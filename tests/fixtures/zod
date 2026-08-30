@@ -90,10 +90,14 @@ def wait_for_test_control(operation: int, kind: str) -> dict[str, object]:
     return command
 
 
-def queued_stdin_bytes() -> int:
+def queued_descriptor_bytes(descriptor: int) -> int:
     available = array.array("i", [0])
-    fcntl.ioctl(0, termios.FIONREAD, available, True)
+    fcntl.ioctl(descriptor, termios.FIONREAD, available, True)
     return available[0]
+
+
+def queued_stdin_bytes() -> int:
+    return queued_descriptor_bytes(0)
 
 
 def response_gate_completed() -> bool:
@@ -482,10 +486,13 @@ def main() -> None:
             while os.read(0, 8192) != b"":
                 pass
             expected = b'{"kind":"shutdown"}\n'
-            queued = endpoint.recv(
-                len(expected),
-                socket.MSG_PEEK | socket.MSG_WAITALL,
-            )
+            deadline = time.monotonic() + 10
+            while queued_descriptor_bytes(endpoint.fileno()) < len(expected):
+                assert time.monotonic() < deadline, (
+                    "relay did not queue the complete shutdown message"
+                )
+                time.sleep(0.01)
+            queued = endpoint.recv(len(expected), socket.MSG_PEEK)
             assert queued == expected, queued
             endpoint.shutdown(socket.SHUT_WR)
             close_sideband(endpoint, reader, writer)
