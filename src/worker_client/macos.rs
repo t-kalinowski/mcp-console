@@ -147,6 +147,9 @@ impl WorkerRuntime {
             command.arg("worker-relay");
         }
         command
+            .inherit_only_standard_streams()
+            .map_err(|error| format!("failed to prepare worker sandbox: {error}"))?;
+        command
             .arg(executable.as_os_str())
             .args(arguments)
             .stdin(Stdio::piped())

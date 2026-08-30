@@ -20,6 +20,41 @@ pub(super) fn close_unlisted(command: &mut Command) -> Result<(), String> {
     Ok(())
 }
 
+pub(super) fn close_unlisted_from_multithreaded_parent(
+    command: &mut Command,
+) -> Result<(), String> {
+    // A server thread can open a descriptor after any parent-side snapshot.
+    // Scan every possible child slot after fork instead. Descriptors created by
+    // Rust for spawn failure reporting already carry close-on-exec and remain
+    // usable until a successful exec closes them.
+    let descriptor_limit = descriptor_limit()?;
+    unsafe {
+        command.pre_exec(move || {
+            for descriptor in (libc::STDERR_FILENO + 1)..descriptor_limit {
+                set_close_on_exec(descriptor)?;
+            }
+            Ok(())
+        });
+    }
+    Ok(())
+}
+
+fn descriptor_limit() -> Result<RawFd, String> {
+    let table_size = unsafe { libc::getdtablesize() };
+    if table_size <= 0 {
+        return Err(format!(
+            "failed to read the launcher file-descriptor limit: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(open_descriptors()?
+        .into_iter()
+        .max()
+        .map_or(table_size, |descriptor| {
+            table_size.max(descriptor.saturating_add(1))
+        }))
+}
+
 fn open_descriptors() -> Result<Vec<RawFd>, String> {
     let mut capacity = 16;
     loop {

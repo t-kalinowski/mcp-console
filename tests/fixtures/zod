@@ -17,16 +17,24 @@ from pathlib import Path
 from typing import Any, TextIO
 
 SIDEBAND_FD_ENV = "MCP_CONSOLE_SIDEBAND_FD"
-TEST_EVENT_FD_ENV = "ZOD_TEST_EVENT_FD"
-TEST_CONTROL_FD_ENV = "ZOD_TEST_CONTROL_FD"
-TEST_FIXTURE_CLEANUP_FD_ENV = "ZOD_TEST_FIXTURE_CLEANUP_FD"
-TEST_RESPONSE_SOCKET_FD_ENV = "ZOD_TEST_RESPONSE_SOCKET_FD"
+TEST_FIXTURE_CONTROL_ENV = "ZOD_TEST_FIXTURE_CONTROL"
+TEST_EVENT_FIFO_NAME = "zod-test-events"
+TEST_CONTROL_FIFO_NAME = "zod-test-control"
+TEST_CLEANUP_FIFO_NAME = "zod-test-cleanup"
+TEST_RESPONSE_QUERY_FIFO_NAME = "zod-test-response-query"
+TEST_RESPONSE_RESULT_FIFO_NAME = "zod-test-response-result"
+TEST_CONTROL_READY_NAME = "zod-test-control-ready"
 LARGE_OUTPUT_SIZE = 2 * 1024 * 1024
 PENDING_TEXT_BUDGET = 8 * 1024 * 1024
 PNG_1X1 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42Y"
     "AAAAASUVORK5CYII="
 )
+test_event_descriptor: int | None = None
+test_control_descriptor: int | None = None
+test_cleanup_descriptor: int | None = None
+test_response_query_descriptor: int | None = None
+test_response_result_descriptor: int | None = None
 
 
 class ConsoleKind(StrEnum):
@@ -34,9 +42,46 @@ class ConsoleKind(StrEnum):
     DIAGNOSTIC = "console_diagnostic"
 
 
+def configure_test_fixture_control(temporary: Path) -> None:
+    global test_event_descriptor
+    global test_control_descriptor
+    global test_cleanup_descriptor
+    global test_response_query_descriptor
+    global test_response_result_descriptor
+
+    if os.environ.get(TEST_FIXTURE_CONTROL_ENV) != "1":
+        return
+    event_path = temporary / TEST_EVENT_FIFO_NAME
+    control_path = temporary / TEST_CONTROL_FIFO_NAME
+    cleanup_path = temporary / TEST_CLEANUP_FIFO_NAME
+    paths = [event_path, control_path, cleanup_path]
+    response_gate_enabled = "ZOD_TEST_RESPONSE_GATE_RELEASED" in os.environ
+    if response_gate_enabled:
+        paths.extend(
+            [
+                temporary / TEST_RESPONSE_QUERY_FIFO_NAME,
+                temporary / TEST_RESPONSE_RESULT_FIFO_NAME,
+            ]
+        )
+    for path in paths:
+        os.mkfifo(path)
+    test_event_descriptor = os.open(event_path, os.O_RDWR)
+    test_control_descriptor = os.open(control_path, os.O_RDWR)
+    test_cleanup_descriptor = os.open(cleanup_path, os.O_RDONLY | os.O_NONBLOCK)
+    if response_gate_enabled:
+        test_response_query_descriptor = os.open(
+            temporary / TEST_RESPONSE_QUERY_FIFO_NAME,
+            os.O_RDWR,
+        )
+        test_response_result_descriptor = os.open(
+            temporary / TEST_RESPONSE_RESULT_FIFO_NAME,
+            os.O_RDWR,
+        )
+    (temporary / TEST_CONTROL_READY_NAME).touch()
+
+
 def emit_test_event(operation: int, kind: str, **details: object) -> None:
-    descriptor_text = os.environ.get(TEST_EVENT_FD_ENV)
-    if descriptor_text is None:
+    if test_event_descriptor is None:
         return
     event = {
         "operation": operation,
@@ -46,20 +91,41 @@ def emit_test_event(operation: int, kind: str, **details: object) -> None:
     }
     payload = json.dumps(event, separators=(",", ":")).encode() + b"\n"
     assert len(payload) <= 512
-    assert os.write(int(descriptor_text), payload) == len(payload)
+    assert os.write(test_event_descriptor, payload) == len(payload)
 
 
 def wait_for_test_control(operation: int, kind: str) -> dict[str, object]:
-    descriptor = int(os.environ[TEST_CONTROL_FD_ENV])
+    assert test_control_descriptor is not None
     payload = bytearray()
     while not payload.endswith(b"\n"):
-        chunk = os.read(descriptor, 1)
+        chunk = os.read(test_control_descriptor, 1)
         assert chunk, f"test control closed before {kind!r} for request {operation}"
         payload.extend(chunk)
     command = json.loads(payload)
     assert command.get("operation") == operation, command
     assert command.get("kind") == kind, command
     return command
+
+
+def duplicate_test_cleanup_gate() -> int:
+    assert test_cleanup_descriptor is not None
+    duplicate = os.dup(test_cleanup_descriptor)
+    os.set_blocking(duplicate, True)
+    return duplicate
+
+
+def close_test_cleanup_gate() -> None:
+    global test_cleanup_descriptor
+    assert test_cleanup_descriptor is not None
+    os.close(test_cleanup_descriptor)
+    test_cleanup_descriptor = None
+
+
+def close_test_control_channel() -> None:
+    global test_control_descriptor
+    assert test_control_descriptor is not None
+    os.close(test_control_descriptor)
+    test_control_descriptor = None
 
 
 def queued_stdin_bytes() -> int:
@@ -69,17 +135,12 @@ def queued_stdin_bytes() -> int:
 
 
 def response_gate_completed() -> bool:
-    if Path(os.environ["ZOD_TEST_RESPONSE_GATE_RELEASED"]).is_file():
-        return True
-    descriptor = int(os.environ[TEST_RESPONSE_SOCKET_FD_ENV])
-    stream = socket.socket(fileno=descriptor)
-    try:
-        queued = stream.recv(64 * 1024, socket.MSG_PEEK | socket.MSG_DONTWAIT)
-        return b"\n" in queued
-    except BlockingIOError:
-        return False
-    finally:
-        stream.detach()
+    assert test_response_query_descriptor is not None
+    assert test_response_result_descriptor is not None
+    assert os.write(test_response_query_descriptor, b"1") == 1
+    completed = os.read(test_response_result_descriptor, 1)
+    assert completed in {b"0", b"1"}, completed
+    return completed == b"1"
 
 
 def discard_stdin_bytes(length: int) -> None:
@@ -266,6 +327,7 @@ def main() -> None:
     """Run the deterministic sideband fixture until the server shuts it down."""
     endpoint, reader, writer = open_sideband()
     temporary = Path(os.environ["TMPDIR"])
+    configure_test_fixture_control(temporary)
     if started_marker := os.environ.get("MCP_CONSOLE_TEST_ZOD_STARTED"):
         Path(started_marker).touch()
     received_sigint = False
@@ -756,7 +818,7 @@ def main() -> None:
             os._exit(86)
 
         if source == "wait after readable frame and partial tail":
-            cleanup_source = int(os.environ.pop(TEST_FIXTURE_CLEANUP_FD_ENV))
+            cleanup_source = duplicate_test_cleanup_gate()
             child = os.fork()
             if child == 0:
                 os.setsid()
@@ -771,6 +833,7 @@ def main() -> None:
                 endpoint.close()
                 os._exit(0)
             os.close(cleanup_source)
+            close_test_cleanup_gate()
             (temporary / "zod-sideband-descendant-pid").write_text(
                 str(child),
                 encoding="utf-8",
@@ -811,10 +874,9 @@ def main() -> None:
                 retained_stdin = os.dup(0)
                 assert os.fstat(retained_stdin) == os.fstat(0)
                 os.close(0)
-                cleanup_source = int(os.environ[TEST_FIXTURE_CLEANUP_FD_ENV])
-                cleanup = os.dup(cleanup_source)
-                os.close(cleanup_source)
-                os.close(int(os.environ[TEST_CONTROL_FD_ENV]))
+                cleanup = duplicate_test_cleanup_gate()
+                close_test_cleanup_gate()
+                close_test_control_channel()
                 close_sideband(endpoint, reader, writer)
                 os.close(1)
                 os.close(2)
@@ -836,7 +898,7 @@ def main() -> None:
             os.close(acknowledge)
             assert os.read(acknowledged, 1) == b"1"
             os.close(acknowledged)
-            os.close(int(os.environ[TEST_FIXTURE_CLEANUP_FD_ENV]))
+            close_test_cleanup_gate()
             consumed_bytes = 0
             emit_test_event(operation, "parent_waiting_for_stdin")
             while True:

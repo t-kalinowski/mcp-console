@@ -197,6 +197,15 @@ impl SandboxedCommand {
         self
     }
 
+    /// Prevents descriptors other than fd 0, 1, and 2 from crossing exec.
+    ///
+    /// The caller may be multithreaded, so the descriptor scan runs in the
+    /// forked child instead of relying on a parent-side snapshot.
+    pub(crate) fn inherit_only_standard_streams(&mut self) -> Result<&mut Self, String> {
+        file_descriptors::close_unlisted_from_multithreaded_parent(&mut self.command)?;
+        Ok(self)
+    }
+
     /// Spawns the sandboxed program and transfers the temporary-directory
     /// guard to the returned child.
     pub(crate) fn spawn(mut self) -> Result<SandboxedChild, String> {
@@ -213,10 +222,8 @@ impl SandboxedCommand {
     }
 
     pub(crate) fn status(mut self) -> Result<ExitCode, String> {
-        // The standalone path has no private transport descriptors. Keep this
-        // policy out of `spawn()`: server callers also use that generic path and
-        // need an explicit allowlist before their inherited descriptors can be
-        // closed safely.
+        // The standalone path has no private transport descriptors, so a
+        // parent-side snapshot is sufficient before it starts any threads.
         file_descriptors::close_unlisted(&mut self.command)?;
         let status = self.spawn()?.wait()?;
         Ok(platform::exit_code(status))
