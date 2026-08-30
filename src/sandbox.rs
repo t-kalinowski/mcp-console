@@ -18,6 +18,10 @@ mod file_descriptors;
 #[path = "sandbox/macos.rs"]
 mod platform;
 
+#[cfg(target_os = "macos")]
+#[path = "sandbox/supervision.rs"]
+mod supervision;
+
 #[cfg(not(target_os = "macos"))]
 #[path = "sandbox/unsupported.rs"]
 mod platform;
@@ -221,12 +225,15 @@ impl SandboxedCommand {
         })
     }
 
+    /// Runs a standalone command and retires descendants observed from its root.
+    ///
+    /// Darwin cannot atomically attach a descendant observer at spawn time. A
+    /// process that detaches before the post-spawn root watch or a fork event is
+    /// observed remains outside this command's guarantee. Launcher crashes and
+    /// terminal signal handling are intentionally left to later supervision work.
     pub(crate) fn status(mut self) -> Result<ExitCode, String> {
-        // The standalone path has no private transport descriptors, so a
-        // parent-side snapshot is sufficient before it starts any threads.
-        file_descriptors::close_unlisted(&mut self.command)?;
-        let status = self.spawn()?.wait()?;
-        Ok(platform::exit_code(status))
+        self.command.env("TMPDIR", self.temporary_directory.path());
+        supervision::status(self.command, self.temporary_directory)
     }
 }
 
@@ -247,6 +254,10 @@ impl SandboxedChild {
         self.child.stderr.take()
     }
 
+    #[allow(
+        dead_code,
+        reason = "available to spawned callers that await normal completion"
+    )]
     pub(crate) fn wait(mut self) -> Result<ExitStatus, String> {
         self.child
             .wait()

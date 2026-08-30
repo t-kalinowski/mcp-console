@@ -171,7 +171,9 @@ mcp-console --version
 ```
 
 `mcp-console serve` communicates with its MCP client over standard input and output.
-The standalone `sandbox` command is available for development, but it supervises only its direct child.
+The standalone `sandbox` command is available for development.
+After its direct command exits, it retires descendants observed from that root, including descendants that entered another process group or session.
+On macOS, a descendant that detaches before the post-spawn tracker observes it remains outside this guarantee, and launcher crashes are not covered.
 It inherits standard input, output, and error while closing other inherited file descriptors before the target runs.
 Use the MCP server for the supported worker-generation lifecycle.
 
