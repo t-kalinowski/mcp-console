@@ -3951,8 +3951,13 @@ def test_routes_python_input(binary: Path) -> Transcript:
         """)
     client.send(python=python)
     assert last_tool_text(client) == '[input requested: "name> "]\n[waiting for stdin]'
-    client.send(stdin="Ada\n")
-    assert last_tool_text(client) == "'Ada'\n"
+    wait_for_evaluation_output(
+        client,
+        "'Ada'\n",
+        "Python stdin routing",
+        stdin="Ada\n",
+        timeout_ms=0,
+    )
 
     # fmt: python
     python = code("""
