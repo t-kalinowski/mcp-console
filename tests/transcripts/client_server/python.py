@@ -22,6 +22,7 @@ from _support import (
     Transcript,
     assert_result_content,
     checkpoint_uv_environment,
+    collect_running_output,
     code,
     r_test_environment,
     reference_plots,
@@ -755,8 +756,11 @@ def test_compacts_native_duckdb_progress_bar(binary: Path) -> Transcript:
     )
     assert last_tool_text(client) == "\n[running; poll with an empty send]"
 
-    client.send(timeout_ms=10_000)
-    output = last_tool_text(client)
+    output = collect_running_output(
+        client,
+        "DuckDB progress evaluation",
+        timeout_ms=10_000,
+    )
     assert "\r" not in output, repr(output)
     assert output.count("% ▕") == 1, repr(output)
     final = output.rstrip()

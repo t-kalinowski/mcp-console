@@ -351,6 +351,46 @@ def wait_for_evaluation_output(
     client.transcript[poll_start:] = [submitted]
 
 
+def collect_running_output(
+    client: "McpClient",
+    description: str,
+    *,
+    timeout_ms: int,
+    attempts: int = 5,
+) -> str:
+    """Poll a running evaluation and retain every public output delta."""
+    assert timeout_ms > 0 and attempts > 0
+    running = "\n[running; poll with an empty send]"
+    poll_start = len(client.transcript)
+    chunks = []
+    for attempt in range(attempts):
+        result = client.send(timeout_ms=timeout_ms)
+        assert result.get("isError") is not True, result
+        content = result["content"]
+        assert len(content) == 1 and content[0]["type"] == "text", content
+        output = content[0]["text"]
+        if output.endswith(running):
+            chunk = output.removesuffix(running)
+            if chunk:
+                chunks.append(chunk)
+            if attempt + 1 == attempts:
+                raise AssertionError(
+                    f"{description} remained running after {attempts} polls: "
+                    f"collected={''.join(chunks)!r}, last={output!r}"
+                )
+            continue
+
+        if output != "[done]" or not chunks:
+            chunks.append(output)
+        break
+
+    collected = "".join(chunks)
+    content[0]["text"] = collected
+    polls = client.transcript[poll_start:]
+    client.transcript[poll_start:] = [polls[-1]]
+    return collected
+
+
 def run_this_suite(suite_path: str) -> None:
     suite = Path(suite_path).resolve()
     directory = next(
