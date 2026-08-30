@@ -201,6 +201,14 @@ impl SandboxedCommand {
     /// guard to the returned child.
     pub(crate) fn spawn(mut self) -> Result<SandboxedChild, String> {
         self.command.env("TMPDIR", self.temporary_directory.path());
+        if uses_fully_builtin_worker(&self.command)? {
+            // The built-in server-relay boundary needs only fd 0, 1, and 2.
+            // Scan in the forked child because the server is multithreaded and
+            // can open a descriptor after any parent-side snapshot. Custom
+            // workers and relays keep their existing inheritance until their
+            // protocol defines an explicit descriptor allowlist.
+            file_descriptors::close_unlisted_from_multithreaded_parent(&mut self.command)?;
+        }
         let child = self
             .command
             .spawn()
@@ -213,14 +221,28 @@ impl SandboxedCommand {
     }
 
     pub(crate) fn status(mut self) -> Result<ExitCode, String> {
-        // The standalone path has no private transport descriptors. Keep this
-        // policy out of `spawn()`: server callers also use that generic path and
-        // need an explicit allowlist before their inherited descriptors can be
-        // closed safely.
+        // The standalone path has no private transport descriptors, so a
+        // parent-side snapshot is sufficient before it starts any threads.
         file_descriptors::close_unlisted(&mut self.command)?;
         let status = self.spawn()?.wait()?;
         Ok(platform::exit_code(status))
     }
+}
+
+#[cfg(target_os = "macos")]
+fn uses_fully_builtin_worker(command: &Command) -> Result<bool, String> {
+    let arguments: Vec<&OsStr> = command.get_args().collect();
+    if arguments.len() < 4 {
+        return Ok(false);
+    }
+    let tail = &arguments[arguments.len() - 4..];
+    if tail[1] != OsStr::new("worker-relay") || tail[3] != OsStr::new("worker") {
+        return Ok(false);
+    }
+
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("failed to identify the built-in worker executable: {error}"))?;
+    Ok(tail[0] == executable.as_os_str() && tail[2] == executable.as_os_str())
 }
 
 #[cfg(target_os = "macos")]
