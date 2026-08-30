@@ -5038,10 +5038,9 @@ def test_shutdown_deadline_does_not_wait_for_sideband_writer(
             client.stdout.read()
             assert client.stderr.read() == ""
             assert not process_group_exists(worker_group), "Zod outlived mcp-console"
-            assert process_exists(sideband_holder), (
-                "fixture did not retain the worker-side socket beyond worker retirement"
+            assert not process_exists(sideband_holder), (
+                "sideband holder outlived sandbox lifetime cleanup"
             )
-            stop_process_id(sideband_holder)
             sideband_holder = None
             passed = True
             return client.transcript

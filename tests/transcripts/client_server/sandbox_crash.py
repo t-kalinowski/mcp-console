@@ -82,12 +82,14 @@ def _pid_is_alive(pid: int) -> bool:
     return True
 
 
-def _wait_for_survivors(pids: tuple[int, ...], timeout: float) -> list[int]:
+def _wait_for_generation_cleanup(
+    generation: tuple[int, int, int, Path], timeout: float
+) -> list[int]:
     deadline = time.monotonic() + timeout
-    survivors = list(pids)
-    while survivors and time.monotonic() < deadline:
-        survivors = [pid for pid in survivors if _pid_is_alive(pid)]
-        if survivors:
+    survivors = list(generation[:3])
+    while (survivors or generation[3].exists()) and time.monotonic() < deadline:
+        survivors = [pid for pid in generation[:3] if _pid_is_alive(pid)]
+        if survivors or generation[3].exists():
             time.sleep(0.01)
     return [pid for pid in survivors if _pid_is_alive(pid)]
 
@@ -160,7 +162,7 @@ def test_server_crash_retires_the_worker_generation(binary: Path) -> Transcript:
 
         os.kill(client.process.pid, signal.SIGKILL)
         returncode = client.process.wait(timeout=TIMEOUT)
-        survivors = _wait_for_survivors(generation[:3], timeout=5)
+        survivors = _wait_for_generation_cleanup(generation, timeout=5)
 
         assert returncode == -signal.SIGKILL, returncode
         assert survivors == [], f"worker-generation processes survived: {survivors}"
@@ -201,7 +203,7 @@ def test_relay_crash_retires_the_worker_generation(binary: Path) -> Transcript:
         assert replacement == "[starting new worker]\nreplacement ready\n", repr(
             replacement
         )
-        survivors = _wait_for_survivors(generation[:3], timeout=5)
+        survivors = _wait_for_generation_cleanup(generation, timeout=5)
         survivor_names = [
             name
             for name, pid in zip(("relay", "worker", "processx child"), generation[:3])
@@ -243,7 +245,7 @@ def test_manager_crash_retires_the_worker_generation(binary: Path) -> Transcript
         assert replacement == "[starting new worker]\nreplacement ready\n", repr(
             replacement
         )
-        survivors = _wait_for_survivors(generation[:3], timeout=5)
+        survivors = _wait_for_generation_cleanup(generation, timeout=5)
         survivor_names = [
             name
             for name, pid in zip(("relay", "worker", "processx child"), generation[:3])
