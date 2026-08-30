@@ -4064,8 +4064,26 @@ def test_restart_outer_force_stops_unresponsive_relay(binary: Path) -> Transcrip
             )
 
             restarted = client._start_send(control="restart")
+            received = threading.Event()
+            errors: list[BaseException] = []
+
+            def receive_restart() -> None:
+                try:
+                    client._receive(restarted)
+                except BaseException as error:
+                    errors.append(error)
+                finally:
+                    received.set()
+
+            receiver = threading.Thread(target=receive_restart, daemon=True)
+            receiver.start()
             force_stop_reached.wait("outer relay force-stop")
-            client._receive(restarted)
+            assert received.wait(2), (
+                "restart did not complete within two seconds of outer relay force-stop"
+            )
+            receiver.join()
+            if errors:
+                raise errors[0]
             assert int(killpg_marker.read_text(encoding="utf-8")) == worker_group
             late_member, late_member_group = map(
                 int,
