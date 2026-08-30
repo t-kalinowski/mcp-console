@@ -101,7 +101,8 @@ The worker owns language-runtime state and implements the worker protocol.
 It reports readiness, accepts complete cells and supported preparation operations, consumes interactive stdin, publishes console events and images, and reports completion or failure through the sideband.
 
 The built-in worker embeds R on its main thread.
-Its language adapters provide persistent Python and DuckDB SQL within that worker process.
+Its language adapters provide persistent Python and SQL within that worker process.
+The DBI-backed SQL adapter owns a managed DuckDB connection by default and can route cells to a user-selected DBI connection held in the same R runtime.
 Its private R environment bridge conditionally wraps `base::library` and `base::loadNamespace`, applies accepted managed libraries, and reports activation outcomes.
 The Rust Python facade loads, retains, and initializes the selected file-backed `libpython`, or attaches its own handle if CPython was already initialized.
 It embeds and installs the private evaluator through that CPython API; reticulate attaches to the interpreter and continues to own object conversion, evaluation dispatch, its manifest, event handling, and interrupts.

@@ -983,6 +983,7 @@ mod platform {
 
     struct SidebandWriter {
         sender: mpsc::Sender<SidebandWrite>,
+        cancellation: crate::sideband::Writer,
         thread: thread::JoinHandle<()>,
     }
 
@@ -998,6 +999,7 @@ mod platform {
             stopping: Arc<AtomicBool>,
         ) -> Self {
             let (sender, receiver) = mpsc::channel();
+            let cancellation = writer.clone();
             let thread = thread::spawn(move || {
                 for message in receiver {
                     match message {
@@ -1014,7 +1016,11 @@ mod platform {
                     }
                 }
             });
-            Self { sender, thread }
+            Self {
+                sender,
+                cancellation,
+                thread,
+            }
         }
 
         fn sender(&self) -> mpsc::Sender<SidebandWrite> {
@@ -1023,6 +1029,7 @@ mod platform {
 
         fn cancel_and_join(self) -> Result<(), String> {
             let _ = self.sender.send(SidebandWrite::Close);
+            let _ = self.cancellation.shutdown();
             self.thread
                 .join()
                 .map_err(|_| "worker sideband writer task failed".to_string())

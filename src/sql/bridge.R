@@ -1,7 +1,7 @@
 base::local(
   {
     managed_connection <- NULL
-    connection <- NULL
+    selected_connection <- NULL
     source <- NULL
     printer_ready <- FALSE
     preview_rows <- 20L
@@ -15,7 +15,7 @@ base::local(
       bquote(
         function() {
           DBI::dbSendQueryArrow(
-            .(bridge)$connection,
+            .(bridge)$selected_connection,
             .(bridge)$source
           )
         }
@@ -47,35 +47,32 @@ base::local(
     }
 
     ensure_connection <- function() {
-      if (is.null(connection)) {
-        connection <<- ensure_managed_connection()
+      if (is.null(selected_connection)) {
+        selected_connection <<- ensure_managed_connection()
       }
-      connection
+      selected_connection
     }
 
     sql_connection <- function() {
       ensure_connection()
     }
 
-    console_sql_connection <- function(value) {
-      if (missing(value)) {
-        return(ensure_connection())
-      }
-      if (is.null(value)) {
-        connection <<- ensure_managed_connection()
-        return(invisible(connection))
+    console_sql_connection <- function(connection) {
+      if (is.null(connection)) {
+        selected_connection <<- ensure_managed_connection()
+        return(invisible(selected_connection))
       }
       if (
-        !inherits(value, "DBIConnection") ||
+        !inherits(connection, "DBIConnection") ||
           !isTRUE(tryCatch(
-            DBI::dbIsValid(value),
+            DBI::dbIsValid(connection),
             error = function(...) FALSE
           ))
       ) {
-        stop("`value` must be a valid DBIConnection or NULL")
+        stop("`connection` must be a valid DBIConnection or NULL")
       }
-      connection <<- value
-      invisible(connection)
+      selected_connection <<- connection
+      invisible(selected_connection)
     }
     tools <- base::attach(
       NULL,
@@ -171,61 +168,15 @@ base::local(
       )
     }
 
-    leading_sql_keyword <- function(source) {
-      source <- sub("^\ufeff", "", source)
-      repeat {
-        previous <- source
-        source <- sub("^[[:space:]]+", "", source)
-        source <- sub(
-          "^--[^\r\n]*(?:\r\n|\r|\n|$)",
-          "",
-          source,
-          perl = TRUE
-        )
-        source <- sub("^/\\*(?s:.*?)\\*/", "", source, perl = TRUE)
-        if (identical(source, previous)) {
-          break
-        }
-      }
-      match <- regexpr("^[[:alpha:]]+", source, perl = TRUE)
-      if (match[[1L]] < 0L) {
-        return("")
-      }
-      toupper(regmatches(source, match))
-    }
-
-    dbi_query_source <- function(source) {
-      keyword <- leading_sql_keyword(source)
-      if (
-        keyword %in% c(
-          "SELECT",
-          "WITH",
-          "VALUES",
-          "TABLE",
-          "SHOW",
-          "DESCRIBE",
-          "DESC",
-          "EXPLAIN",
-          "PRAGMA",
-          "CALL"
-        )
-      ) {
-        return(TRUE)
-      }
-      keyword %in% c("INSERT", "UPDATE", "DELETE", "MERGE") &&
-        grepl("\\bRETURNING\\b", source, ignore.case = TRUE, perl = TRUE)
-    }
-
     fetch_dbi <- function() {
-      if (!dbi_query_source(source)) {
-        result <- DBI::dbSendStatement(connection, source)
-        tryCatch(NULL, finally = DBI::dbClearResult(result))
-        return(NULL)
-      }
-
-      result <- DBI::dbSendQuery(connection, source)
+      # DBI has no dialect-neutral way to classify a cell before dispatch.
+      # Commands that need the statement interface run through DBI from R.
+      result <- DBI::dbSendQuery(selected_connection, source)
       tryCatch(
         {
+          if (nrow(DBI::dbColumnInfo(result)) == 0L) {
+            return(NULL)
+          }
           data <- DBI::dbFetch(result, n = preview_rows + 1L)
           schema <- nanoarrow::infer_nanoarrow_schema(data)
           batch <- nanoarrow::as_nanoarrow_array(data, schema = schema)
@@ -472,7 +423,7 @@ base::local(
           ensure_connection()
           if (
             !isTRUE(tryCatch(
-              DBI::dbIsValid(connection),
+              DBI::dbIsValid(selected_connection),
               error = function(...) FALSE
             ))
           ) {
@@ -484,7 +435,7 @@ base::local(
             )
           }
 
-          preview <- if (identical(connection, managed_connection)) {
+          preview <- if (identical(selected_connection, managed_connection)) {
             fetch_query()
           } else {
             fetch_dbi()
