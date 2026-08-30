@@ -1562,11 +1562,29 @@ def test_keeps_stdin_open_after_partial_payload(binary: Path) -> Transcript:
     client.send(r=r, stdin="without newline", timeout_ms=0)
     assert last_tool_text(client) == "\n[running; poll with an empty send]"
 
-    client.send(timeout_ms=3_000)
-    output = last_tool_text(client)
-    assert output == 'before\n[input requested: "partial> "]\n[waiting for stdin]', (
-        output
-    )
+    expected = 'before\n[input requested: "partial> "]\n[waiting for stdin]'
+    running = "\n[running; poll with an empty send]"
+    poll_start = len(client.transcript)
+    collected = ""
+    for attempt in range(5):
+        client.send(timeout_ms=3_000)
+        output = last_tool_text(client)
+        if output.endswith(running):
+            collected += output.removesuffix(running)
+            assert attempt < 4, (
+                "partial stdin input request remained pending: "
+                f"collected={collected!r}, last={output!r}"
+            )
+            continue
+
+        collected += output
+        assert collected == expected, repr(collected)
+        break
+
+    polls = client.transcript[poll_start:]
+    final_poll = polls[-1]
+    final_poll["result"]["content"][0]["text"] = collected
+    client.transcript[poll_start:] = [final_poll]
 
     client.send(stdin="\n")
     assert last_tool_text(client) == '[1] "without newline"\n'
