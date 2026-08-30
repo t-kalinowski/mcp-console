@@ -1,0 +1,38 @@
+---
+command:
+  - mcp-console
+  - sandbox
+  - --
+  - Rscript
+  - --vanilla
+  - -e
+  - |
+    child_script <- '
+    import signal
+    import time
+
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    print("ready", flush=True)
+    time.sleep(60)
+    '
+
+    child <- processx::process$new(
+      "python",
+      c("-c", child_script),
+      stdout = "|",
+      stderr = "2>&1",
+      cleanup = FALSE,
+      supervise = TRUE
+    )
+    stopifnot(child$poll_io(5000)[["output"]] == "ready")
+    stopifnot(identical(child$read_output_lines(), "ready"))
+    writeLines(c(as.character(Sys.getpid()), as.character(child$get_pid())))
+    flush.console()
+    Sys.sleep(60)
+exit_code: 137
+stdout: |
+  <sandbox root pid>
+  <processx-supervised child pid>
+verified_descendants:
+  - processx child outside root process group
+  - processx crash supervisor outside root process group
