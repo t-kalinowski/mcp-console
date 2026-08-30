@@ -148,7 +148,7 @@ base::local(
         invisible(NULL)
       })
       reticulate::py_set_attr(
-        reticulate::import_main(convert = FALSE),
+        reticulate::import_builtins(convert = FALSE),
         "console_sql_connection",
         callback
       )
