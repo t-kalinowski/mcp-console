@@ -1,6 +1,7 @@
 base::local(
   {
-    connection <- NULL
+    managed_connection <- NULL
+    selected_connection <- NULL
     source <- NULL
     printer_ready <- FALSE
     preview_rows <- 20L
@@ -14,7 +15,7 @@ base::local(
       bquote(
         function() {
           DBI::dbSendQueryArrow(
-            .(bridge)$connection,
+            .(bridge)$selected_connection,
             .(bridge)$source
           )
         }
@@ -22,13 +23,13 @@ base::local(
       envir = globalenv()
     )
 
-    ensure_connection <- function() {
-      if (!is.null(connection)) {
-        return(invisible(connection))
+    ensure_managed_connection <- function() {
+      if (!is.null(managed_connection)) {
+        return(invisible(managed_connection))
       }
 
       storage <- file.path(tempdir(), "mcp-console-duckdb")
-      connection <<- DBI::dbConnect(
+      managed_connection <<- DBI::dbConnect(
         duckdb::duckdb(
           dbdir = ":memory:",
           config = list(
@@ -41,13 +42,37 @@ base::local(
           environment_scan = TRUE
         )
       )
-      DBI::dbExecute(connection, "SET enable_progress_bar = false")
-      invisible(connection)
+      DBI::dbExecute(managed_connection, "SET enable_progress_bar = false")
+      invisible(managed_connection)
+    }
+
+    ensure_connection <- function() {
+      if (is.null(selected_connection)) {
+        selected_connection <<- ensure_managed_connection()
+      }
+      selected_connection
     }
 
     sql_connection <- function() {
       ensure_connection()
-      connection
+    }
+
+    console_sql_connection <- function(connection) {
+      if (is.null(connection)) {
+        selected_connection <<- ensure_managed_connection()
+        return(invisible(selected_connection))
+      }
+      if (
+        !inherits(connection, "DBIConnection") ||
+          !isTRUE(tryCatch(
+            DBI::dbIsValid(connection),
+            error = function(...) FALSE
+          ))
+      ) {
+        stop("`connection` must be a valid DBIConnection or NULL")
+      }
+      selected_connection <<- connection
+      invisible(selected_connection)
     }
     tools <- base::attach(
       NULL,
@@ -59,6 +84,11 @@ base::local(
     # `py$name <- value` already writes through the returned Python module proxy.
     base::makeActiveBinding("py", function() reticulate::py, tools)
     base::assign("sql_connection", sql_connection, envir = tools)
+    base::assign(
+      "console_sql_connection",
+      console_sql_connection,
+      envir = tools
+    )
 
     ensure_printer <- function() {
       if (printer_ready) {
@@ -138,7 +168,29 @@ base::local(
       )
     }
 
+    fetch_dbi <- function() {
+      # DBI has no dialect-neutral way to classify a cell before dispatch.
+      # Commands that need the statement interface run through DBI from R.
+      result <- DBI::dbSendQuery(selected_connection, source)
+      tryCatch(
+        {
+          if (nrow(DBI::dbColumnInfo(result)) == 0L) {
+            return(NULL)
+          }
+          data <- DBI::dbFetch(result, n = preview_rows + 1L)
+          schema <- nanoarrow::infer_nanoarrow_schema(data)
+          batch <- nanoarrow::as_nanoarrow_array(data, schema = schema)
+          if (batch$length == 0L) {
+            batch <- NULL
+          }
+          list(schema = schema, batch = batch)
+        },
+        finally = DBI::dbClearResult(result)
+      )
+    }
+
     stringify <- function(batch, schema, rows, columns, id) {
+      render_connection <- ensure_managed_connection()
       array_pointer <- nanoarrow::nanoarrow_allocate_array()
       schema_pointer <- nanoarrow::nanoarrow_allocate_schema()
       nanoarrow::nanoarrow_pointer_export(batch, array_pointer)
@@ -151,7 +203,7 @@ base::local(
       names <- sprintf("column_%02d", seq_len(columns))
       table <- table$RenameColumns(names)
       occupied <- DBI::dbGetQuery(
-        connection,
+        render_connection,
         paste(
           "SELECT lower(table_name) AS name",
           "FROM system.information_schema.tables"
@@ -159,7 +211,7 @@ base::local(
       )$name
       occupied <- c(
         occupied,
-        tolower(duckdb::duckdb_list_arrow(connection))
+        tolower(duckdb::duckdb_list_arrow(render_connection))
       )
       relation_base <- paste0("__mcp_console_preview_", id)
       relation <- relation_base
@@ -169,10 +221,10 @@ base::local(
         relation <- paste0(relation_base, "_", suffix)
       }
 
-      duckdb::duckdb_register_arrow(connection, relation, table)
+      duckdb::duckdb_register_arrow(render_connection, relation, table)
       tryCatch(
         {
-          identifiers <- DBI::dbQuoteIdentifier(connection, names)
+          identifiers <- DBI::dbQuoteIdentifier(render_connection, names)
           cast_projection <- paste0(
             "CAST(preview.",
             identifiers,
@@ -196,7 +248,7 @@ base::local(
           )
           truncated_names <- sprintf("truncated_%02d", seq_len(columns))
           truncated_identifiers <- DBI::dbQuoteIdentifier(
-            connection,
+            render_connection,
             truncated_names
           )
           truncated_projection <- paste0(
@@ -211,18 +263,21 @@ base::local(
             "WITH strings AS (SELECT",
             cast_projection,
             "FROM",
-            DBI::dbQuoteIdentifier(connection, relation),
+            DBI::dbQuoteIdentifier(render_connection, relation),
             "AS preview) SELECT",
             paste(c(value_projection, truncated_projection), collapse = ", "),
             "FROM strings"
           )
-          output <- DBI::dbGetQuery(connection, query)
+          output <- DBI::dbGetQuery(render_connection, query)
           list(
             values = as.list(output[names]),
             truncated = as.list(output[truncated_names])
           )
         },
-        finally = duckdb::duckdb_unregister_arrow(connection, relation)
+        finally = duckdb::duckdb_unregister_arrow(
+          render_connection,
+          relation
+        )
       )
     }
 
@@ -366,8 +421,25 @@ base::local(
       tryCatch(
         {
           ensure_connection()
+          if (
+            !isTRUE(tryCatch(
+              DBI::dbIsValid(selected_connection),
+              error = function(...) FALSE
+            ))
+          ) {
+            stop(
+              paste(
+                "The selected SQL connection is no longer valid;",
+                "call console_sql_connection(NULL) to restore DuckDB"
+              )
+            )
+          }
 
-          preview <- fetch_query()
+          preview <- if (identical(selected_connection, managed_connection)) {
+            fetch_query()
+          } else {
+            fetch_dbi()
+          }
           if (!is.null(preview)) {
             render_preview(preview, id)
           }
