@@ -32,7 +32,11 @@ from _support import (
     wait_for_worker_file,
 )
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
+CASE_PLATFORMS = {
+    # The Linux CI baseline has no system Python older than the supported floor.
+    "rejects_python_older_than_3_10": {"darwin"},
+}
 
 
 def named_requirement_error(requirement: str) -> str:
@@ -354,6 +358,7 @@ def test_runs_spawn_process_after_live_resolution(binary: Path) -> Transcript:
 def test_inspects_sandbox_child_processes_with_psutil(binary: Path) -> Transcript:
     environment = os.environ.copy()
     environment.pop("RETICULATE_PYTHON", None)
+    environment["MCP_CONSOLE_TEST_HOST_PID"] = str(os.getpid())
     client = McpClient(binary, ("serve",), environment)
     client._initialize_and_list_tools()
     # fmt: python
@@ -374,18 +379,24 @@ def test_inspects_sandbox_child_processes_with_psutil(binary: Path) -> Transcrip
 
         import psutil
 
-        mib = (ctypes.c_int * 3)(1, 14, 0)
-        size = ctypes.c_size_t()
-        ctypes.set_errno(0)
-        result = ctypes.CDLL(None, use_errno=True).sysctl(
-            mib,
-            len(mib),
-            None,
-            ctypes.byref(size),
-            None,
-            0,
-        )
-        denied = result == -1 and ctypes.get_errno() == errno.EPERM
+        if sys.platform == "darwin":
+            mib = (ctypes.c_int * 3)(1, 14, 0)
+            size = ctypes.c_size_t()
+            ctypes.set_errno(0)
+            result = ctypes.CDLL(None, use_errno=True).sysctl(
+                mib,
+                len(mib),
+                None,
+                ctypes.byref(size),
+                None,
+                0,
+            )
+            process_table_isolated = (
+                result == -1 and ctypes.get_errno() == errno.EPERM
+            )
+        else:
+            host_pid = int(os.environ["MCP_CONSOLE_TEST_HOST_PID"])
+            process_table_isolated = not os.path.exists(f"/proc/{host_pid}")
 
         command = [sys.executable, "-c", "import time; time.sleep(30)"]
         child = subprocess.Popen(command)
@@ -399,12 +410,19 @@ def test_inspects_sandbox_child_processes_with_psutil(binary: Path) -> Transcrip
             child.terminate()
             child.wait()
 
+        sandbox_scope = (
+            1 not in visible
+            if sys.platform == "darwin"
+            else host_pid not in visible
+        )
+        worker_scope = all(group == process_group for group in visible_groups)
+
         (
             initial_executable != sys.executable,
-            denied,
-            1 not in visible,
+            process_table_isolated,
+            sandbox_scope,
             visible == sorted(visible),
-            all(group == process_group for group in visible_groups),
+            worker_scope,
             child.pid in visible,
             child.pid in observed,
         )
@@ -420,6 +438,7 @@ def test_retains_environment_when_optional_psutil_setup_fails(
 ) -> Transcript:
     environment = os.environ.copy()
     environment.pop("RETICULATE_PYTHON", None)
+    environment["MCP_CONSOLE_TEST_HOST_PID"] = str(os.getpid())
     client = McpClient(binary, ("serve",), environment)
     client._initialize_and_list_tools()
     # fmt: python
@@ -454,7 +473,8 @@ def test_retains_environment_when_optional_psutil_setup_fails(
         sys.meta_path.insert(0, failing_psutil_finder)
         """)
     client.send(python=python)
-    assert last_tool_text(client) == "[done]"
+    output = last_tool_text(client)
+    assert output == "[done]", repr(output)
 
     # fmt: python
     python = code("""
@@ -476,14 +496,21 @@ def test_retains_environment_when_optional_psutil_setup_fails(
             child.terminate()
             child.wait()
 
+        sandbox_scope = (
+            1 not in visible
+            if sys.platform == "darwin"
+            else int(os.environ["MCP_CONSOLE_TEST_HOST_PID"]) not in visible
+        )
+        worker_scope = all(group == process_group for group in visible_groups)
+
         (
             psutil.__name__,
             failing_psutil_finder.visible_lookups,
             live_sentinel,
             os.getpid() == live_pid,
-            1 not in visible,
+            sandbox_scope,
             visible == sorted(visible),
-            all(group == process_group for group in visible_groups),
+            worker_scope,
             child.pid in visible,
             child.pid in observed,
         )
@@ -1069,9 +1096,7 @@ def test_validates_registry_only_python_requirements(binary: Path) -> Transcript
         uv_record.write_text("", encoding="utf-8")
         # fmt: r
         r = code(rf"""
-            reticulate::py_require({
-              json.dumps(runtime_rejected)
-            })
+            reticulate::py_require({json.dumps(runtime_rejected)})
             invisible(reticulate::py_config())
             """)
         client.send(r=r)
@@ -2612,23 +2637,32 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
         temporary = Path(temporary_directory)
         workspace = temporary / "workspace-one"
         workspace.mkdir()
+        font_root = (
+            Path("/System/Library/Fonts")
+            if sys.platform == "darwin"
+            else Path("/usr/share/fonts")
+        )
         system_fonts = sorted(
             path
-            for path in Path("/System/Library/Fonts").iterdir()
+            for path in font_root.rglob("*")
             if path.is_file() and path.suffix.lower() in {".otf", ".ttc", ".ttf"}
         )
         assert system_fonts, "test system font is required"
         system_font = system_fonts[0]
-        profiler_output = temporary / "system-profiler.plist"
-        profiler_output.write_bytes(
-            plistlib.dumps([{"_items": [{"path": str(system_font)}]}])
-        )
         path = os.environ.get("PATH")
         assert path is not None, "PATH is required"
-        probe = temporary / "bin" / "system_profiler"
+        probe = (
+            temporary
+            / "bin"
+            / ("system_profiler" if sys.platform == "darwin" else "fc-list")
+        )
         probe.parent.mkdir()
-        probe.write_text(
-            code(r"""
+        if sys.platform == "darwin":
+            profiler_output = temporary / "system-profiler.plist"
+            profiler_output.write_bytes(
+                plistlib.dumps([{"_items": [{"path": str(system_font)}]}])
+            )
+            probe_source = code(r"""
                 #!/bin/sh
                 set -eu
                 test "$#" -eq 2
@@ -2636,9 +2670,15 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
                 test "$2" = "SPFontsDataType"
                 : > "$TMPDIR/mcp-console-font-discovery"
                 /bin/cat "$MCP_CONSOLE_TEST_SYSTEM_PROFILER_OUTPUT"
-                """),
-            encoding="utf-8",
-        )
+                """)
+        else:
+            probe_source = code(r"""
+                #!/bin/sh
+                set -eu
+                : > "$TMPDIR/mcp-console-font-discovery"
+                printf '%s\n' "$MCP_CONSOLE_TEST_SYSTEM_FONT"
+                """)
+        probe.write_text(probe_source, encoding="utf-8")
         probe.chmod(0o755)
         fontconfig = temporary / "fonts.conf"
         fontconfig.write_text(
@@ -2660,7 +2700,12 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
         environment["FONTCONFIG_FILE"] = str(fontconfig)
         environment["MPLCONFIGDIR"] = str(host_matplotlib)
         environment["MCP_CONSOLE_TEST_MATPLOTLIBRC"] = str(host_matplotlibrc)
-        environment["MCP_CONSOLE_TEST_SYSTEM_PROFILER_OUTPUT"] = str(profiler_output)
+        if sys.platform == "darwin":
+            environment["MCP_CONSOLE_TEST_SYSTEM_PROFILER_OUTPUT"] = str(
+                profiler_output
+            )
+        else:
+            environment["MCP_CONSOLE_TEST_SYSTEM_FONT"] = str(system_font)
         environment["PATH"] = os.pathsep.join((str(probe.parent), path))
         environment.pop("MATPLOTLIBRC", None)
         environment.pop("MPL_IGNORE_SYSTEM_FONTS", None)
@@ -2882,6 +2927,7 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
         )
         # fmt: python
         python = code("""
+            import errno
             import os
             from pathlib import Path
 
@@ -2897,7 +2943,8 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
             try:
                 with font_cache.open("a", encoding="utf-8"):
                     pass
-            except PermissionError:
+            except OSError as error:
+                assert error.errno in {errno.EACCES, errno.EPERM, errno.EROFS}
                 font_cache_read_only = True
             else:
                 font_cache_read_only = False
@@ -2905,14 +2952,16 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
             try:
                 with config.open("a", encoding="utf-8"):
                     pass
-            except PermissionError:
+            except OSError as error:
+                assert error.errno in {errno.EACCES, errno.EPERM, errno.EROFS}
                 config_read_only = True
             else:
                 config_read_only = False
 
             try:
                 config.with_name("worker-payload").write_text("payload", encoding="utf-8")
-            except PermissionError:
+            except OSError as error:
+                assert error.errno in {errno.EACCES, errno.EPERM, errno.EROFS}
                 config_directory_read_only = True
             else:
                 config_directory_read_only = False
@@ -2980,6 +3029,7 @@ def test_inherits_explicit_matplotlib_config(binary: Path) -> Transcript:
         assert last_tool_text(client) == "[prepared]"
         # fmt: python
         python = code("""
+            import errno
             import os
             from pathlib import Path
 
@@ -2989,7 +3039,8 @@ def test_inherits_explicit_matplotlib_config(binary: Path) -> Transcript:
             try:
                 with config.open("a", encoding="utf-8"):
                     pass
-            except PermissionError:
+            except OSError as error:
+                assert error.errno in {errno.EACCES, errno.EPERM, errno.EROFS}
                 config_read_only = True
             else:
                 config_read_only = False
@@ -3024,9 +3075,18 @@ def test_inherits_default_matplotlib_config(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
         home = temporary / "home"
-        matplotlib = home / ".matplotlib"
-        matplotlib.mkdir(parents=True)
-        matplotlibrc = matplotlib / "matplotlibrc"
+        home.mkdir()
+        if sys.platform == "darwin":
+            config_directory = home / ".matplotlib"
+            cache_directory = config_directory
+            xdg_config_home = None
+        else:
+            assert sys.platform == "linux", sys.platform
+            xdg_config_home = temporary / "host-config"
+            config_directory = xdg_config_home / "matplotlib"
+            cache_directory = temporary / "host-cache" / "matplotlib"
+        config_directory.mkdir(parents=True)
+        matplotlibrc = config_directory / "matplotlibrc"
         matplotlibrc.write_text("lines.linewidth: 9.25\n", encoding="utf-8")
         r_environment, rscript = r_test_environment()
         # fmt: r
@@ -3063,6 +3123,8 @@ def test_inherits_default_matplotlib_config(binary: Path) -> Transcript:
         environment["UV_PYTHON_INSTALL_DIR"] = uv_python
         environment["MPL_IGNORE_SYSTEM_FONTS"] = "1"
         environment["MCP_CONSOLE_TEST_MATPLOTLIBRC"] = str(matplotlibrc)
+        if xdg_config_home is not None:
+            environment["XDG_CONFIG_HOME"] = str(xdg_config_home)
         environment.pop("MATPLOTLIBRC", None)
         environment.pop("MPLCONFIGDIR", None)
         client = McpClient(binary, ("serve",), environment)
@@ -3089,7 +3151,7 @@ def test_inherits_default_matplotlib_config(binary: Path) -> Transcript:
         assert output == "(True, 9.25)\n", repr(output)
         transcript = client._finish()
         assert matplotlibrc.read_text(encoding="utf-8") == "lines.linewidth: 9.25\n"
-        caches = list(matplotlib.glob("fontlist-v*.json"))
+        caches = list(cache_directory.glob("fontlist-v*.json"))
         assert len(caches) == 1, caches
         assert not list(
             (temporary / "host-cache" / "mcp-console" / "matplotlib").glob(
@@ -3271,7 +3333,8 @@ def test_routes_python_input(binary: Path) -> Transcript:
     client.send(python=python)
     assert last_tool_text(client) == '[input requested: "name> "]\n[waiting for stdin]'
     client.send(stdin="Ada\n")
-    assert last_tool_text(client) == "'Ada'\n"
+    output = last_tool_text(client)
+    assert output == "'Ada'\n", repr(output)
 
     # fmt: python
     python = code("""

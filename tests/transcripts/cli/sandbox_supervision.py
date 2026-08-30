@@ -12,10 +12,21 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from _support import Transcript, code, run_this_suite
+from _support import (
+    Transcript,
+    code,
+    host_child_pid_by_name,
+    linux_host_pid,
+    run_this_suite,
+)
 
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
+CASE_PLATFORMS = {
+    "delivers_terminal_interrupt_once": {"darwin"},
+    "preserves_status_after_terminal_closes": {"darwin"},
+    "relays_interrupt_then_retires_descendants": {"darwin"},
+}
 TIMEOUT = 10
 
 
@@ -41,26 +52,6 @@ def _kill_survivors(pids: list[int]) -> list[int]:
         except ProcessLookupError:
             pass
     return survivors
-
-
-def _child_pid_by_name(parent_pid: int, name: str) -> int:
-    result = subprocess.run(
-        ["/bin/ps", "-axo", "pid=,ppid=,comm="],
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=TIMEOUT,
-    )
-    matches = []
-    for line in result.stdout.splitlines():
-        fields = line.split(maxsplit=2)
-        if len(fields) != 3:
-            continue
-        pid, parent, command = fields
-        if int(parent) == parent_pid and Path(command).name == name:
-            matches.append(int(pid))
-    assert len(matches) == 1, (parent_pid, name, matches)
-    return matches[0]
 
 
 def _read_lines(stream: object, count: int, description: str) -> list[str]:
@@ -111,32 +102,64 @@ def test_retires_processx_descendants_across_sessions(binary: Path) -> Transcrip
         stopifnot(length(child_output) == 2L)
         writeLines(c(as.character(child$get_pid()), child_output))
         flush.console()
+        stopifnot(identical(readLines(file("stdin"), n = 1L), "release"))
         quit(save = "no", status = 23L, runLast = FALSE)
         """)
     arguments = ("sandbox", "--", "Rscript", "--vanilla", "-e", script)
-    result = subprocess.run(
+    process = subprocess.Popen(
         [binary, *arguments],
-        capture_output=True,
-        text=True,
-        timeout=TIMEOUT,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
     )
+    assert process.stdin is not None
+    assert process.stdout is not None
+    assert process.stderr is not None
 
-    lines = result.stdout.splitlines()
-    assert len(lines) == 3, lines
-    pids = [int(lines[0]), int(lines[1])]
-    temporary_directory = Path(lines[2])
-    survivors = _kill_survivors(pids)
+    pids: list[int] = []
+    temporary_directory: Path | None = None
+    try:
+        lines = _read_lines(
+            process.stdout,
+            3,
+            "the processx child, grandchild, and temporary directory",
+        )
+        sandbox_pids = [int(lines[0]), int(lines[1])]
+        temporary_directory = Path(lines[2])
+        runner_pid = host_child_pid_by_name(process.pid, "mcp-console-sandbox")
+        if sys.platform == "linux":
+            pids = [
+                linux_host_pid(runner_pid, sandbox_pid) for sandbox_pid in sandbox_pids
+            ]
+        else:
+            pids = sandbox_pids
 
-    assert result.returncode == 23, result
-    assert result.stderr == "", result.stderr
-    assert survivors == [], f"sandbox descendants survived: {survivors}"
-    assert not temporary_directory.exists(), (
-        f"sandbox temporary directory survived: {temporary_directory}"
-    )
+        process.stdin.write(b"release\n")
+        process.stdin.flush()
+        returncode = process.wait(timeout=TIMEOUT)
+        stdout = process.stdout.read().decode("utf-8")
+        stderr = process.stderr.read().decode("utf-8")
+        survivors = _kill_survivors(pids)
+
+        assert returncode == 23, returncode
+        assert stdout == "", stdout
+        assert stderr == "", stderr
+        assert survivors == [], f"sandbox descendants survived: {survivors}"
+        assert not temporary_directory.exists(), (
+            f"sandbox temporary directory survived: {temporary_directory}"
+        )
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=TIMEOUT)
+        _kill_survivors(pids)
+        process.stdin.close()
+        process.stdout.close()
+        process.stderr.close()
     return [
         {
             "command": _command(*arguments),
-            "exit_code": result.returncode,
+            "exit_code": returncode,
             "stdout": "<processx child pid>\n<processx grandchild pid>\n<sandbox temp>\n",
         }
     ]
@@ -191,7 +214,11 @@ def test_waits_for_processx_crash_supervision(binary: Path) -> Transcript:
                 "the sandbox root and processx child PIDs",
             )
         ]
-        supervisor_pid = _child_pid_by_name(root_pid, "supervisor")
+        if sys.platform == "linux":
+            runner_pid = host_child_pid_by_name(process.pid, "mcp-console-sandbox")
+            root_pid = linux_host_pid(runner_pid, root_pid)
+            child_pid = linux_host_pid(runner_pid, child_pid)
+        supervisor_pid = host_child_pid_by_name(root_pid, "supervisor")
         pids = [root_pid, child_pid, supervisor_pid]
         root_group = os.getpgid(root_pid)
         assert os.getpgid(child_pid) != root_group

@@ -5,6 +5,7 @@ import re
 import select
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -92,6 +93,101 @@ def checkpoint_uv_environment(
 
 def code(source: str) -> str:
     return dedent(source).removeprefix("\n")
+
+
+def linux_host_pid(runner_pid: int, sandbox_pid: int) -> int:
+    assert sys.platform == "linux", sys.platform
+    assert runner_pid > 0 and sandbox_pid > 0, (runner_pid, sandbox_pid)
+    candidates = []
+    for process_directory in Path("/proc").iterdir():
+        if not process_directory.name.isdigit():
+            continue
+        try:
+            status = (process_directory / "status").read_text(encoding="utf-8")
+        except (FileNotFoundError, PermissionError, ProcessLookupError):
+            continue
+        namespace_line = next(
+            (line for line in status.splitlines() if line.startswith("NSpid:")),
+            None,
+        )
+        if namespace_line is None:
+            continue
+        namespace_pids = [int(value) for value in namespace_line.split()[1:]]
+        if len(namespace_pids) < 2 or namespace_pids[-1] != sandbox_pid:
+            continue
+        host_pid = int(process_directory.name)
+        if _linux_process_descends_from(host_pid, runner_pid):
+            candidates.append(host_pid)
+    assert len(candidates) == 1, (runner_pid, sandbox_pid, candidates)
+    return candidates[0]
+
+
+def linux_host_process_tree(root_pid: int) -> tuple[int, ...]:
+    assert sys.platform == "linux", sys.platform
+    assert root_pid > 0, root_pid
+    descendants = []
+    for process_directory in Path("/proc").iterdir():
+        if not process_directory.name.isdigit():
+            continue
+        process_id = int(process_directory.name)
+        if process_id != root_pid and _linux_process_descends_from(
+            process_id,
+            root_pid,
+        ):
+            descendants.append(process_id)
+    assert Path(f"/proc/{root_pid}").exists(), root_pid
+    return root_pid, *sorted(descendants)
+
+
+def host_child_pid_by_name(parent_pid: int, name: str) -> int:
+    if sys.platform == "linux":
+        matches = []
+        for process_directory in Path("/proc").iterdir():
+            if not process_directory.name.isdigit():
+                continue
+            try:
+                status = (process_directory / "status").read_text(encoding="utf-8")
+                parent_line = next(
+                    line for line in status.splitlines() if line.startswith("PPid:")
+                )
+                executable = (process_directory / "exe").resolve(strict=True)
+            except (FileNotFoundError, PermissionError, ProcessLookupError):
+                continue
+            if int(parent_line.split()[1]) == parent_pid and executable.name == name:
+                matches.append(int(process_directory.name))
+    else:
+        processes = subprocess.check_output(
+            ["/bin/ps", "-axo", "pid=,ppid=,comm="],
+            text=True,
+        )
+        matches = []
+        for process in processes.splitlines():
+            fields = process.strip().split(None, 2)
+            if (
+                len(fields) == 3
+                and int(fields[1]) == parent_pid
+                and Path(fields[2]).name == name
+            ):
+                matches.append(int(fields[0]))
+    assert len(matches) == 1, (parent_pid, name, matches)
+    return matches[0]
+
+
+def _linux_process_descends_from(process_id: int, ancestor_id: int) -> bool:
+    visited = set()
+    while process_id > 1 and process_id not in visited:
+        if process_id == ancestor_id:
+            return True
+        visited.add(process_id)
+        try:
+            status = Path(f"/proc/{process_id}/status").read_text(encoding="utf-8")
+        except (FileNotFoundError, PermissionError, ProcessLookupError):
+            return False
+        parent_line = next(
+            line for line in status.splitlines() if line.startswith("PPid:")
+        )
+        process_id = int(parent_line.split()[1])
+    return False
 
 
 def normalize_python_resolution_error(error: str, invalid: str | None = None) -> str:

@@ -23,7 +23,7 @@ from _support import (
     wait_for_worker_file,
 )
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
 REQUIRED_COMMANDS = {"ir"}
 
 

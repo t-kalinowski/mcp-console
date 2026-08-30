@@ -13,6 +13,7 @@ result:
 ---
 send:
   python: |
+    import errno
     import os
     from pathlib import Path
 
@@ -22,7 +23,8 @@ send:
     try:
         with config.open("a", encoding="utf-8"):
             pass
-    except PermissionError:
+    except OSError as error:
+        assert error.errno in {errno.EACCES, errno.EPERM, errno.EROFS}
         config_read_only = True
     else:
         config_read_only = False

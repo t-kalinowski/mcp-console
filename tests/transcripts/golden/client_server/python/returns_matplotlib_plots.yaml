@@ -209,6 +209,7 @@ result:
 ---
 send:
   python: |
+    import errno
     import os
     from pathlib import Path
 
@@ -224,7 +225,8 @@ send:
     try:
         with font_cache.open("a", encoding="utf-8"):
             pass
-    except PermissionError:
+    except OSError as error:
+        assert error.errno in {errno.EACCES, errno.EPERM, errno.EROFS}
         font_cache_read_only = True
     else:
         font_cache_read_only = False
@@ -232,14 +234,16 @@ send:
     try:
         with config.open("a", encoding="utf-8"):
             pass
-    except PermissionError:
+    except OSError as error:
+        assert error.errno in {errno.EACCES, errno.EPERM, errno.EROFS}
         config_read_only = True
     else:
         config_read_only = False
 
     try:
         config.with_name("worker-payload").write_text("payload", encoding="utf-8")
-    except PermissionError:
+    except OSError as error:
+        assert error.errno in {errno.EACCES, errno.EPERM, errno.EROFS}
         config_directory_read_only = True
     else:
         config_directory_read_only = False

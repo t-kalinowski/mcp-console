@@ -19,25 +19,49 @@ relay:
   language: python
   source: |
     import os
+    import logging
     import sys
+    import tempfile
+    import warnings
 
     assert fork_ready
-    child = os.fork()
+    logger = logging.Logger("fork child")
+    logger.addHandler(logging.StreamHandler())
+    redirected = tempfile.TemporaryFile(mode="w+", encoding="utf-8")
+    parent_stdout = sys.stdout
+    sys.stdout = redirected
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        child = os.fork()
     if child == 0:
-        print("fork child stdout", flush=True)
+        print("redirected child stdout", flush=True)
         sys.stderr.write("fork child stderr\n")
         sys.stderr.flush()
+        logger.warning("cached child stderr")
         os._exit(0)
 
     _, status = os.waitpid(child, 0)
     assert os.waitstatus_to_exitcode(status) == 0
+    sys.stdout = parent_stdout
+    redirected.seek(0)
+    redirected_capture = redirected.read()
+    redirected.close()
+    print(f"redirected capture: {redirected_capture!r}")
     parent_stdout = sys.stdout.write("parent stdout\n")
     parent_stderr = sys.stderr.write("parent stderr\n")
 ---
-stdout: |
-  fork child stdout
 stderr: |
   fork child stderr
+  cached child stderr
+---
+worker:
+  kind: console_output
+  data: |-
+    redirected capture: 'redirected child stdout\n'
+---
+worker:
+  kind: console_output
+  data: "\n"
 ---
 worker:
   kind: console_output
@@ -51,4 +75,3 @@ worker:
 ---
 worker:
   kind: completed
-...

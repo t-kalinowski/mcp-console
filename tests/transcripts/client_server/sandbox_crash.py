@@ -4,17 +4,28 @@ import os
 import re
 import shutil
 import signal
-import subprocess
 import sys
 import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from _support import McpClient, Transcript, code, run_this_suite, stop_client
+from _support import (
+    McpClient,
+    Transcript,
+    code,
+    host_child_pid_by_name,
+    linux_host_pid,
+    linux_host_process_tree,
+    run_this_suite,
+    stop_client,
+)
 
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
+CASE_PLATFORMS = {
+    "manager_crash_retires_the_worker_generation": {"darwin"},
+}
 TIMEOUT = 10
 
 
@@ -51,6 +62,12 @@ def _spawn_processx_generation(client: McpClient) -> tuple[int, int, int, Path]:
     match = pattern.search(text)
     assert match is not None, text
     worker_pid, relay_pid, child_pid = map(int, match.group(1, 2, 3))
+    if sys.platform == "linux":
+        runner_pid = _runner_lifetime_processes(client.process.pid)[0]
+        worker_pid, relay_pid, child_pid = (
+            linux_host_pid(runner_pid, sandbox_pid)
+            for sandbox_pid in (worker_pid, relay_pid, child_pid)
+        )
     assert os.getpgid(child_pid) != os.getpgid(worker_pid), (
         "processx child did not leave the worker process group"
     )
@@ -111,27 +128,11 @@ def _wait_for_generation_failure(client: McpClient) -> None:
         time.sleep(0.01)
 
 
-def _child_pid_by_name(parent_pid: int, name: str) -> int:
-    processes = subprocess.check_output(
-        ["ps", "-axo", "pid=,ppid=,comm="],
-        text=True,
-    )
-    matches = []
-    for process in processes.splitlines():
-        fields = process.strip().split(None, 2)
-        if (
-            len(fields) == 3
-            and int(fields[1]) == parent_pid
-            and Path(fields[2]).name == name
-        ):
-            matches.append(int(fields[0]))
-    assert len(matches) == 1, (parent_pid, name, matches)
-    return matches[0]
-
-
-def _runner_lifetime_processes(server_pid: int) -> tuple[int, int]:
-    runner_pid = _child_pid_by_name(server_pid, "mcp-console-sandbox")
-    manager_pid = _child_pid_by_name(runner_pid, "mcp-console-sandbox")
+def _runner_lifetime_processes(server_pid: int) -> tuple[int, ...]:
+    runner_pid = host_child_pid_by_name(server_pid, "mcp-console-sandbox")
+    if sys.platform == "linux":
+        return linux_host_process_tree(runner_pid)
+    manager_pid = host_child_pid_by_name(runner_pid, "mcp-console-sandbox")
     return runner_pid, manager_pid
 
 
@@ -160,15 +161,24 @@ def test_server_crash_retires_the_worker_generation(binary: Path) -> Transcript:
     # it could run its normal shutdown path.
     client = McpClient(binary, ("serve",))
     generation: tuple[int, int, int, Path] | None = None
-    lifetime: tuple[int, int] | None = None
+    lifetime: tuple[int, ...] | None = None
     try:
         client._initialize_and_list_tools()
         generation = _spawn_processx_generation(client)
         lifetime = _runner_lifetime_processes(client.process.pid)
+        if sys.platform == "linux":
+            unnamed_lifetime_pids = set(lifetime) - {
+                lifetime[0],
+                *generation[:3],
+            }
+            assert unnamed_lifetime_pids, (
+                "Linux worker lifetime omitted its helper processes"
+            )
 
         os.kill(client.process.pid, signal.SIGKILL)
         returncode = client.process.wait(timeout=TIMEOUT)
-        survivors = _wait_for_survivors((*generation[:3], *lifetime), timeout=5)
+        generation_pids = tuple(sorted({*generation[:3], *lifetime}))
+        survivors = _wait_for_survivors(generation_pids, timeout=5)
 
         assert returncode == -signal.SIGKILL, returncode
         assert survivors == [], f"worker-generation processes survived: {survivors}"
@@ -200,11 +210,19 @@ def test_relay_crash_retires_the_worker_generation(binary: Path) -> Transcript:
     # code running inside the relay.
     client = McpClient(binary, ("serve",))
     generation: tuple[int, int, int, Path] | None = None
-    lifetime: tuple[int, int] | None = None
+    lifetime: tuple[int, ...] | None = None
     try:
         client._initialize_and_list_tools()
         generation = _spawn_processx_generation(client)
         lifetime = _runner_lifetime_processes(client.process.pid)
+        if sys.platform == "linux":
+            unnamed_lifetime_pids = set(lifetime) - {
+                lifetime[0],
+                *generation[:3],
+            }
+            assert unnamed_lifetime_pids, (
+                "Linux worker lifetime omitted its helper processes"
+            )
 
         os.kill(generation[0], signal.SIGKILL)
         client.transcript.append({"relay_signal": "SIGKILL"})
@@ -214,7 +232,8 @@ def test_relay_crash_retires_the_worker_generation(binary: Path) -> Transcript:
         assert replacement == "[starting new worker]\nreplacement ready\n", repr(
             replacement
         )
-        survivors = _wait_for_survivors((*generation[:3], *lifetime), timeout=5)
+        generation_pids = tuple(sorted({*generation[:3], *lifetime}))
+        survivors = _wait_for_survivors(generation_pids, timeout=5)
         survivor_names = [
             name
             for name, pid in zip(("relay", "worker", "processx child"), generation[:3])

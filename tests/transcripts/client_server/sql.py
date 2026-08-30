@@ -1,5 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
+import errno
 import os
 import re
 import sys
@@ -18,7 +19,7 @@ from _support import (
     wait_for_worker_file,
 )
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
 
 
 def test_uses_default_duckdb_extensions(binary: Path) -> Transcript:
@@ -433,7 +434,14 @@ def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
     client.send(r=r)
     output = normalize_duckdb_progress(client)
     assert "knowledge.ragnar.duckdb" in output
-    assert "Operation not permitted" in output
+    denial_messages = {
+        os.strerror(errno.EACCES),
+        os.strerror(errno.EPERM),
+        os.strerror(errno.EROFS),
+    }
+    observed_denials = [message for message in denial_messages if message in output]
+    assert len(observed_denials) == 1, output
+    output = output.replace(observed_denials[0], os.strerror(errno.EPERM))
     for directory in (str(workspace.resolve()), str(workspace)):
         output = output.replace(directory, "<workspace>")
     client.transcript[-1]["result"]["content"][0]["text"] = output

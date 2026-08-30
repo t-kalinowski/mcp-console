@@ -18,6 +18,7 @@ command:
     )
     writeLines(as.character(pipeline$get_pids()))
     flush.console()
+    stopifnot(identical(readLines(file("stdin"), n = 1L), "release"))
     quit(save = "no", status = 23L, runLast = FALSE)
 exit_code: 23
 stdout: |

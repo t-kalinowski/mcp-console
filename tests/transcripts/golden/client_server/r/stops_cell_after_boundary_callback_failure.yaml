@@ -8,9 +8,10 @@ send:
       "mcp_test_register_input_handler",
       file.path(tempdir(), "failing-handler-fifo"),
       function() {
-        plot(1)
+        grDevices::dev.new()
         old_umask <- Sys.umask("0777")
         on.exit(Sys.umask(old_umask), add = TRUE)
+        plot(1)
         grDevices::dev.off()
         Sys.umask(old_umask)
         on.exit(NULL)
@@ -33,4 +34,3 @@ result:
         [starting new worker]
         [idle]
   isError: true
-...

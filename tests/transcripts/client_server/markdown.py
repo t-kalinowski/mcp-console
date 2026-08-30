@@ -20,7 +20,7 @@ from _support import (
 )
 
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
 REQUIRED_COMMANDS = {"yamark"}
 
 

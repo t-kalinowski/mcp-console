@@ -109,6 +109,7 @@ impl Control {
         result
     }
 
+    #[cfg(target_os = "macos")]
     pub(super) fn interrupt(&mut self) -> Result<Value, String> {
         self.request("interrupt", json!({}), Duration::from_secs(2))
     }
@@ -331,8 +332,7 @@ pub(super) fn validate_capabilities(response: &Value, pin: &RunnerPin) -> Result
     expect_text(capabilities, "codex_source_revision", &pin.commit)?;
     expect_text(capabilities, "codex_release_tag", &pin.release)?;
 
-    let expected_backend = "macos_seatbelt";
-    expect_text(capabilities, "backend", expected_backend)?;
+    expect_text(capabilities, "backend", expected_backend())?;
     let setup = capabilities
         .get("setup")
         .ok_or_else(|| "private sandbox discovery omitted setup state".to_string())?;
@@ -405,9 +405,23 @@ pub(super) fn validate_capabilities(response: &Value, pin: &RunnerPin) -> Result
         "more_specific_then_deny_then_write_then_read",
     )?;
 
-    expect_bool(capabilities, "lifecycle", "interrupt", true)?;
-    expect_bool(capabilities, "lifecycle", "graceful_termination", true)?;
-    validate_companions(capabilities, &[])?;
+    expect_bool(
+        capabilities,
+        "lifecycle",
+        "interrupt",
+        cfg!(target_os = "macos"),
+    )?;
+    expect_bool(
+        capabilities,
+        "lifecycle",
+        "graceful_termination",
+        cfg!(target_os = "macos"),
+    )?;
+    #[cfg(target_os = "macos")]
+    let companions = &[][..];
+    #[cfg(target_os = "linux")]
+    let companions = &[("bubblewrap", "codex-resources/bwrap")][..];
+    validate_companions(capabilities, companions)?;
     Ok(())
 }
 
@@ -431,12 +445,24 @@ pub(super) fn expect_launch_accepted(response: &Value) -> Result<(), String> {
         .get("backend")
         .and_then(Value::as_str)
         .unwrap_or("missing");
-    if backend == "macos_seatbelt" {
+    let expected = expected_backend();
+    if backend == expected {
         Ok(())
     } else {
         Err(format!(
-            "private sandbox launch backend mismatch: expected macos_seatbelt, got {backend}"
+            "private sandbox launch backend mismatch: expected {expected}, got {backend}"
         ))
+    }
+}
+
+fn expected_backend() -> &'static str {
+    #[cfg(target_os = "macos")]
+    {
+        "macos_seatbelt"
+    }
+    #[cfg(target_os = "linux")]
+    {
+        "linux_bubblewrap"
     }
 }
 

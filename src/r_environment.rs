@@ -1,6 +1,6 @@
 const R_ENVIRONMENT_BRIDGE_SOURCE: &str = include_str!("r_environment/bridge.R");
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use libr::SEXP;
 
 pub(crate) struct Bridge(crate::r_bridge::Bridge);
@@ -54,7 +54,7 @@ impl Bridge {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[allow(clippy::result_large_err)]
 #[harp::register]
 pub extern "C-unwind" fn mcp_console_resolve_r(packages: SEXP) -> harp::Result<SEXP> {
@@ -69,7 +69,7 @@ pub extern "C-unwind" fn mcp_console_resolve_r(packages: SEXP) -> harp::Result<S
     Ok(harp::object::RObject::from(response).sexp)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[allow(clippy::result_large_err)]
 #[harp::register]
 pub extern "C-unwind" fn mcp_console_r_activated(library: SEXP) -> harp::Result<SEXP> {
@@ -78,7 +78,7 @@ pub extern "C-unwind" fn mcp_console_r_activated(library: SEXP) -> harp::Result<
     unsafe { Ok(libr::R_NilValue) }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[allow(clippy::result_large_err)]
 #[harp::register]
 pub extern "C-unwind" fn mcp_console_r_activation_failed(

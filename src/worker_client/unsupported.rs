@@ -30,7 +30,7 @@ impl WorkerRuntime {
             callbacks,
         );
         Err(super::output::SendFailure::from(
-            "workers are supported only on macOS".to_string(),
+            "workers are supported only on macOS and Linux".to_string(),
         ))
     }
 }
@@ -107,7 +107,7 @@ pub(super) struct WorkerShutdownHandle;
 
 impl WorkerShutdownHandle {
     pub(super) fn interrupt(&self) -> Result<(), String> {
-        Err("worker interrupts are supported only on macOS".to_string())
+        Err("worker interrupts are supported only on macOS and Linux".to_string())
     }
 
     pub(super) fn shutdown(&self, _deadline: std::time::Instant) -> Result<(), String> {

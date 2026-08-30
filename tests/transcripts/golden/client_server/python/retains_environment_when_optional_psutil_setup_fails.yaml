@@ -57,14 +57,21 @@ send:
         child.terminate()
         child.wait()
 
+    sandbox_scope = (
+        1 not in visible
+        if sys.platform == "darwin"
+        else int(os.environ["MCP_CONSOLE_TEST_HOST_PID"]) not in visible
+    )
+    worker_scope = all(group == process_group for group in visible_groups)
+
     (
         psutil.__name__,
         failing_psutil_finder.visible_lookups,
         live_sentinel,
         os.getpid() == live_pid,
-        1 not in visible,
+        sandbox_scope,
         visible == sorted(visible),
-        all(group == process_group for group in visible_groups),
+        worker_scope,
         child.pid in visible,
         child.pid in observed,
     )

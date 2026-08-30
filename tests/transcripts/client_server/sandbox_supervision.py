@@ -11,10 +11,18 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from _support import McpClient, Transcript, code, run_this_suite, stop_client
+from _support import (
+    McpClient,
+    Transcript,
+    code,
+    host_child_pid_by_name,
+    linux_host_pid,
+    run_this_suite,
+    stop_client,
+)
 
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
 
 
 def _last_text(client: McpClient) -> str:
@@ -32,6 +40,12 @@ def _normalize_generation(client: McpClient) -> tuple[int, int, int, Path]:
     match = pattern.search(text)
     assert match is not None, text
     worker_pid, relay_pid, child_pid = map(int, match.group(1, 2, 3))
+    if sys.platform == "linux":
+        runner_pid = host_child_pid_by_name(client.process.pid, "mcp-console-sandbox")
+        worker_pid, relay_pid, child_pid = (
+            linux_host_pid(runner_pid, sandbox_pid)
+            for sandbox_pid in (worker_pid, relay_pid, child_pid)
+        )
     assert os.getpgid(child_pid) != os.getpgid(worker_pid), (
         "processx child did not leave the worker process group"
     )
@@ -75,12 +89,13 @@ def _kill_if_alive(pid: int) -> bool:
 
 def _kill_generation(generation: tuple[int, int, int, Path]) -> list[str]:
     relay_pid, worker_pid, child_pid, _ = generation
-    survivors = []
-    for name, pid in (
+    processes = (
         ("relay", relay_pid),
         ("worker", worker_pid),
         ("processx child", child_pid),
-    ):
+    )
+    survivors = []
+    for name, pid in processes:
         if _kill_if_alive(pid):
             survivors.append(name)
     return survivors

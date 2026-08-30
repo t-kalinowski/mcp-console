@@ -47,3 +47,6 @@ result:
     - type: text
       text: "[worker evaluation is already being polled]"
   isError: true
+transcript_normalization:
+  target: transcript entries
+  polls: collapsed

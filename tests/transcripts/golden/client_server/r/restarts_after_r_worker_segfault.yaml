@@ -20,7 +20,7 @@ result:
       text: |2-
 
          *** caught segfault ***
-        address 0x0, cause 'invalid permissions'
+        address <signal address>, cause '<signal cause>'
 
         Traceback:
          1: tools::pskill(Sys.getpid(), signal = 11L)
@@ -56,4 +56,3 @@ result:
       text: |
         [1] 2
   isError: false
-...

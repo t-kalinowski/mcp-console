@@ -27,12 +27,14 @@ from _support import (
     Transcript,
     TranscriptWithCompanions,
     code,
+    host_child_pid_by_name,
+    linux_host_pid,
     r_test_environment,
     run_this_suite,
     stop_client,
 )
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
 LARGE_OUTPUT_SIZE = 2 * 1024 * 1024
 PENDING_TEXT_BUDGET = 8 * 1024 * 1024
 TEST_GATED_RESPONSE_SIZE = 128 * 1024
@@ -392,7 +394,9 @@ class SocketGateMcpClient(McpClient):
 
 def build_killpg_denial_interposer(directory: Path) -> Path:
     source = directory / "deny-killpg.c"
-    library = directory / "deny-killpg.dylib"
+    library = directory / (
+        "deny-killpg.dylib" if sys.platform == "darwin" else "deny-killpg.so"
+    )
     source.write_text(
         r"""
 #include <errno.h>
@@ -428,9 +432,14 @@ static int deny_killpg(pid_t process_group, int signal) {
 
 __attribute__((constructor))
 static void remove_interposer_from_child_environment(void) {
+#ifdef __APPLE__
     unsetenv("DYLD_INSERT_LIBRARIES");
+#else
+    unsetenv("LD_PRELOAD");
+#endif
 }
 
+#ifdef __APPLE__
 __attribute__((used))
 static struct {
     const void *replacement;
@@ -438,11 +447,19 @@ static struct {
 } interposers[] __attribute__((section("__DATA,__interpose"))) = {
     {(const void *)&deny_killpg, (const void *)&killpg},
 };
+#else
+int killpg(pid_t process_group, int signal) {
+    return deny_killpg(process_group, signal);
+}
+#endif
 """.removeprefix("\n"),
         encoding="utf-8",
     )
+    linker_arguments = (
+        ["-dynamiclib"] if sys.platform == "darwin" else ["-shared", "-fPIC"]
+    )
     subprocess.run(
-        ["cc", "-dynamiclib", "-o", library, source],
+        ["cc", *linker_arguments, "-o", library, source],
         check=True,
         capture_output=True,
         text=True,
@@ -1706,15 +1723,54 @@ def test_compacts_stdout_and_stderr_independently(binary: Path) -> Transcript:
     )
     client._initialize_and_list_tools()
 
-    client.send(r="emit independent stdout stderr redraws")
-    output = last_tool_text(client)
-    lines = sorted(output.splitlines(keepends=True))
-    assert lines == ["stderr final\n", "stdout final\n"], output
-    client.transcript[-1]["result"]["content"][0]["text"] = "".join(lines)
-    client.transcript[-1]["transcript_normalization"] = {
+    expected_lines = ["stderr final\n", "stdout final\n"]
+    running = "\n[running; poll with an empty send]"
+    call_start = len(client.transcript)
+    result = client.send(
+        r="emit independent stdout stderr redraws",
+        timeout_ms=0,
+    )
+    lines = []
+    deadline = time.monotonic() + 3
+    while True:
+        assert result["isError"] is False, result
+        assert len(result["content"]) == 1, result
+        output = result["content"][0]
+        assert output["type"] == "text", result
+        assert output["text"].endswith(running), result
+        payload = output["text"].removesuffix(running)
+        observed = payload.splitlines(keepends=True)
+        assert all(line in expected_lines for line in observed), output["text"]
+        lines.extend(observed)
+        assert len(lines) == len(set(lines)), lines
+        if sorted(lines) == expected_lines:
+            break
+        assert time.monotonic() < deadline, (
+            "independent stdout and stderr did not both reach MCP"
+        )
+        result = client.send(timeout_ms=0)
+
+    calls = client.transcript[call_start:]
+    submitted = calls[0]
+    submitted["result"] = {
+        "content": [
+            {
+                "type": "text",
+                "text": "".join(expected_lines) + running,
+            }
+        ],
+        "isError": False,
+    }
+    submitted["transcript_normalization"] = {
         "target": "result.content[0].text",
         "cross_source_position": "omitted",
+        "polls": "collapsed",
     }
+    client.transcript[call_start:] = [submitted]
+
+    client.send(stdin="complete independent streams\n", timeout_ms=3_000)
+    assert last_tool_text(client) == "[done]"
+    client.transcript[-1]["send"]["stdin"] = "<release independent streams>"
     return client._finish()
 
 
@@ -2262,7 +2318,7 @@ def test_supervises_stopped_and_continued_workers(binary: Path) -> Transcript:
             replacement_marker, replacement_pid, replacement_group = (
                 wait_for_stopped_worker(
                     temporary_path,
-                    {worker_pid},
+                    {marker},
                     workers,
                     client,
                 )
@@ -2339,9 +2395,10 @@ def resolver_interrupt_permission_environment(
     environment["MCP_CONSOLE_TEST_RESOLVER_STARTED"] = str(resolver_started)
     # The interposer removes its loader variable after reaching the server, so
     # the resolver and Zod do not inherit it.
-    environment["DYLD_INSERT_LIBRARIES"] = str(
-        build_killpg_denial_interposer(temporary_path)
+    loader_variable = (
+        "DYLD_INSERT_LIBRARIES" if sys.platform == "darwin" else "LD_PRELOAD"
     )
+    environment[loader_variable] = str(build_killpg_denial_interposer(temporary_path))
     return environment, resolver_started, denied_interrupt
 
 
@@ -3138,7 +3195,8 @@ def test_controlled_restart_runs_cell_once_in_fresh_worker(
             "zod-controlled-restart-old-worker",
             client,
         )
-        old_pid = int(old_worker.read_text(encoding="utf-8"))
+        old_namespace_pid = int(old_worker.read_text(encoding="utf-8"))
+        old_pid = host_sandbox_process_id(client, old_namespace_pid)
 
         client.send(
             control="restart",
@@ -3159,9 +3217,14 @@ def test_controlled_restart_runs_cell_once_in_fresh_worker(
         records = evaluations.read_text(encoding="utf-8").splitlines()
         assert len(records) == 1, records
         new_pid, state, count = records[0].split()
-        assert int(new_pid) != old_pid, records
-        assert (state, count) == ("fresh", "1"), records
+        if sys.platform == "darwin":
+            assert int(new_pid) != old_pid, records
+        else:
+            # Linux worker PIDs are namespace-local and may be reused by a new
+            # sandbox, so compare their generation directories instead.
+            assert evaluations.parent != old_worker.parent, records
         assert not process_exists(old_pid), old_pid
+        assert (state, count) == ("fresh", "1"), records
 
         client.send()
         assert last_tool_text(client) == "\n[idle]"
@@ -3542,8 +3605,10 @@ def test_restart_interrupts_waiting_send(binary: Path) -> Transcript:
 def test_restarts_after_unexpected_sideband_message(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
+        environment["ZOD_REPORT_PROCESS_GROUP"] = "1"
         client = McpClient(
             binary,
             ("serve", "--worker", str(zod)),
@@ -3559,12 +3624,23 @@ def test_restarts_after_unexpected_sideband_message(binary: Path) -> Transcript:
             assert process_group_output.startswith(process_group_prefix), (
                 process_group_output
             )
-            worker_group = int(
+            namespace_worker_group = int(
                 process_group_output.removeprefix(process_group_prefix).removesuffix(
                     "\n"
                 )
             )
-            assert process_group_output == f"{process_group_prefix}{worker_group}\n"
+            assert process_group_output == (
+                f"{process_group_prefix}{namespace_worker_group}\n"
+            )
+            wait_for_marker(
+                temporary_path,
+                "zod-process-group",
+                client,
+            )
+            worker_group = host_sandbox_process_group(
+                client,
+                namespace_worker_group,
+            )
             assert worker_group != os.getpgrp(), (
                 "Zod did not enter a dedicated process group"
             )
@@ -3664,55 +3740,89 @@ def test_reports_unexpected_worker_exit_zero(binary: Path) -> Transcript:
 
 def test_replaces_worker_after_relay_exit(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
-    client = McpClient(
-        binary,
-        ("serve", "--worker", str(zod)),
-    )
+    environment = os.environ.copy()
     worker_pid = None
     launcher_pid = None
     relay_pid = None
     passed = False
-    try:
-        client._initialize_and_list_tools()
-        client.send(r="kill relay and remain live", timeout_ms=5_000)
-
-        result = client.transcript[-1]["result"]
-        assert result["isError"] is True, result
-        topology, failure = result["content"][0]["text"].split("\n", 1)
-        worker, launcher, relay = topology.split("; ")
-        worker_pid = int(worker.removeprefix("zod worker pid: "))
-        launcher_pid = int(launcher.removeprefix("launcher pid: "))
-        relay_pid = int(relay.removeprefix("relay process group: "))
-        assert len({worker_pid, launcher_pid, relay_pid}) == 3, topology
-        assert failure == (
-            "[worker relay stdout closed before retirement completed]\n"
-            "[worker stopped: in-memory state lost]\n"
-            "[starting new worker]\n"
-            "[idle]"
-        ), failure
-        result["content"][0]["text"] = (
-            "zod worker pid: <worker pid>; "
-            "launcher pid: <launcher pid>; "
-            "relay process group: <relay process group>\n" + failure
+    with ZodFixtureControl() as control:
+        control.configure(environment)
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
         )
-        assert not process_exists(worker_pid), "worker outlived its relay"
-        assert not process_exists(launcher_pid), "worker launcher outlived its relay"
-        assert not process_exists(relay_pid), "server did not reap the relay"
-        assert not process_group_exists(relay_pid), (
-            "relay process group outlived private runner retirement"
-        )
+        try:
+            client._initialize_and_list_tools()
+            operation = client._next_request_id
+            failed = client._start_send(
+                r=f"kill relay and remain live: {operation}",
+                timeout_ms=5_000,
+            )
+            event = control.wait_for(operation, "relay_exit_ready")
+            namespace_pids = (
+                event["worker_pid"],
+                event["launcher_pid"],
+                event["relay_process_group"],
+            )
+            assert all(isinstance(pid, int) and pid > 0 for pid in namespace_pids), (
+                event
+            )
+            if sys.platform == "linux":
+                runner_pid = host_child_pid_by_name(
+                    client.process.pid,
+                    "mcp-console-sandbox",
+                )
+                worker_pid, launcher_pid, relay_pid = (
+                    linux_host_pid(runner_pid, pid) for pid in namespace_pids
+                )
+            else:
+                worker_pid, launcher_pid, relay_pid = namespace_pids
+            os.kill(relay_pid, signal.SIGKILL)
+            client._receive(failed)
 
-        client.send(r="echo echo")
-        assert last_tool_text(client) == "zod: echo\n"
-        transcript = client._finish()
-        passed = True
-        return transcript
-    finally:
-        if not passed:
-            stop_process_group(relay_pid)
-            stop_process_id(launcher_pid)
-            stop_process_id(worker_pid)
-            stop_process(client.process)
+            result = failed["result"]
+            assert result["isError"] is True, result
+            topology, failure = result["content"][0]["text"].split("\n", 1)
+            worker, launcher, relay = topology.split("; ")
+            reported_pids = (
+                int(worker.removeprefix("zod worker pid: ")),
+                int(launcher.removeprefix("launcher pid: ")),
+                int(relay.removeprefix("relay process group: ")),
+            )
+            assert reported_pids == namespace_pids, (reported_pids, namespace_pids)
+            assert len(set(reported_pids)) == 3, topology
+            assert failure == (
+                "[worker relay stdout closed before retirement completed]\n"
+                "[worker stopped: in-memory state lost]\n"
+                "[starting new worker]\n"
+                "[idle]"
+            ), failure
+            result["content"][0]["text"] = (
+                "zod worker pid: <worker pid>; "
+                "launcher pid: <launcher pid>; "
+                "relay process group: <relay process group>\n" + failure
+            )
+            assert not process_exists(worker_pid), "worker outlived its relay"
+            assert not process_exists(launcher_pid), (
+                "worker launcher outlived its relay"
+            )
+            assert not process_exists(relay_pid), "server did not reap the relay"
+            assert not process_group_exists(relay_pid), (
+                "relay process group outlived private runner retirement"
+            )
+
+            client.send(r="echo echo")
+            assert last_tool_text(client) == "zod: echo\n"
+            transcript = client._finish()
+            passed = True
+            return transcript
+        finally:
+            if not passed:
+                stop_process_group(relay_pid)
+                stop_process_id(launcher_pid)
+                stop_process_id(worker_pid)
+                stop_process(client.process)
 
 
 def test_restart_closes_worker_stdin(binary: Path) -> Transcript:
@@ -3780,7 +3890,11 @@ def test_restart_force_stops_stalled_worker(binary: Path) -> Transcript:
                 "zod-process-group",
                 client,
             )
-            worker_group = read_worker_group(group_marker)
+            namespace_worker_group = read_worker_group(group_marker)
+            worker_group = host_sandbox_process_group(
+                client,
+                namespace_worker_group,
+            )
             wait_for_marker(temporary_path, "zod-stalled", client)
 
             restart_call = client._start_send(control="restart")
@@ -3828,7 +3942,10 @@ def test_restart_allows_accepted_relay_shutdown_to_finish(
                 "zod-relay-resume-helper",
                 client,
             )
-            helper_pid = int(helper_marker.read_text(encoding="utf-8"))
+            helper_pid = host_sandbox_process_id(
+                client,
+                int(helper_marker.read_text(encoding="utf-8")),
+            )
 
             restarted = client._start_send(control="restart")
             wait_for_marker(
@@ -3884,9 +4001,9 @@ def test_restart_outer_force_stops_unresponsive_relay(binary: Path) -> Transcrip
                 "zod-relay-stop-helper",
                 client,
             )
-            helper_pid = int(helper_marker.read_text(encoding="utf-8"))
+            namespace_helper_pid = int(helper_marker.read_text(encoding="utf-8"))
             wait_for_marker(temporary_path, "zod-relay-stopped", client)
-            relay_target, launcher_pid = map(
+            namespace_relay_target, namespace_launcher_pid = map(
                 int,
                 wait_for_marker(
                     temporary_path,
@@ -3896,15 +4013,22 @@ def test_restart_outer_force_stops_unresponsive_relay(binary: Path) -> Transcrip
                 .read_text(encoding="utf-8")
                 .split(),
             )
-            worker_group = read_worker_group(
+            namespace_worker_group = read_worker_group(
                 wait_for_marker(temporary_path, "zod-process-group", client)
             )
-            assert relay_target == worker_group, (
+            assert namespace_relay_target == namespace_worker_group, (
                 "helper did not stop the sandbox process-group leader"
             )
-            assert launcher_pid != relay_target, (
+            assert namespace_launcher_pid != namespace_relay_target, (
                 "Zod launcher unexpectedly identified the relay"
             )
+            helper_pid, launcher_pid, relay_target = host_sandbox_process_ids(
+                client,
+                namespace_helper_pid,
+                namespace_launcher_pid,
+                namespace_relay_target,
+            )
+            worker_group = relay_target
             assert os.getpgid(launcher_pid) == relay_target, (
                 "Zod launcher did not inherit the relay process group"
             )
@@ -3983,8 +4107,12 @@ def test_restart_starts_first_worker_and_waits_until_ready(
                 "zod-replacement-waiting-ready",
                 client,
             )
-            worker_group = read_worker_group(
+            namespace_worker_group = read_worker_group(
                 wait_for_marker(temporary_path, "zod-process-group", client)
+            )
+            worker_group = host_sandbox_process_group(
+                client,
+                namespace_worker_group,
             )
 
             while_restarting = client._start_send(r="echo echo")
@@ -4047,7 +4175,10 @@ def test_restart_does_not_report_never_ready_worker_as_stopped(
                 "zod-detached-startup-sideband-pid",
                 client,
             )
-            descendant_group = int(marker.read_text(encoding="utf-8"))
+            descendant_group = host_sandbox_process_group(
+                client,
+                int(marker.read_text(encoding="utf-8")),
+            )
 
             startup_control.write_text("ready", encoding="utf-8")
             restarted = client._start_send(control="restart")
@@ -4257,8 +4388,14 @@ def test_shuts_down_stalled_worker(binary: Path) -> Transcript:
             stalled["send"]["r"] = "stall"
             stalled["send"]["stdin"] = "<large stdin>"
             event = control.wait_for(operation, "parent_operation_stalled")
-            worker_group = event["process_group"]
-            assert isinstance(worker_group, int) and worker_group > 0, event
+            namespace_worker_group = event["process_group"]
+            assert (
+                isinstance(namespace_worker_group, int) and namespace_worker_group > 0
+            ), event
+            worker_group = host_sandbox_process_group(
+                client,
+                namespace_worker_group,
+            )
             client.stdin.close()
             try:
                 return_code = client.process.wait(timeout=3)
@@ -4317,11 +4454,12 @@ def test_shutdown_is_bounded_with_detached_stdin_descendant(
             created_group = created["process_group"]
             assert isinstance(created_group, int) and created_group > 0, created
             assert created["pid"] == created_group, created
-            assert created_group != os.getpgrp(), created
+            if sys.platform == "darwin":
+                assert created_group != os.getpgrp(), created
             assert created["inherited_fd"] == 0, created
             retained_fd = created["retained_fd"]
             assert isinstance(retained_fd, int) and retained_fd > 2, created
-            descendant_group = created_group
+            namespace_descendant_group = created_group
 
             control.wait_for(operation, "parent_waiting_for_stdin")
             probe_start = len(client.transcript)
@@ -4372,14 +4510,18 @@ def test_shutdown_is_bounded_with_detached_stdin_descendant(
             stalled_event = control.wait_for(operation, "parent_operation_stalled")
             stalled_group = stalled_event["process_group"]
             assert isinstance(stalled_group, int) and stalled_group > 0, stalled_event
-            assert stalled_group != os.getpgrp(), stalled_event
-            assert stalled_group != descendant_group, stalled_event
-            worker_group = stalled_group
+            assert stalled_group != namespace_descendant_group, stalled_event
+            descendant_group, worker_group = host_sandbox_process_ids(
+                client,
+                namespace_descendant_group,
+                stalled_group,
+            )
+            assert os.getpgid(descendant_group) == descendant_group, created
+            assert os.getpgid(worker_group) == worker_group, stalled_event
+            assert worker_group != os.getpgrp(), stalled_event
 
             stalled = client._start_send(timeout_ms=30_000)
-            client.send(timeout_ms=0)
-            polling = client.transcript[-1]
-            assert polling["result"] == {
+            expected_polling_result = {
                 "content": [
                     {
                         "type": "text",
@@ -4387,7 +4529,32 @@ def test_shutdown_is_bounded_with_detached_stdin_descendant(
                     }
                 ],
                 "isError": True,
-            }, polling
+            }
+            polling_start = len(client.transcript)
+            deadline = time.monotonic() + 3
+            while True:
+                client.send(timeout_ms=0)
+                polling = client.transcript[-1]
+                if polling["result"] == expected_polling_result:
+                    break
+                assert polling["result"] == {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "\n[running; poll with an empty send]",
+                        }
+                    ],
+                    "isError": False,
+                }, polling
+                assert time.monotonic() < deadline, (
+                    "pending poll did not claim the worker evaluation; "
+                    + control.diagnostics()
+                )
+            polling["transcript_normalization"] = {
+                "target": "transcript entries",
+                "polls": "collapsed",
+            }
+            client.transcript[polling_start:] = [polling]
 
             shutdown_started = time.monotonic()
             client.stdin.close()
@@ -4429,7 +4596,6 @@ def test_shutdown_is_bounded_with_detached_stdin_descendant(
                 "detached stdin descendant outlived mcp-console shutdown; "
                 + control.diagnostics()
             )
-            control.wait_for_eof()
             descendant_cleaned = True
             return client.transcript
         finally:
@@ -4586,7 +4752,11 @@ def test_restart_cancels_partial_sideband_frame(binary: Path) -> Transcript:
                 "zod-sideband-descendant-pid",
                 client,
             )
-            descendant_group = int(marker.read_text(encoding="utf-8"))
+            namespace_descendant_group = int(marker.read_text(encoding="utf-8"))
+            descendant_group = host_sandbox_process_group(
+                client,
+                namespace_descendant_group,
+            )
             release_partial_sideband(marker)
 
             restarted = client._start_send(control="restart")
@@ -4653,7 +4823,11 @@ def test_restart_cancels_reader_after_operation_result(
                 "zod-sideband-descendant-pid",
                 client,
             )
-            descendant_group = int(marker.read_text(encoding="utf-8"))
+            namespace_descendant_group = int(marker.read_text(encoding="utf-8"))
+            descendant_group = host_sandbox_process_group(
+                client,
+                namespace_descendant_group,
+            )
 
             restarted = client._start_send(control="restart")
             received = threading.Event()
@@ -4702,11 +4876,18 @@ def test_restart_drains_readable_frame_before_abandoning_partial_tail(
     )
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
-        interposer = temporary / "delay-sideband-poll.dylib"
+        interposer = temporary / (
+            "delay-sideband-poll.dylib"
+            if sys.platform == "darwin"
+            else "delay-sideband-poll.so"
+        )
+        linker_arguments = (
+            ["-dynamiclib"] if sys.platform == "darwin" else ["-shared", "-fPIC"]
+        )
         subprocess.run(
             [
                 "cc",
-                "-dynamiclib",
+                *linker_arguments,
                 "-std=c11",
                 "-Wall",
                 "-Wextra",
@@ -4763,7 +4944,11 @@ def test_restart_drains_readable_frame_before_abandoning_partial_tail(
                 client,
             )
             cleanup_path = marker.parent / f"zod-test-cleanup-{channel}"
-            descendant_group = int(marker.read_text(encoding="utf-8"))
+            namespace_descendant_group = int(marker.read_text(encoding="utf-8"))
+            descendant_group = host_sandbox_process_group(
+                client,
+                namespace_descendant_group,
+            )
             wait_for_marker(temporary, socket_ready_name, client)
             wait_for_marker(temporary, partial_tail_name, client)
             restart = client._start_send(control="restart")
@@ -4833,7 +5018,11 @@ def test_shutdown_cancels_partial_sideband_frame(binary: Path) -> Transcript:
                 "zod-sideband-descendant-pid",
                 client,
             )
-            descendant_group = int(marker.read_text(encoding="utf-8"))
+            namespace_descendant_group = int(marker.read_text(encoding="utf-8"))
+            descendant_group = host_sandbox_process_group(
+                client,
+                namespace_descendant_group,
+            )
             release_partial_sideband(marker)
 
             shutdown_started = time.monotonic()
@@ -4894,8 +5083,14 @@ def test_shutdown_deadline_does_not_wait_for_sideband_writer(
             entry = client._start_send(r="x" * (2 * 1024 * 1024))
             assert entry["id"] == target_operation, entry
             event = control.wait_for(target_operation, "sideband_reader_stalled")
-            worker_group = event["process_group"]
-            assert isinstance(worker_group, int) and worker_group > 0, event
+            namespace_worker_group = event["process_group"]
+            assert (
+                isinstance(namespace_worker_group, int) and namespace_worker_group > 0
+            ), event
+            worker_group = host_sandbox_process_group(
+                client,
+                namespace_worker_group,
+            )
             entry["send"]["r"] = "<large cell>"
             shutdown_started = time.monotonic()
             client.stdin.close()
@@ -4943,25 +5138,42 @@ def wait_for_marker(
 
 def wait_for_stopped_worker(
     root: Path,
-    previous_process_ids: set[int],
+    previous_markers: set[Path],
     recorded_workers: list[tuple[int, int]],
     client: McpClient,
 ) -> tuple[Path, int, int]:
     deadline = time.monotonic() + 3
     while True:
         for marker in root.glob("**/zod-stop-continue-worker"):
-            process_id, parent_id, process_group = map(
+            if marker in previous_markers:
+                continue
+            namespace_process_id, namespace_parent_id, namespace_process_group = map(
                 int,
                 marker.read_text(encoding="utf-8").split(),
             )
-            if process_id in previous_process_ids:
-                continue
+            if sys.platform == "darwin":
+                assert namespace_parent_id == namespace_process_group, (
+                    "stopped worker is not the relay process-group leader's child"
+                )
+            assert namespace_process_id != namespace_process_group, (
+                "stopped worker unexpectedly leads the relay process group"
+            )
+            process_id, parent_id, process_group = host_sandbox_process_ids(
+                client,
+                namespace_process_id,
+                namespace_parent_id,
+                namespace_process_group,
+            )
+            parent_status = read_process_status(parent_id)
+            assert parent_status is not None, (
+                "worker relay exited before its stopped child"
+            )
+            assert parent_status[1] == process_group, (
+                "worker and relay do not share a process group"
+            )
             worker = (process_id, process_group)
             if worker not in recorded_workers:
                 recorded_workers.append(worker)
-            assert parent_id == process_group, (
-                "stopped worker is not the relay's direct child"
-            )
             assert process_id != process_group, (
                 "stopped worker unexpectedly leads the relay process group"
             )
@@ -5054,8 +5266,41 @@ def stop_recorded_worker(process_id: int, process_group: int) -> None:
 
 def read_worker_group(marker: Path) -> int:
     worker_group = int(marker.read_text(encoding="utf-8"))
-    assert worker_group != os.getpgrp(), "Zod did not enter a dedicated process group"
+    assert worker_group > 0, worker_group
+    if sys.platform == "darwin":
+        assert worker_group != os.getpgrp(), (
+            "Zod did not enter a dedicated process group"
+        )
     return worker_group
+
+
+def host_sandbox_process_ids(
+    client: McpClient,
+    *sandbox_process_ids: int,
+) -> tuple[int, ...]:
+    assert sandbox_process_ids
+    if sys.platform == "darwin":
+        return sandbox_process_ids
+    runner_pid = host_child_pid_by_name(
+        client.process.pid,
+        "mcp-console-sandbox",
+    )
+    return tuple(
+        linux_host_pid(runner_pid, process_id) for process_id in sandbox_process_ids
+    )
+
+
+def host_sandbox_process_id(client: McpClient, sandbox_process_id: int) -> int:
+    (process_id,) = host_sandbox_process_ids(client, sandbox_process_id)
+    return process_id
+
+
+def host_sandbox_process_group(client: McpClient, sandbox_process_group: int) -> int:
+    process_group = host_sandbox_process_id(client, sandbox_process_group)
+    assert os.getpgid(process_group) == process_group, (
+        "sandbox process-group leader changed process groups"
+    )
+    return process_group
 
 
 def release_partial_sideband(marker: Path) -> None:

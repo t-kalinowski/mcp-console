@@ -4,12 +4,14 @@
 # ///
 
 import array
+import errno
 import fcntl
 import json
 import os
 import select
 import signal
 import socket
+import sys
 import termios
 import time
 from enum import StrEnum
@@ -608,7 +610,8 @@ def main() -> None:
         if source == "exit zero":
             os._exit(0)
 
-        if source == "kill relay and remain live":
+        if source.startswith("kill relay and remain live: "):
+            operation = int(source.removeprefix("kill relay and remain live: "))
             worker_pid = os.getpid()
             launcher_pid = os.getppid()
             relay_pid = os.getpgrp()
@@ -623,7 +626,14 @@ def main() -> None:
                 ),
             )
             wait_for_server_to_process_sideband(reader, writer)
-            os.kill(relay_pid, signal.SIGKILL)
+            assert test_channel_path("events") is not None
+            emit_test_event(
+                operation,
+                "relay_exit_ready",
+                worker_pid=worker_pid,
+                launcher_pid=launcher_pid,
+                relay_process_group=relay_pid,
+            )
             while True:
                 signal.pause()
 
@@ -650,6 +660,7 @@ def main() -> None:
             # stream's sequence in one atomic pipe write.
             write_all(1, b"\rstdout old\rstdout final\n")
             write_all(2, b"\rstderr old\rstderr final\n")
+            assert input() == "complete independent streams"
             send(writer, {"kind": "completed"})
             continue
 
@@ -988,7 +999,9 @@ def main() -> None:
                     "escaped",
                     encoding="utf-8",
                 )
-            except PermissionError:
+            except OSError as error:
+                expected_errno = errno.EROFS if sys.platform == "linux" else errno.EPERM
+                assert error.errno == expected_errno
                 output = "sandbox blocked host write\n"
             else:
                 output = "worker escaped sandbox\n"

@@ -8,14 +8,14 @@ mod evaluation;
 mod lifecycle;
 mod output;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod events;
 
-#[cfg(target_os = "macos")]
-#[path = "worker_client/macos.rs"]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[path = "worker_client/unix.rs"]
 mod platform;
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 #[path = "worker_client/unsupported.rs"]
 mod platform;
 
@@ -37,7 +37,7 @@ pub(crate) const DEFAULT_R_REQUIREMENTS: &[&str] = &[
     "nanoarrow",
 ];
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 const DEFAULT_DUCKDB_EXTENSIONS: &[&str] = &["icu", "json"];
 
 const CUSTOM_DUCKDB_R_REQUIREMENTS: &[&str] = &["DBI", "duckdb", "jsonlite"];
@@ -309,7 +309,7 @@ impl Client {
         let configured_python = std::env::var_os("RETICULATE_PYTHON");
         let program = std::env::current_exe()
             .map_err(|error| format!("failed to locate the R worker executable: {error}"))?;
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         let (r, duckdb_extensions, python, r_resolver) = {
             let r_resolver =
                 crate::resolver::discover_r_resolver(&mut python_resolver, |_| Ok(()))?;
@@ -351,7 +351,7 @@ impl Client {
                 ),
             }
         };
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         let (r, duckdb_extensions, python, r_resolver) = (
             Option::<crate::resolver::ManagedR>::None,
             Default::default(),

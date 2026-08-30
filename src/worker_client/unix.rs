@@ -23,7 +23,7 @@ pub(super) enum RelayRetirementAllowance {
     Always,
 }
 
-/// Spawns workers through the platform's runtime boundary.
+/// Spawns workers through the Unix runtime boundary.
 pub(super) struct WorkerRuntime;
 
 pub(super) struct Worker {

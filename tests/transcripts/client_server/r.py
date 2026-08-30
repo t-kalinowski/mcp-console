@@ -1,5 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
+import re
 import sys
 import tempfile
 import time
@@ -25,7 +26,7 @@ from _support import (
     wait_for_worker_file,
 )
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
 
 
 @contextmanager
@@ -322,9 +323,8 @@ def test_stops_cell_after_boundary_callback_failure(binary: Path) -> Transcript:
     with r_input_handler_client(binary) as (client, directory):
         client._initialize_and_list_tools()
 
-        # Create the finalized page without read permissions. The PNG device
-        # can write through its open descriptor, but publication cannot reopen
-        # it.
+        # Create the device before removing page permissions. Cairo opens the
+        # page at plot time, while Quartz opens it when the device closes.
         # fmt: r
         r = code(r"""
             dyn.load("./mcp_test_input_handler.so")
@@ -332,9 +332,10 @@ def test_stops_cell_after_boundary_callback_failure(binary: Path) -> Transcript:
               "mcp_test_register_input_handler",
               file.path(tempdir(), "failing-handler-fifo"),
               function() {
-                plot(1)
+                grDevices::dev.new()
                 old_umask <- Sys.umask("0777")
                 on.exit(Sys.umask(old_umask), add = TRUE)
+                plot(1)
                 grDevices::dev.off()
                 Sys.umask(old_umask)
                 on.exit(NULL)
@@ -384,9 +385,10 @@ def test_skips_final_boundary_callbacks_after_cell_failure(binary: Path) -> Tran
             writer <- fifo(callback_fifo, open = "wb")
             writeBin(as.raw(1), writer)
             close(writer)
-            plot(1)
+            grDevices::dev.new()
             old_umask <- Sys.umask("0777")
             on.exit(Sys.umask(old_umask), add = TRUE)
+            plot(1)
             grDevices::dev.off()
             Sys.umask(old_umask)
             on.exit(NULL)
@@ -808,6 +810,14 @@ def test_restarts_after_r_worker_segfault(binary: Path) -> Transcript:
         "[starting new worker]\n"
         "[idle]"
     ), repr(fatal_output)
+    crash_line = next(
+        line for line in fatal_output.splitlines() if line.startswith("address ")
+    )
+    assert re.fullmatch(r"address 0x[0-9a-f]+, cause '[^']+'", crash_line), crash_line
+    result["content"][0]["text"] = fatal_output.replace(
+        crash_line,
+        "address <signal address>, cause '<signal cause>'",
+    )
 
     client.send(r='exists("r_worker_marker", inherits = FALSE)')
     assert last_tool_text(client) == "[1] FALSE\n"
