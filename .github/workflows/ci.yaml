@@ -4,23 +4,61 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
+
+env:
+  UV_VERSION: "0.12.4"
 
 jobs:
-  snapshot:
-    name: Export SQL documentation sources
-    runs-on: ubuntu-latest
+  apply:
+    name: Apply SQL documentation update
+    runs-on: macos-latest
     steps:
-      - name: Check out repository
+      - name: Check out helper branch
         uses: actions/checkout@v7
-
-      - name: Upload source snapshot
-        uses: actions/upload-artifact@v4
         with:
-          name: sql-doc-snapshot
-          path: |
-            src/server.rs
-            docs/TOOL_DESCRIPTIONS.md
-            docs/BUILTIN_RUNTIME.md
-            tests/transcripts/client_server/server.py
-            tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+          ref: tmp/sql-dbapi-doc-snapshot
+          path: helper
+
+      - name: Check out feature branch
+        uses: actions/checkout@v7
+        with:
+          ref: sql-python-dbapi-connections
+          path: repo
+
+      - name: Install Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.0.1
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: Install R
+        uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: always
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Apply, validate, and push update
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd repo
+          git apply ../helper/sql-doc.patch
+          cargo fmt --all
+          python3 -m py_compile tests/transcripts/client_server/server.py
+          scripts/test --update client_server/server::initializes_and_lists_tools
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/server.rs docs/BUILTIN_RUNTIME.md tests/transcripts/client_server/server.py tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+          git commit -m "Document Python DB-API SQL connections"
+          git push origin HEAD:sql-python-dbapi-connections
