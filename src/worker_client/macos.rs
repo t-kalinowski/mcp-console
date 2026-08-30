@@ -118,6 +118,7 @@ impl WorkerRuntime {
             executable,
             arguments,
             relay,
+            builtin_worker,
             python,
             managed_r,
             dynamic_resolution,
@@ -145,6 +146,15 @@ impl WorkerRuntime {
         );
         if use_builtin_relay {
             command.arg("worker-relay");
+        }
+        if use_builtin_relay && builtin_worker {
+            // The fully built-in server-relay boundary needs only fd 0, 1,
+            // and 2. Custom workers and relays retain their existing
+            // descriptor inheritance until those development seams define an
+            // explicit allowlist.
+            command
+                .inherit_only_standard_streams()
+                .map_err(|error| format!("failed to prepare worker sandbox: {error}"))?;
         }
         command
             .arg(executable.as_os_str())
