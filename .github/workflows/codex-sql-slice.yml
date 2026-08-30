@@ -128,4 +128,4 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "Allow selecting a DBI connection for SQL cells"
-          git push --force-with-lease origin HEAD:feat/select-sql-dbi-connection
+          git push origin HEAD:refs/heads/feat/sql-dbi-connection
