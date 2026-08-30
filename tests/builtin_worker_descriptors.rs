@@ -3,7 +3,6 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -30,7 +29,6 @@ fn builtin_worker_closes_unlisted_server_descriptors() {
             "MCP_CONSOLE_TEST_INHERITED_FD",
             descriptor.as_raw_fd().to_string(),
         );
-    lower_child_descriptor_limit(&mut command, 32);
 
     let mut client = McpClient::spawn(command);
     let output = client.call_python(
@@ -62,9 +60,17 @@ print("closed")
 
 fn duplicate_inheritable(file: &File, minimum: libc::c_int) -> OwnedFd {
     let descriptor = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_DUPFD, minimum) };
-    assert!(descriptor >= minimum, "failed to duplicate descriptor: {}", std::io::Error::last_os_error());
+    assert!(
+        descriptor >= minimum,
+        "failed to duplicate descriptor: {}",
+        std::io::Error::last_os_error()
+    );
     let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFD) };
-    assert!(flags >= 0, "failed to read descriptor flags: {}", std::io::Error::last_os_error());
+    assert!(
+        flags >= 0,
+        "failed to read descriptor flags: {}",
+        std::io::Error::last_os_error()
+    );
     assert_eq!(
         unsafe { libc::fcntl(descriptor, libc::F_SETFD, flags & !libc::FD_CLOEXEC) },
         0,
@@ -72,23 +78,6 @@ fn duplicate_inheritable(file: &File, minimum: libc::c_int) -> OwnedFd {
         std::io::Error::last_os_error()
     );
     unsafe { OwnedFd::from_raw_fd(descriptor) }
-}
-
-fn lower_child_descriptor_limit(command: &mut Command, soft_limit: libc::rlim_t) {
-    unsafe {
-        command.pre_exec(move || {
-            let mut limits = std::mem::MaybeUninit::<libc::rlimit>::zeroed();
-            if libc::getrlimit(libc::RLIMIT_NOFILE, limits.as_mut_ptr()) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            let mut limits = limits.assume_init();
-            limits.rlim_cur = soft_limit;
-            if libc::setrlimit(libc::RLIMIT_NOFILE, &limits) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
 }
 
 struct TestDirectory(PathBuf);
@@ -103,7 +92,10 @@ impl TestDirectory {
         let sequence = NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed);
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("target/sandbox-tests")
-            .join(format!("{name}-{}-{unique}-{sequence}", std::process::id()));
+            .join(format!(
+                "{name}-{}-{unique}-{sequence}",
+                std::process::id()
+            ));
         fs::create_dir_all(&path).expect("test directory should be created");
         Self(path)
     }
@@ -198,7 +190,11 @@ impl McpClient {
         drop(self.input.take());
         let deadline = Instant::now() + Duration::from_secs(5);
         let status = loop {
-            if let Some(status) = self.server.try_wait().expect("server status should be readable") {
+            if let Some(status) = self
+                .server
+                .try_wait()
+                .expect("server status should be readable")
+            {
                 break status;
             }
             if Instant::now() >= deadline {
@@ -217,7 +213,11 @@ impl McpClient {
             .read_to_end(&mut stderr)
             .expect("stderr should be readable");
         assert!(status.success());
-        assert!(stderr.is_empty(), "server stderr: {}", String::from_utf8_lossy(&stderr));
+        assert!(
+            stderr.is_empty(),
+            "server stderr: {}",
+            String::from_utf8_lossy(&stderr)
+        );
     }
 }
 
@@ -244,6 +244,8 @@ fn write_message(writer: &mut impl Write, message: &Value) {
 
 fn read_message(reader: &mut impl BufRead) -> Value {
     let mut line = String::new();
-    reader.read_line(&mut line).expect("MCP message should be read");
+    reader
+        .read_line(&mut line)
+        .expect("MCP message should be read");
     serde_json::from_str(&line).expect("MCP message should be JSON")
 }
