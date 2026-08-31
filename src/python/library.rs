@@ -35,6 +35,11 @@ type PyObjectCallFunctionObjArgs = unsafe extern "C" fn(*mut PyObject, ...) -> *
 type PyUnicodeFromStringAndSize = unsafe extern "C" fn(*const libc::c_char, isize) -> *mut PyObject;
 type PyLongAsLong = unsafe extern "C" fn(*mut PyObject) -> libc::c_long;
 type PyDecRef = unsafe extern "C" fn(*mut PyObject);
+type PyErrFetch = unsafe extern "C" fn(*mut *mut PyObject, *mut *mut PyObject, *mut *mut PyObject);
+type PyErrNormalizeException =
+    unsafe extern "C" fn(*mut *mut PyObject, *mut *mut PyObject, *mut *mut PyObject);
+type PyErrDisplay = unsafe extern "C" fn(*mut PyObject, *mut PyObject, *mut PyObject);
+type PyErrClear = unsafe extern "C" fn();
 type PyErrPrint = unsafe extern "C" fn();
 
 const PY_FILE_INPUT: libc::c_int = 257;
@@ -72,6 +77,10 @@ struct PythonApi {
     unicode_from_string_and_size: PyUnicodeFromStringAndSize,
     long_as_long: PyLongAsLong,
     dec_ref: PyDecRef,
+    err_fetch: PyErrFetch,
+    err_normalize_exception: PyErrNormalizeException,
+    err_display: PyErrDisplay,
+    err_clear: PyErrClear,
     err_print: PyErrPrint,
 }
 
@@ -475,7 +484,7 @@ impl PythonApi {
                 // Database errors are normally caught by the Python adapter.
                 // Escaping exceptions such as KeyboardInterrupt remain ordinary
                 // console output and must not fall through to an R provider.
-                (self.err_print)();
+                self.display_pending_exception();
                 return Ok(super::SqlProvider::Handled);
             }
             let provider = (self.long_as_long)(result);
@@ -491,6 +500,34 @@ impl PythonApi {
                     Err("Python SQL dispatch returned an invalid provider".to_string())
                 }
             }
+        }
+    }
+
+    fn display_pending_exception(&self) {
+        // PyErr_Print exits the process for SystemExit. Fetch and display the
+        // pending exception directly so every Python language exception remains
+        // ordinary worker output.
+        unsafe {
+            let mut exception_type = std::ptr::null_mut();
+            let mut exception_value = std::ptr::null_mut();
+            let mut traceback = std::ptr::null_mut();
+            (self.err_fetch)(&mut exception_type, &mut exception_value, &mut traceback);
+            if !exception_type.is_null() {
+                (self.err_normalize_exception)(
+                    &mut exception_type,
+                    &mut exception_value,
+                    &mut traceback,
+                );
+                if !exception_type.is_null() && !exception_value.is_null() {
+                    (self.err_display)(exception_type, exception_value, traceback);
+                }
+            }
+            for object in [exception_type, exception_value, traceback] {
+                if !object.is_null() {
+                    (self.dec_ref)(object);
+                }
+            }
+            (self.err_clear)();
         }
     }
 
@@ -549,6 +586,12 @@ impl PythonApi {
             },
             long_as_long: unsafe { load_symbol(library, path, b"PyLong_AsLong\0")? },
             dec_ref: unsafe { load_symbol(library, path, b"Py_DecRef\0")? },
+            err_fetch: unsafe { load_symbol(library, path, b"PyErr_Fetch\0")? },
+            err_normalize_exception: unsafe {
+                load_symbol(library, path, b"PyErr_NormalizeException\0")?
+            },
+            err_display: unsafe { load_symbol(library, path, b"PyErr_Display\0")? },
+            err_clear: unsafe { load_symbol(library, path, b"PyErr_Clear\0")? },
             err_print: unsafe { load_symbol(library, path, b"PyErr_Print\0")? },
         })
     }

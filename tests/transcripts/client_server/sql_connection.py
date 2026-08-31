@@ -719,6 +719,62 @@ def test_interrupts_python_dbapi_provider_probe(binary: Path) -> Transcript:
                 stop_client(client)
 
 
+def test_recovers_when_python_sql_dispatch_trace_raises_system_exit(
+    binary: Path,
+) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+
+    # fmt: python
+    python = code("""
+        import _mcp_console_sql
+        import sys
+
+
+        class StatefulConnection:
+            description = (("answer",),)
+
+            def __init__(self):
+                self.answer = 42
+
+            def cursor(self):
+                return self
+
+            def execute(self, source):
+                return self
+
+            def fetchmany(self, size):
+                return [(self.answer,)][:size]
+
+
+        dispatch_code = _mcp_console_sql.dispatch.__code__
+
+
+        def exit_sql_dispatch(frame, event, argument):
+            if event == "call" and frame.f_code is dispatch_code:
+                raise SystemExit("selected SQL dispatch exit")
+            return exit_sql_dispatch
+
+
+        connection = StatefulConnection()
+        console_sql_connection(connection)
+        sys.settrace(exit_sql_dispatch)
+        """)
+    client.send(python=python)
+    assert last_tool_text(client) == "[done]"
+
+    client.send(sql="ANSWER")
+    assert "SystemExit: selected SQL dispatch exit" in last_tool_text(client)
+
+    client.send(python="connection.answer")
+    assert last_tool_text(client) == "42\n"
+
+    client.send(sql="ANSWER")
+    preview = last_tool_text(client)
+    assert "answer" in preview and "42" in preview
+    return client._finish()
+
+
 def last_tool_text(client: McpClient) -> str:
     result = client.transcript[-1]["result"]
     assert result.get("isError") is not True, result
