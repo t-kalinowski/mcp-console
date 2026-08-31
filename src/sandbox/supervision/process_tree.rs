@@ -61,7 +61,8 @@ pub(super) fn add_process_tree(
 
         if info.is_zombie {
             // macOS cannot attach a reliable process watch after exit, but the
-            // bounded teardown scan can still wait for this verified identity.
+            // tracker can still retain this verified identity until live
+            // observation or retirement classifies it.
             state.active.insert(pid, identity);
             continue;
         }

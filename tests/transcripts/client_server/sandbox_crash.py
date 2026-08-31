@@ -196,11 +196,6 @@ def test_relay_crash_retires_the_worker_generation(binary: Path) -> Transcript:
         )
         client.transcript.append({"relay_signal": "SIGKILL"})
         _wait_for_generation_failure(client)
-        client.send(r=code('writeLines("replacement ready")'))
-        replacement = _last_text(client)
-        assert replacement == "[starting new worker]\nreplacement ready\n", repr(
-            replacement
-        )
         survivors = _wait_for_generation_cleanup(generation, timeout=5)
         survivor_names = [
             name
@@ -209,12 +204,17 @@ def test_relay_crash_retires_the_worker_generation(binary: Path) -> Transcript:
             )
             if identity[0] in survivors
         ]
-
         assert survivors == [], (
             f"worker-generation processes survived: {survivor_names}"
         )
         assert not generation[3].exists(), (
             f"worker temporary directory survived relay crash: {generation[3]}"
+        )
+
+        client.send(r=code('writeLines("replacement ready")'))
+        replacement = _last_text(client)
+        assert replacement == "[starting new worker]\nreplacement ready\n", repr(
+            replacement
         )
         return client.transcript
     finally:
@@ -242,11 +242,6 @@ def test_manager_crash_retires_the_worker_generation(binary: Path) -> Transcript
         )
         client.transcript.append({"manager_signal": "SIGKILL"})
         _wait_for_generation_failure(client)
-        client.send(r=code('writeLines("replacement ready")'))
-        replacement = _last_text(client)
-        assert replacement == "[starting new worker]\nreplacement ready\n", repr(
-            replacement
-        )
         survivors = _wait_for_generation_cleanup(generation, timeout=5)
         survivor_names = [
             name
@@ -255,12 +250,17 @@ def test_manager_crash_retires_the_worker_generation(binary: Path) -> Transcript
             )
             if identity[0] in survivors
         ]
-
         assert survivors == [], (
             f"worker-generation processes survived manager crash: {survivor_names}"
         )
         assert not generation[3].exists(), (
             f"worker temporary directory survived manager crash: {generation[3]}"
+        )
+
+        client.send(r=code('writeLines("replacement ready")'))
+        replacement = _last_text(client)
+        assert replacement == "[starting new worker]\nreplacement ready\n", repr(
+            replacement
         )
         return client.transcript
     finally:

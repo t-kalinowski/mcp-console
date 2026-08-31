@@ -6,6 +6,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -24,6 +25,62 @@ from _support import (
 
 PLATFORMS = {"darwin"}
 TIMEOUT = 10
+
+
+def _build_signal_order_interposer(directory: Path) -> Path:
+    source = directory / "signal-order.c"
+    library = directory / "signal-order.dylib"
+    source.write_text(
+        r"""
+#include <fcntl.h>
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/syscall.h>
+#include <sys/types.h>
+#include <unistd.h>
+
+static void record_signal(const char *operation, pid_t target, int number) {
+    const char *marker = getenv("MCP_CONSOLE_TEST_SIGNAL_ORDER_MARKER");
+    if (marker == NULL || number != SIGKILL) {
+        return;
+    }
+    int descriptor = open(marker, O_WRONLY | O_CREAT | O_APPEND, 0600);
+    if (descriptor >= 0) {
+        dprintf(descriptor, "%d %s %d\n", getpid(), operation, target);
+        close(descriptor);
+    }
+}
+
+static int record_kill(pid_t process_id, int number) {
+    record_signal("kill", process_id, number);
+    return (int)syscall(SYS_kill, process_id, number);
+}
+
+static int record_killpg(pid_t process_group, int number) {
+    record_signal("killpg", process_group, number);
+    return (int)syscall(SYS_kill, -process_group, number);
+}
+
+__attribute__((used))
+static struct {
+    const void *replacement;
+    const void *replacee;
+} interposers[] __attribute__((section("__DATA,__interpose"))) = {
+    {(const void *)&record_kill, (const void *)&kill},
+    {(const void *)&record_killpg, (const void *)&killpg},
+};
+""".removeprefix("\n"),
+        encoding="utf-8",
+    )
+    subprocess.run(
+        ["clang", "-dynamiclib", source, "-o", library],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=TIMEOUT,
+    )
+    return library
 
 
 def _command(*arguments: str) -> list[str]:
@@ -179,12 +236,21 @@ def test_launcher_crash_retires_the_sandbox_lifetime(binary: Path) -> Transcript
         ))
         flush.console()
         Sys.sleep(60)
-        """)
+    """)
     arguments = ("sandbox", "--", "Rscript", "--vanilla", "-e", script)
+    interposer_directory = tempfile.TemporaryDirectory()
+    interposer_path = Path(interposer_directory.name)
+    signal_marker = interposer_path / "signal-order"
+    environment = os.environ.copy()
+    environment["MCP_CONSOLE_TEST_SIGNAL_ORDER_MARKER"] = str(signal_marker)
+    environment["DYLD_INSERT_LIBRARIES"] = str(
+        _build_signal_order_interposer(interposer_path)
+    )
     process = subprocess.Popen(
         [binary, *arguments],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        env=environment,
     )
     assert process.stdout is not None
     assert process.stderr is not None
@@ -197,6 +263,7 @@ def test_launcher_crash_retires_the_sandbox_lifetime(binary: Path) -> Transcript
             3,
             "the sandbox root, processx child, and temporary directory",
         )
+        root_pid = int(lines[0])
         for pid in map(int, lines[:2]):
             identities.append(capture_darwin_process_identity(pid))
         manager_pid = _child_pid_by_name(process.pid, "mcp-console")
@@ -207,12 +274,22 @@ def test_launcher_crash_retires_the_sandbox_lifetime(binary: Path) -> Transcript
         returncode = process.wait(timeout=TIMEOUT)
         survivors = _wait_for_survivors(identities, timeout=5)
         temporary_directory_survived = temporary_directory.exists()
+        manager_root_signals = [
+            operation
+            for line in signal_marker.read_text(encoding="utf-8").splitlines()
+            for caller, operation, target in [line.split()]
+            if int(caller) == manager_pid and int(target) == root_pid
+        ]
 
         assert returncode == -signal.SIGKILL, returncode
         assert survivors == [], f"launcher crash leaked sandbox processes: {survivors}"
         assert not temporary_directory_survived, (
             f"launcher crash leaked sandbox temporary directory: {temporary_directory}"
         )
+        assert "killpg" in manager_root_signals, manager_root_signals
+        assert (
+            "kill" not in manager_root_signals[: manager_root_signals.index("killpg")]
+        ), "manager signaled the exact root before its process group"
     finally:
         if process.poll() is None:
             process.kill()
@@ -222,6 +299,7 @@ def test_launcher_crash_retires_the_sandbox_lifetime(binary: Path) -> Transcript
         process.stderr.close()
         if temporary_directory is not None:
             shutil.rmtree(temporary_directory, ignore_errors=True)
+        interposer_directory.cleanup()
 
     return [
         {

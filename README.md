@@ -172,7 +172,8 @@ mcp-console --version
 
 `mcp-console serve` communicates with its MCP client over standard input and output.
 Each server worker generation has a host-side sandbox manager that treats its relay and worker process tree as one lifetime.
-The manager supervises descendants it observes from the relay root, including processes that enter another process group or session, and retires the lifetime if the server or relay exits unexpectedly.
+The manager supervises descendants it observes from the relay root, including processes that enter another process group or session.
+Normal restart, automatic worker replacement, orderly server shutdown, and unexpected server or relay exit retire that observed lifetime before replacement or exit.
 If the manager itself exits unsuccessfully while the relay root remains live and pinned, the server reconstructs its current process tree and performs bounded cleanup before replacing that worker generation.
 It cannot reconstruct a descendant that had already detached from that ancestry before the manager failed.
 The standalone `sandbox` development command uses the same manager and remains covered if its launcher crashes after manager ownership is committed.

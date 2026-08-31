@@ -4407,10 +4407,9 @@ def test_shutdown_is_bounded_with_detached_stdin_descendant(
             environment,
         )
         descendant_group = None
-        descendant_cleaned = False
+        descendant_retired = False
         worker_group = None
         server_stopped = False
-        operation = None
         try:
             client._initialize_and_list_tools()
             client.send(r="echo ready")
@@ -4544,13 +4543,14 @@ def test_shutdown_is_bounded_with_detached_stdin_descendant(
                 "detached stdin descendant outlived mcp-console shutdown; "
                 + control.diagnostics()
             )
+
             control.wait_for_eof()
-            descendant_cleaned = True
+            descendant_retired = True
             return client.transcript
         finally:
             if not server_stopped:
                 stop_process(client.process)
-            if not descendant_cleaned:
+            if not descendant_retired:
                 stop_process_group(descendant_group)
             stop_process_group(worker_group)
 
@@ -5051,21 +5051,15 @@ def test_shutdown_deadline_does_not_wait_for_sideband_writer(
                 stop_process(client.process)
 
 
-def wait_for_marker(
-    root: Path,
-    name: str,
-    client: McpClient,
-    *,
-    timeout: float = 3,
-) -> Path:
-    deadline = time.monotonic() + timeout
+def wait_for_marker(root: Path, name: str, client: McpClient) -> Path:
+    deadline = time.monotonic() + 3
     while True:
         markers = list(root.glob(f"**/{name}"))
         if markers:
             assert len(markers) == 1, f"found multiple {name} markers"
             return markers[0]
         assert client.process.poll() is None, "mcp-console stopped before Zod stalled"
-        assert time.monotonic() < deadline, f"Zod did not report its {name} checkpoint"
+        assert time.monotonic() < deadline, "Zod did not report its stall checkpoint"
         time.sleep(0.01)
 
 

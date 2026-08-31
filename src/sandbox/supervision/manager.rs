@@ -45,6 +45,12 @@ enum ManagerExit {
     Recovered,
 }
 
+enum OwnerDisposition {
+    Finish,
+    Stop,
+    Failed(String),
+}
+
 impl SandboxManager {
     pub(crate) fn spawn(cleanup_timeout: Duration) -> Result<Self, String> {
         let _ = cleanup_timeout_millis(cleanup_timeout)?;
@@ -398,25 +404,40 @@ fn finish_manager_failure(
             return Err(error);
         }
     };
-    let cleanup = match DescendantTracker::start(root_pid) {
-        Ok(tracker) => tracker.stop(cleanup_timeout),
-        Err(failure) => Err(failure.retire(cleanup_timeout)),
+    let cleanup_error = match DescendantTracker::start(root_pid) {
+        Ok(tracker) => tracker.stop(cleanup_timeout).err(),
+        Err(failure) => Some(failure.retire(cleanup_timeout)),
     };
-    if let Err(cleanup_error) = cleanup {
+    let group_error = stop_process_group(root).err();
+    if cleanup_error.is_none() && group_error.is_none() {
+        return Ok(ManagerExit::Recovered);
+    }
+    if let Some(cleanup_error) = cleanup_error {
         error = with_prior_error(Some(error), cleanup_error);
         if let Err(signal_error) = signal_process(root, libc::SIGKILL) {
             error = with_prior_error(Some(error), signal_error);
         }
-        if let Err(group_error) = platform::kill_process_group(root_pid as u32) {
-            error = with_prior_error(
-                Some(error),
-                format!("failed to stop sandbox process group: {group_error}"),
-            );
-        }
-        temporary_directory.preserve();
-        return Err(error);
     }
-    Ok(ManagerExit::Recovered)
+    if let Some(group_error) = group_error {
+        error = with_prior_error(Some(error), group_error);
+    }
+    temporary_directory.preserve();
+    Err(error)
+}
+
+fn stop_process_group(root: ProcessIdentity) -> Result<(), String> {
+    let info = process_info(root.pid)?
+        .ok_or_else(|| format!("sandbox root {} exited before group cleanup", root.pid))?;
+    if info.identity != root {
+        return Err(format!(
+            "sandbox root {} changed before group cleanup",
+            root.pid
+        ));
+    }
+    let root_pid = u32::try_from(root.pid)
+        .map_err(|_| format!("invalid sandbox process group {}", root.pid))?;
+    platform::kill_process_group(root_pid)
+        .map_err(|error| format!("failed to stop sandbox process group: {error}"))
 }
 
 fn with_prior_error(prior: Option<String>, error: String) -> String {
@@ -523,12 +544,29 @@ pub(super) fn run() -> Result<(), String> {
             temporary_directory,
         );
     }
-    let disposition_error = read_owner_disposition(&mut stream, root);
-    let tracker_result = join_tracker(tracker_thread);
-
-    let mut error = disposition_error;
-    if let Err(tracker_error) = tracker_result {
-        error = Some(with_prior_error(error, tracker_error));
+    let disposition = read_owner_disposition(&mut stream);
+    let stop_root = !matches!(&disposition, OwnerDisposition::Finish);
+    let mut error = match disposition {
+        OwnerDisposition::Finish | OwnerDisposition::Stop => None,
+        OwnerDisposition::Failed(error) => Some(error),
+    };
+    if stop_root {
+        if let Err(group_error) = stop_process_group(root) {
+            error = Some(with_prior_error(error, group_error));
+        }
+        if let Err(signal_error) = signal_process(root, libc::SIGKILL) {
+            error = Some(with_prior_error(error, signal_error));
+        }
+        if let Err(tracker_error) = join_tracker(tracker_thread) {
+            error = Some(with_prior_error(error, tracker_error));
+        }
+    } else {
+        if let Err(tracker_error) = join_tracker(tracker_thread) {
+            error = Some(with_prior_error(error, tracker_error));
+        }
+        if let Err(group_error) = stop_process_group(root) {
+            error = Some(with_prior_error(error, group_error));
+        }
     }
     if error.is_some() {
         temporary_directory.preserve();
@@ -543,11 +581,19 @@ fn finish_startup_failure(
     temporary_directory: platform::TemporaryDirectory,
     cleanup_timeout: Duration,
 ) -> Result<(), String> {
+    let mut cleanup_failed = false;
+    if let Err(group_error) = stop_process_group(root) {
+        error.push_str(&format!("; additionally, {group_error}"));
+        cleanup_failed = true;
+    }
     if let Err(signal_error) = signal_process(root, libc::SIGKILL) {
         error.push_str(&format!("; additionally, {signal_error}"));
     }
     if let Err(cleanup_error) = tracker.supervise(cleanup_timeout) {
         error.push_str(&format!("; additionally, {cleanup_error}"));
+        cleanup_failed = true;
+    }
+    if cleanup_failed {
         temporary_directory.preserve();
     }
     Err(error)
@@ -581,6 +627,11 @@ fn finish_committed_startup_failure(
     tracker_thread: std::thread::JoinHandle<Result<(), String>>,
     temporary_directory: platform::TemporaryDirectory,
 ) -> Result<(), String> {
+    let mut cleanup_failed = false;
+    if let Err(group_error) = stop_process_group(root) {
+        error = with_prior_error(Some(error), group_error);
+        cleanup_failed = true;
+    }
     if let Err(signal_error) = signal_process(root, libc::SIGKILL) {
         error = with_prior_error(Some(error), signal_error);
     }
@@ -592,6 +643,9 @@ fn finish_committed_startup_failure(
     }
     if let Err(cleanup_error) = join_tracker(tracker_thread) {
         error = with_prior_error(Some(error), cleanup_error);
+        cleanup_failed = true;
+    }
+    if cleanup_failed {
         temporary_directory.preserve();
     }
     Err(error)
@@ -604,37 +658,27 @@ fn join_tracker(tracker_thread: std::thread::JoinHandle<Result<(), String>>) -> 
         .and_then(|result| result)
 }
 
-fn read_owner_disposition(
-    stream: &mut UnixStream,
-    root: super::process::ProcessIdentity,
-) -> Option<String> {
+fn read_owner_disposition(stream: &mut UnixStream) -> OwnerDisposition {
     let mut disposition = [0];
     loop {
         match stream.read(&mut disposition) {
-            Ok(0) => {
-                let error = signal_process(root, libc::SIGKILL).err();
-                return error;
-            }
+            Ok(0) => return OwnerDisposition::Stop,
             Ok(_) if disposition == [FINISH] => {
-                return None;
+                return OwnerDisposition::Finish;
             }
             Ok(_) if disposition == [STOP] => {
-                return signal_process(root, libc::SIGKILL).err();
+                return OwnerDisposition::Stop;
             }
             Ok(_) => {
-                let mut error = "sandbox manager received an invalid finish request".to_string();
-                if let Err(signal_error) = signal_process(root, libc::SIGKILL) {
-                    error.push_str(&format!("; additionally, {signal_error}"));
-                }
-                return Some(error);
+                return OwnerDisposition::Failed(
+                    "sandbox manager received an invalid finish request".to_string(),
+                );
             }
             Err(error) if error.kind() == ErrorKind::Interrupted => {}
             Err(read_error) => {
-                let mut error = format!("sandbox manager control failed: {read_error}");
-                if let Err(signal_error) = signal_process(root, libc::SIGKILL) {
-                    error.push_str(&format!("; additionally, {signal_error}"));
-                }
-                return Some(error);
+                return OwnerDisposition::Failed(format!(
+                    "sandbox manager control failed: {read_error}"
+                ));
             }
         }
     }

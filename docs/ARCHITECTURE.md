@@ -121,8 +121,9 @@ Each server worker lifetime and standalone sandbox command has one manager proce
 The manager validates the root by PID, parent, and start time, then observes descendants by PID and start time across process-group and session changes.
 It adopts the private temporary-directory guard and owns the configured cleanup timeout for that lifetime.
 
-After the root exits, the manager terminates the remaining observed identities and waits for them to disappear within the configured cleanup timeout.
-On forced retirement or owner-socket closure, it first signals the exact recorded root and then runs the same cleanup.
+After a normal root exit, the manager waits for the observed identities to disappear within the configured cleanup timeout, then closes the original root process group as a backstop for a same-group fork that raced observation.
+The host owner retains the waitable root through this cleanup and the manager revalidates its recorded identity before signaling the group.
+On forced retirement or owner-socket closure, the manager instead closes the group while the root identity is still available, signals the exact recorded root, and then waits for observed-tree cleanup.
 It removes the private directory only after successful cleanup; a tracking, signaling, or cleanup failure preserves the directory rather than deleting files beneath a possible survivor.
 The host owner retains an independent guard and uses the same remove-on-success, preserve-on-failure rule if it can recover from an unsuccessful manager exit while the root remains live.
 The manager does not interpret MCP calls, relay frames, worker messages, or runtime output.

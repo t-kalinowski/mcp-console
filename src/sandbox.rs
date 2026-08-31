@@ -311,7 +311,7 @@ impl SandboxedCommand {
                     Ok(control) => Some(control),
                     Err(error) => {
                         drop(manager);
-                        return Err(stop_after_startup_failure(&mut child, error));
+                        return Err(stop_unmanaged_child(&mut child, error));
                     }
                 }
             }
@@ -323,7 +323,7 @@ impl SandboxedCommand {
                 self.temporary_directory.preserve();
             }
             drop(manager);
-            return Err(stop_after_startup_failure(&mut child, error));
+            return Err(stop_unmanaged_child(&mut child, error));
         }
         if let Err(error) = manager.commit() {
             let manager_error = manager.stop().err();
@@ -368,11 +368,6 @@ fn wait_for_startup_ready(mut control: UnixStream) -> Result<UnixStream, String>
         return Err("sandboxed child sent an invalid startup response".to_string());
     }
     Ok(control)
-}
-
-#[cfg(target_os = "macos")]
-fn stop_after_startup_failure(child: &mut Child, error: String) -> String {
-    stop_unmanaged_child(child, error)
 }
 
 #[cfg(target_os = "macos")]

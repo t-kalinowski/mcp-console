@@ -139,30 +139,38 @@ def _read_lines(stream: object, count: int, description: str) -> list[str]:
 
 
 def test_retires_processx_descendants_across_sessions(binary: Path) -> Transcript:
-    # Each processx child calls setsid() on Unix. This fixture creates two nested
-    # processx generations so neither descendant remains in the root group.
+    # The processx child starts a new session on Unix. Its lightweight Python
+    # program starts the sleep grandchild in a third session, so neither
+    # descendant remains in its parent's process group or session.
     # fmt: r
     script = code(r"""
         child_script <- '
-        grandchild <- processx::process$new(
-          "/bin/sleep", "60", cleanup = FALSE
+        import os
+        import subprocess
+        import time
+
+        grandchild = subprocess.Popen(
+            ["/bin/sleep", "60"],
+            start_new_session=True,
         )
-        writeLines(c(
-          as.character(grandchild$get_pid()),
-          Sys.getenv("TMPDIR")
-        ))
-        flush.console()
-        Sys.sleep(60)
+        payload = (
+            str(grandchild.pid)
+            + os.linesep
+            + os.environ["TMPDIR"]
+            + os.linesep
+        ).encode()
+        os.write(1, payload)
+        time.sleep(60)
         '
 
         child <- processx::process$new(
-          "Rscript",
-          c("--vanilla", "-e", child_script),
+          "python",
+          c("-c", child_script),
           stdout = "|",
           stderr = "2>&1",
           cleanup = FALSE
         )
-        stopifnot(child$poll_io(5000)[["output"]] == "ready")
+        stopifnot(child$poll_io(-1)[["output"]] == "ready")
         child_output <- child$read_output_lines()
         stopifnot(length(child_output) == 2L)
         writeLines(c(
@@ -243,7 +251,7 @@ def test_retires_processx_descendants_across_sessions(binary: Path) -> Transcrip
             ),
             "verified_descendants": [
                 "processx child outside root session",
-                "processx grandchild outside child session",
+                "detached grandchild outside processx child session",
             ],
         }
     ]

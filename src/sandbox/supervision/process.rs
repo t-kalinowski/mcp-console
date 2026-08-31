@@ -87,8 +87,9 @@ pub(super) fn process_info(pid: libc::pid_t) -> Result<Option<ProcessInfo>, Stri
                 },
                 parent_pid: info.pbi_ppid as libc::pid_t,
                 // A zombie cannot execute, but its PID remains present until
-                // its parent reaps it. Keep that identity available so the
-                // tracker can wait for NOTE_REAP before returning.
+                // its parent reaps it. Report that state separately so live
+                // observation can retain the identity through NOTE_REAP while
+                // retirement can treat it as already stopped.
                 is_zombie: info.pbi_status == libc::SZOMB,
             }));
         }

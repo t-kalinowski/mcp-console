@@ -193,7 +193,9 @@ Clean relay-stdin EOF does not emit `shutdown_started`; it performs the same wor
 EOF midway through a command frame is a transport failure instead.
 
 The host-side manager tracks the relay root and every descendant identity it observes by PID and start time, retaining those identities across process-group and session changes.
-It adopts a private temporary-directory guard and removes the directory only after successful lifetime cleanup; a cleanup failure preserves the directory.
+After a normal relay exit, it waits for observed-tree cleanup and then closes the original relay process group as a backstop for a same-group fork that raced observation; the server retains the waitable relay and the manager revalidates its recorded identity first.
+On forced retirement or server loss, it instead closes the group while the root identity is still available, signals the exact recorded relay, and then waits for observed-tree cleanup.
+It adopts a private temporary-directory guard and removes the directory only after both cleanup steps succeed; a cleanup failure preserves the directory.
 If the relay exits or crashes, the manager treats root exit as retirement of the remaining observed lifetime.
 If the server exits or crashes, closure of the manager's owner channel makes the manager stop the relay root and complete the same cleanup independently.
 If the manager exits unsuccessfully while the server still owns a live, waitable relay root, the server reconstructs bounded tracking from that root's current process tree and completes cleanup before replacement.
