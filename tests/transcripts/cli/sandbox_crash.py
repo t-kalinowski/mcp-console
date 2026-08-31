@@ -269,8 +269,8 @@ def test_launcher_crash_retires_the_sandbox_lifetime(binary: Path) -> Transcript
     try:
         lifetime.process.kill()
         returncode = lifetime.process.wait(timeout=TIMEOUT)
-        stderr = lifetime.process.stderr.read().decode("utf-8")
         survivors = _wait_for_cleanup(lifetime)
+        stderr = lifetime.process.stderr.read().decode("utf-8")
 
         assert returncode == -signal.SIGKILL, returncode
         assert stderr == "", stderr
