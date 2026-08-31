@@ -187,6 +187,50 @@ result:
   isError: false
 ---
 send:
+  python: |
+    class ControlValue:
+        def __repr__(self):
+            return "tab\tline\nreturn\rcontrol\x01" + "\t" * 80
+
+
+    class ControlCursor:
+        description = (("value",),)
+
+        def execute(self, source):
+            return self
+
+        def fetchmany(self, size):
+            return [(ControlValue(),)][:size]
+
+        def close(self):
+            pass
+
+
+    class ControlConnection:
+        def cursor(self):
+            return ControlCursor()
+
+
+    console_sql_connection(ControlConnection())
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  sql: CONTROL VALUE
+result:
+  content:
+    - type: text
+      text: |
+        value
+        ----------------------------------------------------------------------------------------------------------------------------------------------------------------
+        tab\tline\nreturn\rcontrol\x01\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\…
+        [cell values truncated to 160 characters]
+  isError: false
+---
+send:
   r: console_sql_connection(NULL); invisible()
 result:
   content:

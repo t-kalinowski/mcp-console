@@ -277,6 +277,45 @@ def test_routes_sql_cells_to_a_selected_python_dbapi_connection(
     assert "20" in preview
     assert "[additional rows omitted]" in preview
 
+    # Driver-specific values may return arbitrary text from repr().
+    # fmt: python
+    python = code("""
+        class ControlValue:
+            def __repr__(self):
+                return "tab\\tline\\nreturn\\rcontrol\\x01" + "\\t" * 80
+
+
+        class ControlCursor:
+            description = (("value",),)
+
+            def execute(self, source):
+                return self
+
+            def fetchmany(self, size):
+                return [(ControlValue(),)][:size]
+
+            def close(self):
+                pass
+
+
+        class ControlConnection:
+            def cursor(self):
+                return ControlCursor()
+
+
+        console_sql_connection(ControlConnection())
+        """)
+    client.send(python=python)
+    assert last_tool_text(client) == "[done]"
+
+    client.send(sql="CONTROL VALUE")
+    preview = last_tool_text(client)
+    assert all(control not in preview for control in ("\t", "\r", "\x01"))
+    assert all(escape in preview for escape in ("\\t", "\\n", "\\r", "\\x01"))
+    assert len(preview.splitlines()) == 4
+    assert max(map(display_width, preview.splitlines())) <= 200
+    assert "[cell values truncated to 160 characters]" in preview
+
     client.send(r="console_sql_connection(NULL); invisible()")
     assert last_tool_text(client) == "[done]"
     client.send(sql="SELECT origin FROM managed_values")
@@ -328,6 +367,53 @@ def test_preserves_selected_python_duckdb_connection_state(
     client.send(sql="SELECT value FROM later_state")
     preview = last_tool_text(client)
     assert "value" in preview and "'retained'" in preview
+    return client._finish()
+
+
+def test_reports_python_dbapi_cursor_cleanup_failures(
+    binary: Path,
+) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+
+    # fmt: python
+    python = code("""
+        class CleanupCursor:
+            description = (("answer",),)
+
+            def execute(self, source):
+                if source == "ERROR":
+                    raise RuntimeError("selected DB-API execution failure")
+                return self
+
+            def fetchmany(self, size):
+                return [(42,)][:size]
+
+            def close(self):
+                raise RuntimeError("selected DB-API cleanup failure")
+
+
+        class CleanupConnection:
+            def cursor(self):
+                return CleanupCursor()
+
+
+        console_sql_connection(CleanupConnection())
+        """)
+    client.send(python=python)
+    assert last_tool_text(client) == "[done]"
+
+    client.send(sql="ANSWER")
+    output = last_tool_text(client)
+    assert "answer" in output and "42" in output
+    assert "Error: selected DB-API cleanup failure" in output
+
+    client.send(sql="ERROR")
+    output = last_tool_text(client)
+    execution = "Error: selected DB-API execution failure"
+    cleanup = "Error: selected DB-API cleanup failure"
+    assert execution in output and cleanup in output
+    assert output.index(execution) < output.index(cleanup)
     return client._finish()
 
 

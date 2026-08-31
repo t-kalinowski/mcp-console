@@ -62,19 +62,24 @@ def _display_cell(value):
     if value is None:
         return "NULL", False
 
-    text = repr(value)
+    text = _escape_nonprinting(repr(value))
     if len(text) > _CELL_WIDTH:
         return text[: _CELL_WIDTH - 1] + "…", True
     return text, False
 
 
 def _display_name(value):
-    text = "".join(
-        character if character.isprintable() else repr(character)[1:-1]
-        for character in str(value)
-    )
+    text = _escape_nonprinting(str(value))
     if len(text) > _CELL_WIDTH:
         return text[: _CELL_WIDTH - 1] + "…"
+    return text
+
+
+def _escape_nonprinting(text):
+    text = "".join(
+        character if character.isprintable() else repr(character)[1:-1]
+        for character in text
+    )
     return text
 
 
@@ -233,8 +238,8 @@ def evaluate(source):
                 close = getattr(candidate, "close", None)
                 if callable(close):
                     close()
-            except Exception:
-                pass
+            except Exception as error:
+                print(f"Error: {error}")
             except BaseException:
                 _traceback.print_exc()
     return None

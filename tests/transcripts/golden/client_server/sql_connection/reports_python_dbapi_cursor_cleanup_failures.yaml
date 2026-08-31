@@ -1,0 +1,53 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+send:
+  python: |
+    class CleanupCursor:
+        description = (("answer",),)
+
+        def execute(self, source):
+            if source == "ERROR":
+                raise RuntimeError("selected DB-API execution failure")
+            return self
+
+        def fetchmany(self, size):
+            return [(42,)][:size]
+
+        def close(self):
+            raise RuntimeError("selected DB-API cleanup failure")
+
+
+    class CleanupConnection:
+        def cursor(self):
+            return CleanupCursor()
+
+
+    console_sql_connection(CleanupConnection())
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  sql: ANSWER
+result:
+  content:
+    - type: text
+      text: |
+        answer
+        ------
+        42
+        Error: selected DB-API cleanup failure
+  isError: false
+---
+send:
+  sql: ERROR
+result:
+  content:
+    - type: text
+      text: |
+        Error: selected DB-API execution failure
+        Error: selected DB-API cleanup failure
+  isError: false

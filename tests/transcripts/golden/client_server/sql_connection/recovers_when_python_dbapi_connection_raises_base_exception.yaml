@@ -46,11 +46,11 @@ result:
     - type: text
       text: |
         Traceback (most recent call last):
-          File "<string>", line 215, in evaluate
+          File "<string>", line 220, in evaluate
           File "<mcp-console:python:e1>", line 9, in execute
         SystemExit: selected DB-API failure
         Traceback (most recent call last):
-          File "<string>", line 235, in evaluate
+          File "<string>", line 240, in evaluate
           File "<mcp-console:python:e1>", line 19, in close
         SystemExit: selected DB-API cleanup failure
   isError: false
