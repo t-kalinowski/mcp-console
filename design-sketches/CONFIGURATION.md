@@ -808,12 +808,14 @@ network:
 ```
 
 Windows named pipes can later use a parallel `named_pipes` field. Any
-pre-existing socket or named pipe selected by an automatically discovered
-project requires project trust unless the exact endpoint is approved by
-higher-trust policy. The exception is a worker-owned socket created inside the
-session's private runtime directory. MCP Console does not infer authority from a
-pathname: database, SSH-agent, desktop-bus, container-daemon, and other host
-sockets all use the same rule.
+project-authored connection to a pre-existing socket or named pipe requires
+project trust unless the exact endpoint and operation are approved by
+higher-trust policy. The same rule applies to a requested bind outside the
+session's private runtime directory, whether or not the endpoint exists yet; an
+approval for `connect` does not authorize `bind`. The exception is a worker-owned
+endpoint created inside the private session directory. MCP Console does not infer
+authority from a pathname: database, SSH-agent, desktop-bus, container-daemon,
+and other host sockets all use the same rule.
 
 ## Where the relay and worker run
 
@@ -930,6 +932,14 @@ run_on:
     - --gpus=all
 ```
 
+`args` is not an arbitrary Docker CLI escape hatch. Each option must be
+recognized and validated by the runner. Options that affect mounts, networking,
+namespaces, privileges, capabilities, devices, users, entrypoints, or other
+isolation state are rejected unless the implementation normalizes them into the
+structured runner configuration and compiled policy. In this sketch,
+`--gpus=all` represents a validated device/resource request, not an unexamined
+argument forwarded to Docker.
+
 Image builds should normally use a separate Dockerfile:
 
 ```yaml
@@ -983,9 +993,13 @@ run_on:
 ```
 
 MCP Console connects to the host, starts the container there, and runs the relay
-and worker in the innermost environment. Listener forwarding and derived paths
-cross both boundaries. Additional arbitrary nesting should not be added until a
-concrete supported use case requires it.
+and worker in the innermost environment. The outer runner's working directory is
+mounted at `inside.directory` automatically, with access no broader than the
+effective profile: `read_only` keeps it read-only and `workspace_write` permits
+workspace writes. An explicit mount at the same target replaces this derived
+workspace mount only after normal permission validation. Listener forwarding and
+derived paths cross both boundaries. Additional arbitrary nesting should not be
+added until a concrete supported use case requires it.
 
 ### Arbitrary execution provider
 
@@ -1356,6 +1370,13 @@ python:
   executable: .venv/bin/python
 ```
 
+For either language, a project-authored existing executable is untrusted code
+regardless of whether its path lies inside the project. It may not be executed by
+supervisor-side or resolver preflight unless the project is trusted or the exact
+executable is approved by higher-trust policy. Without that approval it may be
+launched only inside the sandboxed worker, and the profile must use
+`package_resolution: off`.
+
 The same resolver and trust contract applies to Python lockfiles, project
 metadata, package lists, and manifests: project mode may select supported
 metadata, but an untrusted project cannot trigger host-side installation unless
@@ -1682,10 +1703,15 @@ When a runtime needs writable cache state, MCP Console supplies an isolated
 per-session cache or scratch overlay rather than opening the reusable resolver
 cache. `config explain` shows each namespace's owner and effective access
 (`resolver_write`, `worker_read`, or `session_write`). Cleanup is incremental,
-based on last use, and never removes an active environment. Remote cache paths
-are target-side; the simple top-level log path is supervisor-side. Top-level
-`cache` supplies the default and a profile-local `cache` mapping overrides only
-the named namespaces it changes.
+based on last use, and never removes an active environment. For a cache shared by
+several MCP Console server processes, active use is target-wide rather than
+process-local. Cleanup and resolver commit require provider-appropriate
+cross-process coordination and atomic publication or deletion. If safe
+coordination is unavailable, cleanup skips shared entries or uses a private cache.
+The exact lease or locking protocol is deferred to the cache implementation PR and
+its tests. Remote cache paths are target-side; the simple top-level log path is
+supervisor-side. Top-level `cache` supplies the default and a profile-local
+`cache` mapping overrides only the named namespaces it changes.
 
 ## Environment variables and secrets
 
@@ -1909,15 +1935,16 @@ an explicitly trusted project or a higher-trust configuration source:
   publish mode, and supervisor-side port are approved by higher-trust policy;
 - SSH, Docker, Docker Sandbox, nested execution, or custom command runners;
 - third-party sandbox providers;
-- project-selected pre-existing Unix sockets or named pipes outside the
-  worker-owned session directory, unless the exact endpoint is approved by
-  higher-trust policy;
+- project-selected Unix sockets or named pipes outside the worker-owned
+  session directory, including bind requests, unless the exact endpoint and
+  operation are approved by higher-trust policy;
 - explicit or derived writable paths outside the project root;
 - project-authored synchronization sources outside the project root, unless
   exactly approved by higher-trust policy;
 - project-defined package requirements and their ordered source policy when not
   approved together by higher-trust resolver policy;
-- arbitrary executable paths outside the project;
+- every project-authored runtime executable that would be invoked by resolver
+  preparation or supervisor-side preflight, regardless of its path;
 - every project-authored supervisor environment-variable reference, including
   `env.inherit`, `credentials_env`, and `password_env`, unless the exact name is
   approved for that use by higher-trust configuration; and
