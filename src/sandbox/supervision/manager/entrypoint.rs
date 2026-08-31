@@ -1,7 +1,7 @@
-use super::protocol;
 use super::super::process::{ProcessIdentity, process_info};
 use super::super::process_tracker::{DescendantTracker, EventWait};
 use super::super::process_tree::PROCESS_REAP_EVENT;
+use super::protocol;
 use crate::sandbox::platform;
 use std::fs;
 use std::io::Write;
@@ -44,19 +44,19 @@ pub(super) fn run() -> Result<(), String> {
 
     let tracker =
         DescendantTracker::start(root_pid).map_err(|failure| failure.retire(cleanup_timeout))?;
-    let temporary_directory =
-        match AdoptedTemporaryDirectory::adopt(temporary_directory, owner_pid) {
-            Ok(directory) => directory,
-            Err(error) => {
-                return with_cleanup(
-                    error,
-                    tracker,
-                    root,
-                    separate_process_group,
-                    cleanup_timeout,
-                );
-            }
-        };
+    let temporary_directory = match AdoptedTemporaryDirectory::adopt(temporary_directory, owner_pid)
+    {
+        Ok(directory) => directory,
+        Err(error) => {
+            return with_cleanup(
+                error,
+                tracker,
+                root,
+                separate_process_group,
+                cleanup_timeout,
+            );
+        }
+    };
     if let Err(error) = register_owner_exit(&tracker, owner) {
         return finish_startup_failure(
             error,
@@ -167,10 +167,7 @@ fn supervise_owner(
     }
 }
 
-fn register_owner_exit(
-    tracker: &DescendantTracker,
-    owner: ProcessIdentity,
-) -> Result<(), String> {
+fn register_owner_exit(tracker: &DescendantTracker, owner: ProcessIdentity) -> Result<(), String> {
     let event = libc::kevent {
         ident: owner.pid as libc::uintptr_t,
         filter: libc::EVFILT_PROC,
@@ -203,8 +200,10 @@ fn register_owner_exit(
 }
 
 fn identity_is_live(identity: ProcessIdentity) -> Result<bool, String> {
-    Ok(process_info(identity.pid)?
-        .is_some_and(|info| info.identity == identity && !info.is_zombie))
+    Ok(
+        process_info(identity.pid)?
+            .is_some_and(|info| info.identity == identity && !info.is_zombie),
+    )
 }
 
 fn with_cleanup(
@@ -260,49 +259,32 @@ fn finish_startup_failure(
         separate_process_group,
         cleanup_timeout,
     );
-    if result.is_err() {
-        temporary_directory.preserve();
-    }
-    result
-}
+    if resu[š\×Ù\œŠ
+HÂˆ[\Ü˜\WÙ\™XİÜKœ™\Ù\™J
+NÂˆBˆ™\İ[ŸB‚™›ˆ[š\š]YØÛÛ›Û
 
-fn inherited_control() -> UnixStream {
-    // SAFETY: the hidden manager entry point is launched with its owned control
-    // stream on fd 0 and does not otherwise use standard input.
-    unsafe { UnixStream::from_raw_fd(libc::STDIN_FILENO) }
-}
+HOˆ[š^İ™X[HÂˆËÈĞQ‘UNˆHY[ˆX[˜YÙ\ˆ[HÚ[\È][˜ÚYÚ]]ÈİÛ™YÛÛ›ÛˆËÈİ™X[HÛˆ™[™Ù\È›İİ\Ú\ÙH\ÙHİ[™\™[œ]‚ˆ[œØY™HÈ[š^İ™X[N™œ›ÛWÜ˜]×Ù™
+X˜Î”ÕS—Ñ’SS“ÊHBŸB‚œİXİYÜY[\Ü˜\Q\™XİÜJ]YŠNÂ‚š[\YÜY[\Ü˜\Q\™XİÜHÂˆ›ˆYÜ
+]ˆ]Y‹İÛ™\—ÜYˆX˜ÎœYİ
+HOˆ™\İ[Ù[‹İš[™ÏˆÂˆ]]H]˜Ø[›ÛšXØ[^™J
+K›X\Ù\œŠ\œ›ÜŸÂˆ›Ü›X]Jˆ™˜Z[YÈ™\ÛÛ™HØ[™›Ş[\Ü˜\H\™XİÜHßNˆÙ\œ›ÜŸH‹ˆ]™\Ü^J
+Bˆ
+BˆJOÎÂˆ]^XİYÜ™Yš^H›Ü›X]J›XÜXÛÛœÛÛK]\^ÛİÛ™\—ÜYKHŠNÂˆ]˜[YÛ˜[YHH]ˆ™š[WÛ˜[YJ
+Bˆ˜[™İ[Š˜[Y_˜[YK×ÜİŠ
+JBˆš\×ÜÛÛYWØ[™
+˜[Y_˜[YKœİ\×İÚ]
+	™^XİYÜ™Yš^
+JNÂˆ]^XİYÜ\™[Hİ™[[\Ù\Š
+K˜Ø[›ÛšXØ[^™J
+K›X\Ù\œŠ\œ›ÜŸÂˆ›Ü›X]J™˜Z[YÈ™\ÛÛ™HHŞ\İ[H[\Ü˜\H\™XİÜNˆÙ\œ›ÜŸHŠBˆJOÎÂˆYˆ]˜[YÛ˜[YH]œ\™[
 
-struct AdoptedTemporaryDirectory(PathBuf);
+HOHÛÛYJ^XİYÜ\™[˜\×Ü]
 
-impl AdoptedTemporaryDirectory {
-    fn adopt(path: PathBuf, owner_pid: libc::pid_t) -> Result<Self, String> {
-        let path = path.canonicalize().map_err(|error| {
-            format!(
-                "failed to resolve sandbox temporary directory {}: {error}",
-                path.display()
-            )
-        })?;
-        let expected_prefix = format!("mcp-console-tmp-{owner_pid}-");
-        let valid_name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.starts_with(&expected_prefix));
-        let expected_parent = std::env::temp_dir().canonicalize().map_err(|error| {
-            format!("failed to resolve the system temporary directory: {error}")
-        })?;
-        if !valid_name || path.parent() != Some(expected_parent.as_path()) || !path.is_dir() {
-            return Err("sandbox temporary directory has invalid ownership".to_string());
-        }
-        Ok(Self(path))
-    }
-
-    fn preserve(self) {
-        std::mem::forget(self);
-    }
-}
-
-impl Drop for AdoptedTemporaryDirectory {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
+JH\]š\×Ù\Š
+HÂˆ™]\›ˆ\œŠœØ[™›Ş[\Ü˜\H\™XİÜH\È[˜[YİÛ™\œÚ\‹×Üİš[™Ê
+JNÂˆBˆÚÊÙ[Š]
+JBˆB‚ˆ›ˆ™\Ù\™JÙ[ŠHÂˆİ›Y[N™›Ü™Ù]
+Ù[ŠNÂˆBŸB‚š[\›Ü›ÜˆYÜY[\Ü˜\Q\™XİÜHÂˆ›ˆ›Ü
+	›]]Ù[ŠHÂˆ]ÈHœÎœ™[[İ™WÙ\—Ø[
+	œÙ[‹Œ
+NÂˆBŸB

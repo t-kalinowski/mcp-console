@@ -236,9 +236,7 @@ fn recover_after_manager_failure(
     if let Err(error) = signal_process(root, libc::SIGKILL) {
         recovery_error = Some(error);
     }
-    if separate_process_group
-        && let Err(error) = platform::kill_process_group(root.pid as u32)
-    {
+    if separate_process_group && let Err(error) = platform::kill_process_group(root.pid as u32) {
         recovery_error = Some(with_prior_error(
             recovery_error,
             format!("failed to stop sandbox process group: {error}"),

@@ -58,7 +58,6 @@ pub(crate) fn run_manager() -> Result<(), String> {
     Err("the sandbox manager is currently supported only on macOS".to_string())
 }
 
-
 #[cfg(target_os = "macos")]
 include!("sandbox/types.rs");
 
