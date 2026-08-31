@@ -83,7 +83,7 @@ The same private stream carries a bounded normal-retirement handoff: the owner m
 Outside that handoff, the manager observes owner exit and its own view of the root process tree directly on the host.
 
 This is a crash-ownership handoff rather than part of the relay protocol or the public interface.
-The manager supplies cleanup only after abrupt owner loss; the server or standalone launcher retains normal lifetime ownership.
+The manager supplies crash-independent protection and participates in the bounded retirement handoff; the server or standalone launcher retains normal lifetime ownership.
 
 ### Server and relay
 

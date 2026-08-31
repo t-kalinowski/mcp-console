@@ -146,6 +146,7 @@ Other current limitations include:
 Submitted R, Python, and SQL have shell-class capability inside the worker sandbox.
 The worker can read host files, but direct network access and regular-file writes outside its private temporary directory are denied.
 This is a process boundary, not a safe evaluator for untrusted code with access to sensitive readable files.
+
 The server installs automatically inferred or explicitly declared R and Python packages and DuckDB extensions outside the worker sandbox with server permissions.
 Those operations may access the network and execute installation or build code, so only trusted requirements should be supplied.
 See [Requirements and environments](https://github.com/t-kalinowski/mcp-console/blob/main/docs/REQUIREMENTS.md) for the accepted inputs and trust model.

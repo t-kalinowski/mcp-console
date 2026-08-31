@@ -30,11 +30,14 @@ stdout: |
   <sandbox temp>
 ---
 manager_signal: SIGSTOP
-verified_launcher_state: detached descendant retired; temporary directory retained
+verified_launcher_state: >-
+  detached descendant retired; temporary directory retained
+---
+launcher_signal: SIGSTOP
+manager_signal: SIGCONT
+verified_manager_state: waiting for directory disposition
 ---
 launcher_signal: SIGKILL
 launcher_returncode: -9
----
-manager_signal: SIGCONT
 verified_cleanup: sandbox root, detached descendant, and manager
 verified_preservation: sandbox temp
