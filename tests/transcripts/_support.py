@@ -231,6 +231,91 @@ class FifoCheckpoint:
         assert os.write(self.descriptor, b"1") == 1
 
 
+def build_manager_commit_interposer(directory: Path) -> Path:
+    source = directory / "manager-commit.c"
+    library = directory / "manager-commit.dylib"
+    source.write_text(
+        r"""
+#include <fcntl.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+typedef ssize_t (*send_function)(int, const void *, size_t, int);
+
+static send_function next_send(void) {
+    return send;
+}
+
+static void checkpoint(const char *name) {
+    const char *path = getenv(name);
+    if (path == NULL) {
+        return;
+    }
+    int descriptor = open(path, O_WRONLY);
+    if (descriptor < 0) {
+        return;
+    }
+    char byte = '1';
+    write(descriptor, &byte, sizeof(byte));
+    close(descriptor);
+}
+
+static ssize_t gate_manager_commit(
+    int socket,
+    const void *buffer,
+    size_t length,
+    int flags
+) {
+    const char *manager_descriptor = getenv("MCP_CONSOLE_SANDBOX_MANAGER_FD");
+    if (manager_descriptor != NULL
+        && socket == atoi(manager_descriptor)
+        && length == 1
+        && ((const uint8_t *)buffer)[0] == 7) {
+        checkpoint("MCP_CONSOLE_TEST_MANAGER_COMMITTED_READY");
+        const char *release = getenv("MCP_CONSOLE_TEST_MANAGER_COMMITTED_RELEASE");
+        if (release != NULL) {
+            int descriptor = open(release, O_RDONLY);
+            char byte;
+            if (descriptor >= 0) {
+                read(descriptor, &byte, sizeof(byte));
+                close(descriptor);
+            }
+        }
+    }
+    send_function send_next = next_send();
+    return send_next(socket, buffer, length, flags);
+}
+
+__attribute__((used))
+static struct {
+    const void *replacement;
+    const void *replacee;
+} interposers[] __attribute__((section("__DATA,__interpose"))) = {
+    {(const void *)&gate_manager_commit, (const void *)&send},
+};
+""".removeprefix("\n"),
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            "cc",
+            "-dynamiclib",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            source,
+            "-o",
+            library,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return library
+
+
 def checkpoint_uv_environment(
     temporary: Path,
     argument: str,

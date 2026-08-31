@@ -13,14 +13,14 @@ Once observed, a descendant remains a cleanup target after changing process grou
 The manager also adopts the private temporary-directory guard for the lifetime.
 
 The host owner retains the manager process and the direct sandbox root as waitable children.
-After ownership is committed, it monitors manager exit and keeps a backup temporary-directory guard through lifetime cleanup.
+After the manager reports readiness, the owner starts monitoring manager exit and transfers its backup temporary-directory guard to that monitor before entering the ownership-commit exchange.
 The relay remains a transport and direct-worker owner; it does not own observed-descendant cleanup or the private directory.
 
 ## Startup
 
 The host starts the manager before the sandbox root, then sends the root PID, cleanup timeout, and private-directory path over a private control socket.
 The manager validates that the root is the owner's direct child, attaches its descendant tracker, adopts the directory guard, and reports readiness.
-The host then commits ownership.
+The host installs manager-failure recovery while the direct root remains live and waitable, then commits primary cleanup ownership and waits for confirmation.
 
 The built-in relay waits at a startup gate until that commit, so it cannot launch the worker before manager observation begins.
 A custom relay has no equivalent cooperative gate.

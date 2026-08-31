@@ -32,7 +32,7 @@ The server marks every other inherited descriptor except the built-in relay's op
 
 The built-in relay also receives an optional private startup-gate descriptor.
 It reports readiness and waits at that gate before it starts the worker.
-The server releases the gate only after the host-side manager has begun observing the relay root and confirmed its ownership commit for the private temporary directory.
+The server installs manager-failure monitoring after the host-side manager begins observing the relay root, then releases the gate only after the manager confirms its ownership commit for the private temporary directory.
 This gate is not part of the JSONL relay protocol, and the manager's private control channel never enters the sandbox.
 Custom relays do not participate in this optional gate.
 
@@ -198,7 +198,7 @@ On forced retirement or server loss, it instead closes the group while the root 
 It adopts a private temporary-directory guard and removes the directory only after both cleanup steps succeed; a cleanup failure preserves the directory.
 If the relay exits or crashes, the manager treats root exit as retirement of the remaining observed lifetime.
 If the server exits or crashes, closure of the manager's owner channel makes the manager stop the relay root and complete the same cleanup independently.
-If the manager exits unsuccessfully while the server still owns a live, waitable relay root, the server reconstructs bounded tracking from that root's current process tree and completes cleanup before replacement.
+If the manager exits unsuccessfully after readiness while the server still owns a live, waitable relay root, including during the commit acknowledgement, the server reconstructs bounded tracking from that root's current process tree and completes cleanup before replacement.
 That fallback cannot recover a descendant that had already detached from the root's ancestry before the manager failed.
 
 The server leaves an exited relay waitable until sandbox-lifetime cleanup completes, preserving the relay identity while retirement finishes.

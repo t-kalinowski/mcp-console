@@ -1,0 +1,16 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+send:
+  r: "42"
+result:
+  content:
+    - type: text
+      text: >-
+        [failed to launch worker relay: sandbox manager did not confirm
+        ownership: failed to fill whole buffer]
+  isError: true
+---
+manager_signal: SIGKILL before COMMITTED
+---
+verified_cleanup: custom relay, detached child, manager, and temp

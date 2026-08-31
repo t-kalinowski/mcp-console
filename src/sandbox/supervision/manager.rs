@@ -130,7 +130,7 @@ impl SandboxManager {
         Ok(())
     }
 
-    /// Watches a committed manager and takes over cleanup only if it exits
+    /// Watches a ready manager and takes over cleanup only if it exits
     /// unsuccessfully while the sandbox root remains live. The direct child
     /// remains waitable in its owner, so its PID cannot be reused while this
     /// monitor reconstructs the root's current process tree.
@@ -146,11 +146,11 @@ impl SandboxManager {
         let child = self
             .child
             .take()
-            .expect("committed sandbox manager should remain waitable");
+            .expect("ready sandbox manager should remain waitable");
         let child_identity = self
             .child_identity
             .take()
-            .expect("committed sandbox manager identity should remain pinned");
+            .expect("ready sandbox manager identity should remain pinned");
         let root_pid = root_pid as libc::pid_t;
         assert!(root_pid > 0, "sandbox root PID should be valid");
         self.monitor = Some(ManagerMonitor::start(

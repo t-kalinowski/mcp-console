@@ -1,0 +1,32 @@
+---
+command:
+  - mcp-console
+  - sandbox
+  - --
+  - python
+  - -c
+  - |
+    import os
+    import signal
+    import subprocess
+
+    child = subprocess.Popen(
+        ["/bin/sleep", "60"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    print(os.getpid(), flush=True)
+    print(child.pid, flush=True)
+    print(os.environ["TMPDIR"], flush=True)
+    signal.pause()
+stdout: |
+  <sandbox root pid>
+  <detached child pid>
+  <sandbox temp>
+---
+manager_signal: SIGKILL before COMMITTED
+launcher_returncode: 1
+stderr: "sandbox manager did not confirm ownership: <closed control>"
+verified_cleanup: sandbox root, detached child, manager, and temp

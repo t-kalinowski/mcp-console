@@ -6,6 +6,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -13,8 +14,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from _support import (
     DarwinProcessIdentity,
+    FifoCheckpoint,
     McpClient,
     Transcript,
+    build_manager_commit_interposer,
     capture_darwin_process_identity,
     code,
     darwin_process_waits_for_control,
@@ -183,6 +186,18 @@ def _close_client_streams(client: McpClient) -> None:
             stream.close()
         except BrokenPipeError:
             pass
+
+
+def _wait_for_marker(root: Path, name: str, client: McpClient) -> Path:
+    deadline = time.monotonic() + 5
+    while True:
+        markers = list(root.glob(f"**/{name}"))
+        if markers:
+            assert len(markers) == 1, markers
+            return markers[0]
+        assert client.process.poll() is None, f"server exited before creating {name}"
+        assert time.monotonic() < deadline, f"timed out waiting for {name}"
+        time.sleep(0.01)
 
 
 def test_server_crash_retires_the_worker_generation(binary: Path) -> Transcript:
@@ -389,6 +404,96 @@ def test_manager_crash_retires_the_worker_generation(binary: Path) -> Transcript
         if manager_identity is not None:
             kill_darwin_processes((manager_identity,))
         _close_client_streams(client)
+
+
+def test_manager_crash_before_commit_retires_the_custom_relay_generation(
+    binary: Path,
+) -> Transcript:
+    relay = (
+        Path(__file__).resolve().parents[2] / "fixtures" / "precommit_descendant_relay"
+    )
+    worker = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        committed_ready = FifoCheckpoint(temporary / "committed-ready")
+        committed_release = FifoCheckpoint(temporary / "committed-release")
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        environment["MCP_CONSOLE_TEST_MANAGER_COMMITTED_READY"] = str(
+            committed_ready.path
+        )
+        environment["MCP_CONSOLE_TEST_MANAGER_COMMITTED_RELEASE"] = str(
+            committed_release.path
+        )
+        environment["DYLD_INSERT_LIBRARIES"] = str(
+            build_manager_commit_interposer(temporary)
+        )
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(worker), "--relay", str(relay)),
+            environment,
+        )
+        identities: tuple[DarwinProcessIdentity, ...] = ()
+        sandbox_temporary_directory: Path | None = None
+        try:
+            client._initialize_and_list_tools()
+            waiting = client._start_send(r="42")
+            marker = _wait_for_marker(
+                temporary,
+                "mcp-console-precommit-relay",
+                client,
+            )
+            marker_lines = marker.read_text(encoding="utf-8").splitlines()
+            assert len(marker_lines) == 3, marker_lines
+            relay_pid, child_pid = map(int, marker_lines[:2])
+            assert os.getsid(child_pid) != os.getsid(relay_pid), (
+                "pre-commit child did not leave the custom relay session"
+            )
+            sandbox_temporary_directory = Path(marker_lines[2])
+            manager_identity = capture_darwin_process_identity(
+                _manager_pid(client.process.pid)
+            )
+            identities = (
+                capture_darwin_process_identity(relay_pid),
+                capture_darwin_process_identity(child_pid),
+                manager_identity,
+            )
+            committed_ready.wait("manager COMMITTED write")
+
+            assert signal_darwin_process(manager_identity, signal.SIGKILL), (
+                "manager exited before pre-commit crash injection"
+            )
+            client.transcript.append({"manager_signal": "SIGKILL before COMMITTED"})
+            client._receive(waiting)
+            result = waiting["result"]
+            assert result.get("isError") is True, result
+            survivors = _wait_for_process_cleanup(identities, timeout=5)
+
+            assert survivors == [], (
+                f"pre-commit manager crash leaked custom-relay processes: {survivors}"
+            )
+            assert not sandbox_temporary_directory.exists(), (
+                "pre-commit manager crash leaked sandbox temporary directory: "
+                f"{sandbox_temporary_directory}"
+            )
+            client.transcript.append(
+                {
+                    "verified_cleanup": (
+                        "custom relay, detached child, manager, and temp"
+                    )
+                }
+            )
+            return client._finish()
+        finally:
+            committed_release.release()
+            stop_client(client)
+            if identities:
+                kill_darwin_processes(identities)
+            if sandbox_temporary_directory is not None:
+                shutil.rmtree(sandbox_temporary_directory, ignore_errors=True)
+            committed_ready.close()
+            committed_release.close()
+            _close_client_streams(client)
 
 
 if __name__ == "__main__":

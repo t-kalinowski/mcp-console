@@ -14,7 +14,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from _support import (
     DarwinProcessIdentity,
+    FifoCheckpoint,
     Transcript,
+    build_manager_commit_interposer,
     capture_darwin_process_identity,
     code,
     kill_darwin_processes,
@@ -388,6 +390,116 @@ def test_manager_crash_retires_the_sandbox_lifetime(binary: Path) -> Transcript:
             "manager_signal": "SIGKILL",
             "launcher_returncode": returncode,
             "verified_cleanup": "sandbox root, processx child, manager, and temp",
+        },
+    ]
+
+
+def test_manager_crash_before_commit_retires_the_sandbox_lifetime(
+    binary: Path,
+) -> Transcript:
+    # The ungated standalone root may create descendants after manager READY
+    # and before the COMMITTED acknowledgement reaches the launcher.
+    # fmt: python
+    script = code(r"""
+        import os
+        import signal
+        import subprocess
+
+        child = subprocess.Popen(
+            ["/bin/sleep", "60"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        print(os.getpid(), flush=True)
+        print(child.pid, flush=True)
+        print(os.environ["TMPDIR"], flush=True)
+        signal.pause()
+        """)
+    arguments = ("sandbox", "--", "python", "-c", script)
+    interposer_directory = tempfile.TemporaryDirectory()
+    interposer_path = Path(interposer_directory.name)
+    committed_ready = FifoCheckpoint(interposer_path / "committed-ready")
+    committed_release = FifoCheckpoint(interposer_path / "committed-release")
+    environment = os.environ.copy()
+    environment["MCP_CONSOLE_TEST_MANAGER_COMMITTED_READY"] = str(committed_ready.path)
+    environment["MCP_CONSOLE_TEST_MANAGER_COMMITTED_RELEASE"] = str(
+        committed_release.path
+    )
+    environment["DYLD_INSERT_LIBRARIES"] = str(
+        build_manager_commit_interposer(interposer_path)
+    )
+    process = subprocess.Popen(
+        [binary, *arguments],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=environment,
+    )
+    assert process.stdout is not None
+    assert process.stderr is not None
+
+    identities: list[DarwinProcessIdentity] = []
+    temporary_directory: Path | None = None
+    try:
+        lines = _read_lines(
+            process.stdout,
+            3,
+            "the pre-commit sandbox root, detached child, and temporary directory",
+        )
+        root_pid, child_pid = map(int, lines[:2])
+        assert os.getsid(child_pid) != os.getsid(root_pid), (
+            "pre-commit child did not leave the sandbox root session"
+        )
+        identities.extend(
+            capture_darwin_process_identity(pid) for pid in (root_pid, child_pid)
+        )
+        manager_pid = _child_pid_by_name(process.pid, "mcp-console")
+        manager_identity = capture_darwin_process_identity(manager_pid)
+        identities.append(manager_identity)
+        temporary_directory = Path(lines[2])
+        committed_ready.wait("manager COMMITTED write")
+
+        assert signal_darwin_process(manager_identity, signal.SIGKILL), (
+            "manager exited before pre-commit crash injection"
+        )
+        returncode = process.wait(timeout=TIMEOUT)
+        stderr = process.stderr.read().decode("utf-8")
+        survivors = _wait_for_survivors(identities, timeout=5)
+
+        assert returncode == 1, returncode
+        assert stderr.startswith("sandbox manager did not confirm ownership:"), stderr
+        assert survivors == [], (
+            f"pre-commit manager crash leaked sandbox processes: {survivors}"
+        )
+        assert not temporary_directory.exists(), (
+            "pre-commit manager crash leaked sandbox temporary directory: "
+            f"{temporary_directory}"
+        )
+    finally:
+        committed_release.release()
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=TIMEOUT)
+        kill_darwin_processes(identities)
+        process.stdout.close()
+        process.stderr.close()
+        if temporary_directory is not None:
+            shutil.rmtree(temporary_directory, ignore_errors=True)
+        committed_ready.close()
+        committed_release.close()
+        interposer_directory.cleanup()
+
+    return [
+        {
+            "command": _command(*arguments),
+            "stdout": "<sandbox root pid>\n<detached child pid>\n<sandbox temp>\n",
+        },
+        {
+            "manager_signal": "SIGKILL before COMMITTED",
+            "launcher_returncode": returncode,
+            "stderr": ("sandbox manager did not confirm ownership: <closed control>"),
+            "verified_cleanup": "sandbox root, detached child, manager, and temp",
         },
     ]
 

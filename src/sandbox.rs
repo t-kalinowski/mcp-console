@@ -325,14 +325,11 @@ impl SandboxedCommand {
             drop(manager);
             return Err(stop_unmanaged_child(&mut child, error));
         }
+        manager.monitor(child.id(), self.temporary_directory);
         if let Err(error) = manager.commit() {
             let manager_error = manager.stop().err();
-            if manager_error.is_some() {
-                self.temporary_directory.preserve();
-            }
             return Err(stop_after_manager_failure(&mut child, error, manager_error));
         }
-        manager.monitor(child.id(), self.temporary_directory);
         if let Some(mut control) = startup_control
             && let Err(error) = control.write_all(&[STARTUP_GO])
         {

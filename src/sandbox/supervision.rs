@@ -81,6 +81,7 @@ pub(super) fn status(
         return Err(error);
     }
 
+    manager.monitor(child.id(), temporary_directory);
     if let Err(mut error) = manager.commit() {
         // A failed acknowledgement is ambiguous: the manager may already have
         // accepted ownership. Ask it to stop the lifetime before reaping the
@@ -98,7 +99,6 @@ pub(super) fn status(
                 }
             }
             Err(mut stop_error) => {
-                preserve(temporary_directory);
                 if let Err(kill_error) = kill_root(&mut child) {
                     stop_error = additional_error(stop_error, kill_error);
                 }
@@ -110,7 +110,6 @@ pub(super) fn status(
         }
         return Err(error);
     }
-    manager.monitor(child.id(), temporary_directory);
 
     if let Err(mut error) = wait_for_root_exit(&child, &signal_relay, &mut root_waiter) {
         if let Err(stop_error) = stop_managed_root(&mut child, manager) {

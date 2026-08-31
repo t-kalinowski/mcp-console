@@ -54,7 +54,7 @@ mcp-console sandbox launcher             host, outside the sandbox
 
 The standalone launcher retains terminal job control, the command's exit status, and a backup private-directory guard, while the manager owns primary descendant cleanup.
 The manager receives the root PID, private temporary-directory path, and cleanup timeout over a private inherited socket, then derives and validates the root process identity.
-After the manager reports readiness, the launcher commits primary cleanup ownership to the manager and waits for confirmation.
+After the manager reports readiness, the launcher starts manager-failure monitoring, transfers the backup directory guard to that monitor, then commits primary cleanup ownership and waits for confirmation.
 If the launcher exits or crashes after that committed handshake, socket closure makes the manager terminate the exact recorded root and its observed lifetime, then remove the private directory after successful cleanup.
 macOS provides no child subreaper or atomic descendant-tracking spawn, so a process that detaches before the manager's post-spawn observation remains outside this guarantee.
 
@@ -77,8 +77,9 @@ The client does not communicate directly with a relay, worker, or resolver.
 ### Sandbox owner and manager
 
 The server, or the launcher for a standalone command, exchanges private lifecycle controls with the sandbox manager over an inherited Unix socket.
-The owner supplies the root PID, private-directory path, and cleanup timeout, then commits primary cleanup ownership only after the manager has validated the root and reported readiness.
-It keeps the direct sandbox child waitable and retains a backup directory guard while a host thread monitors the manager.
+The owner supplies the root PID, private-directory path, and cleanup timeout.
+After the manager has validated the root and reported readiness, the owner starts a host monitor and transfers its backup directory guard to that monitor before committing primary cleanup ownership.
+It keeps the direct sandbox child waitable throughout the commit exchange and lifetime cleanup.
 If the manager exits unsuccessfully while the root remains live and pinned, that thread starts bounded fallback tracking from the root's current process tree and removes the directory only after successful cleanup.
 The fallback cannot reconstruct a descendant that had already detached from that ancestry before the manager failed.
 This channel is not part of the relay or worker protocol and is not inherited by the sandbox root.
@@ -186,7 +187,8 @@ The worker itself starts lazily when an operation first needs it; preparing reta
 An explicit restart starts its replacement eagerly, including when the session had not started a worker before.
 
 For each worker start, the server configures a sandboxed relay from the retained environment and starts its host-side manager.
-The manager validates and begins tracking the relay root, adopts the private temporary-directory guard, reports readiness, and waits for the server to commit that ownership.
+The manager validates and begins tracking the relay root, adopts the private temporary-directory guard, and reports readiness.
+The server starts manager-failure monitoring before asking the manager to commit primary ownership.
 The built-in relay waits at its startup gate until this commit, then creates the worker sideband and standard streams, launches the worker, and forwards its startup events.
 The server admits the worker only after the required readiness exchange succeeds.
 
