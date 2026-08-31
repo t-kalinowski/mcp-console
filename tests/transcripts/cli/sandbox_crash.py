@@ -17,7 +17,6 @@ from _support import (
     Transcript,
     capture_darwin_process_identity,
     code,
-    darwin_process_waits_for_control,
     kill_darwin_processes,
     live_darwin_processes,
     run_this_suite,
@@ -206,17 +205,39 @@ def _wait_for_cleanup(lifetime: _SandboxLifetime, timeout: float = 5) -> list[in
     return live_darwin_processes(identities)
 
 
-def _wait_for_manager_disposition(lifetime: _SandboxLifetime) -> None:
+def _wait_for_local_retirement(lifetime: _SandboxLifetime) -> None:
+    # The manager is stopped before root exit. The detached descendant can
+    # therefore disappear only after the launcher's tracker observes root exit,
+    # writes the retirement marker, and starts its own termination pass.
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
-        assert lifetime.temporary_directory.exists(), (
-            "manager removed the temporary directory before owner disposition"
+        assert live_darwin_processes((lifetime.launcher,)), (
+            "launcher exited before local retirement"
         )
-        descendant_live = live_darwin_processes((lifetime.descendant,))
-        if not descendant_live and darwin_process_waits_for_control(lifetime.manager):
+        assert live_darwin_processes((lifetime.manager,)), (
+            "stopped manager exited before owner-loss injection"
+        )
+        assert lifetime.temporary_directory.exists(), (
+            "temporary directory disappeared during local retirement"
+        )
+        if not live_darwin_processes((lifetime.descendant,)):
             return
         time.sleep(0.01)
-    raise AssertionError("manager did not await standalone owner disposition")
+    raise AssertionError("launcher did not retire the detached descendant")
+
+
+def _wait_for_process_exit(
+    identities: tuple[DarwinProcessIdentity, ...],
+    description: str,
+    timeout: float = 5,
+) -> list[int]:
+    deadline = time.monotonic() + timeout
+    survivors = live_darwin_processes(identities)
+    while survivors and time.monotonic() < deadline:
+        time.sleep(0.01)
+        survivors = live_darwin_processes(identities)
+    assert survivors == [], f"{description}: {survivors}"
+    return survivors
 
 
 def _cleanup(lifetime: _SandboxLifetime) -> None:
@@ -297,43 +318,52 @@ def test_manager_crash_retires_the_sandbox_lifetime(binary: Path) -> Transcript:
         _cleanup(lifetime)
 
 
-def test_launcher_crash_after_root_exit_completes_manager_disposition(
+def test_launcher_crash_during_retirement_preserves_temporary_directory(
     binary: Path,
 ) -> Transcript:
     lifetime = _start_lifetime(binary)
     try:
-        assert signal_darwin_process(lifetime.launcher, signal.SIGSTOP), (
-            "launcher exited before stop injection"
+        assert signal_darwin_process(lifetime.manager, signal.SIGSTOP), (
+            "manager exited before stop injection"
         )
         lifetime.process.stdin.write(b"exit\n")
         lifetime.process.stdin.close()
-        _wait_for_manager_disposition(lifetime)
+        _wait_for_local_retirement(lifetime)
 
         assert signal_darwin_process(lifetime.launcher, signal.SIGKILL), (
             "launcher exited before crash injection"
         )
         returncode = lifetime.process.wait(timeout=TIMEOUT)
         stderr = lifetime.process.stderr.read().decode("utf-8")
-        survivors = _wait_for_cleanup(lifetime)
+        assert signal_darwin_process(lifetime.manager, signal.SIGCONT), (
+            "manager exited before processing the retirement handoff"
+        )
+        _wait_for_process_exit(
+            (lifetime.root, lifetime.descendant, lifetime.manager),
+            "sandbox processes survived owner loss during retirement",
+        )
 
         assert returncode == -signal.SIGKILL, returncode
         assert stderr == "", stderr
-        assert survivors == [], f"sandbox processes survived owner loss: {survivors}"
-        assert not lifetime.temporary_directory.exists(), (
-            "manager did not complete the temporary-directory disposition"
+        assert lifetime.temporary_directory.exists(), (
+            "manager removed the temporary directory after retirement began"
         )
         return [
             _command_record(lifetime),
             {
-                "launcher_signal": "SIGSTOP",
-                "verified_manager_state": (
-                    "descendant retired; temporary directory retained"
+                "manager_signal": "SIGSTOP",
+                "verified_launcher_state": (
+                    "detached descendant retired; temporary directory retained"
                 ),
             },
             {
                 "launcher_signal": "SIGKILL",
                 "launcher_returncode": returncode,
-                "verified_cleanup": "sandbox root, manager, and temp",
+            },
+            {
+                "manager_signal": "SIGCONT",
+                "verified_cleanup": "sandbox root, detached descendant, and manager",
+                "verified_preservation": "sandbox temp",
             },
         ]
     finally:
