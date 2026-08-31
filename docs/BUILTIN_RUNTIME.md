@@ -16,7 +16,7 @@ Each worker generation contains:
 - one persistent Python `__main__` namespace embedded through reticulate; and
 - one persistent in-memory DuckDB connection and catalog, used as the default SQL backend.
 
-SQL cells can be redirected to a user-owned DBI connection without changing the R or Python runtime.
+SQL cells can be redirected to a user-owned DBI connection retained in R or a DB-API connection retained in Python without moving connection objects between runtimes.
 
 Objects, imports, options, attached packages, database objects, and unread standard input remain available across cells in the same worker generation.
 Language errors do not reset the worker, and changes made before an error remain applied.
@@ -243,10 +243,12 @@ An unchanged restart or shutdown cancels an active resolver and discards candida
 A restart that adds requirements waits for active environment resolution before preparing its additions and replacing the worker; generation checks still prevent an unactivated old candidate from committing.
 Transport, protocol, and bridge-infrastructure failures retain the normal worker-failure behavior.
 
-The worker installs `py`, `sql_connection()`, and `console_sql_connection()` in `tools:mcp-console` at search position 2.
-R can read Python globals through `py$name` and use the active SQL connection through DBI or dplyr.
-`sql_connection()` returns the active connection.
-`console_sql_connection(connection)` selects any valid user-owned `DBIConnection`, and `console_sql_connection(NULL)` restores the managed DuckDB connection and its catalog.
+The worker installs `py`, `sql_connection()`, and `console_sql_connection()` in `tools:mcp-console` at search position 2, and installs `console_sql_connection()` in Python builtins when CPython initializes.
+R can read Python globals through `py$name` and use the R-owned SQL connection through DBI or dplyr.
+`sql_connection()` returns that R-owned connection; it does not proxy a Python connection into R.
+In R, `console_sql_connection(connection)` selects any valid user-owned `DBIConnection`, and `console_sql_connection(NULL)` restores the managed DuckDB connection and its catalog.
+In Python, `console_sql_connection(connection)` selects an object with a DB-API `cursor()` method, and `console_sql_connection(None)` requests restoration of managed DuckDB for the next SQL cell.
+The latest selection controls later SQL cells: selecting from R clears the Python provider, while selecting from Python leaves the R-owned connection available through `sql_connection()` without routing SQL cells to it.
 Do not disconnect the managed DuckDB connection.
 Restore it before disconnecting a custom connection that is still selected.
 
@@ -357,17 +359,32 @@ The selected connection remains owned by user code.
 `sql_connection()` returns it, while `console_sql_connection(NULL)` restores the managed DuckDB connection without discarding its catalog.
 Restore the managed connection before disconnecting a selected connection.
 
-The worker submits SQL cells on a selected connection through `DBI::dbSendQuery()`.
+Python can instead select a DB-API connection:
+
+```python
+import sqlite3
+
+connection = sqlite3.connect(":memory:")
+console_sql_connection(connection)
+```
+
+The Python runtime retains the exact connection object.
+If it implements `execute()`, SQL cells execute directly on it so connection-local state is preserved; otherwise the adapter executes through `connection.cursor()`.
+The adapter reads result metadata and bounded rows through the returned cursor protocol, without converting the connection or its result rows through reticulate.
+`console_sql_connection(None)` restores managed DuckDB when the next SQL cell is dispatched.
+
+The R provider submits SQL cells on a selected connection through `DBI::dbSendQuery()`.
 Results that report columns use the bounded preview path below, while results without columns return `[done]` when they produce no console output.
-The selected driver supplies the SQL dialect, transaction state, and type mappings, and determines whether its query interface accepts statements or multiple commands.
+Each selected driver supplies the SQL dialect, transaction state, and type mappings, and determines whether its query interface accepts statements or multiple commands.
 Use `DBI::dbExecute()` or `DBI::dbSendStatement()` from an R cell for commands that require the DBI statement interface.
-The adapter does not retry a failed cell through another DBI method because the first attempt may already have changed database state.
-DuckDB extension requirements and the conveniences below apply only to the managed DuckDB backend.
+The adapters do not retry a failed cell through another execution method because the first attempt may already have changed database state.
+DuckDB extension requirements and the managed conveniences below apply only to the managed R-backed DuckDB provider; prepare Python drivers and their dependencies through `requirements.python`.
 
 Environment scanning lets an unqualified relation name refer to an R data frame in global state.
 A DuckDB table or view with the same name takes precedence.
 A view over an R data-frame name observes a later rebinding when queried.
-The SQL adapter does not expose Python objects as relations and adds no separate registration API.
+Managed DuckDB does not expose Python objects as relations and adds no separate registration API.
+A selected Python driver can use only the relations and driver-specific registrations available on that connection.
 
 Query results are previews, not complete result materializations for display.
 The preview:
@@ -380,10 +397,10 @@ The preview:
 
 The renderer reports omitted rows, columns, and truncated cells.
 It does not count the complete query result.
-Queries with result columns but zero rows still return column names, Arrow types, and `[0 rows]`.
+Queries with result columns but zero rows still return column names and `[0 rows]`; the R provider also reports Arrow types.
 Results with no columns return no preview and do not report affected-row counts.
 
-SQL backend and DBI errors are printed as ordinary console errors and leave the selected connection available for later cells.
+SQL backend, DBI, and DB-API errors are printed as ordinary console errors and leave the selected connection available for later cells.
 Extension preparation and sandbox constraints are documented in [Requirements and environments](REQUIREMENTS.md).
 
 ## Plots and images
@@ -495,7 +512,7 @@ The [implemented architecture](ARCHITECTURE.md) describes the session record and
 - Restart and failure replacement discard every in-memory language, database, debugger, graphics, and unread-input state.
 - No general worker-frame or stdin-queue size limit is defined.
 - Direct fd-0 readers do not participate in managed input notifications.
-- SQL cannot query Python objects until they are bound as R data.
+- Managed DuckDB cannot query Python objects until they are bound as R data; a selected Python driver sees only objects registered on its own connection.
 - SQL previews do not include affected-row counts or total result counts.
 - Only default-device R graphics and open pyplot figures are captured automatically.
 - Descendants that leave the relay's process group are unsupported.
