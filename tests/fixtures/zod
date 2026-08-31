@@ -910,7 +910,6 @@ def main() -> None:
                 assert os.read(cleanup, 1) in {b"", b"1"}
                 os.close(cleanup)
                 os.close(retained_stdin)
-                emit_test_event(operation, "fixture_cleanup_completed", pid=os.getpid())
                 os._exit(0)
             os.close(acknowledge)
             assert os.read(acknowledged, 1) == b"1"

@@ -16,7 +16,7 @@ MCP client
     │ MCP JSON-RPC over stdio
     ▼
 mcp-console server                         host, outside the sandbox
-    ├── generation and operation owner
+    ├── generation, relay lifetime, and operation owner
     ├── retained environments and output
     ├── transcript and image artifacts
     │
@@ -34,6 +34,7 @@ worker                                     same sandbox and process group
 
 The server is the MCP stdio process.
 It starts one relay as its direct sandbox child for each worker lifetime.
+While that generation is live, it observes the relay's process tree on the host and retains the direct relay as the root of the generation's cleanup lifetime.
 The relay is the sandbox process-group leader and starts the configured worker inside the same sandbox and process group.
 Submitted R, Python, and SQL cells run in the worker, not in the server or a host resolver.
 
@@ -57,14 +58,14 @@ The client does not communicate directly with a relay, worker, or resolver.
 
 The server sends commands to the relay's standard input and receives JSONL events from the relay's standard output.
 Relay standard error is inherited separately and is not part of that protocol.
-The transport is private and currently exists to keep worker connections and process supervision inside the sandbox.
+The transport is private and currently exists to keep worker connections and direct-worker supervision inside the sandbox.
 [`RELAY_PROTOCOL.md`](RELAY_PROTOCOL.md) defines its commands, events, framing, and retirement behavior.
 
 ### Relay and worker
 
 The relay launches the worker with standard input, standard output, standard error, and a dedicated sideband.
 Complete cells and other worker-protocol messages travel over the sideband, interactive input uses worker fd 0, and direct worker output remains on fd 1 and fd 2.
-Process signals and worker supervision remain relay responsibilities.
+Direct-worker signals and supervision remain relay responsibilities.
 [`WORKER_PROTOCOL.md`](WORKER_PROTOCOL.md) defines the launch descriptors, framing, messages, ordering rules, closure behavior, and custom-worker contract.
 
 ## Responsibility boundaries
@@ -75,6 +76,7 @@ The server owns the logical console session and all state that must survive a wo
 
 - MCP tool admission and validation;
 - worker lifecycle and generation ownership;
+- host-side relay lifetime observation and retirement;
 - retained R, Python, and DuckDB requirements;
 - host resolver launch, interruption, cancellation, and result commits;
 - evaluation, preparation, stdin, inline control, restart, and replacement admission;
@@ -84,6 +86,7 @@ The server owns the logical console session and all state that must survive a wo
 
 These responsibilities remain on the host side of the sandbox boundary.
 The server does not execute submitted cells or ask the relay to interpret MCP calls.
+At generation retirement, it stops descendants observed across process-group and session changes, closes the original relay process group as a race backstop, and then reaps the direct relay.
 
 ### Relay
 

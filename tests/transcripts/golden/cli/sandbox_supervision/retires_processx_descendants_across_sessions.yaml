@@ -8,25 +8,32 @@ command:
   - -e
   - |
     child_script <- '
-    grandchild <- processx::process$new(
-      "/bin/sleep", "60", cleanup = FALSE
+    import os
+    import subprocess
+    import time
+
+    grandchild = subprocess.Popen(
+        ["/bin/sleep", "60"],
+        start_new_session=True,
     )
-    writeLines(c(
-      as.character(grandchild$get_pid()),
-      Sys.getenv("TMPDIR")
-    ))
-    flush.console()
-    Sys.sleep(60)
+    payload = (
+        str(grandchild.pid)
+        + os.linesep
+        + os.environ["TMPDIR"]
+        + os.linesep
+    ).encode()
+    os.write(1, payload)
+    time.sleep(60)
     '
 
     child <- processx::process$new(
-      "Rscript",
-      c("--vanilla", "-e", child_script),
+      "python",
+      c("-c", child_script),
       stdout = "|",
       stderr = "2>&1",
       cleanup = FALSE
     )
-    stopifnot(child$poll_io(5000)[["output"]] == "ready")
+    stopifnot(child$poll_io(-1)[["output"]] == "ready")
     child_output <- child$read_output_lines()
     stopifnot(length(child_output) == 2L)
     writeLines(c(
@@ -45,4 +52,4 @@ stdout: |
   <sandbox temp>
 verified_descendants:
   - processx child outside root session
-  - processx grandchild outside child session
+  - detached grandchild outside processx child session

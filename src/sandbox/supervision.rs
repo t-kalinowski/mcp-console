@@ -12,10 +12,11 @@ use std::process::{Child, Command, ExitCode};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const PROCESS_OBSERVATION_POLL_INTERVAL: Duration = Duration::from_millis(10);
-const PROCESS_REAP_GRACE: Duration = Duration::from_secs(1);
+const PROCESS_STALE_PRUNE_INTERVAL: Duration = Duration::from_secs(1);
+const PROCESS_RETIREMENT_GRACE: Duration = Duration::from_secs(1);
 
 /// A sandbox process tree observed from one direct root.
 ///
@@ -30,9 +31,14 @@ pub(crate) struct ObservedLifetime {
     observer: Option<JoinHandle<Option<ObservationResult>>>,
 }
 
-struct ObservationResult {
-    tracker: process_tracker::DescendantTracker,
-    error: Option<String>,
+enum ObservationResult {
+    Tracker {
+        tracker: process_tracker::DescendantTracker,
+        error: Option<String>,
+    },
+    Retired {
+        error: String,
+    },
 }
 
 impl ObservedLifetime {
@@ -42,13 +48,14 @@ impl ObservedLifetime {
             .filter(|pid| *pid > 0)
             .ok_or_else(|| "sandbox process tracker received an invalid root PID".to_string())?;
         let tracker = process_tracker::DescendantTracker::start(root_pid)
-            .map_err(|failure| failure.retire(PROCESS_REAP_GRACE))?;
+            .map_err(|failure| failure.retire(PROCESS_RETIREMENT_GRACE))?;
 
         // Transfer the tracker only after the observer thread exists, so a
         // thread-spawn failure can still retire every identity already seen.
         let stop_requested = Arc::new(AtomicBool::new(false));
         let observer_stop = Arc::clone(&stop_requested);
-        let (tracker_sender, tracker_receiver) = mpsc::channel();
+        let (tracker_sender, tracker_receiver) =
+            mpsc::sync_channel::<process_tracker::DescendantTracker>(0);
         let observer = match thread::Builder::new()
             .name("mcp-console-sandbox-observer".to_string())
             .spawn(move || {
@@ -56,15 +63,23 @@ impl ObservedLifetime {
                     return None;
                 };
                 let mut error = None;
+                let mut next_stale_prune = Instant::now() + PROCESS_STALE_PRUNE_INTERVAL;
                 while !observer_stop.load(Ordering::Acquire) {
                     if let Err(observation_error) =
                         tracker.wait_for_events(Some(PROCESS_OBSERVATION_POLL_INTERVAL))
                     {
-                        error = Some(observation_error);
-                        break;
+                        return Some(ObservationResult::Retired {
+                            error: retire_after_observer_failure(tracker, observation_error),
+                        });
+                    }
+                    if Instant::now() >= next_stale_prune {
+                        if let Err(observation_error) = tracker.prune_stale_processes() {
+                            error.get_or_insert(observation_error);
+                        }
+                        next_stale_prune = Instant::now() + PROCESS_STALE_PRUNE_INTERVAL;
                     }
                 }
-                Some(ObservationResult { tracker, error })
+                Some(ObservationResult::Tracker { tracker, error })
             }) {
             Ok(observer) => observer,
             Err(spawn_error) => {
@@ -101,12 +116,17 @@ impl ObservedLifetime {
             .join()
             .map_err(|_| "sandbox process observer panicked".to_string())?
             .ok_or_else(|| "sandbox process observer stopped before tracker handoff".to_string())?;
-        let cleanup = observation.tracker.terminate(false, PROCESS_REAP_GRACE);
-        match (observation.error, cleanup) {
-            (None, Ok(())) => Ok(()),
-            (Some(error), Ok(())) | (None, Err(error)) => Err(error),
-            (Some(error), Err(cleanup_error)) => {
-                Err(format!("{error}; additionally, {cleanup_error}"))
+        match observation {
+            ObservationResult::Retired { error } => Err(error),
+            ObservationResult::Tracker { tracker, error } => {
+                let cleanup = tracker.terminate(false, PROCESS_RETIREMENT_GRACE);
+                match (error, cleanup) {
+                    (None, Ok(())) => Ok(()),
+                    (Some(error), Ok(())) | (None, Err(error)) => Err(error),
+                    (Some(error), Err(cleanup_error)) => {
+                        Err(format!("{error}; additionally, {cleanup_error}"))
+                    }
+                }
             }
         }
     }
@@ -125,7 +145,7 @@ fn retire_after_observer_failure(
     tracker: process_tracker::DescendantTracker,
     error: String,
 ) -> String {
-    match tracker.terminate(false, PROCESS_REAP_GRACE) {
+    match tracker.terminate(false, PROCESS_RETIREMENT_GRACE) {
         Ok(()) => error,
         Err(cleanup_error) => format!("{error}; additionally, {cleanup_error}"),
     }
@@ -145,13 +165,13 @@ pub(super) fn status(
     let tracker = match process_tracker::DescendantTracker::start(child.id() as libc::pid_t) {
         Ok(tracker) => tracker,
         Err(failure) => {
-            let error = failure.retire(PROCESS_REAP_GRACE);
+            let error = failure.retire(PROCESS_RETIREMENT_GRACE);
             let error = stop_direct_child(&mut child, error);
             preserve(temporary_directory);
             return Err(error);
         }
     };
-    if let Err(error) = tracker.supervise(PROCESS_REAP_GRACE) {
+    if let Err(error) = tracker.supervise(PROCESS_RETIREMENT_GRACE) {
         let error = stop_direct_child(&mut child, error);
         preserve(temporary_directory);
         return Err(error);
@@ -191,7 +211,7 @@ pub(super) fn stop_direct_child(child: &mut Child, primary: String) -> String {
         );
     }
 
-    match platform::wait_for_process_exit_without_reaping(child.id(), PROCESS_REAP_GRACE) {
+    match platform::wait_for_process_exit_without_reaping(child.id(), PROCESS_RETIREMENT_GRACE) {
         Ok(true) => {}
         Ok(false) => {
             return additional_error(

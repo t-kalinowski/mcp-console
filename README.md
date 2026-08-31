@@ -171,6 +171,8 @@ mcp-console --version
 ```
 
 `mcp-console serve` communicates with its MCP client over standard input and output.
+Normal restart, automatic worker replacement, and orderly server shutdown retire descendants observed from each worker generation, including descendants that entered another process group or session.
+Descendants orphaned before observation and cleanup after a server-process failure remain outside this guarantee.
 The standalone `sandbox` command is available for development.
 When its direct command exits while the launcher remains running, it retires descendants observed from that root, including descendants that entered another process group or session.
 On macOS, a descendant that becomes orphaned before the post-spawn tracker observes it remains outside this guarantee; termination or failure of the launcher itself is not covered.

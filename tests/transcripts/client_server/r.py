@@ -1507,6 +1507,12 @@ def test_preserves_fd0_order_between_readers(binary: Path) -> Transcript:
             initial_cuts=(output.removesuffix(running),),
         )
         output = "".join(cuts)
+
+    waiting = "\n[waiting for stdin]"
+    if output.endswith(waiting):
+        output = output.removesuffix(waiting)
+        client.send(timeout_ms=3_000)
+        output += last_tool_text(client)
     assert output == expected, repr(output)
 
     calls = client.transcript[call_start:]
