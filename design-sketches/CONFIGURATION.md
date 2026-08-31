@@ -21,6 +21,27 @@ implementation and tests, MCP Console must reject unsupported combinations rathe
 than infer a broader permission. That invariant lets the design remain iterative
 without requiring this sketch to pre-specify every edge case.
 
+### How to read and review this sketch
+
+This file is the self-standing design record. Pull-request discussion is not part
+of the configuration contract. When review identifies a durable product or
+safety invariant, that invariant belongs in this document rather than only in a
+comment thread.
+
+This spike settles the user-facing concepts, progressive YAML shapes, canonical
+shorthand expansions, defaults, trust direction, and fail-closed boundaries. It
+deliberately does not freeze backend algorithms, wire protocols, exhaustive
+provider option lists, platform-specific enforcement, or exact locking and
+canonicalization mechanisms. Those details are settled incrementally by the
+implementation PR that introduces the feature and its tests.
+
+The review standard for this sketch is therefore: common examples should be
+understandable; one additional need should cause a local expansion rather than a
+schema rewrite; authority should have a clear source; and an advanced combination
+without a safe implementation should fail closed. The sketch is not intended to
+be a waterfall specification that proves every provider and edge case before the
+first implementation slice begins.
+
 The central design rule is:
 
 > **Simple forms are shorthands for advanced forms, not a separate dialect.**
@@ -623,6 +644,13 @@ This trust check changes no YAML syntax. `full` allows unrestricted worker
 networking but does not implicitly grant filesystem access, listener ports, or
 local IPC sockets; those remain separate capabilities. It is still a powerful
 setting requiring a trusted profile.
+
+A network allowlist contributed by a higher-trust layer is a non-widenable
+ceiling for every lower-trust layer. Lower-trust configuration may remove or
+narrow destinations, listeners, and socket access, but it may not add authority
+outside that ceiling. Trusting a project does not override administrator or
+organization policy. Ordinary replacement and list-patch semantics still apply
+within one trust layer.
 
 Writing `network: none` in a selected profile is stronger than merely inheriting
 the built-in empty allowlist: it prohibits outbound connections, listeners, and
@@ -1749,6 +1777,14 @@ supply a documented minimal target baseline needed to start the relay, such as
 its target-side home, temporary directory, and executable search path; that
 baseline is separate from `env.inherit` and is shown by `config explain`.
 
+Profile environment values apply only to the sandboxed worker and its
+descendants. The supervisor, target resolver, relay, and sandbox wrapper start
+from a sanitized implementation-owned environment; profile `env.set` and
+`env.inherit` values are injected only when launching the worker after the
+sandbox boundary is established. Loader and code-injection variables therefore
+cannot affect a pre-sandbox wrapper or helper. A provider that cannot preserve
+this ordering rejects the profile rather than forwarding the variables earlier.
+
 Every project-authored reference to a supervisor environment variable requires
 project trust unless that exact name is approved for its stated use by
 higher-trust configuration. This applies to `env.inherit`, package-source
@@ -1827,10 +1863,20 @@ A higher-trust policy may:
 - forbid `full_access`, SSH, Docker, custom commands, or selected providers;
 - restrict package sources, requirement-and-source pairs, credential variable
   names, and executable paths;
-- limit which profiles an agent may select.
+- limit which profiles a project file or agent may select.
 
 A project file cannot weaken those constraints. Security policy should not be
 encoded by relying on ordinary profile merge order alone.
+
+Profile selection is itself attributed to the layer that made the selection. A
+project-level top-level `profile` does not borrow the trust of a user- or
+administrator-defined profile: selecting it is treated as a project request for
+all of its effective capabilities, and the ordinary project trust and
+higher-trust policy checks are applied again. Thus an untrusted project cannot
+activate `full_access`, SSH, Docker, or a custom runner merely by naming a
+higher-trust profile that contains it. An explicit CLI selection is attributed
+to the invoking user; an agent selection remains limited by trusted
+`server.agent_profiles` policy.
 
 Named `profiles` and entries under `definitions` share one resolved namespace
 per kind across configuration layers. Built-in names are reserved, and defining
