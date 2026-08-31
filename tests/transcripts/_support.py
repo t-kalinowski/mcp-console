@@ -1,22 +1,200 @@
 import base64
+import ctypes
+import errno
 import json
 import os
 import re
 import select
 import shutil
+import signal
 import subprocess
+import sys
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from textwrap import dedent
-from typing import Any
+from typing import Any, Sequence
 
 TranscriptEntry = dict[str, Any]
 Transcript = list[TranscriptEntry]
 ToolResult = dict[str, Any]
 YamlStream = list[Any]
+DarwinProcessIdentity = tuple[int, int, int]
+
+
+class _DarwinProcessInfo(ctypes.Structure):
+    # In Darwin's stable proc_bsdinfo ABI, the two start-time fields follow a
+    # 120-byte prefix and complete the 136-byte structure.
+    _fields_ = [
+        ("prefix", ctypes.c_byte * 120),
+        ("pbi_start_tvsec", ctypes.c_uint64),
+        ("pbi_start_tvusec", ctypes.c_uint64),
+    ]
+
+
+class _DarwinProcessFdInfo(ctypes.Structure):
+    _fields_ = [
+        ("fd", ctypes.c_int32),
+        ("fdtype", ctypes.c_uint32),
+    ]
+
+
+class _DarwinThreadInfo(ctypes.Structure):
+    _fields_ = [
+        ("user_time", ctypes.c_uint64),
+        ("system_time", ctypes.c_uint64),
+        ("cpu_usage", ctypes.c_int32),
+        ("policy", ctypes.c_int32),
+        ("run_state", ctypes.c_int32),
+        ("flags", ctypes.c_int32),
+        ("sleep_time", ctypes.c_int32),
+        ("current_priority", ctypes.c_int32),
+        ("priority", ctypes.c_int32),
+        ("max_priority", ctypes.c_int32),
+        ("name", ctypes.c_char * 64),
+    ]
+
+
+_LIBPROC = None
+if sys.platform == "darwin":
+    _LIBPROC = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+    _LIBPROC.proc_pidinfo.argtypes = [
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_uint64,
+        ctypes.c_void_p,
+        ctypes.c_int,
+    ]
+    _LIBPROC.proc_pidinfo.restype = ctypes.c_int
+
+
+def current_darwin_process_identity(pid: int) -> DarwinProcessIdentity | None:
+    assert _LIBPROC is not None
+    proc_pidtbsdinfo = 3
+    include_zombies = 1
+    info = _DarwinProcessInfo()
+    ctypes.set_errno(0)
+    size = _LIBPROC.proc_pidinfo(
+        pid,
+        proc_pidtbsdinfo,
+        include_zombies,
+        ctypes.byref(info),
+        ctypes.sizeof(info),
+    )
+    if size == ctypes.sizeof(info):
+        return (pid, info.pbi_start_tvsec, info.pbi_start_tvusec)
+    error = ctypes.get_errno()
+    if size == 0 and error == errno.ESRCH:
+        return None
+    if size == 0 and error != 0:
+        raise OSError(error, f"failed to inspect process {pid}")
+    raise RuntimeError(
+        f"proc_pidinfo returned {size} bytes for process {pid}, "
+        f"expected {ctypes.sizeof(info)}"
+    )
+
+
+def capture_darwin_process_identity(pid: int) -> DarwinProcessIdentity:
+    identity = current_darwin_process_identity(pid)
+    assert identity is not None, f"process {pid} exited before identity capture"
+    return identity
+
+
+def live_darwin_processes(
+    identities: Sequence[DarwinProcessIdentity],
+) -> list[int]:
+    return [
+        identity[0]
+        for identity in identities
+        if current_darwin_process_identity(identity[0]) == identity
+    ]
+
+
+def darwin_process_waits_for_control(
+    identity: DarwinProcessIdentity,
+) -> bool:
+    """Return whether the exact manager process is waiting for disposition."""
+    assert _LIBPROC is not None
+    if current_darwin_process_identity(identity[0]) != identity:
+        return False
+
+    proc_pidlistfds = 1
+    proc_pidlistthreads = 6
+    proc_pidthreadinfo = 5
+    prox_fdtype_vnode = 1
+    prox_fdtype_socket = 2
+    th_state_waiting = 3
+
+    fd_infos = (_DarwinProcessFdInfo * 16)()
+    fd_size = _LIBPROC.proc_pidinfo(
+        identity[0],
+        proc_pidlistfds,
+        0,
+        fd_infos,
+        ctypes.sizeof(fd_infos),
+    )
+    if fd_size <= 0:
+        return False
+    assert fd_size % ctypes.sizeof(_DarwinProcessFdInfo) == 0, fd_size
+    file_descriptors = {
+        (info.fd, info.fdtype)
+        for info in fd_infos[: fd_size // ctypes.sizeof(_DarwinProcessFdInfo)]
+    }
+    if file_descriptors != {
+        (0, prox_fdtype_socket),
+        (1, prox_fdtype_vnode),
+        (2, prox_fdtype_vnode),
+    }:
+        return False
+
+    thread_ids = (ctypes.c_uint64 * 16)()
+    thread_size = _LIBPROC.proc_pidinfo(
+        identity[0],
+        proc_pidlistthreads,
+        0,
+        thread_ids,
+        ctypes.sizeof(thread_ids),
+    )
+    if thread_size != ctypes.sizeof(ctypes.c_uint64):
+        return False
+
+    thread_info = _DarwinThreadInfo()
+    info_size = _LIBPROC.proc_pidinfo(
+        identity[0],
+        proc_pidthreadinfo,
+        thread_ids[0],
+        ctypes.byref(thread_info),
+        ctypes.sizeof(thread_info),
+    )
+    return (
+        info_size == ctypes.sizeof(thread_info)
+        and thread_info.run_state == th_state_waiting
+        and thread_info.name.rstrip(b"\0") == b"main"
+        and current_darwin_process_identity(identity[0]) == identity
+    )
+
+
+def signal_darwin_process(identity: DarwinProcessIdentity, number: int) -> bool:
+    # macOS has no pidfd-like signal API. Recheck the start time immediately
+    # before signaling so a reused PID is not treated as the test process.
+    if current_darwin_process_identity(identity[0]) != identity:
+        return False
+    try:
+        os.kill(identity[0], number)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def kill_darwin_processes(
+    identities: Sequence[DarwinProcessIdentity],
+) -> list[int]:
+    survivors = live_darwin_processes(identities)
+    for identity in identities:
+        signal_darwin_process(identity, signal.SIGKILL)
+    return survivors
 
 
 @dataclass(frozen=True)

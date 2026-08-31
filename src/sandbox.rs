@@ -11,6 +11,9 @@ use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
 use std::time::Duration;
 
 #[cfg(target_os = "macos")]
+const CRASH_MANAGER_CLEANUP_TIMEOUT: Duration = Duration::from_secs(1);
+
+#[cfg(target_os = "macos")]
 #[path = "sandbox/file_descriptors.rs"]
 mod file_descriptors;
 
@@ -40,9 +43,19 @@ pub fn run(command_line: &[OsString]) -> Result<ExitCode, String> {
     sandboxed.status()
 }
 
+#[cfg(target_os = "macos")]
+pub(crate) fn run_manager() -> Result<(), String> {
+    supervision::run_manager()
+}
+
 #[cfg(not(target_os = "macos"))]
 pub fn run(command_line: &[OsString]) -> Result<ExitCode, String> {
     platform::run(command_line)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn run_manager() -> Result<(), String> {
+    Err("the sandbox manager is currently supported only on macOS".to_string())
 }
 
 #[cfg(target_os = "macos")]
@@ -118,8 +131,8 @@ pub(crate) struct SandboxedCommand {
 }
 
 #[cfg(target_os = "macos")]
-/// A direct sandboxed child that retains its observed process lifetime and
-/// private temporary directory.
+/// A direct sandboxed child that retains its observed process lifetime, a
+/// committed crash manager, and its private temporary directory.
 ///
 /// Retain this owner until its process lifetime is explicitly retired.
 /// Dropping it does not terminate the child and removes the private directory.
@@ -129,6 +142,7 @@ pub(crate) struct SandboxedCommand {
 pub(crate) struct SandboxedChild {
     child: Child,
     observed_lifetime: Option<supervision::ObservedLifetime>,
+    crash_manager: Option<supervision::SandboxManager>,
     retirement: SandboxedChildRetirement,
     separate_process_group: bool,
     temporary_directory: Option<platform::TemporaryDirectory>,
@@ -221,13 +235,14 @@ impl SandboxedCommand {
     }
 
     /// Spawns the sandboxed program, starts host-side descendant observation,
-    /// and transfers the temporary-directory guard to the returned child.
+    /// commits an independent host crash manager, and transfers the private
+    /// temporary-directory guard to the returned child.
     ///
     /// Darwin cannot atomically attach a descendant observer at spawn time. A
     /// process that detaches before the post-spawn root watch or a fork event is
-    /// observed remains outside this command's guarantee. Failure of the owner
-    /// process itself is also outside this lifetime; crash-independent ownership
-    /// is a separate supervision layer.
+    /// observed remains outside this command's guarantee. Abrupt owner failure
+    /// is covered only after the crash manager reports readiness. The manager's
+    /// later tracker cannot recover descendants that escaped before it attached.
     pub(crate) fn spawn(mut self) -> Result<SandboxedChild, String> {
         self.command.env("TMPDIR", self.temporary_directory.path());
         let mut child = self
@@ -246,9 +261,31 @@ impl SandboxedCommand {
                 return Err(error);
             }
         };
+        let crash_manager = match supervision::SandboxManager::start(
+            child.id(),
+            self.temporary_directory.path(),
+            CRASH_MANAGER_CLEANUP_TIMEOUT,
+        ) {
+            Ok(manager) => manager,
+            Err(error) => {
+                let mut child = SandboxedChild {
+                    child,
+                    observed_lifetime: Some(observed_lifetime),
+                    crash_manager: None,
+                    retirement: SandboxedChildRetirement::Active,
+                    separate_process_group: self.separate_process_group,
+                    temporary_directory: Some(self.temporary_directory),
+                };
+                let cleanup = child.force_stop().err();
+                return Err(cleanup.map_or(error.clone(), |cleanup| {
+                    append_retirement_error(Some(error), cleanup)
+                }));
+            }
+        };
         Ok(SandboxedChild {
             child,
             observed_lifetime: Some(observed_lifetime),
+            crash_manager: Some(crash_manager),
             retirement: SandboxedChildRetirement::Active,
             separate_process_group: self.separate_process_group,
             temporary_directory: Some(self.temporary_directory),
@@ -323,7 +360,8 @@ impl SandboxedChild {
     }
 
     /// Stops the root and descendants observed across process-group and session
-    /// changes, then reaps the direct sandbox process.
+    /// changes, waits for committed manager cleanup, reaps the direct sandbox
+    /// process, then commits the temporary-directory disposition.
     ///
     /// Process-group cleanup always runs as a backstop for unobserved same-group
     /// forks; direct-child cleanup also runs after any retirement error. The
@@ -339,11 +377,17 @@ impl SandboxedChild {
             SandboxedChildRetirement::Active => {}
         }
 
+        if let Some(manager) = self.crash_manager.as_mut() {
+            manager.begin_retirement();
+        }
+        let mut error = None;
         let observed_lifetime = self
             .observed_lifetime
             .take()
             .expect("active sandbox child should retain its observed lifetime");
-        let mut error = observed_lifetime.stop().err();
+        if let Err(observation_error) = observed_lifetime.stop() {
+            error = Some(append_retirement_error(error, observation_error));
+        }
         // Process-group cleanup remains an independent backstop for the narrow
         // interval between a fork and its observation. Run it even when tracked
         // retirement succeeds so a same-group process cannot survive merely
@@ -359,28 +403,71 @@ impl SandboxedChild {
                 ),
             ));
         }
+        let manager_prepared = self
+            .crash_manager
+            .as_mut()
+            .is_none_or(|manager| manager.prepare_finish());
+        let mut direct_stop_failed = false;
         if error.is_some()
             && let Err(kill_error) = self.child.kill()
             && kill_error.raw_os_error() != Some(libc::ESRCH)
         {
-            let error = append_retirement_error(
+            error = Some(append_retirement_error(
                 error,
                 format!(
                     "failed to stop direct `{}` process: {kill_error}",
                     platform::SANDBOX_EXEC
                 ),
-            );
+            ));
+            direct_stop_failed = true;
+        }
+
+        let identity_released = if direct_stop_failed {
+            false
+        } else {
+            match self.child.wait() {
+                Ok(_) => true,
+                Err(wait_error) => {
+                    let identity_released = wait_error.raw_os_error() == Some(libc::ECHILD);
+                    error = Some(append_retirement_error(
+                        error,
+                        format!(
+                            "failed to reap stopped `{}`: {wait_error}",
+                            platform::SANDBOX_EXEC
+                        ),
+                    ));
+                    identity_released
+                }
+            }
+        };
+        if let Some(manager) = self.crash_manager.take()
+            && let Err(manager_error) = manager.finish(error.is_some() || !manager_prepared)
+        {
+            error = Some(append_retirement_error(error, manager_error));
+        }
+        if error.is_some() {
             self.preserve_temporary_directory();
+        } else {
+            self.remove_temporary_directory();
+        }
+
+        if direct_stop_failed {
+            let error = error.expect("direct stop failure should retain its error");
             self.retirement = SandboxedChildRetirement::Failed {
                 error: error.clone(),
             };
             return Err(error);
         }
-
-        self.retirement = SandboxedChildRetirement::AwaitingReap {
-            error: error.clone(),
+        self.retirement = if identity_released {
+            SandboxedChildRetirement::Retired {
+                error: error.clone(),
+            }
+        } else {
+            SandboxedChildRetirement::AwaitingReap {
+                error: error.clone(),
+            }
         };
-        self.reap_after_stop(error)
+        stored_retirement_result(&error)
     }
 
     fn reap_after_stop(&mut self, prior_error: Option<String>) -> Result<(), String> {
@@ -422,6 +509,10 @@ impl SandboxedChild {
         if let Some(directory) = self.temporary_directory.take() {
             std::mem::forget(directory);
         }
+    }
+
+    fn remove_temporary_directory(&mut self) {
+        drop(self.temporary_directory.take());
     }
 }
 

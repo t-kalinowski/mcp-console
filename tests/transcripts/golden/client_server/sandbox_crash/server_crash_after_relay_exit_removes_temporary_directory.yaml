@@ -1,0 +1,39 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+send:
+  python: |
+    import os
+    import subprocess
+
+    crash_child = subprocess.Popen(
+        ["/bin/sleep", "60"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    print(f"worker={os.getpid()}")
+    print(f"relay={os.getppid()}")
+    print(f"child={crash_child.pid}")
+    print(f"temp={os.environ['TMPDIR']}")
+result:
+  content:
+    - type: text
+      text: |
+        worker=<worker pid>
+        relay=<relay pid>
+        child=<detached child pid>
+        temp=<sandbox temp>
+  isError: false
+transcript_normalization:
+  target: result.content[0].text
+  process_ids: omitted
+  sandbox_temporary_directory: omitted
+---
+server_signal: SIGSTOP
+---
+relay_signal: SIGKILL
+---
+server_signal: SIGKILL
+server_returncode: -9

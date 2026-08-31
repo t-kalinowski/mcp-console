@@ -5046,6 +5046,7 @@ def test_restart_drains_readable_frame_before_abandoning_partial_tail(
         )
 
         descendant_group = None
+        cancellation_ready: FifoCheckpoint | None = None
         passed = False
         try:
             client._initialize_and_list_tools()
@@ -5053,6 +5054,7 @@ def test_restart_drains_readable_frame_before_abandoning_partial_tail(
             assert last_tool_text(client) == "[done]"
             control.connect(client)
             loaded = wait_for_marker(temporary, loaded_name, client)
+            cancellation_ready = FifoCheckpoint(loaded.parent / cancellation_ready_name)
             (loaded.parent / arm_name).touch()
 
             evaluation = client._start_send(
@@ -5067,7 +5069,7 @@ def test_restart_drains_readable_frame_before_abandoning_partial_tail(
             wait_for_marker(temporary, socket_ready_name, client)
             wait_for_marker(temporary, partial_tail_name, client)
             restart = client._start_send(control="restart")
-            wait_for_marker(temporary, cancellation_ready_name, client)
+            cancellation_ready.wait("relay sideband cancellation", timeout=3)
             client._receive_many([evaluation, restart])
             result = evaluation["result"]
             assert result["isError"] is True, result
@@ -5104,6 +5106,8 @@ def test_restart_drains_readable_frame_before_abandoning_partial_tail(
             passed = True
             return transcript
         finally:
+            if cancellation_ready is not None:
+                cancellation_ready.close()
             control.release_cleanup()
             stop_process_group(descendant_group)
             if not passed:
