@@ -1,18 +1,38 @@
+mod dbapi;
 mod dbi;
 
-/// Worker-facing SQL runtime facade.
+pub(crate) enum Provider {
+    R,
+    Managed,
+    Python,
+}
+
+/// Worker-facing SQL runtime router.
 ///
-/// The current backend owns DuckDB through DBI in embedded R. Keeping that
-/// backend behind this facade leaves worker dispatch independent of the SQL
-/// host without changing the persistent catalog or preview behavior.
-pub(crate) struct Bridge(dbi::Backend);
+/// R DBI connections stay in embedded R, while Python DB-API connections stay
+/// in CPython. Rust chooses the active provider for each SQL cell without
+/// converting connection objects or result rows between the runtimes.
+pub(crate) struct Bridge {
+    dbi: dbi::Backend,
+    dbapi: dbapi::Backend,
+}
 
 impl Bridge {
     pub(crate) fn initialize() -> Result<Self, String> {
-        dbi::Backend::initialize().map(Self)
+        Ok(Self {
+            dbi: dbi::Backend::initialize()?,
+            dbapi: dbapi::Backend::initialize(),
+        })
     }
 
     pub(crate) fn evaluate(&mut self, source: &str) -> Result<(), String> {
-        self.0.evaluate(source)
+        match self.dbapi.provider()? {
+            Provider::Python => self.dbapi.evaluate(source),
+            Provider::Managed => {
+                self.dbi.restore_managed()?;
+                self.dbi.evaluate(source)
+            }
+            Provider::R => self.dbi.evaluate(source),
+        }
     }
 }
