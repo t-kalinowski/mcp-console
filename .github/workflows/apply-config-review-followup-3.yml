@@ -1,0 +1,163 @@
+name: Apply config review follow-up 3
+
+on:
+  push:
+    branches:
+      - design/config-yaml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+        with:
+          ref: design/config-yaml
+          fetch-depth: 0
+
+      - name: Apply guarded documentation edits
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("design-sketches/CONFIGURATION.md")
+          text = path.read_text()
+          yaml_fences = text.count("```yaml")
+
+          replacements = [
+              (
+                  """Windows named pipes can later use a parallel `named_pipes` field. Any
+          pre-existing socket or named pipe selected by an automatically discovered
+          project requires project trust unless the exact endpoint is approved by
+          higher-trust policy. The exception is a worker-owned socket created inside the
+          session's private runtime directory. MCP Console does not infer authority from a
+          pathname: database, SSH-agent, desktop-bus, container-daemon, and other host
+          sockets all use the same rule.""",
+                  """Windows named pipes can later use a parallel `named_pipes` field. Any
+          project-authored connection to a pre-existing socket or named pipe requires
+          project trust unless the exact endpoint and operation are approved by
+          higher-trust policy. The same rule applies to a requested bind outside the
+          session's private runtime directory, whether or not the endpoint exists yet; an
+          approval for `connect` does not authorize `bind`. The exception is a worker-owned
+          endpoint created inside the private session directory. MCP Console does not infer
+          authority from a pathname: database, SSH-agent, desktop-bus, container-daemon,
+          and other host sockets all use the same rule.""",
+              ),
+              (
+                  """  args:
+              - --gpus=all
+          ```
+
+          Image builds should normally use a separate Dockerfile:""",
+                  """  args:
+              - --gpus=all
+          ```
+
+          `args` is not an arbitrary Docker CLI escape hatch. Each option must be
+          recognized and validated by the runner. Options that affect mounts, networking,
+          namespaces, privileges, capabilities, devices, users, entrypoints, or other
+          isolation state are rejected unless the implementation normalizes them into the
+          structured runner configuration and compiled policy. In this sketch,
+          `--gpus=all` represents a validated device/resource request, not an unexamined
+          argument forwarded to Docker.
+
+          Image builds should normally use a separate Dockerfile:""",
+              ),
+              (
+                  """MCP Console connects to the host, starts the container there, and runs the relay
+          and worker in the innermost environment. Listener forwarding and derived paths
+          cross both boundaries. Additional arbitrary nesting should not be added until a
+          concrete supported use case requires it.""",
+                  """MCP Console connects to the host, starts the container there, and runs the relay
+          and worker in the innermost environment. The outer runner's working directory is
+          mounted at `inside.directory` automatically, with access no broader than the
+          effective profile: `read_only` keeps it read-only and `workspace_write` permits
+          workspace writes. An explicit mount at the same target replaces this derived
+          workspace mount only after normal permission validation. Listener forwarding and
+          derived paths cross both boundaries. Additional arbitrary nesting should not be
+          added until a concrete supported use case requires it.""",
+              ),
+              (
+                  """An exact existing interpreter is:
+
+          ```yaml
+          python:
+            mode: existing
+            executable: .venv/bin/python
+          ```
+
+          The same resolver and trust contract applies to Python lockfiles, project""",
+                  """An exact existing interpreter is:
+
+          ```yaml
+          python:
+            mode: existing
+            executable: .venv/bin/python
+          ```
+
+          For either language, a project-authored existing executable is untrusted code
+          regardless of whether its path lies inside the project. It may not be executed by
+          supervisor-side or resolver preflight unless the project is trusted or the exact
+          executable is approved by higher-trust policy. Without that approval it may be
+          launched only inside the sandboxed worker, and the profile must use
+          `package_resolution: off`.
+
+          The same resolver and trust contract applies to Python lockfiles, project""",
+              ),
+              (
+                  """- arbitrary executable paths outside the project;""",
+                  """- every project-authored runtime executable that would be invoked by resolver
+            preparation or supervisor-side preflight, regardless of its path;""",
+              ),
+              (
+                  """cache. `config explain` shows each namespace's owner and effective access
+          (`resolver_write`, `worker_read`, or `session_write`). Cleanup is incremental,
+          based on last use, and never removes an active environment. Remote cache paths
+          are target-side; the simple top-level log path is supervisor-side. Top-level
+          `cache` supplies the default and a profile-local `cache` mapping overrides only
+          the named namespaces it changes.""",
+                  """cache. `config explain` shows each namespace's owner and effective access
+          (`resolver_write`, `worker_read`, or `session_write`). Cleanup is incremental,
+          based on last use, and never removes an active environment. For a cache shared by
+          several MCP Console server processes, active use is target-wide rather than
+          process-local. Cleanup and resolver commit require provider-appropriate
+          cross-process coordination and atomic publication or deletion. If safe
+          coordination is unavailable, cleanup skips shared entries or uses a private cache.
+          The exact lease or locking protocol is deferred to the cache implementation PR and
+          its tests. Remote cache paths are target-side; the simple top-level log path is
+          supervisor-side. Top-level `cache` supplies the default and a profile-local
+          `cache` mapping overrides only the named namespaces it changes.""",
+              ),
+              (
+                  """- project-selected pre-existing Unix sockets or named pipes outside the
+            worker-owned session directory, unless the exact endpoint is approved by
+            higher-trust policy;""",
+                  """- project-selected Unix sockets or named pipes outside the worker-owned
+            session directory, including bind requests, unless the exact endpoint and
+            operation are approved by higher-trust policy;""",
+              ),
+          ]
+
+          for old, new in replacements:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"expected one match, found {count}: {old[:100]!r}")
+              text = text.replace(old, new)
+
+          if text.count("```yaml") != yaml_fences:
+              raise SystemExit("YAML examples changed unexpectedly")
+
+          path.write_text(text)
+
+      - name: Commit documentation update and remove helper workflow
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git rm .github/workflows/apply-config-review-followup-3.yml
+          git add design-sketches/CONFIGURATION.md
+          git commit -m "Clarify guarded runner and cache invariants"
+          git push origin HEAD:design/config-yaml
