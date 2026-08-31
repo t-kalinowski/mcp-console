@@ -3,7 +3,14 @@ use super::{
     PROCESS_RETIREMENT_GRACE, SandboxManager, additional_error, preserve, stop_direct_child,
 };
 use crate::sandbox::{CRASH_MANAGER_CLEANUP_TIMEOUT, file_descriptors, platform};
+use std::fs;
+use std::io;
 use std::process::{Child, Command, ExitCode};
+use std::thread;
+use std::time::{Duration, Instant};
+
+const TEMPORARY_DIRECTORY_REMOVAL_RETRY: Duration = Duration::from_millis(100);
+const TEMPORARY_DIRECTORY_REMOVAL_POLL: Duration = Duration::from_millis(10);
 
 pub(super) fn status(
     mut sandbox_command: Command,
@@ -75,7 +82,7 @@ pub(super) fn status(
         return Err(error);
     }
 
-    drop(temporary_directory);
+    remove_temporary_directory(temporary_directory)?;
     Ok(platform::exit_code(status.expect(
         "successful standalone retirement should retain the root status",
     )))
@@ -91,4 +98,40 @@ fn retire_after_manager_start_failure(
         Err(retirement_error) => additional_error(error, retirement_error),
     };
     stop_direct_child(child, error)
+}
+
+fn remove_temporary_directory(
+    temporary_directory: platform::TemporaryDirectory,
+) -> Result<(), String> {
+    let path = temporary_directory.path().to_path_buf();
+
+    // TemporaryDirectory's destructor is deliberately best effort so an
+    // arbitrary sandbox command cannot replace its own exit status by changing
+    // directory permissions. After successful process retirement, make that
+    // cleanup observable here and allow a short retry for transient Darwin
+    // vnode teardown after an abruptly killed manager.
+    drop(temporary_directory);
+    let deadline = Instant::now() + TEMPORARY_DIRECTORY_REMOVAL_RETRY;
+    loop {
+        match fs::remove_dir_all(&path) {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) if Instant::now() < deadline => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                thread::sleep(TEMPORARY_DIRECTORY_REMOVAL_POLL.min(remaining));
+                if remaining.is_zero() {
+                    return Err(format!(
+                        "failed to remove sandbox temporary directory `{}`: {error}",
+                        path.display()
+                    ));
+                }
+            }
+            Err(error) => {
+                return Err(format!(
+                    "failed to remove sandbox temporary directory `{}`: {error}",
+                    path.display()
+                ));
+            }
+        }
+    }
 }
