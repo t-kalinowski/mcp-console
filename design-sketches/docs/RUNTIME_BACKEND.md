@@ -290,13 +290,13 @@ For the native path, implement enough equivalent typed operations to compare hon
 
 One local Apple Silicon release-build snapshot recorded:
 
-| Measurement | Ark prototype | Native prototype |
-| --- | ---: | ---: |
-| First R evaluation | ~0.54 s | 0.155–0.177 s |
-| Silent steady round trip | 1.4–1.8 ms | 0.086–0.089 ms |
-| Worker threads | 13 | 1 |
-| Total RSS | ~117.8 MiB | 80.6–81.0 MiB |
-| Release binary | 27.55 MiB | 5.09 MiB |
+| Measurement              | Ark prototype | Native prototype |
+| ------------------------ | ------------: | ---------------: |
+| First R evaluation       |       ~0.54 s |    0.155–0.177 s |
+| Silent steady round trip |    1.4–1.8 ms |   0.086–0.089 ms |
+| Worker threads           |            13 |                1 |
+| Total RSS                |    ~117.8 MiB |    80.6–81.0 MiB |
+| Release binary           |     27.55 MiB |         5.09 MiB |
 
 These are historical comparison snapshots, not general benchmarks.
 The native measurements predate the DLL iterator and should be repeated before making a current performance claim.
@@ -313,19 +313,19 @@ The remaining operational evaluation must cover:
 
 Score each candidate against the following, with evidence rather than preference:
 
-| Criterion | Weight |
-| --- | ---: |
+| Criterion                                                    |   Weight |
+| ------------------------------------------------------------ | -------: |
 | Correct R lifecycle, stdin, debugger, and interrupt behavior | critical |
-| Large live-table inspection and plot/help reuse | critical |
-| First-class Python and SQL semantics | critical |
-| Backend can be isolated behind the normalized service | critical |
-| No unmaintainable fork or unstable dependency boundary | critical |
-| Packaging, startup, and sandbox complexity | high |
-| Cross-platform support | high |
-| Output/transcript integration | high |
-| Compatibility with existing Positron/Canvas viewers | high |
-| Implementation effort and long-term maintenance | high |
-| Binary size and incidental dependencies | medium |
+| Large live-table inspection and plot/help reuse              | critical |
+| First-class Python and SQL semantics                         | critical |
+| Backend can be isolated behind the normalized service        | critical |
+| No unmaintainable fork or unstable dependency boundary       | critical |
+| Packaging, startup, and sandbox complexity                   |     high |
+| Cross-platform support                                       |     high |
+| Output/transcript integration                                |     high |
+| Compatibility with existing Positron/Canvas viewers          |     high |
+| Implementation effort and long-term maintenance              |     high |
+| Binary size and incidental dependencies                      |   medium |
 
 ## 8. Decision rule
 

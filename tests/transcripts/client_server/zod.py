@@ -505,8 +505,11 @@ def build_killpg_denial_interposer(directory: Path) -> Path:
 
 static pid_t denied_process_group = 0;
 static int added_late_member = 0;
+static pid_t seed_member = 0;
 static pid_t late_member = 0;
 static int killpg_count = 0;
+
+static pid_t add_process_group_member(pid_t process_group);
 
 static void signal_checkpoint(const char *name) {
     const char *checkpoint = getenv(name);
@@ -559,6 +562,13 @@ static int deny_killpg(pid_t process_group, int signal) {
     if (signal == SIGKILL
         && getenv("MCP_CONSOLE_TEST_KILLPG_MARKER") != NULL) {
         denied_process_group = process_group;
+        // Observed-tree retirement may leave no live relay descendant for the
+        // fallback's first exact-group snapshot. Add one server child now; its
+        // membership check adds the late child after that snapshot.
+        seed_member = add_process_group_member(process_group);
+        if (seed_member < 0) {
+            return -1;
+        }
         write_pid_marker("MCP_CONSOLE_TEST_KILLPG_MARKER", process_group);
         signal_checkpoint("MCP_CONSOLE_TEST_FORCE_STOP_REACHED");
         errno = EPERM;
@@ -641,10 +651,11 @@ static pid_t getpgid_and_add_member(pid_t process_id) {
     return process_group;
 }
 
-static int kill_and_reap_late_member(pid_t process_id, int signal) {
+static int kill_and_reap_added_member(pid_t process_id, int signal) {
     int result = (int)syscall(SYS_kill, process_id, signal);
     int signal_error = errno;
-    if (result == 0 && signal == SIGKILL && process_id == late_member) {
+    if (result == 0 && signal == SIGKILL
+        && (process_id == seed_member || process_id == late_member)) {
         // Keep the final assertion independent of launchd's orphan reaping.
         int status = 0;
         pid_t waited;
@@ -654,8 +665,12 @@ static int kill_and_reap_late_member(pid_t process_id, int signal) {
         if (waited != process_id) {
             return -1;
         }
-        write_pid_marker("MCP_CONSOLE_TEST_LATE_MEMBER_REAP_MARKER", process_id);
-        late_member = 0;
+        if (process_id == late_member) {
+            write_pid_marker("MCP_CONSOLE_TEST_LATE_MEMBER_REAP_MARKER", process_id);
+            late_member = 0;
+        } else {
+            seed_member = 0;
+        }
     }
     errno = signal_error;
     return result;
@@ -673,7 +688,7 @@ static struct {
 } interposers[] __attribute__((section("__DATA,__interpose"))) = {
     {(const void *)&deny_killpg, (const void *)&killpg},
     {(const void *)&getpgid_and_add_member, (const void *)&getpgid},
-    {(const void *)&kill_and_reap_late_member, (const void *)&kill},
+    {(const void *)&kill_and_reap_added_member, (const void *)&kill},
 };
 """.removeprefix("\n"),
         encoding="utf-8",
@@ -4194,26 +4209,22 @@ def test_restart_outer_force_stops_unresponsive_relay(binary: Path) -> Transcrip
             )
 
             restarted = client._start_send(control="restart")
-            received = threading.Event()
-            errors: list[BaseException] = []
-
-            def receive_restart() -> None:
-                try:
-                    client._receive(restarted)
-                except BaseException as error:
-                    errors.append(error)
-                finally:
-                    received.set()
-
-            receiver = threading.Thread(target=receive_restart, daemon=True)
-            receiver.start()
             force_stop_reached.wait("outer relay force-stop")
-            assert received.wait(2), (
-                "restart did not complete within two seconds of outer relay force-stop"
+            retirement_deadline = time.monotonic() + 2
+            while (
+                relay_status := read_process_status(relay_target)
+            ) is not None and relay_status[1] == worker_group:
+                assert client.process.poll() is None, (
+                    "mcp-console stopped while retiring the old relay"
+                )
+                assert time.monotonic() < retirement_deadline, (
+                    "outer force-stop did not retire the relay within two seconds"
+                )
+                time.sleep(0.01)
+            assert late_member_reap_marker.is_file(), (
+                "outer force-stop returned before reaping the late group member"
             )
-            receiver.join()
-            if errors:
-                raise errors[0]
+            client._receive(restarted)
             assert int(killpg_marker.read_text(encoding="utf-8")) == worker_group
             late_member, late_member_group = map(
                 int,
@@ -4587,10 +4598,9 @@ def test_shutdown_is_bounded_with_detached_stdin_descendant(
             environment,
         )
         descendant_group = None
-        descendant_cleaned = False
+        descendant_retired = False
         worker_group = None
         server_stopped = False
-        operation = None
         try:
             client._initialize_and_list_tools()
             client.send(r="echo ready")
@@ -4721,33 +4731,20 @@ def test_shutdown_is_bounded_with_detached_stdin_descendant(
                 + control.diagnostics()
             )
 
-            control.release_cleanup()
-            cleaned = control.wait_for(operation, "fixture_cleanup_completed")
-            assert cleaned["pid"] == descendant_group, cleaned
+            assert not process_group_exists(descendant_group), (
+                "detached stdin descendant outlived mcp-console shutdown; "
+                + control.diagnostics()
+            )
             control.wait_for_eof()
-            descendant_cleaned = True
+            descendant_retired = True
             return client.transcript
         finally:
             control.release_cleanup()
             if not server_stopped:
                 stop_process(client.process)
-            try:
-                if (
-                    operation is not None
-                    and descendant_group is not None
-                    and not descendant_cleaned
-                ):
-                    cleaned = control.wait_for(
-                        operation,
-                        "fixture_cleanup_completed",
-                    )
-                    assert cleaned["pid"] == descendant_group, cleaned
-                    control.wait_for_eof()
-                    descendant_cleaned = True
-            finally:
-                if not descendant_cleaned:
-                    stop_process_group(descendant_group)
-                stop_process_group(worker_group)
+            if not descendant_retired:
+                stop_process_group(descendant_group)
+            stop_process_group(worker_group)
 
 
 def expose_idle_sideband_output(
@@ -5229,10 +5226,9 @@ def test_shutdown_deadline_does_not_wait_for_sideband_writer(
             client.stdout.read()
             assert client.stderr.read() == ""
             assert not process_group_exists(worker_group), "Zod outlived mcp-console"
-            assert process_exists(sideband_holder), (
-                "fixture did not retain the worker-side socket beyond worker retirement"
+            assert not process_exists(sideband_holder), (
+                "detached sideband holder outlived mcp-console shutdown"
             )
-            stop_process_id(sideband_holder)
             sideband_holder = None
             passed = True
             return client.transcript

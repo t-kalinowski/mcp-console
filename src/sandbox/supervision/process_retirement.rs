@@ -7,10 +7,14 @@ use super::process_tree::{
 use std::os::fd::AsRawFd;
 use std::time::{Duration, Instant};
 
-const PROCESS_REAP_CHECK_INTERVAL: Duration = Duration::from_millis(10);
+const PROCESS_RETIREMENT_CHECK_INTERVAL: Duration = Duration::from_millis(10);
 const TRACKER_EVENT_CAPACITY: usize = 32;
 
 impl DescendantTracker {
+    pub(super) fn prune_stale_processes(&mut self) -> Result<(), String> {
+        remove_stale_processes(&mut self.state.active)
+    }
+
     pub(super) fn wait_for_events(
         &mut self,
         timeout: Option<Duration>,
@@ -93,9 +97,9 @@ impl DescendantTracker {
     pub(super) fn terminate(
         mut self,
         mut root_exited: bool,
-        reap_grace: Duration,
+        retirement_grace: Duration,
     ) -> Result<(), String> {
-        let mut reap_deadline = None;
+        let mut retirement_deadline = None;
         let mut cleanup_error = None;
         loop {
             // The root may have exited before the event wait blocked. Consume
@@ -129,9 +133,17 @@ impl DescendantTracker {
             // The root command has exited, so its background work has no
             // remaining lifetime to preserve. Continue through individual
             // failures so one inaccessible identity does not abandon the rest.
-            for identity in self.state.active.values().copied() {
-                if let Err(error) = signal_process(identity, libc::SIGKILL) {
-                    record_first_error(&mut cleanup_error, error);
+            let identities: Vec<_> = self.state.active.values().copied().collect();
+            for identity in identities {
+                match signal_process(identity, libc::SIGKILL) {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        // Missing, reused, and zombie identities have no live
+                        // process left to retire. Do not spend the bounded grace
+                        // waiting for an external parent to reap a zombie.
+                        self.state.active.remove(&identity.pid);
+                    }
+                    Err(error) => record_first_error(&mut cleanup_error, error),
                 }
             }
             if let Err(error) = remove_stale_processes(&mut self.state.active) {
@@ -144,16 +156,17 @@ impl DescendantTracker {
 
             // Discovery and signaling scale with the number of observed
             // processes. Never abandon known identities mid-pass. Once every
-            // identity has received a signal pass, bound the grace for reaping.
-            let deadline = *reap_deadline.get_or_insert_with(|| Instant::now() + reap_grace);
+            // identity has received a signal pass, bound the grace for stopping.
+            let deadline =
+                *retirement_deadline.get_or_insert_with(|| Instant::now() + retirement_grace);
             if Instant::now() >= deadline {
-                let timeout = "timed out waiting for sandbox descendants to be reaped".to_string();
+                let timeout = "timed out waiting for sandbox descendants to stop".to_string();
                 return Err(cleanup_error.map_or(timeout.clone(), |error| {
                     format!("{error}; additionally, {timeout}")
                 }));
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
-            let wait = remaining.min(PROCESS_REAP_CHECK_INTERVAL);
+            let wait = remaining.min(PROCESS_RETIREMENT_CHECK_INTERVAL);
             match self.wait_for_events(Some(wait)) {
                 Ok(EventWait::TimedOut) => {
                     if let Err(error) = remove_stale_processes(&mut self.state.active) {

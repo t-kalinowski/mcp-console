@@ -182,9 +182,11 @@ EOF midway through a command frame is a transport failure instead.
 
 The server leaves an exited relay waitable until cleanup, preserving the process-group identity while retirement finishes.
 It waits through the worker deadline and uses the additional two-second allowance only after timely `shutdown_started` acceptance or a pre-retirement failure.
-It then closes the sandbox process-group lifetime and reaps the relay, including when the relay stalls or has already exited.
+While the generation is live, the server continuously observes descendants from the relay and records each PID together with its process start time.
+At retirement it first stops the observed tree across process-group and session changes, then always closes the original sandbox process-group lifetime as a backstop for a same-group fork that raced observation, and finally reaps the relay.
 Concurrent or repeated retirement reuses the recorded result and never signals a retired PID or process group again.
-Descendants that leave the group remain unsupported.
+Darwin cannot atomically install this observer at spawn time, so a descendant that becomes orphaned before the initial relay watch or before its fork event can be resolved remains outside the guarantee.
+Failure of the server process itself is also outside this lifetime; crash-independent ownership requires a separate supervision layer.
 
 ## Retirement and failure
 
