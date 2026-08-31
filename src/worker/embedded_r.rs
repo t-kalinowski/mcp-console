@@ -26,6 +26,7 @@ static PENDING_SERVER_MESSAGES: Mutex<VecDeque<ServerMessage>> = Mutex::new(VecD
 static WORKER_FAILURE: Mutex<Option<String>> = Mutex::new(None);
 static WORKER_SHUTDOWN: AtomicBool = AtomicBool::new(false);
 static EVALUATION_STARTED: AtomicBool = AtomicBool::new(false);
+static SQL_EVALUATION_STARTED: AtomicBool = AtomicBool::new(false);
 type ReplInit = unsafe extern "C-unwind" fn();
 type ReplDoOne = unsafe extern "C-unwind" fn() -> c_int;
 type TopLevelExec = unsafe extern "C-unwind" fn(
@@ -435,6 +436,9 @@ pub(crate) fn resolve_r(
     use crate::r_environment::{ResolutionFailureKind, ResolutionOutcome};
     use crate::worker_protocol::RResolutionFailureKind;
 
+    if SQL_EVALUATION_STARTED.load(Ordering::SeqCst) {
+        return Ok(ResolutionOutcome::Unavailable);
+    }
     send_worker_message(&WorkerMessage::ResolveR { packages })?;
     match receive_resolver_message().map_err(infrastructure_failure)? {
         ServerMessage::RResolved { library } => Ok(ResolutionOutcome::Resolved { library }),
@@ -672,7 +676,9 @@ fn evaluate_sql_cell(source: String, sql: &mut crate::sql::Bridge) -> Result<(),
         return Ok(());
     }
     EVALUATION_STARTED.store(true, Ordering::SeqCst);
+    SQL_EVALUATION_STARTED.store(true, Ordering::SeqCst);
     let result = sql.evaluate(&source);
+    SQL_EVALUATION_STARTED.store(false, Ordering::SeqCst);
     EVALUATION_STARTED.store(false, Ordering::SeqCst);
     result
 }
