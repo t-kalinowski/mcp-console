@@ -775,6 +775,59 @@ def test_recovers_when_python_sql_dispatch_trace_raises_system_exit(
     return client._finish()
 
 
+def test_recovers_when_r_provider_switch_trace_raises_system_exit(
+    binary: Path,
+) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+
+    client.send(sql="CREATE TABLE managed_value AS SELECT 7 AS value")
+    assert last_tool_text(client) == "[done]"
+
+    # fmt: python
+    python = code("""
+        import _mcp_console_sql
+        import sqlite3
+        import sys
+
+
+        connection = sqlite3.connect(":memory:")
+        connection.execute("CREATE TABLE python_value AS SELECT 42 AS value")
+        console_sql_connection(connection)
+        use_r_code = _mcp_console_sql.use_r.__code__
+
+
+        def exit_use_r(frame, event, argument):
+            if event == "call" and frame.f_code is use_r_code:
+                raise SystemExit("R provider switch exit")
+            return exit_use_r
+
+
+        sys.settrace(exit_use_r)
+        """)
+    client.send(python=python)
+    assert last_tool_text(client) == "[done]"
+
+    client.send(r="console_sql_connection(NULL); invisible()")
+    assert "SystemExit: R provider switch exit" in last_tool_text(client)
+
+    client.send(
+        python="connection.execute('SELECT value FROM python_value').fetchone()[0]"
+    )
+    assert last_tool_text(client) == "42\n"
+
+    client.send(sql="SELECT value FROM python_value")
+    preview = last_tool_text(client)
+    assert "value" in preview and "42" in preview
+
+    client.send(r="console_sql_connection(NULL); invisible()")
+    assert last_tool_text(client) == "[done]"
+    client.send(sql="SELECT value FROM managed_value")
+    preview = last_tool_text(client)
+    assert "value" in preview and "7" in preview
+    return client._finish()
+
+
 def last_tool_text(client: McpClient) -> str:
     result = client.transcript[-1]["result"]
     assert result.get("isError") is not True, result

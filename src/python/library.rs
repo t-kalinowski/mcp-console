@@ -458,7 +458,7 @@ impl PythonApi {
             let function = self.function(module, name)?;
             let result = (self.call_no_args)(function);
             if result.is_null() {
-                (self.err_print)();
+                self.display_pending_exception();
                 return Err(python_function_error(module, name));
             }
             (self.dec_ref)(result);
