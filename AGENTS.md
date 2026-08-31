@@ -63,9 +63,9 @@ MCP Console has three process boundaries:
 Keep these ownership rules intact:
 
 - The relay is a thin ordered transport and worker supervisor.
-  It owns local worker transports, sideband translation, signal delivery, bounded termination, and reaping.
+  It owns local worker transports, sideband translation, and direct-worker signal delivery, bounded termination, and reaping.
   It preserves each producer's order and supplies serialized observation order; it does not reconstruct chronology across independent sideband, stdout, and stderr transports.
-- The server owns worker-generation state, operation admission, output cuts, pending-output budgets, response assembly, delivery ownership, retained requirements, and host resolvers.
+- The server owns host-side relay lifetime observation and retirement, worker-generation state, operation admission, output cuts, pending-output budgets, response assembly, delivery ownership, retained requirements, and host resolvers.
   Do not move these responsibilities into the relay.
 - Restart, replacement, evaluation admission, stdin writes, resolver callbacks, and retained-environment commits are scoped to the worker generation that accepted them.
   Work admitted for an old generation must not reach its replacement.
@@ -134,6 +134,8 @@ Keep these ownership rules intact:
 - For a public behavior change, first add a public acceptance or regression test and confirm it fails.
   Verify an internal-only refactor with the existing public suite.
   Test public interfaces, not private helpers.
+- For internal coordination and lifecycle control, prefer blocking event-driven waits with an explicit wakeup path.
+  Do not use busy loops or short fixed-interval polling when the state transition can notify a condition variable, descriptor, or platform event.
 - Preserve client-visible runtime output in transcript snapshots, including complete errors and tracebacks.
   Normalize only incidental values such as run-specific temporary paths; do not replace behavior with summaries or placeholders.
 - Keep embedded R, Python, SQL, and shell fixture programs as readable multiline strings.
