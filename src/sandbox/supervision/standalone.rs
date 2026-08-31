@@ -76,9 +76,9 @@ pub(super) fn status(
     }
 
     drop(temporary_directory);
-    Ok(platform::exit_code(
-        status.expect("successful standalone retirement should retain the root status"),
-    ))
+    Ok(platform::exit_code(status.expect(
+        "successful standalone retirement should retain the root status",
+    )))
 }
 
 fn retire_after_manager_start_failure(
