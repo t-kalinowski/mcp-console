@@ -1,4 +1,5 @@
 # MCP Console's private Python DB-API SQL backend.
+import _mcp_console as _runtime
 import builtins as _builtins
 import traceback as _traceback
 import unicodedata as _unicodedata
@@ -8,6 +9,9 @@ _PREVIEW_COLUMNS = 12
 _CELL_WIDTH = 160
 _PREVIEW_WIDTH = 200
 _RESPONSE_BYTES = 12 * 1024
+_PROVIDER_R = 0
+_PROVIDER_MANAGED = 1
+_PROVIDER_HANDLED = 2
 
 try:
     _connection
@@ -48,14 +52,6 @@ def use_r():
     _connection = None
     _restore_managed = False
     return None
-
-
-def has_connection():
-    return _connection is not None
-
-
-def restore_managed_requested():
-    return _restore_managed
 
 
 def _display_cell(value):
@@ -207,7 +203,7 @@ def _fallback_show(cursor):
             raise RuntimeError("SQL preview cannot fit within the response budget")
 
 
-def evaluate(source):
+def _evaluate(source):
     connection = _connection
     if connection is None:
         raise RuntimeError("no Python DB-API connection is selected")
@@ -243,6 +239,19 @@ def evaluate(source):
             except BaseException:
                 _traceback.print_exc()
     return None
+
+
+def _dispatch(source):
+    if _connection is not None:
+        _evaluate(source)
+        return _PROVIDER_HANDLED
+    if _restore_managed:
+        return _PROVIDER_MANAGED
+    return _PROVIDER_R
+
+
+def dispatch(source):
+    return _runtime.without_automatic_resolution(_dispatch, source)
 
 
 _builtins.console_sql_connection = console_sql_connection

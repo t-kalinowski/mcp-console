@@ -434,6 +434,103 @@ def test_does_not_resolve_unreached_or_available_python_imports(
         return client._finish()
 
 
+def test_does_not_resolve_missing_python_imports_from_sql(
+    binary: Path,
+) -> Transcript:
+    prefix = "mcp_console_sql_missing_"
+    with tempfile.TemporaryDirectory() as temporary:
+        directory = Path(temporary)
+        environment, record = recording_uv_environment(
+            directory,
+            fail_requirement=prefix,
+        )
+        client = McpClient(binary, ("serve",), environment)
+        client._initialize_and_list_tools()
+        baseline = initialize_python_and_record_baseline(client, record)
+
+        # Exercise every driver-controlled call made by the DB-API adapter.
+        # fmt: python
+        python = code(f"""
+            import importlib
+
+            sql_import_stages = []
+
+
+            def miss(stage):
+                sql_import_stages.append(stage)
+                try:
+                    importlib.import_module("{prefix}" + stage)
+                except ModuleNotFoundError:
+                    pass
+
+
+            class ColumnName:
+                def __str__(self):
+                    miss("name")
+                    return "answer"
+
+
+            class Value:
+                def __repr__(self):
+                    miss("repr")
+                    return "42"
+
+
+            class Cursor:
+                @property
+                def description(self):
+                    miss("description")
+                    return ((ColumnName(),),)
+
+                def execute(self, source):
+                    miss("execute")
+                    return self
+
+                def fetchmany(self, size):
+                    miss("fetch")
+                    return [(Value(),)][:size]
+
+                def close(self):
+                    miss("close")
+
+
+            class Connection:
+                def cursor(self):
+                    miss("cursor")
+                    return Cursor()
+
+
+            console_sql_connection(Connection())
+            """)
+        client.send(python=python)
+        assert last_tool_text(client) == "[done]"
+
+        client.send(sql="ANSWER")
+        preview = last_tool_text(client)
+        assert "answer" in preview and "42" in preview, preview
+
+        client.send(python="sorted(set(sql_import_stages))")
+        assert last_tool_text(client) == (
+            "['close', 'cursor', 'description', 'execute', 'fetch', 'name', 'repr']\n"
+        )
+        runs = uv_tool_run_requirements(record)
+        assert len(runs) == baseline, (baseline, runs)
+
+        module = f"{prefix}python_cell"
+        # fmt: python
+        python = code(f"""
+            try:
+                importlib.import_module("{module}")
+            except ModuleNotFoundError:
+                pass
+            """)
+        output = send_and_collect_runtime_python_resolution(client, python=python)
+        assert "Traceback" not in output, output
+        runs = uv_tool_run_requirements(record)[baseline:]
+        assert len(runs) == 1 and module in runs[0], runs
+        return client._finish()
+
+
 def test_does_not_reenter_automatic_python_resolution(binary: Path) -> Transcript:
     nested = "mcp_console_nested_resolution_missing"
     with tempfile.TemporaryDirectory() as temporary:

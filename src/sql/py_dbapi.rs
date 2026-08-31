@@ -5,7 +5,7 @@ const PYTHON_RUNTIME_SOURCE: &str = include_str!("dbapi.py");
 pub(super) enum Provider {
     R,
     Managed,
-    Python,
+    Handled,
 }
 
 pub(super) fn install_runtime() -> Result<(), String> {
@@ -16,7 +16,7 @@ pub(super) fn dispatch(source: &str) -> Result<Provider, String> {
     match crate::python::dispatch_sql(source)? {
         crate::python::SqlProvider::R => Ok(Provider::R),
         crate::python::SqlProvider::Managed => Ok(Provider::Managed),
-        crate::python::SqlProvider::Python => Ok(Provider::Python),
+        crate::python::SqlProvider::Handled => Ok(Provider::Handled),
     }
 }
 

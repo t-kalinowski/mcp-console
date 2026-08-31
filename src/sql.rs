@@ -19,7 +19,7 @@ impl Bridge {
 
     pub(crate) fn evaluate(&mut self, source: &str) -> Result<(), String> {
         match py_dbapi::dispatch(source)? {
-            py_dbapi::Provider::Python => Ok(()),
+            py_dbapi::Provider::Handled => Ok(()),
             py_dbapi::Provider::Managed => {
                 self.r_dbi.restore_managed()?;
                 self.r_dbi.evaluate(source)

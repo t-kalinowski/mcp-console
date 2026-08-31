@@ -633,6 +633,92 @@ def test_interrupts_selected_python_dbapi_connection(
                 stop_client(client)
 
 
+def test_interrupts_python_dbapi_provider_probe(binary: Path) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        client = McpClient(binary, ("serve",), environment)
+        checkpoints: list[FifoCheckpoint] = []
+        passed = False
+        try:
+            client._initialize_and_list_tools()
+
+            # Create the checkpoint inside the worker's writable directory.
+            # fmt: r
+            r = code(r"""
+                probe_started <- tempfile("mcp-console-sql-probe-started-")
+                Sys.setenv(MCP_CONSOLE_SQL_PROBE_STARTED = probe_started)
+                cat(probe_started)
+                """)
+            client.send(r=r)
+            setup = client.transcript[-1]["result"]
+            path = Path(setup["content"][0]["text"])
+            setup["content"][0]["text"] = "<probe started>"
+            started = FifoCheckpoint(path)
+            checkpoints.append(started)
+
+            # fmt: python
+            python = code("""
+                import os
+                import signal
+                import sys
+
+
+                class ProbeConnection:
+                    description = (("answer",),)
+
+                    def cursor(self):
+                        return self
+
+                    def execute(self, source):
+                        return self
+
+                    def fetchmany(self, size):
+                        return [(42,)][:size]
+
+
+                def pause_provider_probe(frame, event, argument):
+                    if event == "call" and frame.f_globals.get("__name__") == "_mcp_console_sql":
+                        sys.settrace(None)
+                        with open(
+                            os.environ["MCP_CONSOLE_SQL_PROBE_STARTED"],
+                            "wb",
+                            buffering=0,
+                        ) as checkpoint:
+                            checkpoint.write(b"1")
+                        signal.pause()
+                    return pause_provider_probe
+
+
+                console_sql_connection(ProbeConnection())
+                sys.settrace(pause_provider_probe)
+                """)
+            client.send(python=python)
+            assert last_tool_text(client) == "[done]"
+
+            evaluation = client._start_send(sql="ANSWER", timeout_ms=0)
+            started.wait("Python DB-API provider probe started")
+            client._receive(evaluation)
+            assert evaluation["result"]["content"][0]["text"] == (
+                "\n[running; poll with an empty send]"
+            )
+
+            client.send(control="interrupt", timeout_ms=30_000)
+            assert "KeyboardInterrupt" in last_tool_text(client)
+
+            client.send(sql="ANSWER")
+            preview = last_tool_text(client)
+            assert "answer" in preview and "42" in preview
+            transcript = client._finish()
+            passed = True
+            return transcript
+        finally:
+            for checkpoint in checkpoints:
+                checkpoint.close()
+            if not passed:
+                stop_client(client)
+
+
 def last_tool_text(client: McpClient) -> str:
     result = client.transcript[-1]["result"]
     assert result.get("isError") is not True, result

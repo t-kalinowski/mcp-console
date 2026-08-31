@@ -33,11 +33,14 @@ type PyRunStringFlags = unsafe extern "C" fn(
 type PyObjectCallNoArgs = unsafe extern "C" fn(*mut PyObject) -> *mut PyObject;
 type PyObjectCallFunctionObjArgs = unsafe extern "C" fn(*mut PyObject, ...) -> *mut PyObject;
 type PyUnicodeFromStringAndSize = unsafe extern "C" fn(*const libc::c_char, isize) -> *mut PyObject;
-type PyObjectIsTrue = unsafe extern "C" fn(*mut PyObject) -> libc::c_int;
+type PyLongAsLong = unsafe extern "C" fn(*mut PyObject) -> libc::c_long;
 type PyDecRef = unsafe extern "C" fn(*mut PyObject);
 type PyErrPrint = unsafe extern "C" fn();
 
 const PY_FILE_INPUT: libc::c_int = 257;
+const SQL_PROVIDER_R: libc::c_long = 0;
+const SQL_PROVIDER_MANAGED: libc::c_long = 1;
+const SQL_PROVIDER_HANDLED: libc::c_long = 2;
 
 struct LoadedLibrary {
     path: PathBuf,
@@ -67,7 +70,7 @@ struct PythonApi {
     call_no_args: PyObjectCallNoArgs,
     call_function_obj_args: PyObjectCallFunctionObjArgs,
     unicode_from_string_and_size: PyUnicodeFromStringAndSize,
-    object_is_true: PyObjectIsTrue,
+    long_as_long: PyLongAsLong,
     dec_ref: PyDecRef,
     err_print: PyErrPrint,
 }
@@ -124,16 +127,7 @@ pub(super) fn dispatch_sql(source: &str) -> Result<super::SqlProvider, String> {
     let Some(api) = installed_sql_api()? else {
         return Ok(super::SqlProvider::R);
     };
-    api.with_gil(|api| {
-        if api.call_bool(c"_mcp_console_sql", c"has_connection")? {
-            api.call_string(c"_mcp_console_sql", c"evaluate", source)?;
-            return Ok(super::SqlProvider::Python);
-        }
-        if api.call_bool(c"_mcp_console_sql", c"restore_managed_requested")? {
-            return Ok(super::SqlProvider::Managed);
-        }
-        Ok(super::SqlProvider::R)
-    })
+    api.with_gil(|api| api.call_sql_dispatch(source))
 }
 
 pub(super) fn use_r_sql() -> Result<(), String> {
@@ -449,29 +443,6 @@ impl PythonApi {
         Ok(())
     }
 
-    fn call_bool(&self, module: &CStr, name: &CStr) -> Result<bool, String> {
-        // SAFETY: The GIL is held for the complete call and reference release.
-        unsafe {
-            let function = self.function(module, name)?;
-            let result = (self.call_no_args)(function);
-            if result.is_null() {
-                (self.err_print)();
-                return Err(python_function_error(module, name));
-            }
-            let value = (self.object_is_true)(result);
-            (self.dec_ref)(result);
-            if value < 0 {
-                (self.err_print)();
-                return Err(format!(
-                    "Python function `{}.{}` returned an invalid truth value",
-                    module.to_string_lossy(),
-                    name.to_string_lossy()
-                ));
-            }
-            Ok(value != 0)
-        }
-    }
-
     fn call_unit(&self, module: &CStr, name: &CStr) -> Result<(), String> {
         // SAFETY: The GIL is held for the complete call and reference release.
         unsafe {
@@ -486,13 +457,13 @@ impl PythonApi {
         }
     }
 
-    fn call_string(&self, module: &CStr, name: &CStr, value: &str) -> Result<(), String> {
+    fn call_sql_dispatch(&self, source: &str) -> Result<super::SqlProvider, String> {
         // SAFETY: The GIL is held and PyUnicode_FromStringAndSize copies the
         // UTF-8 source before the Rust buffer can be released.
         unsafe {
-            let function = self.function(module, name)?;
+            let function = self.function(c"_mcp_console_sql", c"dispatch")?;
             let argument =
-                (self.unicode_from_string_and_size)(value.as_ptr().cast(), value.len() as isize);
+                (self.unicode_from_string_and_size)(source.as_ptr().cast(), source.len() as isize);
             if argument.is_null() {
                 (self.err_print)();
                 return Err("failed to create Python SQL source string".to_string());
@@ -503,12 +474,23 @@ impl PythonApi {
             if result.is_null() {
                 // Database errors are normally caught by the Python adapter.
                 // Escaping exceptions such as KeyboardInterrupt remain ordinary
-                // console output and leave the worker reusable.
+                // console output and must not fall through to an R provider.
                 (self.err_print)();
-                return Ok(());
+                return Ok(super::SqlProvider::Handled);
             }
+            let provider = (self.long_as_long)(result);
             (self.dec_ref)(result);
-            Ok(())
+            match provider {
+                SQL_PROVIDER_R => Ok(super::SqlProvider::R),
+                SQL_PROVIDER_MANAGED => Ok(super::SqlProvider::Managed),
+                SQL_PROVIDER_HANDLED => Ok(super::SqlProvider::Handled),
+                _ => {
+                    if provider == -1 {
+                        (self.err_print)();
+                    }
+                    Err("Python SQL dispatch returned an invalid provider".to_string())
+                }
+            }
         }
     }
 
@@ -565,7 +547,7 @@ impl PythonApi {
             unicode_from_string_and_size: unsafe {
                 load_symbol(library, path, b"PyUnicode_FromStringAndSize\0")?
             },
-            object_is_true: unsafe { load_symbol(library, path, b"PyObject_IsTrue\0")? },
+            long_as_long: unsafe { load_symbol(library, path, b"PyLong_AsLong\0")? },
             dec_ref: unsafe { load_symbol(library, path, b"Py_DecRef\0")? },
             err_print: unsafe { load_symbol(library, path, b"PyErr_Print\0")? },
         })

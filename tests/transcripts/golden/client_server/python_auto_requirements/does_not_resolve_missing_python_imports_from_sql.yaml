@@ -1,0 +1,100 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+send:
+  python: None
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  python: |
+    import importlib
+
+    sql_import_stages = []
+
+
+    def miss(stage):
+        sql_import_stages.append(stage)
+        try:
+            importlib.import_module("mcp_console_sql_missing_" + stage)
+        except ModuleNotFoundError:
+            pass
+
+
+    class ColumnName:
+        def __str__(self):
+            miss("name")
+            return "answer"
+
+
+    class Value:
+        def __repr__(self):
+            miss("repr")
+            return "42"
+
+
+    class Cursor:
+        @property
+        def description(self):
+            miss("description")
+            return ((ColumnName(),),)
+
+        def execute(self, source):
+            miss("execute")
+            return self
+
+        def fetchmany(self, size):
+            miss("fetch")
+            return [(Value(),)][:size]
+
+        def close(self):
+            miss("close")
+
+
+    class Connection:
+        def cursor(self):
+            miss("cursor")
+            return Cursor()
+
+
+    console_sql_connection(Connection())
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  sql: ANSWER
+result:
+  content:
+    - type: text
+      text: |
+        answer
+        ------
+        42
+  isError: false
+---
+send:
+  python: sorted(set(sql_import_stages))
+result:
+  content:
+    - type: text
+      text: |
+        ['close', 'cursor', 'description', 'execute', 'fetch', 'name', 'repr']
+  isError: false
+---
+send:
+  python: |
+    try:
+        importlib.import_module("mcp_console_sql_missing_python_cell")
+    except ModuleNotFoundError:
+        pass
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false

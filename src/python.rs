@@ -27,7 +27,7 @@ pub(crate) struct Runtime(reticulate::Runtime);
 pub(crate) enum SqlProvider {
     R,
     Managed,
-    Python,
+    Handled,
 }
 
 #[cfg(target_os = "macos")]
