@@ -1,3 +1,5 @@
+#[path = "supervision/manager.rs"]
+mod manager;
 #[path = "supervision/process.rs"]
 mod process;
 #[path = "supervision/process_retirement.rs"]
@@ -7,6 +9,7 @@ mod process_tracker;
 #[path = "supervision/process_tree.rs"]
 mod process_tree;
 
+pub(crate) use self::manager::SandboxManager;
 use super::{file_descriptors, platform};
 use std::process::{Child, Command, ExitCode};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -16,6 +19,10 @@ use std::time::{Duration, Instant};
 
 const PROCESS_STALE_PRUNE_INTERVAL: Duration = Duration::from_secs(1);
 const PROCESS_RETIREMENT_GRACE: Duration = Duration::from_secs(1);
+
+pub(super) fn run_manager() -> Result<(), String> {
+    manager::run()
+}
 
 /// A sandbox process tree observed from one direct root.
 ///

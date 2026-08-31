@@ -56,6 +56,10 @@ pub enum Command {
         command: Vec<OsString>,
     },
 
+    /// Run the internal sandbox lifetime manager
+    #[command(hide = true)]
+    SandboxManager,
+
     /// Run a command with the MCP Console sandbox policy
     #[command(after_help = SANDBOX_EXAMPLES)]
     Sandbox {
