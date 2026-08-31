@@ -447,6 +447,8 @@ def test_does_not_resolve_missing_python_imports_from_sql(
         client = McpClient(binary, ("serve",), environment)
         client._initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
+        client.send(sql="CREATE TABLE managed_restore_value AS SELECT 42 AS answer")
+        assert last_tool_text(client) == "[done]"
 
         # Exercise every driver-controlled call made by the DB-API adapter.
         # fmt: python
@@ -513,6 +515,44 @@ def test_does_not_resolve_missing_python_imports_from_sql(
         assert last_tool_text(client) == (
             "['close', 'cursor', 'description', 'execute', 'fetch', 'name', 'repr']\n"
         )
+        runs = uv_tool_run_requirements(record)
+        assert len(runs) == baseline, (baseline, runs)
+
+        # Keep the lazy transition back to managed DuckDB inside the SQL
+        # exception and automatic-resolution boundary.
+        # fmt: python
+        python = code("""
+            import _mcp_console_sql
+            import sys
+
+            use_r_code = _mcp_console_sql.use_r.__code__
+
+
+            def restore_hook(frame, event, argument):
+                if event == "call" and frame.f_code is use_r_code:
+                    miss("restore")
+                    raise SystemExit("managed SQL restoration exit")
+                return restore_hook
+
+
+            console_sql_connection(None)
+            sys.settrace(restore_hook)
+            """)
+        client.send(python=python)
+        assert last_tool_text(client) == "[done]"
+
+        output = send_and_collect_runtime_python_resolution(
+            client,
+            sql="SELECT answer FROM managed_restore_value",
+        )
+        assert "SystemExit: managed SQL restoration exit" in output, output
+
+        client.send(python="sql_import_stages[-1]")
+        assert last_tool_text(client) == "'restore'\n"
+
+        client.send(sql="SELECT answer FROM managed_restore_value")
+        preview = last_tool_text(client)
+        assert "answer" in preview and "42" in preview, preview
         runs = uv_tool_run_requirements(record)
         assert len(runs) == baseline, (baseline, runs)
 

@@ -77,7 +77,6 @@ base::local(
     }
 
     restore_managed_connection <- function() {
-      invisible(.Call("mcp_console_sql_use_r"))
       selected_connection <<- NULL
       1L
     }

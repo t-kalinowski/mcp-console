@@ -246,6 +246,7 @@ def _dispatch(source):
         _evaluate(source)
         return _PROVIDER_HANDLED
     if _restore_managed:
+        use_r()
         return _PROVIDER_MANAGED
     return _PROVIDER_R
 
