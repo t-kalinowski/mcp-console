@@ -153,7 +153,17 @@ impl DescendantTracker {
         })
     }
 
-    pub(super) fn supervise(mut self, retirement_grace: Duration) -> Result<(), String> {
+    /// Waits for the root to exit, marks the transition to owner-controlled
+    /// retirement, and then terminates the observed lifetime.
+    ///
+    /// The callback runs exactly once before the first termination pass. Crash
+    /// owners use that point to preserve the private directory if the normal
+    /// owner disappears while local cleanup is in progress.
+    pub(super) fn supervise(
+        mut self,
+        retirement_grace: Duration,
+        retirement_started: impl FnOnce(),
+    ) -> Result<(), String> {
         let observation = match self.root_has_exited() {
             Ok(true) => Ok(()),
             Ok(false) => loop {
@@ -165,6 +175,7 @@ impl DescendantTracker {
             },
             Err(error) => Err(error),
         };
+        retirement_started();
 
         match observation {
             Ok(()) => self.terminate(true, retirement_grace),

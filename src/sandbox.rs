@@ -292,12 +292,13 @@ impl SandboxedCommand {
         })
     }
 
-    /// Runs a standalone command and retires descendants observed from its root.
+    /// Runs a standalone command with launcher-owned normal retirement and an
+    /// independent crash manager for abrupt launcher loss.
     ///
-    /// Darwin cannot atomically attach a descendant observer at spawn time. A
-    /// process that detaches before the post-spawn root watch or a fork event is
-    /// observed remains outside this command's guarantee. Termination or failure
-    /// of the launcher itself is intentionally outside this command's scope.
+    /// Darwin cannot atomically attach either observer at spawn time. A process
+    /// that detaches before the post-spawn root watch or a fork event is observed
+    /// remains outside the corresponding observer's guarantee. Crash cleanup is
+    /// committed only after the manager reports readiness.
     pub(crate) fn status(mut self) -> Result<ExitCode, String> {
         self.command.env("TMPDIR", self.temporary_directory.path());
         supervision::status(self.command, self.temporary_directory)

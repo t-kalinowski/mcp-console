@@ -22,11 +22,11 @@ const FINISH_ALLOWANCE: Duration = Duration::from_secs(1);
 
 /// A host process that independently owns one committed sandbox lifetime.
 ///
-/// Normal retirement remains in the server's continuously serviced observer.
+/// Normal retirement remains in the owner's continuously serviced observer.
 /// Once this manager reports readiness, it supplies a second observation path
-/// that survives abrupt loss of the server process. A descendant that escapes
-/// before the manager's post-spawn tracker observes it remains outside this
-/// guarantee even after readiness.
+/// that survives abrupt loss of the server or standalone launcher. A descendant
+/// that escapes before the manager's post-spawn tracker observes it remains
+/// outside this guarantee even after readiness.
 pub(crate) struct SandboxManager {
     monitor: Option<ManagerMonitor>,
     control: UnixStream,
@@ -78,8 +78,8 @@ impl SandboxManager {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .process_group(0);
-        // The server is multithreaded. Carry the private manager control on fd 0
-        // and apply the same no-extra-descriptor boundary used for worker relays.
+        // The owner may be multithreaded. Carry the private manager control on
+        // fd 0 and apply the same no-extra-descriptor boundary used for relays.
         file_descriptors::close_unlisted_from_multithreaded_parent(&mut command)?;
 
         let mut child = command
@@ -143,7 +143,7 @@ impl SandboxManager {
         })
     }
 
-    /// Marks the beginning of server-owned retirement. If the server exits
+    /// Marks the beginning of owner-controlled retirement. If the owner exits
     /// before completing the handoff, the manager preserves the directory.
     pub(crate) fn begin_retirement(&mut self) -> bool {
         if self.retirement_started {
@@ -190,7 +190,7 @@ impl SandboxManager {
         }
     }
 
-    /// Commits the server's final directory disposition and waits for the
+    /// Commits the owner's final directory disposition and waits for the
     /// manager process to exit.
     pub(crate) fn finish(
         mut self,

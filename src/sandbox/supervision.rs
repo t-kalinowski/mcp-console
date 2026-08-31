@@ -8,9 +8,11 @@ mod process_retirement;
 mod process_tracker;
 #[path = "supervision/process_tree.rs"]
 mod process_tree;
+#[path = "supervision/standalone.rs"]
+mod standalone;
 
 pub(crate) use self::manager::SandboxManager;
-use super::{file_descriptors, platform};
+use super::platform;
 use std::process::{Child, Command, ExitCode};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
@@ -177,35 +179,10 @@ fn retire_after_observer_failure(
 }
 
 pub(super) fn status(
-    mut sandbox_command: Command,
+    sandbox_command: Command,
     temporary_directory: platform::TemporaryDirectory,
 ) -> Result<ExitCode, String> {
-    // The standalone path has no private transport descriptors, so a
-    // parent-side snapshot is sufficient before it starts any threads.
-    file_descriptors::close_unlisted(&mut sandbox_command)?;
-    let mut child = sandbox_command
-        .spawn()
-        .map_err(|error| format!("failed to launch `{}`: {error}", platform::SANDBOX_EXEC))?;
-
-    let tracker = match process_tracker::DescendantTracker::start(child.id() as libc::pid_t) {
-        Ok(tracker) => tracker,
-        Err(failure) => {
-            let error = failure.retire(PROCESS_RETIREMENT_GRACE);
-            let error = stop_direct_child(&mut child, error);
-            preserve(temporary_directory);
-            return Err(error);
-        }
-    };
-    if let Err(error) = tracker.supervise(PROCESS_RETIREMENT_GRACE) {
-        let error = stop_direct_child(&mut child, error);
-        preserve(temporary_directory);
-        return Err(error);
-    }
-
-    let status = child
-        .wait()
-        .map_err(|error| format!("failed to wait for `{}`: {error}", platform::SANDBOX_EXEC))?;
-    Ok(platform::exit_code(status))
+    standalone::status(sandbox_command, temporary_directory)
 }
 
 pub(super) fn stop_direct_child(child: &mut Child, primary: String) -> String {

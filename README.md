@@ -146,7 +146,6 @@ Other current limitations include:
 Submitted R, Python, and SQL have shell-class capability inside the worker sandbox.
 The worker can read host files, but direct network access and regular-file writes outside its private temporary directory are denied.
 This is a process boundary, not a safe evaluator for untrusted code with access to sensitive readable files.
-
 The server installs automatically inferred or explicitly declared R and Python packages and DuckDB extensions outside the worker sandbox with server permissions.
 Those operations may access the network and execute installation or build code, so only trusted requirements should be supplied.
 See [Requirements and environments](https://github.com/t-kalinowski/mcp-console/blob/main/docs/REQUIREMENTS.md) for the accepted inputs and trust model.
@@ -175,9 +174,12 @@ Normal restart, automatic worker replacement, and orderly server shutdown retire
 On macOS, each worker generation also commits an independent host manager that retires the descendants it observed and attempts to remove the private temporary directory after an abrupt server exit outside an in-progress normal retirement.
 A descendant that becomes orphaned before the manager observes it remains outside crash cleanup even after manager readiness.
 The standalone `sandbox` command is available for development.
-When its direct command exits while the launcher remains running, it retires descendants observed from that root, including descendants that entered another process group or session.
-On macOS, a descendant that becomes orphaned before the post-spawn tracker observes it remains outside this guarantee; termination or failure of the launcher itself is not covered.
-It inherits standard input, output, and error while closing other inherited file descriptors before the target runs.
+Its launcher owns normal retirement and preserves the direct command's exit status while retiring descendants observed from that root, including descendants that entered another process group or session.
+On macOS, it also commits an independent manager after the launcher observer attaches.
+After manager readiness, abrupt launcher loss retires the descendants the manager observed and removes the private temporary directory after successful cleanup; unexpected manager loss instead terminates the root so the still-live launcher observer can finish retirement.
+A descendant that becomes orphaned before either post-spawn observer sees it remains outside that observer's guarantee, and an abrupt launcher exit before manager readiness remains outside crash cleanup.
+The command inherits standard input, output, and error while closing other inherited file descriptors before the target runs.
+It does not add terminal job-control or signal-relay semantics beyond the inherited process relationships.
 Use the MCP server for the supported worker-generation lifecycle.
 
 Run development commands from the repository root:
@@ -198,6 +200,7 @@ scripts/test --update BOUNDARY/SUITE[::CASE]
 The [documentation index](https://github.com/t-kalinowski/mcp-console/blob/main/docs/README.md) maps current documents by audience.
 
 - [Implemented architecture](https://github.com/t-kalinowski/mcp-console/blob/main/docs/ARCHITECTURE.md) explains current process boundaries, ownership, lifecycle, recording, and artifacts.
+- [macOS sandbox supervision](https://github.com/t-kalinowski/mcp-console/blob/main/docs/SANDBOX_SUPERVISION.md) explains normal observed-descendant retirement, independent manager cleanup, and post-spawn limitations.
 - [Built-in runtime](https://github.com/t-kalinowski/mcp-console/blob/main/docs/BUILTIN_RUNTIME.md) describes user-visible R, Python, SQL, input, output, and graphics behavior.
 - [Requirements and environments](https://github.com/t-kalinowski/mcp-console/blob/main/docs/REQUIREMENTS.md) describes dependency preparation and its trust boundary.
 - [Worker protocol](https://github.com/t-kalinowski/mcp-console/blob/main/docs/WORKER_PROTOCOL.md) and [relay protocol](https://github.com/t-kalinowski/mcp-console/blob/main/docs/RELAY_PROTOCOL.md) define the exact transport contracts.
