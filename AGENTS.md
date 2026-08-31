@@ -134,6 +134,8 @@ Keep these ownership rules intact:
 - For a public behavior change, first add a public acceptance or regression test and confirm it fails.
   Verify an internal-only refactor with the existing public suite.
   Test public interfaces, not private helpers.
+- For internal coordination and lifecycle control, prefer blocking event-driven waits with an explicit wakeup path.
+  Do not use busy loops or short fixed-interval polling when the state transition can notify a condition variable, descriptor, or platform event.
 - Preserve client-visible runtime output in transcript snapshots, including complete errors and tracebacks.
   Normalize only incidental values such as run-specific temporary paths; do not replace behavior with summaries or placeholders.
 - Keep embedded R, Python, SQL, and shell fixture programs as readable multiline strings.

@@ -87,6 +87,8 @@ The server owns the logical console session and all state that must survive a wo
 These responsibilities remain on the host side of the sandbox boundary.
 The server does not execute submitted cells or ask the relay to interpret MCP calls.
 At generation retirement, it stops descendants observed across process-group and session changes, closes the original relay process group as a race backstop, and then reaps the direct relay.
+On macOS, the dedicated host observer blocks in `kevent()` on its `kqueue` for descendant process events and an explicit user event used for stop.
+The wait has a one-second maintenance deadline for pruning stale identities; lifecycle control triggers the user event instead of polling a shared stop flag.
 
 ### Relay
 

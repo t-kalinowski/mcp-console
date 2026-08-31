@@ -2,11 +2,38 @@ use super::process::{process_identity, process_info};
 use super::process_tree::{TrackerState, add_process_tree};
 use std::collections::HashMap;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::sync::Arc;
 use std::time::Duration;
 
+const OBSERVER_WAKE_IDENT: libc::uintptr_t = 1;
+
 pub(super) struct DescendantTracker {
-    pub(super) kqueue: OwnedFd,
+    pub(super) kqueue: Arc<OwnedFd>,
     pub(super) state: TrackerState,
+}
+
+pub(super) struct ObserverWakeup {
+    // Keep the queue alive if the observer exits before its owner requests
+    // stop, so a reused descriptor cannot receive the wakeup.
+    kqueue: Arc<OwnedFd>,
+}
+
+impl ObserverWakeup {
+    pub(super) fn wake(self) -> Result<(), String> {
+        let event = libc::kevent {
+            ident: OBSERVER_WAKE_IDENT,
+            filter: libc::EVFILT_USER,
+            flags: 0,
+            fflags: libc::NOTE_TRIGGER,
+            data: 0,
+            udata: std::ptr::null_mut(),
+        };
+        submit_observer_event(
+            self.kqueue.as_raw_fd(),
+            &event,
+            "failed to wake sandbox process observer",
+        )
+    }
 }
 
 pub(super) struct StartFailure {
@@ -57,7 +84,7 @@ impl DescendantTracker {
                 std::io::Error::last_os_error()
             )));
         }
-        let kqueue = unsafe { OwnedFd::from_raw_fd(kqueue_descriptor) };
+        let kqueue = Arc::new(unsafe { OwnedFd::from_raw_fd(kqueue_descriptor) });
 
         // Darwin provides neither child subreapers nor PID namespaces, and its
         // kqueue NOTE_TRACK facility is unsupported. A descendant that becomes
@@ -107,6 +134,25 @@ impl DescendantTracker {
         Ok(tracker)
     }
 
+    pub(super) fn register_observer_wakeup(&self) -> Result<ObserverWakeup, String> {
+        let event = libc::kevent {
+            ident: OBSERVER_WAKE_IDENT,
+            filter: libc::EVFILT_USER,
+            flags: libc::EV_ADD | libc::EV_CLEAR,
+            fflags: 0,
+            data: 0,
+            udata: std::ptr::null_mut(),
+        };
+        submit_observer_event(
+            self.kqueue.as_raw_fd(),
+            &event,
+            "failed to register sandbox process observer wakeup",
+        )?;
+        Ok(ObserverWakeup {
+            kqueue: Arc::clone(&self.kqueue),
+        })
+    }
+
     pub(super) fn supervise(mut self, retirement_grace: Duration) -> Result<(), String> {
         let observation = match self.root_has_exited() {
             Ok(true) => Ok(()),
@@ -126,6 +172,24 @@ impl DescendantTracker {
                 Ok(()) => Err(error),
                 Err(cleanup_error) => Err(format!("{error}; additionally, {cleanup_error}")),
             },
+        }
+    }
+}
+
+fn submit_observer_event(
+    kqueue: libc::c_int,
+    event: &libc::kevent,
+    description: &str,
+) -> Result<(), String> {
+    loop {
+        let result =
+            unsafe { libc::kevent(kqueue, event, 1, std::ptr::null_mut(), 0, std::ptr::null()) };
+        if result >= 0 {
+            return Ok(());
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return Err(format!("{description}: {error}"));
         }
     }
 }
