@@ -5,6 +5,7 @@
 This document describes the structure and ownership implemented in the current source.
 It explains how the pieces fit together without defining their wire fields or the built-in console's operating rules.
 See the [relay protocol](RELAY_PROTOCOL.md) and [worker protocol](WORKER_PROTOCOL.md) for exact transports, the [built-in runtime guide](BUILTIN_RUNTIME.md) for console behavior, and [requirements and environments](REQUIREMENTS.md) for dependency management and its trust boundary.
+See [macOS sandbox supervision](SANDBOX_SUPERVISION.md) for host-side sandbox-lifetime cleanup and manager failure recovery.
 The material under `design-sketches/` is future or exploratory design, not evidence for this document.
 
 ## Process layout

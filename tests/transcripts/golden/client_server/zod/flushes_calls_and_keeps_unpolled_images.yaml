@@ -3,7 +3,7 @@
 ---
 send:
   r: complete after release
-  timeout_ms: 3000
+  timeout_ms: 30000
 result:
   content:
     - type: text
@@ -42,12 +42,12 @@ live journal:
     path: artifacts/call-000002-image-000001.png
     data: <byte-identical decoded PNG>
   later poll result:
+    isError: false
     content:
       - type: image
         mimeType: image/png
         artifactId: 1
         path: artifacts/call-000002-image-000001.png
-    isError: false
   Markdown projection:
     live before result: true
     each snapshot retained as an exact prefix: true

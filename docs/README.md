@@ -15,6 +15,7 @@ Source and public acceptance tests remain the final authority when prose disagre
 ## Implementers and protocol reviewers
 
 - [Implemented architecture](ARCHITECTURE.md) is the source of truth for the current process structure, responsibility boundaries, worker-generation ownership, and lifecycle at an architectural level.
+- [macOS sandbox supervision](SANDBOX_SUPERVISION.md) describes primary host-side lifetime ownership, manager failure recovery, and the remaining post-spawn boundary.
 - [Worker protocol](WORKER_PROTOCOL.md) is the exact relay-worker wire protocol and custom-worker contract.
 - [Relay protocol](RELAY_PROTOCOL.md) is the exact private server-relay JSONL protocol.
 - [Registered MCP tool descriptions](TOOL_DESCRIPTIONS.md) mirrors the current descriptions for the MCP tools and their properties.

@@ -62,12 +62,13 @@ scripts/test client_server/server
 scripts/test client_server/server::initializes_and_lists_tools
 scripts/test cli/help
 scripts/test --list
-scripts/test --jobs 1 client_server/python
+scripts/test client_server/python
 scripts/test --update client_server/server::initializes_and_lists_tools
 ```
 
 With no selectors, `scripts/test` runs every suite and case in parallel, using at least two worker processes and otherwise one per available CPU by default.
-Pass `--jobs N` to set the maximum concurrency or `--jobs 1` to run serially.
+Use that default parallel scheduling for normal runs.
+Pass `--jobs N` only when reproducing or diagnosing behavior at a specific concurrency.
 Normal runs emit one flushed `.` for every passing case and end the progress line with a newline.
 A case that runs for one minute is named with its current status.
 The runner reports it again at two-minute elapsed intervals through ten minutes, then once every five minutes, and names it when it finishes.

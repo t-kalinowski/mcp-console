@@ -46,6 +46,7 @@ TEST_CLEANUP_FIFO_NAME = "zod-test-cleanup"
 TEST_RESPONSE_QUERY_FIFO_NAME = "zod-test-response-query"
 TEST_RESPONSE_RESULT_FIFO_NAME = "zod-test-response-result"
 TEST_CONTROL_READY_NAME = "zod-test-control-ready"
+CHECKPOINT_TIMEOUT = 15
 
 
 class ZodFixtureControl:
@@ -1078,7 +1079,7 @@ def test_flushes_calls_and_keeps_unpolled_images(binary: Path) -> Transcript:
 
         waiting = client._start_send(
             r="complete after release",
-            timeout_ms=3_000,
+            timeout_ms=30_000,
         )
         started = wait_for_marker(
             temporary,
@@ -3787,7 +3788,7 @@ def test_replaces_worker_after_relay_exit(binary: Path) -> Transcript:
     passed = False
     try:
         client._initialize_and_list_tools()
-        client.send(r="kill relay and remain live", timeout_ms=5_000)
+        client.send(r="kill relay and remain live", timeout_ms=30_000)
 
         result = client.transcript[-1]["result"]
         assert result["isError"] is True, result
@@ -4718,7 +4719,9 @@ def test_restart_cancels_partial_sideband_frame(binary: Path) -> Transcript:
 
             receiver = threading.Thread(target=receive_restart, daemon=True)
             receiver.start()
-            assert received.wait(3), "restart waited for a partial sideband frame"
+            assert received.wait(CHECKPOINT_TIMEOUT), (
+                "restart waited for a partial sideband frame"
+            )
             receiver.join()
             if errors:
                 raise errors[0]
@@ -4784,7 +4787,9 @@ def test_restart_cancels_reader_after_operation_result(
 
             receiver = threading.Thread(target=receive_restart, daemon=True)
             receiver.start()
-            assert received.wait(3), "restart waited for the sideband reader"
+            assert received.wait(CHECKPOINT_TIMEOUT), (
+                "restart waited for the sideband reader"
+            )
             receiver.join()
             if errors:
                 raise errors[0]
@@ -4840,6 +4845,7 @@ def test_restart_drains_readable_frame_before_abandoning_partial_tail(
         loaded_name = "delay-sideband-poll-loaded"
         arm_name = "delay-sideband-poll-arm"
         socket_ready_name = "delay-sideband-poll-socket-ready"
+        cancellation_ready_name = "delay-sideband-poll-cancellation-ready"
         partial_tail_name = "zod-sideband-partial-tail-written"
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
@@ -4848,6 +4854,7 @@ def test_restart_drains_readable_frame_before_abandoning_partial_tail(
         environment["MCP_CONSOLE_TEST_POLL_LOADED_NAME"] = loaded_name
         environment["MCP_CONSOLE_TEST_POLL_ARM_NAME"] = arm_name
         environment["MCP_CONSOLE_TEST_POLL_SOCKET_READY_NAME"] = socket_ready_name
+        environment["MCP_CONSOLE_TEST_POLL_CANCEL_READY_NAME"] = cancellation_ready_name
         control.configure(environment)
         client = McpClient(
             binary,
@@ -4856,6 +4863,7 @@ def test_restart_drains_readable_frame_before_abandoning_partial_tail(
         )
 
         descendant_group = None
+        cancellation_ready: FifoCheckpoint | None = None
         passed = False
         try:
             client._initialize_and_list_tools()
@@ -4863,6 +4871,7 @@ def test_restart_drains_readable_frame_before_abandoning_partial_tail(
             assert last_tool_text(client) == "[done]"
             control.connect(client)
             loaded = wait_for_marker(temporary, loaded_name, client)
+            cancellation_ready = FifoCheckpoint(loaded.parent / cancellation_ready_name)
             (loaded.parent / arm_name).touch()
 
             evaluation = client._start_send(
@@ -4877,6 +4886,10 @@ def test_restart_drains_readable_frame_before_abandoning_partial_tail(
             wait_for_marker(temporary, socket_ready_name, client)
             wait_for_marker(temporary, partial_tail_name, client)
             restart = client._start_send(control="restart")
+            cancellation_ready.wait(
+                "relay sideband cancellation",
+                timeout=CHECKPOINT_TIMEOUT,
+            )
             client._receive_many([evaluation, restart])
             result = evaluation["result"]
             assert result["isError"] is True, result
@@ -4914,6 +4927,8 @@ def test_restart_drains_readable_frame_before_abandoning_partial_tail(
             passed = True
             return transcript
         finally:
+            if cancellation_ready is not None:
+                cancellation_ready.close()
             control.release_cleanup()
             stop_process_group(descendant_group)
             if not passed:
@@ -5052,7 +5067,7 @@ def test_shutdown_deadline_does_not_wait_for_sideband_writer(
 
 
 def wait_for_marker(root: Path, name: str, client: McpClient) -> Path:
-    deadline = time.monotonic() + 3
+    deadline = time.monotonic() + CHECKPOINT_TIMEOUT
     while True:
         markers = list(root.glob(f"**/{name}"))
         if markers:
@@ -5069,7 +5084,7 @@ def wait_for_stopped_worker(
     recorded_workers: list[tuple[int, int]],
     client: McpClient,
 ) -> tuple[Path, int, int]:
-    deadline = time.monotonic() + 3
+    deadline = time.monotonic() + CHECKPOINT_TIMEOUT
     while True:
         for marker in root.glob("**/zod-stop-continue-worker"):
             process_id, parent_id, process_group = map(

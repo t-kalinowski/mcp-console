@@ -56,7 +56,7 @@ pub enum Command {
         command: Vec<OsString>,
     },
 
-    /// Manage one sandbox lifetime outside Seatbelt
+    /// Run the internal sandbox lifetime manager
     #[command(hide = true)]
     SandboxManager,
 

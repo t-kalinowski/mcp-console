@@ -11,6 +11,7 @@ The documents under `design-sketches/` describe intended behavior, not the curre
 - `README.md` describes the current user-facing project status.
 - `docs/README.md` maps the implemented documentation by audience.
 - `docs/ARCHITECTURE.md` describes the implemented process structure, ownership, and lifecycle.
+- `docs/SANDBOX_SUPERVISION.md` describes macOS sandbox-lifetime ownership and cleanup.
 - `docs/BUILTIN_RUNTIME.md` describes user-visible behavior of the built-in mixed-language console.
 - `docs/REQUIREMENTS.md` describes dependency and environment behavior and its trust boundary.
 - `docs/WORKER_PROTOCOL.md` defines the exact relay-worker and custom-worker contract.

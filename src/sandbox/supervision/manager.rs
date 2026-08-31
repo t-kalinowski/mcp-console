@@ -1,28 +1,23 @@
+#[path = "manager/entrypoint.rs"]
+mod entrypoint;
+#[path = "manager/protocol.rs"]
+mod protocol;
+
 use super::process::{ProcessIdentity, process_info, signal_process};
 use super::process_tracker::DescendantTracker;
 use crate::sandbox::file_descriptors::configure as configure_file_descriptors;
 use crate::sandbox::platform;
-use std::ffi::OsString;
-use std::io::{ErrorKind, Read, Write};
-use std::net::Shutdown;
-use std::os::fd::{AsRawFd, FromRawFd};
-use std::os::unix::ffi::{OsStrExt, OsStringExt};
+use std::io::{Read, Write};
+use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt as _;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
 const CONTROL_DESCRIPTOR_ENV: &str = "MCP_CONSOLE_SANDBOX_MANAGER_FD";
-const INITIALIZATION_MAGIC: &[u8; 4] = b"MCG2";
-const READY: u8 = 1;
-const COMMIT: u8 = 2;
-const FINISH: u8 = 3;
-const STOP: u8 = 5;
-const COMMITTED: u8 = 7;
-const MAXIMUM_PATH_BYTES: usize = 16 * 1024;
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
 const FINISH_ALLOWANCE: Duration = Duration::from_secs(1);
 
@@ -45,15 +40,9 @@ enum ManagerExit {
     Recovered,
 }
 
-enum OwnerDisposition {
-    Finish,
-    Stop,
-    Failed(String),
-}
-
 impl SandboxManager {
     pub(crate) fn spawn(cleanup_timeout: Duration) -> Result<Self, String> {
-        let _ = cleanup_timeout_millis(cleanup_timeout)?;
+        let _ = protocol::cleanup_timeout_millis(cleanup_timeout)?;
         let executable = std::env::current_exe()
             .map_err(|error| format!("failed to locate the sandbox manager: {error}"))?;
         let (stream, inherited_stream) = UnixStream::pair()
@@ -104,16 +93,14 @@ impl SandboxManager {
         root_pid: u32,
         temporary_directory: &Path,
     ) -> Result<(), String> {
+        let owner_pid = libc::pid_t::try_from(std::process::id())
+            .ok()
+            .filter(|pid| *pid > 0)
+            .ok_or_else(|| "sandbox manager owner PID is invalid".to_string())?;
         let root_pid = libc::pid_t::try_from(root_pid)
             .ok()
             .filter(|pid| *pid > 0)
             .ok_or_else(|| "sandbox manager received an invalid root PID".to_string())?;
-        let path = temporary_directory.as_os_str().as_bytes();
-        let path_length = u32::try_from(path.len())
-            .ok()
-            .filter(|length| *length as usize <= MAXIMUM_PATH_BYTES)
-            .ok_or_else(|| "sandbox manager temporary path is too long".to_string())?;
-        let cleanup_timeout = cleanup_timeout_millis(self.cleanup_timeout)?;
         let stream = self
             .stream
             .as_mut()
@@ -125,19 +112,19 @@ impl SandboxManager {
             .set_write_timeout(Some(STARTUP_TIMEOUT))
             .map_err(|error| format!("failed to configure sandbox manager control: {error}"))?;
 
-        stream
-            .write_all(INITIALIZATION_MAGIC)
-            .and_then(|()| stream.write_all(&root_pid.to_be_bytes()))
-            .and_then(|()| stream.write_all(&cleanup_timeout.to_be_bytes()))
-            .and_then(|()| stream.write_all(&path_length.to_be_bytes()))
-            .and_then(|()| stream.write_all(path))
-            .map_err(|error| format!("failed to initialize sandbox manager: {error}"))?;
+        protocol::write(
+            stream,
+            owner_pid,
+            root_pid,
+            self.cleanup_timeout,
+            temporary_directory,
+        )?;
 
         let mut ready = [0];
         stream
             .read_exact(&mut ready)
             .map_err(|error| format!("sandbox manager did not become ready: {error}"))?;
-        if ready != [READY] {
+        if ready != [protocol::READY] {
             return Err("sandbox manager sent an invalid readiness response".to_string());
         }
         Ok(())
@@ -181,13 +168,13 @@ impl SandboxManager {
             .as_mut()
             .expect("sandbox manager control should be available");
         stream
-            .write_all(&[COMMIT])
+            .write_all(&[protocol::COMMIT])
             .map_err(|error| format!("failed to commit sandbox manager ownership: {error}"))?;
         let mut committed = [0];
         stream
             .read_exact(&mut committed)
             .map_err(|error| format!("sandbox manager did not confirm ownership: {error}"))?;
-        if committed != [COMMITTED] {
+        if committed != [protocol::COMMITTED] {
             return Err("sandbox manager sent an invalid ownership confirmation".to_string());
         }
         Ok(())
@@ -195,12 +182,12 @@ impl SandboxManager {
 
     /// Completes ownership after the sandbox root has already exited.
     pub(crate) fn finish(mut self) -> Result<(), String> {
-        self.finish_inner(Some(FINISH), true)
+        self.finish_inner(Some(protocol::FINISH), true)
     }
 
     /// Stops the recorded sandbox root before completing ownership.
     pub(crate) fn stop(mut self) -> Result<(), String> {
-        self.finish_inner(Some(STOP), true)
+        self.finish_inner(Some(protocol::STOP), true)
     }
 
     fn finish_inner(
@@ -469,276 +456,5 @@ impl Drop for SandboxManager {
 }
 
 pub(super) fn run() -> Result<(), String> {
-    // SAFETY: getppid(2) has no pointer or lifetime preconditions.
-    let owner_pid = unsafe { libc::getppid() };
-    if owner_pid <= 0 {
-        return Err("sandbox manager has no valid owner".to_string());
-    }
-
-    let mut stream = inherited_control()?;
-    let (root_pid, cleanup_timeout, temporary_directory) = read_initialization(&mut stream)?;
-    let info = process_info(root_pid)?
-        .ok_or_else(|| format!("sandbox root {root_pid} exited before manager startup"))?;
-    if info.parent_pid != owner_pid {
-        return Err(format!(
-            "sandbox root {root_pid} is not a child of manager owner {owner_pid}"
-        ));
-    }
-
-    let tracker =
-        DescendantTracker::start(root_pid).map_err(|failure| failure.retire(cleanup_timeout))?;
-    let temporary_directory = platform::TemporaryDirectory::adopt(temporary_directory, owner_pid)?;
-    let root = info.identity;
-
-    if let Err(error) = stream.write_all(&[READY]) {
-        return finish_startup_failure(
-            format!("failed to report sandbox manager readiness: {error}"),
-            root,
-            tracker,
-            temporary_directory,
-            cleanup_timeout,
-        );
-    }
-
-    let mut commit = [0];
-    if let Err(error) = stream.read_exact(&mut commit) {
-        return finish_startup_failure(
-            format!("sandbox manager ownership was not committed: {error}"),
-            root,
-            tracker,
-            temporary_directory,
-            cleanup_timeout,
-        );
-    }
-    if commit != [COMMIT] {
-        return finish_startup_failure(
-            "sandbox manager ownership commit is invalid".to_string(),
-            root,
-            tracker,
-            temporary_directory,
-            cleanup_timeout,
-        );
-    }
-
-    let tracker_control = match stream.try_clone() {
-        Ok(control) => control,
-        Err(error) => {
-            return finish_startup_failure(
-                format!("failed to monitor sandbox manager control: {error}"),
-                root,
-                tracker,
-                temporary_directory,
-                cleanup_timeout,
-            );
-        }
-    };
-    let tracker_thread = std::thread::spawn(move || {
-        supervise_tracker(tracker, cleanup_timeout, root, tracker_control)
-    });
-    if let Err(error) = stream.write_all(&[COMMITTED]) {
-        return finish_committed_startup_failure(
-            format!("failed to confirm sandbox manager ownership: {error}"),
-            root,
-            &stream,
-            tracker_thread,
-            temporary_directory,
-        );
-    }
-    let disposition = read_owner_disposition(&mut stream);
-    let stop_root = !matches!(&disposition, OwnerDisposition::Finish);
-    let mut error = match disposition {
-        OwnerDisposition::Finish | OwnerDisposition::Stop => None,
-        OwnerDisposition::Failed(error) => Some(error),
-    };
-    if stop_root {
-        if let Err(group_error) = stop_process_group(root) {
-            error = Some(with_prior_error(error, group_error));
-        }
-        if let Err(signal_error) = signal_process(root, libc::SIGKILL) {
-            error = Some(with_prior_error(error, signal_error));
-        }
-        if let Err(tracker_error) = join_tracker(tracker_thread) {
-            error = Some(with_prior_error(error, tracker_error));
-        }
-    } else {
-        if let Err(tracker_error) = join_tracker(tracker_thread) {
-            error = Some(with_prior_error(error, tracker_error));
-        }
-        if let Err(group_error) = stop_process_group(root) {
-            error = Some(with_prior_error(error, group_error));
-        }
-    }
-    if error.is_some() {
-        temporary_directory.preserve();
-    }
-    error.map_or(Ok(()), Err)
-}
-
-fn finish_startup_failure(
-    mut error: String,
-    root: super::process::ProcessIdentity,
-    tracker: DescendantTracker,
-    temporary_directory: platform::TemporaryDirectory,
-    cleanup_timeout: Duration,
-) -> Result<(), String> {
-    let mut cleanup_failed = false;
-    if let Err(group_error) = stop_process_group(root) {
-        error.push_str(&format!("; additionally, {group_error}"));
-        cleanup_failed = true;
-    }
-    if let Err(signal_error) = signal_process(root, libc::SIGKILL) {
-        error.push_str(&format!("; additionally, {signal_error}"));
-    }
-    if let Err(cleanup_error) = tracker.supervise(cleanup_timeout) {
-        error.push_str(&format!("; additionally, {cleanup_error}"));
-        cleanup_failed = true;
-    }
-    if cleanup_failed {
-        temporary_directory.preserve();
-    }
-    Err(error)
-}
-
-fn supervise_tracker(
-    tracker: DescendantTracker,
-    cleanup_timeout: Duration,
-    root: super::process::ProcessIdentity,
-    control: UnixStream,
-) -> Result<(), String> {
-    let Err(mut error) = tracker.supervise(cleanup_timeout) else {
-        return Ok(());
-    };
-    if let Err(signal_error) = signal_process(root, libc::SIGKILL) {
-        error = with_prior_error(Some(error), signal_error);
-    }
-    if let Err(control_error) = control.shutdown(Shutdown::Both) {
-        error = with_prior_error(
-            Some(error),
-            format!("failed to close sandbox manager control: {control_error}"),
-        );
-    }
-    Err(error)
-}
-
-fn finish_committed_startup_failure(
-    mut error: String,
-    root: super::process::ProcessIdentity,
-    control: &UnixStream,
-    tracker_thread: std::thread::JoinHandle<Result<(), String>>,
-    temporary_directory: platform::TemporaryDirectory,
-) -> Result<(), String> {
-    let mut cleanup_failed = false;
-    if let Err(group_error) = stop_process_group(root) {
-        error = with_prior_error(Some(error), group_error);
-        cleanup_failed = true;
-    }
-    if let Err(signal_error) = signal_process(root, libc::SIGKILL) {
-        error = with_prior_error(Some(error), signal_error);
-    }
-    if let Err(control_error) = control.shutdown(Shutdown::Both) {
-        error = with_prior_error(
-            Some(error),
-            format!("failed to close sandbox manager control: {control_error}"),
-        );
-    }
-    if let Err(cleanup_error) = join_tracker(tracker_thread) {
-        error = with_prior_error(Some(error), cleanup_error);
-        cleanup_failed = true;
-    }
-    if cleanup_failed {
-        temporary_directory.preserve();
-    }
-    Err(error)
-}
-
-fn join_tracker(tracker_thread: std::thread::JoinHandle<Result<(), String>>) -> Result<(), String> {
-    tracker_thread
-        .join()
-        .map_err(|_| "sandbox manager process tracker failed".to_string())
-        .and_then(|result| result)
-}
-
-fn read_owner_disposition(stream: &mut UnixStream) -> OwnerDisposition {
-    let mut disposition = [0];
-    loop {
-        match stream.read(&mut disposition) {
-            Ok(0) => return OwnerDisposition::Stop,
-            Ok(_) if disposition == [FINISH] => {
-                return OwnerDisposition::Finish;
-            }
-            Ok(_) if disposition == [STOP] => {
-                return OwnerDisposition::Stop;
-            }
-            Ok(_) => {
-                return OwnerDisposition::Failed(
-                    "sandbox manager received an invalid finish request".to_string(),
-                );
-            }
-            Err(error) if error.kind() == ErrorKind::Interrupted => {}
-            Err(read_error) => {
-                return OwnerDisposition::Failed(format!(
-                    "sandbox manager control failed: {read_error}"
-                ));
-            }
-        }
-    }
-}
-
-fn inherited_control() -> Result<UnixStream, String> {
-    let descriptor = std::env::var(CONTROL_DESCRIPTOR_ENV)
-        .map_err(|_| "sandbox manager control descriptor is missing".to_string())?
-        .parse::<libc::c_int>()
-        .ok()
-        .filter(|descriptor| *descriptor > libc::STDERR_FILENO)
-        .ok_or_else(|| "sandbox manager control descriptor is invalid".to_string())?;
-    Ok(unsafe { UnixStream::from_raw_fd(descriptor) })
-}
-
-fn read_initialization(
-    stream: &mut UnixStream,
-) -> Result<(libc::pid_t, Duration, PathBuf), String> {
-    let mut magic = [0; INITIALIZATION_MAGIC.len()];
-    stream
-        .read_exact(&mut magic)
-        .map_err(|error| format!("failed to read sandbox manager initialization: {error}"))?;
-    if &magic != INITIALIZATION_MAGIC {
-        return Err("sandbox manager initialization had an invalid version".to_string());
-    }
-
-    let mut root_pid = [0; std::mem::size_of::<libc::pid_t>()];
-    let mut cleanup_timeout = [0; std::mem::size_of::<u64>()];
-    let mut path_length = [0; std::mem::size_of::<u32>()];
-    stream
-        .read_exact(&mut root_pid)
-        .and_then(|()| stream.read_exact(&mut cleanup_timeout))
-        .and_then(|()| stream.read_exact(&mut path_length))
-        .map_err(|error| format!("failed to read sandbox manager initialization: {error}"))?;
-    let root_pid = libc::pid_t::from_be_bytes(root_pid);
-    let cleanup_timeout = u64::from_be_bytes(cleanup_timeout);
-    let path_length = u32::from_be_bytes(path_length) as usize;
-    if root_pid <= 0 || cleanup_timeout == 0 || path_length > MAXIMUM_PATH_BYTES {
-        return Err("sandbox manager initialization is invalid".to_string());
-    }
-
-    let mut path = vec![0; path_length];
-    stream
-        .read_exact(&mut path)
-        .map_err(|error| format!("failed to read sandbox manager path: {error}"))?;
-    Ok((
-        root_pid,
-        Duration::from_millis(cleanup_timeout),
-        PathBuf::from(OsString::from_vec(path)),
-    ))
-}
-
-fn cleanup_timeout_millis(timeout: Duration) -> Result<u64, String> {
-    let milliseconds = timeout
-        .as_millis()
-        .checked_add(u128::from(
-            !timeout.subsec_nanos().is_multiple_of(1_000_000),
-        ))
-        .and_then(|milliseconds| u64::try_from(milliseconds).ok())
-        .filter(|milliseconds| *milliseconds > 0)
-        .ok_or_else(|| "sandbox manager cleanup timeout is invalid".to_string())?;
-    Ok(milliseconds)
+    entrypoint::run()
 }

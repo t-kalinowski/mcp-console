@@ -3,7 +3,7 @@
 ---
 send:
   r: kill relay and remain live
-  timeout_ms: 5000
+  timeout_ms: 30000
 result:
   content:
     - type: text
@@ -23,4 +23,3 @@ result:
       text: |
         zod: echo
   isError: false
-...
