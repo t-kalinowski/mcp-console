@@ -9,6 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from _support import (
+    FifoCheckpoint,
     McpClient,
     Transcript,
     code,
@@ -381,6 +382,100 @@ def test_recovers_when_python_dbapi_connection_raises_base_exception(
     preview = last_tool_text(client)
     assert "answer" in preview and "42" in preview
     return client._finish()
+
+
+def test_allows_python_dbapi_callbacks_to_select_an_r_connection(
+    binary: Path,
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        client = McpClient(binary, ("serve",), environment)
+        checkpoints: list[FifoCheckpoint] = []
+        passed = False
+        try:
+            client._initialize_and_list_tools()
+            client.send(sql="CREATE TABLE managed_values AS SELECT 42 AS value")
+            assert last_tool_text(client) == "[done]"
+
+            # Create checkpoint paths inside the worker's writable directory.
+            # fmt: r
+            r = code(r"""
+                callback_started <- tempfile("mcp-console-sql-callback-started-")
+                callback_release <- tempfile("mcp-console-sql-callback-release-")
+                cat(callback_started, callback_release, sep = "\n")
+                """)
+            client.send(r=r)
+            setup = client.transcript[-1]["result"]
+            paths = setup["content"][0]["text"].splitlines()
+            assert len(paths) == 2, setup
+            setup["content"][0]["text"] = "<callback started>\n<callback release>"
+            started, release = [FifoCheckpoint(Path(path)) for path in paths]
+            checkpoints.extend((started, release))
+
+            # The SQLite UDF re-enters R while the Python DB-API provider is
+            # evaluating the current cell, then selects managed DuckDB for
+            # later SQL cells.
+            # fmt: r
+            r = code(r"""
+                select_r_sql <- function() {
+                  started <- fifo(callback_started, open = "wb", blocking = TRUE)
+                  writeBin(charToRaw("1"), started)
+                  close(started)
+                  gate <- fifo(callback_release, open = "rb", blocking = TRUE)
+                  stopifnot(identical(
+                    readBin(gate, "raw", n = 1L),
+                    charToRaw("1")
+                  ))
+                  close(gate)
+                  console_sql_connection(NULL)
+                  41L
+                }
+                invisible()
+                """)
+            client.send(r=r)
+            output = last_tool_text(client)
+            assert output == "[done]", output
+
+            # fmt: python
+            python = code("""
+                import sqlite3
+
+                connection = sqlite3.connect(":memory:")
+                connection.create_function("select_r_sql", 0, r.select_r_sql)
+                console_sql_connection(connection)
+                """)
+            client.send(python=python)
+            output = last_tool_text(client)
+            assert output == "[done]", output
+
+            evaluation = client._start_send(
+                sql="SELECT select_r_sql() AS callback_value",
+                timeout_ms=0,
+            )
+            started.wait("Python DB-API callback entered R")
+            client._receive(evaluation)
+            assert evaluation["result"]["content"][0]["text"] == (
+                "\n[running; poll with an empty send]"
+            )
+
+            release.release()
+            client.send(timeout_ms=3_000)
+            preview = last_tool_text(client)
+            assert "callback_value" in preview and "41" in preview, preview
+
+            client.send(sql="SELECT value FROM managed_values")
+            preview = last_tool_text(client)
+            assert "value" in preview and "42" in preview
+
+            transcript = client._finish()
+            passed = True
+            return transcript
+        finally:
+            for checkpoint in checkpoints:
+                checkpoint.close()
+            if not passed:
+                stop_client(client)
 
 
 def test_interrupts_selected_python_dbapi_connection(

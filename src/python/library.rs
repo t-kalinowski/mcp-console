@@ -2,6 +2,9 @@ use std::ffi::{CStr, CString};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+// A loaded handle is retained for the process lifetime. SQL calls copy its
+// immutable function table under this lock, then release the guard before
+// invoking Python so Python-to-R callbacks can re-enter library access.
 static PYTHON_LIBRARY: Mutex<Option<LoadedLibrary>> = Mutex::new(None);
 
 type PyIsInitialized = unsafe extern "C" fn() -> libc::c_int;
@@ -45,6 +48,7 @@ struct LoadedLibrary {
     sql_runtime_installed: bool,
 }
 
+#[derive(Clone, Copy)]
 struct PythonApi {
     is_initialized: PyIsInitialized,
     set_program_name: PySetProgramName,
@@ -117,23 +121,36 @@ pub(super) fn install_sql_runtime(source: &str) -> Result<(), String> {
 }
 
 pub(super) fn dispatch_sql(source: &str) -> Result<super::SqlProvider, String> {
-    let library_slot = PYTHON_LIBRARY
-        .lock()
-        .map_err(|_| "Python shared library state is unavailable".to_string())?;
-    let Some(library) = library_slot.as_ref() else {
+    let Some(api) = installed_sql_api()? else {
         return Ok(super::SqlProvider::R);
     };
-    library.dispatch_sql(source)
+    api.with_gil(|api| {
+        if api.call_bool(c"_mcp_console_sql", c"has_connection")? {
+            api.call_string(c"_mcp_console_sql", c"evaluate", source)?;
+            return Ok(super::SqlProvider::Python);
+        }
+        if api.call_bool(c"_mcp_console_sql", c"restore_managed_requested")? {
+            return Ok(super::SqlProvider::Managed);
+        }
+        Ok(super::SqlProvider::R)
+    })
 }
 
 pub(super) fn use_r_sql() -> Result<(), String> {
+    let Some(api) = installed_sql_api()? else {
+        return Ok(());
+    };
+    api.with_gil(|api| api.call_unit(c"_mcp_console_sql", c"use_r"))
+}
+
+fn installed_sql_api() -> Result<Option<PythonApi>, String> {
     let library_slot = PYTHON_LIBRARY
         .lock()
         .map_err(|_| "Python shared library state is unavailable".to_string())?;
     let Some(library) = library_slot.as_ref() else {
-        return Ok(());
+        return Ok(None);
     };
-    library.use_r_sql()
+    Ok(library.sql_runtime_installed.then_some(library.api))
 }
 
 pub(super) fn finish_initialization() -> Result<(), String> {
@@ -289,7 +306,7 @@ impl LoadedLibrary {
     fn install_runtime(&self, source: &str) -> Result<(), String> {
         let source = CString::new(source)
             .map_err(|_| "embedded Python runtime source contains NUL".to_string())?;
-        self.with_gil(|api| {
+        self.api.with_gil(|api| {
             // SAFETY: The GIL is held and the source is a valid NUL-terminated
             // buffer for the duration of the call.
             unsafe { api.run_runtime(&source) }
@@ -299,52 +316,12 @@ impl LoadedLibrary {
     fn install_sql_runtime(&mut self, source: &str) -> Result<(), String> {
         let source = CString::new(source)
             .map_err(|_| "embedded Python SQL runtime source contains NUL".to_string())?;
-        self.with_gil(|api| {
+        self.api.with_gil(|api| {
             // SAFETY: The GIL is held and both strings are valid for the call.
             unsafe { api.run_module(c"_mcp_console_sql", &source) }
         })?;
         self.sql_runtime_installed = true;
         Ok(())
-    }
-
-    fn dispatch_sql(&self, source: &str) -> Result<super::SqlProvider, String> {
-        if !self.sql_runtime_installed {
-            return Ok(super::SqlProvider::R);
-        }
-        self.with_gil(|api| {
-            if api.call_bool(c"_mcp_console_sql", c"has_connection")? {
-                api.call_string(c"_mcp_console_sql", c"evaluate", source)?;
-                return Ok(super::SqlProvider::Python);
-            }
-            if api.call_bool(c"_mcp_console_sql", c"restore_managed_requested")? {
-                return Ok(super::SqlProvider::Managed);
-            }
-            Ok(super::SqlProvider::R)
-        })
-    }
-
-    fn use_r_sql(&self) -> Result<(), String> {
-        if !self.sql_runtime_installed {
-            return Ok(());
-        }
-        self.with_gil(|api| api.call_unit(c"_mcp_console_sql", c"use_r"))
-    }
-
-    fn with_gil<T>(
-        &self,
-        operation: impl FnOnce(&PythonApi) -> Result<T, String>,
-    ) -> Result<T, String> {
-        // SAFETY: The resolved function has no preconditions.
-        if unsafe { (self.api.is_initialized)() } == 0 {
-            return Err("Python interpreter is not initialized".to_string());
-        }
-        // SAFETY: CPython is initialized. PyGILState_Ensure permits this call
-        // both while reticulate holds the GIL and after it has released it.
-        let gil_state = unsafe { (self.api.gil_state_ensure)() };
-        let result = operation(&self.api);
-        // SAFETY: This state was returned by the matching ensure call above.
-        unsafe { (self.api.gil_state_release)(gil_state) };
-        result
     }
 
     fn finish_initialization(&mut self) -> Result<(), String> {
@@ -376,6 +353,23 @@ impl LoadedLibrary {
 }
 
 impl PythonApi {
+    fn with_gil<T>(
+        &self,
+        operation: impl FnOnce(&PythonApi) -> Result<T, String>,
+    ) -> Result<T, String> {
+        // SAFETY: The resolved function has no preconditions.
+        if unsafe { (self.is_initialized)() } == 0 {
+            return Err("Python interpreter is not initialized".to_string());
+        }
+        // SAFETY: CPython is initialized. PyGILState_Ensure permits this call
+        // both while reticulate holds the GIL and after it has released it.
+        let gil_state = unsafe { (self.gil_state_ensure)() };
+        let result = operation(self);
+        // SAFETY: This state was returned by the matching ensure call above.
+        unsafe { (self.gil_state_release)(gil_state) };
+        result
+    }
+
     unsafe fn run_runtime(&self, source: &CStr) -> Result<(), String> {
         // Match reticulate::py_run_string(local = TRUE): definitions are
         // isolated in a fresh locals dictionary while functions retain the
