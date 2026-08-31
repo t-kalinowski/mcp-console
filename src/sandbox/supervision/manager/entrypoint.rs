@@ -259,32 +259,49 @@ fn finish_startup_failure(
         separate_process_group,
         cleanup_timeout,
     );
-    if resu[š\×Ù\œŠ
-HÂˆ[\Ü˜\žWÙ\™XÝÜžKœ™\Ù\™J
-NÂˆBˆ™\Ý[ŸB‚™›ˆ[š\š]YØÛÛ›Û
+    if result.is_err() {
+        temporary_directory.preserve();
+    }
+    result
+}
 
-HOˆ[š^Ý™X[HÂˆËÈÐQ‘UNˆHY[ˆX[˜YÙ\ˆ[žHÚ[\È][˜ÚYÚ]]ÈÝÛ™YÛÛ›ÛˆËÈÝ™X[HÛˆ™[™Ù\È›ÝÝ\Ú\ÙH\ÙHÝ[™\™[œ]‚ˆ[œØY™HÈ[š^Ý™X[NŽ™œ›ÛWÜ˜]×Ù™
-X˜ÎŽ”ÕS—Ñ’SS“ÊHBŸB‚œÝXÝYÜY[\Ü˜\žQ\™XÝÜžJ]YŠNÂ‚š[\YÜY[\Ü˜\žQ\™XÝÜžHÂˆ›ˆYÜ
-]ˆ]Y‹ÝÛ™\—ÜYˆX˜ÎŽœYÝ
-HOˆ™\Ý[Ù[‹Ýš[™ÏˆÂˆ]]H]˜Ø[›ÛšXØ[^™J
-K›X\Ù\œŠ\œ›ÜŸÂˆ›Ü›X]Jˆ™˜Z[YÈ™\ÛÛ™HØ[™›Þ[\Ü˜\žH\™XÝÜžHßNˆÙ\œ›ÜŸH‹ˆ]™\Ü^J
-Bˆ
-BˆJOÎÂˆ]^XÝYÜ™Yš^H›Ü›X]J›XÜXÛÛœÛÛK]\^ÛÝÛ™\—ÜYKHŠNÂˆ]˜[YÛ˜[YHH]ˆ™š[WÛ˜[YJ
-Bˆ˜[™Ý[Š˜[Y_˜[YK×ÜÝŠ
-JBˆš\×ÜÛÛYWØ[™
-˜[Y_˜[YKœÝ\×ÝÚ]
-	™^XÝYÜ™Yš^
-JNÂˆ]^XÝYÜ\™[HÝŽ™[ŽŽ[\Ù\Š
-K˜Ø[›ÛšXØ[^™J
-K›X\Ù\œŠ\œ›ÜŸÂˆ›Ü›X]J™˜Z[YÈ™\ÛÛ™HHÞ\Ý[H[\Ü˜\žH\™XÝÜžNˆÙ\œ›ÜŸHŠBˆJOÎÂˆYˆ]˜[YÛ˜[YH]œ\™[
+fn inherited_control() -> UnixStream {
+    // SAFETY: the hidden manager entry point is launched with its owned control
+    // stream on fd 0 and does not otherwise use standard input.
+    unsafe { UnixStream::from_raw_fd(libc::STDIN_FILENO) }
+}
 
-HOHÛÛYJ^XÝYÜ\™[˜\×Ü]
+struct AdoptedTemporaryDirectory(PathBuf);
 
-JH\]š\×Ù\Š
-HÂˆ™]\›ˆ\œŠœØ[™›Þ[\Ü˜\žH\™XÝÜžH\È[˜[YÝÛ™\œÚ\‹×ÜÝš[™Ê
-JNÂˆBˆÚÊÙ[Š]
-JBˆB‚ˆ›ˆ™\Ù\™JÙ[ŠHÂˆÝŽ›Y[NŽ™›Ü™Ù]
-Ù[ŠNÂˆBŸB‚š[\›Ü›ÜˆYÜY[\Ü˜\žQ\™XÝÜžHÂˆ›ˆ›Ü
-	›]]Ù[ŠHÂˆ]ÈHœÎœ™[[Ý™WÙ\—Ø[
-	œÙ[‹Œ
-NÂˆBŸB
+impl AdoptedTemporaryDirectory {
+    fn adopt(path: PathBuf, owner_pid: libc::pid_t) -> Result<Self, String> {
+        let path = path.canonicalize().map_err(|error| {
+            format!(
+                "failed to resolve sandbox temporary directory {}: {error}",
+                path.display()
+            )
+        })?;
+        let expected_prefix = format!("mcp-console-tmp-{owner_pid}-");
+        let valid_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with(&expected_prefix));
+        let expected_parent = std::env::temp_dir().canonicalize().map_err(|error| {
+            format!("failed to resolve the system temporary directory: {error}")
+        })?;
+        if !valid_name || path.parent() != Some(expected_parent.as_path()) || !path.is_dir() {
+            return Err("sandbox temporary directory has invalid ownership".to_string());
+        }
+        Ok(Self(path))
+    }
+
+    fn preserve(self) {
+        std::mem::forget(self);
+    }
+}
+
+impl Drop for AdoptedTemporaryDirectory {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
