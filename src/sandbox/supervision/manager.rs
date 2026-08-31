@@ -179,9 +179,15 @@ impl SandboxManager {
             .map_err(|error| format!("failed to configure sandbox manager control: {error}"))
             .and_then(|()| protocol::read_cleanup_complete(&mut self.control));
         match result {
-            Ok(()) => {
+            Ok(protocol::CleanupAcknowledgement::Complete) => {
                 self.cleanup_complete = true;
                 true
+            }
+            Ok(protocol::CleanupAcknowledgement::TimedOut) => {
+                // Discovery and the first complete signal pass precede the
+                // manager's bounded cleanup grace. Preserve the directory, then
+                // let the bounded manager monitor prove whether cleanup finished.
+                false
             }
             Err(error) => {
                 self.control_error = Some(error);
