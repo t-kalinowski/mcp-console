@@ -2,30 +2,28 @@
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
 send:
-  r: |
-    crash_child <- processx::process$new(
-      "/bin/sleep",
-      "60",
-      stdout = "|",
-      stderr = "|",
-      cleanup = FALSE
+  python: |
+    import os
+    import subprocess
+
+    crash_child = subprocess.Popen(
+        ["/bin/sleep", "60"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
     )
-    writeLines(c(
-      sprintf("worker=%d", Sys.getpid()),
-      sprintf("relay=%d", ps::ps_ppid()),
-      sprintf("child=%d", crash_child$get_pid()),
-      sprintf("temp=%s", Sys.getenv("TMPDIR"))
-    ))
-  requirements:
-    r:
-      - processx
+    print(f"worker={os.getpid()}")
+    print(f"relay={os.getppid()}")
+    print(f"child={crash_child.pid}")
+    print(f"temp={os.environ['TMPDIR']}")
 result:
   content:
     - type: text
       text: |
         worker=<worker pid>
         relay=<relay pid>
-        child=<processx child pid>
+        child=<detached child pid>
         temp=<sandbox temp>
   isError: false
 transcript_normalization:

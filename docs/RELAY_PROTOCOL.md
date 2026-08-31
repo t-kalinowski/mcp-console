@@ -186,7 +186,10 @@ While the generation is live, the server continuously observes descendants from 
 At retirement it first stops the observed tree across process-group and session changes, then always closes the original sandbox process-group lifetime as a backstop for a same-group fork that raced observation, and finally reaps the relay.
 Concurrent or repeated retirement reuses the recorded result and never signals a retired PID or process group again.
 Darwin cannot atomically install this observer at spawn time, so a descendant that becomes orphaned before the initial relay watch or before its fork event can be resolved remains outside the guarantee.
-Failure of the server process itself is also outside this lifetime; crash-independent ownership requires a separate supervision layer.
+This is the server-owned normal lifetime.
+A separate host sandbox manager is committed during relay spawn and independently observes the server and relay tree.
+After readiness it handles abrupt server loss without adding relay messages.
+A descendant that escapes before the manager observes it remains outside that crash-cleanup guarantee.
 
 ## Retirement and failure
 

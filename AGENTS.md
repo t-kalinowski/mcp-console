@@ -54,11 +54,12 @@ They are not MCP, relay, sideband, or worker-stream records.
 
 ## Process and ownership boundaries
 
-MCP Console has three process boundaries:
+MCP Console has four process boundaries:
 
 1. The client and server communicate through MCP JSON-RPC over stdio.
-2. The server and one per-generation relay communicate through the private, ordered JSONL protocol in `docs/RELAY_PROTOCOL.md`.
-3. The relay and worker communicate through the worker sideband plus worker fd 0, 1, and 2 as documented in `docs/WORKER_PROTOCOL.md`.
+2. The server initializes one per-generation host sandbox manager over a private fixed message on manager fd 0, receives its readiness response, and uses the same stream for the bounded normal-retirement disposition handoff.
+3. The server and one per-generation relay communicate through the private, ordered JSONL protocol in `docs/RELAY_PROTOCOL.md`.
+4. The relay and worker communicate through the worker sideband plus worker fd 0, 1, and 2 as documented in `docs/WORKER_PROTOCOL.md`.
 
 Keep these ownership rules intact:
 
@@ -67,6 +68,8 @@ Keep these ownership rules intact:
   It preserves each producer's order and supplies serialized observation order; it does not reconstruct chronology across independent sideband, stdout, and stderr transports.
 - The server owns host-side relay lifetime observation and retirement, worker-generation state, operation admission, output cuts, pending-output budgets, response assembly, delivery ownership, retained requirements, and host resolvers.
   Do not move these responsibilities into the relay.
+- The sandbox manager owns only independent cleanup after abrupt server loss.
+  It observes exact process identities, does not own logical generation state or relay transport, and does not signal an unpinned process group.
 - Restart, replacement, evaluation admission, stdin writes, resolver callbacks, and retained-environment commits are scoped to the worker generation that accepted them.
   Work admitted for an old generation must not reach its replacement.
 - R, Python, and DuckDB dependency resolution runs outside the worker sandbox.
@@ -92,6 +95,7 @@ Keep these ownership rules intact:
 - `src/relay_protocol.rs` — server-relay JSONL message and framing contract.
 - `src/worker_relay.rs` — sandboxed worker launch, I/O forwarding, signaling, shutdown, and reaping.
 - `src/worker_client.rs`, `src/worker_client/` — server-owned environment, evaluation, lifecycle, ordered event dispatch, output tape, and macOS relay transport.
+- `src/sandbox.rs`, `src/sandbox/supervision.rs`, `src/sandbox/supervision/` — sandbox process launch, server-owned descendant observation, and independent crash-manager supervision.
 - `src/worker.rs`, `src/worker/embedded_r.rs`, `src/r_repl.c` — worker-facing facade, current embedded-R backend, cell dispatch, console callbacks, and the C-owned DLL-REPL boundary.
 
 ### Language adapters
@@ -106,7 +110,7 @@ Keep these ownership rules intact:
 
 - `src/resolver.rs`, `src/resolver/` — retained host environments, direct Python-version selection, validation, platform implementations, and resolver process-group lifecycle.
 - `src/resolver/programs/` — compile-time R programs for DuckDB extension preparation, R-library resolution, and `uv` discovery.
-- `src/sandbox.rs`, `src/sandbox/` — platform dispatch and macOS Seatbelt policy.
+- `src/sandbox/macos.rs`, `src/sandbox/file_descriptors.rs` — macOS Seatbelt policy and inherited-descriptor boundary.
 
 ### Tests and development scripts
 

@@ -9,7 +9,7 @@ The material under `design-sketches/` is future or exploratory design, not evide
 
 ## Process layout
 
-MCP Console has three communication boundaries and one host-only resolver path:
+MCP Console has three runtime communication boundaries, one crash-ownership handoff, and one host-only resolver path:
 
 ```text
 MCP client
@@ -19,6 +19,9 @@ mcp-console server                         host, outside the sandbox
     ├── generation, relay lifetime, and operation owner
     ├── retained environments and output
     ├── transcript and image artifacts
+    │
+    ├──── sandbox manager                  host, outside the sandbox
+    │     independent crash observer for one committed generation
     │
     ├──── host resolver processes          outside the sandbox
     │     R, Python, and DuckDB setup
@@ -35,6 +38,7 @@ worker                                     same sandbox and process group
 The server is the MCP stdio process.
 It starts one relay as its direct sandbox child for each worker lifetime.
 While that generation is live, it observes the relay's process tree on the host and retains the direct relay as the root of the generation's cleanup lifetime.
+For each spawned relay, it also commits a host-side sandbox manager with an independent descendant observer before returning the sandboxed child to the worker lifecycle.
 The relay is the sandbox process-group leader and starts the configured worker inside the same sandbox and process group.
 Submitted R, Python, and SQL cells run in the worker, not in the server or a host resolver.
 
@@ -53,6 +57,17 @@ One `send` can poll, provide stdin, prepare requirements, evaluate a cell, inter
 
 This is the only public protocol boundary.
 The client does not communicate directly with a relay, worker, or resolver.
+
+### Server and sandbox manager
+
+The server initializes one sandbox manager per worker generation over the manager's standard input and waits for a one-byte readiness response.
+The fixed private initialization carries the server and relay PIDs, cleanup timeout, and private temporary-directory path.
+The manager snapshots their process start times and validates the resulting exact identities before reporting readiness.
+The same private stream carries a bounded normal-retirement handoff: the server marks retirement, the manager acknowledges cleanup of its observed identities, and the server reaps the direct relay before committing the final remove-or-preserve disposition.
+Outside that handoff, the manager observes server exit and its own view of the relay process tree directly on the host.
+
+This is a crash-ownership handoff rather than part of the relay protocol or the public interface.
+The manager supplies cleanup only after abrupt server loss; the server retains logical generation ownership and the normal retirement path.
 
 ### Server and relay
 
@@ -89,6 +104,17 @@ The server does not execute submitted cells or ask the relay to interpret MCP ca
 At generation retirement, it stops descendants observed across process-group and session changes, closes the original relay process group as a race backstop, and then reaps the direct relay.
 On macOS, the dedicated host observer blocks in `kevent()` on its `kqueue` for descendant process events and an explicit user event used for stop.
 The wait has a one-second maintenance deadline for pruning stale identities; lifecycle control triggers the user event instead of polling a shared stop flag.
+
+### Sandbox manager
+
+The sandbox manager owns only crash-independent cleanup for one committed generation.
+It records descendants by PID and process start time, observes the exact server owner identity, and adopts the private temporary-directory path.
+After server loss it retires only identities its tracker observed and attempts to remove the directory after successful cleanup.
+It does not own session state, operation admission, relay transport, or process-group signaling.
+
+On normal relay exit, the manager preserves the directory for the server's normal success-or-error disposition.
+It remains alive until the server explicitly commits that disposition; loss of server control before retirement starts instead selects crash cleanup.
+If the manager itself fails while the server remains live, the server monitor signals the exact relay identity; the server observer and its pinned process-group backstop complete retirement.
 
 ### Relay
 
@@ -145,6 +171,8 @@ The worker itself starts lazily when an operation first needs it; preparing reta
 An explicit restart starts its replacement eagerly, including when the session had not started a worker before.
 
 For each worker start, the server configures a sandboxed relay from the retained environment.
+It attaches its normal descendant observer, starts the independent sandbox manager, and waits for manager readiness while retaining the direct relay as a waitable child.
+Because Darwin cannot atomically attach either observer at spawn, a descendant that escapes before the manager observes it remains outside crash cleanup even after readiness.
 The relay creates the worker sideband and standard streams, launches the worker, and forwards its startup events.
 The server admits the worker only after the required readiness exchange succeeds.
 

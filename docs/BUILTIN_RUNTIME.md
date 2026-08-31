@@ -499,7 +499,8 @@ The [implemented architecture](ARCHITECTURE.md) describes the session record and
 - SQL previews do not include affected-row counts or total result counts.
 - Only default-device R graphics and open pyplot figures are captured automatically.
 - Normal restart, automatic failure replacement, and orderly server shutdown retire descendants observed from the relay across process-group and session changes.
-  Descendants orphaned before observation and cleanup after a server-process failure remain outside this guarantee.
+  After its host manager reports readiness, abrupt server exit outside an in-progress normal retirement also retires descendants observed by that independent manager and attempts to remove the private temporary directory after successful cleanup.
+  A descendant that becomes orphaned before the manager observes it remains outside crash cleanup even after readiness.
 - Linux and Windows are not supported.
 
 The [architecture](ARCHITECTURE.md) explains lifecycle and process ownership.

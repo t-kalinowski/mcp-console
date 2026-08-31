@@ -4,12 +4,12 @@ mod entrypoint;
 mod protocol;
 
 use super::process::{ProcessIdentity, process_info, signal_process};
-use crate::sandbox::{file_descriptors, platform};
+use crate::sandbox::file_descriptors;
 use std::io::Read;
 use std::net::Shutdown;
 use std::os::fd::OwnedFd;
 use std::os::unix::net::UnixStream;
-use std::os::unix::process::CommandExt as _;
+use std::os::unix::process::{CommandExt as _, ExitStatusExt as _};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
@@ -24,20 +24,25 @@ const FINISH_ALLOWANCE: Duration = Duration::from_secs(1);
 ///
 /// Normal retirement remains in the server's continuously serviced observer.
 /// Once this manager reports readiness, it supplies a second observation path
-/// that survives abrupt loss of the server process. The interval between the
-/// relay spawn and manager readiness remains outside this guarantee.
+/// that survives abrupt loss of the server process. A descendant that escapes
+/// before the manager's post-spawn tracker observes it remains outside this
+/// guarantee even after readiness.
 pub(crate) struct SandboxManager {
     monitor: Option<ManagerMonitor>,
+    control: UnixStream,
     cleanup_timeout: Duration,
+    retirement_started: bool,
+    cleanup_complete: bool,
+    control_error: Option<String>,
 }
 
 struct ManagerMonitor {
     identity: ProcessIdentity,
-    result: Receiver<Result<ManagerExit, String>>,
+    result: Receiver<Result<SandboxManagerExit, String>>,
     thread: Option<JoinHandle<()>>,
 }
 
-enum ManagerExit {
+pub(crate) enum SandboxManagerExit {
     Normal,
     Recovered,
 }
@@ -46,7 +51,6 @@ impl SandboxManager {
     pub(crate) fn start(
         root_pid: u32,
         temporary_directory: &Path,
-        separate_process_group: bool,
         cleanup_timeout: Duration,
     ) -> Result<Self, String> {
         let owner_pid = libc::pid_t::try_from(std::process::id())
@@ -81,6 +85,10 @@ impl SandboxManager {
         let mut child = command
             .spawn()
             .map_err(|error| format!("failed to launch the sandbox manager: {error}"))?;
+        // Command retains its configured stdio after spawn. Drop its copy of
+        // the manager control so pre-readiness manager exit reaches this read
+        // as EOF instead of waiting for the startup deadline.
+        drop(command);
         let manager_pid = child.id() as libc::pid_t;
         let identity = match process_info(manager_pid) {
             Ok(Some(info)) if !info.is_zombie => info.identity,
@@ -108,7 +116,6 @@ impl SandboxManager {
                 owner_pid,
                 root_pid,
                 cleanup_timeout,
-                separate_process_group,
                 temporary_directory,
             )?;
 
@@ -121,55 +128,114 @@ impl SandboxManager {
             }
             Ok(())
         })();
-        let _ = stream.shutdown(Shutdown::Both);
-        drop(stream);
         if let Err(error) = initialization {
+            let _ = stream.shutdown(Shutdown::Both);
             return Err(stop_and_reap(&mut child, error));
         }
 
         Ok(Self {
-            monitor: Some(ManagerMonitor::start(
-                child,
-                identity,
-                root,
-                separate_process_group,
-            )),
+            monitor: Some(ManagerMonitor::start(child, identity, root)),
+            control: stream,
             cleanup_timeout,
+            retirement_started: false,
+            cleanup_complete: false,
+            control_error: None,
         })
     }
 
-    /// Waits for the crash manager after normal in-process retirement has
-    /// stopped the sandbox root and its observed descendants.
-    pub(crate) fn finish(mut self) -> Result<(), String> {
+    /// Marks the beginning of server-owned retirement. If the server exits
+    /// before completing the handoff, the manager preserves the directory.
+    pub(crate) fn begin_retirement(&mut self) -> bool {
+        if self.retirement_started {
+            return true;
+        }
+        if self.control_error.is_some() {
+            return false;
+        }
+        match protocol::write_retirement_started(&mut self.control) {
+            Ok(()) => {
+                self.retirement_started = true;
+                true
+            }
+            Err(error) => {
+                self.control_error = Some(error);
+                false
+            }
+        }
+    }
+
+    /// Waits until the manager has retired every identity it observed.
+    pub(crate) fn prepare_finish(&mut self) -> bool {
+        if self.cleanup_complete {
+            return true;
+        }
+        if !self.begin_retirement() {
+            return false;
+        }
         let timeout = self.cleanup_timeout.saturating_add(FINISH_ALLOWANCE);
-        self.monitor
+        let result = self
+            .control
+            .set_read_timeout(Some(timeout))
+            .map_err(|error| format!("failed to configure sandbox manager control: {error}"))
+            .and_then(|()| protocol::read_cleanup_complete(&mut self.control));
+        match result {
+            Ok(()) => {
+                self.cleanup_complete = true;
+                true
+            }
+            Err(error) => {
+                self.control_error = Some(error);
+                false
+            }
+        }
+    }
+
+    /// Commits the server's final directory disposition and waits for the
+    /// manager process to exit.
+    pub(crate) fn finish(
+        mut self,
+        preserve_temporary_directory: bool,
+    ) -> Result<SandboxManagerExit, String> {
+        if let Err(error) =
+            protocol::write_retirement_disposition(&mut self.control, preserve_temporary_directory)
+            && self.control_error.is_none()
+        {
+            self.control_error = Some(error);
+        }
+        let _ = self.control.shutdown(Shutdown::Both);
+        let timeout = self.cleanup_timeout.saturating_add(FINISH_ALLOWANCE);
+        let monitor = self
+            .monitor
             .take()
             .expect("active sandbox manager should retain its monitor")
-            .finish(timeout)
-            .map(|_| ())
+            .finish(timeout);
+        match monitor {
+            Ok(SandboxManagerExit::Recovered) => Ok(SandboxManagerExit::Recovered),
+            Ok(SandboxManagerExit::Normal) => self
+                .control_error
+                .map_or(Ok(SandboxManagerExit::Normal), Err),
+            Err(monitor_error) => Err(with_prior_error(self.control_error, monitor_error)),
+        }
     }
 }
 
 impl ManagerMonitor {
-    fn start(
-        mut child: Child,
-        identity: ProcessIdentity,
-        root: ProcessIdentity,
-        separate_process_group: bool,
-    ) -> Self {
+    fn start(mut child: Child, identity: ProcessIdentity, root: ProcessIdentity) -> Self {
         let (result_sender, result) = mpsc::channel();
         let thread = std::thread::spawn(move || {
             let result = match child.wait() {
-                Ok(status) if status.success() => Ok(ManagerExit::Normal),
-                Ok(status) => recover_after_manager_failure(
+                Ok(status) if status.success() => Ok(SandboxManagerExit::Normal),
+                Ok(status) if status.signal().is_some() => recover_after_manager_signal(
                     format!("sandbox manager exited with status {status}"),
                     root,
-                    separate_process_group,
                 ),
-                Err(error) => recover_after_manager_failure(
+                Ok(status) => fail_after_manager_error(
+                    format!("sandbox manager exited with status {status}"),
+                    root,
+                ),
+                Err(error) => fail_after_manager_error(
                     format!("failed to wait for sandbox manager: {error}"),
                     root,
-                    separate_process_group,
                 ),
             };
             let _ = result_sender.send(result);
@@ -181,10 +247,10 @@ impl ManagerMonitor {
         }
     }
 
-    fn finish(mut self, timeout: Duration) -> Result<ManagerExit, String> {
+    fn finish(mut self, timeout: Duration) -> Result<SandboxManagerExit, String> {
         let mut error = None;
         let result = match self.result.recv_timeout(timeout) {
-            Ok(result) => result,
+            Ok(result) => Some(result),
             Err(RecvTimeoutError::Timeout) => {
                 error = Some("timed out waiting for sandbox manager cleanup".to_string());
                 if let Err(signal_error) = signal_process(self.identity, libc::SIGKILL) {
@@ -193,27 +259,43 @@ impl ManagerMonitor {
                         format!("failed to stop sandbox manager: {signal_error}"),
                     ));
                 }
-                self.result.recv().unwrap_or_else(|_| {
-                    Err("sandbox manager monitor ended without a result".to_string())
-                })
+                match self.result.recv_timeout(FINISH_ALLOWANCE) {
+                    Ok(result) => Some(result),
+                    Err(RecvTimeoutError::Disconnected) => Some(Err(
+                        "sandbox manager monitor ended without a result".to_string(),
+                    )),
+                    Err(RecvTimeoutError::Timeout) => {
+                        error = Some(with_prior_error(
+                            error,
+                            "sandbox manager did not stop after forced termination".to_string(),
+                        ));
+                        None
+                    }
+                }
             }
-            Err(RecvTimeoutError::Disconnected) => {
-                Err("sandbox manager monitor ended without a result".to_string())
-            }
+            Err(RecvTimeoutError::Disconnected) => Some(Err(
+                "sandbox manager monitor ended without a result".to_string(),
+            )),
         };
-        let exit = match result {
-            Ok(exit) => Some(exit),
-            Err(result_error) => {
+        let mut exit = None;
+        let can_join = match result {
+            Some(Ok(manager_exit)) => {
+                exit = Some(manager_exit);
+                true
+            }
+            Some(Err(result_error)) => {
                 error = Some(with_prior_error(error, result_error));
-                None
+                true
             }
+            None => false,
         };
-        if self
-            .thread
-            .take()
-            .expect("sandbox manager monitor thread should be joinable")
-            .join()
-            .is_err()
+        if can_join
+            && self
+                .thread
+                .take()
+                .expect("sandbox manager monitor thread should be joinable")
+                .join()
+                .is_err()
         {
             error = Some(with_prior_error(
                 error,
@@ -227,24 +309,25 @@ impl ManagerMonitor {
     }
 }
 
-fn recover_after_manager_failure(
+fn recover_after_manager_signal(
     manager_error: String,
     root: ProcessIdentity,
-    separate_process_group: bool,
-) -> Result<ManagerExit, String> {
-    let mut recovery_error = None;
-    if let Err(error) = signal_process(root, libc::SIGKILL) {
-        recovery_error = Some(error);
+) -> Result<SandboxManagerExit, String> {
+    match signal_process(root, libc::SIGKILL) {
+        Ok(_) => Ok(SandboxManagerExit::Recovered),
+        Err(recovery_error) => Err(format!(
+            "{manager_error}; additionally, manager recovery failed: {recovery_error}"
+        )),
     }
-    if separate_process_group && let Err(error) = platform::kill_process_group(root.pid as u32) {
-        recovery_error = Some(with_prior_error(
-            recovery_error,
-            format!("failed to stop sandbox process group: {error}"),
-        ));
-    }
-    match recovery_error {
-        None => Ok(ManagerExit::Recovered),
-        Some(recovery_error) => Err(format!(
+}
+
+fn fail_after_manager_error(
+    manager_error: String,
+    root: ProcessIdentity,
+) -> Result<SandboxManagerExit, String> {
+    match signal_process(root, libc::SIGKILL) {
+        Ok(_) => Err(manager_error),
+        Err(recovery_error) => Err(format!(
             "{manager_error}; additionally, manager recovery failed: {recovery_error}"
         )),
     }

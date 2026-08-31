@@ -31,23 +31,9 @@ transcript_normalization:
   process_ids: omitted
   sandbox_temporary_directory: omitted
 ---
+server_signal: SIGSTOP
+---
 relay_signal: SIGKILL
 ---
-send: {}
-result:
-  content:
-    - type: text
-      text: |-
-        [worker relay stdout closed before retirement completed]
-        [worker stopped: in-memory state lost]
-  isError: true
----
-send:
-  r: writeLines("replacement ready")
-result:
-  content:
-    - type: text
-      text: |
-        [starting new worker]
-        replacement ready
-  isError: false
+server_signal: SIGKILL
+server_returncode: -9

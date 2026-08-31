@@ -66,6 +66,18 @@ static void mark(const char *name) {
   }
 }
 
+static void notify(const char *name) {
+  const char *path = getenv(name);
+  if (path == NULL) {
+    return;
+  }
+  int descriptor = open(path, O_WRONLY | O_NONBLOCK);
+  if (descriptor >= 0) {
+    (void)write(descriptor, "1", 1);
+    close(descriptor);
+  }
+}
+
 static int delayed_poll(struct pollfd *descriptors, nfds_t count, int timeout) {
   poll_function poll_next = next_poll();
   if (poll_next == NULL) {
@@ -95,7 +107,7 @@ static int delayed_poll(struct pollfd *descriptors, nfds_t count, int timeout) {
     }
     descriptors[1].revents = cancellation.revents;
   }
-  mark("MCP_CONSOLE_TEST_POLL_CANCEL_READY");
+  notify("MCP_CONSOLE_TEST_POLL_CANCEL_READY");
   return (descriptors[0].revents != 0) + (descriptors[1].revents != 0);
 }
 

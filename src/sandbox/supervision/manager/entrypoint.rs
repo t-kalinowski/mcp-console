@@ -2,7 +2,6 @@ use super::super::process::{ProcessIdentity, process_info};
 use super::super::process_tracker::{DescendantTracker, EventWait};
 use super::super::process_tree::PROCESS_REAP_EVENT;
 use super::protocol;
-use crate::sandbox::platform;
 use std::fs;
 use std::io::Write;
 use std::os::fd::{AsRawFd, FromRawFd};
@@ -18,7 +17,6 @@ pub(super) fn run() -> Result<(), String> {
         owner_pid,
         root_pid,
         cleanup_timeout,
-        separate_process_group,
         temporary_directory,
     } = protocol::read(&mut stream)?;
 
@@ -40,106 +38,69 @@ pub(super) fn run() -> Result<(), String> {
             "sandbox root {root_pid} is not a child of manager owner {owner_pid}"
         ));
     }
-    let root = root_info.identity;
-
     let tracker =
         DescendantTracker::start(root_pid).map_err(|failure| failure.retire(cleanup_timeout))?;
     let temporary_directory = match AdoptedTemporaryDirectory::adopt(temporary_directory, owner_pid)
     {
         Ok(directory) => directory,
         Err(error) => {
-            return with_cleanup(
-                error,
-                tracker,
-                root,
-                separate_process_group,
-                cleanup_timeout,
-            );
+            return with_cleanup(error, tracker, false, cleanup_timeout);
         }
     };
     if let Err(error) = register_owner_exit(&tracker, owner) {
-        return finish_startup_failure(
-            error,
-            tracker,
-            root,
-            separate_process_group,
-            temporary_directory,
-            cleanup_timeout,
-        );
+        return finish_startup_failure(error, tracker, temporary_directory, cleanup_timeout);
     }
     if let Err(error) = stream.write_all(&[READY]) {
         return finish_startup_failure(
             format!("failed to report sandbox manager readiness: {error}"),
             tracker,
-            root,
-            separate_process_group,
             temporary_directory,
             cleanup_timeout,
         );
     }
-    drop(stream);
-
-    let result = supervise_owner(
-        tracker,
-        owner,
-        root,
-        separate_process_group,
-        cleanup_timeout,
-    );
-    if result.is_err() {
-        temporary_directory.preserve();
+    match supervise_owner(tracker, owner, &mut stream, cleanup_timeout) {
+        Ok(TemporaryDirectoryDisposition::Remove) => Ok(()),
+        Ok(TemporaryDirectoryDisposition::Preserve) => {
+            temporary_directory.preserve();
+            Ok(())
+        }
+        Err(error) => {
+            temporary_directory.preserve();
+            Err(error)
+        }
     }
-    result
+}
+
+enum TemporaryDirectoryDisposition {
+    Remove,
+    Preserve,
 }
 
 fn supervise_owner(
     mut tracker: DescendantTracker,
     owner: ProcessIdentity,
-    root: ProcessIdentity,
-    separate_process_group: bool,
+    stream: &mut UnixStream,
     cleanup_timeout: Duration,
-) -> Result<(), String> {
+) -> Result<TemporaryDirectoryDisposition, String> {
     loop {
         match identity_is_live(owner) {
             Ok(false) => {
-                return finish_tracker(
-                    tracker,
-                    false,
-                    root,
-                    separate_process_group,
-                    cleanup_timeout,
-                );
+                finish_tracker(tracker, false, cleanup_timeout)?;
+                return await_temporary_directory_disposition(stream);
             }
             Ok(true) => {}
             Err(error) => {
-                return with_cleanup(
-                    error,
-                    tracker,
-                    root,
-                    separate_process_group,
-                    cleanup_timeout,
-                );
+                return with_cleanup(error, tracker, false, cleanup_timeout);
             }
         }
         match tracker.root_has_exited() {
             Ok(true) => {
-                return finish_tracker(
-                    tracker,
-                    true,
-                    root,
-                    separate_process_group,
-                    cleanup_timeout,
-                );
+                finish_tracker(tracker, true, cleanup_timeout)?;
+                return await_temporary_directory_disposition(stream);
             }
             Ok(false) => {}
             Err(error) => {
-                return with_cleanup(
-                    error,
-                    tracker,
-                    root,
-                    separate_process_group,
-                    cleanup_timeout,
-                );
+                return with_cleanup(error, tracker, false, cleanup_timeout);
             }
         }
 
@@ -149,20 +110,50 @@ fn supervise_owner(
                 return with_cleanup(
                     "sandbox manager process wait unexpectedly timed out".to_string(),
                     tracker,
-                    root,
-                    separate_process_group,
+                    false,
                     cleanup_timeout,
                 );
             }
             Err(error) => {
-                return with_cleanup(
-                    error,
-                    tracker,
-                    root,
-                    separate_process_group,
-                    cleanup_timeout,
+                return with_cleanup(error, tracker, false, cleanup_timeout);
+            }
+        }
+    }
+}
+
+fn await_temporary_directory_disposition(
+    stream: &mut UnixStream,
+) -> Result<TemporaryDirectoryDisposition, String> {
+    let mut retirement_started = false;
+    loop {
+        match protocol::read_retirement_command(stream)? {
+            Some(protocol::RetirementCommand::Started) if !retirement_started => {
+                retirement_started = true;
+                if protocol::write_cleanup_complete(stream).is_err() {
+                    return Ok(TemporaryDirectoryDisposition::Preserve);
+                }
+            }
+            Some(protocol::RetirementCommand::Started) => {
+                return Err("sandbox manager received duplicate retirement start".to_string());
+            }
+            Some(protocol::RetirementCommand::RemoveTemporaryDirectory) if retirement_started => {
+                return Ok(TemporaryDirectoryDisposition::Remove);
+            }
+            Some(protocol::RetirementCommand::PreserveTemporaryDirectory) if retirement_started => {
+                return Ok(TemporaryDirectoryDisposition::Preserve);
+            }
+            Some(
+                protocol::RetirementCommand::RemoveTemporaryDirectory
+                | protocol::RetirementCommand::PreserveTemporaryDirectory,
+            ) => {
+                return Err(
+                    "sandbox manager received a disposition before retirement started".to_string(),
                 );
             }
+            None if retirement_started => {
+                return Ok(TemporaryDirectoryDisposition::Preserve);
+            }
+            None => return Ok(TemporaryDirectoryDisposition::Remove),
         }
     }
 }
@@ -206,20 +197,13 @@ fn identity_is_live(identity: ProcessIdentity) -> Result<bool, String> {
     )
 }
 
-fn with_cleanup(
+fn with_cleanup<T>(
     error: String,
     tracker: DescendantTracker,
-    root: ProcessIdentity,
-    separate_process_group: bool,
+    root_exited: bool,
     cleanup_timeout: Duration,
-) -> Result<(), String> {
-    match finish_tracker(
-        tracker,
-        false,
-        root,
-        separate_process_group,
-        cleanup_timeout,
-    ) {
+) -> Result<T, String> {
+    match finish_tracker(tracker, root_exited, cleanup_timeout) {
         Ok(()) => Err(error),
         Err(cleanup_error) => Err(format!("{error}; additionally, {cleanup_error}")),
     }
@@ -228,37 +212,18 @@ fn with_cleanup(
 fn finish_tracker(
     tracker: DescendantTracker,
     root_exited: bool,
-    root: ProcessIdentity,
-    separate_process_group: bool,
     cleanup_timeout: Duration,
 ) -> Result<(), String> {
-    let mut error = tracker.terminate(root_exited, cleanup_timeout).err();
-    if separate_process_group
-        && let Err(group_error) = platform::kill_process_group(root.pid as u32)
-    {
-        error = Some(super::with_prior_error(
-            error,
-            format!("failed to stop sandbox process group: {group_error}"),
-        ));
-    }
-    error.map_or(Ok(()), Err)
+    tracker.terminate(root_exited, cleanup_timeout)
 }
 
 fn finish_startup_failure(
     error: String,
     tracker: DescendantTracker,
-    root: ProcessIdentity,
-    separate_process_group: bool,
     temporary_directory: AdoptedTemporaryDirectory,
     cleanup_timeout: Duration,
 ) -> Result<(), String> {
-    let result = with_cleanup(
-        error,
-        tracker,
-        root,
-        separate_process_group,
-        cleanup_timeout,
-    );
+    let result = with_cleanup(error, tracker, false, cleanup_timeout);
     if result.is_err() {
         temporary_directory.preserve();
     }
