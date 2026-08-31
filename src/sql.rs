@@ -1,5 +1,5 @@
-mod dbapi;
-mod dbi;
+mod py_dbapi;
+mod r_dbi;
 
 /// Worker-facing SQL runtime router.
 ///
@@ -7,28 +7,28 @@ mod dbi;
 /// in CPython. Rust chooses the active provider for each SQL cell without
 /// converting connection objects or result rows between the runtimes.
 pub(crate) struct Bridge {
-    dbi: dbi::Backend,
+    r_dbi: r_dbi::Backend,
 }
 
 impl Bridge {
     pub(crate) fn initialize() -> Result<Self, String> {
         Ok(Self {
-            dbi: dbi::Backend::initialize()?,
+            r_dbi: r_dbi::Backend::initialize()?,
         })
     }
 
     pub(crate) fn evaluate(&mut self, source: &str) -> Result<(), String> {
-        match dbapi::dispatch(source)? {
-            dbapi::Provider::Python => Ok(()),
-            dbapi::Provider::Managed => {
-                self.dbi.restore_managed()?;
-                self.dbi.evaluate(source)
+        match py_dbapi::dispatch(source)? {
+            py_dbapi::Provider::Python => Ok(()),
+            py_dbapi::Provider::Managed => {
+                self.r_dbi.restore_managed()?;
+                self.r_dbi.evaluate(source)
             }
-            dbapi::Provider::R => self.dbi.evaluate(source),
+            py_dbapi::Provider::R => self.r_dbi.evaluate(source),
         }
     }
 }
 
 pub(crate) fn install_python_runtime() -> Result<(), String> {
-    dbapi::install_runtime()
+    py_dbapi::install_runtime()
 }
