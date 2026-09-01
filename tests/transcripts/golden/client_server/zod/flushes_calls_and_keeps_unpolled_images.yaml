@@ -35,6 +35,7 @@ live journal:
   after first call completed:
     - session_started
     - tool_call
+    - cell_output
     - tool_result
   unpolled image:
     event: artifact_created

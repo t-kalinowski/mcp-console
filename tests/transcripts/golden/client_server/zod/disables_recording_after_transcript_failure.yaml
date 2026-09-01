@@ -37,6 +37,7 @@ result:
 journal after failure:
   - session_started
   - tool_call
+  - cell_output
   - tool_result
   - tool_call
 complete final line: true
@@ -44,4 +45,3 @@ post-failure append: false
 server stderr: >-
   mcp-console: transcript recording disabled: <artifact persistence
   failed>
-...

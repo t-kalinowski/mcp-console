@@ -499,6 +499,16 @@ After that first overflow, all later console text, raw standard-stream output, a
 Lifecycle and control events remain available.
 The separate 12 KiB SQL-preview limit is applied before SQL text enters these budgets.
 
+For each recorded evaluation, the server also creates `outputs/call-NNNNNN.log` in the private session directory when the worker operation is admitted.
+It appends console text and direct stdout and stderr bytes in server observation order before applying the pending-output limits, and flushes the file before each response cut and at evaluation completion.
+Direct standard-stream bytes are preserved as written, so a worker that writes invalid UTF-8 can produce a log that is not UTF-8 text.
+Images and server-owned notices are not written to this file.
+
+Each cell output file retains at most 1 GiB.
+The server continues draining worker output after the file limit or a write failure and reports that later text is being permanently discarded.
+When pending text is omitted but remains in the file, the truncation notice includes its workspace-relative path as `retained text`.
+Later polls still return only newly observed output; reading or searching the file does not change polling state.
+
 When session recording is active, an evaluation image that passes the pending-output limits is persisted immediately and remains associated with the `send` call that started the evaluation.
 It can therefore appear in the recording before a later poll returns it.
 By contrast, an image produced while the worker is idle or during dependency preparation is persisted only when a later tool response returns it, and is associated with that responding call.
@@ -511,6 +521,8 @@ The [implemented architecture](ARCHITECTURE.md) describes the session record and
 - Cells run sequentially; lifecycle control may overlap the operation it interrupts or replaces.
 - Restart and failure replacement discard every in-memory language, database, debugger, graphics, and unread-input state.
 - No general worker-frame or stdin-queue size limit is defined.
+- Cell output has a per-evaluation limit but no aggregate session quota or automatic retention cleanup yet.
+- The general inline output limit remains an 8 MiB prefix; smaller head-and-tail response projection is not implemented yet.
 - Direct fd-0 readers do not participate in managed input notifications.
 - Managed DuckDB cannot query Python objects until they are bound as R data; a selected Python driver sees only objects registered on its own connection.
 - SQL previews do not include affected-row counts or total result counts.

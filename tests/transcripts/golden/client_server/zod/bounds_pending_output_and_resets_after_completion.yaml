@@ -8,7 +8,7 @@ result:
     - type: text
       text: |-
         <retained 8388608 text bytes>
-        [output truncated: omitted 7 text bytes and 0 encoded image bytes across 1 event]
+        [output truncated: omitted 7 text bytes and 0 encoded image bytes across 1 event; retained text: .mcp-console/sessions/<run ID>/outputs/call-000001.log]
   isError: false
 ---
 send:
@@ -19,4 +19,3 @@ result:
       text: |
         zod: echo
   isError: false
-...

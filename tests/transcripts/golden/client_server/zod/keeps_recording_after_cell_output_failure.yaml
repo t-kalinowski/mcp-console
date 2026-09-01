@@ -1,0 +1,30 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+send:
+  r: echo first
+result:
+  content:
+    - type: text
+      text: |
+        zod: first
+  isError: false
+---
+send:
+  r: echo second
+result:
+  content:
+    - type: text
+      text: |
+        [cell output file was not created: <output path is not a directory>; text omitted from inline responses will be permanently discarded]
+        zod: second
+  isError: false
+---
+send:
+  r: echo third
+result:
+  content:
+    - type: text
+      text: |
+        zod: third
+  isError: false

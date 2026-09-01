@@ -173,11 +173,9 @@ impl WorkerOperationState {
             kind: OperationKind::Cell(evaluation.clone()),
             result: Some(result),
         });
-        if capture_idle_prelude {
-            evaluation.capture_prelude_before(|| state.operation = operation.take())?;
-        } else {
+        evaluation.capture_prelude_before(capture_idle_prelude, || {
             state.operation = operation.take();
-        }
+        })?;
         Ok(receiver)
     }
 
