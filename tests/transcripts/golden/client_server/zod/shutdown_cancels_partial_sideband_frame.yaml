@@ -11,4 +11,3 @@ result:
 
         [running; poll with an empty send]
   isError: false
-...

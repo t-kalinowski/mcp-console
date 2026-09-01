@@ -44,8 +44,7 @@ result:
       text: "[requirements not prepared: worker is starting]"
   isError: true
 ---
-send:
-  timeout_ms: 3000
+send: {}
 result:
   content:
     - type: text

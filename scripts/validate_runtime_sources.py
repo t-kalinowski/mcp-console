@@ -19,6 +19,7 @@ EXPECTED_SOURCES = {
     "src/resolver/programs/r_library.R",
     "src/resolver/programs/uv_binary.R",
     "src/sql/bridge.R",
+    "src/sql/dbapi.py",
 }
 INCLUDE_PATTERN = re.compile(
     r'include_str!\(\s*"([^"\n]+\.(?:R|py))"\s*\)', re.MULTILINE

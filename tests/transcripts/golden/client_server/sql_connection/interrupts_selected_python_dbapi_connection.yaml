@@ -1,0 +1,75 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+send:
+  python: |
+    import os
+    import time
+    from pathlib import Path
+
+
+    class InterruptibleConnection:
+        def __init__(self):
+            self.description = None
+            self.rows = []
+
+        def cursor(self):
+            return self
+
+        def execute(self, source):
+            if source == "WAIT":
+                Path(
+                    os.environ["TMPDIR"],
+                    "python-sql-interrupt-started",
+                ).touch()
+                while True:
+                    time.sleep(60)
+            self.description = (("answer",),)
+            self.rows = [(42,)]
+            return self
+
+        def fetchmany(self, size):
+            return self.rows[:size]
+
+
+    console_sql_connection(InterruptibleConnection())
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  sql: WAIT
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running; poll with an empty send]
+  isError: false
+---
+send:
+  control: interrupt
+  timeout_ms: 30000
+result:
+  content:
+    - type: text
+      text: |
+        Traceback (most recent call last):
+          File "<string>", line 216, in _evaluate
+          File "<mcp-console:python:e1>", line 21, in execute
+        KeyboardInterrupt
+  isError: false
+---
+send:
+  sql: ANSWER
+result:
+  content:
+    - type: text
+      text: |
+        answer
+        ------
+        42
+  isError: false

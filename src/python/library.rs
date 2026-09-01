@@ -2,6 +2,9 @@ use std::ffi::{CStr, CString};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+// A loaded handle is retained for the process lifetime. SQL calls copy its
+// immutable function table under this lock, then release the guard before
+// invoking Python so Python-to-R callbacks can re-enter library access.
 static PYTHON_LIBRARY: Mutex<Option<LoadedLibrary>> = Mutex::new(None);
 
 type PyIsInitialized = unsafe extern "C" fn() -> libc::c_int;
@@ -18,6 +21,8 @@ type PyGilStateRelease = unsafe extern "C" fn(PyGilState);
 type PyImportAddModule = unsafe extern "C" fn(*const libc::c_char) -> *mut PyObject;
 type PyModuleGetDict = unsafe extern "C" fn(*mut PyObject) -> *mut PyObject;
 type PyDictNew = unsafe extern "C" fn() -> *mut PyObject;
+type PyDictGetItemString =
+    unsafe extern "C" fn(*mut PyObject, *const libc::c_char) -> *mut PyObject;
 type PyRunStringFlags = unsafe extern "C" fn(
     *const libc::c_char,
     libc::c_int,
@@ -25,10 +30,22 @@ type PyRunStringFlags = unsafe extern "C" fn(
     *mut PyObject,
     *mut libc::c_void,
 ) -> *mut PyObject;
+type PyObjectCallNoArgs = unsafe extern "C" fn(*mut PyObject) -> *mut PyObject;
+type PyObjectCallFunctionObjArgs = unsafe extern "C" fn(*mut PyObject, ...) -> *mut PyObject;
+type PyUnicodeFromStringAndSize = unsafe extern "C" fn(*const libc::c_char, isize) -> *mut PyObject;
+type PyLongAsLong = unsafe extern "C" fn(*mut PyObject) -> libc::c_long;
 type PyDecRef = unsafe extern "C" fn(*mut PyObject);
+type PyErrFetch = unsafe extern "C" fn(*mut *mut PyObject, *mut *mut PyObject, *mut *mut PyObject);
+type PyErrNormalizeException =
+    unsafe extern "C" fn(*mut *mut PyObject, *mut *mut PyObject, *mut *mut PyObject);
+type PyErrDisplay = unsafe extern "C" fn(*mut PyObject, *mut PyObject, *mut PyObject);
+type PyErrClear = unsafe extern "C" fn();
 type PyErrPrint = unsafe extern "C" fn();
 
 const PY_FILE_INPUT: libc::c_int = 257;
+const SQL_PROVIDER_R: libc::c_long = 0;
+const SQL_PROVIDER_MANAGED: libc::c_long = 1;
+const SQL_PROVIDER_HANDLED: libc::c_long = 2;
 
 struct LoadedLibrary {
     path: PathBuf,
@@ -36,8 +53,10 @@ struct LoadedLibrary {
     api: PythonApi,
     interpreter: Interpreter,
     configuration: Option<Configuration>,
+    sql_runtime_installed: bool,
 }
 
+#[derive(Clone, Copy)]
 struct PythonApi {
     is_initialized: PyIsInitialized,
     set_program_name: PySetProgramName,
@@ -51,8 +70,17 @@ struct PythonApi {
     import_add_module: PyImportAddModule,
     module_get_dict: PyModuleGetDict,
     dict_new: PyDictNew,
+    dict_get_item_string: PyDictGetItemString,
     run_string_flags: PyRunStringFlags,
+    call_no_args: PyObjectCallNoArgs,
+    call_function_obj_args: PyObjectCallFunctionObjArgs,
+    unicode_from_string_and_size: PyUnicodeFromStringAndSize,
+    long_as_long: PyLongAsLong,
     dec_ref: PyDecRef,
+    err_fetch: PyErrFetch,
+    err_normalize_exception: PyErrNormalizeException,
+    err_display: PyErrDisplay,
+    err_clear: PyErrClear,
     err_print: PyErrPrint,
 }
 
@@ -92,6 +120,40 @@ pub(super) fn install_runtime(source: &str) -> Result<(), String> {
         .as_mut()
         .ok_or_else(|| "Python shared library is not loaded".to_string())?;
     library.install_runtime(source)
+}
+
+pub(super) fn install_sql_runtime(source: &str) -> Result<(), String> {
+    let mut library_slot = PYTHON_LIBRARY
+        .lock()
+        .map_err(|_| "Python shared library state is unavailable".to_string())?;
+    let library = library_slot
+        .as_mut()
+        .ok_or_else(|| "Python shared library is not loaded".to_string())?;
+    library.install_sql_runtime(source)
+}
+
+pub(super) fn dispatch_sql(source: &str) -> Result<super::SqlProvider, String> {
+    let Some(api) = installed_sql_api()? else {
+        return Ok(super::SqlProvider::R);
+    };
+    api.with_gil(|api| api.call_sql_dispatch(source))
+}
+
+pub(super) fn use_r_sql() -> Result<(), String> {
+    let Some(api) = installed_sql_api()? else {
+        return Ok(());
+    };
+    api.with_gil(|api| api.call_unit(c"_mcp_console_sql", c"use_r"))
+}
+
+fn installed_sql_api() -> Result<Option<PythonApi>, String> {
+    let library_slot = PYTHON_LIBRARY
+        .lock()
+        .map_err(|_| "Python shared library state is unavailable".to_string())?;
+    let Some(library) = library_slot.as_ref() else {
+        return Ok(None);
+    };
+    Ok(library.sql_runtime_installed.then_some(library.api))
 }
 
 pub(super) fn finish_initialization() -> Result<(), String> {
@@ -156,6 +218,7 @@ impl LoadedLibrary {
             api,
             interpreter,
             configuration: None,
+            sql_runtime_installed: false,
         })
     }
 
@@ -244,22 +307,24 @@ impl LoadedLibrary {
     }
 
     fn install_runtime(&self, source: &str) -> Result<(), String> {
-        // SAFETY: The resolved function has no preconditions.
-        if unsafe { (self.api.is_initialized)() } == 0 {
-            return Err("Python interpreter is not initialized".to_string());
-        }
         let source = CString::new(source)
             .map_err(|_| "embedded Python runtime source contains NUL".to_string())?;
+        self.api.with_gil(|api| {
+            // SAFETY: The GIL is held and the source is a valid NUL-terminated
+            // buffer for the duration of the call.
+            unsafe { api.run_runtime(&source) }
+        })
+    }
 
-        // SAFETY: CPython is initialized. PyGILState_Ensure permits this call
-        // both while reticulate holds the GIL and after it has released it.
-        let gil_state = unsafe { (self.api.gil_state_ensure)() };
-        // SAFETY: The GIL is held and the source is a valid NUL-terminated
-        // buffer for the duration of the call.
-        let result = unsafe { self.api.run_runtime(&source) };
-        // SAFETY: This state was returned by the matching ensure call above.
-        unsafe { (self.api.gil_state_release)(gil_state) };
-        result
+    fn install_sql_runtime(&mut self, source: &str) -> Result<(), String> {
+        let source = CString::new(source)
+            .map_err(|_| "embedded Python SQL runtime source contains NUL".to_string())?;
+        self.api.with_gil(|api| {
+            // SAFETY: The GIL is held and both strings are valid for the call.
+            unsafe { api.run_module(c"_mcp_console_sql", &source) }
+        })?;
+        self.sql_runtime_installed = true;
+        Ok(())
     }
 
     fn finish_initialization(&mut self) -> Result<(), String> {
@@ -291,6 +356,23 @@ impl LoadedLibrary {
 }
 
 impl PythonApi {
+    fn with_gil<T>(
+        &self,
+        operation: impl FnOnce(&PythonApi) -> Result<T, String>,
+    ) -> Result<T, String> {
+        // SAFETY: The resolved function has no preconditions.
+        if unsafe { (self.is_initialized)() } == 0 {
+            return Err("Python interpreter is not initialized".to_string());
+        }
+        // SAFETY: CPython is initialized. PyGILState_Ensure permits this call
+        // both while reticulate holds the GIL and after it has released it.
+        let gil_state = unsafe { (self.gil_state_ensure)() };
+        let result = operation(self);
+        // SAFETY: This state was returned by the matching ensure call above.
+        unsafe { (self.gil_state_release)(gil_state) };
+        result
+    }
+
     unsafe fn run_runtime(&self, source: &CStr) -> Result<(), String> {
         // Match reticulate::py_run_string(local = TRUE): definitions are
         // isolated in a fresh locals dictionary while functions retain the
@@ -333,6 +415,151 @@ impl PythonApi {
         Ok(())
     }
 
+    unsafe fn run_module(&self, name: &CStr, source: &CStr) -> Result<(), String> {
+        let module = unsafe { (self.import_add_module)(name.as_ptr()) };
+        if module.is_null() {
+            unsafe { (self.err_print)() };
+            return Err(format!(
+                "failed to create Python module `{}`",
+                name.to_string_lossy()
+            ));
+        }
+        let namespace = unsafe { (self.module_get_dict)(module) };
+        if namespace.is_null() {
+            unsafe { (self.err_print)() };
+            return Err(format!(
+                "failed to access Python module `{}`",
+                name.to_string_lossy()
+            ));
+        }
+        let result = unsafe {
+            (self.run_string_flags)(
+                source.as_ptr(),
+                PY_FILE_INPUT,
+                namespace,
+                namespace,
+                std::ptr::null_mut(),
+            )
+        };
+        if result.is_null() {
+            unsafe { (self.err_print)() };
+            return Err(format!(
+                "failed to install Python module `{}`",
+                name.to_string_lossy()
+            ));
+        }
+        unsafe { (self.dec_ref)(result) };
+        Ok(())
+    }
+
+    fn call_unit(&self, module: &CStr, name: &CStr) -> Result<(), String> {
+        // SAFETY: The GIL is held for the complete call and reference release.
+        unsafe {
+            let function = self.function(module, name)?;
+            let result = (self.call_no_args)(function);
+            if result.is_null() {
+                self.display_pending_exception();
+                return Err(python_function_error(module, name));
+            }
+            (self.dec_ref)(result);
+            Ok(())
+        }
+    }
+
+    fn call_sql_dispatch(&self, source: &str) -> Result<super::SqlProvider, String> {
+        // SAFETY: The GIL is held and PyUnicode_FromStringAndSize copies the
+        // UTF-8 source before the Rust buffer can be released.
+        unsafe {
+            let function = self.function(c"_mcp_console_sql", c"dispatch")?;
+            let argument =
+                (self.unicode_from_string_and_size)(source.as_ptr().cast(), source.len() as isize);
+            if argument.is_null() {
+                (self.err_print)();
+                return Err("failed to create Python SQL source string".to_string());
+            }
+            let result =
+                (self.call_function_obj_args)(function, argument, std::ptr::null_mut::<PyObject>());
+            (self.dec_ref)(argument);
+            if result.is_null() {
+                // Database errors are normally caught by the Python adapter.
+                // Escaping exceptions such as KeyboardInterrupt remain ordinary
+                // console output and must not fall through to an R provider.
+                self.display_pending_exception();
+                return Ok(super::SqlProvider::Handled);
+            }
+            let provider = (self.long_as_long)(result);
+            (self.dec_ref)(result);
+            match provider {
+                SQL_PROVIDER_R => Ok(super::SqlProvider::R),
+                SQL_PROVIDER_MANAGED => Ok(super::SqlProvider::Managed),
+                SQL_PROVIDER_HANDLED => Ok(super::SqlProvider::Handled),
+                _ => {
+                    if provider == -1 {
+                        (self.err_print)();
+                    }
+                    Err("Python SQL dispatch returned an invalid provider".to_string())
+                }
+            }
+        }
+    }
+
+    fn display_pending_exception(&self) {
+        // PyErr_Print exits the process for SystemExit. Fetch and display the
+        // pending exception directly so every Python language exception remains
+        // ordinary worker output.
+        unsafe {
+            let mut exception_type = std::ptr::null_mut();
+            let mut exception_value = std::ptr::null_mut();
+            let mut traceback = std::ptr::null_mut();
+            (self.err_fetch)(&mut exception_type, &mut exception_value, &mut traceback);
+            if !exception_type.is_null() {
+                (self.err_normalize_exception)(
+                    &mut exception_type,
+                    &mut exception_value,
+                    &mut traceback,
+                );
+                if !exception_type.is_null() && !exception_value.is_null() {
+                    (self.err_display)(exception_type, exception_value, traceback);
+                }
+            }
+            for object in [exception_type, exception_value, traceback] {
+                if !object.is_null() {
+                    (self.dec_ref)(object);
+                }
+            }
+            (self.err_clear)();
+        }
+    }
+
+    unsafe fn function(&self, module: &CStr, name: &CStr) -> Result<*mut PyObject, String> {
+        let module_object = unsafe { (self.import_add_module)(module.as_ptr()) };
+        if module_object.is_null() {
+            unsafe { (self.err_print)() };
+            return Err(format!(
+                "failed to access Python module `{}`",
+                module.to_string_lossy()
+            ));
+        }
+        let namespace = unsafe { (self.module_get_dict)(module_object) };
+        if namespace.is_null() {
+            unsafe { (self.err_print)() };
+            return Err(format!(
+                "failed to access Python module `{}`",
+                module.to_string_lossy()
+            ));
+        }
+        let function = unsafe { (self.dict_get_item_string)(namespace, name.as_ptr()) };
+        if function.is_null() {
+            unsafe { (self.err_print)() };
+            return Err(format!(
+                "Python module `{}` is missing `{}`",
+                module.to_string_lossy(),
+                name.to_string_lossy()
+            ));
+        }
+        Ok(function)
+    }
+
     unsafe fn load(library: &libloading::os::unix::Library, path: &Path) -> Result<Self, String> {
         Ok(Self {
             // SAFETY: Symbol types match the documented CPython C API.
@@ -348,11 +575,34 @@ impl PythonApi {
             import_add_module: unsafe { load_symbol(library, path, b"PyImport_AddModule\0")? },
             module_get_dict: unsafe { load_symbol(library, path, b"PyModule_GetDict\0")? },
             dict_new: unsafe { load_symbol(library, path, b"PyDict_New\0")? },
+            dict_get_item_string: unsafe { load_symbol(library, path, b"PyDict_GetItemString\0")? },
             run_string_flags: unsafe { load_symbol(library, path, b"PyRun_StringFlags\0")? },
+            call_no_args: unsafe { load_symbol(library, path, b"PyObject_CallNoArgs\0")? },
+            call_function_obj_args: unsafe {
+                load_symbol(library, path, b"PyObject_CallFunctionObjArgs\0")?
+            },
+            unicode_from_string_and_size: unsafe {
+                load_symbol(library, path, b"PyUnicode_FromStringAndSize\0")?
+            },
+            long_as_long: unsafe { load_symbol(library, path, b"PyLong_AsLong\0")? },
             dec_ref: unsafe { load_symbol(library, path, b"Py_DecRef\0")? },
+            err_fetch: unsafe { load_symbol(library, path, b"PyErr_Fetch\0")? },
+            err_normalize_exception: unsafe {
+                load_symbol(library, path, b"PyErr_NormalizeException\0")?
+            },
+            err_display: unsafe { load_symbol(library, path, b"PyErr_Display\0")? },
+            err_clear: unsafe { load_symbol(library, path, b"PyErr_Clear\0")? },
             err_print: unsafe { load_symbol(library, path, b"PyErr_Print\0")? },
         })
     }
+}
+
+fn python_function_error(module: &CStr, name: &CStr) -> String {
+    format!(
+        "Python function `{}.{}` failed",
+        module.to_string_lossy(),
+        name.to_string_lossy()
+    )
 }
 
 unsafe fn load_symbol<T: Copy>(

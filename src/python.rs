@@ -24,6 +24,13 @@ pub(crate) enum PreparationOutcome {
 pub(crate) struct Runtime(reticulate::Runtime);
 
 #[cfg(target_os = "macos")]
+pub(crate) enum SqlProvider {
+    R,
+    Managed,
+    Handled,
+}
+
+#[cfg(target_os = "macos")]
 pub(crate) fn configure_worker_environment() -> std::io::Result<()> {
     platform::configure_worker_environment()?;
     reticulate::configure_worker_environment()
@@ -42,6 +49,21 @@ impl Runtime {
     pub(crate) fn prepare(&self, packages: Vec<String>) -> Result<PreparationOutcome, String> {
         self.0.prepare(packages)
     }
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn install_sql_runtime(source: &str) -> Result<(), String> {
+    library::install_sql_runtime(source)
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn dispatch_sql(source: &str) -> Result<SqlProvider, String> {
+    library::dispatch_sql(source)
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn use_r_sql() -> Result<(), String> {
+    library::use_r_sql()
 }
 
 #[cfg(all(test, target_os = "macos"))]

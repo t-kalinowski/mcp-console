@@ -101,6 +101,9 @@ base::local(
       )
 
       response <- .Call("mcp_console_resolve_r", package)
+      if (base::identical(response, "unavailable")) {
+        return(base::list(kind = "ready"))
+      }
       if (
         !base::is.character(response) ||
           base::anyNA(response) ||
