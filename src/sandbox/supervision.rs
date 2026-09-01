@@ -58,27 +58,20 @@ enum ObservationResult {
 
 impl ObservedLifetime {
     pub(crate) fn start(root_pid: u32) -> Result<Self, String> {
-        Self::start_inner(root_pid, false).map(|(lifetime, _)| lifetime)
+        Self::start_inner(root_pid, None)
     }
 
-    /// Starts the standalone observer and returns an independent wake handle
-    /// for the crash-manager monitor. If the manager exits unexpectedly, that
-    /// handle transfers the tracker back to the launcher even when signalling
-    /// the direct root fails.
     fn start_for_standalone(
         root_pid: u32,
-    ) -> Result<(Self, process_tracker::ObserverWakeup), String> {
-        let (lifetime, manager_wakeup) = Self::start_inner(root_pid, true)?;
-        Ok((
-            lifetime,
-            manager_wakeup.expect("standalone observer should expose a manager wakeup"),
-        ))
+        root_wakeup: root_exit_waiter::RootExitWakeup,
+    ) -> Result<Self, String> {
+        Self::start_inner(root_pid, Some(root_wakeup))
     }
 
     fn start_inner(
         root_pid: u32,
-        expose_manager_wakeup: bool,
-    ) -> Result<(Self, Option<process_tracker::ObserverWakeup>), String> {
+        root_wakeup: Option<root_exit_waiter::RootExitWakeup>,
+    ) -> Result<Self, String> {
         let root_pid = libc::pid_t::try_from(root_pid)
             .ok()
             .filter(|pid| *pid > 0)
@@ -88,14 +81,6 @@ impl ObservedLifetime {
         let observer_wakeup = match tracker.register_observer_wakeup() {
             Ok(observer_wakeup) => observer_wakeup,
             Err(error) => return Err(retire_after_observer_failure(tracker, error)),
-        };
-        let manager_wakeup = if expose_manager_wakeup {
-            match tracker.register_observer_wakeup() {
-                Ok(manager_wakeup) => Some(manager_wakeup),
-                Err(error) => return Err(retire_after_observer_failure(tracker, error)),
-            }
-        } else {
-            None
         };
 
         // Transfer the tracker only after the observer thread exists, so a
@@ -107,6 +92,7 @@ impl ObservedLifetime {
         let observer = match thread::Builder::new()
             .name("mcp-console-sandbox-observer".to_string())
             .spawn(move || {
+                let _wake_root = root_wakeup.map(root_exit_waiter::RootExitWakeup::on_drop);
                 let Ok(mut tracker) = tracker_receiver.recv() else {
                     return None;
                 };
@@ -117,18 +103,10 @@ impl ObservedLifetime {
                         break;
                     }
                     let wait = next_stale_prune.saturating_duration_since(Instant::now());
-                    match tracker.wait_for_events(Some(wait)) {
-                        Ok(process_tracker::EventWait::Wakeup) => break,
-                        Ok(
-                            process_tracker::EventWait::Events
-                            | process_tracker::EventWait::RootExited
-                            | process_tracker::EventWait::TimedOut,
-                        ) => {}
-                        Err(observation_error) => {
-                            return Some(ObservationResult::Retired {
-                                error: retire_after_observer_failure(tracker, observation_error),
-                            });
-                        }
+                    if let Err(observation_error) = tracker.wait_for_events(Some(wait)) {
+                        return Some(ObservationResult::Retired {
+                            error: retire_after_observer_failure(tracker, observation_error),
+                        });
                     }
                     if observer_stop.load(Ordering::Acquire) {
                         break;
@@ -160,20 +138,11 @@ impl ObservedLifetime {
             ));
         }
 
-        Ok((
-            Self {
-                stop_requested,
-                observer_wakeup: Some(observer_wakeup),
-                observer: Some(observer),
-            },
-            manager_wakeup,
-        ))
-    }
-
-    pub(super) fn is_finished(&self) -> bool {
-        self.observer
-            .as_ref()
-            .is_some_and(|observer| observer.is_finished())
+        Ok(Self {
+            stop_requested,
+            observer_wakeup: Some(observer_wakeup),
+            observer: Some(observer),
+        })
     }
 
     /// Stops the root and every descendant observed from it.

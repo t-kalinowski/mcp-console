@@ -4,7 +4,7 @@ mod entrypoint;
 mod protocol;
 
 use super::process::{ProcessIdentity, process_info, signal_process};
-use super::process_tracker::ObserverWakeup;
+use super::root_exit_waiter::RootExitWakeup;
 use crate::sandbox::file_descriptors;
 use std::io::Read;
 use std::net::Shutdown;
@@ -68,13 +68,13 @@ impl SandboxManager {
         root_pid: u32,
         temporary_directory: &Path,
         cleanup_timeout: Duration,
-        observer_wakeup: ObserverWakeup,
+        root_wakeup: RootExitWakeup,
     ) -> Result<Self, String> {
         Self::start_inner(
             root_pid,
             temporary_directory,
             cleanup_timeout,
-            Some(observer_wakeup),
+            Some(root_wakeup),
         )
     }
 
@@ -82,7 +82,7 @@ impl SandboxManager {
         root_pid: u32,
         temporary_directory: &Path,
         cleanup_timeout: Duration,
-        observer_wakeup: Option<ObserverWakeup>,
+        root_wakeup: Option<RootExitWakeup>,
     ) -> Result<Self, String> {
         let owner_pid = libc::pid_t::try_from(std::process::id())
             .ok()
@@ -165,12 +165,7 @@ impl SandboxManager {
         }
 
         Ok(Self {
-            monitor: Some(ManagerMonitor::start(
-                child,
-                identity,
-                root,
-                observer_wakeup,
-            )),
+            monitor: Some(ManagerMonitor::start(child, identity, root, root_wakeup)),
             control: stream,
             cleanup_timeout,
             retirement_started: false,
@@ -266,10 +261,11 @@ impl ManagerMonitor {
         mut child: Child,
         identity: ProcessIdentity,
         root: ProcessIdentity,
-        observer_wakeup: Option<ObserverWakeup>,
+        root_wakeup: Option<RootExitWakeup>,
     ) -> Self {
         let (result_sender, result) = mpsc::channel();
         let thread = std::thread::spawn(move || {
+            let _wake_root = root_wakeup.map(RootExitWakeup::on_drop);
             let result = match child.wait() {
                 Ok(status) if status.success() => Ok(SandboxManagerExit::Normal),
                 Ok(status) if status.signal().is_some() => recover_after_manager_signal(
@@ -286,9 +282,6 @@ impl ManagerMonitor {
                 ),
             };
             let _ = result_sender.send(result);
-            if let Some(observer_wakeup) = observer_wakeup {
-                let _ = observer_wakeup.wake();
-            }
         });
         Self {
             identity,

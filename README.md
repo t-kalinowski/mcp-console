@@ -179,10 +179,12 @@ The standalone `sandbox` command is available for development.
 Its launcher owns normal retirement and preserves the direct command's exit status while retiring descendants observed from that root, including descendants that entered another process group or session.
 On macOS, it also commits an independent manager after the launcher observer attaches.
 The requested command starts only after the manager has adopted the private temporary directory and reported readiness.
-After readiness, abrupt launcher loss retires the descendants the manager observed and removes the directory after successful cleanup; unexpected manager loss wakes the still-live launcher observer to finish retirement, even if the manager monitor cannot terminate the root itself.
+After readiness, abrupt launcher loss retires the descendants the manager observed and removes the directory after successful cleanup; unexpected manager loss wakes the still-live launcher's root waiter to start local retirement, even if the manager monitor cannot terminate the root itself.
 A descendant that later becomes orphaned before either observer sees its fork remains outside that observer's guarantee, and an abrupt launcher exit before manager readiness remains outside crash cleanup.
 The command inherits standard input, output, and error while closing other inherited file descriptors before the target runs.
-For a direct foreground invocation, the launcher places the target in a dedicated process group, transfers controlling-terminal ownership to it, relays `SIGHUP`, `SIGINT`, `SIGQUIT`, and `SIGTERM` addressed to the launcher, and restores terminal ownership after cleanup.
+The launcher places the target in a dedicated process group and relays `SIGHUP`, `SIGINT`, `SIGQUIT`, and `SIGTERM` addressed to the launcher into that group.
+For a direct foreground invocation whose process group has no peer, it also transfers controlling-terminal ownership to the target and restores ownership after cleanup.
+If the launcher shares its foreground process group with a pipeline peer, it leaves terminal ownership with that group.
 Stopped/continued job state and general shell-pipeline job-control semantics remain unsupported; `Ctrl-Z` followed by `fg` requires a separate terminal state machine.
 Use the MCP server for the supported worker-generation lifecycle.
 
@@ -204,9 +206,9 @@ scripts/test --update BOUNDARY/SUITE[::CASE]
 The [documentation index](https://github.com/t-kalinowski/mcp-console/blob/main/docs/README.md) maps current documents by audience.
 
 - [Implemented architecture](https://github.com/t-kalinowski/mcp-console/blob/main/docs/ARCHITECTURE.md) explains current process boundaries, ownership, lifecycle, recording, and artifacts.
-- [macOS sandbox supervision](https://github.com/t-kalinowski/mcp-console/blob/main/docs/SANDBOX_SUPERVISION.md) explains normal observed-descendant retirement, independent manager cleanup, and post-spawn limitations.
+- [macOS sandbox supervision](https://github.com/t-kalinowski/mcp-console/blob/main/docs/SANDBOX_SUPERVISION.md) explains standalone terminal and signal ownership, observed-descendant retirement, independent manager cleanup, and post-spawn limitations.
 - [Built-in runtime](https://github.com/t-kalinowski/mcp-console/blob/main/docs/BUILTIN_RUNTIME.md) describes user-visible R, Python, SQL, input, output, and graphics behavior.
-- [Requirements and environments](https://github.com/t-kalinowski/mcp-console/blob/main/docs/REQUIREMENTS.md) defines dependency preparation and its trust boundary.
+- [Requirements and environments](https://github.com/t-kalinowski/mcp-console/blob/main/docs/REQUIREMENTS.md) describes dependency preparation and its trust boundary.
 - [Worker protocol](https://github.com/t-kalinowski/mcp-console/blob/main/docs/WORKER_PROTOCOL.md) and [relay protocol](https://github.com/t-kalinowski/mcp-console/blob/main/docs/RELAY_PROTOCOL.md) define the exact transport contracts.
   [Registered tool descriptions](https://github.com/t-kalinowski/mcp-console/blob/main/docs/TOOL_DESCRIPTIONS.md) is a human-readable mirror of the current agent-facing wording.
 - [Transcript test guide](https://github.com/t-kalinowski/mcp-console/blob/main/tests/transcripts/README.md) explains selectors, normalization, and golden updates.

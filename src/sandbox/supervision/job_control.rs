@@ -1,8 +1,9 @@
 //! Configures process groups and signal delivery for one foreground sandbox job.
 //!
 //! A controlling terminal, including a PTY slave, sends terminal-generated signals
-//! directly to the foreground child group. Signals addressed to the launcher
-//! are consumed synchronously and relayed to that group.
+//! directly to an exclusively owned child group. When the launcher shares its
+//! foreground group with peers, it retains terminal ownership and relays signals
+//! addressed to the launcher into the child group.
 
 use std::os::unix::process::CommandExt;
 use std::process::Command;
@@ -13,23 +14,32 @@ const FORWARDED_SIGNALS: [libc::c_int; 4] =
 pub(super) struct ForegroundTerminal {
     descriptor: Option<libc::c_int>,
     launcher_process_group: libc::pid_t,
+    transfer_to_child: bool,
 }
 
 impl ForegroundTerminal {
-    pub(super) fn detect() -> Self {
+    pub(super) fn detect() -> Result<Self, String> {
         let launcher_process_group = unsafe { libc::getpgrp() };
+        let launcher_process_id = unsafe { libc::getpid() };
         let descriptor = [libc::STDIN_FILENO, libc::STDOUT_FILENO, libc::STDERR_FILENO]
             .into_iter()
             .find(|descriptor| unsafe { libc::tcgetpgrp(*descriptor) } == launcher_process_group);
+        let transfer_to_child = descriptor.is_some()
+            && !process_group_has_peer(launcher_process_group, launcher_process_id)?;
 
-        Self {
+        Ok(Self {
             descriptor,
             launcher_process_group,
-        }
+            transfer_to_child,
+        })
     }
 
     pub(super) fn descriptor(&self) -> Option<libc::c_int> {
-        self.descriptor
+        if self.transfer_to_child {
+            self.descriptor
+        } else {
+            None
+        }
     }
 
     pub(super) fn restore(&mut self) -> Result<(), String> {
@@ -39,7 +49,9 @@ impl ForegroundTerminal {
 
         // A revoked or hung-up controlling terminal no longer has foreground
         // ownership to restore. Preserve the command's actual exit status.
-        if let Err(error) = set_foreground_process_group(descriptor, self.launcher_process_group)
+        if self.transfer_to_child
+            && let Err(error) =
+                set_foreground_process_group(descriptor, self.launcher_process_group)
             && error.raw_os_error() != Some(libc::ENOTTY)
         {
             return Err(format!(
@@ -48,6 +60,52 @@ impl ForegroundTerminal {
         }
         self.descriptor = None;
         Ok(())
+    }
+}
+
+fn process_group_has_peer(
+    process_group: libc::pid_t,
+    process_id: libc::pid_t,
+) -> Result<bool, String> {
+    let mut capacity = 16;
+    loop {
+        let mut processes = vec![0; capacity];
+        unsafe { *libc::__error() = 0 };
+        let count = unsafe {
+            libc::proc_listpgrppids(
+                process_group,
+                processes.as_mut_ptr().cast(),
+                std::mem::size_of_val(processes.as_slice()) as libc::c_int,
+            )
+        };
+        if count == 0 {
+            let error_code = unsafe { *libc::__error() };
+            if error_code == 0 || error_code == libc::ESRCH {
+                return Ok(false);
+            }
+            if error_code == libc::EINTR {
+                continue;
+            }
+            return Err(format!(
+                "failed to inspect the foreground process group: {}",
+                std::io::Error::from_raw_os_error(error_code)
+            ));
+        }
+        if count < 0 {
+            return Err(format!(
+                "failed to inspect the foreground process group: \
+                 proc_listpgrppids returned {count}"
+            ));
+        }
+
+        let count = count as usize;
+        if count < capacity {
+            processes.truncate(count);
+            return Ok(processes
+                .into_iter()
+                .any(|candidate| candidate > 0 && candidate != process_id));
+        }
+        capacity = capacity.saturating_mul(2).max(count + 16);
     }
 }
 

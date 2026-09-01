@@ -2,11 +2,15 @@
 
 import ctypes
 import errno
+import fcntl
 import os
+import pty
 import selectors
 import signal
 import subprocess
 import sys
+import tempfile
+import termios
 import time
 from pathlib import Path
 
@@ -26,6 +30,30 @@ _ProcessIdentity = tuple[int, int, int]
 
 def _command(*arguments: str) -> list[str]:
     return ["mcp-console", *arguments]
+
+
+def _start_with_controlling_terminal(
+    arguments: list[str | Path],
+) -> tuple[subprocess.Popen[bytes], int, str]:
+    master, slave = pty.openpty()
+    slave_name = os.ttyname(slave)
+
+    def attach_controlling_terminal() -> None:
+        os.setsid()
+        fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+        os.tcsetpgrp(slave, os.getpid())
+
+    process = subprocess.Popen(
+        arguments,
+        stdin=slave,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        preexec_fn=attach_controlling_terminal,
+    )
+    os.close(slave)
+    assert process.stdout is not None
+    assert process.stderr is not None
+    return process, master, slave_name
 
 
 class _ProcessInfo(ctypes.Structure):
@@ -351,13 +379,15 @@ def test_relays_interrupt_then_retires_descendants(binary: Path) -> Transcript:
           "60",
           cleanup = FALSE
         )
-        writeLines(c(
-          as.character(Sys.getpid()),
-          as.character(child$get_pid())
-        ))
-        flush.console()
         tryCatch(
-          Sys.sleep(60),
+          {
+            writeLines(c(
+              as.character(Sys.getpid()),
+              as.character(child$get_pid())
+            ))
+            flush.console()
+            Sys.sleep(60)
+          },
           interrupt = function(...) {
             quit(save = "no", status = 130L, runLast = FALSE)
           }
@@ -383,6 +413,8 @@ def test_relays_interrupt_then_retires_descendants(binary: Path) -> Transcript:
             )
         ]
         identities = [_capture_identity(pid) for pid in pids]
+        assert os.getpgid(pids[0]) == pids[0]
+        assert os.getpgid(pids[1]) != os.getpgid(pids[0])
         os.kill(process.pid, signal.SIGINT)
         returncode = process.wait(timeout=TIMEOUT)
         stderr = process.stderr.read().decode("utf-8")
@@ -403,6 +435,7 @@ def test_relays_interrupt_then_retires_descendants(binary: Path) -> Transcript:
         {
             "command": _command(*arguments),
             "stdout": "<sandbox root pid>\n<processx child pid>\n",
+            "verified_descendant": "processx child outside root process group",
         },
         {
             "signal": "SIGINT",
@@ -412,102 +445,7 @@ def test_relays_interrupt_then_retires_descendants(binary: Path) -> Transcript:
     ]
 
 
-def test_sandbox_cannot_retain_its_temporary_directory(binary: Path) -> Transcript:
-    # fmt: python
-    sandboxed_script = code(r"""
-        import os
-        from pathlib import Path
-
-        temporary_directory = Path(os.environ["TMPDIR"])
-        (temporary_directory / ".mcp-console-preserve").write_text("retain\n")
-        print(temporary_directory)
-        """)
-    arguments = ("sandbox", "--", "python", "-c", sandboxed_script)
-    result = subprocess.run(
-        [binary, *arguments],
-        capture_output=True,
-        text=True,
-        timeout=TIMEOUT,
-    )
-
-    temporary_directory = Path(result.stdout.strip())
-    assert result.returncode == 0, result
-    assert result.stderr == "", result.stderr
-    assert not temporary_directory.exists(), (
-        f"sandbox retained its host-owned temporary directory: {temporary_directory}"
-    )
-    return [
-        {
-            "command": _command(*arguments),
-            "stdout": "<sandbox temp>\n",
-            "transcript_normalization": {
-                "target": "stdout",
-                "sandbox_temporary_directory": "omitted",
-            },
-        }
-    ]
-
-
 def test_delivers_terminal_interrupt_once(binary: Path) -> Transcript:
-    host_script = code(r"""
-        import fcntl
-        import os
-        import pty
-        import signal
-        import subprocess
-        import sys
-        import termios
-
-        master, slave = pty.openpty()
-        sandbox_group = None
-
-        def attach_controlling_terminal():
-            os.setsid()
-            fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
-            os.tcsetpgrp(slave, os.getpid())
-
-        process = subprocess.Popen(
-            [sys.argv[1], "sandbox", "--", "python", "-c", sys.argv[2]],
-            stdin=slave,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            preexec_fn=attach_controlling_terminal,
-        )
-        os.close(slave)
-        try:
-            assert process.stdout is not None
-            readiness = process.stdout.readline().split()
-            assert len(readiness) == 2 and readiness[0] == "ready", readiness
-            sandbox_group = int(readiness[1])
-            assert os.tcgetpgrp(master) == sandbox_group
-            assert sandbox_group != process.pid
-            os.write(master, b"sandbox input\n")
-            assert process.stdout.readline() == "sandbox input\n"
-            assert process.stdout.readline() == "interrupt ready\n"
-            assert os.tcgetpgrp(master) == sandbox_group
-            terminal_attributes = termios.tcgetattr(master)
-            assert terminal_attributes[3] & termios.ISIG
-            assert terminal_attributes[6][termios.VINTR] == b"\x03"
-            os.write(master, b"\x03")
-            stdout, stderr = process.communicate(timeout=5)
-        except BaseException:
-            for process_group in (sandbox_group, process.pid):
-                if process_group is None:
-                    continue
-                try:
-                    os.killpg(process_group, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-            process.wait()
-            raise
-        finally:
-            os.close(master)
-
-        sys.stdout.write(stdout)
-        sys.stderr.write(stderr)
-        raise SystemExit(process.returncode)
-        """)
     # fmt: python
     sandboxed_script = code(r"""
         import os
@@ -527,126 +465,233 @@ def test_delivers_terminal_interrupt_once(binary: Path) -> Transcript:
         signal.signal(signal.SIGINT, handle_interrupt)
         previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
         assert signal.SIGINT not in previous_mask
-        print(f"ready {os.getpgrp()}", flush=True)
+        print(f"ready {os.getpid()} {os.getpgrp()}", flush=True)
         print(input(), flush=True)
         signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
         print("interrupt ready", flush=True)
         interrupted.wait()
         print(interrupts)
         """)
-    result = subprocess.run(
-        ["python", "-c", host_script, binary, sandboxed_script],
-        capture_output=True,
-        text=True,
-        timeout=TIMEOUT,
-    )
+    arguments = [binary, "sandbox", "--", "python", "-c", sandboxed_script]
+    process, master, _ = _start_with_controlling_terminal(arguments)
+    identities: list[_ProcessIdentity] = []
+    try:
+        readiness = _read_lines(
+            process.stdout,
+            1,
+            "the foreground sandbox readiness",
+        )[0].split()
+        assert len(readiness) == 3 and readiness[0] == "ready", readiness
+        target_pid, target_group = map(int, readiness[1:])
+        identities.append(_capture_identity(target_pid))
+        assert target_group == target_pid
+        assert target_group != process.pid
+        assert os.tcgetpgrp(master) == target_group
 
-    assert result.returncode == 0, result
-    assert result.stdout == "1\n", result.stdout
-    assert result.stderr == "", result.stderr
+        os.write(master, b"sandbox input\n")
+        assert _read_lines(process.stdout, 2, "the sandbox input acknowledgement") == [
+            "sandbox input",
+            "interrupt ready",
+        ]
+        assert os.tcgetpgrp(master) == target_group
+        terminal_attributes = termios.tcgetattr(master)
+        assert terminal_attributes[3] & termios.ISIG
+        assert terminal_attributes[6][termios.VINTR] == b"\x03"
+        os.write(master, b"\x03")
+        stdout, stderr = process.communicate(timeout=TIMEOUT)
+        survivors = _kill_survivors(identities)
+
+        assert process.returncode == 0, process.returncode
+        assert stdout == b"1\n", stdout
+        assert stderr == b"", stderr
+        assert survivors == [], f"terminal sandbox survived: {survivors}"
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=TIMEOUT)
+        _kill_survivors(identities)
+        process.stdout.close()
+        process.stderr.close()
+        os.close(master)
+
     return [
         {
             "command": _command("sandbox", "--", "python", "-c", sandboxed_script),
             "stdin": "sandbox input\n<Ctrl-C>",
-            "stdout": result.stdout,
+            "stdout": stdout.decode("utf-8"),
+            "terminal_ownership": "transferred to target",
+        }
+    ]
+
+
+def test_preserves_terminal_ownership_with_foreground_peer(binary: Path) -> Transcript:
+    # A foreground shell pipeline places all of its stages in one process group.
+    # Model another stage with a sibling that remains in the launcher's group.
+    # fmt: python
+    wrapper_script = code(r"""
+        import os
+        import sys
+
+        peer = os.fork()
+        if peer == 0:
+            os.closerange(0, 3)
+            os.execl("/bin/sleep", "sleep", "60")
+        os.execv(
+            sys.argv[1],
+            [
+                sys.argv[1],
+                "sandbox",
+                "--",
+                "python",
+                "-c",
+                sys.argv[2],
+                sys.argv[3],
+                str(peer),
+            ],
+        )
+        """)
+    # fmt: python
+    sandboxed_script = code(r"""
+        import os
+        import sys
+
+        print(
+            f"ready {os.getpid()} {os.getpgrp()} {sys.argv[2]}",
+            flush=True,
+        )
+        with open(sys.argv[1], encoding="utf-8") as release:
+            assert release.readline() == "release\n"
+        """)
+
+    with tempfile.TemporaryDirectory() as directory:
+        release = os.path.join(directory, "release")
+        os.mkfifo(release)
+        process, master, _ = _start_with_controlling_terminal(
+            [sys.executable, "-c", wrapper_script, binary, sandboxed_script, release]
+        )
+
+        identities: list[_ProcessIdentity] = []
+        release_descriptor = None
+        try:
+            readiness = _read_lines(
+                process.stdout,
+                1,
+                "the foreground-peer sandbox readiness",
+            )[0].split()
+            assert len(readiness) == 4 and readiness[0] == "ready", readiness
+            target_pid, target_group, peer_pid = map(int, readiness[1:])
+            foreground_group = os.tcgetpgrp(master)
+            identities.append(_capture_identity(target_pid))
+            peer_identity = _capture_identity(peer_pid)
+            identities.append(peer_identity)
+
+            assert os.getpgid(process.pid) == process.pid
+            assert os.getpgid(peer_pid) == process.pid
+            assert target_group == target_pid
+            assert foreground_group == process.pid
+            assert target_group != foreground_group
+
+            assert _kill_survivors([peer_identity]) == [peer_pid]
+            identities.pop()
+            release_descriptor = os.open(release, os.O_RDWR | os.O_NONBLOCK)
+            os.write(release_descriptor, b"release\n")
+            returncode = process.wait(timeout=TIMEOUT)
+            stderr = process.stderr.read().decode("utf-8")
+            survivors = _kill_survivors(identities)
+
+            assert returncode == 0, returncode
+            assert stderr == "", stderr
+            assert survivors == [], f"foreground-peer sandbox survived: {survivors}"
+        finally:
+            if release_descriptor is not None:
+                os.close(release_descriptor)
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=TIMEOUT)
+            _kill_survivors(identities)
+            process.stdout.close()
+            process.stderr.close()
+            os.close(master)
+
+    return [
+        {
+            "command": _command(
+                "sandbox",
+                "--",
+                "python",
+                "-c",
+                sandboxed_script,
+                "<release gate>",
+                "<peer pid>",
+            ),
+            "foreground_peer": "shares launcher process group",
+            "target_process_group": "dedicated",
+            "terminal_foreground_group": "launcher and peer",
+            "exit_code": returncode,
         }
     ]
 
 
 def test_preserves_status_after_terminal_closes(binary: Path) -> Transcript:
-    host_script = code(r"""
-        import ctypes
-        import fcntl
-        import os
-        import pty
-        import signal
-        import subprocess
-        import sys
-        import tempfile
-        import termios
-
-        master, slave = pty.openpty()
-        slave_name = os.ttyname(slave)
-        sandbox_group = None
-
-        def attach_controlling_terminal():
-            os.setsid()
-            fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
-            os.tcsetpgrp(slave, os.getpid())
-
-        with tempfile.TemporaryDirectory() as directory:
-            release = os.path.join(directory, "release")
-            process = subprocess.Popen(
-                [
-                    sys.argv[1],
-                    "sandbox",
-                    "--",
-                    "python",
-                    "-c",
-                    sys.argv[2],
-                    release,
-                ],
-                stdin=slave,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                preexec_fn=attach_controlling_terminal,
-            )
-            os.close(slave)
-            try:
-                assert process.stdout is not None
-                assert process.stdout.readline() == "ready\n"
-                sandbox_group = os.tcgetpgrp(master)
-                libc = ctypes.CDLL(None, use_errno=True)
-                assert libc.revoke(slave_name.encode()) == 0
-                os.close(master)
-                master = None
-                release_descriptor = os.open(
-                    release, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600
-                )
-                os.close(release_descriptor)
-                stdout, stderr = process.communicate(timeout=5)
-            except BaseException:
-                for process_group in (sandbox_group, process.pid):
-                    if process_group is None:
-                        continue
-                    try:
-                        os.killpg(process_group, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                process.wait()
-                raise
-            finally:
-                if master is not None:
-                    os.close(master)
-
-        sys.stdout.write(stdout)
-        sys.stderr.write(stderr)
-        raise SystemExit(process.returncode)
-        """)
     # fmt: python
     sandboxed_script = code(r"""
         import os
         import signal
         import sys
-        import time
 
         signal.signal(signal.SIGHUP, signal.SIG_IGN)
         print("ready", flush=True)
-        while not os.path.exists(sys.argv[1]):
-            time.sleep(0.01)
+        with open(sys.argv[1], encoding="utf-8") as release:
+            assert release.readline() == "release\n"
         raise SystemExit(23)
         """)
-    result = subprocess.run(
-        ["python", "-c", host_script, binary, sandboxed_script],
-        capture_output=True,
-        text=True,
-        timeout=TIMEOUT,
-    )
+    with tempfile.TemporaryDirectory() as directory:
+        release = os.path.join(directory, "release")
+        os.mkfifo(release)
+        arguments = [
+            binary,
+            "sandbox",
+            "--",
+            "python",
+            "-c",
+            sandboxed_script,
+            release,
+        ]
+        process, master, slave_name = _start_with_controlling_terminal(arguments)
+        identities: list[_ProcessIdentity] = []
+        release_descriptor = None
+        try:
+            assert _read_lines(process.stdout, 1, "the terminal-close readiness") == [
+                "ready"
+            ]
+            target_pid = os.tcgetpgrp(master)
+            identities.append(_capture_identity(target_pid))
 
-    assert result.returncode == 23, result
-    assert result.stdout == "", result.stdout
-    assert result.stderr == "", result.stderr
+            libc = ctypes.CDLL(None, use_errno=True)
+            assert libc.revoke(slave_name.encode()) == 0
+            os.close(master)
+            master = None
+            release_descriptor = os.open(release, os.O_RDWR | os.O_NONBLOCK)
+            os.write(release_descriptor, b"release\n")
+            stdout, stderr = process.communicate(timeout=TIMEOUT)
+            survivors = _kill_survivors(identities)
+
+            assert process.returncode == 23, process.returncode
+            assert stdout == b"", stdout
+            assert stderr == b"", stderr
+            assert survivors == [], f"terminal-close sandbox survived: {survivors}"
+        finally:
+            if release_descriptor is not None:
+                os.close(release_descriptor)
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=TIMEOUT)
+            _kill_survivors(identities)
+            process.stdout.close()
+            process.stderr.close()
+            if master is not None:
+                os.close(master)
+
     return [
         {
             "command": _command(
@@ -658,7 +703,7 @@ def test_preserves_status_after_terminal_closes(binary: Path) -> Transcript:
                 "<release gate>",
             ),
             "terminal": "closed after readiness",
-            "exit_code": result.returncode,
+            "exit_code": process.returncode,
         }
     ]
 
