@@ -17,6 +17,9 @@ use rmcp::{
 use serde_json::{Value, json};
 
 mod markdown;
+mod output;
+
+pub(crate) use output::CellOutput;
 
 const SCHEMA_VERSION: u64 = 1;
 
@@ -231,6 +234,12 @@ impl ActiveTranscript {
             format!(
                 "failed to create {}: {error}",
                 directory.join("artifacts").display()
+            )
+        })?;
+        create_private_directory(&directory.join("outputs"), false).map_err(|error| {
+            format!(
+                "failed to create {}: {error}",
+                directory.join("outputs").display()
             )
         })?;
         let internal = directory.join("internal");
