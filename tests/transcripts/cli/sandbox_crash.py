@@ -1109,20 +1109,18 @@ def test_manager_crash_retires_the_sandbox_lifetime(binary: Path) -> Transcript:
         )
         returncode = lifetime.process.wait(timeout=TIMEOUT)
         stderr = lifetime.process.stderr.read().decode("utf-8")
-        survivors = _wait_for_cleanup(lifetime)
+        identities = (lifetime.root, lifetime.descendant, lifetime.manager)
+        _wait_for_process_exit(identities, "manager crash leaked sandbox processes")
 
         assert returncode == 128 + signal.SIGKILL, returncode
         assert stderr == "", stderr
-        assert survivors == [], f"manager crash leaked sandbox processes: {survivors}"
-        assert not lifetime.temporary_directory.exists(), (
-            "manager crash leaked the sandbox temporary directory"
-        )
+        assert lifetime.temporary_directory.exists(), "manager recovery removed temp"
         return [
             _command_record(lifetime),
             {
                 "manager_signal": "SIGKILL",
                 "launcher_returncode": returncode,
-                "verified_cleanup": "sandbox root, detached descendant, manager, and temp",
+                "verified_cleanup": "sandbox root, detached descendant, and manager; preserved temp",
             },
         ]
     finally:

@@ -13,7 +13,7 @@ use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt as _;
 use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -21,6 +21,9 @@ use std::time::Duration;
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
 const FINISH_ALLOWANCE: Duration = Duration::from_secs(1);
+const PRESERVE_AFTER_RECOVERY: u8 = 1;
+const PRESERVE_AFTER_NORMAL_EXIT: u8 = 2;
+const PRESERVE_UNCONDITIONALLY: u8 = 4;
 
 pub(crate) struct SandboxManager {
     child: Option<Child>,
@@ -35,8 +38,7 @@ pub(crate) struct SandboxManager {
 
 struct ManagerMonitor {
     identity: ProcessIdentity,
-    preserve_after_normal_exit: Arc<AtomicBool>,
-    preserve_unconditionally: Arc<AtomicBool>,
+    preservation: Arc<AtomicU8>,
     recovery_enabled: Arc<Mutex<bool>>,
     result: Receiver<Result<ManagerExit, String>>,
     thread: Option<JoinHandle<()>>,
@@ -196,6 +198,10 @@ impl SandboxManager {
         if committed != [protocol::COMMITTED] {
             return Err("sandbox manager sent an invalid ownership confirmation".to_string());
         }
+        self.monitor
+            .as_ref()
+            .expect("manager monitor is missing")
+            .preserve(PRESERVE_AFTER_RECOVERY);
         Ok(())
     }
 
@@ -209,7 +215,7 @@ impl SandboxManager {
             return false;
         }
         if let Some(monitor) = self.monitor.as_ref() {
-            monitor.preserve_after_normal_exit();
+            monitor.preserve(PRESERVE_AFTER_NORMAL_EXIT);
         }
         let stream = self
             .stream
@@ -264,7 +270,7 @@ impl SandboxManager {
     ) -> Result<(), String> {
         if let Some(monitor) = self.monitor.as_ref() {
             if preserve_temporary_directory {
-                monitor.preserve_unconditionally();
+                monitor.preserve(PRESERVE_UNCONDITIONALLY);
             } else if self.control_error.is_none() {
                 monitor.remove_after_normal_exit();
             }
@@ -279,7 +285,7 @@ impl SandboxManager {
         if self.control_error.is_some()
             && let Some(monitor) = self.monitor.as_ref()
         {
-            monitor.preserve_after_normal_exit();
+            monitor.preserve(PRESERVE_AFTER_NORMAL_EXIT);
         }
         let control_error = self.control_error.take();
         match self.finish_inner(None, true) {
@@ -369,10 +375,8 @@ impl ManagerMonitor {
         cleanup_timeout: Duration,
     ) -> Self {
         let (result_sender, result) = mpsc::channel();
-        let preserve_after_normal_exit = Arc::new(AtomicBool::new(false));
-        let preserve_normal_for_monitor = Arc::clone(&preserve_after_normal_exit);
-        let preserve_unconditionally = Arc::new(AtomicBool::new(false));
-        let preserve_unconditionally_for_monitor = Arc::clone(&preserve_unconditionally);
+        let preservation = Arc::new(AtomicU8::new(0));
+        let preservation_for_monitor = Arc::clone(&preservation);
         let recovery_enabled = Arc::new(Mutex::new(true));
         let recovery_enabled_for_monitor = Arc::clone(&recovery_enabled);
         let thread = std::thread::spawn(move || {
@@ -381,34 +385,27 @@ impl ManagerMonitor {
                 root_pid,
                 temporary_directory,
                 cleanup_timeout,
-                preserve_normal_for_monitor,
-                preserve_unconditionally_for_monitor,
+                preservation_for_monitor,
                 recovery_enabled_for_monitor,
             );
             let _ = result_sender.send(result);
         });
         Self {
             identity,
-            preserve_after_normal_exit,
-            preserve_unconditionally,
+            preservation,
             recovery_enabled,
             result,
             thread: Some(thread),
         }
     }
 
-    fn preserve_after_normal_exit(&self) {
-        self.preserve_after_normal_exit
-            .store(true, Ordering::Release);
+    fn preserve(&self, flag: u8) {
+        self.preservation.fetch_or(flag, Ordering::Release);
     }
 
     fn remove_after_normal_exit(&self) {
-        self.preserve_after_normal_exit
-            .store(false, Ordering::Release);
-    }
-
-    fn preserve_unconditionally(&self) {
-        self.preserve_unconditionally.store(true, Ordering::Release);
+        self.preservation
+            .fetch_and(!PRESERVE_AFTER_NORMAL_EXIT, Ordering::Release);
     }
 
     fn disable_recovery(&self) {
@@ -425,7 +422,7 @@ impl ManagerMonitor {
             Ok(result) => result,
             Err(RecvTimeoutError::Timeout) => {
                 error = Some("timed out waiting for sandbox manager cleanup".to_string());
-                self.preserve_unconditionally();
+                self.preserve(PRESERVE_UNCONDITIONALLY);
                 if let Err(signal_error) = signal_process(self.identity, libc::SIGKILL) {
                     error = Some(with_prior_error(
                         error,
@@ -488,8 +485,7 @@ fn monitor_manager(
     root_pid: libc::pid_t,
     temporary_directory: platform::TemporaryDirectory,
     cleanup_timeout: Duration,
-    preserve_after_normal_exit: Arc<AtomicBool>,
-    preserve_unconditionally: Arc<AtomicBool>,
+    preservation: Arc<AtomicU8>,
     recovery_enabled: Arc<Mutex<bool>>,
 ) -> Result<ManagerExit, String> {
     let completion = match platform::wait_for_process_exit_without_reaping_blocking(child.id()) {
@@ -515,10 +511,13 @@ fn monitor_manager(
         ),
         Err(error) => finish_manager_failure(error, root_pid, cleanup_timeout, &recovery_enabled),
     };
+    let preservation = preservation.load(Ordering::Acquire);
     if result.is_err()
-        || preserve_unconditionally.load(Ordering::Acquire)
+        || (matches!(&result, Ok(ManagerExit::Recovered))
+            && preservation & PRESERVE_AFTER_RECOVERY != 0)
+        || preservation & PRESERVE_UNCONDITIONALLY != 0
         || (matches!(&result, Ok(ManagerExit::Normal))
-            && preserve_after_normal_exit.load(Ordering::Acquire))
+            && preservation & PRESERVE_AFTER_NORMAL_EXIT != 0)
     {
         temporary_directory.preserve();
     }
@@ -675,7 +674,7 @@ impl Drop for SandboxManager {
         if self.retirement_started
             && let Some(monitor) = self.monitor.as_ref()
         {
-            monitor.preserve_after_normal_exit();
+            monitor.preserve(PRESERVE_AFTER_NORMAL_EXIT);
         }
         let _ = self.finish_inner(None, false);
     }

@@ -271,8 +271,8 @@ fn finish_committed_startup_failure(
 }
 
 fn run_group_backstop(root: ProcessIdentity, group_backstop: &GroupBackstop) -> Result<(), String> {
-    // Tracker completion and owner loss can reach this concurrently. Keep the
-    // first attempt serialized while the owner's waitable root pins the group.
+    // Tracker completion and owner loss can race. The first caller propagates
+    // failure from its validated root; do not retry across that identity boundary.
     let mut started = group_backstop
         .lock()
         .map_err(|_| "sandbox manager group backstop state was poisoned".to_string())?;

@@ -51,7 +51,7 @@ With no surviving owner to receive a filesystem error, directory removal itself 
 Each host owner retains a blocking monitor for the manager process.
 If the manager exits unsuccessfully while the owner still retains a live, waitable root, the monitor reconstructs the root's current process tree and performs bounded cleanup before the owner continues.
 The fallback revalidates process identities immediately before signaling and closes the still-pinned process group as a race backstop.
-It preserves the private directory on failure.
+Once ownership is committed for target release, it preserves the private directory even when fallback cleanup succeeds because a detached descendant observed only by the failed manager may remain live.
 If manager completion times out, the owner requests forced exit and allows one more bounded recovery interval.
 If the manager still does not report completion, the owner disables fallback recovery before releasing the root's PID pin and returns an error without joining the live monitor thread.
 If bounded fallback recovery has already started, the owner retains the pin until it finishes instead.

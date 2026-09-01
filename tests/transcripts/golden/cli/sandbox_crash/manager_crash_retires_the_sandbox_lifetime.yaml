@@ -31,4 +31,4 @@ stdout: |
 ---
 manager_signal: SIGKILL
 launcher_returncode: 137
-verified_cleanup: sandbox root, detached descendant, manager, and temp
+verified_cleanup: sandbox root, detached descendant, and manager; preserved temp
