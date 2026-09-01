@@ -255,8 +255,8 @@ impl SandboxedCommand {
 
     /// Adds an environment variable inherited by the sandboxed program.
     ///
-    /// macOS filters `DYLD_*` variables when launching `sandbox-exec`; this
-    /// wrapper intentionally does not restore them inside the sandbox.
+    /// Host loader injection is removed from the initial `sandbox-exec`
+    /// command. Callers must not restore it inside the sandbox.
     /// `TMPDIR` is reserved and reset to the private directory when spawning.
     pub(crate) fn env(&mut self, key: impl AsRef<OsStr>, value: impl AsRef<OsStr>) -> &mut Self {
         self.command.env(key, value);
