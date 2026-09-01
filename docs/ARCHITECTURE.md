@@ -157,10 +157,11 @@ It reports readiness, accepts complete cells and supported preparation operation
 
 The built-in worker embeds R on its main thread.
 Its language adapters provide persistent Python and SQL within that worker process.
-The DBI-backed SQL adapter owns a managed DuckDB connection by default and can route cells to a user-selected DBI connection held in the same R runtime.
+The SQL router uses a DBI provider in embedded R or a DB-API provider in CPython.
+The R provider owns a managed DuckDB connection by default and can retain a user-selected DBI connection; the Python provider retains a user-selected DB-API connection without converting it or its result rows through reticulate.
 Its private R environment bridge conditionally wraps `base::library` and `base::loadNamespace`, applies accepted managed libraries, and reports activation outcomes.
 The Rust Python facade loads, retains, and initializes the selected file-backed `libpython`, or attaches its own handle if CPython was already initialized.
-It embeds and installs the private evaluator through that CPython API; reticulate attaches to the interpreter and continues to own object conversion, evaluation dispatch, its manifest, event handling, and interrupts.
+It embeds and installs the private evaluator and DB-API adapter through that CPython API; reticulate attaches to the interpreter and continues to own object conversion, Python-cell evaluation dispatch, its manifest, event handling, and interrupts.
 Its private Python runtime conditionally appends a last-chance import finder, while the R Python bridge owns the reticulate manifest and the callback into the existing managed-Python resolver.
 Bare sessions leave both resolution adapters disabled.
 Their user-visible behavior belongs in the [built-in runtime guide](BUILTIN_RUNTIME.md), while the sideband contract remains independent of the interpreter implementation.

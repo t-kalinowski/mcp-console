@@ -235,6 +235,62 @@ def test_resolves_missing_r_packages_during_evaluation(binary: Path) -> Transcri
         return client._finish()
 
 
+def test_does_not_resolve_missing_r_packages_from_sql_callbacks(
+    binary: Path,
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        directory = Path(temporary)
+        package = "mcpsqlcallback"
+        environment, record = recording_fixture_r_environment(directory, (package,))
+        client = McpClient(binary, ("serve",), environment)
+        client._initialize_and_list_tools()
+
+        # fmt: r
+        r = code(r"""
+            sql_requires_package <- function() {
+              as.integer(suppressWarnings(requireNamespace(
+                "mcpsqlcallback",
+                quietly = TRUE
+              )))
+            }
+            invisible()
+            """)
+        client.send(r=r)
+        assert last_tool_text(client) == "[done]"
+
+        # fmt: python
+        python = code("""
+            import sqlite3
+
+            connection = sqlite3.connect(":memory:")
+            connection.create_function("sql_requires_package", 0, r.sql_requires_package)
+            console_sql_connection(connection)
+            """)
+        client.send(python=python)
+        assert last_tool_text(client) == "[done]"
+        baseline = len(ir_run_records(record))
+
+        client.send(sql="SELECT sql_requires_package() AS resolved")
+        preview = last_tool_text(client)
+        assert preview.splitlines()[-1].split() == ["0"], preview
+        assert len(ir_run_records(record)) == baseline
+
+        # Automatic resolution resumes outside the SQL evaluation.
+        # fmt: r
+        r = code(r"""
+            stopifnot(
+              requireNamespace("mcpsqlcallback", quietly = TRUE),
+              is.function(mcpsqlcallback::fixture)
+            )
+            42L
+            """)
+        send_and_collect_runtime_r_resolution(client, "[1] 42\n", r=r)
+        runs = ir_run_records(record)[baseline:]
+        assert len(runs) == 1, runs
+        assert package in ir_requirements(runs[0]), runs
+        return client._finish()
+
+
 def test_resolves_reached_r_packages_at_runtime(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)

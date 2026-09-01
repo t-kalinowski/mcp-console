@@ -59,20 +59,26 @@ base::local(
 
     console_sql_connection <- function(connection) {
       if (is.null(connection)) {
-        selected_connection <<- ensure_managed_connection()
-        return(invisible(selected_connection))
+        connection <- ensure_managed_connection()
+      } else {
+        if (
+          !inherits(connection, "DBIConnection") ||
+            !isTRUE(tryCatch(
+              DBI::dbIsValid(connection),
+              error = function(...) FALSE
+            ))
+        ) {
+          stop("`connection` must be a valid DBIConnection or NULL")
+        }
       }
-      if (
-        !inherits(connection, "DBIConnection") ||
-          !isTRUE(tryCatch(
-            DBI::dbIsValid(connection),
-            error = function(...) FALSE
-          ))
-      ) {
-        stop("`connection` must be a valid DBIConnection or NULL")
-      }
+      invisible(.Call("mcp_console_sql_use_r"))
       selected_connection <<- connection
       invisible(selected_connection)
+    }
+
+    restore_managed_connection <- function() {
+      selected_connection <<- NULL
+      1L
     }
     tools <- base::attach(
       NULL,
