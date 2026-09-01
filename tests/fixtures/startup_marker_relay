@@ -1,0 +1,34 @@
+#!/usr/bin/env python3
+
+import errno
+import fcntl
+import json
+import os
+import sys
+from pathlib import Path
+
+extra_descriptors = []
+for name in os.listdir("/dev/fd"):
+    descriptor = int(name)
+    if descriptor < 3:
+        continue
+    try:
+        fcntl.fcntl(descriptor, fcntl.F_GETFD)
+    except OSError as error:
+        assert error.errno == errno.EBADF
+    else:
+        extra_descriptors.append(descriptor)
+
+marker = Path(os.environ["TMPDIR"]) / "mcp-console-startup-marker"
+marker.write_text(
+    json.dumps(
+        {
+            "pid": os.getpid(),
+            "extra_descriptors": extra_descriptors,
+        }
+    ),
+    encoding="utf-8",
+)
+
+binary = os.environ["MCP_CONSOLE_TEST_BINARY"]
+os.execv(binary, [binary, "worker-relay", *sys.argv[1:]])

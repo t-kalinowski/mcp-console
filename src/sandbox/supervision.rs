@@ -29,11 +29,11 @@ pub(super) fn run_manager() -> Result<(), String> {
 
 /// A sandbox process tree observed from one direct root.
 ///
-/// Darwin cannot atomically install a descendant observer at spawn time. A
-/// descendant that becomes orphaned before the post-spawn root watch or a
-/// corresponding fork observation remains outside this lifetime. A dedicated
-/// observer continuously consumes fork events while the generation is live;
-/// once a process is observed, retirement follows its PID and start time across
+/// Supported callers keep the configured target blocked until the root watch
+/// is installed. After release, a descendant that becomes orphaned before its
+/// fork event is resolved remains outside this lifetime. A dedicated observer
+/// continuously consumes fork events while the generation is live; once a
+/// process is observed, retirement follows its PID and start time across
 /// process-group and session changes. Lifecycle control wakes the blocking
 /// kqueue wait through an explicit user event.
 pub(crate) struct ObservedLifetime {
