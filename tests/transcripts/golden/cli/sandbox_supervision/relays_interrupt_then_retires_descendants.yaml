@@ -1,0 +1,32 @@
+---
+command:
+  - mcp-console
+  - sandbox
+  - --
+  - Rscript
+  - --vanilla
+  - -e
+  - |
+    child <- processx::process$new(
+      "/bin/sleep",
+      "60",
+      cleanup = FALSE
+    )
+    writeLines(c(
+      as.character(Sys.getpid()),
+      as.character(child$get_pid())
+    ))
+    flush.console()
+    tryCatch(
+      Sys.sleep(60),
+      interrupt = function(...) {
+        quit(save = "no", status = 130L, runLast = FALSE)
+      }
+    )
+stdout: |
+  <sandbox root pid>
+  <processx child pid>
+---
+signal: SIGINT
+exit_code: 130
+stderr: ""

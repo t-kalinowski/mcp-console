@@ -1,3 +1,5 @@
+#[path = "supervision/job_control.rs"]
+mod job_control;
 #[path = "supervision/manager.rs"]
 mod manager;
 #[path = "supervision/process.rs"]
@@ -8,6 +10,8 @@ mod process_retirement;
 mod process_tracker;
 #[path = "supervision/process_tree.rs"]
 mod process_tree;
+#[path = "supervision/root_exit_waiter.rs"]
+mod root_exit_waiter;
 #[path = "supervision/standalone.rs"]
 mod standalone;
 
@@ -54,6 +58,27 @@ enum ObservationResult {
 
 impl ObservedLifetime {
     pub(crate) fn start(root_pid: u32) -> Result<Self, String> {
+        Self::start_inner(root_pid, false).map(|(lifetime, _)| lifetime)
+    }
+
+    /// Starts the standalone observer and returns an independent wake handle
+    /// for the crash-manager monitor. If the manager exits unexpectedly, that
+    /// handle transfers the tracker back to the launcher even when signalling
+    /// the direct root fails.
+    pub(super) fn start_for_standalone(
+        root_pid: u32,
+    ) -> Result<(Self, process_tracker::ObserverWakeup), String> {
+        let (lifetime, manager_wakeup) = Self::start_inner(root_pid, true)?;
+        Ok((
+            lifetime,
+            manager_wakeup.expect("standalone observer should expose a manager wakeup"),
+        ))
+    }
+
+    fn start_inner(
+        root_pid: u32,
+        expose_manager_wakeup: bool,
+    ) -> Result<(Self, Option<process_tracker::ObserverWakeup>), String> {
         let root_pid = libc::pid_t::try_from(root_pid)
             .ok()
             .filter(|pid| *pid > 0)
@@ -63,6 +88,14 @@ impl ObservedLifetime {
         let observer_wakeup = match tracker.register_observer_wakeup() {
             Ok(observer_wakeup) => observer_wakeup,
             Err(error) => return Err(retire_after_observer_failure(tracker, error)),
+        };
+        let manager_wakeup = if expose_manager_wakeup {
+            match tracker.register_observer_wakeup() {
+                Ok(manager_wakeup) => Some(manager_wakeup),
+                Err(error) => return Err(retire_after_observer_failure(tracker, error)),
+            }
+        } else {
+            None
         };
 
         // Transfer the tracker only after the observer thread exists, so a
@@ -84,10 +117,18 @@ impl ObservedLifetime {
                         break;
                     }
                     let wait = next_stale_prune.saturating_duration_since(Instant::now());
-                    if let Err(observation_error) = tracker.wait_for_events(Some(wait)) {
-                        return Some(ObservationResult::Retired {
-                            error: retire_after_observer_failure(tracker, observation_error),
-                        });
+                    match tracker.wait_for_events(Some(wait)) {
+                        Ok(process_tracker::EventWait::Wakeup) => break,
+                        Ok(
+                            process_tracker::EventWait::Events
+                            | process_tracker::EventWait::RootExited
+                            | process_tracker::EventWait::TimedOut,
+                        ) => {}
+                        Err(observation_error) => {
+                            return Some(ObservationResult::Retired {
+                                error: retire_after_observer_failure(tracker, observation_error),
+                            });
+                        }
                     }
                     if observer_stop.load(Ordering::Acquire) {
                         break;
@@ -119,11 +160,20 @@ impl ObservedLifetime {
             ));
         }
 
-        Ok(Self {
-            stop_requested,
-            observer_wakeup: Some(observer_wakeup),
-            observer: Some(observer),
-        })
+        Ok((
+            Self {
+                stop_requested,
+                observer_wakeup: Some(observer_wakeup),
+                observer: Some(observer),
+            },
+            manager_wakeup,
+        ))
+    }
+
+    pub(super) fn is_finished(&self) -> bool {
+        self.observer
+            .as_ref()
+            .is_some_and(|observer| observer.is_finished())
     }
 
     /// Stops the root and every descendant observed from it.
