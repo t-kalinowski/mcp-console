@@ -13,9 +13,9 @@ use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt as _;
 use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -38,6 +38,7 @@ struct ManagerMonitor {
     identity: ProcessIdentity,
     preserve_after_normal_exit: Arc<AtomicBool>,
     preserve_unconditionally: Arc<AtomicBool>,
+    recovery_enabled: Arc<Mutex<bool>>,
     result: Receiver<Result<ManagerExit, String>>,
     thread: Option<JoinHandle<()>>,
 }
@@ -371,6 +372,8 @@ impl ManagerMonitor {
         let preserve_normal_for_monitor = Arc::clone(&preserve_after_normal_exit);
         let preserve_unconditionally = Arc::new(AtomicBool::new(false));
         let preserve_unconditionally_for_monitor = Arc::clone(&preserve_unconditionally);
+        let recovery_enabled = Arc::new(Mutex::new(true));
+        let recovery_enabled_for_monitor = Arc::clone(&recovery_enabled);
         let thread = std::thread::spawn(move || {
             let result = monitor_manager(
                 child,
@@ -379,6 +382,7 @@ impl ManagerMonitor {
                 cleanup_timeout,
                 preserve_normal_for_monitor,
                 preserve_unconditionally_for_monitor,
+                recovery_enabled_for_monitor,
             );
             let _ = result_sender.send(result);
         });
@@ -386,6 +390,7 @@ impl ManagerMonitor {
             identity,
             preserve_after_normal_exit,
             preserve_unconditionally,
+            recovery_enabled,
             result,
             thread: Some(thread),
         }
@@ -405,6 +410,14 @@ impl ManagerMonitor {
         self.preserve_unconditionally.store(true, Ordering::Release);
     }
 
+    fn disable_recovery(&self) {
+        let mut enabled = self
+            .recovery_enabled
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *enabled = false;
+    }
+
     fn finish(mut self, timeout: Duration) -> Result<ManagerExit, String> {
         let mut error = None;
         let result = match self.result.recv_timeout(timeout) {
@@ -422,13 +435,16 @@ impl ManagerMonitor {
                 // thread still owns the exact, unreaped manager child. Allow a
                 // second cleanup deadline for forced-exit recovery, then detach
                 // the monitor and preserve its directory guard rather than
-                // extending the bounded retirement wait.
+                // extending the bounded retirement wait. If fallback recovery
+                // has already started, retain the root pin until that bounded
+                // cleanup finishes before detaching.
                 match self.result.recv_timeout(timeout) {
                     Ok(result) => result,
                     Err(RecvTimeoutError::Disconnected) => {
                         Err("sandbox manager monitor ended without a result".to_string())
                     }
                     Err(RecvTimeoutError::Timeout) => {
+                        self.disable_recovery();
                         return Err(with_prior_error(
                             error,
                             "sandbox manager did not stop after forced termination".to_string(),
@@ -473,6 +489,7 @@ fn monitor_manager(
     cleanup_timeout: Duration,
     preserve_after_normal_exit: Arc<AtomicBool>,
     preserve_unconditionally: Arc<AtomicBool>,
+    recovery_enabled: Arc<Mutex<bool>>,
 ) -> Result<ManagerExit, String> {
     let completion = match platform::wait_for_process_exit_without_reaping_blocking(child.id()) {
         Ok(()) => child
@@ -493,8 +510,9 @@ fn monitor_manager(
             format!("sandbox manager exited with status {status}"),
             root_pid,
             cleanup_timeout,
+            &recovery_enabled,
         ),
-        Err(error) => finish_manager_failure(error, root_pid, cleanup_timeout),
+        Err(error) => finish_manager_failure(error, root_pid, cleanup_timeout, &recovery_enabled),
     };
     if result.is_err()
         || preserve_unconditionally.load(Ordering::Acquire)
@@ -527,16 +545,31 @@ fn finish_manager_failure(
     mut error: String,
     root_pid: libc::pid_t,
     cleanup_timeout: Duration,
+    recovery_enabled: &Mutex<bool>,
 ) -> Result<ManagerExit, String> {
+    let enabled = recovery_enabled
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if !*enabled {
+        return Err(error);
+    }
     let root = match process_info(root_pid) {
         Ok(Some(info)) if !info.is_zombie => info.identity,
-        Ok(_) => {
+        Ok(info) => {
             error = with_prior_error(
                 Some(error),
                 format!(
                     "manager recovery failed: sandbox root {root_pid} exited before fallback supervision"
                 ),
             );
+            if info.is_some()
+                && let Err(group_error) = stop_pinned_process_group(root_pid)
+            {
+                error = with_prior_error(
+                    Some(error),
+                    format!("manager recovery failed: {group_error}"),
+                );
+            }
             return Err(error);
         }
         Err(inspect_error) => {

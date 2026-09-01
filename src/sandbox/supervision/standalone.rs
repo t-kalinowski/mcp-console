@@ -3,7 +3,7 @@ use super::manager::{CleanupPreparation, SandboxManager};
 use super::process_tracker::EventWait;
 use super::root_exit_waiter::RootExitWaiter;
 use crate::sandbox::{TARGET_GATE_RELEASE, file_descriptors, platform};
-use std::io::Write as _;
+use std::io::{ErrorKind, Write as _};
 use std::os::fd::AsRawFd as _;
 use std::os::unix::net::UnixStream;
 use std::process::{Child, Command, ExitCode, ExitStatus};
@@ -93,14 +93,13 @@ pub(in crate::sandbox) fn status(
         return Err(error);
     }
 
-    if let Err(error) = launcher_gate
-        .write_all(&[TARGET_GATE_RELEASE])
-        .map_err(|error| format!("failed to release sandbox target startup gate: {error}"))
+    if let Err(write_error) = launcher_gate.write_all(&[TARGET_GATE_RELEASE])
+        && write_error.kind() != ErrorKind::BrokenPipe
     {
-        let mut error = match stop_managed_root(&mut child, manager) {
-            Ok(()) => error,
-            Err(stop_error) => additional_error(error, stop_error),
-        };
+        let mut error = format!("failed to release sandbox target startup gate: {write_error}");
+        if let Err(stop_error) = stop_managed_root(&mut child, manager) {
+            error = additional_error(error, stop_error);
+        }
         if let Err(terminal_error) = foreground_terminal.restore() {
             error = additional_error(error, terminal_error);
         }

@@ -54,7 +54,9 @@ If the manager exits unsuccessfully while the owner still retains a live, waitab
 The fallback revalidates process identities immediately before signaling and closes the still-pinned process group as a race backstop.
 It preserves the private directory on failure.
 If manager completion times out, the owner requests forced exit and allows one more bounded recovery interval.
-If the manager still does not report completion, the owner returns an error without joining the live monitor thread; that monitor retains and preserves the backup directory guard.
+If the manager still does not report completion, the owner disables fallback recovery before releasing the root's PID pin and returns an error without joining the live monitor thread.
+If bounded fallback recovery has already started, the owner retains the pin until it finishes instead.
+That monitor still reaps the manager if it exits later and retains and preserves the backup directory guard.
 
 This fallback can recover only descendants still reachable from the root's current ancestry.
 It cannot reconstruct a descendant that detached before the manager failed.
