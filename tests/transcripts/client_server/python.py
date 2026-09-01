@@ -2577,41 +2577,31 @@ def test_rejects_python_preparation_while_evaluation_is_running(
         client._initialize_and_list_tools()
         python = code("""
             runtime_generation_marker = "original runtime retained"
-            import time; from pathlib import Path
-            temporary = Path(__import__("os").environ["TMPDIR"])
-            (temporary / "python-evaluation-running").touch()
-            while not (temporary / "release-python").exists():
-                time.sleep(0.01)
+            preparation_gate = input("preparation gate> ")
             """)
-        client.send(python=python, timeout_ms=0)
-        assert last_tool_text(client) == "\n[running; poll with an empty send]"
-        client.transcript[-1]["result"]["content"][0]["text"] = "<running>"
-        running = wait_for_worker_file(
-            Path(temporary_directory),
-            "python-evaluation-running",
-            client,
+        client.send(python=python)
+        assert last_tool_text(client) == (
+            '[input requested: "preparation gate> "]\n[waiting for stdin]'
         )
-        release = running.parent / "release-python"
         uv_record.write_text("", encoding="utf-8")
 
         preparation_returned = threading.Event()
-        forced_release = threading.Event()
 
-        def release_blocked_evaluation() -> None:
-            if not preparation_returned.wait(2):
-                forced_release.set()
-                release.touch()
+        def stop_blocked_preparation() -> None:
+            # This is only a deadlock guard. The blocked input, not elapsed
+            # time, proves that a successful preparation response was prompt.
+            if not preparation_returned.wait(30):
+                client.process.kill()
 
-        watchdog = threading.Thread(target=release_blocked_evaluation)
+        watchdog = threading.Thread(target=stop_blocked_preparation)
         watchdog.start()
-        client.send(
-            requirements={"python": ["py-yaml12"]},
-        )
-        preparation_returned.set()
-        watchdog.join()
-        assert not forced_release.is_set(), (
-            "standalone preparation waited for the running evaluation"
-        )
+        try:
+            client.send(
+                requirements={"python": ["py-yaml12"]},
+            )
+        finally:
+            preparation_returned.set()
+            watchdog.join()
         result = client.transcript[-1]["result"]
         assert result["isError"] is True, result
         assert result["content"][0]["text"] == (
@@ -2629,9 +2619,9 @@ def test_rejects_python_preparation_while_evaluation_is_running(
         )
         assert uv_record.read_text(encoding="utf-8") == ""
 
-        release.touch()
-        client.send()
-        assert last_tool_text(client) == "[done]"
+        client.send(stdin="continue\n")
+        output = last_tool_text(client)
+        assert output == "[done]", repr(output)
         client.send(
             python=("runtime_generation_marker, 'combined_cell_ran' not in globals()")
         )
