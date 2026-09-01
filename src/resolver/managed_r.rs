@@ -10,6 +10,7 @@ use super::process::{
 const MANAGED_R_LIBRARY_RESOLVER_SOURCE: &str = include_str!("programs/r_library.R");
 const UV_BINARY_RESOLVER_SOURCE: &str = include_str!("programs/uv_binary.R");
 const MINIMUM_IR_VERSION: semver::Version = semver::Version::new(0, 4, 0);
+const PAK_SUBPROCESS_STARTUP_TIMEOUT_MILLISECONDS: &str = "60000";
 const UV_UNAVAILABLE_STATUSES: &[i32] = &[42, 43, 44];
 
 #[derive(Clone)]
@@ -349,6 +350,13 @@ fn resolve_r_with_process(
     }
     command
         .env("IR_NO_LOCAL_SOURCES", "1")
+        // Pak starts its resolver subprocess asynchronously. Its five-second
+        // default can expire while the host is oversubscribed, before the
+        // resolver subprocess has had a chance to report readiness.
+        .env(
+            "PKG_SUBPROCESS_TIMEOUT",
+            PAK_SUBPROCESS_STARTUP_TIMEOUT_MILLISECONDS,
+        )
         .args([
             "--isolated",
             "--vanilla",

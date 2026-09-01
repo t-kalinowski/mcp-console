@@ -73,6 +73,7 @@ def main() -> None:
             {
                 "arguments": arguments,
                 "no_local_sources": os.environ.get("IR_NO_LOCAL_SOURCES"),
+                "subprocess_timeout": os.environ.get("PKG_SUBPROCESS_TIMEOUT"),
             },
             stream,
         )
