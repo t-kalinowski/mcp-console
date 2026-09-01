@@ -50,6 +50,7 @@ def _build_supervision_interposer(directory: Path, behavior: str) -> Path:
     definitions = {
         "manager-start": "-DMCP_CONSOLE_INTERPOSE_MANAGER_START",
         "denied-sigkill": "-DMCP_CONSOLE_INTERPOSE_DENIED_SIGKILL",
+        "failed-process-info": "-DMCP_CONSOLE_INTERPOSE_FAILED_PROCESS_INFO",
         "late-cleanup": "-DMCP_CONSOLE_INTERPOSE_LATE_CLEANUP",
         "retirement-disposition": ("-DMCP_CONSOLE_INTERPOSE_RETIREMENT_DISPOSITION"),
     }
@@ -61,6 +62,7 @@ def _build_supervision_interposer(directory: Path, behavior: str) -> Path:
 #include <crt_externs.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <libproc.h>
 #include <signal.h>
 #include <stdatomic.h>
 #include <stdint.h>
@@ -83,6 +85,9 @@ static _Atomic int gated_manager_read = 0;
 #if defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_DISPOSITION)
 static _Atomic int gated_retirement_disposition = 0;
 #endif
+#if defined(MCP_CONSOLE_INTERPOSE_FAILED_PROCESS_INFO)
+static _Atomic int failed_process_info = 0;
+#endif
 
 #if defined(MCP_CONSOLE_INTERPOSE_DENIED_SIGKILL) \
     || defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP)
@@ -90,6 +95,14 @@ typedef int (*kill_function)(pid_t, int);
 
 static kill_function next_kill(void) {
     return kill;
+}
+#endif
+
+#if defined(MCP_CONSOLE_INTERPOSE_FAILED_PROCESS_INFO)
+typedef int (*proc_pidinfo_function)(int, int, uint64_t, void *, int);
+
+static proc_pidinfo_function next_proc_pidinfo(void) {
+    return proc_pidinfo;
 }
 #endif
 
@@ -130,6 +143,28 @@ static void wait_for_release(const char *name) {
     if (count != sizeof(value)) {
         _exit(125);
     }
+}
+#endif
+
+#if defined(MCP_CONSOLE_INTERPOSE_FAILED_PROCESS_INFO)
+static int fail_process_info(
+    int process_id,
+    int flavor,
+    uint64_t argument,
+    void *buffer,
+    int buffer_size
+) {
+    const char *trigger = getenv("MCP_CONSOLE_TEST_PROCESS_INFO_FAILURE_TRIGGER");
+    if (flavor == PROC_PIDTBSDINFO
+        && trigger != NULL
+        && access(trigger, F_OK) == 0) {
+        if (atomic_exchange(&failed_process_info, 1) == 0) {
+            signal_checkpoint("MCP_CONSOLE_TEST_PROCESS_INFO_FAILURE");
+        }
+        errno = EIO;
+        return 0;
+    }
+    return next_proc_pidinfo()(process_id, flavor, argument, buffer, buffer_size);
 }
 #endif
 
@@ -286,6 +321,8 @@ static ssize_t gate_retirement_disposition(
 DYLD_INTERPOSE(gate_manager_initialization, recv)
 #elif defined(MCP_CONSOLE_INTERPOSE_DENIED_SIGKILL)
 DYLD_INTERPOSE(deny_first_sigkill, kill)
+#elif defined(MCP_CONSOLE_INTERPOSE_FAILED_PROCESS_INFO)
+DYLD_INTERPOSE(fail_process_info, proc_pidinfo)
 #elif defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP)
 DYLD_INTERPOSE(delay_cleanup_acknowledgement, send)
 DYLD_INTERPOSE(deny_first_sigkill, kill)
@@ -851,6 +888,65 @@ def test_manager_recovery_failure_wakes_launcher(binary: Path) -> Transcript:
             ]
         finally:
             denied_sigkill.close()
+            _cleanup(lifetime)
+
+
+def test_manager_recovery_inspection_failure_stops_root(binary: Path) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        fixture_directory = Path(temporary_directory)
+        inspection_failed = FifoCheckpoint(fixture_directory / "inspection-failed")
+        failure_trigger = fixture_directory / "fail-process-info"
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "DYLD_INSERT_LIBRARIES": str(
+                    _build_supervision_interposer(
+                        fixture_directory,
+                        "failed-process-info",
+                    )
+                ),
+                "MCP_CONSOLE_TEST_PROCESS_INFO_FAILURE": str(inspection_failed.path),
+                "MCP_CONSOLE_TEST_PROCESS_INFO_FAILURE_TRIGGER": str(failure_trigger),
+            }
+        )
+        lifetime = _start_lifetime(binary, environment)
+        try:
+            failure_trigger.touch()
+            assert signal_darwin_process(lifetime.manager, signal.SIGKILL), (
+                "manager exited before crash injection"
+            )
+            inspection_failed.wait("launcher root-inspection failure")
+            returncode = lifetime.process.wait(timeout=TIMEOUT)
+            stderr = lifetime.process.stderr.read().decode("utf-8")
+            normalized_stderr = stderr.replace(
+                str(lifetime.root[0]),
+                "<sandbox root pid>",
+            )
+            assert returncode == 1, returncode
+            assert "manager recovery failed" in stderr, stderr
+            assert "failed to inspect sandbox process" in stderr, stderr
+            assert "Input/output error" in stderr, stderr
+            assert live_darwin_processes((lifetime.root, lifetime.manager)) == [], (
+                "sandbox root or manager survived failed recovery inspection"
+            )
+            assert lifetime.temporary_directory.exists(), (
+                "manager inspection failure removed the sandbox temporary directory"
+            )
+            command = _command_record(lifetime)
+            command["stderr"] = normalized_stderr
+            return [
+                command,
+                {
+                    "manager_signal": "SIGKILL",
+                    "manager_recovery_inspection": "EIO",
+                    "launcher_returncode": returncode,
+                    "verified_bounded_return": "after pinned root-group termination",
+                    "verified_cleanup": "sandbox root and manager",
+                    "verified_preservation": "sandbox temp",
+                },
+            ]
+        finally:
+            inspection_failed.close()
             _cleanup(lifetime)
 
 

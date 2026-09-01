@@ -544,6 +544,12 @@ fn finish_manager_failure(
                 Some(error),
                 format!("manager recovery failed: {inspect_error}"),
             );
+            if let Err(group_error) = stop_pinned_process_group(root_pid) {
+                error = with_prior_error(
+                    Some(error),
+                    format!("manager recovery failed: {group_error}"),
+                );
+            }
             return Err(error);
         }
     };
@@ -582,8 +588,15 @@ fn stop_process_group(root: ProcessIdentity) -> Result<(), String> {
             root.pid
         ));
     }
-    let root_pid = u32::try_from(root.pid)
-        .map_err(|_| format!("invalid sandbox process group {}", root.pid))?;
+    stop_pinned_process_group(root.pid)
+}
+
+fn stop_pinned_process_group(root_pid: libc::pid_t) -> Result<(), String> {
+    // The owner keeps the direct root waitable until monitor recovery returns,
+    // so its PID and process-group identity remain pinned even when libproc
+    // cannot inspect it.
+    let root_pid =
+        u32::try_from(root_pid).map_err(|_| format!("invalid sandbox process group {root_pid}"))?;
     platform::kill_process_group(root_pid)
         .map_err(|error| format!("failed to stop sandbox process group: {error}"))
 }
