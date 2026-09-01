@@ -852,9 +852,26 @@ class McpClient:
         self.stdin.flush()
         return entry
 
-    def _receive(self, entry: TranscriptEntry) -> None:
+    def _read_response_line(self) -> str:
         line = self.stdout.readline()
-        assert line, "mcp-console stopped before replying"
+        if line:
+            return line
+
+        return_code = self.process.poll()
+        standard_error = ""
+        readable, _, _ = select.select([self.stderr], [], [], 0)
+        if readable:
+            standard_error = os.read(self.stderr.fileno(), 64 * 1024).decode(
+                "utf-8",
+                errors="replace",
+            )
+        raise AssertionError(
+            "mcp-console stdout closed before replying: "
+            f"return_code={return_code!r}, stderr={standard_error!r}"
+        )
+
+    def _receive(self, entry: TranscriptEntry) -> None:
+        line = self._read_response_line()
         message = json.loads(line)
         assert message.pop("jsonrpc", None) == "2.0", message
         assert message.pop("id", None) == entry["id"], message
@@ -866,8 +883,7 @@ class McpClient:
         pending = {entry["id"]: entry for entry in entries}
         assert len(pending) == len(entries), "response batch reused a request ID"
         for _ in entries:
-            line = self.stdout.readline()
-            assert line, "mcp-console stopped before replying"
+            line = self._read_response_line()
             message = json.loads(line)
             assert message.pop("jsonrpc", None) == "2.0", message
             request_id = message.pop("id", None)

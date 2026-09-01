@@ -46,7 +46,10 @@ def _last_text(client: McpClient) -> str:
     return content[0]["text"]
 
 
-def _spawn_detached_generation(client: McpClient) -> Generation:
+def _spawn_detached_generation(
+    client: McpClient,
+    fixture_command: str | None = None,
+) -> Generation:
     # Use the bundled Python runtime and standard library so crash supervision
     # does not depend on an externally resolved R package. Starting a new
     # session proves that observation is not limited to the relay's group.
@@ -67,7 +70,10 @@ def _spawn_detached_generation(client: McpClient) -> Generation:
         print(f"child={crash_child.pid}")
         print(f"temp={os.environ['TMPDIR']}")
         """)
-    client.send(python=python)
+    if fixture_command is None:
+        client.send(python=python)
+    else:
+        client.send(r=fixture_command)
 
     result = client.transcript[-1]["result"]
     text = _last_text(client)
@@ -257,13 +263,17 @@ def test_server_crash_after_relay_exit_removes_temporary_directory(
     environment = os.environ.copy()
     environment["MCP_CONSOLE_TEST_MANAGER_GROUP_CLOSED"] = str(group_closed.path)
     environment["DYLD_INSERT_LIBRARIES"] = str(build_manager_interposer(temporary))
-    client = McpClient(binary, ("serve",), environment)
+    zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
+    client = McpClient(binary, ("serve", "--worker", str(zod)), environment)
     generation: Generation | None = None
     manager_identity: DarwinProcessIdentity | None = None
     server_identity: DarwinProcessIdentity | None = None
     try:
         client._initialize_and_list_tools()
-        generation = _spawn_detached_generation(client)
+        generation = _spawn_detached_generation(
+            client,
+            fixture_command="spawn detached sandbox crash child",
+        )
         manager_identity = capture_darwin_process_identity(
             _manager_pid(client.process.pid)
         )
