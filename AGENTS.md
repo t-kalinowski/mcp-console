@@ -59,7 +59,8 @@ MCP Console has four process boundaries:
 
 1. The client and server communicate through MCP JSON-RPC over stdio.
 2. Each host sandbox owner initializes one manager over a private fixed message on manager fd 0, receives its readiness response, and uses the same stream for the bounded normal-retirement disposition handoff.
-   The server does this once per worker generation; the standalone launcher does it once per command.
+   The server starts one manager for each worker generation, which may evaluate multiple cells before restart or replacement.
+   The standalone launcher starts one manager for each invocation of `mcp-console sandbox`, which runs one direct child command.
 3. The server and one per-generation relay communicate through the private, ordered JSONL protocol in `docs/RELAY_PROTOCOL.md`.
 4. The relay and worker communicate through the worker sideband plus worker fd 0, 1, and 2 as documented in `docs/WORKER_PROTOCOL.md`.
 

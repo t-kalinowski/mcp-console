@@ -75,7 +75,8 @@ The client does not communicate directly with a relay, worker, or resolver.
 
 ### Sandbox owner and sandbox manager
 
-The server initializes one sandbox manager per worker generation, and the standalone launcher initializes one per command.
+The server initializes one sandbox manager per worker generation, which may evaluate multiple cells before restart or replacement.
+The standalone launcher initializes one manager per invocation of `mcp-console sandbox`, which runs one direct child command.
 Initialization travels over the manager's standard input and waits for a one-byte readiness response.
 The fixed private initialization carries the owner and sandbox-root PIDs, cleanup timeout, and private temporary-directory path.
 The manager snapshots their process start times and validates the resulting exact identities before reporting readiness.
