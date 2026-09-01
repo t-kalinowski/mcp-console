@@ -105,7 +105,7 @@ fn supervise_owner(
         }
 
         match tracker.wait_for_events(None) {
-            Ok(EventWait::Events | EventWait::RootExited) => {}
+            Ok(EventWait::Events | EventWait::RootExited | EventWait::Wakeup) => {}
             Ok(EventWait::TimedOut) => {
                 return with_cleanup(
                     "sandbox manager process wait unexpectedly timed out".to_string(),

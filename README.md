@@ -177,8 +177,9 @@ A descendant that becomes orphaned before the manager observes it remains outsid
 The standalone `sandbox` command is available for development.
 Its launcher owns normal retirement and preserves the direct command's exit status while retiring descendants observed from that root, including descendants that entered another process group or session.
 On macOS, it also commits an independent manager after the launcher observer attaches.
-After manager readiness, abrupt launcher loss retires the descendants the manager observed and removes the private temporary directory after successful cleanup; unexpected manager loss instead terminates the root so the still-live launcher observer can finish retirement.
-A descendant that becomes orphaned before either post-spawn observer sees it remains outside that observer's guarantee, and an abrupt launcher exit before manager readiness remains outside crash cleanup.
+The requested command starts only after the manager has adopted the private temporary directory and reported readiness.
+After readiness, abrupt launcher loss retires the descendants the manager observed and removes the directory after successful cleanup; unexpected manager loss wakes the still-live launcher observer to finish retirement, even if the manager monitor cannot terminate the root itself.
+A descendant that later becomes orphaned before either observer sees its fork remains outside that observer's guarantee, and an abrupt launcher exit before manager readiness remains outside crash cleanup.
 The command inherits standard input, output, and error while closing other inherited file descriptors before the target runs.
 It does not add terminal job-control or signal-relay semantics beyond the inherited process relationships.
 Use the MCP server for the supported worker-generation lifecycle.

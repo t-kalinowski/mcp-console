@@ -72,6 +72,7 @@ Keep these ownership rules intact:
 - The server owns host-side relay lifetime observation and retirement, worker-generation state, operation admission, output cuts, pending-output budgets, response assembly, delivery ownership, retained requirements, and host resolvers.
   Do not move these responsibilities into the relay.
 - The standalone launcher owns normal observation and retirement of its direct sandbox command, its exit status, and its final temporary-directory disposition.
+  It releases the command's private startup gate only after attaching its local observer and receiving manager readiness.
   Do not move normal standalone cleanup or terminal semantics into the manager.
 - The sandbox manager owns only independent cleanup after abrupt loss of its server or standalone owner.
   It observes exact process identities, does not own logical generation state or relay transport, and does not signal an unpinned process group.

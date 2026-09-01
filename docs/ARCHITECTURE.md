@@ -55,6 +55,7 @@ The relay is the sandbox process-group leader and starts the configured worker i
 Submitted R, Python, and SQL cells run in the worker, not in the server or a host resolver.
 
 The standalone launcher retains its direct `sandbox-exec` child, observes that root and its descendants on the host, and commits the same kind of independent manager after its local observer attaches.
+The sandboxed child first runs a hidden wrapper blocked on a private release channel; the launcher releases it into the requested command only after manager readiness.
 It has no MCP, relay, worker, resolver, recording, or retained-session responsibilities.
 
 R, Python, and DuckDB dependency resolution follows a separate path.
@@ -125,7 +126,8 @@ The wait has a one-second maintenance deadline for pruning stale identities; lif
 ### Standalone launcher
 
 The standalone launcher owns normal observation and retirement for one direct sandbox command.
-It inherits the command's standard streams, closes other inherited descriptors before exec, retains the direct root as a waitable child, and returns that root's exit status when cleanup succeeds.
+It inherits the command's standard streams, closes every unrelated inherited descriptor before exec, retains the direct root as a waitable child, and returns that root's exit status when cleanup succeeds.
+It keeps the root blocked on a private descriptor while attaching its observer and committing manager crash ownership, then releases the root into the requested command.
 After root exit it marks normal retirement before terminating observed descendants, waits for manager cleanup, reaps the root, and supplies the final temporary-directory disposition.
 It does not own console state, dependency resolution, recording, relay transport, or worker protocol behavior.
 It also does not add terminal job-control or signal-relay semantics beyond the inherited process relationships.
@@ -139,7 +141,8 @@ It does not own session state, operation admission, relay transport, command exi
 
 On normal root exit, the manager preserves the directory for the owner's normal success-or-error disposition.
 It remains alive until the owner explicitly commits that disposition; loss of owner control before retirement starts instead selects crash cleanup.
-If the manager itself fails while its owner remains live, the owner monitor signals the exact root identity so the owner's local observer can complete retirement.
+If the manager itself fails while its owner remains live, every owner monitor signals the exact root identity.
+The standalone monitor also wakes its local tracker so it can complete retirement even if that signal fails.
 
 ### Relay
 
@@ -203,15 +206,18 @@ The server admits the worker only after the required readiness exchange succeeds
 
 ### Standalone command startup and retirement
 
-The standalone launcher creates a private temporary directory, configures `sandbox-exec`, closes nonstandard inherited descriptors, and spawns the direct command with inherited standard streams.
-It attaches its local descendant tracker first, then starts the independent manager and waits for readiness while retaining the root as a waitable child.
-An abrupt launcher exit before readiness and a descendant that escapes before the manager observes it remain outside crash cleanup.
+The standalone launcher creates a private temporary directory, configures `sandbox-exec`, closes unrelated nonstandard inherited descriptors, and asks it to run a hidden wrapper with inherited standard streams plus one private release descriptor.
+The wrapper blocks on that descriptor before requested command code executes.
+While retaining that root as a waitable child, the launcher attaches its local descendant tracker, starts the independent manager, and waits for the manager to adopt the directory and report readiness.
+It then writes one release byte; the same root closes the descriptor and replaces itself with the requested command.
+An abrupt launcher exit before readiness and a descendant that later escapes before an observer sees its fork remain outside crash cleanup.
 
 The launcher blocks in its local tracker until root exit or observation failure.
 Before its first local termination pass it marks normal retirement on the manager control stream.
 It then retires observed descendants, waits for the manager's cleanup acknowledgement, reaps the direct root, and commits remove after success or preserve after any cleanup error.
 If the launcher exits after the retirement marker but before final disposition, the manager preserves the directory; owner loss before that marker selects crash cleanup and removal after successful manager retirement.
-If the manager is killed while the launcher remains live, its monitor signals the exact root; the local tracker completes descendant retirement and the launcher returns the root's signal-derived status.
+If the manager is killed while the launcher remains live, its monitor signals the exact root and wakes the local tracker.
+The tracker completes descendant retirement even if the root signal fails; otherwise the launcher returns the root's signal-derived status.
 
 ### Evaluation
 

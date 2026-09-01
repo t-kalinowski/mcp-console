@@ -13,6 +13,7 @@ mod standalone;
 
 pub(crate) use self::manager::SandboxManager;
 use super::platform;
+use std::os::unix::net::UnixStream;
 use std::process::{Child, Command, ExitCode};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
@@ -181,8 +182,15 @@ fn retire_after_observer_failure(
 pub(super) fn status(
     sandbox_command: Command,
     temporary_directory: platform::TemporaryDirectory,
+    target_gate: UnixStream,
+    launcher_gate: UnixStream,
 ) -> Result<ExitCode, String> {
-    standalone::status(sandbox_command, temporary_directory)
+    standalone::status(
+        sandbox_command,
+        temporary_directory,
+        target_gate,
+        launcher_gate,
+    )
 }
 
 pub(super) fn stop_direct_child(child: &mut Child, primary: String) -> String {

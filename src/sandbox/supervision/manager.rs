@@ -4,6 +4,7 @@ mod entrypoint;
 mod protocol;
 
 use super::process::{ProcessIdentity, process_info, signal_process};
+use super::process_tracker::ObserverWakeup;
 use crate::sandbox::file_descriptors;
 use std::io::Read;
 use std::net::Shutdown;
@@ -52,6 +53,29 @@ impl SandboxManager {
         root_pid: u32,
         temporary_directory: &Path,
         cleanup_timeout: Duration,
+    ) -> Result<Self, String> {
+        Self::start_inner(root_pid, temporary_directory, cleanup_timeout, None)
+    }
+
+    pub(super) fn start_for_standalone(
+        root_pid: u32,
+        temporary_directory: &Path,
+        cleanup_timeout: Duration,
+        observer_wakeup: ObserverWakeup,
+    ) -> Result<Self, String> {
+        Self::start_inner(
+            root_pid,
+            temporary_directory,
+            cleanup_timeout,
+            Some(observer_wakeup),
+        )
+    }
+
+    fn start_inner(
+        root_pid: u32,
+        temporary_directory: &Path,
+        cleanup_timeout: Duration,
+        observer_wakeup: Option<ObserverWakeup>,
     ) -> Result<Self, String> {
         let owner_pid = libc::pid_t::try_from(std::process::id())
             .ok()
@@ -134,7 +158,12 @@ impl SandboxManager {
         }
 
         Ok(Self {
-            monitor: Some(ManagerMonitor::start(child, identity, root)),
+            monitor: Some(ManagerMonitor::start(
+                child,
+                identity,
+                root,
+                observer_wakeup,
+            )),
             control: stream,
             cleanup_timeout,
             retirement_started: false,
@@ -226,7 +255,12 @@ impl SandboxManager {
 }
 
 impl ManagerMonitor {
-    fn start(mut child: Child, identity: ProcessIdentity, root: ProcessIdentity) -> Self {
+    fn start(
+        mut child: Child,
+        identity: ProcessIdentity,
+        root: ProcessIdentity,
+        observer_wakeup: Option<ObserverWakeup>,
+    ) -> Self {
         let (result_sender, result) = mpsc::channel();
         let thread = std::thread::spawn(move || {
             let result = match child.wait() {
@@ -245,6 +279,9 @@ impl ManagerMonitor {
                 ),
             };
             let _ = result_sender.send(result);
+            if let Some(observer_wakeup) = observer_wakeup {
+                let _ = observer_wakeup.wake();
+            }
         });
         Self {
             identity,

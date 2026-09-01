@@ -20,7 +20,9 @@ A process that becomes orphaned before the root watch or a corresponding fork ev
 
 ## Standalone normal ownership
 
-The standalone launcher retains its direct `sandbox-exec` child and attaches a descendant tracker before committing crash ownership.
+The standalone launcher asks `sandbox-exec` to run a hidden wrapper that blocks on a private inherited release channel before executing the requested command.
+While that same direct root is blocked, the launcher attaches a descendant tracker, starts the manager, and waits for it to adopt the private temporary directory and report readiness.
+The launcher then sends one release byte; the wrapper closes the channel and replaces itself with the requested command.
 It blocks on that tracker until the direct root exits, then marks the start of normal retirement before the first termination pass.
 The launcher retires every identity its tracker observed, waits for the manager's independent cleanup acknowledgement, reaps the direct root, and commits the final remove-or-preserve directory disposition.
 The direct command's exit status remains the standalone command's exit status when cleanup succeeds.
@@ -50,6 +52,7 @@ The manager cannot recover a descendant that becomes orphaned before its tracker
 The owner's earlier observer can still own such a process during normal retirement, but that local ownership disappears with an abrupt owner exit.
 An uncatchable owner failure before manager readiness can also preempt manager commitment.
 Darwin does not provide an atomic spawn-and-observe operation that closes either interval.
+For the standalone path, the private release channel prevents requested command code from running during initial observer attachment and manager adoption.
 
 When the root exits while the owner remains live, the manager retires its observed descendants without removing the private directory.
 It keeps crash ownership until the owner sends a final directory disposition.
@@ -61,9 +64,9 @@ If manager control closes without that marker, the manager treats the loss as an
 ## Manager failure
 
 Each normal owner retains a blocking monitor for the manager process.
-An unexpected manager signal is treated as a sandbox-lifetime failure: the monitor signals the exact root identity.
+An unexpected manager signal is treated as a sandbox-lifetime failure: every monitor signals the exact root identity.
 For worker generations, the server observer remains alive and completes retirement of the observed tree before the normal server path closes the still-pinned process group as its race backstop.
-For a standalone command, the launcher tracker sees the root exit, retires its observed descendants, reaps the root, and returns the root's signal-derived exit status.
+For a standalone command, the monitor also wakes the launcher tracker so it starts retirement even if the root signal fails; otherwise the tracker sees root exit and returns the root's signal-derived exit status after cleanup.
 In both paths, successful local recovery removes the owner-held private temporary directory.
 
 A manager that survives its owner is self-contained.

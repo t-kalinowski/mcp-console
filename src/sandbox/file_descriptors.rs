@@ -2,17 +2,27 @@ use std::os::fd::RawFd;
 use std::os::unix::process::CommandExt as _;
 use std::process::Command;
 
-pub(super) fn close_unlisted(command: &mut Command) -> Result<(), String> {
+pub(super) fn close_unlisted_except(
+    command: &mut Command,
+    inherited_descriptor: RawFd,
+) -> Result<(), String> {
     // The standalone path reaches this point before starting any threads, so
     // this snapshot contains every inherited descriptor that can reach the
     // child. Change flags only after fork to leave the launcher unchanged.
     // Rust creates its later exec-error pipe with close-on-exec already set.
     let mut descriptors = open_descriptors()?;
+    if inherited_descriptor <= libc::STDERR_FILENO || !descriptors.contains(&inherited_descriptor) {
+        return Err("sandbox inherited descriptor is invalid".to_string());
+    }
     descriptors.retain(|descriptor| *descriptor > libc::STDERR_FILENO);
     unsafe {
         command.pre_exec(move || {
             for descriptor in &descriptors {
-                set_close_on_exec(*descriptor)?;
+                if *descriptor == inherited_descriptor {
+                    clear_close_on_exec(*descriptor)?;
+                } else {
+                    set_close_on_exec(*descriptor)?;
+                }
             }
             Ok(())
         });
@@ -103,6 +113,18 @@ fn open_descriptors() -> Result<Vec<RawFd>, String> {
 }
 
 fn set_close_on_exec(descriptor: RawFd) -> std::io::Result<()> {
+    update_close_on_exec(descriptor, true, true)
+}
+
+fn clear_close_on_exec(descriptor: RawFd) -> std::io::Result<()> {
+    update_close_on_exec(descriptor, false, false)
+}
+
+fn update_close_on_exec(
+    descriptor: RawFd,
+    close_on_exec: bool,
+    ignore_missing: bool,
+) -> std::io::Result<()> {
     let flags = loop {
         let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFD) };
         if flags >= 0 {
@@ -111,22 +133,27 @@ fn set_close_on_exec(descriptor: RawFd) -> std::io::Result<()> {
         let error = std::io::Error::last_os_error();
         match error.raw_os_error() {
             Some(libc::EINTR) => continue,
-            Some(libc::EBADF) => return Ok(()),
+            Some(libc::EBADF) if ignore_missing => return Ok(()),
             _ => return Err(error),
         }
     };
-    if flags & libc::FD_CLOEXEC != 0 {
+    let updated_flags = if close_on_exec {
+        flags | libc::FD_CLOEXEC
+    } else {
+        flags & !libc::FD_CLOEXEC
+    };
+    if flags == updated_flags {
         return Ok(());
     }
 
     loop {
-        if unsafe { libc::fcntl(descriptor, libc::F_SETFD, flags | libc::FD_CLOEXEC) } == 0 {
+        if unsafe { libc::fcntl(descriptor, libc::F_SETFD, updated_flags) } == 0 {
             return Ok(());
         }
         let error = std::io::Error::last_os_error();
         match error.raw_os_error() {
             Some(libc::EINTR) => continue,
-            Some(libc::EBADF) => return Ok(()),
+            Some(libc::EBADF) if ignore_missing => return Ok(()),
             _ => return Err(error),
         }
     }
