@@ -19,6 +19,7 @@ from _support import (
     Transcript,
     capture_darwin_process_identity,
     code,
+    darwin_child_process_identities,
     darwin_process_waits_for_control,
     darwin_process_waits_for_startup_release,
     kill_darwin_processes,
@@ -56,14 +57,32 @@ def _build_supervision_interposer(directory: Path) -> Path:
 #include <fcntl.h>
 #include <signal.h>
 #include <stdatomic.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
-#include <sys/syscall.h>
 #include <sys/types.h>
 #include <unistd.h>
 
 static _Atomic int denied_sigkill = 0;
+static _Atomic int delayed_cleanup = 0;
+static _Atomic int gated_manager_read = 0;
+
+typedef int (*kill_function)(pid_t, int);
+typedef ssize_t (*recv_function)(int, void *, size_t, int);
+typedef ssize_t (*send_function)(int, const void *, size_t, int);
+
+static kill_function next_kill(void) {
+    return kill;
+}
+
+static recv_function next_recv(void) {
+    return recv;
+}
+
+static send_function next_send(void) {
+    return send;
+}
 
 static void signal_checkpoint(const char *name) {
     const char *checkpoint = getenv(name);
@@ -73,7 +92,7 @@ static void signal_checkpoint(const char *name) {
     int descriptor = open(checkpoint, O_WRONLY | O_NONBLOCK);
     if (descriptor >= 0) {
         const char value = '1';
-        syscall(SYS_write, descriptor, &value, sizeof(value));
+        (void)write(descriptor, &value, sizeof(value));
         close(descriptor);
     }
 }
@@ -111,17 +130,33 @@ __attribute__((constructor))
 static void configure_interposer(void) {
     if (getenv("MCP_CONSOLE_TEST_MANAGER_START") != NULL
         || getenv("MCP_CONSOLE_TEST_LATE_CLEANUP") != NULL) {
-        if (is_subcommand("sandbox-manager")) {
-            if (getenv("MCP_CONSOLE_TEST_MANAGER_START") != NULL) {
-                signal_checkpoint("MCP_CONSOLE_TEST_MANAGER_START");
-                wait_for_release("MCP_CONSOLE_TEST_MANAGER_RELEASE");
-            }
-        } else if (!is_subcommand("sandbox")) {
+        if (!is_subcommand("sandbox-manager") && !is_subcommand("sandbox")) {
             unsetenv("DYLD_INSERT_LIBRARIES");
         }
     } else {
         unsetenv("DYLD_INSERT_LIBRARIES");
     }
+}
+
+static ssize_t gate_manager_initialization(
+    int descriptor,
+    void *buffer,
+    size_t length,
+    int flags
+) {
+    if (descriptor == STDIN_FILENO
+        && getenv("MCP_CONSOLE_TEST_MANAGER_START") != NULL
+        && is_subcommand("sandbox-manager")
+        && atomic_exchange(&gated_manager_read, 1) == 0) {
+        signal_checkpoint("MCP_CONSOLE_TEST_MANAGER_START");
+        wait_for_release("MCP_CONSOLE_TEST_MANAGER_RELEASE");
+    }
+    recv_function recv_next = next_recv();
+    if (recv_next == NULL) {
+        errno = ENOSYS;
+        return -1;
+    }
+    return recv_next(descriptor, buffer, length, flags);
 }
 
 static int deny_first_sigkill(pid_t process_id, int number) {
@@ -132,10 +167,13 @@ static int deny_first_sigkill(pid_t process_id, int number) {
         errno = EPERM;
         return -1;
     }
-    return (int)syscall(SYS_kill, process_id, number);
+    kill_function kill_next = next_kill();
+    if (kill_next == NULL) {
+        errno = ENOSYS;
+        return -1;
+    }
+    return kill_next(process_id, number);
 }
-
-static _Atomic int delayed_cleanup = 0;
 
 static ssize_t delay_cleanup_acknowledgement(
     int descriptor,
@@ -161,22 +199,42 @@ static ssize_t delay_cleanup_acknowledgement(
         }
         signal_checkpoint("MCP_CONSOLE_TEST_LATE_CLEANUP");
     }
-    return syscall(SYS_sendto, descriptor, buffer, length, flags, NULL, 0);
+    send_function send_next = next_send();
+    if (send_next == NULL) {
+        errno = ENOSYS;
+        return -1;
+    }
+    return send_next(descriptor, buffer, length, flags);
 }
 
-__attribute__((used))
-static struct {
-    const void *replacement;
-    const void *replacee;
-} interposers[] __attribute__((section("__DATA,__interpose"))) = {
-    {(const void *)&deny_first_sigkill, (const void *)&kill},
-    {(const void *)&delay_cleanup_acknowledgement, (const void *)&send},
-};
+#define DYLD_INTERPOSE(replacement, replacee)                                  \
+    __attribute__((used)) static struct {                                      \
+        const void *replacement;                                               \
+        const void *replacee;                                                  \
+    } interpose_##replacee __attribute__((section("__DATA,__interpose"))) = {  \
+        (const void *)(uintptr_t)&replacement,                                 \
+        (const void *)(uintptr_t)&replacee,                                    \
+    };
+
+DYLD_INTERPOSE(gate_manager_initialization, recv)
+DYLD_INTERPOSE(deny_first_sigkill, kill)
+DYLD_INTERPOSE(delay_cleanup_acknowledgement, send)
 """.removeprefix("\n"),
         encoding="utf-8",
     )
     subprocess.run(
-        ["cc", "-dynamiclib", "-o", library, source],
+        [
+            "cc",
+            "-std=c11",
+            "-Wall",
+            "-Wextra",
+            "-Wpedantic",
+            "-Werror",
+            "-dynamiclib",
+            "-o",
+            library,
+            source,
+        ],
         check=True,
         capture_output=True,
         text=True,
@@ -229,68 +287,14 @@ def _manager_pid(launcher_pid: int) -> int:
         time.sleep(0.01)
 
 
-def _root_pid(launcher_pid: int, manager_pid: int) -> int:
-    result = subprocess.run(
-        ["/bin/ps", "-axo", "pid=,ppid="],
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=TIMEOUT,
-    )
-    matches = []
-    for line in result.stdout.splitlines():
-        process_id, parent_id = line.split()
-        if int(parent_id) == launcher_pid and int(process_id) != manager_pid:
-            matches.append(int(process_id))
-    assert len(matches) == 1, (launcher_pid, manager_pid, matches)
-    return matches[0]
-
-
-def _process_state(identity: DarwinProcessIdentity) -> str:
-    assert live_darwin_processes((identity,)), "sandbox root exited before state check"
-    result = subprocess.run(
-        ["/bin/ps", "-p", str(identity[0]), "-o", "state="],
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=TIMEOUT,
-    )
-    assert live_darwin_processes((identity,)), "sandbox root changed during state check"
-    return result.stdout.strip()
-
-
-def _process_command(identity: DarwinProcessIdentity) -> str:
-    assert live_darwin_processes((identity,)), (
-        "sandbox root exited before command check"
-    )
-    result = subprocess.run(
-        ["/bin/ps", "-ww", "-p", str(identity[0]), "-o", "command="],
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=TIMEOUT,
-    )
-    assert live_darwin_processes((identity,)), (
-        "sandbox root changed during command check"
-    )
-    return result.stdout.strip()
-
-
 def _wait_for_private_startup_gate(identity: DarwinProcessIdentity) -> None:
     deadline = time.monotonic() + TIMEOUT
-    while True:
-        state = _process_state(identity)
-        assert not state.startswith("T"), (
-            "sandbox target used a signal-releasable startup gate"
+    while not darwin_process_waits_for_startup_release(identity):
+        assert live_darwin_processes((identity,)), (
+            "sandbox root exited before reaching its private startup gate"
         )
-        command = _process_command(identity)
-        if (
-            " sandbox-target --gate-fd " in command
-            and darwin_process_waits_for_startup_release(identity)
-        ):
-            return
         assert time.monotonic() < deadline, (
-            f"sandbox target did not block at its private startup gate: {state}"
+            "sandbox target did not block at its private startup gate"
         )
         time.sleep(0.01)
 
@@ -492,8 +496,9 @@ def _command_record(lifetime: _SandboxLifetime) -> dict[str, object]:
 
 
 def test_target_waits_for_manager_adoption(binary: Path) -> Transcript:
-    # The manager constructor is held before it can read initialization or
-    # adopt TMPDIR. The exact root must already be blocked on its private gate.
+    # The manager's first control read is held before it can consume
+    # initialization or adopt TMPDIR. The exact root must already be blocked on
+    # its private gate.
     # fmt: python
     script = code(r"""
         import os
@@ -529,11 +534,31 @@ def test_target_waits_for_manager_adoption(binary: Path) -> Transcript:
         sandbox_temporary_directory: Path | None = None
         try:
             manager_started.wait("manager startup before temporary-directory adoption")
-            manager = capture_darwin_process_identity(_manager_pid(process.pid))
-            identities.append(manager)
-            root = capture_darwin_process_identity(_root_pid(process.pid, manager[0]))
-            identities.append(root)
-            _wait_for_private_startup_gate(root)
+            launcher = capture_darwin_process_identity(process.pid)
+            children = darwin_child_process_identities(launcher)
+            assert len(children) == 2, children
+            deadline = time.monotonic() + TIMEOUT
+            gated: list[DarwinProcessIdentity] = []
+            while not gated:
+                gated = [
+                    child
+                    for child in children
+                    if darwin_process_waits_for_startup_release(child)
+                ]
+                assert len(gated) <= 1, (children, gated)
+                if gated:
+                    break
+                assert live_darwin_processes(children) == [
+                    child[0] for child in children
+                ], children
+                assert time.monotonic() < deadline, (
+                    "sandbox root did not reach its private startup gate"
+                )
+                time.sleep(0.01)
+            assert len(gated) == 1, (children, gated)
+            root = gated[0]
+            manager = next(child for child in children if child != root)
+            identities.extend((root, manager))
             temporary_directories = list(
                 fixture_directory.glob(f"mcp-console-tmp-{process.pid}-*")
             )

@@ -60,6 +60,12 @@ class _DarwinThreadInfo(ctypes.Structure):
 _LIBPROC = None
 if sys.platform == "darwin":
     _LIBPROC = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+    _LIBPROC.proc_listchildpids.argtypes = [
+        ctypes.c_int,
+        ctypes.c_void_p,
+        ctypes.c_int,
+    ]
+    _LIBPROC.proc_listchildpids.restype = ctypes.c_int
     _LIBPROC.proc_pidinfo.argtypes = [
         ctypes.c_int,
         ctypes.c_int,
@@ -110,6 +116,35 @@ def live_darwin_processes(
         for identity in identities
         if current_darwin_process_identity(identity[0]) == identity
     ]
+
+
+def darwin_child_process_identities(
+    parent: DarwinProcessIdentity,
+) -> tuple[DarwinProcessIdentity, ...]:
+    assert _LIBPROC is not None
+    assert current_darwin_process_identity(parent[0]) == parent, (
+        "parent process exited before child inspection"
+    )
+    capacity = 16
+    while True:
+        child_pids = (ctypes.c_int * capacity)()
+        ctypes.set_errno(0)
+        count = _LIBPROC.proc_listchildpids(
+            parent[0],
+            child_pids,
+            ctypes.sizeof(child_pids),
+        )
+        error = ctypes.get_errno()
+        if count < 0 or (count == 0 and error != 0):
+            raise OSError(error, f"failed to list children of process {parent[0]}")
+        if count < capacity:
+            break
+        capacity *= 2
+
+    assert current_darwin_process_identity(parent[0]) == parent, (
+        "parent process changed during child inspection"
+    )
+    return tuple(capture_darwin_process_identity(pid) for pid in child_pids[:count])
 
 
 def _darwin_process_resources(
