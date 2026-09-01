@@ -173,7 +173,8 @@ mcp-console --version
 `mcp-console serve` communicates with its MCP client over standard input and output.
 Normal restart, automatic worker replacement, and orderly server shutdown retire descendants observed from each worker generation, including descendants that entered another process group or session.
 On macOS, each worker generation also commits an independent host manager that retires the descendants it observed and attempts to remove the private temporary directory after an abrupt server exit outside an in-progress normal retirement.
-A descendant that becomes orphaned before the manager observes it remains outside crash cleanup even after manager readiness.
+The built-in or configured relay starts only after the server observer is attached and that manager has adopted the private temporary directory and reported readiness.
+A later descendant that becomes orphaned before the manager resolves its fork event remains outside crash cleanup.
 The standalone `sandbox` command is available for development.
 Its launcher owns normal retirement and preserves the direct command's exit status while retiring descendants observed from that root, including descendants that entered another process group or session.
 On macOS, it also commits an independent manager after the launcher observer attaches.

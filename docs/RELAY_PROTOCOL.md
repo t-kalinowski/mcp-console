@@ -11,21 +11,25 @@ The [worker protocol](WORKER_PROTOCOL.md) defines the relay's other interface.
 ## Process boundary
 
 The server remains outside the sandbox.
-For each worker generation it starts one relay as the direct sandbox child, and the relay starts the configured worker inside the same sandbox:
+For each worker generation it starts `sandbox-exec` as the direct child.
+That root first runs a hidden wrapper blocked on a private startup gate.
+After the server attaches its normal observer and the independent manager reports readiness, the server releases the wrapper; it closes the gate and replaces itself with the configured relay in the same process identity.
+The relay then starts the configured worker inside the same sandbox:
 
 ```text
-server <--> (worker relay <--> worker)
+server <--> (gated root -> worker relay <--> worker)
 ```
 
 The parentheses mark the sandbox boundary.
 The relay is also the dedicated sandbox process-group leader, and the worker inherits that group.
 
-Only the relay's standard input, standard output, and standard error cross the server/sandbox boundary.
+Once relay code begins, only its standard input, standard output, and standard error cross the server/sandbox boundary.
 Standard input and output carry the framed relay protocol described below.
 Relay standard error is inherited from the server and is not part of the protocol; it is normally empty and is reserved for fatal or infrastructure diagnostics.
 Runtime failures are also represented by a `fatal` event when relay stdout remains usable.
 The framed event is authoritative; stderr diagnostics are best effort because the server's outer fail-safe can terminate a failed relay before its final diagnostic is written.
-The server marks every other inherited descriptor close-on-exec in the forked child before it executes `sandbox-exec`, so a descriptor opened by another server thread cannot cross this boundary.
+The server marks every nonstandard inherited descriptor close-on-exec in the forked child except the private startup gate.
+The hidden wrapper closes that gate before relay exec, so a descriptor opened by another server thread and the private gate itself cannot reach relay code.
 
 The relay creates the worker's private full-duplex sideband socket pair and its standard-input, standard-output, and standard-error pipes after entering the sandbox.
 It passes one worker sideband endpoint through `MCP_CONSOLE_SIDEBAND_FD` together with the fd-0/1/2 contract documented in [`WORKER_PROTOCOL.md`](WORKER_PROTOCOL.md).
@@ -185,11 +189,11 @@ It waits through the worker deadline and uses the additional two-second allowanc
 While the generation is live, the server continuously observes descendants from the relay and records each PID together with its process start time.
 At retirement it first stops the observed tree across process-group and session changes, then always closes the original sandbox process-group lifetime as a backstop for a same-group fork that raced observation, and finally reaps the relay.
 Concurrent or repeated retirement reuses the recorded result and never signals a retired PID or process group again.
-Darwin cannot atomically install this observer at spawn time, so a descendant that becomes orphaned before the initial relay watch or before its fork event can be resolved remains outside the guarantee.
+Darwin cannot resolve every later fork atomically, so a descendant that becomes orphaned before its fork event is resolved remains outside the guarantee.
 This is the server-owned normal lifetime.
 A separate host sandbox manager is committed during relay spawn and independently observes the server and relay tree.
 After readiness it handles abrupt server loss without adding relay messages.
-A descendant that escapes before the manager observes it remains outside that crash-cleanup guarantee.
+A later descendant that becomes orphaned before the manager resolves its fork event remains outside that crash-cleanup guarantee.
 
 ## Retirement and failure
 

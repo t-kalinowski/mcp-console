@@ -25,9 +25,9 @@ const FINISH_ALLOWANCE: Duration = Duration::from_secs(1);
 ///
 /// Normal retirement remains in the owner's continuously serviced observer.
 /// Once this manager reports readiness, it supplies a second observation path
-/// that survives abrupt loss of the server or standalone launcher. A descendant
-/// that escapes before the manager's post-spawn tracker observes it remains
-/// outside this guarantee even after readiness.
+/// that survives abrupt loss of the server or standalone launcher. A later
+/// descendant that becomes orphaned before the manager resolves its fork event
+/// remains outside this guarantee even after readiness.
 pub(crate) struct SandboxManager {
     monitor: Option<ManagerMonitor>,
     control: UnixStream,

@@ -517,7 +517,8 @@ The [implemented architecture](ARCHITECTURE.md) describes the session record and
 - Only default-device R graphics and open pyplot figures are captured automatically.
 - Normal restart, automatic failure replacement, and orderly server shutdown retire descendants observed from the relay across process-group and session changes.
   After its host manager reports readiness, abrupt server exit outside an in-progress normal retirement also retires descendants observed by that independent manager and attempts to remove the private temporary directory after successful cleanup.
-  A descendant that becomes orphaned before the manager observes it remains outside crash cleanup even after readiness.
+  The configured relay starts only after the server observer is attached and the manager reports readiness.
+  A later descendant that becomes orphaned before the manager resolves its fork event remains outside crash cleanup.
 - Linux and Windows are not supported.
 
 The [architecture](ARCHITECTURE.md) explains lifecycle and process ownership.

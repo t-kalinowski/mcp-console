@@ -70,6 +70,7 @@ Keep these ownership rules intact:
   It owns local worker transports, sideband translation, and direct-worker signal delivery, bounded termination, and reaping.
   It preserves each producer's order and supplies serialized observation order; it does not reconstruct chronology across independent sideband, stdout, and stderr transports.
 - The server owns host-side relay lifetime observation and retirement, worker-generation state, operation admission, output cuts, pending-output budgets, response assembly, delivery ownership, retained requirements, and host resolvers.
+  It releases each relay root's private startup gate only after attaching its local observer and receiving manager readiness.
   Do not move these responsibilities into the relay.
 - The standalone launcher owns normal observation and retirement of its direct sandbox command, its exit status, and its final temporary-directory disposition.
   It releases the command's private startup gate only after attaching its local observer and receiving manager readiness.
@@ -101,7 +102,7 @@ Keep these ownership rules intact:
 - `src/relay_protocol.rs` — server-relay JSONL message and framing contract.
 - `src/worker_relay.rs` — sandboxed worker launch, I/O forwarding, signaling, shutdown, and reaping.
 - `src/worker_client.rs`, `src/worker_client/` — server-owned environment, evaluation, lifecycle, ordered event dispatch, output tape, and macOS relay transport.
-- `src/sandbox.rs`, `src/sandbox/supervision.rs`, `src/sandbox/supervision/` — sandbox process launch, owner-side descendant observation, and independent crash-manager supervision.
+- `src/sandbox.rs`, `src/sandbox/{child,command,spawn}.rs`, `src/sandbox/supervision.rs`, `src/sandbox/supervision/` — sandbox command construction, launch, child retirement, owner-side descendant observation, and independent crash-manager supervision.
 - `src/worker.rs`, `src/worker/embedded_r.rs`, `src/r_repl.c` — worker-facing facade, current embedded-R backend, cell dispatch, console callbacks, and the C-owned DLL-REPL boundary.
 
 ### Language adapters
