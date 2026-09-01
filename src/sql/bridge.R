@@ -2,6 +2,7 @@ base::local(
   {
     managed_connection <- NULL
     selected_connection <- NULL
+    selected_backend <- NULL
     source <- NULL
     printer_ready <- FALSE
     preview_rows <- 20L
@@ -46,9 +47,15 @@ base::local(
       invisible(managed_connection)
     }
 
+    select_managed_connection <- function() {
+      selected_connection <<- ensure_managed_connection()
+      selected_backend <<- "managed"
+      invisible(selected_connection)
+    }
+
     ensure_connection <- function() {
       if (is.null(selected_connection)) {
-        selected_connection <<- ensure_managed_connection()
+        select_managed_connection()
       }
       selected_connection
     }
@@ -57,23 +64,68 @@ base::local(
       ensure_connection()
     }
 
+    python_error_message <- function(error) {
+      detail <- tryCatch(
+        reticulate::py_last_error(),
+        error = function(...) NULL
+      )
+      if (
+        !is.null(detail) &&
+          is.character(detail$value) &&
+          length(detail$value) == 1L &&
+          nzchar(detail$value)
+      ) {
+        return(detail$value)
+      }
+      conditionMessage(error)
+    }
+
+    is_python_connection <- function(connection) {
+      if (!inherits(connection, "python.builtin.object")) {
+        return(FALSE)
+      }
+      isTRUE(tryCatch(
+        {
+          cursor <- reticulate::py_get_attr(connection, "cursor")
+          reticulate::import_builtins(convert = TRUE)$callable(cursor)
+        },
+        error = function(...) FALSE
+      ))
+    }
+
     console_sql_connection <- function(connection) {
       if (is.null(connection)) {
-        selected_connection <<- ensure_managed_connection()
-        return(invisible(selected_connection))
+        return(select_managed_connection())
       }
       if (
-        !inherits(connection, "DBIConnection") ||
-          !isTRUE(tryCatch(
+        inherits(connection, "DBIConnection") &&
+          isTRUE(tryCatch(
             DBI::dbIsValid(connection),
             error = function(...) FALSE
           ))
       ) {
-        stop("`connection` must be a valid DBIConnection or NULL")
+        selected_connection <<- connection
+        selected_backend <<- if (identical(connection, managed_connection)) {
+          "managed"
+        } else {
+          "dbi"
+        }
+        return(invisible(selected_connection))
       }
-      selected_connection <<- connection
-      invisible(selected_connection)
+      if (is_python_connection(connection)) {
+        selected_connection <<- connection
+        selected_backend <<- "dbapi"
+        return(invisible(selected_connection))
+      }
+      stop(
+        paste(
+          "`connection` must be a valid DBIConnection,",
+          "a Python DB-API connection, or NULL"
+        ),
+        call. = FALSE
+      )
     }
+
     tools <- base::attach(
       NULL,
       pos = 2L,
@@ -89,6 +141,40 @@ base::local(
       console_sql_connection,
       envir = tools
     )
+
+    install_python_tool <- function() {
+      callback <- reticulate::py_func(function(connection = NULL) {
+        console_sql_connection(connection)
+        invisible(NULL)
+      })
+      reticulate::py_set_attr(
+        reticulate::import_builtins(convert = FALSE),
+        "console_sql_connection",
+        callback
+      )
+      invisible()
+    }
+
+    install_python_hooks <- function(...) {
+      namespace <- asNamespace("reticulate")
+      base::setHook(
+        "reticulate.onPyInit",
+        install_python_tool,
+        action = "append"
+      )
+      if (get("is_python_initialized", envir = namespace)()) {
+        install_python_tool()
+      }
+      invisible()
+    }
+    setHook(
+      packageEvent("reticulate", "onLoad"),
+      install_python_hooks,
+      action = "append"
+    )
+    if ("reticulate" %in% loadedNamespaces()) {
+      install_python_hooks()
+    }
 
     ensure_printer <- function() {
       if (printer_ready) {
@@ -186,6 +272,169 @@ base::local(
           list(schema = schema, batch = batch)
         },
         finally = DBI::dbClearResult(result)
+      )
+    }
+
+    dbapi_is_null <- function(value) {
+      is.null(value) ||
+        (
+          length(value) == 1L &&
+            is.atomic(value) &&
+            isTRUE(is.na(value))
+        )
+    }
+
+    dbapi_value_type <- function(value) {
+      if (dbapi_is_null(value)) {
+        return(NULL)
+      }
+      if (is.logical(value)) {
+        return("bool")
+      }
+      if (is.integer(value)) {
+        return("int64")
+      }
+      if (is.numeric(value)) {
+        return("double")
+      }
+      if (is.character(value)) {
+        return("string")
+      }
+      if (is.raw(value)) {
+        return("binary")
+      }
+      if (inherits(value, "Date")) {
+        return("date32")
+      }
+      if (inherits(value, "POSIXt")) {
+        return("timestamp")
+      }
+      if (inherits(value, "difftime")) {
+        return("duration")
+      }
+      classes <- class(value)
+      python_class <- classes[startsWith(classes, "python.")][1L]
+      if (!is.na(python_class)) {
+        return(sub("^python\\.(builtin\\.)?", "", python_class))
+      }
+      "object"
+    }
+
+    dbapi_column_type <- function(values) {
+      types <- unique(Filter(
+        Negate(is.null),
+        lapply(values, dbapi_value_type)
+      ))
+      if (length(types) == 0L) {
+        return("unknown")
+      }
+      if (all(types %in% c("int64", "double"))) {
+        return(if ("double" %in% types) "double" else "int64")
+      }
+      if (length(types) == 1L) {
+        return(types[[1L]])
+      }
+      "object"
+    }
+
+    dbapi_cell <- function(value) {
+      if (dbapi_is_null(value)) {
+        return(list(value = NA_character_, truncated = FALSE))
+      }
+      text <- if (is.raw(value)) {
+        paste0(
+          "b'",
+          paste(sprintf("\\x%02x", as.integer(value)), collapse = ""),
+          "'"
+        )
+      } else if (inherits(value, "python.builtin.object")) {
+        reticulate::py_str(value)
+      } else if (length(value) == 1L) {
+        as.character(value)
+      } else {
+        paste(as.character(value), collapse = ", ")
+      }
+      truncated <- nchar(text, type = "chars") > cell_width
+      if (truncated) {
+        text <- paste0(substr(text, 1L, cell_width - 1L), "…")
+      }
+      list(value = text, truncated = truncated)
+    }
+
+    fetch_dbapi <- function() {
+      reticulate::py_clear_last_error()
+      cursor <- NULL
+      on.exit(
+        if (!is.null(cursor)) {
+          try(
+            reticulate::py_call(
+              reticulate::py_get_attr(cursor, "close")
+            ),
+            silent = TRUE
+          )
+        },
+        add = TRUE
+      )
+
+      tryCatch(
+        {
+          cursor <- reticulate::py_call(
+            reticulate::py_get_attr(selected_connection, "cursor")
+          )
+          invisible(reticulate::py_call(
+            reticulate::py_get_attr(cursor, "execute"),
+            source
+          ))
+          description <- reticulate::py_to_r(
+            reticulate::py_get_attr(cursor, "description")
+          )
+          if (is.null(description) || length(description) == 0L) {
+            return(NULL)
+          }
+
+          rows <- reticulate::py_to_r(reticulate::py_call(
+            reticulate::py_get_attr(cursor, "fetchmany"),
+            preview_rows + 1L
+          ))
+          fetched_rows <- length(rows)
+          rows <- rows[seq_len(min(fetched_rows, preview_rows))]
+          total_columns <- length(description)
+          columns <- min(total_columns, preview_columns)
+          names <- vapply(
+            description[seq_len(columns)],
+            function(column) as.character(column[[1L]]),
+            character(1)
+          )
+          column_values <- lapply(seq_len(columns), function(column) {
+            lapply(rows, function(row) row[[column]])
+          })
+          cells <- lapply(column_values, function(values) {
+            lapply(values, dbapi_cell)
+          })
+          values <- lapply(cells, function(column) {
+            vapply(column, `[[`, character(1), "value")
+          })
+          truncated <- lapply(cells, function(column) {
+            vapply(column, `[[`, logical(1), "truncated")
+          })
+          types <- vapply(
+            column_values,
+            dbapi_column_type,
+            character(1)
+          )
+          list(
+            values = values,
+            names = names,
+            types = types,
+            truncated = truncated,
+            rows = length(rows),
+            total_columns = total_columns,
+            more_rows = fetched_rows > preview_rows
+          )
+        },
+        error = function(error) {
+          stop(python_error_message(error), call. = FALSE)
+        }
       )
     }
 
@@ -361,6 +610,43 @@ base::local(
       paste(c(output, markers), collapse = "\n")
     }
 
+    render_table <- function(
+      values,
+      names,
+      types,
+      truncated,
+      rows,
+      total_columns,
+      more_rows
+    ) {
+      visible_rows <- rows
+      visible_columns <- length(values)
+      repeat {
+        output <- format_table(
+          values,
+          names,
+          types,
+          truncated,
+          visible_rows,
+          visible_columns,
+          rows,
+          total_columns,
+          more_rows
+        )
+        if (nchar(output, type = "bytes") + 1L <= response_bytes) {
+          cat(output, "\n", sep = "")
+          return(invisible(NULL))
+        }
+        if (visible_rows > 0L) {
+          visible_rows <- visible_rows - 1L
+        } else if (visible_columns > 1L) {
+          visible_columns <- visible_columns - 1L
+        } else {
+          stop("SQL preview cannot fit within the response budget")
+        }
+      }
+    }
+
     render_preview <- function(preview, id) {
       schema <- preview$schema
       batch <- preview$batch
@@ -389,32 +675,15 @@ base::local(
         truncated <- cells$truncated
       }
 
-      visible_rows <- rows
-      visible_columns <- columns
-      repeat {
-        output <- format_table(
-          values,
-          names,
-          types,
-          truncated,
-          visible_rows,
-          visible_columns,
-          rows,
-          total_columns,
-          more_rows
-        )
-        if (nchar(output, type = "bytes") + 1L <= response_bytes) {
-          cat(output, "\n", sep = "")
-          return(invisible(NULL))
-        }
-        if (visible_rows > 0L) {
-          visible_rows <- visible_rows - 1L
-        } else if (visible_columns > 1L) {
-          visible_columns <- visible_columns - 1L
-        } else {
-          stop("SQL preview cannot fit within the response budget")
-        }
-      }
+      render_table(
+        values,
+        names,
+        types,
+        truncated,
+        rows,
+        total_columns,
+        more_rows
+      )
     }
 
     evaluate_impl <- function(id) {
@@ -422,10 +691,11 @@ base::local(
         {
           ensure_connection()
           if (
-            !isTRUE(tryCatch(
-              DBI::dbIsValid(selected_connection),
-              error = function(...) FALSE
-            ))
+            selected_backend != "dbapi" &&
+              !isTRUE(tryCatch(
+                DBI::dbIsValid(selected_connection),
+                error = function(...) FALSE
+              ))
           ) {
             stop(
               paste(
@@ -435,13 +705,31 @@ base::local(
             )
           }
 
-          preview <- if (identical(selected_connection, managed_connection)) {
-            fetch_query()
+          if (selected_backend == "managed") {
+            preview <- fetch_query()
+            if (!is.null(preview)) {
+              render_preview(preview, id)
+            }
+          } else if (selected_backend == "dbi") {
+            preview <- fetch_dbi()
+            if (!is.null(preview)) {
+              render_preview(preview, id)
+            }
+          } else if (selected_backend == "dbapi") {
+            preview <- fetch_dbapi()
+            if (!is.null(preview)) {
+              render_table(
+                preview$values,
+                preview$names,
+                preview$types,
+                preview$truncated,
+                preview$rows,
+                preview$total_columns,
+                preview$more_rows
+              )
+            }
           } else {
-            fetch_dbi()
-          }
-          if (!is.null(preview)) {
-            render_preview(preview, id)
+            stop("unknown SQL connection backend")
           }
         },
         error = function(error) {
