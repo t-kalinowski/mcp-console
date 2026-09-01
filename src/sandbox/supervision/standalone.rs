@@ -7,7 +7,7 @@ use super::{
 use crate::sandbox::{
     CRASH_MANAGER_CLEANUP_TIMEOUT, TARGET_GATE_RELEASE, file_descriptors, platform,
 };
-use std::io::Write as _;
+use std::io::{ErrorKind, Write as _};
 use std::os::fd::AsRawFd as _;
 use std::os::unix::net::UnixStream;
 use std::process::{Child, Command, ExitCode};
@@ -75,7 +75,11 @@ pub(super) fn status(
         }
     };
 
-    if let Err(write_error) = launcher_gate.write_all(&[TARGET_GATE_RELEASE]) {
+    // A terminal signal can end the sole gated reader while the manager starts.
+    // Continue normal retirement so its waitable root status remains authoritative.
+    if let Err(write_error) = launcher_gate.write_all(&[TARGET_GATE_RELEASE])
+        && write_error.kind() != ErrorKind::BrokenPipe
+    {
         drop(launcher_gate);
         let mut error = format!("failed to release sandbox target startup gate: {write_error}");
         let _ = manager.begin_retirement();

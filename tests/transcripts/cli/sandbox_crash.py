@@ -1,12 +1,16 @@
 #!/usr/bin/env -S uv run --script
 
+import fcntl
 import os
+import pty
+import select
 import selectors
 import shutil
 import signal
 import subprocess
 import sys
 import tempfile
+import termios
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,6 +49,31 @@ class _SandboxLifetime:
 
 def _command(*arguments: str) -> list[str]:
     return ["mcp-console", *arguments]
+
+
+def _start_with_controlling_terminal(
+    arguments: list[str | Path],
+    environment: dict[str, str],
+) -> tuple[subprocess.Popen[bytes], int]:
+    master, slave = pty.openpty()
+
+    def attach_controlling_terminal() -> None:
+        os.setsid()
+        fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+        os.tcsetpgrp(slave, os.getpid())
+
+    process = subprocess.Popen(
+        arguments,
+        env=environment,
+        stdin=slave,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        preexec_fn=attach_controlling_terminal,
+    )
+    os.close(slave)
+    assert process.stdout is not None
+    assert process.stderr is not None
+    return process, master
 
 
 def _build_supervision_interposer(directory: Path, behavior: str) -> Path:
@@ -633,6 +662,130 @@ def test_target_waits_for_manager_adoption(binary: Path) -> Transcript:
             for stream in (process.stdout, process.stderr):
                 if not stream.closed:
                     stream.close()
+            manager_started.close()
+            manager_release.close()
+
+
+def test_terminal_interrupt_before_manager_readiness_preserves_status(
+    binary: Path,
+) -> Transcript:
+    arguments = ("sandbox", "--", "python", "-c", "raise SystemExit(23)")
+
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        fixture_directory = Path(temporary_directory)
+        manager_started = FifoCheckpoint(fixture_directory / "manager-started")
+        manager_release = FifoCheckpoint(fixture_directory / "manager-release")
+        environment = os.environ.copy()
+        environment["DYLD_INSERT_LIBRARIES"] = str(
+            _build_supervision_interposer(fixture_directory, "manager-start")
+        )
+        environment["MCP_CONSOLE_TEST_MANAGER_START"] = str(manager_started.path)
+        environment["MCP_CONSOLE_TEST_MANAGER_RELEASE"] = str(manager_release.path)
+        environment["TMPDIR"] = str(fixture_directory)
+
+        process, master = _start_with_controlling_terminal(
+            [binary, *arguments],
+            environment,
+        )
+        identities: list[DarwinProcessIdentity] = []
+        manager_released = False
+        sandbox_temporary_directory: Path | None = None
+        try:
+            manager_started.wait("manager startup before readiness")
+            launcher = capture_darwin_process_identity(process.pid)
+            children = darwin_child_process_identities(launcher)
+            assert len(children) == 2, children
+            deadline = time.monotonic() + TIMEOUT
+            gated: list[DarwinProcessIdentity] = []
+            while not gated:
+                gated = [
+                    child
+                    for child in children
+                    if darwin_process_waits_for_startup_release(child)
+                ]
+                assert len(gated) <= 1, (children, gated)
+                if gated:
+                    break
+                assert live_darwin_processes(children) == [
+                    child[0] for child in children
+                ], children
+                assert time.monotonic() < deadline, (
+                    "sandbox root did not reach its private startup gate"
+                )
+                time.sleep(0.01)
+            root = gated[0]
+            manager = next(child for child in children if child != root)
+            identities.extend((root, manager))
+            temporary_directories = list(
+                fixture_directory.glob(f"mcp-console-tmp-{process.pid}-*")
+            )
+            assert len(temporary_directories) == 1, temporary_directories
+            sandbox_temporary_directory = temporary_directories[0]
+
+            assert os.getpgid(root[0]) == root[0]
+            assert os.tcgetpgrp(master) == root[0]
+            terminal_attributes = termios.tcgetattr(master)
+            assert terminal_attributes[3] & termios.ISIG
+            assert terminal_attributes[6][termios.VINTR] == b"\x03"
+            exit_queue = select.kqueue()
+            try:
+                exit_watch = select.kevent(
+                    root[0],
+                    filter=select.KQ_FILTER_PROC,
+                    flags=select.KQ_EV_ADD | select.KQ_EV_CLEAR,
+                    fflags=select.KQ_NOTE_EXIT,
+                )
+                assert exit_queue.control([exit_watch], 0, 0) == []
+                os.write(master, b"\x03")
+                exit_events = exit_queue.control(None, 1, TIMEOUT)
+                assert len(exit_events) == 1, "sandbox root did not exit"
+                exit_event = exit_events[0]
+                assert exit_event.ident == root[0], exit_event
+                assert exit_event.filter == select.KQ_FILTER_PROC, exit_event
+                assert exit_event.fflags & select.KQ_NOTE_EXIT, exit_event
+            finally:
+                exit_queue.close()
+
+            manager_release.release()
+            manager_released = True
+            returncode = process.wait(timeout=TIMEOUT)
+            stdout = process.stdout.read().decode("utf-8")
+            stderr = process.stderr.read().decode("utf-8")
+            survivors = live_darwin_processes(identities)
+
+            assert returncode == 130, returncode
+            assert stdout == "", stdout
+            assert stderr == "", stderr
+            assert survivors == [], f"sandbox processes survived: {survivors}"
+            assert not sandbox_temporary_directory.exists(), (
+                "sandbox temporary directory survived normal retirement"
+            )
+            return [
+                {
+                    "command": _command(*arguments),
+                    "manager_checkpoint": "before readiness",
+                    "terminal_foreground_group": "gated sandbox root",
+                },
+                {
+                    "stdin": "<Ctrl-C>",
+                    "root_state_before_manager_release": "exit observed",
+                    "launcher_returncode": returncode,
+                    "verified_cleanup": "sandbox root, manager, and temp",
+                },
+            ]
+        finally:
+            if not manager_released:
+                manager_release.release()
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=TIMEOUT)
+            kill_darwin_processes(identities)
+            if sandbox_temporary_directory is not None:
+                shutil.rmtree(sandbox_temporary_directory, ignore_errors=True)
+            for stream in (process.stdout, process.stderr):
+                if not stream.closed:
+                    stream.close()
+            os.close(master)
             manager_started.close()
             manager_release.close()
 
