@@ -1,3 +1,5 @@
+#[path = "supervision/job_control.rs"]
+mod job_control;
 #[path = "supervision/manager.rs"]
 mod manager;
 #[path = "supervision/process.rs"]
@@ -8,6 +10,8 @@ mod process_retirement;
 mod process_tracker;
 #[path = "supervision/process_tree.rs"]
 mod process_tree;
+#[path = "supervision/root_exit_waiter.rs"]
+mod root_exit_waiter;
 #[path = "supervision/standalone.rs"]
 mod standalone;
 
@@ -54,6 +58,20 @@ enum ObservationResult {
 
 impl ObservedLifetime {
     pub(crate) fn start(root_pid: u32) -> Result<Self, String> {
+        Self::start_inner(root_pid, None)
+    }
+
+    fn start_for_standalone(
+        root_pid: u32,
+        root_wakeup: root_exit_waiter::RootExitWakeup,
+    ) -> Result<Self, String> {
+        Self::start_inner(root_pid, Some(root_wakeup))
+    }
+
+    fn start_inner(
+        root_pid: u32,
+        root_wakeup: Option<root_exit_waiter::RootExitWakeup>,
+    ) -> Result<Self, String> {
         let root_pid = libc::pid_t::try_from(root_pid)
             .ok()
             .filter(|pid| *pid > 0)
@@ -74,6 +92,7 @@ impl ObservedLifetime {
         let observer = match thread::Builder::new()
             .name("mcp-console-sandbox-observer".to_string())
             .spawn(move || {
+                let _wake_root = root_wakeup.map(root_exit_waiter::RootExitWakeup::on_drop);
                 let Ok(mut tracker) = tracker_receiver.recv() else {
                     return None;
                 };

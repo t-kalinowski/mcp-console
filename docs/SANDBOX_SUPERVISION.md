@@ -26,14 +26,19 @@ A descendant that becomes orphaned before a corresponding fork event is observed
 ## Standalone normal ownership
 
 The standalone launcher asks `sandbox-exec` to run the same hidden wrapper, blocked on a separate private inherited release channel before executing the requested command.
-While that same direct root is blocked, the launcher attaches a descendant tracker, starts the manager, and waits for it to adopt the private temporary directory and report readiness.
+While that same direct root is blocked, the launcher attaches a background descendant observer and a blocking root waiter, starts the manager, and waits for it to adopt the private temporary directory and report readiness.
 The launcher then sends one release byte; the wrapper closes the channel and replaces itself with the requested command.
-It blocks on that tracker until the direct root exits, then marks the start of normal retirement before the first termination pass.
+The requested command runs in a dedicated process group.
+The root waiter blocks in `kevent()` for direct-root exit, signals addressed to the launcher, and explicit observer or manager-monitor failure wakeups.
+The launcher consumes pending `SIGHUP`, `SIGINT`, `SIGQUIT`, and `SIGTERM` and relays them to the target group.
+When the launcher exclusively owns its foreground process group, it transfers controlling-terminal ownership to the target group; when a pipeline peer shares that group, it leaves terminal ownership unchanged.
+After the direct root exits or owner-side supervision fails, the launcher marks the start of normal retirement before the first termination pass.
 The launcher retires every identity its tracker observed, waits for the manager's independent cleanup acknowledgement, reaps the direct root, and commits the final remove-or-preserve directory disposition.
 The direct command's exit status remains the standalone command's exit status when cleanup succeeds.
 
 The launcher remains the authority for normal cleanup.
-The manager does not replace its tracker, decide the command's exit status, or add terminal job-control and signal-relay semantics.
+The manager does not replace its tracker, decide the command's exit status, own terminal state, or relay signals.
+Stopped/continued job state and general shell-pipeline job control remain unsupported.
 
 ## Committed crash ownership
 
@@ -70,7 +75,7 @@ If manager control closes without that marker, the manager treats the loss as an
 Each normal owner retains a blocking monitor for the manager process.
 An unexpected manager signal is treated as a sandbox-lifetime failure: every monitor signals the exact root identity.
 For worker generations, the server observer remains alive and completes retirement of the observed tree before the normal server path closes the still-pinned process group as its race backstop.
-For a standalone command, the monitor also wakes the launcher tracker so it starts retirement even if the root signal fails; otherwise the tracker sees root exit and returns the root's signal-derived exit status after cleanup.
+For a standalone command, the monitor also wakes the root waiter so the launcher starts retirement even if the root signal fails; otherwise the waiter sees root exit and the launcher returns the root's signal-derived exit status after cleanup.
 In both paths, successful local recovery removes the owner-held private temporary directory.
 
 A manager that survives its owner is self-contained.
@@ -81,4 +86,5 @@ After its observed lifetime retires, it remains available until the owner comple
 
 This ownership applies to `SandboxedCommand::spawn`, which is used for built-in and custom worker relay generations, and to `SandboxedCommand::status`, which implements `mcp-console sandbox`.
 The worker path retains its server-owned process-group race backstop and gates the relay before either relay implementation runs.
-The standalone path retains inherited standard streams and does not add terminal job-control or signal-relay semantics.
+The standalone path retains inherited standard streams, uses a dedicated target process group, and supplies the direct-foreground terminal and signal behavior above.
+It does not support `Ctrl-Z` followed by `fg` or general pipeline job-control semantics.
