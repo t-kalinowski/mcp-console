@@ -172,6 +172,23 @@ static ssize_t gate_manager_initialization(
         && getenv("MCP_CONSOLE_TEST_MANAGER_START") != NULL
         && is_subcommand("sandbox-manager")
         && atomic_exchange(&gated_manager_read, 1) == 0) {
+        // The owner writes initialization only after spawning the gated root.
+        // Peek one byte so the checkpoint implies that both children exist.
+        char initialization;
+        ssize_t count;
+        do {
+            count = recvfrom(
+                descriptor,
+                &initialization,
+                sizeof(initialization),
+                flags | MSG_PEEK,
+                NULL,
+                NULL
+            );
+        } while (count < 0 && errno == EINTR);
+        if (count != sizeof(initialization)) {
+            _exit(125);
+        }
         signal_checkpoint("MCP_CONSOLE_TEST_MANAGER_START");
         wait_for_release("MCP_CONSOLE_TEST_MANAGER_RELEASE");
     }
