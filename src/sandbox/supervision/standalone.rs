@@ -1,6 +1,7 @@
 use super::process_tracker::DescendantTracker;
 use super::{
-    PROCESS_RETIREMENT_GRACE, SandboxManager, additional_error, preserve, stop_direct_child,
+    CleanupPreparation, PROCESS_RETIREMENT_GRACE, SandboxManager, additional_error, preserve,
+    stop_direct_child,
 };
 use crate::sandbox::{
     CRASH_MANAGER_CLEANUP_TIMEOUT, TARGET_GATE_RELEASE, file_descriptors, platform,
@@ -81,7 +82,7 @@ pub(super) fn status(
         }
     };
     let mut error = retirement.err();
-    let manager_prepared = manager.prepare_finish();
+    let manager_preparation = manager.prepare_finish();
 
     let status = if let Some(retirement_error) = error.take() {
         error = Some(stop_direct_child(&mut child, retirement_error));
@@ -99,7 +100,9 @@ pub(super) fn status(
         }
     };
 
-    if let Err(manager_error) = manager.finish(error.is_some() || !manager_prepared) {
+    let preserve_manager_directory =
+        error.is_some() || manager_preparation != CleanupPreparation::Complete;
+    if let Err(manager_error) = manager.finish(preserve_manager_directory) {
         error = Some(match error {
             Some(error) => additional_error(error, manager_error),
             None => manager_error,
@@ -110,7 +113,11 @@ pub(super) fn status(
         return Err(error);
     }
 
-    drop(temporary_directory);
+    if manager_preparation == CleanupPreparation::TimedOut {
+        preserve(temporary_directory);
+    } else {
+        drop(temporary_directory);
+    }
     Ok(platform::exit_code(status.expect(
         "successful standalone retirement should retain the root status",
     )))

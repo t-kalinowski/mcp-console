@@ -443,8 +443,8 @@ impl SandboxedChild {
     ///
     /// Process-group cleanup always runs as a backstop for unobserved same-group
     /// forks; direct-child cleanup also runs after any retirement error. The
-    /// private temporary directory is preserved on any cleanup error because an
-    /// unobserved process may remain live.
+    /// private temporary directory is preserved on any cleanup error or manager
+    /// cleanup timeout because an unobserved process may remain live.
     pub(crate) fn force_stop(&mut self) -> Result<(), String> {
         match &self.retirement {
             SandboxedChildRetirement::Retired { error } => return stored_retirement_result(error),
@@ -481,10 +481,10 @@ impl SandboxedChild {
                 ),
             ));
         }
-        let manager_prepared = self
+        let manager_preparation = self
             .crash_manager
             .as_mut()
-            .is_none_or(|manager| manager.prepare_finish());
+            .map(supervision::SandboxManager::prepare_finish);
         let mut direct_stop_failed = false;
         if error.is_some()
             && let Err(kill_error) = self.child.kill()
@@ -518,12 +518,17 @@ impl SandboxedChild {
                 }
             }
         };
+        let preserve_manager_directory = error.is_some()
+            || manager_preparation.is_some_and(|preparation| {
+                preparation != supervision::CleanupPreparation::Complete
+            });
         if let Some(manager) = self.crash_manager.take()
-            && let Err(manager_error) = manager.finish(error.is_some() || !manager_prepared)
+            && let Err(manager_error) = manager.finish(preserve_manager_directory)
         {
             error = Some(append_retirement_error(error, manager_error));
         }
-        if error.is_some() {
+        if error.is_some() || manager_preparation == Some(supervision::CleanupPreparation::TimedOut)
+        {
             self.preserve_temporary_directory();
         } else {
             self.remove_temporary_directory();

@@ -11,7 +11,7 @@ mod process_tree;
 #[path = "supervision/standalone.rs"]
 mod standalone;
 
-pub(crate) use self::manager::SandboxManager;
+pub(crate) use self::manager::{CleanupPreparation, SandboxManager};
 use super::platform;
 use std::os::unix::net::UnixStream;
 use std::process::{Child, Command, ExitCode};

@@ -48,6 +48,13 @@ pub(crate) enum SandboxManagerExit {
     Recovered,
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(crate) enum CleanupPreparation {
+    Complete,
+    TimedOut,
+    Failed,
+}
+
 impl SandboxManager {
     pub(crate) fn start(
         root_pid: u32,
@@ -194,12 +201,12 @@ impl SandboxManager {
     }
 
     /// Waits until the manager has retired every identity it observed.
-    pub(crate) fn prepare_finish(&mut self) -> bool {
+    pub(crate) fn prepare_finish(&mut self) -> CleanupPreparation {
         if self.cleanup_complete {
-            return true;
+            return CleanupPreparation::Complete;
         }
         if !self.begin_retirement() {
-            return false;
+            return CleanupPreparation::Failed;
         }
         let timeout = self.cleanup_timeout.saturating_add(FINISH_ALLOWANCE);
         let result = self
@@ -210,17 +217,17 @@ impl SandboxManager {
         match result {
             Ok(protocol::CleanupAcknowledgement::Complete) => {
                 self.cleanup_complete = true;
-                true
+                CleanupPreparation::Complete
             }
             Ok(protocol::CleanupAcknowledgement::TimedOut) => {
                 // Discovery and the first complete signal pass precede the
                 // manager's bounded cleanup grace. Preserve the directory, then
                 // let the bounded manager monitor prove whether cleanup finished.
-                false
+                CleanupPreparation::TimedOut
             }
             Err(error) => {
                 self.control_error = Some(error);
-                false
+                CleanupPreparation::Failed
             }
         }
     }

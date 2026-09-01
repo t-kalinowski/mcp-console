@@ -58,6 +58,7 @@ def _build_supervision_interposer(directory: Path) -> Path:
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <sys/syscall.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -108,10 +109,13 @@ static int is_subcommand(const char *name) {
 
 __attribute__((constructor))
 static void configure_interposer(void) {
-    if (getenv("MCP_CONSOLE_TEST_MANAGER_START") != NULL) {
+    if (getenv("MCP_CONSOLE_TEST_MANAGER_START") != NULL
+        || getenv("MCP_CONSOLE_TEST_LATE_CLEANUP") != NULL) {
         if (is_subcommand("sandbox-manager")) {
-            signal_checkpoint("MCP_CONSOLE_TEST_MANAGER_START");
-            wait_for_release("MCP_CONSOLE_TEST_MANAGER_RELEASE");
+            if (getenv("MCP_CONSOLE_TEST_MANAGER_START") != NULL) {
+                signal_checkpoint("MCP_CONSOLE_TEST_MANAGER_START");
+                wait_for_release("MCP_CONSOLE_TEST_MANAGER_RELEASE");
+            }
         } else if (!is_subcommand("sandbox")) {
             unsetenv("DYLD_INSERT_LIBRARIES");
         }
@@ -131,12 +135,42 @@ static int deny_first_sigkill(pid_t process_id, int number) {
     return (int)syscall(SYS_kill, process_id, number);
 }
 
+static _Atomic int delayed_cleanup = 0;
+
+static ssize_t delay_cleanup_acknowledgement(
+    int descriptor,
+    const void *buffer,
+    size_t length,
+    int flags
+) {
+    const unsigned char cleanup_complete = 5;
+    const unsigned char preserve_temporary_directory = 4;
+    if (descriptor == STDIN_FILENO
+        && length == 1
+        && *(const unsigned char *)buffer == cleanup_complete
+        && getenv("MCP_CONSOLE_TEST_LATE_CLEANUP") != NULL
+        && is_subcommand("sandbox-manager")
+        && atomic_exchange(&delayed_cleanup, 1) == 0) {
+        unsigned char disposition;
+        ssize_t count;
+        do {
+            count = recv(descriptor, &disposition, 1, MSG_PEEK);
+        } while (count < 0 && errno == EINTR);
+        if (count != 1 || disposition != preserve_temporary_directory) {
+            _exit(125);
+        }
+        signal_checkpoint("MCP_CONSOLE_TEST_LATE_CLEANUP");
+    }
+    return syscall(SYS_sendto, descriptor, buffer, length, flags, NULL, 0);
+}
+
 __attribute__((used))
 static struct {
     const void *replacement;
     const void *replacee;
 } interposers[] __attribute__((section("__DATA,__interpose"))) = {
     {(const void *)&deny_first_sigkill, (const void *)&kill},
+    {(const void *)&delay_cleanup_acknowledgement, (const void *)&send},
 };
 """.removeprefix("\n"),
         encoding="utf-8",
@@ -656,6 +690,46 @@ def test_manager_recovery_failure_wakes_launcher(binary: Path) -> Transcript:
             ]
         finally:
             denied_sigkill.close()
+            _cleanup(lifetime)
+
+
+def test_cleanup_timeout_preserves_temporary_directory(binary: Path) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        fixture_directory = Path(temporary_directory)
+        late_cleanup = FifoCheckpoint(fixture_directory / "late-cleanup")
+        environment = os.environ.copy()
+        environment["DYLD_INSERT_LIBRARIES"] = str(
+            _build_supervision_interposer(fixture_directory)
+        )
+        environment["MCP_CONSOLE_TEST_LATE_CLEANUP"] = str(late_cleanup.path)
+        lifetime = _start_lifetime(binary, environment)
+        try:
+            lifetime.process.stdin.write(b"exit\n")
+            lifetime.process.stdin.close()
+            late_cleanup.wait("cleanup acknowledgement after launcher timeout")
+            returncode = lifetime.process.wait(timeout=TIMEOUT)
+            stderr = lifetime.process.stderr.read().decode("utf-8")
+            _wait_for_process_exit(
+                (lifetime.root, lifetime.descendant, lifetime.manager),
+                "sandbox processes survived delayed cleanup acknowledgement",
+            )
+
+            assert returncode == 23, returncode
+            assert stderr == "", stderr
+            assert lifetime.temporary_directory.exists(), (
+                "cleanup timeout removed the sandbox temporary directory"
+            )
+            return [
+                _command_record(lifetime),
+                {
+                    "manager_cleanup": "acknowledgement delayed past launcher timeout",
+                    "launcher_returncode": returncode,
+                    "verified_cleanup": "sandbox root, detached descendant, and manager",
+                    "verified_preservation": "sandbox temp",
+                },
+            ]
+        finally:
+            late_cleanup.close()
             _cleanup(lifetime)
 
 
