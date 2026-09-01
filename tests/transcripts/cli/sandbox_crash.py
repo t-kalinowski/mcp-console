@@ -47,7 +47,13 @@ def _command(*arguments: str) -> list[str]:
     return ["mcp-console", *arguments]
 
 
-def _build_supervision_interposer(directory: Path) -> Path:
+def _build_supervision_interposer(directory: Path, behavior: str) -> Path:
+    definitions = {
+        "manager-start": "-DMCP_CONSOLE_INTERPOSE_MANAGER_START",
+        "denied-sigkill": "-DMCP_CONSOLE_INTERPOSE_DENIED_SIGKILL",
+        "late-cleanup": "-DMCP_CONSOLE_INTERPOSE_LATE_CLEANUP",
+    }
+    assert behavior in definitions, behavior
     source = directory / "supervision-interposer.c"
     library = directory / "supervision-interposer.dylib"
     source.write_text(
@@ -64,25 +70,23 @@ def _build_supervision_interposer(directory: Path) -> Path:
 #include <sys/types.h>
 #include <unistd.h>
 
+#if defined(MCP_CONSOLE_INTERPOSE_DENIED_SIGKILL)
 static _Atomic int denied_sigkill = 0;
+#endif
+#if defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP)
 static _Atomic int delayed_cleanup = 0;
+#endif
+#if defined(MCP_CONSOLE_INTERPOSE_MANAGER_START)
 static _Atomic int gated_manager_read = 0;
+#endif
 
+#if defined(MCP_CONSOLE_INTERPOSE_DENIED_SIGKILL)
 typedef int (*kill_function)(pid_t, int);
-typedef ssize_t (*recv_function)(int, void *, size_t, int);
-typedef ssize_t (*send_function)(int, const void *, size_t, int);
 
 static kill_function next_kill(void) {
     return kill;
 }
-
-static recv_function next_recv(void) {
-    return recv;
-}
-
-static send_function next_send(void) {
-    return send;
-}
+#endif
 
 static void signal_checkpoint(const char *name) {
     const char *checkpoint = getenv(name);
@@ -97,6 +101,7 @@ static void signal_checkpoint(const char *name) {
     }
 }
 
+#if defined(MCP_CONSOLE_INTERPOSE_MANAGER_START)
 static void wait_for_release(const char *name) {
     const char *release = getenv(name);
     if (release == NULL) {
@@ -119,25 +124,30 @@ static void wait_for_release(const char *name) {
         _exit(125);
     }
 }
+#endif
 
+#if defined(MCP_CONSOLE_INTERPOSE_MANAGER_START) \
+    || defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP)
 static int is_subcommand(const char *name) {
     int argc = *_NSGetArgc();
     char **argv = *_NSGetArgv();
     return argc > 1 && strcmp(argv[1], name) == 0;
 }
+#endif
 
 __attribute__((constructor))
 static void configure_interposer(void) {
-    if (getenv("MCP_CONSOLE_TEST_MANAGER_START") != NULL
-        || getenv("MCP_CONSOLE_TEST_LATE_CLEANUP") != NULL) {
-        if (!is_subcommand("sandbox-manager") && !is_subcommand("sandbox")) {
-            unsetenv("DYLD_INSERT_LIBRARIES");
-        }
-    } else {
+#if defined(MCP_CONSOLE_INTERPOSE_MANAGER_START) \
+    || defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP)
+    if (!is_subcommand("sandbox-manager") && !is_subcommand("sandbox")) {
         unsetenv("DYLD_INSERT_LIBRARIES");
     }
+#else
+    unsetenv("DYLD_INSERT_LIBRARIES");
+#endif
 }
 
+#if defined(MCP_CONSOLE_INTERPOSE_MANAGER_START)
 static ssize_t gate_manager_initialization(
     int descriptor,
     void *buffer,
@@ -151,14 +161,11 @@ static ssize_t gate_manager_initialization(
         signal_checkpoint("MCP_CONSOLE_TEST_MANAGER_START");
         wait_for_release("MCP_CONSOLE_TEST_MANAGER_RELEASE");
     }
-    recv_function recv_next = next_recv();
-    if (recv_next == NULL) {
-        errno = ENOSYS;
-        return -1;
-    }
-    return recv_next(descriptor, buffer, length, flags);
+    return recvfrom(descriptor, buffer, length, flags, NULL, NULL);
 }
+#endif
 
+#if defined(MCP_CONSOLE_INTERPOSE_DENIED_SIGKILL)
 static int deny_first_sigkill(pid_t process_id, int number) {
     if (number == SIGKILL
         && getenv("MCP_CONSOLE_TEST_DENIED_SIGKILL") != NULL
@@ -174,7 +181,9 @@ static int deny_first_sigkill(pid_t process_id, int number) {
     }
     return kill_next(process_id, number);
 }
+#endif
 
+#if defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP)
 static ssize_t delay_cleanup_acknowledgement(
     int descriptor,
     const void *buffer,
@@ -199,13 +208,9 @@ static ssize_t delay_cleanup_acknowledgement(
         }
         signal_checkpoint("MCP_CONSOLE_TEST_LATE_CLEANUP");
     }
-    send_function send_next = next_send();
-    if (send_next == NULL) {
-        errno = ENOSYS;
-        return -1;
-    }
-    return send_next(descriptor, buffer, length, flags);
+    return sendto(descriptor, buffer, length, flags, NULL, 0);
 }
+#endif
 
 #define DYLD_INTERPOSE(replacement, replacee)                                  \
     __attribute__((used)) static struct {                                      \
@@ -216,9 +221,13 @@ static ssize_t delay_cleanup_acknowledgement(
         (const void *)(uintptr_t)&replacee,                                    \
     };
 
+#if defined(MCP_CONSOLE_INTERPOSE_MANAGER_START)
 DYLD_INTERPOSE(gate_manager_initialization, recv)
+#elif defined(MCP_CONSOLE_INTERPOSE_DENIED_SIGKILL)
 DYLD_INTERPOSE(deny_first_sigkill, kill)
+#elif defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP)
 DYLD_INTERPOSE(delay_cleanup_acknowledgement, send)
+#endif
 """.removeprefix("\n"),
         encoding="utf-8",
     )
@@ -230,6 +239,7 @@ DYLD_INTERPOSE(delay_cleanup_acknowledgement, send)
             "-Wextra",
             "-Wpedantic",
             "-Werror",
+            definitions[behavior],
             "-dynamiclib",
             "-o",
             library,
@@ -402,10 +412,22 @@ def _start_lifetime(
         )
         _wait_for_manager_readiness(lifetime)
         return lifetime
-    except BaseException:
+    except BaseException as error:
         if process.poll() is None:
             process.kill()
             process.wait(timeout=TIMEOUT)
+        with selectors.DefaultSelector() as selector:
+            selector.register(process.stderr.fileno(), selectors.EVENT_READ)
+            stderr_ready = selector.select(0)
+        stderr = (
+            os.read(process.stderr.fileno(), 4096).decode("utf-8", errors="replace")
+            if stderr_ready
+            else ""
+        )
+        error.add_note(
+            f"sandbox returncode after setup failure: {process.returncode}\n"
+            f"sandbox stderr:\n{stderr}"
+        )
         kill_darwin_processes(identities)
         if temporary_directory is not None:
             shutil.rmtree(temporary_directory, ignore_errors=True)
@@ -515,7 +537,7 @@ def test_target_waits_for_manager_adoption(binary: Path) -> Transcript:
         manager_release = FifoCheckpoint(fixture_directory / "manager-release")
         environment = os.environ.copy()
         environment["DYLD_INSERT_LIBRARIES"] = str(
-            _build_supervision_interposer(fixture_directory)
+            _build_supervision_interposer(fixture_directory, "manager-start")
         )
         environment["MCP_CONSOLE_TEST_MANAGER_START"] = str(manager_started.path)
         environment["MCP_CONSOLE_TEST_MANAGER_RELEASE"] = str(manager_release.path)
@@ -675,7 +697,7 @@ def test_manager_recovery_failure_wakes_launcher(binary: Path) -> Transcript:
         denied_sigkill = FifoCheckpoint(fixture_directory / "denied-sigkill")
         environment = os.environ.copy()
         environment["DYLD_INSERT_LIBRARIES"] = str(
-            _build_supervision_interposer(fixture_directory)
+            _build_supervision_interposer(fixture_directory, "denied-sigkill")
         )
         environment["MCP_CONSOLE_TEST_DENIED_SIGKILL"] = str(denied_sigkill.path)
         lifetime = _start_lifetime(binary, environment)
@@ -724,7 +746,7 @@ def test_cleanup_timeout_preserves_temporary_directory(binary: Path) -> Transcri
         late_cleanup = FifoCheckpoint(fixture_directory / "late-cleanup")
         environment = os.environ.copy()
         environment["DYLD_INSERT_LIBRARIES"] = str(
-            _build_supervision_interposer(fixture_directory)
+            _build_supervision_interposer(fixture_directory, "late-cleanup")
         )
         environment["MCP_CONSOLE_TEST_LATE_CLEANUP"] = str(late_cleanup.path)
         lifetime = _start_lifetime(binary, environment)
