@@ -65,7 +65,7 @@ impl ObservedLifetime {
     /// for the crash-manager monitor. If the manager exits unexpectedly, that
     /// handle transfers the tracker back to the launcher even when signalling
     /// the direct root fails.
-    pub(super) fn start_for_standalone(
+    fn start_for_standalone(
         root_pid: u32,
     ) -> Result<(Self, process_tracker::ObserverWakeup), String> {
         let (lifetime, manager_wakeup) = Self::start_inner(root_pid, true)?;

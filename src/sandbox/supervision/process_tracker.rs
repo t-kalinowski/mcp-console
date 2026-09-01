@@ -154,40 +154,6 @@ impl DescendantTracker {
             kqueue: Arc::clone(&self.kqueue),
         })
     }
-
-    /// Waits for the root to exit, marks the transition to owner-controlled
-    /// retirement, and then terminates the observed lifetime.
-    ///
-    /// The callback runs exactly once before the first termination pass. Crash
-    /// owners use that point to preserve the private directory if the normal
-    /// owner disappears while local cleanup is in progress.
-    pub(super) fn supervise(
-        mut self,
-        retirement_grace: Duration,
-        retirement_started: impl FnOnce(),
-    ) -> Result<(), String> {
-        let observation = match self.root_has_exited() {
-            Ok(true) => Ok(true),
-            Ok(false) => loop {
-                match self.wait_for_events(None) {
-                    Ok(EventWait::RootExited) => break Ok(true),
-                    Ok(EventWait::Wakeup) => break Ok(false),
-                    Ok(EventWait::Events | EventWait::TimedOut) => {}
-                    Err(error) => break Err(error),
-                }
-            },
-            Err(error) => Err(error),
-        };
-        retirement_started();
-
-        match observation {
-            Ok(root_exited) => self.terminate(root_exited, retirement_grace),
-            Err(error) => match self.terminate(false, retirement_grace) {
-                Ok(()) => Err(error),
-                Err(cleanup_error) => Err(format!("{error}; additionally, {cleanup_error}")),
-            },
-        }
-    }
 }
 
 fn submit_observer_event(
