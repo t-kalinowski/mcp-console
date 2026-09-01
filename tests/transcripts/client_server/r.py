@@ -10,6 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from _support import (
+    FifoCheckpoint,
     McpClient,
     Transcript,
     assert_result_content,
@@ -1478,49 +1479,84 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
 
 def test_preserves_fd0_order_between_readers(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    released = False
+    finished = False
+    checkpoints: list[FifoCheckpoint] = []
+    try:
+        client._initialize_and_list_tools()
 
-    # fmt: r
-    r = code(r"""
-        prompted <- readline("callback> ")
-        direct <- local({
-          connection <- suppressWarnings(file("/dev/stdin"))
-          on.exit(close(connection))
-          readLines(connection, n = 1)
-        })
-        cat(paste(prompted, direct, sep = "|"), "\n", sep = "")
-        """)
-    expected = '[input requested: "callback> "]\ncallback|direct\n'
-    call_start = len(client.transcript)
-    client.send(
-        r=r,
-        stdin="callback\ndirect\n",
-        timeout_ms=1_000,
-    )
-    running = "\n[running; poll with an empty send]"
-    output = last_tool_text(client)
-    if output.endswith(running):
-        cuts = collect_running_output(
-            client,
-            "ordered fd 0 readers",
-            timeouts_ms=(1_000,) * 3,
-            initial_cuts=(output.removesuffix(running),),
+        # Create the FIFOs inside the worker's private writable directory.
+        # fmt: r
+        r = code(r"""
+            fd0_order_started <- tempfile("mcp-console-fd0-order-started-")
+            fd0_order_release <- tempfile("mcp-console-fd0-order-release-")
+            cat(fd0_order_started, fd0_order_release, sep = "\n")
+            """)
+        client.send(r=r)
+        setup = client.transcript[-1]["result"]
+        paths = setup["content"][0]["text"].splitlines()
+        assert len(paths) == 2, setup
+        setup["content"][0]["text"] = (
+            "<fd 0 started checkpoint>\n<fd 0 release checkpoint>"
         )
-        output = "".join(cuts)
+        started, release = [FifoCheckpoint(Path(path)) for path in paths]
+        checkpoints.extend((started, release))
 
-    waiting = "\n[waiting for stdin]"
-    if output.endswith(waiting):
-        output = output.removesuffix(waiting)
-        client.send(timeout_ms=3_000)
-        output += last_tool_text(client)
-    assert output == expected, repr(output)
+        # Hold the worker after same-call stdin has been queued but before
+        # either reader can consume it. The following public poll then observes
+        # both reads independent of process scheduling.
+        # fmt: r
+        r = code(r"""
+            started <- fifo(fd0_order_started, open = "wb", blocking = TRUE)
+            writeBin(charToRaw("1"), started)
+            close(started)
+            release <- fifo(fd0_order_release, open = "rb", blocking = TRUE)
+            stopifnot(identical(
+              readBin(release, "raw", n = 1L),
+              charToRaw("1")
+            ))
+            close(release)
 
-    calls = client.transcript[call_start:]
-    final_call = calls[-1]
-    final_call["send"] = calls[0]["send"]
-    final_call["result"]["content"][0]["text"] = output
-    client.transcript[call_start:] = [final_call]
-    return client._finish()
+            prompted <- readline("callback> ")
+            direct <- local({
+              connection <- suppressWarnings(file("/dev/stdin"))
+              on.exit(close(connection))
+              readLines(connection, n = 1)
+            })
+            cat(paste(prompted, direct, sep = "|"), "\n", sep = "")
+            """)
+        evaluation = client._start_send(
+            r=r,
+            stdin="callback\ndirect\n",
+            timeout_ms=0,
+        )
+        started.wait("ordered fd 0 readers")
+        client._receive(evaluation)
+        assert evaluation["result"]["content"] == [
+            {
+                "type": "text",
+                "text": "\n[running; poll with an empty send]",
+            }
+        ], evaluation
+        release.release()
+        released = True
+
+        client.send()
+        expected = '[input requested: "callback> "]\ncallback|direct\n'
+        assert last_tool_text(client) == expected
+        evaluation["result"] = client.transcript[-1]["result"]
+        client.transcript[-2:] = [evaluation]
+
+        transcript = client._finish()
+        finished = True
+        return transcript
+    finally:
+        if checkpoints and not released:
+            release.release()
+        for checkpoint in checkpoints:
+            checkpoint.close()
+        if not finished:
+            stop_client(client)
 
 
 def test_preserves_utf8_across_console_reads(binary: Path) -> Transcript:
