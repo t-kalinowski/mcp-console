@@ -1,6 +1,6 @@
 # Transcript tests
 
-A transcript suite is a non-private Python file under one of four boundary directories:
+A transcript suite is a Python file under one of four boundary directories whose relative path has no component beginning with `_`:
 
 - `client_server` records the public MCP JSON-RPC boundary.
 - `server_relay` records the private JSONL boundary between the server and relay.
