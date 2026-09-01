@@ -53,6 +53,8 @@ Each host owner retains a blocking monitor for the manager process.
 If the manager exits unsuccessfully while the owner still retains a live, waitable root, the monitor reconstructs the root's current process tree and performs bounded cleanup before the owner continues.
 The fallback revalidates process identities immediately before signaling and closes the still-pinned process group as a race backstop.
 It preserves the private directory on failure.
+If manager completion times out, the owner requests forced exit and allows one more bounded recovery interval.
+If the manager still does not report completion, the owner returns an error without joining the live monitor thread; that monitor retains and preserves the backup directory guard.
 
 This fallback can recover only descendants still reachable from the root's current ancestry.
 It cannot reconstruct a descendant that detached before the manager failed.

@@ -411,6 +411,7 @@ impl ManagerMonitor {
             Ok(result) => result,
             Err(RecvTimeoutError::Timeout) => {
                 error = Some("timed out waiting for sandbox manager cleanup".to_string());
+                self.preserve_unconditionally();
                 if let Err(signal_error) = signal_process(self.identity, libc::SIGKILL) {
                     error = Some(with_prior_error(
                         error,
@@ -418,12 +419,22 @@ impl ManagerMonitor {
                     ));
                 }
                 // Do not release the caller's pinned sandbox root while this
-                // thread still owns the exact, unreaped manager child. SIGKILL
-                // makes the blocking waitid complete; any recovery tracker then
-                // has its own cleanup deadline before it reports a result.
-                self.result.recv().unwrap_or_else(|_| {
-                    Err("sandbox manager monitor ended without a result".to_string())
-                })
+                // thread still owns the exact, unreaped manager child. Allow a
+                // second cleanup deadline for forced-exit recovery, then detach
+                // the monitor and preserve its directory guard rather than
+                // extending the bounded retirement wait.
+                match self.result.recv_timeout(timeout) {
+                    Ok(result) => result,
+                    Err(RecvTimeoutError::Disconnected) => {
+                        Err("sandbox manager monitor ended without a result".to_string())
+                    }
+                    Err(RecvTimeoutError::Timeout) => {
+                        return Err(with_prior_error(
+                            error,
+                            "sandbox manager did not stop after forced termination".to_string(),
+                        ));
+                    }
+                }
             }
             Err(RecvTimeoutError::Disconnected) => {
                 Err("sandbox manager monitor ended without a result".to_string())

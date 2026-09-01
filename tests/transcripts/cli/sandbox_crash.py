@@ -70,7 +70,8 @@ def _build_supervision_interposer(directory: Path, behavior: str) -> Path:
 #include <sys/types.h>
 #include <unistd.h>
 
-#if defined(MCP_CONSOLE_INTERPOSE_DENIED_SIGKILL)
+#if defined(MCP_CONSOLE_INTERPOSE_DENIED_SIGKILL) \
+    || defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP)
 static _Atomic int denied_sigkill = 0;
 #endif
 #if defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP)
@@ -83,7 +84,8 @@ static _Atomic int gated_manager_read = 0;
 static _Atomic int gated_retirement_disposition = 0;
 #endif
 
-#if defined(MCP_CONSOLE_INTERPOSE_DENIED_SIGKILL)
+#if defined(MCP_CONSOLE_INTERPOSE_DENIED_SIGKILL) \
+    || defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP)
 typedef int (*kill_function)(pid_t, int);
 
 static kill_function next_kill(void) {
@@ -105,6 +107,7 @@ static void signal_checkpoint(const char *name) {
 }
 
 #if defined(MCP_CONSOLE_INTERPOSE_MANAGER_START) \
+    || defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP) \
     || defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_DISPOSITION)
 static void wait_for_release(const char *name) {
     const char *release = getenv(name);
@@ -196,10 +199,14 @@ static ssize_t gate_manager_initialization(
 }
 #endif
 
-#if defined(MCP_CONSOLE_INTERPOSE_DENIED_SIGKILL)
+#if defined(MCP_CONSOLE_INTERPOSE_DENIED_SIGKILL) \
+    || defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP)
 static int deny_first_sigkill(pid_t process_id, int number) {
     if (number == SIGKILL
         && getenv("MCP_CONSOLE_TEST_DENIED_SIGKILL") != NULL
+#if defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP)
+        && is_subcommand("sandbox")
+#endif
         && atomic_exchange(&denied_sigkill, 1) == 0) {
         signal_checkpoint("MCP_CONSOLE_TEST_DENIED_SIGKILL");
         errno = EPERM;
@@ -238,6 +245,9 @@ static ssize_t delay_cleanup_acknowledgement(
             _exit(125);
         }
         signal_checkpoint("MCP_CONSOLE_TEST_LATE_CLEANUP");
+        if (getenv("MCP_CONSOLE_TEST_LATE_CLEANUP_RELEASE") != NULL) {
+            wait_for_release("MCP_CONSOLE_TEST_LATE_CLEANUP_RELEASE");
+        }
     }
     return sendto(descriptor, buffer, length, flags, NULL, 0);
 }
@@ -278,6 +288,7 @@ DYLD_INTERPOSE(gate_manager_initialization, recv)
 DYLD_INTERPOSE(deny_first_sigkill, kill)
 #elif defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP)
 DYLD_INTERPOSE(delay_cleanup_acknowledgement, send)
+DYLD_INTERPOSE(deny_first_sigkill, kill)
 #elif defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_DISPOSITION)
 DYLD_INTERPOSE(gate_retirement_disposition, send)
 #endif
@@ -880,6 +891,75 @@ def test_cleanup_timeout_preserves_temporary_directory(binary: Path) -> Transcri
             ]
         finally:
             late_cleanup.close()
+            _cleanup(lifetime)
+
+
+def test_manager_stop_failure_remains_bounded(binary: Path) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        fixture_directory = Path(temporary_directory)
+        late_cleanup = FifoCheckpoint(fixture_directory / "late-cleanup")
+        late_cleanup_release = FifoCheckpoint(
+            fixture_directory / "late-cleanup-release"
+        )
+        denied_sigkill = FifoCheckpoint(fixture_directory / "denied-sigkill")
+        environment = os.environ.copy()
+        environment["DYLD_INSERT_LIBRARIES"] = str(
+            _build_supervision_interposer(
+                fixture_directory,
+                "late-cleanup",
+            )
+        )
+        environment["MCP_CONSOLE_TEST_LATE_CLEANUP"] = str(late_cleanup.path)
+        environment["MCP_CONSOLE_TEST_LATE_CLEANUP_RELEASE"] = str(
+            late_cleanup_release.path
+        )
+        environment["MCP_CONSOLE_TEST_DENIED_SIGKILL"] = str(denied_sigkill.path)
+        lifetime = _start_lifetime(binary, environment)
+        manager_released = False
+        try:
+            lifetime.process.stdin.write(b"exit\n")
+            lifetime.process.stdin.close()
+            late_cleanup.wait("cleanup acknowledgement after launcher timeout")
+            denied_sigkill.wait("launcher manager-stop signal denial")
+            returncode = lifetime.process.wait(timeout=TIMEOUT)
+            stderr = lifetime.process.stderr.read().decode("utf-8")
+            normalized_stderr = stderr.replace(
+                str(lifetime.manager[0]),
+                "<sandbox manager pid>",
+            )
+
+            assert returncode == 1, returncode
+            assert "timed out waiting for sandbox manager cleanup" in stderr, stderr
+            assert "failed to stop sandbox manager" in stderr, stderr
+            assert "Operation not permitted" in stderr, stderr
+            late_cleanup_release.release()
+            manager_released = True
+            _wait_for_process_exit(
+                (lifetime.root, lifetime.descendant, lifetime.manager),
+                "sandbox processes survived the released manager",
+            )
+            assert lifetime.temporary_directory.exists(), (
+                "manager-stop failure removed the sandbox temporary directory"
+            )
+            command = _command_record(lifetime)
+            command["stderr"] = normalized_stderr
+            return [
+                command,
+                {
+                    "manager_cleanup": "acknowledgement held past both owner deadlines",
+                    "manager_stop_signal": "EPERM",
+                    "launcher_returncode": returncode,
+                    "verified_bounded_return": "within the recovery deadline",
+                    "verified_cleanup": "sandbox root, detached descendant, and manager",
+                    "verified_preservation": "sandbox temp",
+                },
+            ]
+        finally:
+            if not manager_released:
+                late_cleanup_release.release()
+            late_cleanup.close()
+            late_cleanup_release.close()
+            denied_sigkill.close()
             _cleanup(lifetime)
 
 
