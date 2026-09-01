@@ -2,7 +2,7 @@
 !same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
 ---
 send:
-  r: start background sideband
+  r: complete before restart checkpoint
   timeout_ms: 0
 result:
   content:
@@ -19,7 +19,6 @@ result:
     - type: text
       text: |-
         [done]
-        zod background sideband
         [worker stopped: in-memory state lost]
         [starting new worker]
         [idle]

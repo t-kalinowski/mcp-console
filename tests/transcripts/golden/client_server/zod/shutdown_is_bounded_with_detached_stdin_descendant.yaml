@@ -33,6 +33,7 @@ result:
   isError: false
 ---
 send:
+  stdin: <poll ownership stdin>
   timeout_ms: 30000
 result:
   content:

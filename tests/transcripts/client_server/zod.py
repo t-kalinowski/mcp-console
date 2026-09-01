@@ -36,6 +36,7 @@ PLATFORMS = {"darwin"}
 LARGE_OUTPUT_SIZE = 2 * 1024 * 1024
 PENDING_TEXT_BUDGET = 8 * 1024 * 1024
 TEST_GATED_RESPONSE_SIZE = 128 * 1024
+FIXTURE_CHECKPOINT_TIMEOUT_SECONDS = 15
 PNG_1X1 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42Y"
     "AAAAASUVORK5CYII="
@@ -46,7 +47,6 @@ TEST_CLEANUP_FIFO_NAME = "zod-test-cleanup"
 TEST_RESPONSE_QUERY_FIFO_NAME = "zod-test-response-query"
 TEST_RESPONSE_RESULT_FIFO_NAME = "zod-test-response-result"
 TEST_CONTROL_READY_NAME = "zod-test-control-ready"
-CHECKPOINT_TIMEOUT = 15
 
 
 class ZodFixtureControl:
@@ -72,40 +72,28 @@ class ZodFixtureControl:
     def connect(self, client: McpClient) -> None:
         if self.event_reader is not None:
             return
-        deadline = time.monotonic() + 15
-        while True:
-            ready = list(self.root.glob(f"**/{TEST_CONTROL_READY_NAME}"))
-            assert len(ready) <= 1, (
-                f"found multiple Zod fixture control channels: {ready!r}"
-            )
-            if ready:
-                directory = ready[0].parent
-                event_reader = os.open(
-                    directory / TEST_EVENT_FIFO_NAME,
-                    os.O_RDONLY | os.O_NONBLOCK,
-                )
-                control_writer = os.open(
-                    directory / TEST_CONTROL_FIFO_NAME,
-                    os.O_WRONLY | os.O_NONBLOCK,
-                )
-                cleanup_writer = os.open(
-                    directory / TEST_CLEANUP_FIFO_NAME,
-                    os.O_WRONLY | os.O_NONBLOCK,
-                )
-                os.set_blocking(control_writer, True)
-                os.set_blocking(cleanup_writer, True)
-                self.event_reader = event_reader
-                self.control_writer = control_writer
-                self.cleanup_writer = cleanup_writer
-                return
-            assert client.process.poll() is None, (
-                "mcp-console stopped before Zod created its fixture controls; "
-                + self.diagnostics()
-            )
-            assert time.monotonic() < deadline, (
-                "Zod did not create its fixture controls; " + self.diagnostics()
-            )
-            time.sleep(0.01)
+        directory = wait_for_marker(
+            self.root,
+            TEST_CONTROL_READY_NAME,
+            client,
+        ).parent
+        event_reader = os.open(
+            directory / TEST_EVENT_FIFO_NAME,
+            os.O_RDONLY | os.O_NONBLOCK,
+        )
+        control_writer = os.open(
+            directory / TEST_CONTROL_FIFO_NAME,
+            os.O_WRONLY | os.O_NONBLOCK,
+        )
+        cleanup_writer = os.open(
+            directory / TEST_CLEANUP_FIFO_NAME,
+            os.O_WRONLY | os.O_NONBLOCK,
+        )
+        os.set_blocking(control_writer, True)
+        os.set_blocking(cleanup_writer, True)
+        self.event_reader = event_reader
+        self.control_writer = control_writer
+        self.cleanup_writer = cleanup_writer
 
     def send_control(self, operation: int, kind: str, **details: object) -> None:
         assert self.control_writer is not None
@@ -138,7 +126,7 @@ class ZodFixtureControl:
         operation: int,
         kinds: set[str],
     ) -> dict[str, object]:
-        deadline = time.monotonic() + 15
+        deadline = time.monotonic() + FIXTURE_CHECKPOINT_TIMEOUT_SECONDS
         while True:
             event = next(
                 (
@@ -212,7 +200,7 @@ class ZodFixtureControl:
 
     def wait_for_eof(self) -> None:
         assert self.event_reader is not None
-        deadline = time.monotonic() + 15
+        deadline = time.monotonic() + FIXTURE_CHECKPOINT_TIMEOUT_SECONDS
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -265,7 +253,7 @@ class ResponseGateObserver:
         query_reader: int | None = None
         result_writer: int | None = None
         try:
-            deadline = time.monotonic() + 15
+            deadline = time.monotonic() + FIXTURE_CHECKPOINT_TIMEOUT_SECONDS
             while True:
                 ready = list(self.root.glob(f"**/{TEST_CONTROL_READY_NAME}"))
                 assert len(ready) <= 1, (
@@ -318,7 +306,7 @@ class ResponseGateObserver:
                 os.close(result_writer)
 
     def finish(self) -> None:
-        self.thread.join(15)
+        self.thread.join(FIXTURE_CHECKPOINT_TIMEOUT_SECONDS)
         assert not self.thread.is_alive(), "Zod did not query the response gate"
         if self.error is not None:
             raise self.error
@@ -348,7 +336,12 @@ class SocketTextReader:
         diagnostics: str,
     ) -> int:
         assert not self.buffer
-        readable, _, _ = select.select([self.stream], [], [], 15)
+        readable, _, _ = select.select(
+            [self.stream],
+            [],
+            [],
+            FIXTURE_CHECKPOINT_TIMEOUT_SECONDS,
+        )
         assert readable, (
             f"response {request} did not reach the test gate; {diagnostics}"
         )
@@ -369,7 +362,7 @@ class SocketTextReader:
         release: Path,
         diagnostics: str,
     ) -> None:
-        deadline = time.monotonic() + 15
+        deadline = time.monotonic() + FIXTURE_CHECKPOINT_TIMEOUT_SECONDS
         while True:
             remaining = deadline - time.monotonic()
             assert remaining > 0, (
@@ -466,7 +459,7 @@ class SocketGateMcpClient(McpClient):
         withheld until this returns, so observing that later frame leave the
         socket proves the preceding frame passed through ServerTransport.receive.
         """
-        deadline = time.monotonic() + 15
+        deadline = time.monotonic() + FIXTURE_CHECKPOINT_TIMEOUT_SECONDS
         while queued_socket_bytes(self.input_reader) != 0:
             assert self.process.poll() is None, (
                 f"mcp-console stopped before consuming {description}; "
@@ -1077,10 +1070,7 @@ def test_flushes_calls_and_keeps_unpolled_images(binary: Path) -> Transcript:
         )
         client._initialize_and_list_tools()
 
-        waiting = client._start_send(
-            r="complete after release",
-            timeout_ms=30_000,
-        )
+        waiting = client._start_send(r="complete after release")
         started = wait_for_marker(
             temporary,
             "zod-evaluation-started",
@@ -1577,6 +1567,28 @@ def test_custom_worker_prepares_r_and_duckdb_requirements(binary: Path) -> Trans
         return client._finish()
 
 
+def expose_idle_input_request(client: McpClient, temporary_path: Path) -> None:
+    requested = client._start_send(r="request input while idle")
+    completed = wait_for_marker(
+        temporary_path,
+        "zod-idle-input-cell-completed",
+        client,
+    )
+    client._receive(requested)
+    assert last_tool_text(client) == "[done]"
+
+    release_fixture_checkpoint(completed.parent / "zod-release-idle-input-request")
+    wait_for_marker(
+        temporary_path,
+        "zod-idle-input-request-processed",
+        client,
+    )
+    client.send()
+    assert last_tool_text(client) == (
+        '[input requested: "idle> "]\n[waiting for stdin]'
+    )
+
+
 def test_custom_worker_reports_idle_input_before_preparation_failure(
     binary: Path,
 ) -> Transcript:
@@ -1590,6 +1602,7 @@ def test_custom_worker_reports_idle_input_before_preparation_failure(
         environment["R_LIBS"] = str(isolated_library)
         environment["R_LIBS_SITE"] = str(isolated_library)
         environment["R_LIBS_USER"] = str(isolated_library)
+        environment["TMPDIR"] = temporary
         record_resolved_r_library(environment, temporary_path)
         client = McpClient(
             binary,
@@ -1597,9 +1610,7 @@ def test_custom_worker_reports_idle_input_before_preparation_failure(
             environment,
         )
         client._initialize_and_list_tools()
-        client.send(r="request input while idle")
-        output = last_tool_text(client)
-        assert output == '[input requested: "idle> "]\n', repr(output)
+        expose_idle_input_request(client, temporary_path)
 
         result = client.send(requirements={"r": ["praise"]})
         assert result["isError"] is True, result
@@ -1717,23 +1728,40 @@ def test_custom_worker_resolves_idle_activity_before_evaluation(
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
-    client = McpClient(
-        binary,
-        ("serve", "--worker", str(zod)),
-        environment,
-    )
-    client._initialize_and_list_tools()
-    client.send(r="resolve python while idle")
-    assert last_tool_text(client) == "[done]", repr(last_tool_text(client))
+    with tempfile.TemporaryDirectory() as temporary:
+        temporary_path = Path(temporary)
+        environment["TMPDIR"] = temporary
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        client._initialize_and_list_tools()
+        client.send(r="resolve python while idle")
+        assert last_tool_text(client) == "[done]", repr(last_tool_text(client))
 
-    client.send(r="echo echo")
-    assert last_tool_text(client) == "zod: echo\n"
+        client.send(r="echo echo")
+        assert last_tool_text(client) == "zod: echo\n"
 
-    client.send(r="request input while idle")
-    assert last_tool_text(client) == '[input requested: "idle> "]\n'
-    client.send(r="echo echo", stdin="continue\n")
-    assert last_tool_text(client) == "zod: echo\n"
-    return client._finish()
+        expose_idle_input_request(client, temporary_path)
+        poll_start = len(client.transcript)
+        submitted = client._start_send(r="echo echo", stdin="continue\n")
+        wait_for_marker(
+            temporary_path,
+            "zod-idle-input-received",
+            client,
+        )
+        client._receive(submitted)
+        output = last_tool_text(client)
+        if output != "zod: echo\n":
+            assert output == "\n[waiting for stdin]", repr(output)
+            client.send()
+            output = last_tool_text(client)
+        assert output == "zod: echo\n", repr(output)
+        calls = client.transcript[poll_start:]
+        submitted["result"] = calls[-1]["result"]
+        client.transcript[poll_start:] = [submitted]
+        return client._finish()
 
 
 def test_custom_worker_restart_prepares_r_and_duckdb_requirements(
@@ -2325,8 +2353,11 @@ def test_supervises_stopped_and_continued_workers(binary: Path) -> Transcript:
     wrapper = Path(__file__).resolve().parents[2] / "fixtures" / "stop_continue_zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
+        startup_control = temporary_path / "zod-startup-control"
+        startup_control.write_text("stop evaluation", encoding="utf-8")
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
+        environment["ZOD_STARTUP_CONTROL"] = str(startup_control)
         client = McpClient(
             binary,
             ("serve", "--worker", str(wrapper)),
@@ -2336,7 +2367,7 @@ def test_supervises_stopped_and_continued_workers(binary: Path) -> Transcript:
         passed = False
         try:
             client._initialize_and_list_tools()
-            evaluation = client._start_send(r="echo echo", timeout_ms=30_000)
+            evaluation = client._start_send(r="echo echo")
             marker, worker_pid, worker_group = wait_for_stopped_worker(
                 temporary_path,
                 set(),
@@ -2345,7 +2376,12 @@ def test_supervises_stopped_and_continued_workers(binary: Path) -> Transcript:
             )
 
             interrupt = client._start_send(control="interrupt", timeout_ms=0)
-            readable, _, _ = select.select([client.stdout], [], [], 3)
+            readable, _, _ = select.select(
+                [client.stdout],
+                [],
+                [],
+                FIXTURE_CHECKPOINT_TIMEOUT_SECONDS,
+            )
             assert readable, "relay supervision did not answer the interrupt request"
             client._receive(interrupt)
             assert interrupt["result"] == {
@@ -2370,6 +2406,7 @@ def test_supervises_stopped_and_continued_workers(binary: Path) -> Transcript:
                 "isError": False,
             }, evaluation
 
+            startup_control.write_text("stop startup", encoding="utf-8")
             restarted = client._start_send(control="restart")
             replacement_marker, replacement_pid, replacement_group = (
                 wait_for_stopped_worker(
@@ -2730,51 +2767,80 @@ def test_idle_stdin_startup_blocks_preparation(binary: Path) -> Transcript:
 
 def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
-    client = McpClient(
-        binary,
-        ("serve", "--worker", str(zod)),
-    )
-    client._initialize_and_list_tools()
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
+        )
+        client._initialize_and_list_tools()
 
-    client.send(
-        r="input length without request",
-        stdin=("x" * 1024) + "café\0\n",
-    )
-    client.transcript[-1]["send"]["stdin"] = "<long UTF-8 stdin containing NUL>"
-    assert last_tool_text(client) == "zod stdin length: 1030\n"
+        def submit_prompted_stdin(
+            stdin: str,
+            marker: str,
+            expected: str,
+        ) -> None:
+            poll_start = len(client.transcript)
+            submitted = client._start_send(stdin=stdin)
+            wait_for_marker(temporary_path, marker, client)
+            client._receive(submitted)
+            if last_tool_text(client) != expected:
+                assert last_tool_text(client) == "\n[waiting for stdin]"
+                client.send()
+            assert last_tool_text(client) == expected
+            calls = client.transcript[poll_start:]
+            submitted["result"] = calls[-1]["result"]
+            client.transcript[poll_start:] = [submitted]
 
-    client.send(r="input without request", timeout_ms=0)
-    assert last_tool_text(client) == "\n[running; poll with an empty send]"
-    client.send(stdin="followup\n", timeout_ms=3_000)
-    assert last_tool_text(client) == "zod stdin: followup\n"
+        client.send(
+            r="input length without request",
+            stdin=("x" * 1024) + "café\0\n",
+        )
+        client.transcript[-1]["send"]["stdin"] = "<long UTF-8 stdin containing NUL>"
+        assert last_tool_text(client) == "zod stdin length: 1030\n"
 
-    client.send(r="request input")
-    assert last_tool_text(client) == '[input requested: "zod> "]\n[waiting for stdin]'
-    client.send(stdin="")
-    assert last_tool_text(client) == "\n[waiting for stdin]"
-    client.send(stdin="prompted\n")
-    assert last_tool_text(client) == "zod stdin: prompted\n"
+        client.send(r="input without request", timeout_ms=0)
+        assert last_tool_text(client) == "\n[running; poll with an empty send]"
+        client.send(stdin="followup\n")
+        assert last_tool_text(client) == "zod stdin: followup\n"
 
-    client.send(
-        r="input without request then request input",
-        stdin="first\n",
-        timeout_ms=1_000,
-    )
-    assert (
-        last_tool_text(client) == '[input requested: "second> "]\n[waiting for stdin]'
-    )
-    client.send(stdin="second\n")
-    assert last_tool_text(client) == "zod stdin: first|second\n"
+        client.send(r="request input")
+        assert last_tool_text(client) == (
+            '[input requested: "zod> "]\n[waiting for stdin]'
+        )
+        client.send(stdin="")
+        assert last_tool_text(client) == "\n[waiting for stdin]"
+        submit_prompted_stdin(
+            "prompted\n",
+            "zod-prompted-input-processed",
+            "zod stdin: prompted\n",
+        )
 
-    client.send(r="echo echo", stdin="stale\n")
-    assert last_tool_text(client) == "zod: echo\n"
-    client.send(r="input without request")
-    assert last_tool_text(client) == "zod stdin: stale\n"
+        client.send(
+            r="input without request then request input",
+            stdin="first\n",
+        )
+        assert last_tool_text(client) == (
+            '[input requested: "second> "]\n[waiting for stdin]'
+        )
+        submit_prompted_stdin(
+            "second\n",
+            "zod-combined-input-processed",
+            "zod stdin: first|second\n",
+        )
 
-    client.send(r="echo echo", stdin="x" * (128 * 1024), timeout_ms=1_000)
-    client.transcript[-1]["send"]["stdin"] = "<large unread stdin>"
-    assert last_tool_text(client) == "zod: echo\n"
-    return client._finish()
+        client.send(r="echo echo", stdin="stale\n")
+        assert last_tool_text(client) == "zod: echo\n"
+        client.send(r="input without request")
+        assert last_tool_text(client) == "zod stdin: stale\n"
+
+        client.send(r="echo echo", stdin="x" * (128 * 1024))
+        client.transcript[-1]["send"]["stdin"] = "<large unread stdin>"
+        assert last_tool_text(client) == "zod: echo\n"
+        return client._finish()
 
 
 def test_routes_same_call_stdin_to_direct_fd0(binary: Path) -> Transcript:
@@ -3029,11 +3095,16 @@ def test_reports_replacement_startup_failure_and_retry(
         assert last_tool_text(client) == "[done]"
         startup_control.write_text("fail with stderr", encoding="utf-8")
         failed = client._start_send(r="exit unexpectedly")
+        wait_for_marker(
+            Path(temporary_directory),
+            "zod-replacement-startup-failing",
+            client,
+        )
         response_returned = threading.Event()
         forced_stop = threading.Event()
 
         def stop_if_replacement_loops() -> None:
-            if not response_returned.wait(5):
+            if not response_returned.wait(FIXTURE_CHECKPOINT_TIMEOUT_SECONDS):
                 forced_stop.set()
                 stop_process(client.process)
 
@@ -3113,7 +3184,7 @@ def test_polls_replacement_startup_after_send_timeout(binary: Path) -> Transcrip
             )
 
             def release_if_send_ignores_timeout() -> None:
-                if not response_returned.wait(5):
+                if not response_returned.wait(FIXTURE_CHECKPOINT_TIMEOUT_SECONDS):
                     forced_release.set()
                     startup_release.touch()
 
@@ -3171,7 +3242,7 @@ def test_polls_replacement_startup_after_send_timeout(binary: Path) -> Transcrip
             assert not (temporary_path / "resolved-r-library").exists()
 
             startup_release.touch()
-            client.send(timeout_ms=3_000)
+            client.send()
             assert last_tool_text(client) == "[idle]"
             transcript = client._finish()
             passed = True
@@ -3529,9 +3600,7 @@ def test_restart_preserves_pending_sideband_output(binary: Path) -> Transcript:
         return client._finish()
 
 
-def test_restart_preserves_completion_boundary_before_idle_output(
-    binary: Path,
-) -> Transcript:
+def test_restart_preserves_unpolled_completion(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
@@ -3544,28 +3613,22 @@ def test_restart_preserves_completion_boundary_before_idle_output(
         )
         client._initialize_and_list_tools()
 
-        client.send(r="start background sideband", timeout_ms=0)
+        client.send(r="complete before restart checkpoint", timeout_ms=0)
         assert last_tool_text(client) == "\n[running; poll with an empty send]"
-        started = wait_for_marker(
-            temporary_path,
-            "zod-background-sideband-started",
-            client,
-        )
-        (started.parent / "zod-release-background-sideband").touch()
         wait_for_marker(
             temporary_path,
-            "zod-background-sideband-emitted",
+            "zod-completion-processed",
             client,
         )
 
         client.send(control="restart")
-        assert last_tool_text(client) == (
+        restart_output = last_tool_text(client)
+        assert restart_output == (
             "[done]\n"
-            "zod background sideband\n"
             "[worker stopped: in-memory state lost]\n"
             "[starting new worker]\n"
             "[idle]"
-        )
+        ), restart_output
         return client._finish()
 
 
@@ -3600,7 +3663,7 @@ def test_restart_interrupts_waiting_send(binary: Path) -> Transcript:
         forced_stop = threading.Event()
 
         def stop_if_calls_block() -> None:
-            if not responses_returned.wait(5):
+            if not responses_returned.wait(FIXTURE_CHECKPOINT_TIMEOUT_SECONDS):
                 forced_stop.set()
                 stop_process(client.process)
 
@@ -3778,55 +3841,72 @@ def test_reports_unexpected_worker_exit_zero(binary: Path) -> Transcript:
 
 def test_replaces_worker_after_relay_exit(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
-    client = McpClient(
-        binary,
-        ("serve", "--worker", str(zod)),
-    )
-    worker_pid = None
-    launcher_pid = None
-    relay_pid = None
-    passed = False
-    try:
-        client._initialize_and_list_tools()
-        client.send(r="kill relay and remain live", timeout_ms=30_000)
-
-        result = client.transcript[-1]["result"]
-        assert result["isError"] is True, result
-        topology, failure = result["content"][0]["text"].split("\n", 1)
-        worker, launcher, relay = topology.split("; ")
-        worker_pid = int(worker.removeprefix("zod worker pid: "))
-        launcher_pid = int(launcher.removeprefix("launcher pid: "))
-        relay_pid = int(relay.removeprefix("relay process group: "))
-        assert len({worker_pid, launcher_pid, relay_pid}) == 3, topology
-        assert failure == (
-            "[worker relay stdout closed before retirement completed]\n"
-            "[worker stopped: in-memory state lost]\n"
-            "[starting new worker]\n"
-            "[idle]"
-        ), failure
-        result["content"][0]["text"] = (
-            "zod worker pid: <worker pid>; "
-            "launcher pid: <launcher pid>; "
-            "relay process group: <relay process group>\n" + failure
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            environment,
         )
-        assert not process_exists(worker_pid), "worker outlived its relay"
-        assert not process_exists(launcher_pid), "worker launcher outlived its relay"
-        assert not process_exists(relay_pid), "server did not reap the relay"
-        assert not process_group_exists(relay_pid), (
-            "relay process group outlived sandbox manager retirement"
-        )
+        worker_pid = None
+        launcher_pid = None
+        relay_pid = None
+        passed = False
+        try:
+            client._initialize_and_list_tools()
+            client.send(r="kill relay and remain live", timeout_ms=0)
+            assert last_tool_text(client) == "\n[running; poll with an empty send]"
+            started = wait_for_marker(
+                temporary_path,
+                "zod-relay-exit-evaluation-started",
+                client,
+            )
+            release_fixture_checkpoint(started.parent / "zod-release-relay-exit")
+            client.send()
 
-        client.send(r="echo echo")
-        assert last_tool_text(client) == "zod: echo\n"
-        transcript = client._finish()
-        passed = True
-        return transcript
-    finally:
-        if not passed:
-            stop_process_group(relay_pid)
-            stop_process_id(launcher_pid)
-            stop_process_id(worker_pid)
-            stop_process(client.process)
+            result = client.transcript[-1]["result"]
+            assert result["isError"] is True, result
+            text = result["content"][0]["text"]
+            assert text.startswith("zod worker pid: "), text
+            topology, failure = text.split("\n", 1)
+            worker, launcher, relay = topology.split("; ")
+            worker_pid = int(worker.removeprefix("zod worker pid: "))
+            launcher_pid = int(launcher.removeprefix("launcher pid: "))
+            relay_pid = int(relay.removeprefix("relay process group: "))
+            assert len({worker_pid, launcher_pid, relay_pid}) == 3, topology
+            assert failure == (
+                "[worker relay stdout closed before retirement completed]\n"
+                "[worker stopped: in-memory state lost]\n"
+                "[starting new worker]\n"
+                "[idle]"
+            ), failure
+            result["content"][0]["text"] = (
+                "zod worker pid: <worker pid>; "
+                "launcher pid: <launcher pid>; "
+                "relay process group: <relay process group>\n" + failure
+            )
+            assert not process_exists(worker_pid), "worker outlived its relay"
+            assert not process_exists(launcher_pid), (
+                "worker launcher outlived its relay"
+            )
+            assert not process_exists(relay_pid), "server did not reap the relay"
+            assert not process_group_exists(relay_pid), (
+                "relay process group outlived sandbox manager retirement"
+            )
+
+            client.send(r="echo echo")
+            assert last_tool_text(client) == "zod: echo\n"
+            transcript = client._finish()
+            passed = True
+            return transcript
+        finally:
+            if not passed:
+                stop_process_group(relay_pid)
+                stop_process_id(launcher_pid)
+                stop_process_id(worker_pid)
+                stop_process(client.process)
 
 
 def test_restart_closes_worker_stdin(binary: Path) -> Transcript:
@@ -3942,14 +4022,32 @@ def test_restart_allows_accepted_relay_shutdown_to_finish(
                 "zod-relay-resume-helper",
                 client,
             )
-            helper_pid = int(helper_marker.read_text(encoding="utf-8"))
+            helper_pid, relay_target = map(
+                int,
+                helper_marker.read_text(encoding="utf-8").split(),
+            )
 
             restarted = client._start_send(control="restart")
-            wait_for_marker(
+            stopped_marker = wait_for_marker(
                 temporary_path,
                 "zod-relay-stopped-after-shutdown",
                 client,
             )
+            wait_for_stopped_process(
+                relay_target,
+                relay_target,
+                client,
+                "accepted worker relay shutdown",
+            )
+            wait_for_marker(
+                temporary_path,
+                "zod-relay-retirement-output-written",
+                client,
+            )
+            with stopped_marker.with_name("zod-accepted-relay-stop-observed").open(
+                "wb", buffering=0
+            ) as checkpoint:
+                assert checkpoint.write(b"1") == 1
             client._receive(restarted)
             assert not process_exists(helper_pid), (
                 "detached relay-resume helper outlived sandbox retirement"
@@ -3999,7 +4097,6 @@ def test_restart_outer_force_stops_unresponsive_relay(binary: Path) -> Transcrip
                 client,
             )
             helper_pid = int(helper_marker.read_text(encoding="utf-8"))
-            wait_for_marker(temporary_path, "zod-relay-stopped", client)
             relay_target, launcher_pid = map(
                 int,
                 wait_for_marker(
@@ -4024,6 +4121,12 @@ def test_restart_outer_force_stops_unresponsive_relay(binary: Path) -> Transcrip
             )
             assert os.getpgid(helper_pid) == helper_pid, (
                 "relay-stop helper did not detach from the relay process group"
+            )
+            wait_for_stopped_process(
+                relay_target,
+                worker_group,
+                client,
+                "outer relay force-stop",
             )
 
             restarted = client._start_send(control="restart")
@@ -4169,7 +4272,7 @@ def test_restart_does_not_report_never_ready_worker_as_stopped(
             forced_stop = threading.Event()
 
             def stop_if_calls_block() -> None:
-                if not responses_returned.wait(5):
+                if not responses_returned.wait(FIXTURE_CHECKPOINT_TIMEOUT_SECONDS):
                     forced_stop.set()
                     stop_process(client.process)
 
@@ -4491,7 +4594,27 @@ def test_shutdown_is_bounded_with_detached_stdin_descendant(
             assert stalled_group != descendant_group, stalled_event
             worker_group = stalled_group
 
-            stalled = client._start_send(timeout_ms=30_000)
+            poll_stdin = "p" + "x" * (LARGE_OUTPUT_SIZE - 1)
+            stalled = client._start_send(
+                stdin=poll_stdin,
+                timeout_ms=30_000,
+            )
+            stalled["send"]["stdin"] = "<poll ownership stdin>"
+            control.send_control(
+                operation,
+                "observe_poll_ownership",
+                request=stalled["id"],
+                prior_bytes=expected_bytes,
+                submitted_bytes=len(poll_stdin),
+                sentinel=poll_stdin[0],
+            )
+            ownership = control.wait_for(stalled["id"], "poll_ownership_observed")
+            assert ownership["target_operation"] == operation, ownership
+            assert ownership["consumed_bytes"] == expected_bytes + 1, ownership
+            assert ownership["submitted_bytes"] == len(poll_stdin), ownership
+            ownership_queued = ownership["queued_bytes"]
+            assert isinstance(ownership_queued, int) and ownership_queued > 0, ownership
+            assert ownership_queued < len(poll_stdin) - 1, ownership
             client.send(timeout_ms=0)
             polling = client.transcript[-1]
             assert polling["result"] == {
@@ -4606,11 +4729,11 @@ def test_demarcates_idle_prelude_across_cell_outcomes(binary: Path) -> Transcrip
             expose_idle_sideband_output(client, temporary_path, "timeout")
             timed_out = client._start_send(
                 r="output then complete after release",
-                timeout_ms=1_000,
+                timeout_ms=0,
             )
-            processed = wait_for_marker(
+            pending = wait_for_marker(
                 temporary_path,
-                "zod-cell-output-processed",
+                "zod-cell-output-pending",
                 client,
             )
             client._receive(timed_out)
@@ -4619,9 +4742,7 @@ def test_demarcates_idle_prelude_across_cell_outcomes(binary: Path) -> Transcrip
                     {
                         "type": "text",
                         "text": (
-                            "zod background sideband\n"
-                            "[output produced while idle]\n"
-                            "zod cell output before completion\n\n"
+                            "zod background sideband\n\n"
                             "[running; poll with an empty send]"
                         ),
                     }
@@ -4629,21 +4750,39 @@ def test_demarcates_idle_prelude_across_cell_outcomes(binary: Path) -> Transcrip
                 "isError": False,
             }, timed_out
 
+            release_fixture_checkpoint(pending.parent / "zod-release-cell-output")
+            processed = wait_for_marker(
+                temporary_path,
+                "zod-cell-output-processed",
+                client,
+            )
+            client.send(timeout_ms=0)
+            assert client.transcript[-1]["result"] == {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "zod cell output before completion\n\n"
+                        "[running; poll with an empty send]",
+                    }
+                ],
+                "isError": False,
+            }, client.transcript[-1]
+
             (processed.parent / "zod-release-evaluation").touch()
-            client.send(timeout_ms=3_000)
+            client.send()
             assert last_tool_text(client) == (
                 "zod: output then complete after release\n"
             ), repr(last_tool_text(client))
 
             expose_idle_sideband_output(client, temporary_path, "input")
-            client.send(r="request input", timeout_ms=3_000)
+            client.send(r="request input")
             assert last_tool_text(client) == (
                 "zod background sideband\n"
                 "[output produced while idle]\n"
                 '[input requested: "zod> "]\n'
                 "[waiting for stdin]"
             )
-            client.send(stdin="answer\n", timeout_ms=3_000)
+            client.send(stdin="answer\n")
             assert last_tool_text(client) == "zod stdin: answer\n"
 
             expose_idle_sideband_output(client, temporary_path, "language-error")
@@ -4704,6 +4843,11 @@ def test_restart_cancels_partial_sideband_frame(binary: Path) -> Transcript:
             )
             descendant_group = int(marker.read_text(encoding="utf-8"))
             release_partial_sideband(marker)
+            wait_for_marker(
+                temporary_path,
+                "zod-sideband-partial-tail-written",
+                client,
+            )
 
             restarted = client._start_send(control="restart")
             received = threading.Event()
@@ -4719,7 +4863,7 @@ def test_restart_cancels_partial_sideband_frame(binary: Path) -> Transcript:
 
             receiver = threading.Thread(target=receive_restart, daemon=True)
             receiver.start()
-            assert received.wait(CHECKPOINT_TIMEOUT), (
+            assert received.wait(FIXTURE_CHECKPOINT_TIMEOUT_SECONDS), (
                 "restart waited for a partial sideband frame"
             )
             receiver.join()
@@ -4772,6 +4916,11 @@ def test_restart_cancels_reader_after_operation_result(
                 client,
             )
             descendant_group = int(marker.read_text(encoding="utf-8"))
+            wait_for_marker(
+                temporary_path,
+                "zod-sideband-partial-tail-written",
+                client,
+            )
 
             restarted = client._start_send(control="restart")
             received = threading.Event()
@@ -4787,7 +4936,7 @@ def test_restart_cancels_reader_after_operation_result(
 
             receiver = threading.Thread(target=receive_restart, daemon=True)
             receiver.start()
-            assert received.wait(CHECKPOINT_TIMEOUT), (
+            assert received.wait(FIXTURE_CHECKPOINT_TIMEOUT_SECONDS), (
                 "restart waited for the sideband reader"
             )
             receiver.join()
@@ -4888,7 +5037,7 @@ def test_restart_drains_readable_frame_before_abandoning_partial_tail(
             restart = client._start_send(control="restart")
             cancellation_ready.wait(
                 "relay sideband cancellation",
-                timeout=CHECKPOINT_TIMEOUT,
+                timeout=FIXTURE_CHECKPOINT_TIMEOUT_SECONDS,
             )
             client._receive_many([evaluation, restart])
             result = evaluation["result"]
@@ -4959,6 +5108,11 @@ def test_shutdown_cancels_partial_sideband_frame(binary: Path) -> Transcript:
             )
             descendant_group = int(marker.read_text(encoding="utf-8"))
             release_partial_sideband(marker)
+            wait_for_marker(
+                temporary_path,
+                "zod-sideband-partial-tail-written",
+                client,
+            )
 
             shutdown_started = time.monotonic()
             client.stdin.close()
@@ -5067,15 +5221,102 @@ def test_shutdown_deadline_does_not_wait_for_sideband_writer(
 
 
 def wait_for_marker(root: Path, name: str, client: McpClient) -> Path:
-    deadline = time.monotonic() + CHECKPOINT_TIMEOUT
-    while True:
-        markers = list(root.glob(f"**/{name}"))
-        if markers:
-            assert len(markers) == 1, f"found multiple {name} markers"
-            return markers[0]
-        assert client.process.poll() is None, "mcp-console stopped before Zod stalled"
-        assert time.monotonic() < deadline, "Zod did not report its stall checkpoint"
-        time.sleep(0.01)
+    deadline = time.monotonic() + FIXTURE_CHECKPOINT_TIMEOUT_SECONDS
+    events = select.kqueue()
+    directories: dict[Path, int] = {}
+    try:
+        events.control(
+            [
+                select.kevent(
+                    client.process.pid,
+                    filter=select.KQ_FILTER_PROC,
+                    flags=select.KQ_EV_ADD | select.KQ_EV_CLEAR,
+                    fflags=select.KQ_NOTE_EXIT,
+                )
+            ],
+            0,
+            0,
+        )
+        while True:
+            marker = find_marker(root, name)
+            if marker is not None:
+                return marker
+
+            watch_marker_directories(root, events, directories)
+            marker = find_marker(root, name)
+            if marker is not None:
+                return marker
+            assert client.process.poll() is None, (
+                f"mcp-console stopped before Zod reported its {name!r} checkpoint"
+            )
+
+            remaining = deadline - time.monotonic()
+            assert remaining > 0, (
+                f"Zod did not report its {name!r} checkpoint within "
+                f"{FIXTURE_CHECKPOINT_TIMEOUT_SECONDS} seconds"
+            )
+            try:
+                observed = events.control(
+                    None,
+                    max(1, len(directories) + 1),
+                    remaining,
+                )
+            except InterruptedError:
+                continue
+            assert observed, (
+                f"Zod did not report its {name!r} checkpoint within "
+                f"{FIXTURE_CHECKPOINT_TIMEOUT_SECONDS} seconds"
+            )
+    finally:
+        for descriptor in directories.values():
+            os.close(descriptor)
+        events.close()
+
+
+def find_marker(root: Path, name: str) -> Path | None:
+    markers = [path for path in [root / name] if path.exists()]
+    markers.extend(root.glob(f"mcp-console-tmp-*/{name}"))
+    assert len(markers) <= 1, f"found multiple {name} markers"
+    return markers[0] if markers else None
+
+
+def watch_marker_directories(
+    root: Path,
+    events: select.kqueue,
+    directories: dict[Path, int],
+) -> None:
+    def watch(directory: Path) -> None:
+        if directory in directories:
+            return
+        try:
+            descriptor = os.open(directory, os.O_EVTONLY | os.O_CLOEXEC)
+        except FileNotFoundError:
+            return
+        events.control(
+            [
+                select.kevent(
+                    descriptor,
+                    filter=select.KQ_FILTER_VNODE,
+                    flags=select.KQ_EV_ADD | select.KQ_EV_CLEAR,
+                    fflags=(
+                        select.KQ_NOTE_WRITE
+                        | select.KQ_NOTE_RENAME
+                        | select.KQ_NOTE_DELETE
+                        | select.KQ_NOTE_REVOKE
+                    ),
+                )
+            ],
+            0,
+            0,
+        )
+        directories[directory] = descriptor
+
+    # Watch the root before discovering private temporary directories. This
+    # makes creation of a directory after the glob snapshot observable.
+    watch(root)
+    for directory in root.glob("mcp-console-tmp-*"):
+        if directory.is_dir():
+            watch(directory)
 
 
 def wait_for_stopped_worker(
@@ -5084,9 +5325,9 @@ def wait_for_stopped_worker(
     recorded_workers: list[tuple[int, int]],
     client: McpClient,
 ) -> tuple[Path, int, int]:
-    deadline = time.monotonic() + CHECKPOINT_TIMEOUT
+    deadline = time.monotonic() + FIXTURE_CHECKPOINT_TIMEOUT_SECONDS
     while True:
-        for marker in root.glob("**/zod-stop-continue-worker"):
+        for marker in root.glob("mcp-console-tmp-*/zod-stop-continue-worker"):
             try:
                 contents = marker.read_text(encoding="utf-8")
             except FileNotFoundError:
@@ -5121,19 +5362,40 @@ def wait_for_stopped_worker(
             "mcp-console stopped before its direct worker reached SIGSTOP"
         )
         assert time.monotonic() < deadline, (
-            "direct worker did not enter the stopped process state"
+            "direct worker did not enter the stopped process state within "
+            f"{FIXTURE_CHECKPOINT_TIMEOUT_SECONDS} seconds"
+        )
+        time.sleep(0.01)
+
+
+def wait_for_stopped_process(
+    process_id: int,
+    process_group: int,
+    client: McpClient,
+    description: str,
+) -> None:
+    deadline = time.monotonic() + FIXTURE_CHECKPOINT_TIMEOUT_SECONDS
+    while True:
+        status = read_process_status(process_id)
+        assert status is not None, (
+            f"{description} process exited before reaching SIGSTOP"
+        )
+        assert status[1] == process_group, f"{description} process changed groups"
+        if status[2].startswith("T"):
+            return
+        assert client.process.poll() is None, (
+            f"mcp-console stopped before {description} reached SIGSTOP"
+        )
+        assert time.monotonic() < deadline, (
+            f"{description} did not reach SIGSTOP within "
+            f"{FIXTURE_CHECKPOINT_TIMEOUT_SECONDS} seconds"
         )
         time.sleep(0.01)
 
 
 def wait_for_path(path: Path, description: str, client: McpClient) -> None:
-    deadline = time.monotonic() + 3
-    while not path.exists():
-        assert client.process.poll() is None, (
-            f"mcp-console stopped before {description}"
-        )
-        assert time.monotonic() < deadline, f"timed out waiting for {description}"
-        time.sleep(0.01)
+    observed = wait_for_marker(path.parent, path.name, client)
+    assert observed == path, f"found a different path while waiting for {description}"
 
 
 def read_process_status(process_id: int) -> tuple[int, int, str] | None:
@@ -5174,7 +5436,7 @@ def wait_for_worker_retirement(
     process_group: int,
     client: McpClient,
 ) -> None:
-    deadline = time.monotonic() + 3
+    deadline = time.monotonic() + FIXTURE_CHECKPOINT_TIMEOUT_SECONDS
     while read_process_status(process_id) is not None or process_group_exists(
         process_group
     ):
@@ -5207,6 +5469,11 @@ def release_partial_sideband(marker: Path) -> None:
         assert stream.write(b"x") == 1
 
 
+def release_fixture_checkpoint(path: Path) -> None:
+    with path.open("wb", buffering=0) as stream:
+        assert stream.write(b"1") == 1
+
+
 def process_group_exists(process_group: int) -> bool:
     try:
         os.killpg(process_group, 0)
@@ -5237,7 +5504,7 @@ def stop_process_id(process_id: int | None) -> None:
 
 
 def wait_for_process_group_exit(process_group: int, client: McpClient) -> None:
-    deadline = time.monotonic() + 3
+    deadline = time.monotonic() + FIXTURE_CHECKPOINT_TIMEOUT_SECONDS
     while process_group_exists(process_group):
         assert client.process.poll() is None, "mcp-console stopped during restart"
         assert time.monotonic() < deadline, (

@@ -3,7 +3,6 @@
 ---
 send:
   r: complete after release
-  timeout_ms: 30000
 result:
   content:
     - type: text

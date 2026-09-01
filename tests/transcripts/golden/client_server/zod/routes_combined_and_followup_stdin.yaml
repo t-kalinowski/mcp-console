@@ -25,7 +25,6 @@ result:
 send:
   stdin: |
     followup
-  timeout_ms: 3000
 result:
   content:
     - type: text
@@ -67,7 +66,6 @@ send:
   r: input without request then request input
   stdin: |
     first
-  timeout_ms: 1000
 result:
   content:
     - type: text
@@ -109,11 +107,9 @@ result:
 send:
   r: echo echo
   stdin: <large unread stdin>
-  timeout_ms: 1000
 result:
   content:
     - type: text
       text: |
         zod: echo
   isError: false
-...

@@ -6,8 +6,16 @@ send:
 result:
   content:
     - type: text
-      text: |
+      text: "[done]"
+  isError: false
+---
+send: {}
+result:
+  content:
+    - type: text
+      text: |-
         [input requested: "idle> "]
+        [waiting for stdin]
   isError: false
 ---
 send:

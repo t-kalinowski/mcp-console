@@ -249,6 +249,7 @@ def test_resolves_reached_r_packages_at_runtime(binary: Path) -> Transcript:
             "mcpdynamicns",
         )
         environment, record = recording_fixture_r_environment(directory, packages)
+        environment["PKG_SUBPROCESS_TIMEOUT"] = "0"
         client = McpClient(binary, ("serve",), environment)
         client._initialize_and_list_tools()
         baseline = len(ir_run_records(record))
@@ -290,6 +291,7 @@ def test_resolves_reached_r_packages_at_runtime(binary: Path) -> Transcript:
                 later not in requirements for later in static_packages[index + 1 :]
             )
             assert run["no_local_sources"] == "1", run
+            assert run["subprocess_timeout"] == "60000", run
 
         dynamic_baseline = len(ir_run_records(record))
         # fmt: r
@@ -715,9 +717,15 @@ def test_rejects_preparation_while_automatic_r_resolver_is_running(
             baseline = len(ir_run_records(record))
 
             evaluation = client._start_send(
-                r=(f'invisible(base::loadNamespace("{package}")); 42L')
+                r=(f'invisible(base::loadNamespace("{package}")); 42L'),
+                timeout_ms=0,
             )
             started.wait("automatic R resolver")
+            client._receive(evaluation)
+            assert (
+                last_tool_text_from_entry(evaluation)
+                == "\n[running; poll with an empty send]"
+            )
             preparation = client._start_send(
                 requirements={"r": ["english"]},
             )
@@ -737,10 +745,13 @@ def test_rejects_preparation_while_automatic_r_resolver_is_running(
                 "isError": True,
             }, preparation
 
+            poll = client._start_send()
             release.release()
             resolver_released = True
-            client._receive(evaluation)
-            assert last_tool_text_from_entry(evaluation) == "[1] 42\n"
+            client._receive(poll)
+            assert last_tool_text_from_entry(poll) == "[1] 42\n"
+            evaluation["result"] = poll["result"]
+            assert client.transcript.pop() is poll
             assert len(ir_run_records(record)) == baseline + 1
             transcript = client._finish()
             finished = True

@@ -3,7 +3,6 @@
 ---
 send:
   r: echo echo
-  timeout_ms: 30000
 result:
   content:
     - type: text

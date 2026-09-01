@@ -3,6 +3,7 @@
 ---
 send:
   r: invisible(base::loadNamespace("RcppRoll")); 42L
+  timeout_ms: 0
 result:
   content:
     - type: text
