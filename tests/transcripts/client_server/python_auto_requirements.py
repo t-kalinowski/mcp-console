@@ -219,6 +219,16 @@ def test_keeps_mapped_resolution_notice_atomic_at_output_limit(
     remainder = output.removeprefix(prefix)
     assert remainder.startswith("\n[output truncated: omitted "), repr(remainder[:200])
     assert "resolved PyPI distribution" not in remainder, repr(remainder[:200])
+    assert client.temporary_directory is not None
+    workspace = Path(client.temporary_directory.name)
+    session = next((workspace / ".mcp-console" / "sessions").iterdir())
+    relative_output = Path("outputs/call-000001.log")
+    public_output = f".mcp-console/sessions/{session.name}/{relative_output.as_posix()}"
+    assert f"; retained text: {public_output}]" in remainder, remainder[-300:]
+    assert (session / relative_output).read_text(encoding="utf-8") == (
+        prefix + "'yaml12'\n"
+    )
+    remainder = remainder.replace(session.name, "<run ID>")
     client.transcript[-1]["result"]["content"][0]["text"] = (
         f"<retained {retained} text bytes>{remainder}"
     )
