@@ -1,0 +1,17 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+send:
+  r: emit stdout
+result:
+  content:
+    - type: text
+      text: |
+        zod stdout 👩🏽‍💻
+        <large output>
+  isError: false
+startup_gate:
+  manager: blocked before readiness
+  relay_root: blocked on private startup gate
+  worker: not started before readiness
+...
