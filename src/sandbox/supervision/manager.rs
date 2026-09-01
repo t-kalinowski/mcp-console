@@ -4,6 +4,7 @@ mod entrypoint;
 mod protocol;
 
 use super::process::{ProcessIdentity, process_info, signal_process};
+use super::process_tracker::ObserverWakeup;
 use crate::sandbox::file_descriptors;
 use std::io::Read;
 use std::net::Shutdown;
@@ -22,11 +23,11 @@ const FINISH_ALLOWANCE: Duration = Duration::from_secs(1);
 
 /// A host process that independently owns one committed sandbox lifetime.
 ///
-/// Normal retirement remains in the server's continuously serviced observer.
+/// Normal retirement remains in the owner's continuously serviced observer.
 /// Once this manager reports readiness, it supplies a second observation path
-/// that survives abrupt loss of the server process. A descendant that escapes
-/// before the manager's post-spawn tracker observes it remains outside this
-/// guarantee even after readiness.
+/// that survives abrupt loss of the server or standalone launcher. A descendant
+/// that escapes before the manager's post-spawn tracker observes it remains
+/// outside this guarantee even after readiness.
 pub(crate) struct SandboxManager {
     monitor: Option<ManagerMonitor>,
     control: UnixStream,
@@ -47,11 +48,41 @@ pub(crate) enum SandboxManagerExit {
     Recovered,
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(crate) enum CleanupPreparation {
+    Complete,
+    TimedOut,
+    Failed,
+}
+
 impl SandboxManager {
     pub(crate) fn start(
         root_pid: u32,
         temporary_directory: &Path,
         cleanup_timeout: Duration,
+    ) -> Result<Self, String> {
+        Self::start_inner(root_pid, temporary_directory, cleanup_timeout, None)
+    }
+
+    pub(super) fn start_for_standalone(
+        root_pid: u32,
+        temporary_directory: &Path,
+        cleanup_timeout: Duration,
+        observer_wakeup: ObserverWakeup,
+    ) -> Result<Self, String> {
+        Self::start_inner(
+            root_pid,
+            temporary_directory,
+            cleanup_timeout,
+            Some(observer_wakeup),
+        )
+    }
+
+    fn start_inner(
+        root_pid: u32,
+        temporary_directory: &Path,
+        cleanup_timeout: Duration,
+        observer_wakeup: Option<ObserverWakeup>,
     ) -> Result<Self, String> {
         let owner_pid = libc::pid_t::try_from(std::process::id())
             .ok()
@@ -78,8 +109,8 @@ impl SandboxManager {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .process_group(0);
-        // The server is multithreaded. Carry the private manager control on fd 0
-        // and apply the same no-extra-descriptor boundary used for worker relays.
+        // The owner may be multithreaded. Carry the private manager control on
+        // fd 0 and apply the same no-extra-descriptor boundary used for relays.
         file_descriptors::close_unlisted_from_multithreaded_parent(&mut command)?;
 
         let mut child = command
@@ -134,7 +165,12 @@ impl SandboxManager {
         }
 
         Ok(Self {
-            monitor: Some(ManagerMonitor::start(child, identity, root)),
+            monitor: Some(ManagerMonitor::start(
+                child,
+                identity,
+                root,
+                observer_wakeup,
+            )),
             control: stream,
             cleanup_timeout,
             retirement_started: false,
@@ -143,7 +179,7 @@ impl SandboxManager {
         })
     }
 
-    /// Marks the beginning of server-owned retirement. If the server exits
+    /// Marks the beginning of owner-controlled retirement. If the owner exits
     /// before completing the handoff, the manager preserves the directory.
     pub(crate) fn begin_retirement(&mut self) -> bool {
         if self.retirement_started {
@@ -165,12 +201,12 @@ impl SandboxManager {
     }
 
     /// Waits until the manager has retired every identity it observed.
-    pub(crate) fn prepare_finish(&mut self) -> bool {
+    pub(crate) fn prepare_finish(&mut self) -> CleanupPreparation {
         if self.cleanup_complete {
-            return true;
+            return CleanupPreparation::Complete;
         }
         if !self.begin_retirement() {
-            return false;
+            return CleanupPreparation::Failed;
         }
         let timeout = self.cleanup_timeout.saturating_add(FINISH_ALLOWANCE);
         let result = self
@@ -179,18 +215,24 @@ impl SandboxManager {
             .map_err(|error| format!("failed to configure sandbox manager control: {error}"))
             .and_then(|()| protocol::read_cleanup_complete(&mut self.control));
         match result {
-            Ok(()) => {
+            Ok(protocol::CleanupAcknowledgement::Complete) => {
                 self.cleanup_complete = true;
-                true
+                CleanupPreparation::Complete
+            }
+            Ok(protocol::CleanupAcknowledgement::TimedOut) => {
+                // Discovery and the first complete signal pass precede the
+                // manager's bounded cleanup grace. Preserve the directory, then
+                // let the bounded manager monitor prove whether cleanup finished.
+                CleanupPreparation::TimedOut
             }
             Err(error) => {
                 self.control_error = Some(error);
-                false
+                CleanupPreparation::Failed
             }
         }
     }
 
-    /// Commits the server's final directory disposition and waits for the
+    /// Commits the owner's final directory disposition and waits for the
     /// manager process to exit.
     pub(crate) fn finish(
         mut self,
@@ -220,7 +262,12 @@ impl SandboxManager {
 }
 
 impl ManagerMonitor {
-    fn start(mut child: Child, identity: ProcessIdentity, root: ProcessIdentity) -> Self {
+    fn start(
+        mut child: Child,
+        identity: ProcessIdentity,
+        root: ProcessIdentity,
+        observer_wakeup: Option<ObserverWakeup>,
+    ) -> Self {
         let (result_sender, result) = mpsc::channel();
         let thread = std::thread::spawn(move || {
             let result = match child.wait() {
@@ -239,6 +286,9 @@ impl ManagerMonitor {
                 ),
             };
             let _ = result_sender.send(result);
+            if let Some(observer_wakeup) = observer_wakeup {
+                let _ = observer_wakeup.wake();
+            }
         });
         Self {
             identity,

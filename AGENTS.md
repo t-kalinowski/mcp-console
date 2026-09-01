@@ -11,6 +11,7 @@ The documents under `design-sketches/` describe intended behavior, not the curre
 - `README.md` describes the current user-facing project status.
 - `docs/README.md` maps the implemented documentation by audience.
 - `docs/ARCHITECTURE.md` describes the implemented process structure, ownership, and lifecycle.
+- `docs/SANDBOX_SUPERVISION.md` describes macOS normal and crash-independent sandbox lifetime supervision.
 - `docs/BUILTIN_RUNTIME.md` describes user-visible behavior of the built-in mixed-language console.
 - `docs/REQUIREMENTS.md` describes dependency and environment behavior and its trust boundary.
 - `docs/WORKER_PROTOCOL.md` defines the exact relay-worker and custom-worker contract.
@@ -57,7 +58,9 @@ They are not MCP, relay, sideband, or worker-stream records.
 MCP Console has four process boundaries:
 
 1. The client and server communicate through MCP JSON-RPC over stdio.
-2. The server initializes one per-generation host sandbox manager over a private fixed message on manager fd 0, receives its readiness response, and uses the same stream for the bounded normal-retirement disposition handoff.
+2. Each host sandbox owner initializes one manager over a private fixed message on manager fd 0, receives its readiness response, and uses the same stream for the bounded normal-retirement disposition handoff.
+   The server starts one manager for each worker generation, which may evaluate multiple cells before restart or replacement.
+   The standalone launcher starts one manager for each invocation of `mcp-console sandbox`, which runs one direct child command.
 3. The server and one per-generation relay communicate through the private, ordered JSONL protocol in `docs/RELAY_PROTOCOL.md`.
 4. The relay and worker communicate through the worker sideband plus worker fd 0, 1, and 2 as documented in `docs/WORKER_PROTOCOL.md`.
 
@@ -68,7 +71,10 @@ Keep these ownership rules intact:
   It preserves each producer's order and supplies serialized observation order; it does not reconstruct chronology across independent sideband, stdout, and stderr transports.
 - The server owns host-side relay lifetime observation and retirement, worker-generation state, operation admission, output cuts, pending-output budgets, response assembly, delivery ownership, retained requirements, and host resolvers.
   Do not move these responsibilities into the relay.
-- The sandbox manager owns only independent cleanup after abrupt server loss.
+- The standalone launcher owns normal observation and retirement of its direct sandbox command, its exit status, and its final temporary-directory disposition.
+  It releases the command's private startup gate only after attaching its local observer and receiving manager readiness.
+  Do not move normal standalone cleanup or terminal semantics into the manager.
+- The sandbox manager owns only independent cleanup after abrupt loss of its server or standalone owner.
   It observes exact process identities, does not own logical generation state or relay transport, and does not signal an unpinned process group.
 - Restart, replacement, evaluation admission, stdin writes, resolver callbacks, and retained-environment commits are scoped to the worker generation that accepted them.
   Work admitted for an old generation must not reach its replacement.
@@ -95,7 +101,7 @@ Keep these ownership rules intact:
 - `src/relay_protocol.rs` — server-relay JSONL message and framing contract.
 - `src/worker_relay.rs` — sandboxed worker launch, I/O forwarding, signaling, shutdown, and reaping.
 - `src/worker_client.rs`, `src/worker_client/` — server-owned environment, evaluation, lifecycle, ordered event dispatch, output tape, and macOS relay transport.
-- `src/sandbox.rs`, `src/sandbox/supervision.rs`, `src/sandbox/supervision/` — sandbox process launch, server-owned descendant observation, and independent crash-manager supervision.
+- `src/sandbox.rs`, `src/sandbox/supervision.rs`, `src/sandbox/supervision/` — sandbox process launch, owner-side descendant observation, and independent crash-manager supervision.
 - `src/worker.rs`, `src/worker/embedded_r.rs`, `src/r_repl.c` — worker-facing facade, current embedded-R backend, cell dispatch, console callbacks, and the C-owned DLL-REPL boundary.
 
 ### Language adapters

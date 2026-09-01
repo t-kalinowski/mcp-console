@@ -380,7 +380,10 @@ fn kill_process(process_id: libc::pid_t) -> io::Result<()> {
 pub(super) fn sandboxed_command() -> Result<(Command, TemporaryDirectory), String> {
     let temporary_directory = TemporaryDirectory::new()?;
     let mut launcher = Command::new(SANDBOX_EXEC);
+    // Do not rely on SIP to keep host interposers out of the Apple sandbox
+    // intermediary and the sandbox target.
     launcher
+        .env_remove("DYLD_INSERT_LIBRARIES")
         .arg("-p")
         .arg(POLICY)
         .arg(parameter_definition(

@@ -68,6 +68,26 @@ def test_preserves_executable_names_with_equals_signs(binary: Path) -> Transcrip
     return [entry]
 
 
+def test_preserves_executable_names_that_look_like_options(binary: Path) -> Transcript:
+    with TemporaryDirectory() as directory:
+        current_directory = Path(directory)
+        shutil.copy("/usr/bin/true", current_directory / "--help")
+        entry = record(
+            binary,
+            "sandbox",
+            "--",
+            "--help",
+            environment={"PATH": "."},
+            current_directory=current_directory,
+        )
+
+    assert "exit_code" not in entry, (
+        "the executable name was parsed as a launcher option"
+    )
+    assert entry["stdout"] == "", "the launcher handled the target's option-like name"
+    return [entry]
+
+
 def test_preserves_python_arguments_and_standard_output(binary: Path) -> Transcript:
     # fmt: python
     script = code(r"""

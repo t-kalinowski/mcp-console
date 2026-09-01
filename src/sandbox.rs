@@ -4,6 +4,14 @@ use std::process::ExitCode;
 #[cfg(target_os = "macos")]
 use std::ffi::OsStr;
 #[cfg(target_os = "macos")]
+use std::fs::File;
+#[cfg(target_os = "macos")]
+use std::io::Read as _;
+#[cfg(target_os = "macos")]
+use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
+#[cfg(target_os = "macos")]
+use std::os::unix::net::UnixStream;
+#[cfg(target_os = "macos")]
 use std::os::unix::process::CommandExt as _;
 #[cfg(target_os = "macos")]
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
@@ -12,6 +20,8 @@ use std::time::Duration;
 
 #[cfg(target_os = "macos")]
 const CRASH_MANAGER_CLEANUP_TIMEOUT: Duration = Duration::from_secs(1);
+#[cfg(target_os = "macos")]
+const TARGET_GATE_RELEASE: u8 = 1;
 
 #[cfg(target_os = "macos")]
 #[path = "sandbox/file_descriptors.rs"]
@@ -31,21 +41,68 @@ mod platform;
 
 #[cfg(target_os = "macos")]
 pub fn run(command_line: &[OsString]) -> Result<ExitCode, String> {
-    let (program, arguments) = command_line
-        .split_first()
-        .expect("sandbox command must include a program");
-    let mut sandboxed = SandboxedCommand::new(program)?;
+    let (target_gate, launcher_gate) = UnixStream::pair()
+        .map_err(|error| format!("failed to create the sandbox target startup gate: {error}"))?;
+    let target_gate_descriptor = target_gate.as_raw_fd();
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("failed to locate the sandbox target gate: {error}"))?;
+    let mut sandboxed = SandboxedCommand::new(executable.as_os_str())?;
     sandboxed
-        .args(arguments)
+        .arg("sandbox-target")
+        .arg("--gate-fd")
+        .arg(target_gate_descriptor.to_string())
+        .arg("--")
+        .args(command_line)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
-    sandboxed.status()
+    sandboxed.status(target_gate, launcher_gate)
 }
 
 #[cfg(target_os = "macos")]
 pub(crate) fn run_manager() -> Result<(), String> {
     supervision::run_manager()
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn run_target(
+    gate_descriptor: libc::c_int,
+    command_line: &[OsString],
+) -> Result<ExitCode, String> {
+    let (program, arguments) = command_line
+        .split_first()
+        .expect("sandbox target must include a program");
+    if gate_descriptor <= libc::STDERR_FILENO {
+        return Err("sandbox target startup gate descriptor is invalid".to_string());
+    }
+    loop {
+        if unsafe { libc::fcntl(gate_descriptor, libc::F_GETFD) } >= 0 {
+            break;
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return Err(format!(
+                "sandbox target startup gate descriptor is invalid: {error}"
+            ));
+        }
+    }
+    // SAFETY: the standalone launcher transfers this inherited descriptor to
+    // the hidden target process and retains no owner for the child-side copy.
+    let gate = unsafe { OwnedFd::from_raw_fd(gate_descriptor) };
+    let mut gate = File::from(gate);
+    let mut release = [0];
+    gate.read_exact(&mut release)
+        .map_err(|error| format!("failed to await sandbox target startup: {error}"))?;
+    if release != [TARGET_GATE_RELEASE] {
+        return Err("sandbox target received an invalid startup release".to_string());
+    }
+    drop(gate);
+
+    let error = Command::new(program).args(arguments).exec();
+    Err(format!(
+        "failed to launch sandbox target `{}`: {error}",
+        program.to_string_lossy()
+    ))
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -56,6 +113,14 @@ pub fn run(command_line: &[OsString]) -> Result<ExitCode, String> {
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn run_manager() -> Result<(), String> {
     Err("the sandbox manager is currently supported only on macOS".to_string())
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn run_target(
+    _gate_descriptor: libc::c_int,
+    _command_line: &[OsString],
+) -> Result<ExitCode, String> {
+    Err("the sandbox target gate is currently supported only on macOS".to_string())
 }
 
 #[cfg(target_os = "macos")]
@@ -190,8 +255,8 @@ impl SandboxedCommand {
 
     /// Adds an environment variable inherited by the sandboxed program.
     ///
-    /// macOS filters `DYLD_*` variables when launching `sandbox-exec`; this
-    /// wrapper intentionally does not restore them inside the sandbox.
+    /// Host loader injection is removed from the initial `sandbox-exec`
+    /// command. Callers must not restore it inside the sandbox.
     /// `TMPDIR` is reserved and reset to the private directory when spawning.
     pub(crate) fn env(&mut self, key: impl AsRef<OsStr>, value: impl AsRef<OsStr>) -> &mut Self {
         self.command.env(key, value);
@@ -292,15 +357,28 @@ impl SandboxedCommand {
         })
     }
 
-    /// Runs a standalone command and retires descendants observed from its root.
+    /// Runs a standalone command with launcher-owned normal retirement and an
+    /// independent crash manager for abrupt launcher loss.
     ///
-    /// Darwin cannot atomically attach a descendant observer at spawn time. A
-    /// process that detaches before the post-spawn root watch or a fork event is
-    /// observed remains outside this command's guarantee. Termination or failure
-    /// of the launcher itself is intentionally outside this command's scope.
-    pub(crate) fn status(mut self) -> Result<ExitCode, String> {
+    /// A hidden wrapper blocks on a private release descriptor before executing
+    /// the requested program. The launcher attaches its local observer, waits
+    /// for the manager to adopt the temporary directory and report readiness,
+    /// then releases that same root process into the program. A descendant that
+    /// later becomes orphaned before either observer sees its fork remains
+    /// outside that observer's guarantee. Abrupt launcher failure before manager
+    /// readiness remains outside crash cleanup.
+    pub(crate) fn status(
+        mut self,
+        target_gate: UnixStream,
+        launcher_gate: UnixStream,
+    ) -> Result<ExitCode, String> {
         self.command.env("TMPDIR", self.temporary_directory.path());
-        supervision::status(self.command, self.temporary_directory)
+        supervision::status(
+            self.command,
+            self.temporary_directory,
+            target_gate,
+            launcher_gate,
+        )
     }
 }
 
@@ -365,8 +443,8 @@ impl SandboxedChild {
     ///
     /// Process-group cleanup always runs as a backstop for unobserved same-group
     /// forks; direct-child cleanup also runs after any retirement error. The
-    /// private temporary directory is preserved on any cleanup error because an
-    /// unobserved process may remain live.
+    /// private temporary directory is preserved on any cleanup error or manager
+    /// cleanup timeout because an unobserved process may remain live.
     pub(crate) fn force_stop(&mut self) -> Result<(), String> {
         match &self.retirement {
             SandboxedChildRetirement::Retired { error } => return stored_retirement_result(error),
@@ -403,10 +481,10 @@ impl SandboxedChild {
                 ),
             ));
         }
-        let manager_prepared = self
+        let manager_preparation = self
             .crash_manager
             .as_mut()
-            .is_none_or(|manager| manager.prepare_finish());
+            .map(supervision::SandboxManager::prepare_finish);
         let mut direct_stop_failed = false;
         if error.is_some()
             && let Err(kill_error) = self.child.kill()
@@ -440,12 +518,17 @@ impl SandboxedChild {
                 }
             }
         };
+        let preserve_manager_directory = error.is_some()
+            || manager_preparation.is_some_and(|preparation| {
+                preparation != supervision::CleanupPreparation::Complete
+            });
         if let Some(manager) = self.crash_manager.take()
-            && let Err(manager_error) = manager.finish(error.is_some() || !manager_prepared)
+            && let Err(manager_error) = manager.finish(preserve_manager_directory)
         {
             error = Some(append_retirement_error(error, manager_error));
         }
-        if error.is_some() {
+        if error.is_some() || manager_preparation == Some(supervision::CleanupPreparation::TimedOut)
+        {
             self.preserve_temporary_directory();
         } else {
             self.remove_temporary_directory();

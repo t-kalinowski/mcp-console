@@ -60,6 +60,24 @@ pub enum Command {
     #[command(hide = true)]
     SandboxManager,
 
+    /// Hold a standalone sandbox target until host supervision is ready
+    #[command(hide = true)]
+    SandboxTarget {
+        /// Inherited descriptor that releases target execution
+        #[arg(long, value_name = "FD")]
+        gate_fd: i32,
+
+        /// Command and arguments to run after host supervision is ready
+        #[arg(
+            value_name = "COMMAND",
+            required = true,
+            num_args = 1..,
+            allow_hyphen_values = true,
+            trailing_var_arg = true
+        )]
+        command: Vec<OsString>,
+    },
+
     /// Run a command with the MCP Console sandbox policy
     #[command(after_help = SANDBOX_EXAMPLES)]
     Sandbox {

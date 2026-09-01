@@ -17,6 +17,11 @@ pub(super) enum RetirementCommand {
     PreserveTemporaryDirectory,
 }
 
+pub(super) enum CleanupAcknowledgement {
+    Complete,
+    TimedOut,
+}
+
 pub(super) struct Initialization {
     pub(super) owner_pid: libc::pid_t,
     pub(super) root_pid: libc::pid_t,
@@ -110,18 +115,29 @@ pub(super) fn write_cleanup_complete(stream: &mut impl Write) -> Result<(), Stri
     write_control(stream, CLEANUP_COMPLETE)
 }
 
-pub(super) fn read_cleanup_complete(stream: &mut impl Read) -> Result<(), String> {
-    match read_control(stream)? {
-        Some(CLEANUP_COMPLETE) => Ok(()),
-        Some(_) => Err("sandbox manager sent an invalid cleanup response".to_string()),
-        None => Err("sandbox manager exited before cleanup completed".to_string()),
+pub(super) fn read_cleanup_complete(
+    stream: &mut impl Read,
+) -> Result<CleanupAcknowledgement, String> {
+    match read_control(stream) {
+        Ok(Some(CLEANUP_COMPLETE)) => Ok(CleanupAcknowledgement::Complete),
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+            ) =>
+        {
+            Ok(CleanupAcknowledgement::TimedOut)
+        }
+        Ok(Some(_)) => Err("sandbox manager sent an invalid cleanup response".to_string()),
+        Ok(None) => Err("sandbox manager exited before cleanup completed".to_string()),
+        Err(error) => Err(control_error(error)),
     }
 }
 
 pub(super) fn read_retirement_command(
     stream: &mut impl Read,
 ) -> Result<Option<RetirementCommand>, String> {
-    match read_control(stream)? {
+    match read_control(stream).map_err(control_error)? {
         Some(RETIREMENT_STARTED) => Ok(Some(RetirementCommand::Started)),
         Some(REMOVE_TEMPORARY_DIRECTORY) => Ok(Some(RetirementCommand::RemoveTemporaryDirectory)),
         Some(PRESERVE_TEMPORARY_DIRECTORY) => {
@@ -138,7 +154,7 @@ fn write_control(stream: &mut impl Write, value: u8) -> Result<(), String> {
         .map_err(|error| format!("failed to control sandbox manager retirement: {error}"))
 }
 
-fn read_control(stream: &mut impl Read) -> Result<Option<u8>, String> {
+fn read_control(stream: &mut impl Read) -> std::io::Result<Option<u8>> {
     let mut value = [0];
     loop {
         match stream.read(&mut value) {
@@ -146,13 +162,13 @@ fn read_control(stream: &mut impl Read) -> Result<Option<u8>, String> {
             Ok(1) => return Ok(Some(value[0])),
             Ok(_) => unreachable!("one-byte sandbox manager read returned excess data"),
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(error) => {
-                return Err(format!(
-                    "failed to control sandbox manager retirement: {error}"
-                ));
-            }
+            Err(error) => return Err(error),
         }
     }
+}
+
+fn control_error(error: std::io::Error) -> String {
+    format!("failed to control sandbox manager retirement: {error}")
 }
 
 fn cleanup_timeout_millis(timeout: Duration) -> Result<u64, String> {
