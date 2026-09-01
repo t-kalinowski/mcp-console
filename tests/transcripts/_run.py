@@ -26,7 +26,11 @@ directory = Path(__file__).resolve().parent
 root = directory.parents[1]
 binary = root / "target" / "debug" / "mcp-console"
 boundaries = {"client_server", "server_relay", "relay_worker", "cli"}
-suite_paths = sorted(directory.rglob("[!_]*.py"))
+suite_paths = sorted(
+    path
+    for path in directory.rglob("*.py")
+    if not any(part.startswith("_") for part in path.relative_to(directory).parts)
+)
 initialization_suite = "client_server/server"
 initialization_case = "initializes_and_lists_tools"
 initialization_reference = (
