@@ -1,0 +1,28 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+send:
+  r: echo echo
+result:
+  content:
+    - type: text
+      text: >-
+        [failed to launch worker relay: sandbox manager did not become ready:
+        failed to fill whole buffer]
+  isError: true
+startup_gate_failure:
+  manager: killed before readiness
+  relay_root: retired without executing the custom relay
+  temporary_directory: removed
+---
+send:
+  r: echo echo
+result:
+  content:
+    - type: text
+      text: |
+        zod: echo
+  isError: false
+startup_gate_recovery:
+  custom_relay: executed only for the replacement generation
+  private_gate: closed before relay exec

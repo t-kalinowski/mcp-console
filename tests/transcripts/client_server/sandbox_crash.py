@@ -20,7 +20,9 @@ from _support import (
     build_manager_interposer,
     capture_darwin_process_identity,
     code,
+    darwin_child_process_identities,
     darwin_process_waits_for_control,
+    darwin_process_waits_for_startup_release,
     kill_darwin_processes,
     live_darwin_processes,
     run_this_suite,
@@ -132,6 +134,18 @@ def _wait_for_process_cleanup(
     return survivors
 
 
+def _wait_for_private_startup_gate(identity: DarwinProcessIdentity) -> None:
+    deadline = time.monotonic() + TIMEOUT
+    while not darwin_process_waits_for_startup_release(identity):
+        assert live_darwin_processes((identity,)), (
+            "custom relay root exited before reaching its private startup gate"
+        )
+        assert time.monotonic() < deadline, (
+            "custom relay root did not block at its private startup gate"
+        )
+        time.sleep(0.01)
+
+
 def _wait_for_manager_disposition(
     identity: DarwinProcessIdentity,
     temporary_directory: Path,
@@ -192,18 +206,6 @@ def _close_client_streams(client: McpClient) -> None:
             stream.close()
         except BrokenPipeError:
             pass
-
-
-def _wait_for_marker(root: Path, name: str, client: McpClient) -> Path:
-    deadline = time.monotonic() + 5
-    while True:
-        markers = list(root.glob(f"**/{name}"))
-        if markers:
-            assert len(markers) == 1, markers
-            return markers[0]
-        assert client.process.poll() is None, f"server exited before creating {name}"
-        assert time.monotonic() < deadline, f"timed out waiting for {name}"
-        time.sleep(0.01)
 
 
 def test_server_crash_retires_the_worker_generation(binary: Path) -> Transcript:
@@ -431,16 +433,17 @@ def test_manager_crash_retires_the_worker_generation(binary: Path) -> Transcript
 def test_manager_crash_before_commit_retires_the_custom_relay_generation(
     binary: Path,
 ) -> Transcript:
-    relay = (
-        Path(__file__).resolve().parents[2] / "fixtures" / "precommit_descendant_relay"
-    )
-    worker = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
+    fixture_root = Path(__file__).resolve().parents[2] / "fixtures"
+    relay = fixture_root / "startup_marker_relay"
+    worker = fixture_root / "zod"
+    marker_name = "mcp-console-startup-marker"
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
         committed_ready = FifoCheckpoint(temporary / "committed-ready")
         committed_release = FifoCheckpoint(temporary / "committed-release")
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
+        environment["MCP_CONSOLE_TEST_BINARY"] = str(binary)
         environment["MCP_CONSOLE_TEST_MANAGER_COMMITTED_READY"] = str(
             committed_ready.path
         )
@@ -458,27 +461,32 @@ def test_manager_crash_before_commit_retires_the_custom_relay_generation(
         try:
             client._initialize_and_list_tools()
             waiting = client._start_send(r="42")
-            marker = _wait_for_marker(
-                temporary,
-                "mcp-console-precommit-relay",
-                client,
-            )
-            marker_lines = marker.read_text(encoding="utf-8").splitlines()
-            assert len(marker_lines) == 3, marker_lines
-            relay_pid, child_pid = map(int, marker_lines[:2])
-            assert os.getsid(child_pid) != os.getsid(relay_pid), (
-                "pre-commit child did not leave the custom relay session"
-            )
-            sandbox_temporary_directory = Path(marker_lines[2])
+            committed_ready.wait("manager COMMITTED write")
+
             manager_identity = capture_darwin_process_identity(
                 _manager_pid(client.process.pid)
             )
-            identities = (
-                capture_darwin_process_identity(relay_pid),
-                capture_darwin_process_identity(child_pid),
-                manager_identity,
+            server_identity = capture_darwin_process_identity(client.process.pid)
+            root_candidates = tuple(
+                identity
+                for identity in darwin_child_process_identities(server_identity)
+                if identity != manager_identity
             )
-            committed_ready.wait("manager COMMITTED write")
+            assert len(root_candidates) == 1, root_candidates
+            root_identity = root_candidates[0]
+            identities = (root_identity, manager_identity)
+            _wait_for_private_startup_gate(root_identity)
+            assert darwin_child_process_identities(root_identity) == (), (
+                "custom relay root created children before manager ownership committed"
+            )
+            sandbox_directories = tuple(
+                temporary.glob(f"mcp-console-tmp-{client.process.pid}-*")
+            )
+            assert len(sandbox_directories) == 1, sandbox_directories
+            sandbox_temporary_directory = sandbox_directories[0]
+            assert list(temporary.glob(f"**/{marker_name}")) == [], (
+                "custom relay executed before manager ownership committed"
+            )
 
             assert signal_darwin_process(manager_identity, signal.SIGKILL), (
                 "manager exited before pre-commit crash injection"
@@ -496,11 +504,15 @@ def test_manager_crash_before_commit_retires_the_custom_relay_generation(
                 "pre-commit manager crash leaked sandbox temporary directory: "
                 f"{sandbox_temporary_directory}"
             )
+            assert list(temporary.glob(f"**/{marker_name}")) == [], (
+                "custom relay executed after its manager failed before ownership commit"
+            )
             client.transcript.append(
                 {
-                    "verified_cleanup": (
-                        "custom relay, detached child, manager, and temp"
-                    )
+                    "verified_startup_gate": (
+                        "custom relay did not execute before COMMITTED"
+                    ),
+                    "verified_cleanup": "gated relay root, manager, and temp",
                 }
             )
             return client._finish()

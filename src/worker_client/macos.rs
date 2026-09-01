@@ -145,7 +145,6 @@ impl WorkerRuntime {
         );
         if use_builtin_relay {
             command.arg("worker-relay");
-            command.gate_startup()?;
         }
         command
             .arg(executable.as_os_str())

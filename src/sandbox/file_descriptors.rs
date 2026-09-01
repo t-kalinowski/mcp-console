@@ -18,7 +18,11 @@ pub(super) fn close_unlisted_except(
     unsafe {
         command.pre_exec(move || {
             for descriptor in &descriptors {
-                configure_descriptor(*descriptor, *descriptor == inherited_descriptor)?;
+                if *descriptor == inherited_descriptor {
+                    clear_close_on_exec(*descriptor)?;
+                } else {
+                    set_close_on_exec(*descriptor)?;
+                }
             }
             Ok(())
         });
@@ -26,16 +30,37 @@ pub(super) fn close_unlisted_except(
     Ok(())
 }
 
-pub(super) fn configure(command: &mut Command, allowed: Vec<RawFd>) -> Result<(), String> {
+pub(super) fn close_unlisted_from_multithreaded_parent(
+    command: &mut Command,
+) -> Result<(), String> {
+    close_unlisted_from_multithreaded_parent_except(command, Vec::new())
+}
+
+pub(super) fn close_unlisted_from_multithreaded_parent_except(
+    command: &mut Command,
+    inherited_descriptors: Vec<RawFd>,
+) -> Result<(), String> {
+    if inherited_descriptors
+        .iter()
+        .any(|descriptor| *descriptor <= libc::STDERR_FILENO)
+    {
+        return Err("sandbox inherited descriptor is invalid".to_string());
+    }
     // A server thread can open a descriptor after any parent-side snapshot.
     // Scan every possible child slot after fork instead. Descriptors created by
     // Rust for spawn failure reporting already carry close-on-exec and remain
-    // usable until a successful exec closes them.
+    // usable until a successful exec closes them. Only the private startup gate
+    // is allowlisted through the hidden wrapper; that wrapper closes it before
+    // executing the configured relay.
     let descriptor_limit = descriptor_limit()?;
     unsafe {
         command.pre_exec(move || {
             for descriptor in (libc::STDERR_FILENO + 1)..descriptor_limit {
-                configure_descriptor(descriptor, allowed.contains(&descriptor))?;
+                update_close_on_exec(
+                    descriptor,
+                    !inherited_descriptors.contains(&descriptor),
+                    true,
+                )?;
             }
             Ok(())
         });
@@ -106,7 +131,19 @@ fn open_descriptors() -> Result<Vec<RawFd>, String> {
     }
 }
 
-fn configure_descriptor(descriptor: RawFd, allowed: bool) -> std::io::Result<()> {
+fn set_close_on_exec(descriptor: RawFd) -> std::io::Result<()> {
+    update_close_on_exec(descriptor, true, true)
+}
+
+fn clear_close_on_exec(descriptor: RawFd) -> std::io::Result<()> {
+    update_close_on_exec(descriptor, false, false)
+}
+
+fn update_close_on_exec(
+    descriptor: RawFd,
+    close_on_exec: bool,
+    ignore_missing: bool,
+) -> std::io::Result<()> {
     let flags = loop {
         let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFD) };
         if flags >= 0 {
@@ -115,27 +152,27 @@ fn configure_descriptor(descriptor: RawFd, allowed: bool) -> std::io::Result<()>
         let error = std::io::Error::last_os_error();
         match error.raw_os_error() {
             Some(libc::EINTR) => continue,
-            Some(libc::EBADF) => return Ok(()),
+            Some(libc::EBADF) if ignore_missing => return Ok(()),
             _ => return Err(error),
         }
     };
-    let desired = if allowed {
-        flags & !libc::FD_CLOEXEC
-    } else {
+    let updated_flags = if close_on_exec {
         flags | libc::FD_CLOEXEC
+    } else {
+        flags & !libc::FD_CLOEXEC
     };
-    if desired == flags {
+    if flags == updated_flags {
         return Ok(());
     }
 
     loop {
-        if unsafe { libc::fcntl(descriptor, libc::F_SETFD, desired) } == 0 {
+        if unsafe { libc::fcntl(descriptor, libc::F_SETFD, updated_flags) } == 0 {
             return Ok(());
         }
         let error = std::io::Error::last_os_error();
         match error.raw_os_error() {
             Some(libc::EINTR) => continue,
-            Some(libc::EBADF) => return Ok(()),
+            Some(libc::EBADF) if ignore_missing => return Ok(()),
             _ => return Err(error),
         }
     }

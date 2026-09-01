@@ -60,7 +60,7 @@ pub enum Command {
     #[command(hide = true)]
     SandboxManager,
 
-    /// Hold a standalone sandbox target until host supervision is ready
+    /// Hold a sandbox target until host supervision is ready
     #[command(hide = true)]
     SandboxTarget {
         /// Inherited descriptor that releases target execution

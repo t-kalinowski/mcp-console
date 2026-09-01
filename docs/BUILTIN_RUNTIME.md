@@ -515,7 +515,9 @@ The [implemented architecture](ARCHITECTURE.md) describes the session record and
 - Managed DuckDB cannot query Python objects until they are bound as R data; a selected Python driver sees only objects registered on its own connection.
 - SQL previews do not include affected-row counts or total result counts.
 - Only default-device R graphics and open pyplot figures are captured automatically.
-- Normal restart, automatic failure replacement, orderly server shutdown, and unexpected server or relay failure retire descendants observed by the host-side sandbox manager across process-group and session changes; a descendant that detaches before the macOS tracker observes it remains outside this guarantee.
+- Normal restart, automatic failure replacement, orderly server shutdown, and unexpected server or relay failure retire descendants observed by the host-side sandbox manager across process-group and session changes.
+  The configured relay starts only after the manager has adopted the private directory, begun observation, and committed ownership.
+  A later descendant that becomes orphaned before the manager resolves its fork event remains outside this guarantee.
 - Linux and Windows are not supported.
 
 The [architecture](ARCHITECTURE.md) explains lifecycle and process ownership.

@@ -33,7 +33,6 @@ mod platform {
     const CHILD_CONTINUED: libc::c_int = 6;
 
     pub(super) fn run(command_line: &[std::ffi::OsString]) -> Result<(), String> {
-        crate::sandbox::await_sandbox_startup()?;
         let (program, arguments) = command_line
             .split_first()
             .ok_or_else(|| "worker relay command must include an executable".to_string())?;
@@ -370,13 +369,19 @@ mod platform {
     }
 
     fn finish_exited_worker(child: &mut Child) -> (Option<ExitStatus>, Option<String>) {
-        match child.wait() {
-            Ok(status) => (Some(status), None),
-            Err(error) => (
-                None,
-                Some(format!("failed to reap the direct worker: {error}")),
-            ),
+        let mut errors = Vec::new();
+        let status = match child.wait() {
+            Ok(status) => Some(status),
+            Err(error) => {
+                errors.push(format!("failed to reap the direct worker: {error}"));
+                None
+            }
+        };
+        if let Err(error) = crate::sandbox::force_stop_process_group_members_except_self() {
+            errors.push(format!("failed to stop the worker process group: {error}"));
         }
+        let error = (!errors.is_empty()).then(|| errors.join("; "));
+        (status, error)
     }
 
     fn interrupt_worker(child: &mut Child) -> Result<(), String> {
@@ -413,6 +418,10 @@ mod platform {
             && error.raw_os_error() != Some(libc::ESRCH)
         {
             errors.push(format!("failed to stop the direct worker: {error}"));
+        }
+        let group_error = crate::sandbox::force_stop_process_group_members_except_self().err();
+        if let Some(error) = group_error.as_ref() {
+            errors.push(format!("failed to stop the worker process group: {error}"));
         }
         if status.is_none() {
             match child.wait() {

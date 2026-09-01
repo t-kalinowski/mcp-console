@@ -60,11 +60,12 @@ impl DescendantTracker {
         let kqueue = unsafe { OwnedFd::from_raw_fd(kqueue_descriptor) };
 
         // Darwin provides neither child subreapers nor PID namespaces, and its
-        // kqueue NOTE_TRACK facility is unsupported. A descendant that becomes
-        // orphaned before this post-spawn watch, or before a NOTE_FORK event can
-        // be paired with a libproc snapshot, is therefore outside this tracker's
-        // intentional boundary. Once observed, descendants that call setsid(),
-        // such as processx children, remain tracked by PID and start time.
+        // kqueue NOTE_TRACK facility is unsupported. Supported callers prevent
+        // the target from running until this root watch is installed. After
+        // release, a descendant orphaned before a NOTE_FORK event can be paired
+        // with a libproc snapshot is outside this tracker's intentional boundary.
+        // Once observed, descendants that call setsid(), such as processx
+        // children, remain tracked by PID and start time.
         let root = process_identity(root_pid)
             .map_err(StartFailure::new)?
             .ok_or_else(|| {

@@ -32,11 +32,14 @@ stderr: >
   failed to control sandbox manager retirement: Broken pipe (os error 32);
   additionally, sandbox manager exited with status signal: 9 (SIGKILL);
   additionally, manager recovery failed: failed to inspect sandbox process
-  <sandbox root pid>: Input/output error (os error 5)
+  <sandbox root pid>: Input/output error (os error 5); additionally,
+  manager recovery failed: failed to stop sandbox process group:
+  Input/output error (os error 5)
 ---
 manager_signal: SIGKILL
 manager_recovery_inspection: EIO
+manager_recovery_group_stop: EIO
 launcher_returncode: 1
-verified_bounded_return: after pinned root-group termination
+verified_bounded_return: after direct pinned-root termination
 verified_cleanup: sandbox root and manager
-verified_preservation: sandbox temp
+verified_preservation: detached descendant and sandbox temp

@@ -1,6 +1,6 @@
 use super::super::process::{ProcessIdentity, process_info, signal_process};
 use super::super::process_tracker::DescendantTracker;
-use super::{CONTROL_DESCRIPTOR_ENV, protocol, stop_process_group, with_prior_error};
+use super::{protocol, stop_process_group, with_prior_error};
 use crate::sandbox::platform;
 use std::io::{Read, Write};
 use std::net::Shutdown;
@@ -12,7 +12,9 @@ use std::time::Duration;
 type GroupBackstop = Mutex<bool>;
 
 pub(super) fn run() -> Result<(), String> {
-    let mut stream = inherited_control()?;
+    // SAFETY: the owner transfers its private control socket as the manager's
+    // standard input and retains no manager-side copy after spawning.
+    let mut stream = unsafe { UnixStream::from_raw_fd(libc::STDIN_FILENO) };
     let protocol::Initialization {
         owner_pid,
         root_pid,
@@ -286,15 +288,4 @@ fn join_tracker(tracker_thread: std::thread::JoinHandle<Result<(), String>>) -> 
         .join()
         .map_err(|_| "sandbox manager process tracker failed".to_string())
         .and_then(|result| result)
-}
-
-fn inherited_control() -> Result<UnixStream, String> {
-    let descriptor = std::env::var(CONTROL_DESCRIPTOR_ENV)
-        .map_err(|_| "sandbox manager control descriptor is missing".to_string())?
-        .parse::<libc::c_int>()
-        .ok()
-        .filter(|descriptor| *descriptor > libc::STDERR_FILENO)
-        .ok_or_else(|| "sandbox manager control descriptor is invalid".to_string())?;
-    // SAFETY: the descriptor is inherited exclusively by this manager process.
-    Ok(unsafe { UnixStream::from_raw_fd(descriptor) })
 }

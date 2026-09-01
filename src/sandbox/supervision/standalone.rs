@@ -117,8 +117,7 @@ pub(in crate::sandbox) fn status(
         return Err(error);
     }
     // Keep the exited root waitable until host-side sandbox-lifetime cleanup has
-    // completed. The local observer only supplies root-exit and job-control
-    // wakeups.
+    // completed. The root waiter supplies only exit and job-control wakeups.
     drop(root_waiter);
     let _ = manager.begin_retirement();
     let terminal_result = foreground_terminal.restore();
@@ -206,7 +205,13 @@ fn kill_root(child: &mut Child) -> Result<ExitStatus, String> {
         .filter(|error| error.raw_os_error() != Some(libc::ESRCH));
 
     match child.try_wait() {
-        Ok(Some(status)) => return Ok(status),
+        Ok(Some(status)) => {
+            return group_error.map_or(Ok(status), |group_error| {
+                Err(format!(
+                    "process-group termination also failed: {group_error}"
+                ))
+            });
+        }
         Ok(None) => {}
         Err(error) => {
             return Err(format!(
@@ -228,14 +233,20 @@ fn kill_root(child: &mut Child) -> Result<ExitStatus, String> {
         ));
     }
 
-    child.wait().map_err(|error| {
+    let status = child.wait().map_err(|error| {
         let group_error = group_error
+            .as_ref()
             .map(|group_error| format!("; process-group termination also failed: {group_error}"))
             .unwrap_or_default();
         format!(
             "failed to wait for terminated {}: {error}{group_error}",
             platform::SANDBOX_EXEC
         )
+    })?;
+    group_error.map_or(Ok(status), |group_error| {
+        Err(format!(
+            "process-group termination also failed: {group_error}"
+        ))
     })
 }
 

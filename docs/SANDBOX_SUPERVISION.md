@@ -8,6 +8,7 @@ The broader process and responsibility model remains in [implemented architectur
 ## Lifetime ownership
 
 Each sandbox lifetime has one host-side manager outside Seatbelt and one direct sandbox root in its own process group.
+The direct root initially runs a hidden wrapper blocked on a private inherited release channel before executing the built-in relay, a configured relay, or the standalone command.
 The manager records the root and every descendant identity it observes by PID and process start time.
 Once observed, a descendant remains a cleanup target after changing process group or session.
 The manager also adopts the private temporary-directory guard for the lifetime.
@@ -22,16 +23,13 @@ The host starts the manager before the sandbox root, then sends the owner PID, r
 The manager validates the direct-child relationship and exact root identity, attaches its descendant tracker, adopts the directory guard, and reports readiness.
 The host installs manager-failure recovery while the direct root remains live and waitable, then commits primary cleanup ownership and waits for confirmation.
 
-The built-in relay waits at a startup gate until that commit, so it cannot launch the worker before manager observation begins.
-A custom relay has no equivalent cooperative gate.
-The standalone launcher instead asks `sandbox-exec` to run a hidden wrapper blocked on a private release channel.
-It releases that same root into the requested command only after manager ownership is committed.
-Abrupt owner loss before readiness or commitment can preempt manager adoption.
-The standalone gate prevents requested command code from running in that interval, but private-directory cleanup is not guaranteed.
+After ownership is committed, the owner writes one release byte.
+The hidden wrapper closes the channel and replaces itself with the configured relay or requested command in the same process identity.
+Configured sandbox code therefore cannot run before manager observation and ownership are committed.
+Abrupt owner loss before readiness or commitment closes the startup channel before configured code runs, but private-directory cleanup is not guaranteed.
 
-Darwin cannot atomically attach a tracker while spawning.
-A process that becomes orphaned before the root watch or corresponding fork event is observed remains outside the implemented guarantee.
-The standalone startup gate prevents requested command code from creating such a process before initial manager observation.
+Darwin cannot resolve every later fork atomically.
+A descendant that becomes orphaned before the manager resolves its fork event remains outside the implemented guarantee.
 
 ## Retirement
 
@@ -46,6 +44,7 @@ If the launcher exits after marking retirement but before sending the final disp
 Control closure before the marker is an abrupt owner exit: the manager stops the lifetime and removes the directory after successful cleanup.
 
 The manager preserves the private directory on any cleanup error because a surviving process may still use it.
+With no surviving owner to receive a filesystem error, directory removal itself is best effort and can leave the directory behind.
 
 ## Manager failure
 
@@ -71,5 +70,7 @@ After root exit, the launcher restores its own foreground group before returning
 
 ## Scope
 
-This ownership applies to `SandboxedCommand::spawn`, which is used for worker relay generations, and to `SandboxedCommand::status`, which implements `mcp-console sandbox`.
+This ownership applies to `SandboxedCommand::spawn`, which is used for built-in and custom worker relay generations, and to `SandboxedCommand::status`, which implements `mcp-console sandbox`.
+The worker path gates the relay before either relay implementation runs.
+The standalone path retains inherited standard streams and uses the launcher-owned terminal and signal behavior described above.
 Linux and Windows are not supported.

@@ -69,7 +69,8 @@ Keep these ownership rules intact:
 - The relay is a thin ordered transport and worker supervisor.
   It owns local worker transports, sideband translation, and direct-worker signal delivery, bounded termination, and reaping.
   It preserves each producer's order and supplies serialized observation order; it does not reconstruct chronology across independent sideband, stdout, and stderr transports.
-- The server owns host-side relay lifetime observation and retirement, worker-generation state, operation admission, output cuts, pending-output budgets, response assembly, delivery ownership, retained requirements, and host resolvers.
+- The server owns host-side relay lifetime orchestration and retirement, worker-generation state, operation admission, output cuts, pending-output budgets, response assembly, delivery ownership, retained requirements, and host resolvers.
+  It releases each relay root's private startup gate only after manager-failure recovery is installed and manager ownership is committed.
   Do not move these responsibilities into the relay.
 - Treat each relay and its worker process tree, and each standalone command tree, as one sandboxed lifetime.
   A host-side sandbox manager owns primary observed-descendant tracking, bounded force termination, and private-directory cleanup for that lifetime.
@@ -103,7 +104,7 @@ Keep these ownership rules intact:
 - `src/relay_protocol.rs` — server-relay JSONL message and framing contract.
 - `src/worker_relay.rs` — sandboxed worker launch, I/O forwarding, signaling, shutdown, and reaping.
 - `src/worker_client.rs`, `src/worker_client/` — server-owned environment, evaluation, lifecycle, ordered event dispatch, output tape, and macOS relay transport.
-- `src/sandbox.rs`, `src/sandbox/supervision.rs`, `src/sandbox/supervision/` — sandbox process launch, primary host-manager supervision, owner-side manager-failure recovery, and standalone job control.
+- `src/sandbox.rs`, `src/sandbox/{child,command,spawn}.rs`, `src/sandbox/supervision.rs`, `src/sandbox/supervision/` — sandbox command construction, launch, child retirement, primary host-manager supervision, owner-side manager-failure recovery, and standalone job control.
 - `src/worker.rs`, `src/worker/embedded_r.rs`, `src/r_repl.c` — worker-facing facade, current embedded-R backend, cell dispatch, console callbacks, and the C-owned DLL-REPL boundary.
 
 ### Language adapters

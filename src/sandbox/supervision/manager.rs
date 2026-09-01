@@ -5,10 +5,10 @@ mod protocol;
 
 use super::process::{ProcessIdentity, process_info, signal_process};
 use super::process_tracker::DescendantTracker;
-use crate::sandbox::file_descriptors::configure as configure_file_descriptors;
+use crate::sandbox::file_descriptors;
 use crate::sandbox::platform;
 use std::io::{Read, Write};
-use std::os::fd::AsRawFd;
+use std::os::fd::OwnedFd;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt as _;
 use std::path::Path;
@@ -19,7 +19,6 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-const CONTROL_DESCRIPTOR_ENV: &str = "MCP_CONSOLE_SANDBOX_MANAGER_FD";
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
 const FINISH_ALLOWANCE: Duration = Duration::from_secs(1);
 
@@ -62,25 +61,28 @@ impl SandboxManager {
             .map_err(|error| format!("failed to locate the sandbox manager: {error}"))?;
         let (stream, inherited_stream) = UnixStream::pair()
             .map_err(|error| format!("failed to create sandbox manager control: {error}"))?;
-        let inherited_descriptor = inherited_stream.as_raw_fd();
+        let inherited_input = Stdio::from(OwnedFd::from(inherited_stream));
 
         let mut command = Command::new(executable);
         command
             .arg("sandbox-manager")
-            .env(CONTROL_DESCRIPTOR_ENV, inherited_descriptor.to_string())
-            .stdin(Stdio::null())
+            .stdin(inherited_input)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .process_group(0);
-        configure_file_descriptors(&mut command, vec![inherited_descriptor])?;
+        file_descriptors::close_unlisted_from_multithreaded_parent(&mut command)?;
 
         let mut child = command
             .spawn()
             .map_err(|error| format!("failed to launch the sandbox manager: {error}"))?;
+        // Command retains its configured stdio after spawn. Drop its copy of
+        // the manager control so pre-readiness manager exit reaches observe()
+        // as EOF instead of waiting for the startup deadline.
+        drop(command);
         let child_pid = child.id() as libc::pid_t;
         let child_identity = match process_info(child_pid) {
-            Ok(Some(info)) => info.identity,
-            Ok(None) => {
+            Ok(Some(info)) if !info.is_zombie => info.identity,
+            Ok(_) => {
                 return Err(stop_and_reap(
                     &mut child,
                     "sandbox manager exited before it could be monitored".to_string(),
@@ -93,7 +95,6 @@ impl SandboxManager {
                 ));
             }
         };
-        drop(inherited_stream);
         Ok(Self {
             child: Some(child),
             child_identity: Some(child_identity),
@@ -628,10 +629,23 @@ fn stop_pinned_process_group(root_pid: libc::pid_t) -> Result<(), String> {
     // The owner keeps the direct root waitable until monitor recovery returns,
     // so its PID and process-group identity remain pinned even when libproc
     // cannot inspect it.
-    let root_pid =
+    let root_process_id =
         u32::try_from(root_pid).map_err(|_| format!("invalid sandbox process group {root_pid}"))?;
-    platform::kill_process_group(root_pid)
-        .map_err(|error| format!("failed to stop sandbox process group: {error}"))
+    let Err(group_error) = platform::kill_process_group(root_process_id) else {
+        return Ok(());
+    };
+
+    let mut error = format!("failed to stop sandbox process group: {group_error}");
+    if unsafe { libc::kill(root_pid, libc::SIGKILL) } < 0 {
+        let root_error = std::io::Error::last_os_error();
+        if root_error.raw_os_error() != Some(libc::ESRCH) {
+            error = with_prior_error(
+                Some(error),
+                format!("failed to stop pinned sandbox root {root_pid}: {root_error}"),
+            );
+        }
+    }
+    Err(error)
 }
 
 fn with_prior_error(prior: Option<String>, error: String) -> String {

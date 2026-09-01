@@ -212,7 +212,16 @@ pub(super) fn kill_process_group(process_group_id: u32) -> io::Result<()> {
         }
     }
 
-    kill_process_group_members(process_group_id)
+    kill_process_group_members(process_group_id, None)
+}
+
+pub(super) fn kill_process_group_members_except(
+    process_group_id: u32,
+    excluded_process_id: u32,
+) -> io::Result<()> {
+    let process_group_id = valid_process_id(process_group_id, "process group")?;
+    let excluded_process_id = valid_process_id(excluded_process_id, "excluded process")?;
+    kill_process_group_members(process_group_id, Some(excluded_process_id))
 }
 
 fn valid_process_id(process_id: u32, kind: &str) -> io::Result<libc::pid_t> {
@@ -222,16 +231,20 @@ fn valid_process_id(process_id: u32, kind: &str) -> io::Result<libc::pid_t> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, format!("invalid {kind} ID")))
 }
 
-fn kill_process_group_members(process_group_id: libc::pid_t) -> io::Result<()> {
+fn kill_process_group_members(
+    process_group_id: libc::pid_t,
+    excluded_process_id: Option<libc::pid_t>,
+) -> io::Result<()> {
     // Group signalling and the EPERM fallback both operate on PID snapshots.
-    // The caller normally keeps the direct leader unreaped while rescanning so
-    // its PID pins the process-group identity until the caller collects it. If
-    // it was already reaped, exact membership checks still prevent a stale
-    // snapshot from targeting a process that changed groups.
+    // The full-group caller normally keeps the direct leader unreaped while
+    // rescanning so its PID pins the process-group identity until the caller
+    // collects it. If it was already reaped, exact membership checks still
+    // prevent a stale snapshot from targeting a process that changed groups.
+    // The relay-side caller remains alive as the excluded group leader.
     let deadline = Instant::now() + PROCESS_GROUP_STOP_TIMEOUT;
     loop {
         let mut members = process_group_members(process_group_id)?;
-        if !members.contains(&process_group_id) {
+        if excluded_process_id.is_none() && !members.contains(&process_group_id) {
             members.push(process_group_id);
         }
         // Stop the leader before its descendants so it cannot fork after this
@@ -241,7 +254,7 @@ fn kill_process_group_members(process_group_id: libc::pid_t) -> io::Result<()> {
         let mut observed_live_member = false;
         let mut first_error = None;
         for process_id in members {
-            if process_id <= 0 {
+            if process_id <= 0 || Some(process_id) == excluded_process_id {
                 continue;
             }
             match process_is_live_group_member(process_id, process_group_id) {

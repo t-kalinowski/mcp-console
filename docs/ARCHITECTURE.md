@@ -26,6 +26,10 @@ mcp-console server                         host, outside the sandbox
     ├──── host resolver processes          outside the sandbox
     │     R, Python, and DuckDB setup
     │
+    │ private startup gate
+    ▼
+sandbox-exec root / hidden wrapper         macOS sandbox
+    │ closes the gate and execs after manager ownership is committed
     │ private JSONL over relay fd 0 and 1
     ▼
 worker relay                               macOS sandbox
@@ -48,8 +52,10 @@ sandbox-exec root                          macOS sandbox
 ```
 
 The server is the MCP stdio process.
-It starts one relay as its direct sandbox child for each worker lifetime.
-For each spawned relay, it commits one host-side sandbox manager that observes the relay process tree and owns cleanup of that lifetime while the server retains the direct relay waitably.
+It starts one `sandbox-exec` root as its direct child for each worker lifetime and retains that process identity as the root of the generation's cleanup lifetime.
+The sandboxed root first runs a hidden wrapper blocked on a private release channel.
+For each root, the server commits one host-side sandbox manager that observes the relay process tree and owns cleanup while the server retains the root waitably.
+After manager-failure recovery is installed and manager ownership is confirmed, the server releases the wrapper into either the built-in or a configured custom relay.
 The relay is the sandbox process-group leader and starts the configured worker inside the same sandbox and process group.
 Submitted R, Python, and SQL cells run in the worker, not in the server or a host resolver.
 
@@ -196,9 +202,11 @@ The worker itself starts lazily when an operation first needs it; preparing reta
 An explicit restart starts its replacement eagerly, including when the session had not started a worker before.
 
 For each worker start, the server configures a sandboxed relay from the retained environment.
-It starts the sandbox manager, launches the relay as a waitable root, waits for manager readiness, installs manager-failure recovery, and commits manager ownership.
-Because Darwin cannot atomically attach the observer at spawn, a descendant that escapes before the manager observes it remains outside cleanup even after readiness.
-The built-in relay waits at a private startup gate until ownership is committed, then creates the worker sideband and standard streams, launches the worker, and forwards its startup events.
+It starts the sandbox manager, launches a gated sandbox root as a waitable child, waits for manager readiness, installs manager-failure recovery, and commits manager ownership.
+The server then releases that same root process into the configured relay.
+Neither built-in nor configured relay code can run before manager observation and ownership are committed.
+Darwin can still miss a later descendant that becomes orphaned before the manager resolves its fork event.
+The relay creates the worker sideband and standard streams, launches the worker, and forwards its startup events.
 The server admits the worker only after the required readiness exchange succeeds.
 
 ### Standalone command startup and retirement

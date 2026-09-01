@@ -318,11 +318,13 @@ def build_manager_interposer(directory: Path) -> Path:
     library = directory / "manager-interposer.dylib"
     source.write_text(
         r"""
+#include <crt_externs.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -338,6 +340,12 @@ static killpg_function next_killpg(void) {
 
 static send_function next_send(void) {
     return send;
+}
+
+static int is_manager(void) {
+    int argc = *_NSGetArgc();
+    char **argv = *_NSGetArgv();
+    return argc > 1 && strcmp(argv[1], "sandbox-manager") == 0;
 }
 
 static void checkpoint(const char *name) {
@@ -360,9 +368,8 @@ static ssize_t gate_manager_commit(
     size_t length,
     int flags
 ) {
-    const char *manager_descriptor = getenv("MCP_CONSOLE_SANDBOX_MANAGER_FD");
-    if (manager_descriptor != NULL
-        && socket == atoi(manager_descriptor)
+    if (is_manager()
+        && socket == STDIN_FILENO
         && length == 1
         && ((const uint8_t *)buffer)[0] == 7) {
         checkpoint("MCP_CONSOLE_TEST_MANAGER_COMMITTED_READY");
@@ -382,7 +389,7 @@ static ssize_t gate_manager_commit(
 
 static int report_manager_group_close(pid_t process_group_id, int number) {
     if (number == SIGKILL
-        && getenv("MCP_CONSOLE_SANDBOX_MANAGER_FD") != NULL
+        && is_manager()
         && atomic_exchange(&reported_group_close, 1) == 0) {
         checkpoint("MCP_CONSOLE_TEST_MANAGER_GROUP_CLOSED");
     }

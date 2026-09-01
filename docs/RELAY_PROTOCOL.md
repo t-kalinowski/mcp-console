@@ -11,10 +11,14 @@ The [worker protocol](WORKER_PROTOCOL.md) defines the relay's other interface.
 ## Process boundary
 
 The server remains outside the sandbox.
-For each worker generation it starts one relay as the direct sandbox child, and the relay starts the configured worker inside the same sandbox:
+For each worker generation it starts `sandbox-exec` as the direct child.
+That root first runs a hidden wrapper blocked on a private startup gate.
+After the host manager begins observation, the server installs manager-failure recovery and commits manager ownership.
+The server then releases the wrapper; it closes the gate and replaces itself with the configured relay in the same process identity.
+The relay then starts the configured worker inside the same sandbox:
 
 ```text
-server <--> (worker relay <--> worker)
+server <--> (gated root -> worker relay <--> worker)
    \----> sandbox lifetime manager
 ```
 
@@ -23,18 +27,15 @@ The relay is also the dedicated sandbox process-group leader, and the worker inh
 The sandbox lifetime manager is a separate host-side process outside the parentheses.
 It observes and retires the relay, worker, and their observed descendants as one sandbox lifetime.
 
-The relay's standard input, standard output, and standard error cross the server/sandbox boundary.
+Once relay code begins, only its standard input, standard output, and standard error cross the server/sandbox boundary.
 Standard input and output carry the framed relay protocol described below.
 Relay standard error is inherited from the server and is not part of the protocol; it is normally empty and is reserved for fatal or infrastructure diagnostics.
 Runtime failures are also represented by a `fatal` event when relay stdout remains usable.
 The framed event is authoritative; stderr diagnostics are best effort because the server's outer fail-safe can terminate a failed relay before its final diagnostic is written.
-The server marks every other inherited descriptor except the built-in relay's optional startup gate close-on-exec in the forked child before it executes `sandbox-exec`, so a descriptor opened by another server thread cannot cross this boundary.
-
-The built-in relay also receives an optional private startup-gate descriptor.
-It reports readiness and waits at that gate before it starts the worker.
-The server installs manager-failure monitoring after the host-side manager begins observing the relay root, then releases the gate only after the manager confirms its ownership commit for the private temporary directory.
-This gate is not part of the JSONL relay protocol, and the manager's private control channel never enters the sandbox.
-Custom relays do not participate in this optional gate.
+The server marks every nonstandard inherited descriptor close-on-exec in the forked child except the private startup gate.
+The hidden wrapper closes that gate before relay exec, so a descriptor opened by another server thread and the private gate itself cannot reach relay code.
+The server releases the gate only after manager-failure monitoring is installed and manager ownership of the observed lifetime and private directory is committed.
+The gate is not part of the JSONL relay protocol, and the manager's private control channel never enters the sandbox.
 
 The relay creates the worker's private full-duplex sideband socket pair and its standard-input, standard-output, and standard-error pipes after entering the sandbox.
 It passes one worker sideband endpoint through `MCP_CONSOLE_SIDEBAND_FD` together with the fd-0/1/2 contract documented in [`WORKER_PROTOCOL.md`](WORKER_PROTOCOL.md).
@@ -209,8 +210,8 @@ If the manager misses that allowance, the owner sends exact-identity `SIGKILL`, 
 Those manager bounds can extend past the relay allowance when the outer stop begins only at that allowance's deadline.
 The server does not start the replacement sandbox lifetime until that retirement barrier completes.
 Concurrent or repeated retirement reuses the recorded result and never signals a retired PID or process group again.
-macOS provides no child subreaper or atomic descendant-tracking spawn, so a process that detaches before the manager's post-spawn observation remains outside this guarantee.
-The built-in relay's startup gate prevents it from launching the worker before manager observation and ownership are confirmed; a custom relay has no equivalent cooperative gate.
+Darwin cannot resolve every later fork atomically, so a descendant that becomes orphaned before its fork event is resolved remains outside the guarantee.
+The private startup gate prevents either relay implementation from running during initial manager observation and ownership commitment.
 
 ## Retirement and failure
 

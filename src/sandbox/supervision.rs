@@ -17,16 +17,6 @@ mod standalone;
 
 pub(crate) use self::manager::SandboxManager;
 pub(super) use self::standalone::status;
-use super::file_descriptors::configure as configure_file_descriptors;
-use std::os::fd::RawFd;
-use std::process::Command;
-
-pub(super) fn configure_command(
-    command: &mut Command,
-    inherited_descriptors: Vec<RawFd>,
-) -> Result<(), String> {
-    configure_file_descriptors(command, inherited_descriptors)
-}
 
 pub(super) fn run_manager() -> Result<(), String> {
     manager::run()

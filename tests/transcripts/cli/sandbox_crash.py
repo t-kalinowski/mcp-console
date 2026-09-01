@@ -1,6 +1,7 @@
 #!/usr/bin/env -S uv run --script
 
 import os
+import re
 import select
 import selectors
 import shutil
@@ -53,7 +54,8 @@ def _build_supervision_interposer(directory: Path, behavior: str) -> Path:
     definitions = {
         "manager-start": "-DMCP_CONSOLE_INTERPOSE_MANAGER_START",
         "denied-sigkill": "-DMCP_CONSOLE_INTERPOSE_DENIED_SIGKILL",
-        "failed-process-info": "-DMCP_CONSOLE_INTERPOSE_FAILED_PROCESS_INFO",
+        "failed-recovery-stop": "-DMCP_CONSOLE_INTERPOSE_FAILED_RECOVERY_STOP",
+        "failed-root-observer": "-DMCP_CONSOLE_INTERPOSE_FAILED_ROOT_OBSERVER",
         "late-cleanup": "-DMCP_CONSOLE_INTERPOSE_LATE_CLEANUP",
         "retirement-disposition": ("-DMCP_CONSOLE_INTERPOSE_RETIREMENT_DISPOSITION"),
     }
@@ -94,11 +96,15 @@ static int retained_target_gate = -1;
 #if defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_DISPOSITION)
 static _Atomic int gated_retirement_disposition = 0;
 #endif
-#if defined(MCP_CONSOLE_INTERPOSE_FAILED_PROCESS_INFO)
+#if defined(MCP_CONSOLE_INTERPOSE_FAILED_RECOVERY_STOP)
 static _Atomic int failed_process_info = 0;
+#endif
+#if defined(MCP_CONSOLE_INTERPOSE_FAILED_ROOT_OBSERVER)
+static _Atomic int process_info_calls = 0;
 #endif
 
 #if defined(MCP_CONSOLE_INTERPOSE_DENIED_SIGKILL) \
+    || defined(MCP_CONSOLE_INTERPOSE_FAILED_ROOT_OBSERVER) \
     || defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP)
 typedef int (*kill_function)(pid_t, int);
 
@@ -107,12 +113,56 @@ static kill_function next_kill(void) {
 }
 #endif
 
-#if defined(MCP_CONSOLE_INTERPOSE_FAILED_PROCESS_INFO) \
+#if defined(MCP_CONSOLE_INTERPOSE_FAILED_RECOVERY_STOP) \
+    || defined(MCP_CONSOLE_INTERPOSE_FAILED_ROOT_OBSERVER) \
     || defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP)
 typedef int (*proc_pidinfo_function)(int, int, uint64_t, void *, int);
 
 static proc_pidinfo_function next_proc_pidinfo(void) {
     return proc_pidinfo;
+}
+#endif
+
+#if defined(MCP_CONSOLE_INTERPOSE_FAILED_ROOT_OBSERVER)
+static void signal_checkpoint(const char *name);
+
+static int fail_root_observer(
+    int process_id,
+    int flavor,
+    uint64_t argument,
+    void *buffer,
+    int buffer_size
+) {
+    if (flavor == PROC_PIDTBSDINFO
+        && atomic_fetch_add(&process_info_calls, 1) == 1) {
+        signal_checkpoint("MCP_CONSOLE_TEST_PROCESS_INFO_FAILURE");
+        errno = EIO;
+        return 0;
+    }
+    return next_proc_pidinfo()(process_id, flavor, argument, buffer, buffer_size);
+}
+
+static int fail_root_group_stop(pid_t process_id, int number) {
+    if (process_id < 0 && number == SIGKILL) {
+        signal_checkpoint("MCP_CONSOLE_TEST_GROUP_STOP_FAILURE");
+        errno = EIO;
+        return -1;
+    }
+    return next_kill()(process_id, number);
+}
+#endif
+
+#if defined(MCP_CONSOLE_INTERPOSE_FAILED_RECOVERY_STOP)
+static void signal_checkpoint(const char *name);
+
+static int fail_group_stop(pid_t process_group_id, int number) {
+    const char *trigger = getenv("MCP_CONSOLE_TEST_PROCESS_INFO_FAILURE_TRIGGER");
+    if (number == SIGKILL && trigger != NULL && access(trigger, F_OK) == 0) {
+        signal_checkpoint("MCP_CONSOLE_TEST_GROUP_STOP_FAILURE");
+        errno = EIO;
+        return -1;
+    }
+    return killpg(process_group_id, number);
 }
 #endif
 
@@ -172,7 +222,7 @@ static void wait_for_release(const char *name) {
 }
 #endif
 
-#if defined(MCP_CONSOLE_INTERPOSE_FAILED_PROCESS_INFO)
+#if defined(MCP_CONSOLE_INTERPOSE_FAILED_RECOVERY_STOP)
 static int fail_process_info(
     int process_id,
     int flavor,
@@ -403,8 +453,12 @@ DYLD_INTERPOSE(gate_manager_initialization, recv)
 DYLD_INTERPOSE(fail_target_gate_release, send)
 #elif defined(MCP_CONSOLE_INTERPOSE_DENIED_SIGKILL)
 DYLD_INTERPOSE(deny_first_sigkill, kill)
-#elif defined(MCP_CONSOLE_INTERPOSE_FAILED_PROCESS_INFO)
+#elif defined(MCP_CONSOLE_INTERPOSE_FAILED_RECOVERY_STOP)
 DYLD_INTERPOSE(fail_process_info, proc_pidinfo)
+DYLD_INTERPOSE(fail_group_stop, killpg)
+#elif defined(MCP_CONSOLE_INTERPOSE_FAILED_ROOT_OBSERVER)
+DYLD_INTERPOSE(fail_root_observer, proc_pidinfo)
+DYLD_INTERPOSE(fail_root_group_stop, kill)
 #elif defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP)
 DYLD_INTERPOSE(delay_cleanup_acknowledgement, send)
 DYLD_INTERPOSE(deny_first_sigkill, kill)
@@ -1188,6 +1242,7 @@ def test_manager_recovery_inspection_failure_stops_root(binary: Path) -> Transcr
     with tempfile.TemporaryDirectory() as temporary_directory:
         fixture_directory = Path(temporary_directory)
         inspection_failed = FifoCheckpoint(fixture_directory / "inspection-failed")
+        group_stop_failed = FifoCheckpoint(fixture_directory / "group-stop-failed")
         failure_trigger = fixture_directory / "fail-process-info"
         environment = os.environ.copy()
         environment.update(
@@ -1195,11 +1250,12 @@ def test_manager_recovery_inspection_failure_stops_root(binary: Path) -> Transcr
                 "DYLD_INSERT_LIBRARIES": str(
                     _build_supervision_interposer(
                         fixture_directory,
-                        "failed-process-info",
+                        "failed-recovery-stop",
                     )
                 ),
                 "MCP_CONSOLE_TEST_PROCESS_INFO_FAILURE": str(inspection_failed.path),
                 "MCP_CONSOLE_TEST_PROCESS_INFO_FAILURE_TRIGGER": str(failure_trigger),
+                "MCP_CONSOLE_TEST_GROUP_STOP_FAILURE": str(group_stop_failed.path),
             }
         )
         lifetime = _start_lifetime(binary, environment)
@@ -1209,6 +1265,7 @@ def test_manager_recovery_inspection_failure_stops_root(binary: Path) -> Transcr
                 "manager exited before crash injection"
             )
             inspection_failed.wait("launcher root-inspection failure")
+            group_stop_failed.wait("launcher pinned-group stop failure")
             returncode = lifetime.process.wait(timeout=TIMEOUT)
             stderr = lifetime.process.stderr.read().decode("utf-8")
             normalized_stderr = stderr.replace(
@@ -1218,10 +1275,14 @@ def test_manager_recovery_inspection_failure_stops_root(binary: Path) -> Transcr
             assert returncode == 1, returncode
             assert "manager recovery failed" in stderr, stderr
             assert "failed to inspect sandbox process" in stderr, stderr
+            assert "failed to stop sandbox process group" in stderr, stderr
             assert "Input/output error" in stderr, stderr
             assert live_darwin_processes((lifetime.root, lifetime.manager)) == [], (
                 "sandbox root or manager survived failed recovery inspection"
             )
+            assert live_darwin_processes((lifetime.descendant,)) == [
+                lifetime.descendant[0]
+            ], "failed recovery unexpectedly claimed detached-descendant cleanup"
             assert lifetime.temporary_directory.exists(), (
                 "manager inspection failure removed the sandbox temporary directory"
             )
@@ -1232,15 +1293,59 @@ def test_manager_recovery_inspection_failure_stops_root(binary: Path) -> Transcr
                 {
                     "manager_signal": "SIGKILL",
                     "manager_recovery_inspection": "EIO",
+                    "manager_recovery_group_stop": "EIO",
                     "launcher_returncode": returncode,
-                    "verified_bounded_return": "after pinned root-group termination",
+                    "verified_bounded_return": "after direct pinned-root termination",
                     "verified_cleanup": "sandbox root and manager",
-                    "verified_preservation": "sandbox temp",
+                    "verified_preservation": "detached descendant and sandbox temp",
                 },
             ]
         finally:
             inspection_failed.close()
+            group_stop_failed.close()
             _cleanup(lifetime)
+
+
+def test_root_observer_failure_reports_group_cleanup_failure(
+    binary: Path,
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        inspection_failed = FifoCheckpoint(temporary / "inspection-failed")
+        group_stop_failed = FifoCheckpoint(temporary / "group-stop-failed")
+        environment = os.environ.copy()
+        environment["DYLD_INSERT_LIBRARIES"] = str(
+            _build_supervision_interposer(temporary, "failed-root-observer")
+        )
+        environment["MCP_CONSOLE_TEST_PROCESS_INFO_FAILURE"] = str(
+            inspection_failed.path
+        )
+        environment["MCP_CONSOLE_TEST_GROUP_STOP_FAILURE"] = str(group_stop_failed.path)
+        try:
+            result = subprocess.run(
+                [binary, "sandbox", "--", "/bin/sleep", "60"],
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=TIMEOUT,
+            )
+            inspection_failed.wait("sandbox root-observer failure")
+            group_stop_failed.wait("sandbox root-group stop failure")
+            stderr = re.sub(
+                r"sandbox process \d+", "sandbox process <pid>", result.stderr
+            )
+            assert result.returncode == 1, result.returncode
+            assert "failed to inspect sandbox process" in stderr, stderr
+            assert "process-group termination also failed" in stderr, stderr
+            return [
+                {
+                    "command": _command("sandbox", "--", "/bin/sleep", "60"),
+                    "stderr": stderr,
+                }
+            ]
+        finally:
+            inspection_failed.close()
+            group_stop_failed.close()
 
 
 def test_cleanup_timeout_preserves_temporary_directory(binary: Path) -> Transcript:
