@@ -17,7 +17,7 @@ from _support import (
     FifoCheckpoint,
     McpClient,
     Transcript,
-    build_manager_commit_interposer,
+    build_manager_interposer,
     capture_darwin_process_identity,
     code,
     darwin_process_waits_for_control,
@@ -251,7 +251,13 @@ def test_server_crash_after_relay_exit_removes_temporary_directory(
     # A live but stopped server cannot complete normal relay retirement. The
     # committed manager must retain directory ownership after the relay exits
     # so a later server crash still completes cleanup.
-    client = McpClient(binary, ("serve",))
+    temporary_owner = tempfile.TemporaryDirectory()
+    temporary = Path(temporary_owner.name)
+    group_closed = FifoCheckpoint(temporary / "manager-group-closed")
+    environment = os.environ.copy()
+    environment["MCP_CONSOLE_TEST_MANAGER_GROUP_CLOSED"] = str(group_closed.path)
+    environment["DYLD_INSERT_LIBRARIES"] = str(build_manager_interposer(temporary))
+    client = McpClient(binary, ("serve",), environment)
     generation: Generation | None = None
     manager_identity: DarwinProcessIdentity | None = None
     server_identity: DarwinProcessIdentity | None = None
@@ -276,9 +282,13 @@ def test_server_crash_after_relay_exit_removes_temporary_directory(
         # server can run any cleanup code.
         survivors = _wait_for_process_cleanup(generation[1:3], timeout=5)
         assert survivors == [], f"worker-generation processes survived: {survivors}"
-        # Once tracker cleanup consumes the manager's kqueue, its sole thread
-        # blocks on the server control stream. This positive checkpoint rejects
-        # both an active cleanup pass and an exited manager left as a zombie.
+        # Close the root group while the stopped server still pins the waitable
+        # relay identity. This backstop covers a same-group child that raced
+        # descendant observation.
+        group_closed.wait("manager root-group backstop", timeout=5)
+        # Once cleanup consumes the manager's kqueue, its sole thread blocks on
+        # the server control stream. This positive checkpoint rejects both an
+        # active cleanup pass and an exited manager left as a zombie.
         _wait_for_manager_disposition(manager_identity, generation[3], timeout=5)
         assert generation[3].exists()
 
@@ -312,6 +322,8 @@ def test_server_crash_after_relay_exit_removes_temporary_directory(
         if manager_identity is not None:
             kill_darwin_processes((manager_identity,))
         _close_client_streams(client)
+        group_closed.close()
+        temporary_owner.cleanup()
 
 
 def test_relay_crash_retires_the_worker_generation(binary: Path) -> Transcript:
@@ -425,9 +437,7 @@ def test_manager_crash_before_commit_retires_the_custom_relay_generation(
         environment["MCP_CONSOLE_TEST_MANAGER_COMMITTED_RELEASE"] = str(
             committed_release.path
         )
-        environment["DYLD_INSERT_LIBRARIES"] = str(
-            build_manager_commit_interposer(temporary)
-        )
+        environment["DYLD_INSERT_LIBRARIES"] = str(build_manager_interposer(temporary))
         client = McpClient(
             binary,
             ("serve", "--worker", str(worker), "--relay", str(relay)),

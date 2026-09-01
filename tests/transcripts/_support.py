@@ -313,18 +313,28 @@ class FifoCheckpoint:
         assert os.write(self.descriptor, b"1") == 1
 
 
-def build_manager_commit_interposer(directory: Path) -> Path:
-    source = directory / "manager-commit.c"
-    library = directory / "manager-commit.dylib"
+def build_manager_interposer(directory: Path) -> Path:
+    source = directory / "manager-interposer.c"
+    library = directory / "manager-interposer.dylib"
     source.write_text(
         r"""
 #include <fcntl.h>
+#include <signal.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <sys/socket.h>
+#include <sys/types.h>
 #include <unistd.h>
 
+typedef int (*killpg_function)(pid_t, int);
 typedef ssize_t (*send_function)(int, const void *, size_t, int);
+
+static _Atomic int reported_group_close = 0;
+
+static killpg_function next_killpg(void) {
+    return killpg;
+}
 
 static send_function next_send(void) {
     return send;
@@ -370,12 +380,23 @@ static ssize_t gate_manager_commit(
     return send_next(socket, buffer, length, flags);
 }
 
+static int report_manager_group_close(pid_t process_group_id, int number) {
+    if (number == SIGKILL
+        && getenv("MCP_CONSOLE_SANDBOX_MANAGER_FD") != NULL
+        && atomic_exchange(&reported_group_close, 1) == 0) {
+        checkpoint("MCP_CONSOLE_TEST_MANAGER_GROUP_CLOSED");
+    }
+    killpg_function killpg_next = next_killpg();
+    return killpg_next(process_group_id, number);
+}
+
 __attribute__((used))
 static struct {
     const void *replacement;
     const void *replacee;
 } interposers[] __attribute__((section("__DATA,__interpose"))) = {
     {(const void *)&gate_manager_commit, (const void *)&send},
+    {(const void *)&report_manager_group_close, (const void *)&killpg},
 };
 """.removeprefix("\n"),
         encoding="utf-8",

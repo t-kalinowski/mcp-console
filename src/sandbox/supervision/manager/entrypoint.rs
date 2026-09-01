@@ -6,7 +6,10 @@ use std::io::{Read, Write};
 use std::net::Shutdown;
 use std::os::fd::FromRawFd;
 use std::os::unix::net::UnixStream;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+type GroupBackstop = Mutex<bool>;
 
 pub(super) fn run() -> Result<(), String> {
     let mut stream = inherited_control()?;
@@ -79,8 +82,16 @@ pub(super) fn run() -> Result<(), String> {
             );
         }
     };
+    let group_backstop = Arc::new(GroupBackstop::new(false));
+    let tracker_group_backstop = Arc::clone(&group_backstop);
     let tracker_thread = std::thread::spawn(move || {
-        supervise_tracker(tracker, cleanup_timeout, root, tracker_control)
+        supervise_tracker(
+            tracker,
+            cleanup_timeout,
+            root,
+            tracker_control,
+            tracker_group_backstop,
+        )
     });
     if let Err(error) = stream.write_all(&[protocol::COMMITTED]) {
         return finish_committed_startup_failure(
@@ -88,12 +99,19 @@ pub(super) fn run() -> Result<(), String> {
             root,
             &stream,
             tracker_thread,
+            &group_backstop,
             temporary_directory,
         );
     }
     let disposition = protocol::read_owner_disposition(&mut stream);
     if matches!(disposition, protocol::OwnerDisposition::RetirementStarted) {
-        return finish_retirement(root, &mut stream, tracker_thread, temporary_directory);
+        return finish_retirement(
+            root,
+            &mut stream,
+            tracker_thread,
+            &group_backstop,
+            temporary_directory,
+        );
     }
     let stop_root = !matches!(&disposition, protocol::OwnerDisposition::Finish);
     let mut error = match disposition {
@@ -108,22 +126,18 @@ pub(super) fn run() -> Result<(), String> {
         protocol::OwnerDisposition::Failed(error) => Some(error),
     };
     if stop_root {
-        if let Err(group_error) = stop_process_group(root) {
+        if let Err(group_error) = run_group_backstop(root, &group_backstop) {
             error = Some(with_prior_error(error, group_error));
         }
         if let Err(signal_error) = signal_process(root, libc::SIGKILL) {
             error = Some(with_prior_error(error, signal_error));
         }
-        if let Err(tracker_error) = join_tracker(tracker_thread) {
-            error = Some(with_prior_error(error, tracker_error));
-        }
-    } else {
-        if let Err(tracker_error) = join_tracker(tracker_thread) {
-            error = Some(with_prior_error(error, tracker_error));
-        }
-        if let Err(group_error) = stop_process_group(root) {
-            error = Some(with_prior_error(error, group_error));
-        }
+    }
+    if let Err(tracker_error) = join_tracker(tracker_thread) {
+        error = Some(with_prior_error(error, tracker_error));
+    }
+    if let Err(group_error) = run_group_backstop(root, &group_backstop) {
+        error = Some(with_prior_error(error, group_error));
     }
     if error.is_some() {
         temporary_directory.preserve();
@@ -135,10 +149,11 @@ fn finish_retirement(
     root: ProcessIdentity,
     stream: &mut UnixStream,
     tracker_thread: std::thread::JoinHandle<Result<(), String>>,
+    group_backstop: &GroupBackstop,
     temporary_directory: platform::TemporaryDirectory,
 ) -> Result<(), String> {
     let mut error = join_tracker(tracker_thread).err();
-    if let Err(group_error) = stop_process_group(root) {
+    if let Err(group_error) = run_group_backstop(root, group_backstop) {
         error = Some(with_prior_error(error, group_error));
     }
     if let Some(error) = error {
@@ -200,8 +215,13 @@ fn supervise_tracker(
     cleanup_timeout: Duration,
     root: ProcessIdentity,
     control: UnixStream,
+    group_backstop: Arc<GroupBackstop>,
 ) -> Result<(), String> {
-    let Err(mut error) = tracker.supervise(cleanup_timeout) else {
+    let mut error = tracker.supervise(cleanup_timeout).err();
+    if let Err(group_error) = run_group_backstop(root, &group_backstop) {
+        error = Some(with_prior_error(error, group_error));
+    }
+    let Some(mut error) = error else {
         return Ok(());
     };
     if let Err(signal_error) = signal_process(root, libc::SIGKILL) {
@@ -221,10 +241,11 @@ fn finish_committed_startup_failure(
     root: ProcessIdentity,
     control: &UnixStream,
     tracker_thread: std::thread::JoinHandle<Result<(), String>>,
+    group_backstop: &GroupBackstop,
     temporary_directory: platform::TemporaryDirectory,
 ) -> Result<(), String> {
     let mut cleanup_failed = false;
-    if let Err(group_error) = stop_process_group(root) {
+    if let Err(group_error) = run_group_backstop(root, group_backstop) {
         error = with_prior_error(Some(error), group_error);
         cleanup_failed = true;
     }
@@ -245,6 +266,19 @@ fn finish_committed_startup_failure(
         temporary_directory.preserve();
     }
     Err(error)
+}
+
+fn run_group_backstop(root: ProcessIdentity, group_backstop: &GroupBackstop) -> Result<(), String> {
+    // Tracker completion and owner loss can reach this concurrently. Keep the
+    // first attempt serialized while the owner's waitable root pins the group.
+    let mut started = group_backstop
+        .lock()
+        .map_err(|_| "sandbox manager group backstop state was poisoned".to_string())?;
+    if *started {
+        return Ok(());
+    }
+    *started = true;
+    stop_process_group(root)
 }
 
 fn join_tracker(tracker_thread: std::thread::JoinHandle<Result<(), String>>) -> Result<(), String> {
