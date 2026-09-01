@@ -1,12 +1,9 @@
 use std::os::unix::net::UnixStream;
 use std::process::{Child, ExitCode};
-use std::time::Duration;
 
 use super::child::append_retirement_error;
 use super::command::{SandboxedChild, SandboxedChildRetirement, SandboxedCommand};
-use super::{platform, supervision};
-
-const CRASH_MANAGER_CLEANUP_TIMEOUT: Duration = Duration::from_secs(1);
+use super::{CRASH_MANAGER_CLEANUP_TIMEOUT, platform, supervision};
 
 impl SandboxedCommand {
     /// Spawns a hidden gated root, starts host-side descendant observation,
@@ -20,14 +17,16 @@ impl SandboxedCommand {
     /// closes the private gate without executing relay code, but remains outside
     /// manager-owned temporary-directory cleanup.
     pub(crate) fn spawn(mut self) -> Result<SandboxedChild, String> {
+        let mut startup_gate = self
+            .startup_gate
+            .take()
+            .expect("sandboxed relay spawn should retain its startup gate");
         self.command.env("TMPDIR", self.temporary_directory.path());
         let mut child = self
             .command
             .spawn()
             .map_err(|error| format!("failed to launch `{}`: {error}", platform::SANDBOX_EXEC))?;
-        if let Some(startup_gate) = self.startup_gate.as_mut() {
-            startup_gate.child_spawned();
-        }
+        startup_gate.child_spawned();
         let observed_lifetime = match supervision::ObservedLifetime::start(child.id()) {
             Ok(lifetime) => lifetime,
             Err(error) => {
@@ -69,9 +68,7 @@ impl SandboxedCommand {
             separate_process_group: self.separate_process_group,
             temporary_directory: Some(self.temporary_directory),
         };
-        if let Some(startup_gate) = self.startup_gate.take()
-            && let Err(error) = startup_gate.release()
-        {
+        if let Err(error) = startup_gate.release() {
             let cleanup = child.force_stop().err();
             return Err(cleanup.map_or(error.clone(), |cleanup| {
                 append_retirement_error(Some(error), cleanup)
@@ -122,4 +119,3 @@ fn stop_after_observation_failure(
     }
     supervision::stop_direct_child(child, error)
 }
-

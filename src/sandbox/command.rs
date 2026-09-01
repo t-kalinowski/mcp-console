@@ -2,14 +2,16 @@ use std::ffi::OsStr;
 use std::io::Write as _;
 use std::os::fd::{AsRawFd as _, RawFd};
 use std::os::unix::net::UnixStream;
+use std::os::unix::process::CommandExt as _;
 use std::process::{Child, Command, Stdio};
 
-use super::{file_descriptors, platform, supervision, TARGET_GATE_RELEASE};
+use super::{TARGET_GATE_RELEASE, file_descriptors, platform, supervision};
 
 /// A command configured to run under the macOS sandbox.
 ///
-/// The public sandbox transcript exercises this interaction. This example is
-/// ignored as a doctest because the type is crate-private in a binary target.
+/// The public worker-startup transcript exercises this interaction. This
+/// example is ignored as a doctest because the type is crate-private in a
+/// binary target.
 ///
 /// # Example
 ///
@@ -18,6 +20,7 @@ use super::{file_descriptors, platform, supervision, TARGET_GATE_RELEASE};
 /// use std::ffi::OsStr;
 /// use std::io::{Read, Write};
 /// use std::process::Stdio;
+/// use std::time::Duration;
 ///
 /// fn read_echo(mut stream: impl Read) -> [u8; 6] {
 ///     let mut output = [0; 6];
@@ -74,7 +77,6 @@ pub(crate) struct SandboxedCommand {
     pub(super) command: Command,
     pub(super) temporary_directory: platform::TemporaryDirectory,
     pub(super) startup_gate: Option<StartupGate>,
-    descriptor_boundary_configured: bool,
     pub(super) separate_process_group: bool,
 }
 
@@ -161,7 +163,6 @@ impl SandboxedCommand {
             command,
             temporary_directory,
             startup_gate: None,
-            descriptor_boundary_configured: false,
             separate_process_group: false,
         };
         sandboxed
@@ -223,21 +224,10 @@ impl SandboxedCommand {
         self
     }
 
-    /// Prevents descriptors other than fd 0, 1, and 2 from crossing exec.
-    ///
-    /// The caller may be multithreaded, so the descriptor scan runs in the
-    /// forked child instead of relying on a parent-side snapshot. A private
-    /// startup descriptor may reach the hidden wrapper, which closes it before
-    /// executing the configured relay.
-    pub(crate) fn inherit_only_standard_streams(&mut self) -> Result<&mut Self, String> {
-        self.configure_descriptor_boundary()?;
-        Ok(self)
-    }
-
     fn configure_descriptor_boundary(&mut self) -> Result<(), String> {
-        if self.descriptor_boundary_configured {
-            return Ok(());
-        }
+        // The server may be multithreaded, so scan in the forked child. Carry
+        // only the private gate through the hidden wrapper; run_target closes
+        // it before relay exec.
         let inherited_descriptors = self
             .startup_gate
             .as_ref()
@@ -248,7 +238,6 @@ impl SandboxedCommand {
             &mut self.command,
             inherited_descriptors,
         )?;
-        self.descriptor_boundary_configured = true;
         Ok(())
     }
 }

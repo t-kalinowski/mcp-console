@@ -13,7 +13,11 @@ use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt as _;
 #[cfg(target_os = "macos")]
 use std::process::{Command, Stdio};
+#[cfg(target_os = "macos")]
+use std::time::Duration;
 
+#[cfg(target_os = "macos")]
+const CRASH_MANAGER_CLEANUP_TIMEOUT: Duration = Duration::from_secs(1);
 #[cfg(target_os = "macos")]
 const TARGET_GATE_RELEASE: u8 = 1;
 
@@ -30,11 +34,11 @@ mod file_descriptors;
 #[path = "sandbox/macos.rs"]
 mod platform;
 #[cfg(target_os = "macos")]
-#[path = "sandbox/supervision.rs"]
-mod supervision;
-#[cfg(target_os = "macos")]
 #[path = "sandbox/spawn.rs"]
 mod spawn;
+#[cfg(target_os = "macos")]
+#[path = "sandbox/supervision.rs"]
+mod supervision;
 
 #[cfg(target_os = "macos")]
 pub(crate) use child::force_stop_process_group_members_except_self;

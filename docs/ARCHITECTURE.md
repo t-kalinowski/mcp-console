@@ -26,6 +26,10 @@ mcp-console server                         host, outside the sandbox
     ├──── host resolver processes          outside the sandbox
     │     R, Python, and DuckDB setup
     │
+    │ private startup gate
+    ▼
+sandbox-exec root / hidden wrapper         macOS sandbox
+    │ closes the gate and execs after both host observers are ready
     │ private JSONL over relay fd 0 and 1
     ▼
 worker relay                               macOS sandbox
@@ -48,9 +52,10 @@ sandbox-exec root                          macOS sandbox
 ```
 
 The server is the MCP stdio process.
-It starts one relay as its direct sandbox child for each worker lifetime.
-While that generation is live, it observes the relay's process tree on the host and retains the direct relay as the root of the generation's cleanup lifetime.
-For each spawned relay, it also commits a host-side sandbox manager with an independent descendant observer before returning the sandboxed child to the worker lifecycle.
+It starts one `sandbox-exec` root as its direct child for each worker lifetime and retains that process identity as the root of the generation's cleanup lifetime.
+The sandboxed root first runs a hidden wrapper blocked on a private release channel.
+The server attaches its normal descendant observer, starts the independent sandbox manager, and waits for manager readiness before releasing the wrapper into either the built-in or a configured custom relay.
+While that generation is live, both host observers follow the relay's process tree.
 The relay is the sandbox process-group leader and starts the configured worker inside the same sandbox and process group.
 Submitted R, Python, and SQL cells run in the worker, not in the server or a host resolver.
 
@@ -200,8 +205,10 @@ The worker itself starts lazily when an operation first needs it; preparing reta
 An explicit restart starts its replacement eagerly, including when the session had not started a worker before.
 
 For each worker start, the server configures a sandboxed relay from the retained environment.
-It attaches its normal descendant observer, starts the independent sandbox manager, and waits for manager readiness while retaining the direct relay as a waitable child.
-Because Darwin cannot atomically attach either observer at spawn, a descendant that escapes before the manager observes it remains outside crash cleanup even after readiness.
+The direct sandbox root blocks in a hidden wrapper while the server attaches its normal descendant observer, starts the independent sandbox manager, and waits for manager readiness.
+The server then releases that same root process into the configured relay.
+Configured relay and worker code cannot run before both observers are attached.
+Darwin can still miss a later descendant that becomes orphaned before an observer resolves its fork event.
 The relay creates the worker sideband and standard streams, launches the worker, and forwards its startup events.
 The server admits the worker only after the required readiness exchange succeeds.
 
