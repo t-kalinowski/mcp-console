@@ -10,4 +10,11 @@ impl Backend {
     pub(super) fn evaluate(&mut self, source: &str) -> Result<(), String> {
         self.0.evaluate(source)
     }
+
+    pub(super) fn restore_managed(&self) -> Result<(), String> {
+        match self.0.call0_integer(c"restore_managed_connection")? {
+            1 => Ok(()),
+            _ => Err("SQL DBI bridge did not restore managed DuckDB".to_string()),
+        }
+    }
 }

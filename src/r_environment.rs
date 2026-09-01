@@ -20,6 +20,7 @@ impl ResolutionFailureKind {
 }
 
 pub(crate) enum ResolutionOutcome {
+    Unavailable,
     Resolved {
         library: String,
     },
@@ -61,6 +62,7 @@ pub extern "C-unwind" fn mcp_console_resolve_r(packages: SEXP) -> harp::Result<S
     let packages = Vec::<String>::try_from(harp::object::RObject::view(packages))?;
     let outcome = crate::worker::resolve_r(packages).map_err(|error| harp::anyhow!("{error}"))?;
     let response = match outcome {
+        ResolutionOutcome::Unavailable => vec!["unavailable".to_string()],
         ResolutionOutcome::Resolved { library } => vec!["resolved".to_string(), library],
         ResolutionOutcome::Failed { failure, message } => {
             vec!["failed".to_string(), failure.as_str().to_string(), message]
