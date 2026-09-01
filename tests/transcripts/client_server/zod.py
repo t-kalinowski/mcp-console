@@ -5087,9 +5087,15 @@ def wait_for_stopped_worker(
     deadline = time.monotonic() + CHECKPOINT_TIMEOUT
     while True:
         for marker in root.glob("**/zod-stop-continue-worker"):
+            try:
+                contents = marker.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                # Restart may remove the old generation's directory between
+                # enumeration and opening while this waits for its replacement.
+                continue
             process_id, parent_id, process_group = map(
                 int,
-                marker.read_text(encoding="utf-8").split(),
+                contents.split(),
             )
             if process_id in previous_process_ids:
                 continue

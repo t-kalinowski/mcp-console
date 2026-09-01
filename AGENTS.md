@@ -11,7 +11,7 @@ The documents under `design-sketches/` describe intended behavior, not the curre
 - `README.md` describes the current user-facing project status.
 - `docs/README.md` maps the implemented documentation by audience.
 - `docs/ARCHITECTURE.md` describes the implemented process structure, ownership, and lifecycle.
-- `docs/SANDBOX_SUPERVISION.md` describes macOS sandbox-lifetime ownership and cleanup.
+- `docs/SANDBOX_SUPERVISION.md` describes macOS normal and crash-independent sandbox lifetime supervision.
 - `docs/BUILTIN_RUNTIME.md` describes user-visible behavior of the built-in mixed-language console.
 - `docs/REQUIREMENTS.md` describes dependency and environment behavior and its trust boundary.
 - `docs/WORKER_PROTOCOL.md` defines the exact relay-worker and custom-worker contract.
@@ -55,23 +55,29 @@ They are not MCP, relay, sideband, or worker-stream records.
 
 ## Process and ownership boundaries
 
-The MCP server has three application protocol boundaries:
+MCP Console has four process boundaries:
 
 1. The client and server communicate through MCP JSON-RPC over stdio.
-2. The server and one per-generation relay communicate through the private, ordered JSONL protocol in `docs/RELAY_PROTOCOL.md`.
-3. The relay and worker communicate through the worker sideband plus worker fd 0, 1, and 2 as documented in `docs/WORKER_PROTOCOL.md`.
+2. Each host sandbox owner initializes one manager over a private inherited Unix socket, receives its readiness and ownership-commit responses, and uses the same stream for bounded retirement.
+   The server starts one manager for each worker generation, which may evaluate multiple cells before restart or replacement.
+   The standalone launcher starts one manager for each invocation of `mcp-console sandbox`, which runs one direct child command, and uses the stream for its final directory disposition.
+3. The server and one per-generation relay communicate through the private, ordered JSONL protocol in `docs/RELAY_PROTOCOL.md`.
+4. The relay and worker communicate through the worker sideband plus worker fd 0, 1, and 2 as documented in `docs/WORKER_PROTOCOL.md`.
 
 Keep these ownership rules intact:
 
-- Treat each relay and its worker process tree as one sandboxed lifetime.
+- The relay is a thin ordered transport and worker supervisor.
+  It owns local worker transports, sideband translation, and direct-worker signal delivery, bounded termination, and reaping.
+  It preserves each producer's order and supplies serialized observation order; it does not reconstruct chronology across independent sideband, stdout, and stderr transports.
+- The server owns host-side relay lifetime observation and retirement, worker-generation state, operation admission, output cuts, pending-output budgets, response assembly, delivery ownership, retained requirements, and host resolvers.
+  Do not move these responsibilities into the relay.
+- Treat each relay and its worker process tree, and each standalone command tree, as one sandboxed lifetime.
   A host-side sandbox manager owns primary observed-descendant tracking, bounded force termination, and private-directory cleanup for that lifetime.
   Its host owner retains a backup directory guard and takes over bounded cleanup if the manager exits unsuccessfully while the sandbox root remains live and pinned.
   That fallback can reconstruct only descendants still reachable from the root's current ancestry.
-- The relay is a thin ordered transport inside the sandboxed lifetime.
-  It owns worker-local descriptors, sideband translation, direct signal forwarding, stream draining, and direct-child status collection and reaping.
-  It preserves each producer's order and supplies serialized observation order; it does not reconstruct chronology across independent sideband, stdout, and stderr transports.
-- The server owns worker-generation state, operation admission, output cuts, pending-output budgets, response assembly, delivery ownership, retained requirements, and host resolvers.
-  Do not move these responsibilities into the relay.
+- The standalone launcher owns the direct command's exit status, foreground-terminal transfer, signal relaying, and final temporary-directory disposition.
+  It releases the command's private startup gate only after manager ownership is committed, and retains the direct root waitably through manager cleanup.
+- The sandbox manager does not own logical generation state, command exit status, relay transport, or terminal semantics.
 - Restart, replacement, evaluation admission, stdin writes, resolver callbacks, and retained-environment commits are scoped to the worker generation that accepted them.
   Work admitted for an old generation must not reach its replacement.
 - R, Python, and DuckDB dependency resolution runs outside the worker sandbox.
@@ -97,6 +103,7 @@ Keep these ownership rules intact:
 - `src/relay_protocol.rs` — server-relay JSONL message and framing contract.
 - `src/worker_relay.rs` — sandboxed worker launch, I/O forwarding, signaling, shutdown, and reaping.
 - `src/worker_client.rs`, `src/worker_client/` — server-owned environment, evaluation, lifecycle, ordered event dispatch, output tape, and macOS relay transport.
+- `src/sandbox.rs`, `src/sandbox/supervision.rs`, `src/sandbox/supervision/` — sandbox process launch, primary host-manager supervision, owner-side manager-failure recovery, and standalone job control.
 - `src/worker.rs`, `src/worker/embedded_r.rs`, `src/r_repl.c` — worker-facing facade, current embedded-R backend, cell dispatch, console callbacks, and the C-owned DLL-REPL boundary.
 
 ### Language adapters
@@ -111,7 +118,7 @@ Keep these ownership rules intact:
 
 - `src/resolver.rs`, `src/resolver/` — retained host environments, direct Python-version selection, validation, platform implementations, and resolver process-group lifecycle.
 - `src/resolver/programs/` — compile-time R programs for DuckDB extension preparation, R-library resolution, and `uv` discovery.
-- `src/sandbox.rs`, `src/sandbox/` — platform dispatch, macOS Seatbelt policy, inherited-descriptor closure, host-side sandbox manager, standalone job control, and observed-descendant tracking.
+- `src/sandbox/macos.rs`, `src/sandbox/file_descriptors.rs` — macOS Seatbelt policy and inherited-descriptor boundary.
 
 ### Tests and development scripts
 

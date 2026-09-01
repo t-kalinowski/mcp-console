@@ -419,7 +419,10 @@ fn kill_process(process_id: libc::pid_t) -> io::Result<()> {
 pub(super) fn sandboxed_command() -> Result<(Command, TemporaryDirectory), String> {
     let temporary_directory = TemporaryDirectory::new()?;
     let mut launcher = Command::new(SANDBOX_EXEC);
+    // Do not rely on SIP to keep host interposers out of the Apple sandbox
+    // intermediary and the sandbox target.
     launcher
+        .env_remove("DYLD_INSERT_LIBRARIES")
         .arg("-p")
         .arg(POLICY)
         .arg(parameter_definition(
@@ -482,7 +485,10 @@ impl TemporaryDirectory {
             .file_name()
             .and_then(|name| name.to_str())
             .is_some_and(|name| name.starts_with(&expected_prefix));
-        if !valid_name {
+        let expected_parent = std::env::temp_dir().canonicalize().map_err(|error| {
+            format!("failed to resolve the system temporary directory: {error}")
+        })?;
+        if !valid_name || path.parent() != Some(expected_parent.as_path()) {
             return Err("sandbox temporary directory has invalid ownership".to_string());
         }
         if !path.is_dir() {

@@ -9,13 +9,26 @@ const MAXIMUM_PATH_BYTES: usize = 16 * 1024;
 pub(super) const READY: u8 = 1;
 pub(super) const COMMIT: u8 = 2;
 pub(super) const FINISH: u8 = 3;
-pub(super) const STOP: u8 = 5;
+const PRESERVE_TEMPORARY_DIRECTORY: u8 = 4;
+const CLEANUP_COMPLETE: u8 = 5;
+pub(super) const STOP: u8 = 6;
 pub(super) const COMMITTED: u8 = 7;
+const RETIREMENT_STARTED: u8 = 8;
+const REMOVE_TEMPORARY_DIRECTORY: u8 = 9;
 
 pub(super) enum OwnerDisposition {
     Finish,
     Stop,
+    RetirementStarted,
+    RemoveTemporaryDirectory,
+    PreserveTemporaryDirectory,
+    Closed,
     Failed(String),
+}
+
+pub(super) enum CleanupAcknowledgement {
+    Complete,
+    TimedOut,
 }
 
 pub(super) struct Initialization {
@@ -93,9 +106,18 @@ pub(super) fn read_owner_disposition(stream: &mut impl Read) -> OwnerDisposition
     let mut disposition = [0];
     loop {
         match stream.read(&mut disposition) {
-            Ok(0) => return OwnerDisposition::Stop,
+            Ok(0) => return OwnerDisposition::Closed,
             Ok(_) if disposition == [FINISH] => return OwnerDisposition::Finish,
             Ok(_) if disposition == [STOP] => return OwnerDisposition::Stop,
+            Ok(_) if disposition == [RETIREMENT_STARTED] => {
+                return OwnerDisposition::RetirementStarted;
+            }
+            Ok(_) if disposition == [REMOVE_TEMPORARY_DIRECTORY] => {
+                return OwnerDisposition::RemoveTemporaryDirectory;
+            }
+            Ok(_) if disposition == [PRESERVE_TEMPORARY_DIRECTORY] => {
+                return OwnerDisposition::PreserveTemporaryDirectory;
+            }
             Ok(_) => {
                 return OwnerDisposition::Failed(
                     "sandbox manager received an invalid finish request".to_string(),
@@ -109,6 +131,57 @@ pub(super) fn read_owner_disposition(stream: &mut impl Read) -> OwnerDisposition
             }
         }
     }
+}
+
+pub(super) fn write_retirement_started(stream: &mut impl Write) -> Result<(), String> {
+    write_control(stream, RETIREMENT_STARTED)
+}
+
+pub(super) fn write_retirement_disposition(
+    stream: &mut impl Write,
+    preserve_temporary_directory: bool,
+) -> Result<(), String> {
+    write_control(
+        stream,
+        if preserve_temporary_directory {
+            PRESERVE_TEMPORARY_DIRECTORY
+        } else {
+            REMOVE_TEMPORARY_DIRECTORY
+        },
+    )
+}
+
+pub(super) fn write_cleanup_complete(stream: &mut impl Write) -> Result<(), String> {
+    stream
+        .write_all(&[CLEANUP_COMPLETE])
+        .map_err(|error| format!("failed to report sandbox manager cleanup: {error}"))
+}
+
+pub(super) fn read_cleanup_complete(
+    stream: &mut impl Read,
+) -> Result<CleanupAcknowledgement, String> {
+    let mut acknowledgement = [0];
+    match stream.read_exact(&mut acknowledgement) {
+        Ok(()) if acknowledgement == [CLEANUP_COMPLETE] => Ok(CleanupAcknowledgement::Complete),
+        Ok(()) => Err("sandbox manager sent an invalid cleanup response".to_string()),
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+            ) =>
+        {
+            Ok(CleanupAcknowledgement::TimedOut)
+        }
+        Err(error) => Err(format!(
+            "sandbox manager exited before cleanup completed: {error}"
+        )),
+    }
+}
+
+fn write_control(stream: &mut impl Write, value: u8) -> Result<(), String> {
+    stream
+        .write_all(&[value])
+        .map_err(|error| format!("failed to control sandbox manager retirement: {error}"))
 }
 
 pub(super) fn cleanup_timeout_millis(timeout: Duration) -> Result<u64, String> {

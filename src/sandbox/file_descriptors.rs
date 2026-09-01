@@ -2,17 +2,23 @@ use std::os::fd::RawFd;
 use std::os::unix::process::CommandExt as _;
 use std::process::Command;
 
-pub(super) fn close_unlisted(command: &mut Command) -> Result<(), String> {
+pub(super) fn close_unlisted_except(
+    command: &mut Command,
+    inherited_descriptor: RawFd,
+) -> Result<(), String> {
     // The standalone path reaches this point before starting any threads, so
     // this snapshot contains every inherited descriptor that can reach the
     // child. Change flags only after fork to leave the launcher unchanged.
     // Rust creates its later exec-error pipe with close-on-exec already set.
     let mut descriptors = open_descriptors()?;
+    if inherited_descriptor <= libc::STDERR_FILENO || !descriptors.contains(&inherited_descriptor) {
+        return Err("sandbox inherited descriptor is invalid".to_string());
+    }
     descriptors.retain(|descriptor| *descriptor > libc::STDERR_FILENO);
     unsafe {
         command.pre_exec(move || {
             for descriptor in &descriptors {
-                configure_descriptor(*descriptor, false)?;
+                configure_descriptor(*descriptor, *descriptor == inherited_descriptor)?;
             }
             Ok(())
         });

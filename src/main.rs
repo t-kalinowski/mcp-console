@@ -47,6 +47,12 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
+        cli::Command::SandboxTarget { gate_fd, command } => {
+            match sandbox::run_target(gate_fd, &command) {
+                Ok(exit_code) => exit_code,
+                Err(error) => exit_with_error(error),
+            }
+        }
         cli::Command::Sandbox { command } => match sandbox::run(&command) {
             Ok(exit_code) => exit_code,
             Err(error) => exit_with_error(error),

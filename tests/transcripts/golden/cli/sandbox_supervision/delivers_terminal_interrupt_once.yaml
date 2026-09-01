@@ -8,13 +8,16 @@ command:
   - |
     import os
     import signal
+    import threading
 
     interrupts = 0
+    interrupted = threading.Event()
 
 
     def handle_interrupt(_signal, _frame):
         global interrupts
         interrupts += 1
+        interrupted.set()
 
 
     signal.signal(signal.SIGINT, handle_interrupt)
@@ -22,10 +25,9 @@ command:
     assert signal.SIGINT not in previous_mask
     print(f"ready {os.getpgrp()}", flush=True)
     print(input(), flush=True)
-    print("interrupt ready", flush=True)
     signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
-    while interrupts == 0:
-        signal.pause()
+    print("interrupt ready", flush=True)
+    interrupted.wait()
     print(interrupts)
 stdin: |-
   sandbox input

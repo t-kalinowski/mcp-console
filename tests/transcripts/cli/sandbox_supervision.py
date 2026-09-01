@@ -485,6 +485,10 @@ def test_delivers_terminal_interrupt_once(binary: Path) -> Transcript:
             os.write(master, b"sandbox input\n")
             assert process.stdout.readline() == "sandbox input\n"
             assert process.stdout.readline() == "interrupt ready\n"
+            assert os.tcgetpgrp(master) == sandbox_group
+            terminal_attributes = termios.tcgetattr(master)
+            assert terminal_attributes[3] & termios.ISIG
+            assert terminal_attributes[6][termios.VINTR] == b"\x03"
             os.write(master, b"\x03")
             stdout, stderr = process.communicate(timeout=5)
         except BaseException:
@@ -508,13 +512,16 @@ def test_delivers_terminal_interrupt_once(binary: Path) -> Transcript:
     sandboxed_script = code(r"""
         import os
         import signal
+        import threading
 
         interrupts = 0
+        interrupted = threading.Event()
 
 
         def handle_interrupt(_signal, _frame):
             global interrupts
             interrupts += 1
+            interrupted.set()
 
 
         signal.signal(signal.SIGINT, handle_interrupt)
@@ -522,10 +529,9 @@ def test_delivers_terminal_interrupt_once(binary: Path) -> Transcript:
         assert signal.SIGINT not in previous_mask
         print(f"ready {os.getpgrp()}", flush=True)
         print(input(), flush=True)
-        print("interrupt ready", flush=True)
         signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
-        while interrupts == 0:
-            signal.pause()
+        print("interrupt ready", flush=True)
+        interrupted.wait()
         print(interrupts)
         """)
     result = subprocess.run(

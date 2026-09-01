@@ -1,0 +1,9 @@
+---
+command:
+  - mcp-console
+  - sandbox
+  - --
+  - --help
+environment:
+  PATH: .
+stdout: ""

@@ -92,9 +92,19 @@ pub(super) fn run() -> Result<(), String> {
         );
     }
     let disposition = protocol::read_owner_disposition(&mut stream);
+    if matches!(disposition, protocol::OwnerDisposition::RetirementStarted) {
+        return finish_retirement(root, &mut stream, tracker_thread, temporary_directory);
+    }
     let stop_root = !matches!(&disposition, protocol::OwnerDisposition::Finish);
     let mut error = match disposition {
-        protocol::OwnerDisposition::Finish | protocol::OwnerDisposition::Stop => None,
+        protocol::OwnerDisposition::Finish
+        | protocol::OwnerDisposition::Stop
+        | protocol::OwnerDisposition::Closed => None,
+        protocol::OwnerDisposition::RemoveTemporaryDirectory
+        | protocol::OwnerDisposition::PreserveTemporaryDirectory => {
+            Some("sandbox manager received a disposition before retirement started".to_string())
+        }
+        protocol::OwnerDisposition::RetirementStarted => unreachable!(),
         protocol::OwnerDisposition::Failed(error) => Some(error),
     };
     if stop_root {
@@ -119,6 +129,45 @@ pub(super) fn run() -> Result<(), String> {
         temporary_directory.preserve();
     }
     error.map_or(Ok(()), Err)
+}
+
+fn finish_retirement(
+    root: ProcessIdentity,
+    stream: &mut UnixStream,
+    tracker_thread: std::thread::JoinHandle<Result<(), String>>,
+    temporary_directory: platform::TemporaryDirectory,
+) -> Result<(), String> {
+    let mut error = join_tracker(tracker_thread).err();
+    if let Err(group_error) = stop_process_group(root) {
+        error = Some(with_prior_error(error, group_error));
+    }
+    if let Some(error) = error {
+        temporary_directory.preserve();
+        return Err(error);
+    }
+
+    if protocol::write_cleanup_complete(stream).is_err() {
+        temporary_directory.preserve();
+        return Ok(());
+    }
+    match protocol::read_owner_disposition(stream) {
+        protocol::OwnerDisposition::RemoveTemporaryDirectory => Ok(()),
+        protocol::OwnerDisposition::PreserveTemporaryDirectory
+        | protocol::OwnerDisposition::Closed => {
+            temporary_directory.preserve();
+            Ok(())
+        }
+        protocol::OwnerDisposition::Failed(error) => {
+            temporary_directory.preserve();
+            Err(error)
+        }
+        protocol::OwnerDisposition::Finish
+        | protocol::OwnerDisposition::Stop
+        | protocol::OwnerDisposition::RetirementStarted => {
+            temporary_directory.preserve();
+            Err("sandbox manager received an invalid retirement disposition".to_string())
+        }
+    }
 }
 
 fn finish_startup_failure(

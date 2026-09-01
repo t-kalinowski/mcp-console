@@ -60,6 +60,12 @@ class _DarwinThreadInfo(ctypes.Structure):
 _LIBPROC = None
 if sys.platform == "darwin":
     _LIBPROC = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+    _LIBPROC.proc_listchildpids.argtypes = [
+        ctypes.c_int,
+        ctypes.c_void_p,
+        ctypes.c_int,
+    ]
+    _LIBPROC.proc_listchildpids.restype = ctypes.c_int
     _LIBPROC.proc_pidinfo.argtypes = [
         ctypes.c_int,
         ctypes.c_int,
@@ -112,20 +118,45 @@ def live_darwin_processes(
     ]
 
 
-def darwin_process_waits_for_control(
+def darwin_child_process_identities(
+    parent: DarwinProcessIdentity,
+) -> tuple[DarwinProcessIdentity, ...]:
+    assert _LIBPROC is not None
+    assert current_darwin_process_identity(parent[0]) == parent, (
+        "parent process exited before child inspection"
+    )
+    capacity = 16
+    while True:
+        child_pids = (ctypes.c_int * capacity)()
+        ctypes.set_errno(0)
+        count = _LIBPROC.proc_listchildpids(
+            parent[0],
+            child_pids,
+            ctypes.sizeof(child_pids),
+        )
+        error = ctypes.get_errno()
+        if count < 0 or (count == 0 and error != 0):
+            raise OSError(error, f"failed to list children of process {parent[0]}")
+        if count < capacity:
+            break
+        capacity *= 2
+
+    assert current_darwin_process_identity(parent[0]) == parent, (
+        "parent process changed during child inspection"
+    )
+    return tuple(capture_darwin_process_identity(pid) for pid in child_pids[:count])
+
+
+def _darwin_process_resources(
     identity: DarwinProcessIdentity,
-) -> bool:
-    """Return whether the exact manager process is waiting for disposition."""
+) -> tuple[set[tuple[int, int]], _DarwinThreadInfo] | None:
     assert _LIBPROC is not None
     if current_darwin_process_identity(identity[0]) != identity:
-        return False
+        return None
 
     proc_pidlistfds = 1
     proc_pidlistthreads = 6
     proc_pidthreadinfo = 5
-    prox_fdtype_vnode = 1
-    prox_fdtype_socket = 2
-    th_state_waiting = 3
 
     fd_infos = (_DarwinProcessFdInfo * 16)()
     fd_size = _LIBPROC.proc_pidinfo(
@@ -136,29 +167,12 @@ def darwin_process_waits_for_control(
         ctypes.sizeof(fd_infos),
     )
     if fd_size <= 0:
-        return False
+        return None
     assert fd_size % ctypes.sizeof(_DarwinProcessFdInfo) == 0, fd_size
     file_descriptors = {
         (info.fd, info.fdtype)
         for info in fd_infos[: fd_size // ctypes.sizeof(_DarwinProcessFdInfo)]
     }
-    standard_descriptors = {
-        (0, prox_fdtype_vnode),
-        (1, prox_fdtype_vnode),
-        (2, prox_fdtype_vnode),
-    }
-    control_descriptors = {
-        (descriptor, descriptor_type)
-        for descriptor, descriptor_type in file_descriptors
-        if descriptor > 2 and descriptor_type == prox_fdtype_socket
-    }
-    if (
-        len(file_descriptors) != 4
-        or not standard_descriptors.issubset(file_descriptors)
-        or len(control_descriptors) != 1
-    ):
-        return False
-
     thread_ids = (ctypes.c_uint64 * 16)()
     thread_size = _LIBPROC.proc_pidinfo(
         identity[0],
@@ -168,7 +182,7 @@ def darwin_process_waits_for_control(
         ctypes.sizeof(thread_ids),
     )
     if thread_size != ctypes.sizeof(ctypes.c_uint64):
-        return False
+        return None
 
     thread_info = _DarwinThreadInfo()
     info_size = _LIBPROC.proc_pidinfo(
@@ -178,11 +192,79 @@ def darwin_process_waits_for_control(
         ctypes.byref(thread_info),
         ctypes.sizeof(thread_info),
     )
+    if (
+        info_size != ctypes.sizeof(thread_info)
+        or current_darwin_process_identity(identity[0]) != identity
+    ):
+        return None
+    return file_descriptors, thread_info
+
+
+def _darwin_main_thread_waits(thread_info: _DarwinThreadInfo) -> bool:
+    th_state_waiting = 3
     return (
-        info_size == ctypes.sizeof(thread_info)
-        and thread_info.run_state == th_state_waiting
+        thread_info.run_state == th_state_waiting
         and thread_info.name.rstrip(b"\0") == b"main"
-        and current_darwin_process_identity(identity[0]) == identity
+    )
+
+
+def darwin_process_waits_for_control(
+    identity: DarwinProcessIdentity,
+) -> bool:
+    """Return whether the exact manager process is waiting for disposition."""
+    prox_fdtype_vnode = 1
+    prox_fdtype_socket = 2
+    resources = _darwin_process_resources(identity)
+    if resources is None:
+        return False
+    file_descriptors, thread_info = resources
+    inherited_stdin_control = file_descriptors == {
+        (0, prox_fdtype_socket),
+        (1, prox_fdtype_vnode),
+        (2, prox_fdtype_vnode),
+    }
+    standard_descriptors = {
+        (0, prox_fdtype_vnode),
+        (1, prox_fdtype_vnode),
+        (2, prox_fdtype_vnode),
+    }
+    inherited_extra_control = (
+        standard_descriptors.issubset(file_descriptors)
+        and len(
+            {
+                descriptor
+                for descriptor, descriptor_type in file_descriptors
+                if descriptor > 2 and descriptor_type == prox_fdtype_socket
+            }
+        )
+        == 1
+    )
+    return (
+        inherited_stdin_control or inherited_extra_control
+    ) and _darwin_main_thread_waits(thread_info)
+
+
+def darwin_process_waits_for_startup_release(
+    identity: DarwinProcessIdentity,
+) -> bool:
+    """Return whether the exact target wrapper is waiting on its private gate."""
+    prox_fdtype_socket = 2
+    resources = _darwin_process_resources(identity)
+    if resources is None:
+        return False
+    file_descriptors, thread_info = resources
+    standard_descriptors = {
+        descriptor for descriptor, _ in file_descriptors if descriptor <= 2
+    }
+    extra_descriptors = [
+        descriptor_type
+        for descriptor, descriptor_type in file_descriptors
+        if descriptor > 2
+    ]
+    return (
+        standard_descriptors == {0, 1, 2}
+        and extra_descriptors == [prox_fdtype_socket]
+        and _darwin_main_thread_waits(thread_info)
     )
 
 

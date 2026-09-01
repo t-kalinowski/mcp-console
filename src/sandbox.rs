@@ -4,9 +4,11 @@ use std::process::ExitCode;
 #[cfg(target_os = "macos")]
 use std::ffi::OsStr;
 #[cfg(target_os = "macos")]
+use std::fs::File;
+#[cfg(target_os = "macos")]
 use std::io::{Read, Write};
 #[cfg(target_os = "macos")]
-use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 #[cfg(target_os = "macos")]
 use std::os::unix::net::UnixStream;
 #[cfg(target_os = "macos")]
@@ -27,6 +29,8 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(target_os = "macos")]
 const BACKGROUND_CLEANUP_TIMEOUT: Duration = Duration::from_secs(1);
 #[cfg(target_os = "macos")]
+const TARGET_GATE_RELEASE: u8 = 1;
+#[cfg(target_os = "macos")]
 #[path = "sandbox/file_descriptors.rs"]
 mod file_descriptors;
 
@@ -44,21 +48,68 @@ mod platform;
 
 #[cfg(target_os = "macos")]
 pub fn run(command_line: &[OsString]) -> Result<ExitCode, String> {
-    let (program, arguments) = command_line
-        .split_first()
-        .expect("sandbox command must include a program");
-    let mut sandboxed = SandboxedCommand::new(program)?;
+    let (target_gate, launcher_gate) = UnixStream::pair()
+        .map_err(|error| format!("failed to create the sandbox target startup gate: {error}"))?;
+    let target_gate_descriptor = target_gate.as_raw_fd();
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("failed to locate the sandbox target gate: {error}"))?;
+    let mut sandboxed = SandboxedCommand::new(executable.as_os_str())?;
     sandboxed
-        .args(arguments)
+        .arg("sandbox-target")
+        .arg("--gate-fd")
+        .arg(target_gate_descriptor.to_string())
+        .arg("--")
+        .args(command_line)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
-    sandboxed.status()
+    sandboxed.status(target_gate, launcher_gate)
 }
 
 #[cfg(target_os = "macos")]
 pub(crate) fn run_manager() -> Result<(), String> {
     supervision::run_manager()
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn run_target(
+    gate_descriptor: libc::c_int,
+    command_line: &[OsString],
+) -> Result<ExitCode, String> {
+    let (program, arguments) = command_line
+        .split_first()
+        .expect("sandbox target must include a program");
+    if gate_descriptor <= libc::STDERR_FILENO {
+        return Err("sandbox target startup gate descriptor is invalid".to_string());
+    }
+    loop {
+        if unsafe { libc::fcntl(gate_descriptor, libc::F_GETFD) } >= 0 {
+            break;
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return Err(format!(
+                "sandbox target startup gate descriptor is invalid: {error}"
+            ));
+        }
+    }
+    // SAFETY: the standalone launcher transfers this inherited descriptor to
+    // the hidden target process and retains no owner for the child-side copy.
+    let gate = unsafe { OwnedFd::from_raw_fd(gate_descriptor) };
+    let mut gate = File::from(gate);
+    let mut release = [0];
+    gate.read_exact(&mut release)
+        .map_err(|error| format!("failed to await sandbox target startup: {error}"))?;
+    if release != [TARGET_GATE_RELEASE] {
+        return Err("sandbox target received an invalid startup release".to_string());
+    }
+    drop(gate);
+
+    let error = Command::new(program).args(arguments).exec();
+    Err(format!(
+        "failed to launch sandbox target `{}`: {error}",
+        program.to_string_lossy()
+    ))
 }
 
 #[cfg(target_os = "macos")]
@@ -108,6 +159,14 @@ pub fn run(command_line: &[OsString]) -> Result<ExitCode, String> {
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn run_manager() -> Result<(), String> {
     Err("the sandbox manager is currently supported only on macOS".to_string())
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn run_target(
+    _gate_descriptor: libc::c_int,
+    _command_line: &[OsString],
+) -> Result<ExitCode, String> {
+    Err("the sandbox target gate is currently supported only on macOS".to_string())
 }
 
 #[cfg(target_os = "macos")]
@@ -345,9 +404,18 @@ impl SandboxedCommand {
         })
     }
 
-    pub(crate) fn status(mut self) -> Result<ExitCode, String> {
+    pub(crate) fn status(
+        mut self,
+        target_gate: UnixStream,
+        launcher_gate: UnixStream,
+    ) -> Result<ExitCode, String> {
         self.command.env("TMPDIR", self.temporary_directory.path());
-        supervision::status(self.command, self.temporary_directory)
+        supervision::status(
+            self.command,
+            self.temporary_directory,
+            target_gate,
+            launcher_gate,
+        )
     }
 }
 

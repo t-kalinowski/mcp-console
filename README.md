@@ -171,14 +171,17 @@ mcp-console --version
 ```
 
 `mcp-console serve` communicates with its MCP client over standard input and output.
-Each server worker generation has a host-side sandbox manager that treats its relay and worker process tree as one lifetime.
-The manager supervises descendants it observes from the relay root, including processes that enter another process group or session.
-Normal restart, automatic worker replacement, orderly server shutdown, and unexpected server or relay exit retire that observed lifetime before replacement or exit.
-If the manager itself exits unsuccessfully while the relay root remains live and pinned, the server reconstructs its current process tree and performs bounded cleanup before replacing that worker generation.
-It cannot reconstruct a descendant that had already detached from that ancestry before the manager failed.
-The standalone `sandbox` development command uses the same manager and remains covered if its launcher crashes after manager ownership is committed.
-On macOS, a descendant that detaches before the post-spawn tracker observes it remains outside this guarantee.
-The standalone command inherits standard input, output, and error while closing other inherited file descriptors before the target runs.
+On macOS, each worker generation commits one host-side manager that owns observed-descendant cleanup and the private temporary directory.
+Normal restart, automatic worker replacement, orderly server shutdown, and abrupt server exit retire descendants the manager observed, including descendants that entered another process group or session.
+If the manager fails while the server retains a live, waitable relay root, the server reconstructs that root's current ancestry and performs bounded fallback cleanup.
+A descendant that detached from the root before manager observation, or before fallback reconstruction, remains outside that cleanup guarantee.
+The standalone `sandbox` command is available for development.
+Its requested command remains blocked on a private startup gate until the manager has adopted the private temporary directory, begun observation, and committed ownership.
+The launcher preserves the direct command's exit status while the manager retires observed descendants.
+Abrupt launcher loss after commitment retires that managed lifetime; owner loss after normal retirement begins preserves the directory when its final disposition is uncertain.
+Unexpected manager loss triggers bounded launcher-side recovery while the direct root remains live and waitable.
+The command inherits standard input, output, and error while closing other inherited file descriptors before the target runs.
+It transfers foreground-terminal ownership to the command process group, relays supported signals addressed to the launcher, and restores terminal ownership after the command exits.
 Use the MCP server for the supported worker-generation lifecycle.
 
 Run development commands from the repository root:
@@ -199,7 +202,7 @@ scripts/test --update BOUNDARY/SUITE[::CASE]
 The [documentation index](https://github.com/t-kalinowski/mcp-console/blob/main/docs/README.md) maps current documents by audience.
 
 - [Implemented architecture](https://github.com/t-kalinowski/mcp-console/blob/main/docs/ARCHITECTURE.md) explains current process boundaries, ownership, lifecycle, recording, and artifacts.
-- [macOS sandbox supervision](https://github.com/t-kalinowski/mcp-console/blob/main/docs/SANDBOX_SUPERVISION.md) describes host-side sandbox-lifetime ownership and cleanup.
+- [macOS sandbox supervision](https://github.com/t-kalinowski/mcp-console/blob/main/docs/SANDBOX_SUPERVISION.md) explains normal observed-descendant retirement, independent manager cleanup, and post-spawn limitations.
 - [Built-in runtime](https://github.com/t-kalinowski/mcp-console/blob/main/docs/BUILTIN_RUNTIME.md) describes user-visible R, Python, SQL, input, output, and graphics behavior.
 - [Requirements and environments](https://github.com/t-kalinowski/mcp-console/blob/main/docs/REQUIREMENTS.md) describes dependency preparation and its trust boundary.
 - [Worker protocol](https://github.com/t-kalinowski/mcp-console/blob/main/docs/WORKER_PROTOCOL.md) and [relay protocol](https://github.com/t-kalinowski/mcp-console/blob/main/docs/RELAY_PROTOCOL.md) define the exact transport contracts.

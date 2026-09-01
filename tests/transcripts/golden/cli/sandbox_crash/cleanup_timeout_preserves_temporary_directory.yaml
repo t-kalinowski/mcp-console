@@ -29,6 +29,7 @@ stdout: |
   <detached descendant pid>
   <sandbox temp>
 ---
-launcher_signal: SIGKILL
-launcher_returncode: -9
-verified_cleanup: sandbox root, detached descendant, manager, and temp
+manager_cleanup: acknowledgement delayed past launcher timeout
+launcher_returncode: 23
+verified_cleanup: sandbox root, detached descendant, and manager
+verified_preservation: sandbox temp

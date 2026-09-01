@@ -5,28 +5,26 @@
 This document describes the structure and ownership implemented in the current source.
 It explains how the pieces fit together without defining their wire fields or the built-in console's operating rules.
 See the [relay protocol](RELAY_PROTOCOL.md) and [worker protocol](WORKER_PROTOCOL.md) for exact transports, the [built-in runtime guide](BUILTIN_RUNTIME.md) for console behavior, and [requirements and environments](REQUIREMENTS.md) for dependency management and its trust boundary.
-See [macOS sandbox supervision](SANDBOX_SUPERVISION.md) for host-side sandbox-lifetime cleanup and manager failure recovery.
 The material under `design-sketches/` is future or exploratory design, not evidence for this document.
 
 ## Process layout
 
-The MCP server has three runtime protocol boundaries, one host-only resolver path, and one private management channel for each sandbox lifetime:
+MCP Console has three runtime communication boundaries, one private manager channel for each sandbox lifetime, and one host-only resolver path:
 
 ```text
 MCP client
     │ MCP JSON-RPC over stdio
     ▼
 mcp-console server                         host, outside the sandbox
-    ├── generation and operation owner
+    ├── generation, relay lifetime, and operation owner
     ├── retained environments and output
     ├── transcript and image artifacts
     │
+    ├──── sandbox manager                  host, outside the sandbox
+    │     primary lifetime observer and private-directory owner
+    │
     ├──── host resolver processes          outside the sandbox
     │     R, Python, and DuckDB setup
-    │
-    ├──── sandbox manager                  host, outside Seatbelt
-    │     private lifecycle control socket
-    │     observed lifetime and private directory
     │
     │ private JSONL over relay fd 0 and 1
     ▼
@@ -37,26 +35,27 @@ worker                                     same sandbox and process group
     └── built-in R, Python, and DuckDB runtime
 ```
 
-The server is the MCP stdio process.
-For each worker lifetime, it starts one host-side sandbox manager and one relay as sibling child processes.
-The manager runs in a separate process group outside Seatbelt; the relay is the root of the managed sandbox lifetime.
-The relay is the sandbox process-group leader and starts the configured worker inside the same sandbox and process group.
-The relay and its worker tree are one sandboxed unit for lifetime cleanup.
-Submitted R, Python, and SQL cells run in the worker, not in the server or a host resolver.
-
-The standalone development command uses the same host-side manager:
+The standalone development command uses the same manager handoff without a relay or worker protocol:
 
 ```text
-mcp-console sandbox launcher             host, outside the sandbox
-    ├── sandbox manager                  host, separate process group
-    └── sandbox root and descendants     macOS sandbox
+mcp-console sandbox launcher               host, outside the sandbox
+    ├── direct-root status, terminal, and manager monitor
+    ├──── sandbox manager                  host, outside the sandbox
+    │     primary lifetime observer for this command
+    ▼
+sandbox-exec root                          macOS sandbox
+    └── command and observed descendants
 ```
 
-The standalone launcher retains terminal job control, the command's exit status, and a backup private-directory guard, while the manager owns primary descendant cleanup.
-The manager receives the root PID, private temporary-directory path, and cleanup timeout over a private inherited socket, then derives and validates the root process identity.
-After the manager reports readiness, the launcher starts manager-failure monitoring, transfers the backup directory guard to that monitor, then commits primary cleanup ownership and waits for confirmation.
-If the launcher exits or crashes after that committed handshake, socket closure makes the manager terminate the exact recorded root and its observed lifetime, then remove the private directory after successful cleanup.
-macOS provides no child subreaper or atomic descendant-tracking spawn, so a process that detaches before the manager's post-spawn observation remains outside this guarantee.
+The server is the MCP stdio process.
+It starts one relay as its direct sandbox child for each worker lifetime.
+For each spawned relay, it commits one host-side sandbox manager that observes the relay process tree and owns cleanup of that lifetime while the server retains the direct relay waitably.
+The relay is the sandbox process-group leader and starts the configured worker inside the same sandbox and process group.
+Submitted R, Python, and SQL cells run in the worker, not in the server or a host resolver.
+
+The standalone launcher retains its direct `sandbox-exec` child and commits the same primary manager while a root-only waiter supplies exit and signal wakeups.
+The sandboxed child first runs a hidden wrapper blocked on a private release channel; the launcher releases it into the requested command only after manager ownership is committed.
+It has no MCP, relay, worker, resolver, recording, or retained-session responsibilities.
 
 R, Python, and DuckDB dependency resolution follows a separate path.
 The server launches resolver subprocesses on the host, outside the worker sandbox, because they need normal installation, cache, and network access.
@@ -74,29 +73,29 @@ One `send` can poll, provide stdin, prepare requirements, evaluate a cell, inter
 This is the only public protocol boundary.
 The client does not communicate directly with a relay, worker, or resolver.
 
-### Sandbox owner and manager
+### Sandbox owner and sandbox manager
 
-The server, or the launcher for a standalone command, exchanges private lifecycle controls with the sandbox manager over an inherited Unix socket.
-The owner supplies the root PID, private-directory path, and cleanup timeout.
-After the manager has validated the root and reported readiness, the owner starts a host monitor and transfers its backup directory guard to that monitor before committing primary cleanup ownership.
-It keeps the direct sandbox child waitable throughout the commit exchange and lifetime cleanup.
-If the manager exits unsuccessfully while the root remains live and pinned, that thread starts bounded fallback tracking from the root's current process tree and removes the directory only after successful cleanup.
-The fallback cannot reconstruct a descendant that had already detached from that ancestry before the manager failed.
-This channel is not part of the relay or worker protocol and is not inherited by the sandbox root.
+The server initializes one sandbox manager per worker generation, which may evaluate multiple cells before restart or replacement.
+The standalone launcher initializes one manager per invocation of `mcp-console sandbox`, which runs one direct child command.
+Initialization travels over a private inherited Unix socket and waits for one-byte readiness and ownership-commit responses.
+The fixed private initialization carries the owner and sandbox-root PIDs, cleanup timeout, and private temporary-directory path.
+Before reporting readiness, the manager validates the root's exact identity and direct-child relationship, attaches its PID-and-start-time descendant tracker, and adopts the directory.
+The same private stream carries forced-stop requests and the standalone normal-retirement handoff: the launcher marks retirement, the manager acknowledges cleanup, and the launcher commits the final remove-or-preserve disposition before reaping the direct root.
+
+This is a private lifetime-management boundary rather than part of the relay protocol or public interface.
 
 ### Server and relay
 
 The server sends commands to the relay's standard input and receives JSONL events from the relay's standard output.
 Relay standard error is inherited separately and is not part of that protocol.
-The transport is private and keeps worker-local connections inside the sandbox while the separate manager owns the sandbox lifetime from the host.
+The transport is private and currently exists to keep worker connections and direct-worker supervision inside the sandbox.
 [`RELAY_PROTOCOL.md`](RELAY_PROTOCOL.md) defines its commands, events, framing, and retirement behavior.
 
 ### Relay and worker
 
 The relay launches the worker with standard input, standard output, standard error, and a dedicated sideband.
 Complete cells and other worker-protocol messages travel over the sideband, interactive input uses worker fd 0, and direct worker output remains on fd 1 and fd 2.
-The relay forwards direct worker signals, applies its local direct-child shutdown mechanics, and collects the direct child's status.
-The host-side manager owns cleanup of the relay root and every descendant it observed.
+Direct-worker signals and supervision remain relay responsibilities.
 [`WORKER_PROTOCOL.md`](WORKER_PROTOCOL.md) defines the launch descriptors, framing, messages, ordering rules, closure behavior, and custom-worker contract.
 
 ## Responsibility boundaries
@@ -107,6 +106,7 @@ The server owns the logical console session and all state that must survive a wo
 
 - MCP tool admission and validation;
 - worker lifecycle and generation ownership;
+- host-side relay lifetime ownership and retirement;
 - retained R, Python, and DuckDB requirements;
 - host resolver launch, interruption, cancellation, and result commits;
 - evaluation, preparation, stdin, inline control, restart, and replacement admission;
@@ -116,31 +116,39 @@ The server owns the logical console session and all state that must survive a wo
 
 These responsibilities remain on the host side of the sandbox boundary.
 The server does not execute submitted cells or ask the relay to interpret MCP calls.
+At generation retirement, it asks the manager to stop descendants observed across process-group and session changes, then reaps the direct relay.
+It retains that root waitably so the manager or owner-side failure recovery can close the original process group as a PID-reuse-safe backstop.
+
+### Standalone launcher
+
+The standalone launcher owns one direct sandbox command's exit status, job control, and final directory disposition.
+It inherits the command's standard streams, closes every unrelated inherited descriptor before exec, retains the direct root as a waitable child, and returns that root's exit status when cleanup succeeds.
+It keeps the root blocked on a private descriptor while committing primary manager ownership, then releases the root into the requested command.
+After root exit it marks normal retirement, waits for manager cleanup, supplies the final temporary-directory disposition, and reaps the root last.
+It does not own console state, dependency resolution, recording, relay transport, or worker protocol behavior.
+It transfers foreground-terminal ownership to the command group, relays supported signals addressed to the launcher, and restores terminal ownership after root exit.
 
 ### Sandbox manager
 
-Each server worker lifetime and standalone sandbox command has one manager process outside Seatbelt and outside the sandbox root's process group.
-The manager validates the root by PID, parent, and start time, then observes descendants by PID and start time across process-group and session changes.
-It adopts the private temporary-directory guard and owns the configured cleanup timeout for that lifetime.
+The sandbox manager owns primary observed-descendant cleanup for one committed sandbox lifetime.
+It records descendants by PID and process start time, validates the exact root identity, and adopts the private temporary-directory path.
+It retires only identities its tracker observed, uses the still-pinned root process group as a race backstop, and removes the directory only after successful cleanup.
+It does not own session state, operation admission, relay transport, command exit status, or terminal semantics.
 
-After a normal root exit, the manager waits for the observed identities to disappear within the configured cleanup timeout, then closes the original root process group as a backstop for a same-group fork that raced observation.
-The host owner retains the waitable root through this cleanup and the manager revalidates its recorded identity before signaling the group.
-On forced retirement or owner-socket closure, the manager instead closes the group while the root identity is still available, signals the exact recorded root, and then waits for observed-tree cleanup.
-It removes the private directory only after successful cleanup; a tracking, signaling, or cleanup failure preserves the directory rather than deleting files beneath a possible survivor.
-The host owner retains an independent guard and uses the same remove-on-success, preserve-on-failure rule if it can recover from an unsuccessful manager exit while the root remains live.
-The manager does not interpret MCP calls, relay frames, worker messages, or runtime output.
+On normal standalone root exit, the manager remains alive until the launcher explicitly commits the directory disposition.
+Loss of owner control after retirement starts preserves the directory; earlier control loss selects forced cleanup and removal after success.
+If the manager itself fails while its owner retains a live, waitable root, the owner monitor reconstructs the root's current ancestry and performs bounded cleanup.
+That fallback cannot recover a descendant that had already detached from the root's ancestry.
 
 ### Relay
 
-The relay is a thin ordered transport and local worker adapter.
-It owns the worker's local descriptors, translates applicable relay commands to worker-sideband messages, forwards worker observations, delivers direct signals, applies local direct-child shutdown mechanics, drains streams, and collects and reaps the direct worker's status.
-The built-in relay also waits at a private startup gate before it launches the worker.
-That gate does not transfer lifetime ownership to the relay; it only prevents worker launch until the host manager has begun tracking the relay root and confirmed its temporary-directory ownership commit.
+The relay is a thin ordered transport and worker supervisor.
+It owns the worker's local descriptors, translates applicable relay commands to worker-sideband messages, forwards worker observations, delivers signals, bounds shutdown, drains streams, and reaps the direct worker.
 Its producers preserve their own order, and one relay writer serializes their observations for the server.
 That serialization does not reconstruct chronology across the independent sideband, stdout, and stderr transports.
 
-The relay does not own the logical session, retained requirements, evaluation admission, output budgets, response assembly, MCP delivery, observed-descendant cleanup, or the private temporary directory.
-Processes that leave the relay process group or session remain part of the manager's observed sandbox lifetime, not a separate relay-owned lifetime.
+The relay does not own the logical session, retained requirements, evaluation admission, output budgets, response assembly, or MCP delivery.
+It exits with the worker lifetime it supervises.
 
 ### Worker
 
@@ -163,7 +171,7 @@ Generation ownership belongs to the server.
 The server captures the current generation when it admits an evaluation, stdin write, resolver callback, preparation, interrupt target, or retained-environment commit.
 The operation can affect only the lifecycle generation that accepted it.
 
-An explicit restart advances logical admission to a new generation before the old relay and worker finish retirement, but it does not launch the replacement until sandbox-lifetime cleanup has completed.
+An explicit restart advances admission to a new generation before the old relay and worker finish retirement.
 Work still completing for the retiring generation is either settled for that generation or discarded according to its existing lifecycle contract; it cannot be forwarded to the replacement or commit state on its behalf.
 The replacement receives new worker transports and fresh language-runtime state, while the server supplies the retained environment selected for it.
 
@@ -186,11 +194,25 @@ If no resolver bootstrap is available, it accepts MCP input with an empty retain
 The worker itself starts lazily when an operation first needs it; preparing retained requirements can happen without launching a worker.
 An explicit restart starts its replacement eagerly, including when the session had not started a worker before.
 
-For each worker start, the server configures a sandboxed relay from the retained environment and starts its host-side manager.
-The manager validates and begins tracking the relay root, adopts the private temporary-directory guard, and reports readiness.
-The server starts manager-failure monitoring before asking the manager to commit primary ownership.
-The built-in relay waits at its startup gate until this commit, then creates the worker sideband and standard streams, launches the worker, and forwards its startup events.
+For each worker start, the server configures a sandboxed relay from the retained environment.
+It starts the sandbox manager, launches the relay as a waitable root, waits for manager readiness, installs manager-failure recovery, and commits manager ownership.
+Because Darwin cannot atomically attach the observer at spawn, a descendant that escapes before the manager observes it remains outside cleanup even after readiness.
+The built-in relay waits at a private startup gate until ownership is committed, then creates the worker sideband and standard streams, launches the worker, and forwards its startup events.
 The server admits the worker only after the required readiness exchange succeeds.
+
+### Standalone command startup and retirement
+
+The standalone launcher creates a private temporary directory, configures `sandbox-exec`, closes unrelated nonstandard inherited descriptors, and asks it to run a hidden wrapper with inherited standard streams plus one private release descriptor.
+The wrapper blocks on that descriptor before requested command code executes.
+The launcher starts the manager before that root, retains both children waitably, waits for the manager to adopt the directory and report readiness, installs recovery monitoring, and commits primary ownership.
+It then writes one release byte; the same root closes the descriptor and replaces itself with the requested command.
+A descendant that later escapes before the manager sees its fork remains outside cleanup.
+
+The launcher blocks in a root-only event waiter that also wakes for supported signals addressed to the launcher.
+At root exit it marks normal retirement, waits for the manager's cleanup acknowledgement, and commits remove after success or preserve after an acknowledgement timeout or error.
+It then reaps the direct root and returns its status when cleanup succeeded.
+If the launcher exits after the retirement marker but before final disposition, the manager preserves the directory; owner loss before that marker selects crash cleanup and removal after successful manager retirement.
+If the manager is killed while the launcher remains live, its monitor reconstructs the root's current ancestry and performs bounded cleanup while that root remains pinned.
 
 ### Evaluation
 
@@ -288,13 +310,13 @@ Resolver interruption and lifecycle cancellation are tracked as typed outcomes f
 
 When restart includes requirements, the server first resolves the candidate retained environment outside the sandbox.
 A resolution failure leaves the existing worker generation in place.
-After resolution succeeds, or immediately for an unchanged restart, the server closes admission to the old generation, settles any active response ownership, retires the worker through the relay, waits for cleanup of the relay root and observed descendants, reaps the direct relay, then starts the replacement from the retained environment.
+After resolution succeeds, or immediately for an unchanged restart, the server closes admission to the old generation, settles any active response ownership, retires and reaps the relay and worker, then starts the replacement from the retained environment.
 For `send(control = "restart")`, that transaction continues under the same admission boundary through same-call stdin enqueue and reservation of the optional cell against the ready replacement.
 Exact requirement commit behavior is documented in [requirements and environments](REQUIREMENTS.md).
 
 ### Failure replacement
 
-When an established worker fails during an evaluation, the server retires its relay and worker, waits for sandbox-lifetime cleanup, retains the observed failure and output, and makes one automatic replacement attempt for that call.
+When an established worker fails during an evaluation, the server retires its relay and worker, retains the observed failure and output, and makes one automatic replacement attempt for that call.
 The failed cell is not run again.
 A successful replacement starts with fresh in-memory state and the retained environment; the [built-in runtime guide](BUILTIN_RUNTIME.md) owns the exact notices and polling behavior.
 
@@ -302,7 +324,6 @@ A successful replacement starts with fresh in-memory state and the retained envi
 
 Closing MCP input begins shutdown of the implicit console session.
 The server stops accepting generation work, requests bounded retirement of the active relay and worker, cancels an active host resolver, joins the remaining relay I/O tasks, and reaps owned processes.
-The manager, or the owner-side recovery monitor after manager failure, stops the remaining observed lifetime within its configured cleanup timeout, then attempts private-directory removal before the server treats the generation as retired.
 The protocol documents define the exact closure and retirement order.
 
 ## Output ownership
@@ -358,6 +379,6 @@ This includes a server working directory that cannot be represented as UTF-8 bec
 
 ## Platform support
 
-The implemented sandbox command, sandbox manager, relay, built-in worker, and managed resolvers are supported only on macOS.
+The implemented sandbox command, relay, built-in worker, and managed resolvers are supported only on macOS.
 The complete CI check runs on macOS.
 Linux and Windows have unsupported-platform paths but no working execution stack yet.

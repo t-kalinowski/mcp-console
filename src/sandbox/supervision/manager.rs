@@ -13,6 +13,8 @@ use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt as _;
 use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -27,10 +29,15 @@ pub(crate) struct SandboxManager {
     monitor: Option<ManagerMonitor>,
     stream: Option<UnixStream>,
     cleanup_timeout: Duration,
+    retirement_started: bool,
+    cleanup_complete: bool,
+    control_error: Option<String>,
 }
 
 struct ManagerMonitor {
     identity: ProcessIdentity,
+    preserve_after_normal_exit: Arc<AtomicBool>,
+    preserve_unconditionally: Arc<AtomicBool>,
     result: Receiver<Result<ManagerExit, String>>,
     thread: Option<JoinHandle<()>>,
 }
@@ -38,6 +45,13 @@ struct ManagerMonitor {
 enum ManagerExit {
     Normal,
     Recovered,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(crate) enum CleanupPreparation {
+    Complete,
+    TimedOut,
+    Failed,
 }
 
 impl SandboxManager {
@@ -85,6 +99,9 @@ impl SandboxManager {
             monitor: None,
             stream: Some(stream),
             cleanup_timeout,
+            retirement_started: false,
+            cleanup_complete: false,
+            control_error: None,
         })
     }
 
@@ -180,21 +197,111 @@ impl SandboxManager {
         Ok(())
     }
 
+    /// Marks the point after which owner loss must preserve the private
+    /// directory because normal retirement has already begun.
+    pub(crate) fn begin_retirement(&mut self) -> bool {
+        if self.retirement_started {
+            return true;
+        }
+        if self.control_error.is_some() {
+            return false;
+        }
+        if let Some(monitor) = self.monitor.as_ref() {
+            monitor.preserve_after_normal_exit();
+        }
+        let stream = self
+            .stream
+            .as_mut()
+            .expect("sandbox manager control should be available");
+        match protocol::write_retirement_started(stream) {
+            Ok(()) => {
+                self.retirement_started = true;
+                true
+            }
+            Err(error) => {
+                self.control_error = Some(error);
+                false
+            }
+        }
+    }
+
+    /// Waits until the manager has retired every observed identity.
+    pub(crate) fn prepare_finish(&mut self) -> CleanupPreparation {
+        if self.cleanup_complete {
+            return CleanupPreparation::Complete;
+        }
+        if !self.begin_retirement() {
+            return CleanupPreparation::Failed;
+        }
+        let timeout = self.cleanup_timeout.saturating_add(FINISH_ALLOWANCE);
+        let stream = self
+            .stream
+            .as_mut()
+            .expect("sandbox manager control should be available");
+        let result = stream
+            .set_read_timeout(Some(timeout))
+            .map_err(|error| format!("failed to configure sandbox manager control: {error}"))
+            .and_then(|()| protocol::read_cleanup_complete(stream));
+        match result {
+            Ok(protocol::CleanupAcknowledgement::Complete) => {
+                self.cleanup_complete = true;
+                CleanupPreparation::Complete
+            }
+            Ok(protocol::CleanupAcknowledgement::TimedOut) => CleanupPreparation::TimedOut,
+            Err(error) => {
+                self.control_error = Some(error);
+                CleanupPreparation::Failed
+            }
+        }
+    }
+
+    /// Commits the standalone launcher's final directory disposition.
+    pub(crate) fn finish_retirement(
+        mut self,
+        preserve_temporary_directory: bool,
+    ) -> Result<(), String> {
+        if let Some(monitor) = self.monitor.as_ref() {
+            if preserve_temporary_directory {
+                monitor.preserve_unconditionally();
+            } else if self.control_error.is_none() {
+                monitor.remove_after_normal_exit();
+            }
+        }
+        if let Some(stream) = self.stream.as_mut()
+            && let Err(error) =
+                protocol::write_retirement_disposition(stream, preserve_temporary_directory)
+            && self.control_error.is_none()
+        {
+            self.control_error = Some(error);
+        }
+        if self.control_error.is_some()
+            && let Some(monitor) = self.monitor.as_ref()
+        {
+            monitor.preserve_after_normal_exit();
+        }
+        let control_error = self.control_error.take();
+        match self.finish_inner(None, true) {
+            Ok(ManagerExit::Recovered) => Ok(()),
+            Ok(ManagerExit::Normal) => control_error.map_or(Ok(()), Err),
+            Err(error) => Err(with_prior_error(control_error, error)),
+        }
+    }
+
     /// Completes ownership after the sandbox root has already exited.
     pub(crate) fn finish(mut self) -> Result<(), String> {
-        self.finish_inner(Some(protocol::FINISH), true)
+        self.finish_inner(Some(protocol::FINISH), true).map(|_| ())
     }
 
     /// Stops the recorded sandbox root before completing ownership.
     pub(crate) fn stop(mut self) -> Result<(), String> {
-        self.finish_inner(Some(protocol::STOP), true)
+        self.finish_inner(Some(protocol::STOP), true).map(|_| ())
     }
 
     fn finish_inner(
         &mut self,
         disposition: Option<u8>,
         inspect_status: bool,
-    ) -> Result<(), String> {
+    ) -> Result<ManagerExit, String> {
         let mut error = None;
         if let Some(mut stream) = self.stream.take()
             && let Some(disposition) = disposition
@@ -208,15 +315,15 @@ impl SandboxManager {
         if let Some(monitor) = self.monitor.take() {
             match monitor.finish(finish_timeout) {
                 Ok(ManagerExit::Normal) => {}
-                Ok(ManagerExit::Recovered) => error = None,
+                Ok(ManagerExit::Recovered) => return Ok(ManagerExit::Recovered),
                 Err(monitor_error) => {
                     error = Some(with_prior_error(error, monitor_error));
                 }
             }
-            return error.map_or(Ok(()), Err);
+            return error.map_or(Ok(ManagerExit::Normal), Err);
         }
         let Some(mut child) = self.child.take() else {
-            return error.map_or(Ok(()), Err);
+            return error.map_or(Ok(ManagerExit::Normal), Err);
         };
         let exited =
             match platform::wait_for_process_exit_without_reaping(child.id(), finish_timeout) {
@@ -247,7 +354,7 @@ impl SandboxManager {
             let status_error = format!("sandbox manager exited with status {status}");
             return Err(with_prior_error(error, status_error));
         }
-        error.map_or(Ok(()), Err)
+        error.map_or(Ok(ManagerExit::Normal), Err)
     }
 }
 
@@ -260,15 +367,42 @@ impl ManagerMonitor {
         cleanup_timeout: Duration,
     ) -> Self {
         let (result_sender, result) = mpsc::channel();
+        let preserve_after_normal_exit = Arc::new(AtomicBool::new(false));
+        let preserve_normal_for_monitor = Arc::clone(&preserve_after_normal_exit);
+        let preserve_unconditionally = Arc::new(AtomicBool::new(false));
+        let preserve_unconditionally_for_monitor = Arc::clone(&preserve_unconditionally);
         let thread = std::thread::spawn(move || {
-            let result = monitor_manager(child, root_pid, temporary_directory, cleanup_timeout);
+            let result = monitor_manager(
+                child,
+                root_pid,
+                temporary_directory,
+                cleanup_timeout,
+                preserve_normal_for_monitor,
+                preserve_unconditionally_for_monitor,
+            );
             let _ = result_sender.send(result);
         });
         Self {
             identity,
+            preserve_after_normal_exit,
+            preserve_unconditionally,
             result,
             thread: Some(thread),
         }
+    }
+
+    fn preserve_after_normal_exit(&self) {
+        self.preserve_after_normal_exit
+            .store(true, Ordering::Release);
+    }
+
+    fn remove_after_normal_exit(&self) {
+        self.preserve_after_normal_exit
+            .store(false, Ordering::Release);
+    }
+
+    fn preserve_unconditionally(&self) {
+        self.preserve_unconditionally.store(true, Ordering::Release);
     }
 
     fn finish(mut self, timeout: Duration) -> Result<ManagerExit, String> {
@@ -326,6 +460,8 @@ fn monitor_manager(
     root_pid: libc::pid_t,
     temporary_directory: platform::TemporaryDirectory,
     cleanup_timeout: Duration,
+    preserve_after_normal_exit: Arc<AtomicBool>,
+    preserve_unconditionally: Arc<AtomicBool>,
 ) -> Result<ManagerExit, String> {
     let completion = match platform::wait_for_process_exit_without_reaping_blocking(child.id()) {
         Ok(()) => child
@@ -340,16 +476,23 @@ fn monitor_manager(
         }
     };
 
-    match completion {
+    let result = match completion {
         Ok(status) if status.success() => Ok(ManagerExit::Normal),
         Ok(status) => finish_manager_failure(
             format!("sandbox manager exited with status {status}"),
             root_pid,
-            temporary_directory,
             cleanup_timeout,
         ),
-        Err(error) => finish_manager_failure(error, root_pid, temporary_directory, cleanup_timeout),
+        Err(error) => finish_manager_failure(error, root_pid, cleanup_timeout),
+    };
+    if result.is_err()
+        || preserve_unconditionally.load(Ordering::Acquire)
+        || (matches!(&result, Ok(ManagerExit::Normal))
+            && preserve_after_normal_exit.load(Ordering::Acquire))
+    {
+        temporary_directory.preserve();
     }
+    result
 }
 
 fn stop_manager_child(child: &mut Child) -> Result<ExitStatus, String> {
@@ -372,7 +515,6 @@ fn stop_manager_child(child: &mut Child) -> Result<ExitStatus, String> {
 fn finish_manager_failure(
     mut error: String,
     root_pid: libc::pid_t,
-    temporary_directory: platform::TemporaryDirectory,
     cleanup_timeout: Duration,
 ) -> Result<ManagerExit, String> {
     let root = match process_info(root_pid) {
@@ -380,14 +522,17 @@ fn finish_manager_failure(
         Ok(_) => {
             error = with_prior_error(
                 Some(error),
-                format!("sandbox root {root_pid} exited before fallback supervision"),
+                format!(
+                    "manager recovery failed: sandbox root {root_pid} exited before fallback supervision"
+                ),
             );
-            temporary_directory.preserve();
             return Err(error);
         }
         Err(inspect_error) => {
-            error = with_prior_error(Some(error), inspect_error);
-            temporary_directory.preserve();
+            error = with_prior_error(
+                Some(error),
+                format!("manager recovery failed: {inspect_error}"),
+            );
             return Err(error);
         }
     };
@@ -400,15 +545,20 @@ fn finish_manager_failure(
         return Ok(ManagerExit::Recovered);
     }
     if let Some(cleanup_error) = cleanup_error {
-        error = with_prior_error(Some(error), cleanup_error);
+        error = with_prior_error(
+            Some(error),
+            format!("manager recovery failed: {cleanup_error}"),
+        );
         if let Err(signal_error) = signal_process(root, libc::SIGKILL) {
             error = with_prior_error(Some(error), signal_error);
         }
     }
     if let Some(group_error) = group_error {
-        error = with_prior_error(Some(error), group_error);
+        error = with_prior_error(
+            Some(error),
+            format!("manager recovery failed: {group_error}"),
+        );
     }
-    temporary_directory.preserve();
     Err(error)
 }
 
@@ -451,6 +601,11 @@ fn stop_and_reap(child: &mut Child, mut error: String) -> String {
 
 impl Drop for SandboxManager {
     fn drop(&mut self) {
+        if self.retirement_started
+            && let Some(monitor) = self.monitor.as_ref()
+        {
+            monitor.preserve_after_normal_exit();
+        }
         let _ = self.finish_inner(None, false);
     }
 }
