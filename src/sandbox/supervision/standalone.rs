@@ -68,7 +68,8 @@ pub(super) fn status(
     ) {
         Ok(manager) => manager,
         Err(error) => {
-            let mut error = retire_after_manager_start_failure(observed_lifetime, &mut child, error);
+            let mut error =
+                retire_after_manager_start_failure(observed_lifetime, &mut child, error);
             if let Err(terminal_error) = foreground_terminal.restore() {
                 error = additional_error(error, terminal_error);
             }
@@ -99,13 +100,8 @@ pub(super) fn status(
     }
     drop(launcher_gate);
 
-    let wait_error = wait_for_root_exit(
-        &child,
-        &signal_relay,
-        &mut root_waiter,
-        &observed_lifetime,
-    )
-    .err();
+    let wait_error =
+        wait_for_root_exit(&child, &signal_relay, &mut root_waiter, &observed_lifetime).err();
     // Keep the exited root waitable until host-side sandbox-lifetime cleanup has
     // completed. The root waiter supplies root-exit and launcher-signal wakeups;
     // the observer thread independently reports manager failure.
