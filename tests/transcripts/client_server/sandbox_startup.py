@@ -50,7 +50,7 @@ def _build_manager_start_interposer(directory: Path) -> Path:
 
 static _Atomic int gated_manager_read = 0;
 static _Atomic pid_t denied_cleanup_root = 0;
-static _Atomic int denied_cleanup_signals = 0;
+static _Atomic int reported_direct_cleanup_denial = 0;
 
 typedef int (*kill_function)(pid_t, int);
 typedef int (*killpg_function)(pid_t, int);
@@ -132,7 +132,7 @@ static int deny_startup_cleanup_group(pid_t process_group_id, int number) {
         && is_subcommand("serve")
         && getenv("MCP_CONSOLE_TEST_DENY_STARTUP_CLEANUP") != NULL) {
         atomic_store(&denied_cleanup_root, process_group_id);
-        errno = EPERM;
+        errno = EIO;
         return -1;
     }
     killpg_function killpg_next = next_killpg();
@@ -144,7 +144,7 @@ static int deny_startup_cleanup_process(pid_t process_id, int number) {
         && process_id == atomic_load(&denied_cleanup_root)
         && is_subcommand("serve")
         && getenv("MCP_CONSOLE_TEST_DENY_STARTUP_CLEANUP") != NULL) {
-        if (atomic_fetch_add(&denied_cleanup_signals, 1) == 1) {
+        if (atomic_exchange(&reported_direct_cleanup_denial, 1) == 0) {
             signal_checkpoint("MCP_CONSOLE_TEST_DIRECT_KILL_DENIED");
         }
         errno = EPERM;
@@ -443,7 +443,7 @@ def test_manager_failure_before_readiness_keeps_custom_relay_gated(
             assert "sandbox manager did not become ready" in text, result
             assert (
                 "failed to stop `/usr/bin/sandbox-exec` process group: "
-                "Operation not permitted" in text
+                "Input/output error" in text
             ), result
             assert (
                 "failed to stop `/usr/bin/sandbox-exec`: Operation not permitted"
@@ -456,7 +456,7 @@ def test_manager_failure_before_readiness_keeps_custom_relay_gated(
             )
             waiting["startup_gate_failure"] = {
                 "manager": "killed before readiness",
-                "cleanup_signals": "EPERM for group and direct root",
+                "cleanup_signals": "EIO for group, EPERM for direct root",
                 "root_signal": "SIGSTOP then SIGCONT",
                 "relay_root": "retired without executing the custom relay",
                 "temporary_directory": "preserved",

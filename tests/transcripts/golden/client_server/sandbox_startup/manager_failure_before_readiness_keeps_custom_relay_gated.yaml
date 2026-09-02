@@ -9,13 +9,13 @@ result:
       text: >-
         [failed to launch worker relay: sandbox manager did not become ready:
         failed to fill whole buffer; additionally failed to stop
-        `/usr/bin/sandbox-exec` process group: Operation not permitted (os error
-        1); additionally failed to stop `/usr/bin/sandbox-exec`: Operation not
+        `/usr/bin/sandbox-exec` process group: Input/output error (os error 5);
+        additionally failed to stop `/usr/bin/sandbox-exec`: Operation not
         permitted (os error 1)]
   isError: true
 startup_gate_failure:
   manager: killed before readiness
-  cleanup_signals: EPERM for group and direct root
+  cleanup_signals: EIO for group, EPERM for direct root
   root_signal: SIGSTOP then SIGCONT
   relay_root: retired without executing the custom relay
   temporary_directory: preserved

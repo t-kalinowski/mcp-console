@@ -105,6 +105,7 @@ def _build_supervision_interposer(directory: Path, behavior: str) -> Path:
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/event.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -130,15 +131,19 @@ static _Atomic int gated_manager_read = 0;
 #endif
 #if defined(MCP_CONSOLE_INTERPOSE_FAILED_RECOVERY_STOP)
 static _Atomic int failed_process_info = 0;
+static _Atomic int failed_group_stop = 0;
+static _Atomic int gated_recovery_root_stop = 0;
 #endif
 #if defined(MCP_CONSOLE_INTERPOSE_FAILED_ROOT_OBSERVER)
-static _Atomic int process_info_calls = 0;
+static _Atomic int root_exit_watch_registered = 0;
+static _Atomic int failed_root_identity_recheck = 0;
 #endif
 #if defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_DISPOSITION)
 static _Atomic int gated_retirement_disposition = 0;
 #endif
 
 #if defined(MCP_CONSOLE_INTERPOSE_DENIED_SIGKILL) \
+    || defined(MCP_CONSOLE_INTERPOSE_FAILED_RECOVERY_STOP) \
     || defined(MCP_CONSOLE_INTERPOSE_FAILED_ROOT_OBSERVER) \
     || defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP) \
     || defined(MCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE)
@@ -171,6 +176,46 @@ static proc_pidinfo_function next_proc_pidinfo(void) {
 #if defined(MCP_CONSOLE_INTERPOSE_FAILED_ROOT_OBSERVER)
 static void signal_checkpoint(const char *name);
 
+typedef int (*kevent_function)(
+    int,
+    const struct kevent *,
+    int,
+    struct kevent *,
+    int,
+    const struct timespec *
+);
+
+static kevent_function next_kevent(void) {
+    return kevent;
+}
+
+static int arm_root_identity_recheck(
+    int descriptor,
+    const struct kevent *changes,
+    int change_count,
+    struct kevent *events,
+    int event_count,
+    const struct timespec *timeout
+) {
+    int result = next_kevent()(
+        descriptor,
+        changes,
+        change_count,
+        events,
+        event_count,
+        timeout
+    );
+    if (result >= 0
+        && change_count == 1
+        && changes != NULL
+        && changes[0].filter == EVFILT_PROC
+        && (changes[0].flags & EV_ADD) != 0
+        && (changes[0].fflags & NOTE_EXIT) != 0) {
+        atomic_store(&root_exit_watch_registered, 1);
+    }
+    return result;
+}
+
 static int fail_root_observer(
     int process_id,
     int flavor,
@@ -179,7 +224,8 @@ static int fail_root_observer(
     int buffer_size
 ) {
     if (flavor == PROC_PIDTBSDINFO
-        && atomic_fetch_add(&process_info_calls, 1) == 1) {
+        && atomic_load(&root_exit_watch_registered) != 0
+        && atomic_exchange(&failed_root_identity_recheck, 1) == 0) {
         signal_checkpoint("MCP_CONSOLE_TEST_PROCESS_INFO_FAILURE");
         errno = EIO;
         return 0;
@@ -203,6 +249,7 @@ static void signal_checkpoint(const char *name);
 static int fail_group_stop(pid_t process_group_id, int number) {
     const char *trigger = getenv("MCP_CONSOLE_TEST_PROCESS_INFO_FAILURE_TRIGGER");
     if (number == SIGKILL && trigger != NULL && access(trigger, F_OK) == 0) {
+        atomic_store(&failed_group_stop, 1);
         signal_checkpoint("MCP_CONSOLE_TEST_GROUP_STOP_FAILURE");
         errno = EIO;
         return -1;
@@ -250,6 +297,7 @@ static void signal_checkpoint(const char *name) {
 }
 
 #if defined(MCP_CONSOLE_INTERPOSE_MANAGER_START) \
+    || defined(MCP_CONSOLE_INTERPOSE_FAILED_RECOVERY_STOP) \
     || defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP) \
     || defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_DISPOSITION)
 static void wait_for_release(const char *name) {
@@ -295,6 +343,23 @@ static int fail_process_info(
         return 0;
     }
     return next_proc_pidinfo()(process_id, flavor, argument, buffer, buffer_size);
+}
+
+static int gate_recovery_root_stop(pid_t process_id, int number) {
+    kill_function kill_next = next_kill();
+    if (process_id > 0
+        && number == SIGKILL
+        && atomic_load(&failed_group_stop) != 0
+        && getenv("MCP_CONSOLE_TEST_RECOVERY_ROOT_STOPPED") != NULL
+        && atomic_exchange(&gated_recovery_root_stop, 1) == 0) {
+        int result = kill_next(process_id, number);
+        if (result == 0) {
+            signal_checkpoint("MCP_CONSOLE_TEST_RECOVERY_ROOT_STOPPED");
+            wait_for_release("MCP_CONSOLE_TEST_RECOVERY_ROOT_RELEASE");
+        }
+        return result;
+    }
+    return kill_next(process_id, number);
 }
 #endif
 
@@ -519,7 +584,9 @@ DYLD_INTERPOSE(deny_first_sigkill, kill)
 #elif defined(MCP_CONSOLE_INTERPOSE_FAILED_RECOVERY_STOP)
 DYLD_INTERPOSE(fail_process_info, proc_pidinfo)
 DYLD_INTERPOSE(fail_group_stop, killpg)
+DYLD_INTERPOSE(gate_recovery_root_stop, kill)
 #elif defined(MCP_CONSOLE_INTERPOSE_FAILED_ROOT_OBSERVER)
+DYLD_INTERPOSE(arm_root_identity_recheck, kevent)
 DYLD_INTERPOSE(fail_root_observer, proc_pidinfo)
 DYLD_INTERPOSE(fail_root_group_stop, kill)
 #elif defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP)
@@ -875,7 +942,9 @@ def _cleanup(lifetime: _SandboxLifetime) -> None:
     if lifetime.process.poll() is None:
         lifetime.process.kill()
         lifetime.process.wait(timeout=TIMEOUT)
-    kill_darwin_processes((lifetime.root, lifetime.descendant, lifetime.manager))
+    identities = (lifetime.root, lifetime.descendant, lifetime.manager)
+    kill_darwin_processes(identities)
+    _wait_for_process_exit(identities, "sandbox cleanup did not stop all processes")
     shutil.rmtree(lifetime.temporary_directory, ignore_errors=True)
     for stream in (
         lifetime.process.stdin,
@@ -1569,6 +1638,8 @@ def test_manager_recovery_inspection_failure_stops_root(binary: Path) -> Transcr
         fixture_directory = Path(temporary_directory)
         inspection_failed = FifoCheckpoint(fixture_directory / "inspection-failed")
         group_stop_failed = FifoCheckpoint(fixture_directory / "group-stop-failed")
+        root_stopped = FifoCheckpoint(fixture_directory / "root-stopped")
+        root_stop_release = FifoCheckpoint(fixture_directory / "root-stop-release")
         failure_trigger = fixture_directory / "fail-process-info"
         environment = os.environ.copy()
         environment.update(
@@ -1582,16 +1653,28 @@ def test_manager_recovery_inspection_failure_stops_root(binary: Path) -> Transcr
                 "MCP_CONSOLE_TEST_PROCESS_INFO_FAILURE": str(inspection_failed.path),
                 "MCP_CONSOLE_TEST_PROCESS_INFO_FAILURE_TRIGGER": str(failure_trigger),
                 "MCP_CONSOLE_TEST_GROUP_STOP_FAILURE": str(group_stop_failed.path),
+                "MCP_CONSOLE_TEST_RECOVERY_ROOT_STOPPED": str(root_stopped.path),
+                "MCP_CONSOLE_TEST_RECOVERY_ROOT_RELEASE": str(root_stop_release.path),
             }
         )
         lifetime = _start_lifetime(binary, environment)
+        root_stop_released = False
         try:
-            failure_trigger.touch()
-            assert signal_darwin_process(lifetime.manager, signal.SIGKILL), (
-                "manager exited before crash injection"
-            )
-            inspection_failed.wait("launcher root-inspection failure")
-            group_stop_failed.wait("launcher pinned-group stop failure")
+            with _observe_process_exit(lifetime.root) as root_exit:
+                failure_trigger.touch()
+                assert signal_darwin_process(lifetime.manager, signal.SIGKILL), (
+                    "manager exited before crash injection"
+                )
+                inspection_failed.wait("launcher root-inspection failure")
+                group_stop_failed.wait("launcher pinned-group stop failure")
+                root_stopped.wait("launcher direct pinned-root termination")
+                events = root_exit.control(None, 1, TIMEOUT)
+                assert events, "direct pinned-root termination did not stop the root"
+                assert events[0].ident == lifetime.root[0], events[0]
+                assert events[0].filter == select.KQ_FILTER_PROC, events[0]
+                assert events[0].fflags & select.KQ_NOTE_EXIT, events[0]
+                root_stop_release.release()
+                root_stop_released = True
             returncode = lifetime.process.wait(timeout=TIMEOUT)
             stderr = lifetime.process.stderr.read().decode("utf-8")
             normalized_stderr = stderr.replace(
@@ -1627,8 +1710,12 @@ def test_manager_recovery_inspection_failure_stops_root(binary: Path) -> Transcr
                 },
             ]
         finally:
+            if not root_stop_released:
+                root_stop_release.release()
             inspection_failed.close()
             group_stop_failed.close()
+            root_stopped.close()
+            root_stop_release.close()
             _cleanup(lifetime)
 
 
@@ -1640,6 +1727,7 @@ def test_root_observer_failure_reports_group_cleanup_failure(
         inspection_failed = FifoCheckpoint(temporary / "inspection-failed")
         group_stop_failed = FifoCheckpoint(temporary / "group-stop-failed")
         environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
         environment["DYLD_INSERT_LIBRARIES"] = str(
             _build_supervision_interposer(temporary, "failed-root-observer")
         )
