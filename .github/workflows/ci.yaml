@@ -147,6 +147,7 @@ jobs:
           install-quarto: true
           upgrade: "FALSE"
           packages: |
+            any::devtools
             any::processx
             github::rstudio/reticulate
 

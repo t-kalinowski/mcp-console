@@ -598,46 +598,48 @@ def test_preserves_base_r_loading_semantics_without_resolution(
         return client._finish()
 
 
-def test_preserves_load_namespace_body_for_pkgload(binary: Path) -> Transcript:
+def test_loads_package_with_devtools(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
-        environment, record = recording_ir_environment(Path(temporary))
-        client = McpClient(binary, ("serve",), environment)
+        directory = Path(temporary)
+        fixture = Path(__file__).resolve().parents[2] / "fixtures" / "load_all"
+        package = directory / "package"
+        shutil.copytree(fixture, package)
+        environment, record = recording_ir_environment(directory)
+        client = McpClient(
+            binary,
+            ("serve",),
+            environment,
+            current_directory=package,
+        )
         client._initialize_and_list_tools()
         baseline = len(ir_run_records(record))
 
-        # pkgload extracts this private helper from body(loadNamespace) when
-        # its namespace loads.
         # fmt: r
         r = code(r"""
-            find_make_namespace <- function(expression) {
-              if (
-                is.call(expression) &&
-                  length(expression) >= 3L &&
-                  identical(expression[[1L]], quote(`<-`)) &&
-                  identical(expression[[2L]], quote(makeNamespace))
-              ) {
-                return(expression[[3L]])
-              }
-              if (!is.call(expression)) {
-                return(NULL)
-              }
-              for (child in as.list(expression)) {
-                found <- find_make_namespace(child)
-                if (!is.null(found)) {
-                  return(found)
-                }
-              }
-              NULL
-            }
-            make_namespace <- eval(
-              find_make_namespace(body(base::loadNamespace)),
-              envir = baseenv()
+            stopifnot(
+              !isNamespaceLoaded("devtools"),
+              !isNamespaceLoaded("pkgload"),
+              !isNamespaceLoaded("mcpconsoleloadall")
             )
-            stopifnot(is.function(make_namespace))
-            42L
+            devtools::load_all(
+              reset = TRUE,
+              recompile = FALSE,
+              export_all = FALSE,
+              helpers = FALSE,
+              quiet = TRUE
+            )
+            stopifnot(
+              !"internal_value" %in%
+                getNamespaceExports("mcpconsoleloadall")
+            )
+            list(
+              exported = mcpconsoleloadall::exported_value(),
+              internal = mcpconsoleloadall:::internal_value()
+            )
             """)
         client.send(r=r)
-        assert last_tool_text(client) == "[1] 42\n"
+        output = last_tool_text(client)
+        assert output == "$exported\n[1] 42\n\n$internal\n[1] 41\n\n", repr(output)
         assert len(ir_run_records(record)) == baseline
         return client._finish()
 
