@@ -7,6 +7,8 @@ use super::child::append_retirement_error;
 use super::command::{SandboxedChild, SandboxedChildRetirement, SandboxedCommand};
 use super::{MANAGER_CLEANUP_TIMEOUT, platform, supervision};
 
+const CHILD_CLEANUP_TIMEOUT: Duration = Duration::from_secs(1);
+
 impl SandboxedCommand {
     /// Spawns a hidden gated root under one host-side lifetime manager.
     ///
@@ -29,12 +31,14 @@ impl SandboxedCommand {
         startup_gate.child_spawned();
 
         if let Err(error) = manager.observe(child.id(), self.temporary_directory.path()) {
+            drop(startup_gate);
             drop(manager);
             return Err(stop_unmanaged_child(&mut child, error));
         }
         manager.monitor(child.id(), self.temporary_directory);
         if let Err(error) = manager.commit() {
             let manager_error = manager.stop().err();
+            drop(startup_gate);
             return Err(stop_after_manager_failure(&mut child, error, manager_error));
         }
         if let Err(error) = startup_gate.release() {
@@ -95,8 +99,8 @@ fn stop_unmanaged_child(child: &mut Child, mut error: String) -> String {
             ),
         );
     }
-    let exited =
-        platform::wait_for_process_exit_without_reaping(child.id(), Duration::from_secs(1))
+    let mut exited =
+        platform::wait_for_process_exit_without_reaping(child.id(), CHILD_CLEANUP_TIMEOUT)
             .unwrap_or(false);
     if !exited
         && let Err(kill_error) = child.kill()
@@ -105,6 +109,30 @@ fn stop_unmanaged_child(child: &mut Child, mut error: String) -> String {
         error = append_retirement_error(
             Some(error),
             format!("failed to stop `{}`: {kill_error}", platform::SANDBOX_EXEC),
+        );
+    }
+    if !exited {
+        match platform::wait_for_process_exit_without_reaping(child.id(), CHILD_CLEANUP_TIMEOUT) {
+            Ok(observed) => exited = observed,
+            Err(wait_error) => {
+                return append_retirement_error(
+                    Some(error),
+                    format!(
+                        "failed to wait for `{}` to exit before reaping it: {wait_error}",
+                        platform::SANDBOX_EXEC
+                    ),
+                );
+            }
+        }
+    }
+    if !exited {
+        return append_retirement_error(
+            Some(error),
+            format!(
+                "failed to reap `{}`: process remained live after {} ms",
+                platform::SANDBOX_EXEC,
+                CHILD_CLEANUP_TIMEOUT.as_millis()
+            ),
         );
     }
     if let Err(wait_error) = child.wait() {

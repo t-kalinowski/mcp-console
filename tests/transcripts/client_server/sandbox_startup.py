@@ -2,6 +2,8 @@
 
 import json
 import os
+import select
+import signal
 import subprocess
 import sys
 import tempfile
@@ -21,6 +23,7 @@ from _support import (
     kill_darwin_processes,
     live_darwin_processes,
     run_this_suite,
+    signal_darwin_process,
     stop_client,
 )
 
@@ -37,6 +40,7 @@ def _build_manager_start_interposer(directory: Path) -> Path:
 #include <crt_externs.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -45,6 +49,19 @@ def _build_manager_start_interposer(directory: Path) -> Path:
 #include <unistd.h>
 
 static _Atomic int gated_manager_read = 0;
+static _Atomic pid_t denied_cleanup_root = 0;
+static _Atomic int denied_cleanup_signals = 0;
+
+typedef int (*kill_function)(pid_t, int);
+typedef int (*killpg_function)(pid_t, int);
+
+static kill_function next_kill(void) {
+    return kill;
+}
+
+static killpg_function next_killpg(void) {
+    return killpg;
+}
 
 static int is_subcommand(const char *name) {
     int argc = *_NSGetArgc();
@@ -110,6 +127,33 @@ static ssize_t gate_manager_initialization(
     return recvfrom(descriptor, buffer, length, flags, NULL, NULL);
 }
 
+static int deny_startup_cleanup_group(pid_t process_group_id, int number) {
+    if (number == SIGKILL
+        && is_subcommand("serve")
+        && getenv("MCP_CONSOLE_TEST_DENY_STARTUP_CLEANUP") != NULL) {
+        atomic_store(&denied_cleanup_root, process_group_id);
+        errno = EPERM;
+        return -1;
+    }
+    killpg_function killpg_next = next_killpg();
+    return killpg_next(process_group_id, number);
+}
+
+static int deny_startup_cleanup_process(pid_t process_id, int number) {
+    if (number == SIGKILL
+        && process_id == atomic_load(&denied_cleanup_root)
+        && is_subcommand("serve")
+        && getenv("MCP_CONSOLE_TEST_DENY_STARTUP_CLEANUP") != NULL) {
+        if (atomic_fetch_add(&denied_cleanup_signals, 1) == 1) {
+            signal_checkpoint("MCP_CONSOLE_TEST_DIRECT_KILL_DENIED");
+        }
+        errno = EPERM;
+        return -1;
+    }
+    kill_function kill_next = next_kill();
+    return kill_next(process_id, number);
+}
+
 #define DYLD_INTERPOSE(replacement, replacee)                                  \
     __attribute__((used)) static struct {                                      \
         const void *replacement;                                               \
@@ -120,6 +164,8 @@ static ssize_t gate_manager_initialization(
     };
 
 DYLD_INTERPOSE(gate_manager_initialization, recv)
+DYLD_INTERPOSE(deny_startup_cleanup_group, killpg)
+DYLD_INTERPOSE(deny_startup_cleanup_process, kill)
 """.removeprefix("\n"),
         encoding="utf-8",
     )
@@ -181,6 +227,31 @@ def _wait_for_private_startup_gate(identity: DarwinProcessIdentity) -> None:
         )
         assert time.monotonic() < deadline, (
             "relay root did not block at its private startup gate"
+        )
+        time.sleep(0.01)
+
+
+def _wait_for_process_state(
+    identity: DarwinProcessIdentity,
+    prefix: str,
+    description: str,
+) -> None:
+    deadline = time.monotonic() + TIMEOUT
+    while True:
+        assert live_darwin_processes((identity,)) == [identity[0]], (
+            f"{description} exited before reaching state {prefix!r}"
+        )
+        result = subprocess.run(
+            ["/bin/ps", "-o", "state=", "-p", str(identity[0])],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=TIMEOUT,
+        )
+        if result.stdout.strip().startswith(prefix):
+            return
+        assert time.monotonic() < deadline, (
+            f"timed out waiting for {description} state {prefix!r}"
         )
         time.sleep(0.01)
 
@@ -312,11 +383,16 @@ def test_manager_failure_before_readiness_keeps_custom_relay_gated(
         temporary = Path(temporary_directory)
         manager_started = FifoCheckpoint(temporary / "manager-started")
         manager_release = FifoCheckpoint(temporary / "manager-release")
+        direct_kill_denied = FifoCheckpoint(temporary / "direct-kill-denied")
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
         environment["MCP_CONSOLE_TEST_BINARY"] = str(binary)
         environment["MCP_CONSOLE_TEST_MANAGER_START"] = str(manager_started.path)
         environment["MCP_CONSOLE_TEST_MANAGER_RELEASE"] = str(manager_release.path)
+        environment["MCP_CONSOLE_TEST_DENY_STARTUP_CLEANUP"] = "1"
+        environment["MCP_CONSOLE_TEST_DIRECT_KILL_DENIED"] = str(
+            direct_kill_denied.path
+        )
         environment["DYLD_INSERT_LIBRARIES"] = str(
             _build_manager_start_interposer(temporary)
         )
@@ -350,19 +426,40 @@ def test_manager_failure_before_readiness_keeps_custom_relay_gated(
             assert len(temporary_directories) == 1, temporary_directories
             assert list(temporary.glob(f"**/{MARKER_NAME}")) == []
 
+            assert signal_darwin_process(root, signal.SIGSTOP), (
+                "sandbox root exited before stop injection"
+            )
+            _wait_for_process_state(root, "T", "sandbox root")
             assert kill_darwin_processes((manager,)) == [manager_pid], (
                 "sandbox manager exited before failure injection"
+            )
+            direct_kill_denied.wait("direct sandbox-root signal denial")
+            assert signal_darwin_process(root, signal.SIGCONT), (
+                "sandbox root exited before gate-close verification"
+            )
+            readable, _, _ = select.select([client.stdout], [], [], TIMEOUT)
+            assert readable, (
+                "server did not return after startup cleanup signals failed"
             )
             client._receive(waiting)
             result = waiting["result"]
             assert result.get("isError") is True, result
+            text = result["content"][0]["text"]
+            assert "sandbox manager did not become ready" in text, result
             assert (
-                "sandbox manager did not become ready" in result["content"][0]["text"]
+                "failed to stop `/usr/bin/sandbox-exec` process group: "
+                "Operation not permitted" in text
+            ), result
+            assert (
+                "failed to stop `/usr/bin/sandbox-exec`: Operation not permitted"
+                in text
             ), result
             _wait_for_startup_cleanup(identities, temporary_directories)
             assert list(temporary.glob(f"**/{MARKER_NAME}")) == []
             waiting["startup_gate_failure"] = {
                 "manager": "killed before readiness",
+                "cleanup_signals": "EPERM for group and direct root",
+                "root_signal": "SIGSTOP then SIGCONT",
                 "relay_root": "retired without executing the custom relay",
                 "temporary_directory": "removed",
             }
@@ -388,6 +485,7 @@ def test_manager_failure_before_readiness_keeps_custom_relay_gated(
                 kill_darwin_processes(identities)
             manager_started.close()
             manager_release.close()
+            direct_kill_denied.close()
 
 
 if __name__ == "__main__":
