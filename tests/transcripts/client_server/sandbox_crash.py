@@ -498,8 +498,8 @@ def test_manager_crash_before_commit_retires_the_custom_relay_generation(
             assert survivors == [], (
                 f"pre-commit manager crash leaked custom-relay processes: {survivors}"
             )
-            assert not sandbox_temporary_directory.exists(), (
-                "pre-commit manager crash leaked sandbox temporary directory: "
+            assert sandbox_temporary_directory.exists(), (
+                "ambiguous manager commit removed sandbox temporary directory: "
                 f"{sandbox_temporary_directory}"
             )
             assert list(temporary.glob(f"**/{marker_name}")) == [], (
@@ -510,7 +510,8 @@ def test_manager_crash_before_commit_retires_the_custom_relay_generation(
                     "verified_startup_gate": (
                         "custom relay did not execute before COMMITTED"
                     ),
-                    "verified_cleanup": "gated relay root, manager, and temp",
+                    "verified_cleanup": "gated relay root and manager",
+                    "verified_preservation": "sandbox temp",
                 }
             )
             return client._finish()

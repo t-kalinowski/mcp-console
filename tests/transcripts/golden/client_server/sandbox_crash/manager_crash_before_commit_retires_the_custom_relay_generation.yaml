@@ -14,4 +14,5 @@ result:
 manager_signal: SIGKILL before COMMITTED
 ---
 verified_startup_gate: custom relay did not execute before COMMITTED
-verified_cleanup: gated relay root, manager, and temp
+verified_cleanup: gated relay root and manager
+verified_preservation: sandbox temp

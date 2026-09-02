@@ -204,6 +204,10 @@ impl SandboxManager {
     }
 
     pub(crate) fn commit(&mut self) -> Result<(), String> {
+        self.monitor
+            .as_ref()
+            .expect("manager monitor is missing")
+            .preserve(PRESERVE_AFTER_RECOVERY);
         let stream = self
             .stream
             .as_mut()
@@ -218,10 +222,6 @@ impl SandboxManager {
         if committed != [protocol::COMMITTED] {
             return Err("sandbox manager sent an invalid ownership confirmation".to_string());
         }
-        self.monitor
-            .as_ref()
-            .expect("manager monitor is missing")
-            .preserve(PRESERVE_AFTER_RECOVERY);
         Ok(())
     }
 

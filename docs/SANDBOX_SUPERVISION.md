@@ -27,6 +27,7 @@ After ownership is committed, the owner writes one release byte.
 The hidden wrapper closes the channel and replaces itself with the configured relay or requested command in the same process identity.
 Configured sandbox code therefore cannot run before manager observation and ownership are committed.
 Abrupt owner loss before readiness or commitment closes the startup channel before configured code runs, but private-directory cleanup is not guaranteed.
+The owner preserves its backup directory guard whenever readiness or ownership confirmation is ambiguous.
 
 Darwin cannot resolve every later fork atomically.
 A descendant that becomes orphaned before the manager resolves its fork event remains outside the implemented guarantee.
