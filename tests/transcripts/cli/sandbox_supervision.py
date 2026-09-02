@@ -445,6 +445,42 @@ def test_relays_interrupt_then_retires_descendants(binary: Path) -> Transcript:
     ]
 
 
+def test_sandbox_cannot_retain_its_temporary_directory(binary: Path) -> Transcript:
+    # fmt: python
+    sandboxed_script = code(r"""
+        import os
+        from pathlib import Path
+
+        temporary_directory = Path(os.environ["TMPDIR"])
+        (temporary_directory / ".mcp-console-preserve").write_text("retain\n")
+        print(temporary_directory)
+        """)
+    arguments = ("sandbox", "--", "python", "-c", sandboxed_script)
+    result = subprocess.run(
+        [binary, *arguments],
+        capture_output=True,
+        text=True,
+        timeout=TIMEOUT,
+    )
+
+    temporary_directory = Path(result.stdout.strip())
+    assert result.returncode == 0, result
+    assert result.stderr == "", result.stderr
+    assert not temporary_directory.exists(), (
+        f"sandbox retained its host-owned temporary directory: {temporary_directory}"
+    )
+    return [
+        {
+            "command": _command(*arguments),
+            "stdout": "<sandbox temp>\n",
+            "transcript_normalization": {
+                "target": "stdout",
+                "sandbox_temporary_directory": "omitted",
+            },
+        }
+    ]
+
+
 def test_delivers_terminal_interrupt_once(binary: Path) -> Transcript:
     # fmt: python
     sandboxed_script = code(r"""

@@ -1,5 +1,5 @@
 use super::super::process::{ProcessIdentity, process_info, signal_process};
-use super::super::process_tracker::DescendantTracker;
+use super::super::process_tracker::{DescendantTracker, TrackerStopWakeup};
 use super::{protocol, stop_process_group, with_prior_error};
 use crate::sandbox::platform;
 use std::io::{Read, Write};
@@ -86,6 +86,18 @@ pub(super) fn run() -> Result<(), String> {
     };
     let group_backstop = Arc::new(GroupBackstop::new(false));
     let tracker_group_backstop = Arc::clone(&group_backstop);
+    let tracker_stop_wakeup = match tracker.stop_wakeup() {
+        Ok(wakeup) => wakeup,
+        Err(error) => {
+            return finish_startup_failure(
+                error,
+                root,
+                tracker,
+                temporary_directory,
+                cleanup_timeout,
+            );
+        }
+    };
     let tracker_thread = std::thread::spawn(move || {
         supervise_tracker(
             tracker,
@@ -100,6 +112,7 @@ pub(super) fn run() -> Result<(), String> {
             format!("failed to confirm sandbox manager ownership: {error}"),
             root,
             &stream,
+            tracker_stop_wakeup,
             tracker_thread,
             &group_backstop,
             temporary_directory,
@@ -107,6 +120,7 @@ pub(super) fn run() -> Result<(), String> {
     }
     let disposition = protocol::read_owner_disposition(&mut stream);
     if matches!(disposition, protocol::OwnerDisposition::RetirementStarted) {
+        drop(tracker_stop_wakeup);
         return finish_retirement(
             root,
             &mut stream,
@@ -127,15 +141,19 @@ pub(super) fn run() -> Result<(), String> {
         protocol::OwnerDisposition::RetirementStarted => unreachable!(),
         protocol::OwnerDisposition::Failed(error) => Some(error),
     };
-    if stop_root {
-        if let Err(group_error) = run_group_backstop(root, &group_backstop) {
-            error = Some(with_prior_error(error, group_error));
-        }
-        if let Err(signal_error) = signal_process(root, libc::SIGKILL) {
-            error = Some(with_prior_error(error, signal_error));
-        }
-    }
-    if let Err(tracker_error) = join_tracker(tracker_thread) {
+    let root_exit_expected = if stop_root {
+        request_root_stop(root, run_group_backstop(root, &group_backstop), &mut error)
+            .root_exit_expected
+    } else {
+        true
+    };
+    let tracker_result = if root_exit_expected {
+        drop(tracker_stop_wakeup);
+        join_tracker(tracker_thread)
+    } else {
+        stop_tracker(tracker_stop_wakeup, tracker_thread)
+    };
+    if let Err(tracker_error) = tracker_result {
         error = Some(with_prior_error(error, tracker_error));
     }
     if let Err(group_error) = run_group_backstop(root, &group_backstop) {
@@ -188,28 +206,28 @@ fn finish_retirement(
 }
 
 fn finish_startup_failure(
-    mut error: String,
+    error: String,
     root: ProcessIdentity,
     tracker: DescendantTracker,
     temporary_directory: platform::TemporaryDirectory,
     cleanup_timeout: Duration,
 ) -> Result<(), String> {
-    let mut cleanup_failed = false;
-    if let Err(group_error) = stop_process_group(root) {
-        error.push_str(&format!("; additionally, {group_error}"));
-        cleanup_failed = true;
-    }
-    if let Err(signal_error) = signal_process(root, libc::SIGKILL) {
-        error.push_str(&format!("; additionally, {signal_error}"));
-    }
-    if let Err(cleanup_error) = tracker.supervise(cleanup_timeout) {
-        error.push_str(&format!("; additionally, {cleanup_error}"));
+    let mut error = Some(error);
+    let stop = request_root_stop(root, stop_process_group(root), &mut error);
+    let mut cleanup_failed = stop.group_cleanup_failed || !stop.root_exit_expected;
+    if stop.root_exit_expected {
+        if let Err(cleanup_error) = tracker.supervise(cleanup_timeout) {
+            error = Some(with_prior_error(error, cleanup_error));
+            cleanup_failed = true;
+        }
+    } else if let Err(cleanup_error) = tracker.stop(cleanup_timeout) {
+        error = Some(with_prior_error(error, cleanup_error));
         cleanup_failed = true;
     }
     if cleanup_failed {
         temporary_directory.preserve();
     }
-    Err(error)
+    Err(error.expect("startup failure should retain its error"))
 }
 
 fn supervise_tracker(
@@ -239,35 +257,67 @@ fn supervise_tracker(
 }
 
 fn finish_committed_startup_failure(
-    mut error: String,
+    error: String,
     root: ProcessIdentity,
     control: &UnixStream,
+    tracker_stop_wakeup: TrackerStopWakeup,
     tracker_thread: std::thread::JoinHandle<Result<(), String>>,
     group_backstop: &GroupBackstop,
     temporary_directory: platform::TemporaryDirectory,
 ) -> Result<(), String> {
-    let mut cleanup_failed = false;
-    if let Err(group_error) = run_group_backstop(root, group_backstop) {
-        error = with_prior_error(Some(error), group_error);
-        cleanup_failed = true;
-    }
-    if let Err(signal_error) = signal_process(root, libc::SIGKILL) {
-        error = with_prior_error(Some(error), signal_error);
-    }
+    let mut error = Some(error);
+    let stop = request_root_stop(root, run_group_backstop(root, group_backstop), &mut error);
+    let mut cleanup_failed = stop.group_cleanup_failed || !stop.root_exit_expected;
     if let Err(control_error) = control.shutdown(Shutdown::Both) {
-        error = with_prior_error(
-            Some(error),
+        error = Some(with_prior_error(
+            error,
             format!("failed to close sandbox manager control: {control_error}"),
-        );
+        ));
     }
-    if let Err(cleanup_error) = join_tracker(tracker_thread) {
-        error = with_prior_error(Some(error), cleanup_error);
+    let tracker_result = if stop.root_exit_expected {
+        drop(tracker_stop_wakeup);
+        join_tracker(tracker_thread)
+    } else {
+        stop_tracker(tracker_stop_wakeup, tracker_thread)
+    };
+    if let Err(cleanup_error) = tracker_result {
+        error = Some(with_prior_error(error, cleanup_error));
         cleanup_failed = true;
     }
     if cleanup_failed {
         temporary_directory.preserve();
     }
-    Err(error)
+    Err(error.expect("committed startup failure should retain its error"))
+}
+
+struct RootStop {
+    root_exit_expected: bool,
+    group_cleanup_failed: bool,
+}
+
+fn request_root_stop(
+    root: ProcessIdentity,
+    group_result: Result<(), String>,
+    error: &mut Option<String>,
+) -> RootStop {
+    let group_cleanup_failed = match group_result {
+        Ok(()) => false,
+        Err(group_error) => {
+            *error = Some(with_prior_error(error.take(), group_error));
+            true
+        }
+    };
+    let root_signal_failed = match signal_process(root, libc::SIGKILL) {
+        Ok(_) => false,
+        Err(signal_error) => {
+            *error = Some(with_prior_error(error.take(), signal_error));
+            true
+        }
+    };
+    RootStop {
+        root_exit_expected: !root_signal_failed,
+        group_cleanup_failed,
+    }
 }
 
 fn run_group_backstop(root: ProcessIdentity, group_backstop: &GroupBackstop) -> Result<(), String> {
@@ -288,4 +338,12 @@ fn join_tracker(tracker_thread: std::thread::JoinHandle<Result<(), String>>) -> 
         .join()
         .map_err(|_| "sandbox manager process tracker failed".to_string())
         .and_then(|result| result)
+}
+
+fn stop_tracker(
+    tracker_stop_wakeup: TrackerStopWakeup,
+    tracker_thread: std::thread::JoinHandle<Result<(), String>>,
+) -> Result<(), String> {
+    tracker_stop_wakeup.wake()?;
+    join_tracker(tracker_thread)
 }
