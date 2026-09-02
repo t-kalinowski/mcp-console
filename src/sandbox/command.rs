@@ -2,7 +2,6 @@ use std::ffi::OsStr;
 use std::io::Write as _;
 use std::os::fd::{AsRawFd as _, RawFd};
 use std::os::unix::net::UnixStream;
-use std::os::unix::process::CommandExt as _;
 use std::process::{Child, Command, Stdio};
 
 use super::{TARGET_GATE_RELEASE, file_descriptors, platform, supervision};
@@ -46,7 +45,6 @@ use super::{TARGET_GATE_RELEASE, file_descriptors, platform, supervision};
 /// let mut command =
 ///     SandboxedCommand::new(OsStr::new("python")).expect("sandbox should be configured");
 /// command
-///     .new_process_group()
 ///     .args(["-c", script])
 ///     .stdin(Stdio::piped())
 ///     .stdout(Stdio::piped())
@@ -77,7 +75,6 @@ pub(crate) struct SandboxedCommand {
     pub(super) command: Command,
     pub(super) temporary_directory: platform::TemporaryDirectory,
     pub(super) startup_gate: Option<StartupGate>,
-    pub(super) separate_process_group: bool,
 }
 
 pub(super) struct StartupGate {
@@ -85,21 +82,18 @@ pub(super) struct StartupGate {
     owner: UnixStream,
 }
 
-/// A direct sandboxed child that retains its observed process lifetime, a
-/// committed crash manager, and its private temporary directory.
+/// A direct sandboxed child and its host-owned lifetime manager.
 ///
-/// Retain this owner until its process lifetime is explicitly retired.
-/// Dropping it does not terminate the child and removes the private directory.
-/// Piped streams can be taken and moved to independent I/O tasks before
-/// retirement.
+/// Retain this owner until retirement, then call `force_stop` to retire the
+/// sandbox root and observed descendants and reap its direct process. Dropping
+/// this owner runs the same path on a best-effort basis, keeping sandbox-lifetime
+/// cleanup before direct-process reaping. Piped streams can be taken and moved
+/// to independent I/O tasks before retirement.
 #[must_use = "retain the sandboxed child until it is explicitly retired"]
 pub(crate) struct SandboxedChild {
     pub(super) child: Child,
-    pub(super) observed_lifetime: Option<supervision::ObservedLifetime>,
-    pub(super) crash_manager: Option<supervision::SandboxManager>,
+    pub(super) manager: Option<supervision::SandboxManager>,
     pub(super) retirement: SandboxedChildRetirement,
-    pub(super) separate_process_group: bool,
-    pub(super) temporary_directory: Option<platform::TemporaryDirectory>,
 }
 
 pub(super) enum SandboxedChildRetirement {
@@ -163,7 +157,6 @@ impl SandboxedCommand {
             command,
             temporary_directory,
             startup_gate: None,
-            separate_process_group: false,
         };
         sandboxed
             .env("TMPDIR", temporary_directory_path)
@@ -214,13 +207,6 @@ impl SandboxedCommand {
 
     pub(crate) fn stderr(&mut self, configuration: Stdio) -> &mut Self {
         self.command.stderr(configuration);
-        self
-    }
-
-    /// Isolates a background sandbox command for bounded forced termination.
-    pub(crate) fn new_process_group(&mut self) -> &mut Self {
-        self.command.process_group(0);
-        self.separate_process_group = true;
         self
     }
 

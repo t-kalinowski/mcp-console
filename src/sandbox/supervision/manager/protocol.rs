@@ -1,20 +1,29 @@
 use std::ffi::OsString;
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 const INITIALIZATION_MAGIC: &[u8; 4] = b"MCG4";
 const MAXIMUM_PATH_BYTES: usize = 16 * 1024;
-const RETIREMENT_STARTED: u8 = 2;
-const REMOVE_TEMPORARY_DIRECTORY: u8 = 3;
+pub(super) const READY: u8 = 1;
+pub(super) const COMMIT: u8 = 2;
+pub(super) const FINISH: u8 = 3;
 const PRESERVE_TEMPORARY_DIRECTORY: u8 = 4;
 const CLEANUP_COMPLETE: u8 = 5;
+pub(super) const STOP: u8 = 6;
+pub(super) const COMMITTED: u8 = 7;
+const RETIREMENT_STARTED: u8 = 8;
+const REMOVE_TEMPORARY_DIRECTORY: u8 = 9;
 
-pub(super) enum RetirementCommand {
-    Started,
+pub(super) enum OwnerDisposition {
+    Finish,
+    Stop,
+    RetirementStarted,
     RemoveTemporaryDirectory,
     PreserveTemporaryDirectory,
+    Closed,
+    Failed(String),
 }
 
 pub(super) enum CleanupAcknowledgement {
@@ -93,6 +102,37 @@ pub(super) fn read(stream: &mut impl Read) -> Result<Initialization, String> {
     })
 }
 
+pub(super) fn read_owner_disposition(stream: &mut impl Read) -> OwnerDisposition {
+    let mut disposition = [0];
+    loop {
+        match stream.read(&mut disposition) {
+            Ok(0) => return OwnerDisposition::Closed,
+            Ok(_) if disposition == [FINISH] => return OwnerDisposition::Finish,
+            Ok(_) if disposition == [STOP] => return OwnerDisposition::Stop,
+            Ok(_) if disposition == [RETIREMENT_STARTED] => {
+                return OwnerDisposition::RetirementStarted;
+            }
+            Ok(_) if disposition == [REMOVE_TEMPORARY_DIRECTORY] => {
+                return OwnerDisposition::RemoveTemporaryDirectory;
+            }
+            Ok(_) if disposition == [PRESERVE_TEMPORARY_DIRECTORY] => {
+                return OwnerDisposition::PreserveTemporaryDirectory;
+            }
+            Ok(_) => {
+                return OwnerDisposition::Failed(
+                    "sandbox manager received an invalid finish request".to_string(),
+                );
+            }
+            Err(error) if error.kind() == ErrorKind::Interrupted => {}
+            Err(error) => {
+                return OwnerDisposition::Failed(format!(
+                    "sandbox manager control failed: {error}"
+                ));
+            }
+        }
+    }
+}
+
 pub(super) fn write_retirement_started(stream: &mut impl Write) -> Result<(), String> {
     write_control(stream, RETIREMENT_STARTED)
 }
@@ -112,14 +152,18 @@ pub(super) fn write_retirement_disposition(
 }
 
 pub(super) fn write_cleanup_complete(stream: &mut impl Write) -> Result<(), String> {
-    write_control(stream, CLEANUP_COMPLETE)
+    stream
+        .write_all(&[CLEANUP_COMPLETE])
+        .map_err(|error| format!("failed to report sandbox manager cleanup: {error}"))
 }
 
 pub(super) fn read_cleanup_complete(
     stream: &mut impl Read,
 ) -> Result<CleanupAcknowledgement, String> {
-    match read_control(stream) {
-        Ok(Some(CLEANUP_COMPLETE)) => Ok(CleanupAcknowledgement::Complete),
+    let mut acknowledgement = [0];
+    match stream.read_exact(&mut acknowledgement) {
+        Ok(()) if acknowledgement == [CLEANUP_COMPLETE] => Ok(CleanupAcknowledgement::Complete),
+        Ok(()) => Err("sandbox manager sent an invalid cleanup response".to_string()),
         Err(error)
             if matches!(
                 error.kind(),
@@ -128,23 +172,9 @@ pub(super) fn read_cleanup_complete(
         {
             Ok(CleanupAcknowledgement::TimedOut)
         }
-        Ok(Some(_)) => Err("sandbox manager sent an invalid cleanup response".to_string()),
-        Ok(None) => Err("sandbox manager exited before cleanup completed".to_string()),
-        Err(error) => Err(control_error(error)),
-    }
-}
-
-pub(super) fn read_retirement_command(
-    stream: &mut impl Read,
-) -> Result<Option<RetirementCommand>, String> {
-    match read_control(stream).map_err(control_error)? {
-        Some(RETIREMENT_STARTED) => Ok(Some(RetirementCommand::Started)),
-        Some(REMOVE_TEMPORARY_DIRECTORY) => Ok(Some(RetirementCommand::RemoveTemporaryDirectory)),
-        Some(PRESERVE_TEMPORARY_DIRECTORY) => {
-            Ok(Some(RetirementCommand::PreserveTemporaryDirectory))
-        }
-        Some(_) => Err("sandbox manager received an invalid retirement command".to_string()),
-        None => Ok(None),
+        Err(error) => Err(format!(
+            "sandbox manager exited before cleanup completed: {error}"
+        )),
     }
 }
 
@@ -154,24 +184,7 @@ fn write_control(stream: &mut impl Write, value: u8) -> Result<(), String> {
         .map_err(|error| format!("failed to control sandbox manager retirement: {error}"))
 }
 
-fn read_control(stream: &mut impl Read) -> std::io::Result<Option<u8>> {
-    let mut value = [0];
-    loop {
-        match stream.read(&mut value) {
-            Ok(0) => return Ok(None),
-            Ok(1) => return Ok(Some(value[0])),
-            Ok(_) => unreachable!("one-byte sandbox manager read returned excess data"),
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(error) => return Err(error),
-        }
-    }
-}
-
-fn control_error(error: std::io::Error) -> String {
-    format!("failed to control sandbox manager retirement: {error}")
-}
-
-fn cleanup_timeout_millis(timeout: Duration) -> Result<u64, String> {
+pub(super) fn cleanup_timeout_millis(timeout: Duration) -> Result<u64, String> {
     timeout
         .as_millis()
         .checked_add(if timeout.subsec_nanos().is_multiple_of(1_000_000) {

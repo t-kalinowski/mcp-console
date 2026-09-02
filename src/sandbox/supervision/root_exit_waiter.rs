@@ -2,8 +2,9 @@ use super::job_control::SignalRelay;
 use super::process::{ProcessIdentity, process_identity, process_info};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::sync::Arc;
+use std::time::Duration;
 
-const EVENT_CAPACITY: usize = 32;
+const TRACKER_EVENT_CAPACITY: usize = 32;
 const OWNER_WAKE_IDENT: libc::uintptr_t = 1;
 
 pub(super) struct RootExitWaiter {
@@ -22,6 +23,7 @@ pub(super) enum RootWait {
     Events,
     RootExited,
     Wakeup,
+    TimedOut,
 }
 
 impl RootExitWakeup {
@@ -105,13 +107,23 @@ impl RootExitWaiter {
         }
     }
 
-    pub(super) fn wait_for_events(&mut self) -> Result<RootWait, String> {
+    pub(super) fn wait_for_events(
+        &mut self,
+        timeout: Option<Duration>,
+    ) -> Result<RootWait, String> {
         if self.root_exited {
             return Ok(RootWait::RootExited);
         }
 
-        let mut events: [libc::kevent; EVENT_CAPACITY] =
+        let mut events: [libc::kevent; TRACKER_EVENT_CAPACITY] =
             unsafe { std::mem::MaybeUninit::zeroed().assume_init() };
+        let timeout = timeout.map(|duration| libc::timespec {
+            tv_sec: duration.as_secs() as libc::time_t,
+            tv_nsec: duration.subsec_nanos() as libc::c_long,
+        });
+        let timeout = timeout
+            .as_ref()
+            .map_or(std::ptr::null(), |timeout| timeout as *const _);
 
         let event_count = unsafe {
             libc::kevent(
@@ -120,7 +132,7 @@ impl RootExitWaiter {
                 0,
                 events.as_mut_ptr(),
                 events.len() as libc::c_int,
-                std::ptr::null(),
+                timeout,
             )
         };
         if event_count < 0 {
@@ -131,7 +143,7 @@ impl RootExitWaiter {
             return Err(format!("sandbox root observer failed: {error}"));
         }
         if event_count == 0 {
-            return Ok(RootWait::Events);
+            return Ok(RootWait::TimedOut);
         }
 
         let mut owner_wakeup = false;

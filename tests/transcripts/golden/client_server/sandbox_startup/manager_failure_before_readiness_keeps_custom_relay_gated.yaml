@@ -13,7 +13,7 @@ result:
 startup_gate_failure:
   manager: killed before readiness
   relay_root: retired without executing the custom relay
-  temporary_directory: removed
+  temporary_directory: preserved
 ---
 send:
   r: echo echo

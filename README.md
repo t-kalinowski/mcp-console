@@ -171,20 +171,23 @@ mcp-console --version
 ```
 
 `mcp-console serve` communicates with its MCP client over standard input and output.
-Normal restart, automatic worker replacement, and orderly server shutdown retire descendants observed from each worker generation, including descendants that entered another process group or session.
-On macOS, each worker generation also commits an independent host manager that retires the descendants it observed and attempts to remove the private temporary directory after an abrupt server exit outside an in-progress normal retirement.
-The built-in or configured relay starts only after the server observer is attached and that manager has adopted the private temporary directory and reported readiness.
-A later descendant that becomes orphaned before the manager resolves its fork event remains outside crash cleanup.
+On macOS, each worker generation commits one host-side manager that owns observed-descendant cleanup and the private temporary directory.
+The built-in or configured relay starts only after that manager has adopted the directory, begun observation, and committed ownership.
+Normal restart, automatic worker replacement, orderly server shutdown, and abrupt server exit retire descendants the manager observed, including descendants that entered another process group or session.
+If the manager fails while the server retains a live, waitable relay root, the server reconstructs that root's current ancestry and performs bounded fallback cleanup.
+That fallback preserves the private directory after ownership commitment because a detached descendant known only to the failed manager may remain live.
+A later descendant that becomes orphaned before the manager resolves its fork event, or that detached before fallback reconstruction, remains outside that cleanup guarantee.
 The standalone `sandbox` command is available for development.
-Its launcher owns normal retirement and preserves the direct command's exit status while retiring descendants observed from that root, including descendants that entered another process group or session.
-On macOS, it also commits an independent manager after the launcher observer attaches.
-The requested command starts only after the manager has adopted the private temporary directory and reported readiness.
-After readiness, abrupt launcher loss retires the descendants the manager observed and removes the directory after successful cleanup; unexpected manager loss wakes the still-live launcher's root waiter to start local retirement, even if the manager monitor cannot terminate the root itself.
-A descendant that later becomes orphaned before either observer sees its fork remains outside that observer's guarantee, and an abrupt launcher exit before manager readiness remains outside crash cleanup.
+Its requested command remains blocked on a private startup gate until the manager has adopted the private temporary directory, begun observation, and committed ownership.
+The launcher preserves the direct command's exit status while the manager retires observed descendants.
+Abrupt launcher loss after commitment retires that managed lifetime; owner loss after normal retirement begins preserves the directory when its final disposition is uncertain.
+Unexpected manager loss triggers bounded launcher-side recovery while the direct root remains live and waitable.
+The launcher likewise preserves the private directory after committed-manager recovery.
 The command inherits standard input, output, and error while closing other inherited file descriptors before the target runs.
 The launcher places the target in a dedicated process group and relays `SIGHUP`, `SIGINT`, `SIGQUIT`, and `SIGTERM` addressed to the launcher into that group.
-For a direct foreground invocation whose process group has no peer, it also transfers controlling-terminal ownership to the target and restores ownership after cleanup.
+For a direct foreground invocation whose process group has no peer, it also transfers controlling-terminal ownership to the target and restores ownership after the direct root exits.
 If the launcher shares its foreground process group with a pipeline peer, it leaves terminal ownership with that group.
+After the direct root exits or startup cleanup stops it, the launcher drains forwarded signals already pending at that boundary and restores its inherited signal mask before returning.
 Stopped/continued job state and general shell-pipeline job-control semantics remain unsupported; `Ctrl-Z` followed by `fg` requires a separate terminal state machine.
 Use the MCP server for the supported worker-generation lifecycle.
 
@@ -206,7 +209,7 @@ scripts/test --update BOUNDARY/SUITE[::CASE]
 The [documentation index](https://github.com/t-kalinowski/mcp-console/blob/main/docs/README.md) maps current documents by audience.
 
 - [Implemented architecture](https://github.com/t-kalinowski/mcp-console/blob/main/docs/ARCHITECTURE.md) explains current process boundaries, ownership, lifecycle, recording, and artifacts.
-- [macOS sandbox supervision](https://github.com/t-kalinowski/mcp-console/blob/main/docs/SANDBOX_SUPERVISION.md) explains standalone terminal and signal ownership, observed-descendant retirement, independent manager cleanup, and post-spawn limitations.
+- [macOS sandbox supervision](https://github.com/t-kalinowski/mcp-console/blob/main/docs/SANDBOX_SUPERVISION.md) explains standalone terminal and signal ownership, manager-owned observed-descendant retirement, fallback cleanup, and remaining tracking limitations.
 - [Built-in runtime](https://github.com/t-kalinowski/mcp-console/blob/main/docs/BUILTIN_RUNTIME.md) describes user-visible R, Python, SQL, input, output, and graphics behavior.
 - [Requirements and environments](https://github.com/t-kalinowski/mcp-console/blob/main/docs/REQUIREMENTS.md) describes dependency preparation and its trust boundary.
 - [Worker protocol](https://github.com/t-kalinowski/mcp-console/blob/main/docs/WORKER_PROTOCOL.md) and [relay protocol](https://github.com/t-kalinowski/mcp-console/blob/main/docs/RELAY_PROTOCOL.md) define the exact transport contracts.

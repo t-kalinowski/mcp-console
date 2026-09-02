@@ -5,86 +5,84 @@
 This document describes host-side lifetime ownership for sandboxed worker generations and the standalone `mcp-console sandbox` command.
 The broader process and responsibility model remains in [implemented architecture](ARCHITECTURE.md).
 
-## Normal generation ownership
+## Lifetime ownership
 
-The server asks `sandbox-exec` to run a hidden wrapper that blocks on a private inherited release channel before executing either the built-in or a configured custom relay.
-The server retains that direct root and starts a dedicated observer after spawn.
-The observer owns a Darwin `kqueue`, records descendants by PID and process start time, and consumes fork and exit events for the lifetime of the generation.
+Each sandbox lifetime has one host-side manager outside Seatbelt and one direct sandbox root in its own process group.
+The direct root initially runs a hidden wrapper blocked on a private inherited release channel before executing the built-in relay, a configured relay, or the standalone command.
+The manager records the root and every descendant identity it observes by PID and process start time.
 Once observed, a descendant remains a cleanup target after changing process group or session.
+The manager also adopts the private temporary-directory guard for the lifetime.
 
-While the root is still blocked, the server starts the crash manager and waits for its independent observer and temporary-directory adoption to report readiness.
-The server then sends one release byte; the wrapper closes the channel and replaces itself with the configured relay in the same process identity.
-Relay and worker code therefore cannot run before both host observers are attached.
+The host owner retains the manager process and direct sandbox root as waitable children.
+After the manager reports readiness, the owner starts monitoring manager exit and transfers its backup directory guard to that monitor before entering the ownership-commit exchange.
+The relay remains a transport and direct-worker owner, including local same-group cleanup; it does not own observed-descendant cleanup across process groups or sessions, or the private directory.
 
-At restart, replacement, failure, or shutdown, the server wakes its observer through an `EVFILT_USER` event.
-Retirement signals every observed identity, closes the relay's original process group as a race backstop when the caller requested one, and reaps the direct relay last.
-Any cleanup error preserves the private temporary directory because an unobserved process may still use it.
+## Startup
 
-Darwin still cannot resolve every later fork atomically.
-A descendant that becomes orphaned before a corresponding fork event is observed remains outside the implemented guarantee.
+The host starts the manager before the sandbox root, then sends the owner PID, root PID, cleanup timeout, and private-directory path over a private inherited Unix socket.
+The manager validates the direct-child relationship and exact root identity, attaches its descendant tracker, adopts the directory guard, and reports readiness.
+The host installs manager-failure recovery while the direct root remains live and waitable, then commits primary cleanup ownership and waits for confirmation.
 
-## Standalone normal ownership
+After ownership is committed, the owner writes one release byte.
+The hidden wrapper closes the channel and replaces itself with the configured relay or requested command in the same process identity.
+Configured sandbox code therefore cannot run before manager observation and ownership are committed.
+Abrupt owner loss before readiness or commitment closes the startup channel before configured code runs, but private-directory cleanup is not guaranteed.
+The owner preserves its backup directory guard whenever readiness or ownership confirmation is ambiguous.
 
-The standalone launcher asks `sandbox-exec` to run the same hidden wrapper, blocked on a separate private inherited release channel before executing the requested command.
-While that same direct root is blocked, the launcher attaches a background descendant observer and a blocking root waiter, starts the manager, and waits for it to adopt the private temporary directory and report readiness.
-The launcher then sends one release byte; the wrapper closes the channel and replaces itself with the requested command.
-The requested command runs in a dedicated process group.
-The root waiter blocks in `kevent()` for direct-root exit, signals addressed to the launcher, and explicit observer or manager-monitor failure wakeups.
+Darwin cannot resolve every later fork atomically.
+A descendant that becomes orphaned before the manager resolves its fork event remains outside the implemented guarantee.
+
+The standalone requested command runs in a dedicated process group.
+Its root waiter blocks in `kevent()` for direct-root exit and signals addressed to the launcher.
 The launcher consumes pending `SIGHUP`, `SIGINT`, `SIGQUIT`, and `SIGTERM` and relays them to the target group.
 When the launcher exclusively owns its foreground process group, it transfers controlling-terminal ownership to the target group; when a pipeline peer shares that group, it leaves terminal ownership unchanged.
-After the direct root exits or owner-side supervision fails, the launcher marks the start of normal retirement before the first termination pass.
-The launcher retires every identity its tracker observed, waits for the manager's independent cleanup acknowledgement, reaps the direct root, and commits the final remove-or-preserve directory disposition.
-The direct command's exit status remains the standalone command's exit status when cleanup succeeds.
-
-The launcher remains the authority for normal cleanup.
-The manager does not replace its tracker, decide the command's exit status, own terminal state, or relay signals.
+The manager owns descendant cleanup and the private directory; the launcher owns the direct command's exit status, terminal state, and signal relay.
 Stopped/continued job state and general shell-pipeline job control remain unsupported.
 
-## Committed crash ownership
+## Retirement
 
-After the normal owner observer has attached, the server or standalone launcher starts one hidden `sandbox-manager` process for that sandbox lifetime.
-Its initialization travels on manager fd 0; all other nonstandard descriptors are closed at exec.
-Before it reports readiness, the manager independently:
+Normal restart, automatic replacement, orderly shutdown, relay failure, and abrupt owner exit all retire the same manager-owned lifetime.
+The manager closes the original root process group as a race backstop and retires every observed identity within the configured timeout.
+During owner-controlled retirement, the host retains the waitable root through cleanup and reaps it last.
 
-- validates the sandbox root identity and its direct-child relationship to the owner;
-- attaches its own PID-and-start-time descendant tracker;
-- registers an event-driven watch for owner exit; and
-- adopts the private temporary-directory path after validating its owner prefix and canonical temporary-directory parent.
+For normal standalone root exit, the launcher marks retirement on the manager control stream.
+The manager finishes observed cleanup, reports completion, and waits for the launcher's final remove-or-preserve directory disposition.
+The launcher preserves the directory if that acknowledgement times out, while still returning the direct command's exit status after process cleanup succeeds.
+If the launcher exits after marking retirement but before sending the final disposition, the manager conservatively preserves the directory.
+Control closure before the marker is an abrupt owner exit: the manager stops the lifetime and removes the directory after successful cleanup.
 
-Readiness commits crash-independent ownership.
-If the owner then exits without running normal shutdown, the manager's owner watch wakes, retires its observed process tree, and attempts to remove the private temporary directory after successful cleanup.
-It preserves the directory on a cleanup error because an unobserved process may still use it.
+The manager preserves the private directory on any cleanup error because a surviving process may still use it.
 With no surviving owner to receive a filesystem error, directory removal itself is best effort and can leave the directory behind.
-The manager signals only recorded PID-and-start-time identities.
-It does not signal the root's raw process-group ID after owner loss because no waitable owner child remains to pin that group against reuse.
-
-The manager cannot recover a later descendant that becomes orphaned before its tracker observes the process, even if it previously reported readiness.
-The owner's observer can still own such a process during normal retirement, but that local ownership disappears with an abrupt owner exit.
-An uncatchable owner failure before manager readiness can also preempt manager commitment.
-In both worker and standalone paths, closing the private startup channel prevents configured sandbox code from running before commitment; a pre-readiness crash can still leave the owner-created temporary directory behind.
-
-When the root exits while the owner remains live, the manager retires its observed descendants without removing the private directory.
-It keeps crash ownership until the owner sends a final directory disposition.
-The owner marks the start of normal retirement before local cleanup, waits for the manager to report that its observed identities are retired, and reaps the direct root before committing the final directory disposition.
-It removes the directory after success or preserves it after an error.
-If the owner exits after marking retirement but before the final disposition, the manager conservatively preserves the directory.
-If manager control closes without that marker, the manager treats the loss as an abrupt owner exit and attempts removal after cleanup.
 
 ## Manager failure
 
-Each normal owner retains a blocking monitor for the manager process.
-An unexpected manager signal is treated as a sandbox-lifetime failure: every monitor signals the exact root identity.
-For worker generations, the server observer remains alive and completes retirement of the observed tree before the normal server path closes the still-pinned process group as its race backstop.
-For a standalone command, the monitor also wakes the root waiter so the launcher starts retirement even if the root signal fails; otherwise the waiter sees root exit and the launcher returns the root's signal-derived exit status after cleanup.
-In both paths, successful local recovery removes the owner-held private temporary directory.
+Each host owner retains a blocking monitor for the manager process.
+If the manager exits unsuccessfully while the owner still retains a live, waitable root, the monitor reconstructs the root's current process tree and performs bounded cleanup before the owner continues.
+The fallback revalidates process identities immediately before signaling and closes the still-pinned process group as a race backstop.
+Once ownership is committed for target release, it preserves the private directory even when fallback cleanup succeeds because a detached descendant observed only by the failed manager may remain live.
+If manager completion times out, the owner requests forced exit and allows one more bounded recovery interval.
+If the manager still does not report completion, the owner disables fallback recovery before releasing the root's PID pin and returns an error without joining the live monitor thread.
+If bounded fallback recovery has already started, the owner retains the pin until it finishes instead.
+That monitor still reaps the manager if it exits later and retains and preserves the backup directory guard.
 
-A manager that survives its owner is self-contained.
-It uses no owner thread, relay protocol message, or sandboxed code to complete cleanup.
-After its observed lifetime retires, it remains available until the owner completes the normal disposition handoff or control closes with the owner.
+This fallback can recover only descendants still reachable from the root's current ancestry.
+It cannot reconstruct a descendant that detached before the manager failed.
+For a standalone command, successful fallback preserves the root's signal-derived exit status; a fallback error wakes the launcher with an error and leaves the directory in place.
+
+## Standalone job control
+
+The standalone launcher gives the requested command its own process group.
+When the launcher's foreground process group has no peer, it transfers foreground-terminal ownership before exec so terminal-generated signals reach the command group directly.
+When a pipeline peer shares the launcher's foreground group, the launcher leaves terminal ownership unchanged.
+`SIGHUP`, `SIGINT`, `SIGQUIT`, and `SIGTERM` addressed to the launcher are blocked, consumed synchronously, and relayed once to that group.
+After root exit, the launcher marks normal retirement, restores its own foreground group when it transferred ownership, drains forwarded signals already pending at that boundary, and restores its inherited signal mask before manager cleanup.
+If startup or recovery cleanup stops the root, the launcher drains pending forwarded signals before restoring the mask and returning the error.
+A signal received after that final drain can then follow its inherited disposition; if that terminates the launcher, the committed manager completes lifetime cleanup.
 
 ## Scope
 
 This ownership applies to `SandboxedCommand::spawn`, which is used for built-in and custom worker relay generations, and to `SandboxedCommand::status`, which implements `mcp-console sandbox`.
-The worker path retains its server-owned process-group race backstop and gates the relay before either relay implementation runs.
+The worker path retains its manager-owned process-group race backstop, with owner fallback after manager failure, and gates the relay before either relay implementation runs.
 The standalone path retains inherited standard streams, uses a dedicated target process group, and supplies the direct-foreground terminal and signal behavior above.
 It does not support `Ctrl-Z` followed by `fg` or general pipeline job-control semantics.
+Linux and Windows are not supported.

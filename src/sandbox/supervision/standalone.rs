@@ -1,24 +1,22 @@
 use super::job_control::{ForegroundTerminal, SignalRelay};
+use super::manager::{CleanupPreparation, SandboxManager};
 use super::root_exit_waiter::{RootExitWaiter, RootWait};
-use super::{
-    CleanupPreparation, ObservedLifetime, SandboxManager, additional_error, preserve,
-    stop_direct_child,
-};
-use crate::sandbox::{
-    CRASH_MANAGER_CLEANUP_TIMEOUT, TARGET_GATE_RELEASE, file_descriptors, platform,
-};
+use crate::sandbox::{TARGET_GATE_RELEASE, file_descriptors, platform};
 use std::io::{ErrorKind, Write as _};
 use std::os::fd::AsRawFd as _;
 use std::os::unix::net::UnixStream;
-use std::process::{Child, Command, ExitCode};
+use std::process::{Child, Command, ExitCode, ExitStatus};
 use std::time::Duration;
 
-pub(super) fn status(
+const ROOT_STOP_TIMEOUT: Duration = Duration::from_secs(1);
+
+pub(in crate::sandbox) fn status(
     mut sandbox_command: Command,
     temporary_directory: platform::TemporaryDirectory,
     target_gate: UnixStream,
     mut launcher_gate: UnixStream,
 ) -> Result<ExitCode, String> {
+    let mut manager = SandboxManager::spawn(Duration::from_secs(5))?;
     let signal_relay = SignalRelay::install()?;
     let mut foreground_terminal = ForegroundTerminal::detect()?;
     signal_relay.configure_child(&mut sandbox_command, foreground_terminal.descriptor());
@@ -37,167 +35,352 @@ pub(super) fn status(
     let mut root_waiter = match RootExitWaiter::start(child.id() as libc::pid_t, &signal_relay) {
         Ok(root_waiter) => root_waiter,
         Err(error) => {
-            let mut error = stop_direct_child(&mut child, error);
+            let mut error = match kill_root(&mut child) {
+                Ok(_) => error,
+                Err(kill_error) => additional_error(error, kill_error),
+            };
             if let Err(terminal_error) = foreground_terminal.restore() {
                 error = additional_error(error, terminal_error);
             }
-            preserve(temporary_directory);
-            return Err(error);
-        }
-    };
-    let observed_lifetime =
-        match ObservedLifetime::start_for_standalone(child.id(), root_waiter.wakeup()) {
-            Ok(observer) => observer,
-            Err(error) => {
-                let mut error = stop_direct_child(&mut child, error);
-                if let Err(terminal_error) = foreground_terminal.restore() {
-                    error = additional_error(error, terminal_error);
-                }
-                preserve(temporary_directory);
-                return Err(error);
-            }
-        };
-    let mut manager = match SandboxManager::start_for_standalone(
-        child.id(),
-        temporary_directory.path(),
-        CRASH_MANAGER_CLEANUP_TIMEOUT,
-        root_waiter.wakeup(),
-    ) {
-        Ok(manager) => manager,
-        Err(error) => {
-            let mut error =
-                retire_after_manager_start_failure(observed_lifetime, &mut child, error);
-            if let Err(terminal_error) = foreground_terminal.restore() {
-                error = additional_error(error, terminal_error);
+            drop(manager);
+            if let Err(signal_error) = signal_relay.drain_pending_and_restore() {
+                error = additional_error(error, signal_error);
             }
             preserve(temporary_directory);
             return Err(error);
         }
     };
 
-    // A terminal signal can end the sole gated reader while the manager starts.
-    // Continue normal retirement so its waitable root status remains authoritative.
-    if let Err(write_error) = launcher_gate.write_all(&[TARGET_GATE_RELEASE])
-        && write_error.kind() != ErrorKind::BrokenPipe
-    {
-        drop(launcher_gate);
-        let mut error = format!("failed to release sandbox target startup gate: {write_error}");
-        let _ = manager.begin_retirement();
-        if let Err(retirement_error) = observed_lifetime.stop() {
-            error = additional_error(error, retirement_error);
-        }
-        error = stop_direct_child(&mut child, error);
+    if let Err(error) = manager.observe(child.id(), temporary_directory.path()) {
+        preserve(temporary_directory);
+        let root_result = kill_root(&mut child);
+        let mut error = match root_result {
+            Ok(_) => error,
+            Err(kill_error) => additional_error(error, kill_error),
+        };
         if let Err(terminal_error) = foreground_terminal.restore() {
             error = additional_error(error, terminal_error);
         }
-        let _ = manager.prepare_finish();
-        if let Err(manager_error) = manager.finish(true) {
+        if let Err(manager_error) = manager.finish() {
             error = additional_error(error, manager_error);
         }
-        preserve(temporary_directory);
+        if let Err(signal_error) = signal_relay.drain_pending_and_restore() {
+            error = additional_error(error, signal_error);
+        }
+        return Err(error);
+    }
+
+    manager.monitor_for_standalone(child.id(), temporary_directory, root_waiter.wakeup());
+    if let Err(mut error) = manager.commit() {
+        // A failed acknowledgement is ambiguous: the manager may already have
+        // accepted ownership. Ask it to stop the lifetime before reaping the
+        // root, and use process-group cleanup only if that request fails.
+        match manager.stop() {
+            Ok(()) => {
+                if let Err(wait_error) = child.wait() {
+                    error = additional_error(
+                        error,
+                        format!(
+                            "failed to wait for terminated {}: {wait_error}",
+                            platform::SANDBOX_EXEC
+                        ),
+                    );
+                }
+            }
+            Err(mut stop_error) => {
+                if let Err(kill_error) = kill_root(&mut child) {
+                    stop_error = additional_error(stop_error, kill_error);
+                }
+                error = additional_error(error, stop_error);
+            }
+        }
+        if let Err(owner_error) = restore_launcher_state(&mut foreground_terminal, signal_relay) {
+            error = additional_error(error, owner_error);
+        }
+        return Err(error);
+    }
+
+    if let Err(write_error) = launcher_gate.write_all(&[TARGET_GATE_RELEASE])
+        && write_error.kind() != ErrorKind::BrokenPipe
+    {
+        let mut error = format!("failed to release sandbox target startup gate: {write_error}");
+        if let Err(stop_error) = stop_managed_root(&mut child, manager) {
+            error = additional_error(error, stop_error);
+        }
+        if let Err(owner_error) = restore_launcher_state(&mut foreground_terminal, signal_relay) {
+            error = additional_error(error, owner_error);
+        }
         return Err(error);
     }
     drop(launcher_gate);
 
-    let wait_error = wait_for_root_exit(&child, &signal_relay, &mut root_waiter).err();
-    // Keep the exited root waitable until host-side sandbox-lifetime cleanup has
-    // completed. Root exit, launcher signals, and owner-side supervision failure
-    // all wake the same blocking wait.
-    drop(root_waiter);
-    let _ = manager.begin_retirement();
-
-    let retirement_error = observed_lifetime.stop().err();
-    let terminal_error = foreground_terminal.restore().err();
-    let manager_preparation = manager.prepare_finish();
-
-    let mut error = wait_error;
-    if let Some(retirement_error) = retirement_error {
-        error = Some(match error {
-            Some(error) => additional_error(error, retirement_error),
-            None => retirement_error,
-        });
-    }
-    if let Some(terminal_error) = terminal_error {
-        error = Some(match error {
-            Some(error) => additional_error(error, terminal_error),
-            None => terminal_error,
-        });
-    }
-
-    let status = if let Some(cleanup_error) = error.take() {
-        error = Some(stop_direct_child(&mut child, cleanup_error));
-        None
-    } else {
-        match child.wait() {
-            Ok(status) => Some(status),
-            Err(wait_error) => {
-                error = Some(format!(
-                    "failed to wait for `{}`: {wait_error}",
-                    platform::SANDBOX_EXEC
-                ));
-                None
+    let root_wait = match wait_for_root_exit(&child, &signal_relay, &mut root_waiter) {
+        Ok(root_wait) => root_wait,
+        Err(mut error) => {
+            if let Err(stop_error) = stop_managed_root(&mut child, manager) {
+                error = additional_error(error, stop_error);
             }
+            if let Err(owner_error) = restore_launcher_state(&mut foreground_terminal, signal_relay)
+            {
+                error = additional_error(error, owner_error);
+            }
+            return Err(error);
         }
     };
+    // Keep the exited root waitable until host-side sandbox-lifetime cleanup has
+    // completed. Root exit, launcher signals, and manager-monitor completion all
+    // wake the same blocking wait.
+    drop(root_waiter);
+    if root_wait == RootCompletion::ManagerFinished {
+        return finish_after_manager_exit(
+            &mut child,
+            manager,
+            &mut foreground_terminal,
+            signal_relay,
+        );
+    }
+    let _ = manager.begin_retirement();
+    let owner_result = restore_launcher_state(&mut foreground_terminal, signal_relay);
+    let cleanup_preparation = manager.prepare_finish();
+    let manager_result =
+        manager.finish_retirement(cleanup_preparation == CleanupPreparation::TimedOut);
 
-    let preserve_manager_directory =
-        error.is_some() || manager_preparation != CleanupPreparation::Complete;
-    if let Err(manager_error) = manager.finish(preserve_manager_directory) {
-        error = Some(match error {
-            Some(error) => additional_error(error, manager_error),
-            None => manager_error,
-        });
+    let status = match child.wait() {
+        Ok(status) => status,
+        Err(wait_error) => {
+            let mut error = format!(
+                "failed to wait for `{}`: {wait_error}",
+                platform::SANDBOX_EXEC
+            );
+            if let Err(owner_error) = owner_result {
+                error = additional_error(error, owner_error);
+            }
+            if let Err(manager_error) = manager_result {
+                error = additional_error(error, manager_error);
+            }
+            return Err(error);
+        }
+    };
+    match (owner_result, manager_result) {
+        (Ok(()), Ok(())) => Ok(platform::exit_code(status)),
+        (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+        (Err(error), Err(manager_error)) => Err(additional_error(error, manager_error)),
     }
-    if let Some(error) = error {
-        preserve(temporary_directory);
-        return Err(error);
-    }
+}
 
-    if manager_preparation == CleanupPreparation::TimedOut {
-        preserve(temporary_directory);
-    } else {
-        drop(temporary_directory);
-    }
-    Ok(platform::exit_code(status.expect(
-        "successful standalone retirement should retain the root status",
-    )))
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum RootCompletion {
+    RootExited,
+    ManagerFinished,
 }
 
 fn wait_for_root_exit(
     child: &Child,
     signal_relay: &SignalRelay,
     root_waiter: &mut RootExitWaiter,
-) -> Result<(), String> {
+) -> Result<RootCompletion, String> {
     loop {
-        if platform::wait_for_process_exit_without_reaping(child.id(), Duration::ZERO).map_err(
-            |error| {
-                format!(
-                    "failed to inspect `{}` exit status: {error}",
-                    platform::SANDBOX_EXEC
-                )
-            },
-        )? {
-            return Ok(());
+        if root_has_exited(child, Duration::ZERO)? {
+            return Ok(RootCompletion::RootExited);
         }
 
         let process_group = child.id() as libc::pid_t;
         signal_relay.relay_pending(process_group)?;
-        match root_waiter.wait_for_events() {
-            Ok(RootWait::RootExited | RootWait::Wakeup) => return Ok(()),
-            Ok(RootWait::Events) => {}
+        match root_waiter.wait_for_events(None) {
+            Ok(RootWait::RootExited) => return Ok(RootCompletion::RootExited),
+            Ok(RootWait::Wakeup) => {
+                return if root_has_exited(child, Duration::ZERO)? {
+                    Ok(RootCompletion::RootExited)
+                } else {
+                    Ok(RootCompletion::ManagerFinished)
+                };
+            }
+            Ok(RootWait::Events | RootWait::TimedOut) => {}
             Err(error) => return Err(error),
         }
     }
 }
 
-fn retire_after_manager_start_failure(
-    observed_lifetime: ObservedLifetime,
+fn finish_after_manager_exit(
     child: &mut Child,
-    error: String,
-) -> String {
-    let error = match observed_lifetime.stop() {
-        Ok(()) => error,
-        Err(retirement_error) => additional_error(error, retirement_error),
+    manager: SandboxManager,
+    foreground_terminal: &mut ForegroundTerminal,
+    signal_relay: SignalRelay,
+) -> Result<ExitCode, String> {
+    let manager_result = manager.stop();
+    let root_exit_result = root_has_exited(child, ROOT_STOP_TIMEOUT);
+    let status_result = match root_exit_result {
+        Ok(true) => match child.wait() {
+            Ok(status) => manager_result.map(|()| status),
+            Err(wait_error) => {
+                let wait_error = format!(
+                    "failed to wait for terminated {}: {wait_error}",
+                    platform::SANDBOX_EXEC
+                );
+                Err(match manager_result {
+                    Ok(()) => wait_error,
+                    Err(error) => additional_error(error, wait_error),
+                })
+            }
+        },
+        Ok(false) => {
+            let mut error = manager_result.err().unwrap_or_else(|| {
+                "sandbox manager recovery did not terminate the sandbox root".to_string()
+            });
+            if let Err(kill_error) = kill_root(child) {
+                error = additional_error(error, kill_error);
+            }
+            Err(error)
+        }
+        Err(wait_error) => {
+            let mut error = match manager_result {
+                Ok(()) => wait_error,
+                Err(error) => additional_error(error, wait_error),
+            };
+            if let Err(kill_error) = kill_root(child) {
+                error = additional_error(error, kill_error);
+            }
+            Err(error)
+        }
     };
-    stop_direct_child(child, error)
+    let owner_result = restore_launcher_state(foreground_terminal, signal_relay);
+
+    let status = match status_result {
+        Ok(status) => status,
+        Err(mut error) => {
+            if let Err(owner_error) = owner_result {
+                error = additional_error(error, owner_error);
+            }
+            return Err(error);
+        }
+    };
+    owner_result.map(|()| platform::exit_code(status))
+}
+
+fn restore_launcher_state(
+    foreground_terminal: &mut ForegroundTerminal,
+    signal_relay: SignalRelay,
+) -> Result<(), String> {
+    let terminal_result = foreground_terminal.restore();
+    let signal_result = signal_relay.drain_pending_and_restore();
+    match (terminal_result, signal_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+        (Err(error), Err(signal_error)) => Err(additional_error(error, signal_error)),
+    }
+}
+
+fn root_has_exited(child: &Child, timeout: Duration) -> Result<bool, String> {
+    platform::wait_for_process_exit_without_reaping(child.id(), timeout).map_err(|error| {
+        format!(
+            "failed to inspect `{}` exit status: {error}",
+            platform::SANDBOX_EXEC
+        )
+    })
+}
+
+fn additional_error(primary: String, additional: String) -> String {
+    format!("{primary}; additionally, {additional}")
+}
+
+fn stop_managed_root(child: &mut Child, manager: SandboxManager) -> Result<(), String> {
+    stop_managed_root_with_status(child, manager).map(|_| ())
+}
+
+fn stop_managed_root_with_status(
+    child: &mut Child,
+    manager: SandboxManager,
+) -> Result<ExitStatus, String> {
+    match manager.stop() {
+        Ok(()) => child.wait().map_err(|wait_error| {
+            format!(
+                "failed to wait for terminated {}: {wait_error}",
+                platform::SANDBOX_EXEC
+            )
+        }),
+        Err(mut error) => {
+            if let Err(kill_error) = kill_root(child) {
+                error = additional_error(error, kill_error);
+            }
+            Err(error)
+        }
+    }
+}
+
+// Callers retain the direct child waitably until after this function signals
+// its process group, so its PID and process-group ID cannot be reused.
+fn kill_root(child: &mut Child) -> Result<ExitStatus, String> {
+    let group_result = unsafe { libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL) };
+    let group_error = (group_result != 0)
+        .then(std::io::Error::last_os_error)
+        .filter(|error| error.raw_os_error() != Some(libc::ESRCH));
+
+    match child.try_wait() {
+        Ok(Some(status)) => {
+            return group_error.map_or(Ok(status), |group_error| {
+                Err(format!(
+                    "process-group termination also failed: {group_error}"
+                ))
+            });
+        }
+        Ok(None) => {}
+        Err(error) => {
+            return Err(format!(
+                "failed to read {} status during termination: {error}",
+                platform::SANDBOX_EXEC
+            ));
+        }
+    }
+
+    if let Err(error) = child.kill()
+        && error.raw_os_error() != Some(libc::ESRCH)
+    {
+        let group_error = group_error
+            .map(|group_error| format!("; process-group termination also failed: {group_error}"))
+            .unwrap_or_default();
+        return Err(format!(
+            "failed to terminate direct {} process: {error}{group_error}",
+            platform::SANDBOX_EXEC
+        ));
+    }
+
+    let exited = root_has_exited(child, ROOT_STOP_TIMEOUT).map_err(|error| {
+        let group_error = group_error
+            .as_ref()
+            .map(|group_error| format!("; process-group termination also failed: {group_error}"))
+            .unwrap_or_default();
+        format!("{error}{group_error}")
+    })?;
+    if !exited {
+        let group_error = group_error
+            .as_ref()
+            .map(|group_error| format!("; process-group termination also failed: {group_error}"))
+            .unwrap_or_default();
+        return Err(format!(
+            "timed out waiting for terminated {}{group_error}",
+            platform::SANDBOX_EXEC
+        ));
+    }
+
+    let status = child.wait().map_err(|error| {
+        let group_error = group_error
+            .as_ref()
+            .map(|group_error| format!("; process-group termination also failed: {group_error}"))
+            .unwrap_or_default();
+        format!(
+            "failed to wait for terminated {}: {error}{group_error}",
+            platform::SANDBOX_EXEC
+        )
+    })?;
+    group_error.map_or(Ok(status), |group_error| {
+        Err(format!(
+            "process-group termination also failed: {group_error}"
+        ))
+    })
+}
+
+fn preserve(temporary_directory: platform::TemporaryDirectory) {
+    // A live descendant may still be using this path. Deliberately leak the
+    // guard on lifetime-cleanup failure instead of deleting files underneath it.
+    temporary_directory.preserve();
 }

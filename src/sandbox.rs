@@ -17,7 +17,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 #[cfg(target_os = "macos")]
-const CRASH_MANAGER_CLEANUP_TIMEOUT: Duration = Duration::from_secs(1);
+const MANAGER_CLEANUP_TIMEOUT: Duration = Duration::from_secs(1);
 #[cfg(target_os = "macos")]
 const TARGET_GATE_RELEASE: u8 = 1;
 
@@ -101,8 +101,14 @@ pub(crate) fn run_target(
     let gate = unsafe { OwnedFd::from_raw_fd(gate_descriptor) };
     let mut gate = File::from(gate);
     let mut release = [0];
-    gate.read_exact(&mut release)
-        .map_err(|error| format!("failed to await sandbox target startup: {error}"))?;
+    if let Err(error) = gate.read_exact(&mut release) {
+        // Closing the owner endpoint before release cancels private startup.
+        // The owner reports the startup failure through its public boundary.
+        if error.kind() == std::io::ErrorKind::UnexpectedEof {
+            return Ok(ExitCode::FAILURE);
+        }
+        return Err(format!("failed to await sandbox target startup: {error}"));
+    }
     if release != [TARGET_GATE_RELEASE] {
         return Err("sandbox target received an invalid startup release".to_string());
     }

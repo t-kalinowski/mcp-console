@@ -1,5 +1,5 @@
 use super::process::{process_identity, process_info, signal_process};
-use super::process_tracker::{DescendantTracker, EventWait, OBSERVER_WAKE_IDENT};
+use super::process_tracker::{DescendantTracker, EventWait};
 use super::process_tree::{
     PROCESS_REAP_EVENT, add_children, discover_active_children, record_first_error,
     remove_stale_processes,
@@ -11,8 +11,8 @@ const PROCESS_RETIREMENT_CHECK_INTERVAL: Duration = Duration::from_millis(10);
 const TRACKER_EVENT_CAPACITY: usize = 32;
 
 impl DescendantTracker {
-    pub(super) fn prune_stale_processes(&mut self) -> Result<(), String> {
-        remove_stale_processes(&mut self.state.active)
+    pub(super) fn stop(self, retirement_grace: Duration) -> Result<(), String> {
+        self.terminate(false, retirement_grace)
     }
 
     pub(super) fn wait_for_events(
@@ -51,7 +51,6 @@ impl DescendantTracker {
         }
 
         let mut root_exited = false;
-        let mut observer_wakeup = false;
         for event in events.iter().take(event_count as usize) {
             let pid = event.ident as libc::pid_t;
             let event_data = event.data;
@@ -65,10 +64,6 @@ impl DescendantTracker {
                 return Err(format!(
                     "sandbox process tracker received event error {event_data}"
                 ));
-            }
-            if event.filter == libc::EVFILT_USER && event.ident == OBSERVER_WAKE_IDENT {
-                observer_wakeup = true;
-                continue;
             }
             if event.filter != libc::EVFILT_PROC {
                 continue;
@@ -94,8 +89,6 @@ impl DescendantTracker {
         }
         Ok(if root_exited {
             EventWait::RootExited
-        } else if observer_wakeup {
-            EventWait::Wakeup
         } else {
             EventWait::Events
         })
@@ -113,7 +106,7 @@ impl DescendantTracker {
             // any queued fork event before removing it from the snapshot.
             match self.wait_for_events(Some(Duration::ZERO)) {
                 Ok(EventWait::RootExited) => root_exited = true,
-                Ok(EventWait::Events | EventWait::Wakeup | EventWait::TimedOut) => {}
+                Ok(EventWait::Events | EventWait::TimedOut) => {}
                 Err(error) => record_first_error(&mut cleanup_error, error),
             }
 
@@ -183,7 +176,7 @@ impl DescendantTracker {
                         return cleanup_error.map_or(Ok(()), Err);
                     }
                 }
-                Ok(EventWait::Events | EventWait::RootExited | EventWait::Wakeup) => {}
+                Ok(EventWait::Events | EventWait::RootExited) => {}
                 Err(error) => {
                     record_first_error(&mut cleanup_error, error);
                     std::thread::sleep(wait);

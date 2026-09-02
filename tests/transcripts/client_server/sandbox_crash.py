@@ -6,6 +6,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -13,11 +14,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from _support import (
     DarwinProcessIdentity,
+    FifoCheckpoint,
     McpClient,
     Transcript,
+    build_manager_interposer,
     capture_darwin_process_identity,
     code,
+    darwin_child_process_identities,
     darwin_process_waits_for_control,
+    darwin_process_waits_for_startup_release,
     kill_darwin_processes,
     live_darwin_processes,
     run_this_suite,
@@ -43,7 +48,10 @@ def _last_text(client: McpClient) -> str:
     return content[0]["text"]
 
 
-def _spawn_detached_generation(client: McpClient) -> Generation:
+def _spawn_detached_generation(
+    client: McpClient,
+    fixture_command: str | None = None,
+) -> Generation:
     # Use the bundled Python runtime and standard library so crash supervision
     # does not depend on an externally resolved R package. Starting a new
     # session proves that observation is not limited to the relay's group.
@@ -64,7 +72,10 @@ def _spawn_detached_generation(client: McpClient) -> Generation:
         print(f"child={crash_child.pid}")
         print(f"temp={os.environ['TMPDIR']}")
         """)
-    client.send(python=python)
+    if fixture_command is None:
+        client.send(python=python)
+    else:
+        client.send(r=fixture_command)
 
     result = client.transcript[-1]["result"]
     text = _last_text(client)
@@ -121,6 +132,18 @@ def _wait_for_process_cleanup(
         time.sleep(0.01)
         survivors = live_darwin_processes(identities)
     return survivors
+
+
+def _wait_for_private_startup_gate(identity: DarwinProcessIdentity) -> None:
+    deadline = time.monotonic() + TIMEOUT
+    while not darwin_process_waits_for_startup_release(identity):
+        assert live_darwin_processes((identity,)), (
+            "custom relay root exited before reaching its private startup gate"
+        )
+        assert time.monotonic() < deadline, (
+            "custom relay root did not block at its private startup gate"
+        )
+        time.sleep(0.01)
 
 
 def _wait_for_manager_disposition(
@@ -236,13 +259,31 @@ def test_server_crash_after_relay_exit_removes_temporary_directory(
     # A live but stopped server cannot complete normal relay retirement. The
     # committed manager must retain directory ownership after the relay exits
     # so a later server crash still completes cleanup.
-    client = McpClient(binary, ("serve",))
+    temporary_owner = tempfile.TemporaryDirectory()
+    temporary = Path(temporary_owner.name)
+    group_closed = FifoCheckpoint(temporary / "manager-group-closed")
+    killpg_marker = temporary / "manager-killpg-denied"
+    late_member_marker = temporary / "late-process-group-member"
+    late_member_reap_marker = temporary / "late-process-group-member-reaped"
+    environment = os.environ.copy()
+    environment["MCP_CONSOLE_TEST_MANAGER_GROUP_CLOSED"] = str(group_closed.path)
+    environment["MCP_CONSOLE_TEST_KILLPG_MARKER"] = str(killpg_marker)
+    environment["MCP_CONSOLE_TEST_LATE_MEMBER_MARKER"] = str(late_member_marker)
+    environment["MCP_CONSOLE_TEST_LATE_MEMBER_REAP_MARKER"] = str(
+        late_member_reap_marker
+    )
+    environment["DYLD_INSERT_LIBRARIES"] = str(build_manager_interposer(temporary))
+    zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
+    client = McpClient(binary, ("serve", "--worker", str(zod)), environment)
     generation: Generation | None = None
     manager_identity: DarwinProcessIdentity | None = None
     server_identity: DarwinProcessIdentity | None = None
     try:
         client._initialize_and_list_tools()
-        generation = _spawn_detached_generation(client)
+        generation = _spawn_detached_generation(
+            client,
+            fixture_command="spawn detached sandbox crash child",
+        )
         manager_identity = capture_darwin_process_identity(
             _manager_pid(client.process.pid)
         )
@@ -261,10 +302,26 @@ def test_server_crash_after_relay_exit_removes_temporary_directory(
         # server can run any cleanup code.
         survivors = _wait_for_process_cleanup(generation[1:3], timeout=5)
         assert survivors == [], f"worker-generation processes survived: {survivors}"
-        # Once tracker cleanup consumes the manager's kqueue, its sole thread
-        # blocks on the server control stream. This positive checkpoint rejects
-        # both an active cleanup pass and an exited manager left as a zombie.
+        # Close the root group while the stopped server still pins the waitable
+        # relay identity. This backstop covers a same-group child that raced
+        # descendant observation.
+        group_closed.wait("manager root-group backstop", timeout=5)
+        # Once cleanup consumes the manager's kqueue, its sole thread blocks on
+        # the server control stream. This positive checkpoint rejects both an
+        # active cleanup pass and an exited manager left as a zombie.
         _wait_for_manager_disposition(manager_identity, generation[3], timeout=5)
+        assert int(killpg_marker.read_text(encoding="utf-8")) == generation[0][0]
+        late_member, late_member_group = map(
+            int,
+            late_member_marker.read_text(encoding="utf-8").split(),
+        )
+        assert late_member > 0, "invalid late process-group member PID"
+        assert late_member_group == generation[0][0], (
+            "late member joined a different process group"
+        )
+        assert int(late_member_reap_marker.read_text(encoding="utf-8")) == (
+            late_member
+        ), "manager cleanup returned before reaping the late group member"
         assert generation[3].exists()
 
         client.process.kill()
@@ -288,6 +345,12 @@ def test_server_crash_after_relay_exit_removes_temporary_directory(
         )
         return client.transcript
     finally:
+        if generation is not None:
+            assert generation[0][0] != os.getpgrp()
+            try:
+                os.killpg(generation[0][0], signal.SIGKILL)
+            except ProcessLookupError:
+                pass
         if server_identity is not None:
             signal_darwin_process(server_identity, signal.SIGKILL)
         stop_client(client)
@@ -297,6 +360,8 @@ def test_server_crash_after_relay_exit_removes_temporary_directory(
         if manager_identity is not None:
             kill_darwin_processes((manager_identity,))
         _close_client_streams(client)
+        group_closed.close()
+        temporary_owner.cleanup()
 
 
 def test_relay_crash_retires_the_worker_generation(binary: Path) -> Transcript:
@@ -344,9 +409,8 @@ def test_relay_crash_retires_the_worker_generation(binary: Path) -> Transcript:
 
 
 def test_manager_crash_retires_the_worker_generation(binary: Path) -> Transcript:
-    # While the relay root remains live and pinned, the already-running
-    # server-side observer must retire its current tree if the committed
-    # manager exits.
+    # While the relay root remains live and pinned, the host owner must take
+    # over bounded cleanup if the committed manager exits.
     client = McpClient(binary, ("serve",))
     generation: Generation | None = None
     manager_identity: DarwinProcessIdentity | None = None
@@ -366,7 +430,7 @@ def test_manager_crash_retires_the_worker_generation(binary: Path) -> Transcript
         assert replacement == "[starting new worker]\nreplacement ready\n", repr(
             replacement
         )
-        survivors = _wait_for_generation_cleanup(generation, timeout=5)
+        survivors = _wait_for_process_cleanup(generation[:3], timeout=5)
         survivor_names = [
             name
             for name, identity in zip(
@@ -378,9 +442,7 @@ def test_manager_crash_retires_the_worker_generation(binary: Path) -> Transcript
         assert survivors == [], (
             f"worker-generation processes survived manager crash: {survivor_names}"
         )
-        assert not generation[3].exists(), (
-            f"worker temporary directory survived manager crash: {generation[3]}"
-        )
+        assert generation[3].exists(), "manager recovery removed worker temp"
         return client.transcript
     finally:
         stop_client(client)
@@ -390,6 +452,105 @@ def test_manager_crash_retires_the_worker_generation(binary: Path) -> Transcript
         if manager_identity is not None:
             kill_darwin_processes((manager_identity,))
         _close_client_streams(client)
+
+
+def test_manager_crash_before_commit_retires_the_custom_relay_generation(
+    binary: Path,
+) -> Transcript:
+    fixture_root = Path(__file__).resolve().parents[2] / "fixtures"
+    relay = fixture_root / "startup_marker_relay"
+    worker = fixture_root / "zod"
+    marker_name = "mcp-console-startup-marker"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        committed_ready = FifoCheckpoint(temporary / "committed-ready")
+        committed_release = FifoCheckpoint(temporary / "committed-release")
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        environment["MCP_CONSOLE_TEST_BINARY"] = str(binary)
+        environment["MCP_CONSOLE_TEST_MANAGER_COMMITTED_READY"] = str(
+            committed_ready.path
+        )
+        environment["MCP_CONSOLE_TEST_MANAGER_COMMITTED_RELEASE"] = str(
+            committed_release.path
+        )
+        environment["DYLD_INSERT_LIBRARIES"] = str(build_manager_interposer(temporary))
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(worker), "--relay", str(relay)),
+            environment,
+        )
+        identities: tuple[DarwinProcessIdentity, ...] = ()
+        sandbox_temporary_directory: Path | None = None
+        try:
+            client._initialize_and_list_tools()
+            waiting = client._start_send(r="42")
+            committed_ready.wait("manager COMMITTED write")
+
+            manager_identity = capture_darwin_process_identity(
+                _manager_pid(client.process.pid)
+            )
+            server_identity = capture_darwin_process_identity(client.process.pid)
+            root_candidates = tuple(
+                identity
+                for identity in darwin_child_process_identities(server_identity)
+                if identity != manager_identity
+            )
+            assert len(root_candidates) == 1, root_candidates
+            root_identity = root_candidates[0]
+            identities = (root_identity, manager_identity)
+            _wait_for_private_startup_gate(root_identity)
+            assert darwin_child_process_identities(root_identity) == (), (
+                "custom relay root created children before manager ownership committed"
+            )
+            sandbox_directories = tuple(
+                temporary.glob(f"mcp-console-tmp-{client.process.pid}-*")
+            )
+            assert len(sandbox_directories) == 1, sandbox_directories
+            sandbox_temporary_directory = sandbox_directories[0]
+            assert list(temporary.glob(f"**/{marker_name}")) == [], (
+                "custom relay executed before manager ownership committed"
+            )
+
+            assert signal_darwin_process(manager_identity, signal.SIGKILL), (
+                "manager exited before pre-commit crash injection"
+            )
+            client.transcript.append({"manager_signal": "SIGKILL before COMMITTED"})
+            client._receive(waiting)
+            result = waiting["result"]
+            assert result.get("isError") is True, result
+            survivors = _wait_for_process_cleanup(identities, timeout=5)
+
+            assert survivors == [], (
+                f"pre-commit manager crash leaked custom-relay processes: {survivors}"
+            )
+            assert sandbox_temporary_directory.exists(), (
+                "ambiguous manager commit removed sandbox temporary directory: "
+                f"{sandbox_temporary_directory}"
+            )
+            assert list(temporary.glob(f"**/{marker_name}")) == [], (
+                "custom relay executed after its manager failed before ownership commit"
+            )
+            client.transcript.append(
+                {
+                    "verified_startup_gate": (
+                        "custom relay did not execute before COMMITTED"
+                    ),
+                    "verified_cleanup": "gated relay root and manager",
+                    "verified_preservation": "sandbox temp",
+                }
+            )
+            return client._finish()
+        finally:
+            committed_release.release()
+            stop_client(client)
+            if identities:
+                kill_darwin_processes(identities)
+            if sandbox_temporary_directory is not None:
+                shutil.rmtree(sandbox_temporary_directory, ignore_errors=True)
+            committed_ready.close()
+            committed_release.close()
+            _close_client_streams(client)
 
 
 if __name__ == "__main__":
