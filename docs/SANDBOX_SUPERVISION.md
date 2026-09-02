@@ -15,7 +15,7 @@ The manager also adopts the private temporary-directory guard for the lifetime.
 
 The host owner retains the manager process and direct sandbox root as waitable children.
 After the manager reports readiness, the owner starts monitoring manager exit and transfers its backup directory guard to that monitor before entering the ownership-commit exchange.
-The relay remains a transport and direct-worker owner; it does not own observed-descendant cleanup or the private directory.
+The relay remains a transport and direct-worker owner, including local same-group cleanup; it does not own observed-descendant cleanup across process groups or sessions, or the private directory.
 
 ## Startup
 
@@ -82,7 +82,7 @@ A signal received after that final drain can then follow its inherited dispositi
 ## Scope
 
 This ownership applies to `SandboxedCommand::spawn`, which is used for built-in and custom worker relay generations, and to `SandboxedCommand::status`, which implements `mcp-console sandbox`.
-The worker path retains its server-owned process-group race backstop and gates the relay before either relay implementation runs.
+The worker path retains its manager-owned process-group race backstop, with owner fallback after manager failure, and gates the relay before either relay implementation runs.
 The standalone path retains inherited standard streams, uses a dedicated target process group, and supplies the direct-foreground terminal and signal behavior above.
 It does not support `Ctrl-Z` followed by `fg` or general pipeline job-control semantics.
 Linux and Windows are not supported.

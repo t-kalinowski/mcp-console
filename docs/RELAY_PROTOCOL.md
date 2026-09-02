@@ -40,7 +40,7 @@ The gate is not part of the JSONL relay protocol, and the manager's private cont
 The relay creates the worker's private full-duplex sideband socket pair and its standard-input, standard-output, and standard-error pipes after entering the sandbox.
 It passes one worker sideband endpoint through `MCP_CONSOLE_SIDEBAND_FD` together with the fd-0/1/2 contract documented in [`WORKER_PROTOCOL.md`](WORKER_PROTOCOL.md).
 
-The relay owns the direct worker process and its local transports, translation between this protocol and the worker sideband, direct-worker signal delivery, deadline-bounded direct-worker termination, and direct-worker reaping.
+The relay owns the direct worker process and its local transports, translation between this protocol and the worker sideband, direct-worker signal delivery, deadline-bounded direct-worker termination, cleanup of remaining members of its worker process group, and direct-worker reaping.
 The host-side manager owns primary tracking and termination of the relay root and observed descendants across process-group and session changes, along with private-directory cleanup.
 The server retains a backup directory guard and a manager monitor outside the sandbox.
 The server owns generation state and host-side dependency resolution; see [Requirements and environments](REQUIREMENTS.md) for that trust boundary.
@@ -188,7 +188,8 @@ The failure retirement marker and physical relay wait share one absolute two-sec
 This keeps the relay reader alive for drained raw output, stream closures, and the final process outcome before the outer fail-safe runs.
 
 The relay closes worker stdin and sends the unchanged worker-sideband `shutdown` message without waiting for one path before attempting the other.
-If the worker remains live at its deadline, the relay sends `SIGKILL` to that direct child and reaps it.
+If the worker remains live at its deadline, the relay sends `SIGKILL` to that direct child.
+After direct-worker exit or force-stop, the relay stops any remaining member of its worker process group and reaps the direct child.
 The resulting `worker_exited` or `worker_signaled` event describes only that direct child; it is not a sandbox-lifetime retirement acknowledgment.
 Clean relay-stdin EOF does not emit `shutdown_started`; it performs the same worker shutdown with a new one-second grace period measured from EOF.
 EOF midway through a command frame is a transport failure instead.

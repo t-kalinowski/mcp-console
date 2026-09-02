@@ -262,8 +262,16 @@ def test_server_crash_after_relay_exit_removes_temporary_directory(
     temporary_owner = tempfile.TemporaryDirectory()
     temporary = Path(temporary_owner.name)
     group_closed = FifoCheckpoint(temporary / "manager-group-closed")
+    killpg_marker = temporary / "manager-killpg-denied"
+    late_member_marker = temporary / "late-process-group-member"
+    late_member_reap_marker = temporary / "late-process-group-member-reaped"
     environment = os.environ.copy()
     environment["MCP_CONSOLE_TEST_MANAGER_GROUP_CLOSED"] = str(group_closed.path)
+    environment["MCP_CONSOLE_TEST_KILLPG_MARKER"] = str(killpg_marker)
+    environment["MCP_CONSOLE_TEST_LATE_MEMBER_MARKER"] = str(late_member_marker)
+    environment["MCP_CONSOLE_TEST_LATE_MEMBER_REAP_MARKER"] = str(
+        late_member_reap_marker
+    )
     environment["DYLD_INSERT_LIBRARIES"] = str(build_manager_interposer(temporary))
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
     client = McpClient(binary, ("serve", "--worker", str(zod)), environment)
@@ -302,6 +310,18 @@ def test_server_crash_after_relay_exit_removes_temporary_directory(
         # the server control stream. This positive checkpoint rejects both an
         # active cleanup pass and an exited manager left as a zombie.
         _wait_for_manager_disposition(manager_identity, generation[3], timeout=5)
+        assert int(killpg_marker.read_text(encoding="utf-8")) == generation[0][0]
+        late_member, late_member_group = map(
+            int,
+            late_member_marker.read_text(encoding="utf-8").split(),
+        )
+        assert late_member > 0, "invalid late process-group member PID"
+        assert late_member_group == generation[0][0], (
+            "late member joined a different process group"
+        )
+        assert int(late_member_reap_marker.read_text(encoding="utf-8")) == (
+            late_member
+        ), "manager cleanup returned before reaping the late group member"
         assert generation[3].exists()
 
         client.process.kill()
@@ -325,6 +345,12 @@ def test_server_crash_after_relay_exit_removes_temporary_directory(
         )
         return client.transcript
     finally:
+        if generation is not None:
+            assert generation[0][0] != os.getpgrp()
+            try:
+                os.killpg(generation[0][0], signal.SIGKILL)
+            except ProcessLookupError:
+                pass
         if server_identity is not None:
             signal_darwin_process(server_identity, signal.SIGKILL)
         stop_client(client)

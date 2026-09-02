@@ -67,7 +67,7 @@ MCP Console has four process boundaries:
 Keep these ownership rules intact:
 
 - The relay is a thin ordered transport and worker supervisor.
-  It owns local worker transports, sideband translation, and direct-worker signal delivery, bounded termination, and reaping.
+  It owns local worker transports, sideband translation, direct-worker signal delivery, bounded termination, same-process-group cleanup, and direct-worker reaping.
   It preserves each producer's order and supplies serialized observation order; it does not reconstruct chronology across independent sideband, stdout, and stderr transports.
 - The server owns host-side relay lifetime orchestration and retirement, worker-generation state, operation admission, output cuts, pending-output budgets, response assembly, delivery ownership, retained requirements, and host resolvers.
   It releases each relay root's private startup gate only after manager-failure recovery is installed and manager ownership is committed.
