@@ -187,7 +187,7 @@ The command inherits standard input, output, and error while closing other inher
 The launcher places the target in a dedicated process group and relays `SIGHUP`, `SIGINT`, `SIGQUIT`, and `SIGTERM` addressed to the launcher into that group.
 For a direct foreground invocation whose process group has no peer, it also transfers controlling-terminal ownership to the target and restores ownership after the direct root exits.
 If the launcher shares its foreground process group with a pipeline peer, it leaves terminal ownership with that group.
-After the direct root exits, the launcher drains forwarded signals already pending at that boundary and restores its inherited signal mask before manager cleanup.
+After the direct root exits or startup cleanup stops it, the launcher drains forwarded signals already pending at that boundary and restores its inherited signal mask before returning.
 Stopped/continued job state and general shell-pipeline job-control semantics remain unsupported; `Ctrl-Z` followed by `fg` requires a separate terminal state machine.
 Use the MCP server for the supported worker-generation lifecycle.
 

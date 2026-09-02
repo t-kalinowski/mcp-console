@@ -35,14 +35,17 @@ pub(in crate::sandbox) fn status(
     let mut root_waiter = match RootExitWaiter::start(child.id() as libc::pid_t, &signal_relay) {
         Ok(root_waiter) => root_waiter,
         Err(error) => {
-            let error = match kill_root(&mut child) {
+            let mut error = match kill_root(&mut child) {
                 Ok(_) => error,
                 Err(kill_error) => additional_error(error, kill_error),
             };
-            let error = match foreground_terminal.restore() {
-                Ok(()) => error,
-                Err(terminal_error) => additional_error(error, terminal_error),
-            };
+            if let Err(terminal_error) = foreground_terminal.restore() {
+                error = additional_error(error, terminal_error);
+            }
+            drop(manager);
+            if let Err(signal_error) = signal_relay.drain_pending_and_restore() {
+                error = additional_error(error, signal_error);
+            }
             preserve(temporary_directory);
             return Err(error);
         }
@@ -58,11 +61,11 @@ pub(in crate::sandbox) fn status(
         if let Err(terminal_error) = foreground_terminal.restore() {
             error = additional_error(error, terminal_error);
         }
-        if let Err(signal_error) = signal_relay.restore() {
-            error = additional_error(error, signal_error);
-        }
         if let Err(manager_error) = manager.finish() {
             error = additional_error(error, manager_error);
+        }
+        if let Err(signal_error) = signal_relay.drain_pending_and_restore() {
+            error = additional_error(error, signal_error);
         }
         return Err(error);
     }
@@ -91,8 +94,8 @@ pub(in crate::sandbox) fn status(
                 error = additional_error(error, stop_error);
             }
         }
-        if let Err(terminal_error) = foreground_terminal.restore() {
-            error = additional_error(error, terminal_error);
+        if let Err(owner_error) = restore_launcher_state(&mut foreground_terminal, signal_relay) {
+            error = additional_error(error, owner_error);
         }
         return Err(error);
     }
@@ -104,8 +107,8 @@ pub(in crate::sandbox) fn status(
         if let Err(stop_error) = stop_managed_root(&mut child, manager) {
             error = additional_error(error, stop_error);
         }
-        if let Err(terminal_error) = foreground_terminal.restore() {
-            error = additional_error(error, terminal_error);
+        if let Err(owner_error) = restore_launcher_state(&mut foreground_terminal, signal_relay) {
+            error = additional_error(error, owner_error);
         }
         return Err(error);
     }
@@ -117,8 +120,9 @@ pub(in crate::sandbox) fn status(
             if let Err(stop_error) = stop_managed_root(&mut child, manager) {
                 error = additional_error(error, stop_error);
             }
-            if let Err(terminal_error) = foreground_terminal.restore() {
-                error = additional_error(error, terminal_error);
+            if let Err(owner_error) = restore_launcher_state(&mut foreground_terminal, signal_relay)
+            {
+                error = additional_error(error, owner_error);
             }
             return Err(error);
         }
@@ -136,13 +140,7 @@ pub(in crate::sandbox) fn status(
         );
     }
     let _ = manager.begin_retirement();
-    let terminal_result = foreground_terminal.restore();
-    let signal_result = signal_relay.drain_pending_and_restore();
-    let owner_result = match (terminal_result, signal_result) {
-        (Ok(()), Ok(())) => Ok(()),
-        (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
-        (Err(error), Err(signal_error)) => Err(additional_error(error, signal_error)),
-    };
+    let owner_result = restore_launcher_state(&mut foreground_terminal, signal_relay);
     let cleanup_preparation = manager.prepare_finish();
     let manager_result =
         manager.finish_retirement(cleanup_preparation == CleanupPreparation::TimedOut);
@@ -245,23 +243,28 @@ fn finish_after_manager_exit(
             Err(error)
         }
     };
-    let terminal_result = foreground_terminal.restore();
-    let signal_result = signal_relay.drain_pending_and_restore();
+    let owner_result = restore_launcher_state(foreground_terminal, signal_relay);
 
     let status = match status_result {
         Ok(status) => status,
         Err(mut error) => {
-            if let Err(terminal_error) = terminal_result {
-                error = additional_error(error, terminal_error);
-            }
-            if let Err(signal_error) = signal_result {
-                error = additional_error(error, signal_error);
+            if let Err(owner_error) = owner_result {
+                error = additional_error(error, owner_error);
             }
             return Err(error);
         }
     };
+    owner_result.map(|()| platform::exit_code(status))
+}
+
+fn restore_launcher_state(
+    foreground_terminal: &mut ForegroundTerminal,
+    signal_relay: SignalRelay,
+) -> Result<(), String> {
+    let terminal_result = foreground_terminal.restore();
+    let signal_result = signal_relay.drain_pending_and_restore();
     match (terminal_result, signal_result) {
-        (Ok(()), Ok(())) => Ok(platform::exit_code(status)),
+        (Ok(()), Ok(())) => Ok(()),
         (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
         (Err(error), Err(signal_error)) => Err(additional_error(error, signal_error)),
     }

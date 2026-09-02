@@ -76,6 +76,7 @@ When the launcher's foreground process group has no peer, it transfers foregroun
 When a pipeline peer shares the launcher's foreground group, the launcher leaves terminal ownership unchanged.
 `SIGHUP`, `SIGINT`, `SIGQUIT`, and `SIGTERM` addressed to the launcher are blocked, consumed synchronously, and relayed once to that group.
 After root exit, the launcher marks normal retirement, restores its own foreground group when it transferred ownership, drains forwarded signals already pending at that boundary, and restores its inherited signal mask before manager cleanup.
+If startup or recovery cleanup stops the root, the launcher drains pending forwarded signals before restoring the mask and returning the error.
 A signal received after that final drain can then follow its inherited disposition; if that terminates the launcher, the committed manager completes lifetime cleanup.
 
 ## Scope

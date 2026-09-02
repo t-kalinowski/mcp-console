@@ -214,20 +214,9 @@ impl SignalRelay {
         }
     }
 
-    pub(super) fn restore(mut self) -> Result<(), String> {
-        self.restore_mask()
-    }
-
     pub(super) fn drain_pending_and_restore(mut self) -> Result<(), String> {
-        let drain_result = self.drain_pending();
-        let restore_result = self.restore_mask();
-        match (drain_result, restore_result) {
-            (Ok(()), Ok(())) => Ok(()),
-            (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
-            (Err(error), Err(restore_error)) => {
-                Err(format!("{error}; additionally, {restore_error}"))
-            }
-        }
+        self.drain_pending()?;
+        self.restore_mask()
     }
 
     fn restore_mask(&mut self) -> Result<(), String> {
@@ -302,7 +291,9 @@ impl SignalRelay {
 
 impl Drop for SignalRelay {
     fn drop(&mut self) {
-        let _ = self.restore_mask();
+        if self.restore_pending && self.drain_pending().is_ok() {
+            let _ = self.restore_mask();
+        }
     }
 }
 

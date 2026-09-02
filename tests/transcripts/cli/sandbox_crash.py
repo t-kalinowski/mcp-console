@@ -21,6 +21,7 @@ from _support import (
     DarwinProcessIdentity,
     FifoCheckpoint,
     Transcript,
+    build_manager_interposer,
     capture_darwin_process_identity,
     code,
     darwin_child_process_identities,
@@ -887,6 +888,114 @@ def test_pending_signal_at_root_exit_preserves_status(binary: Path) -> Transcrip
             signal_darwin_process(lifetime.launcher, signal.SIGCONT)
         exit_events.close()
         _cleanup(lifetime)
+
+
+def test_pending_signal_during_failed_commit_preserves_error(
+    binary: Path,
+) -> Transcript:
+    arguments = ("sandbox", "--", "python", "-c", "raise SystemExit(23)")
+
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        committed_ready = FifoCheckpoint(temporary / "committed-ready")
+        committed_release = FifoCheckpoint(temporary / "committed-release")
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        environment["MCP_CONSOLE_TEST_MANAGER_COMMITTED_READY"] = str(
+            committed_ready.path
+        )
+        environment["MCP_CONSOLE_TEST_MANAGER_COMMITTED_RELEASE"] = str(
+            committed_release.path
+        )
+        environment["DYLD_INSERT_LIBRARIES"] = str(build_manager_interposer(temporary))
+        process = subprocess.Popen(
+            [binary, *arguments],
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        assert process.stdout is not None
+        assert process.stderr is not None
+        identities: tuple[DarwinProcessIdentity, ...] = ()
+        sandbox_temporary_directory: Path | None = None
+        try:
+            committed_ready.wait("manager COMMITTED write")
+            launcher = capture_darwin_process_identity(process.pid)
+            children = darwin_child_process_identities(launcher)
+            assert len(children) == 2, children
+            deadline = time.monotonic() + TIMEOUT
+            roots: tuple[DarwinProcessIdentity, ...] = ()
+            while not roots:
+                roots = tuple(
+                    child
+                    for child in children
+                    if darwin_process_waits_for_startup_release(child)
+                )
+                assert len(roots) <= 1, (children, roots)
+                if roots:
+                    break
+                assert live_darwin_processes(children) == [
+                    child[0] for child in children
+                ], children
+                assert time.monotonic() < deadline, (
+                    "sandbox root did not reach its private startup gate"
+                )
+                time.sleep(0.01)
+            assert len(roots) == 1, (children, roots)
+            root = roots[0]
+            manager = next(child for child in children if child != root)
+            identities = (root, manager)
+            sandbox_directories = tuple(
+                temporary.glob(f"mcp-console-tmp-{process.pid}-*")
+            )
+            assert len(sandbox_directories) == 1, sandbox_directories
+            sandbox_temporary_directory = sandbox_directories[0]
+
+            assert signal_darwin_process(launcher, signal.SIGTERM), (
+                "sandbox launcher exited before pending-signal injection"
+            )
+            assert signal_darwin_process(manager, signal.SIGKILL), (
+                "manager exited before commit-failure injection"
+            )
+            returncode = process.wait(timeout=TIMEOUT)
+            stdout = process.stdout.read().decode("utf-8")
+            stderr = process.stderr.read().decode("utf-8")
+            survivors = live_darwin_processes(identities)
+
+            assert returncode == 1, (returncode, stderr)
+            assert stdout == "", stdout
+            assert survivors == [], f"sandbox processes survived: {survivors}"
+            assert sandbox_temporary_directory.exists(), (
+                "ambiguous manager commit removed sandbox temporary directory"
+            )
+            return [
+                {
+                    "command": _command(*arguments),
+                    "manager_checkpoint": "before COMMITTED",
+                    "pending_launcher_signal": "SIGTERM",
+                    "manager_signal": "SIGKILL",
+                },
+                {
+                    "launcher_returncode": returncode,
+                    "stderr": stderr,
+                    "verified_signal": "consumed without replacing startup error",
+                    "verified_cleanup": "gated sandbox root and manager",
+                    "verified_preservation": "sandbox temp",
+                },
+            ]
+        finally:
+            committed_release.release()
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=TIMEOUT)
+            kill_darwin_processes(identities)
+            if sandbox_temporary_directory is not None:
+                shutil.rmtree(sandbox_temporary_directory, ignore_errors=True)
+            for stream in (process.stdout, process.stderr):
+                if not stream.closed:
+                    stream.close()
+            committed_ready.close()
+            committed_release.close()
 
 
 def test_launcher_crash_retires_the_sandbox_lifetime(binary: Path) -> Transcript:
