@@ -1,0 +1,37 @@
+---
+!same-as tests/transcripts/golden/client_server/server/initializes_and_lists_tools.yaml
+---
+send:
+  r: |
+    find_make_namespace <- function(expression) {
+      if (
+        is.call(expression) &&
+          length(expression) >= 3L &&
+          identical(expression[[1L]], quote(`<-`)) &&
+          identical(expression[[2L]], quote(makeNamespace))
+      ) {
+        return(expression[[3L]])
+      }
+      if (!is.call(expression)) {
+        return(NULL)
+      }
+      for (child in as.list(expression)) {
+        found <- find_make_namespace(child)
+        if (!is.null(found)) {
+          return(found)
+        }
+      }
+      NULL
+    }
+    make_namespace <- eval(
+      find_make_namespace(body(base::loadNamespace)),
+      envir = baseenv()
+    )
+    stopifnot(is.function(make_namespace))
+    42L
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false

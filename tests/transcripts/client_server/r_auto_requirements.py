@@ -598,6 +598,50 @@ def test_preserves_base_r_loading_semantics_without_resolution(
         return client._finish()
 
 
+def test_preserves_load_namespace_body_for_pkgload(binary: Path) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        environment, record = recording_ir_environment(Path(temporary))
+        client = McpClient(binary, ("serve",), environment)
+        client._initialize_and_list_tools()
+        baseline = len(ir_run_records(record))
+
+        # pkgload extracts this private helper from body(loadNamespace) when
+        # its namespace loads.
+        # fmt: r
+        r = code(r"""
+            find_make_namespace <- function(expression) {
+              if (
+                is.call(expression) &&
+                  length(expression) >= 3L &&
+                  identical(expression[[1L]], quote(`<-`)) &&
+                  identical(expression[[2L]], quote(makeNamespace))
+              ) {
+                return(expression[[3L]])
+              }
+              if (!is.call(expression)) {
+                return(NULL)
+              }
+              for (child in as.list(expression)) {
+                found <- find_make_namespace(child)
+                if (!is.null(found)) {
+                  return(found)
+                }
+              }
+              NULL
+            }
+            make_namespace <- eval(
+              find_make_namespace(body(base::loadNamespace)),
+              envir = baseenv()
+            )
+            stopifnot(is.function(make_namespace))
+            42L
+            """)
+        client.send(r=r)
+        assert last_tool_text(client) == "[1] 42\n"
+        assert len(ir_run_records(record)) == baseline
+        return client._finish()
+
+
 def test_r_activation_failure_requires_restart_without_stopping_worker(
     binary: Path,
 ) -> Transcript:

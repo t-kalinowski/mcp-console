@@ -215,6 +215,10 @@ base::local(
       )
       base::lockEnvironment(load_namespace_environment, bindings = TRUE)
       base::stopifnot(
+        !base::identical(
+          base::environment(managed_load_namespace),
+          base::environment(original_load_namespace)
+        ),
         base::identical(
           base::formals(managed_load_namespace),
           base::formals(original_load_namespace)
