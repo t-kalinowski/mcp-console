@@ -20,7 +20,8 @@ for name in os.listdir("/dev/fd"):
         extra_descriptors.append(descriptor)
 
 marker = Path(os.environ["TMPDIR"]) / "mcp-console-startup-marker"
-marker.write_text(
+marker_temporary = marker.with_name(f".{marker.name}-{os.getpid()}")
+marker_temporary.write_text(
     json.dumps(
         {
             "pid": os.getpid(),
@@ -29,6 +30,7 @@ marker.write_text(
     ),
     encoding="utf-8",
 )
+marker_temporary.replace(marker)
 
 binary = os.environ["MCP_CONSOLE_TEST_BINARY"]
 os.execv(binary, [binary, "worker-relay", *sys.argv[1:]])

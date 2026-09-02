@@ -168,7 +168,7 @@ def _worker_generation_processes(server_pid: int) -> tuple[int, int]:
         if manager and root:
             return root[0], manager[0]
         assert time.monotonic() < deadline, (
-            "worker generation did not start its root and crash manager"
+            "worker generation did not start its root and manager"
         )
         time.sleep(0.01)
 

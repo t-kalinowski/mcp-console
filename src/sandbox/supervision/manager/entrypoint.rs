@@ -1,18 +1,20 @@
-use super::super::process::{ProcessIdentity, process_info};
-use super::super::process_tracker::{DescendantTracker, EventWait};
-use super::super::process_tree::PROCESS_REAP_EVENT;
-use super::protocol;
-use std::fs;
-use std::io::Write;
-use std::os::fd::{AsRawFd, FromRawFd};
+use super::super::process::{ProcessIdentity, process_info, signal_process};
+use super::super::process_tracker::DescendantTracker;
+use super::{protocol, stop_process_group, with_prior_error};
+use crate::sandbox::platform;
+use std::io::{Read, Write};
+use std::net::Shutdown;
+use std::os::fd::FromRawFd;
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-const READY: u8 = 1;
+type GroupBackstop = Mutex<bool>;
 
 pub(super) fn run() -> Result<(), String> {
-    let mut stream = inherited_control();
+    // SAFETY: the owner transfers its private control socket as the manager's
+    // standard input and retains no manager-side copy after spawning.
+    let mut stream = unsafe { UnixStream::from_raw_fd(libc::STDIN_FILENO) };
     let protocol::Initialization {
         owner_pid,
         root_pid,
@@ -27,246 +29,263 @@ pub(super) fn run() -> Result<(), String> {
             "sandbox manager owner changed before commitment: expected {owner_pid}, found {parent_pid}"
         ));
     }
-    let owner = process_info(owner_pid)?
-        .filter(|info| !info.is_zombie)
-        .ok_or_else(|| format!("sandbox manager owner {owner_pid} exited before startup"))?
-        .identity;
-    let root_info = process_info(root_pid)?
+    let info = process_info(root_pid)?
         .ok_or_else(|| format!("sandbox root {root_pid} exited before manager startup"))?;
-    if root_info.parent_pid != owner_pid {
+    if info.parent_pid != owner_pid {
         return Err(format!(
             "sandbox root {root_pid} is not a child of manager owner {owner_pid}"
         ));
     }
+
     let tracker =
         DescendantTracker::start(root_pid).map_err(|failure| failure.retire(cleanup_timeout))?;
-    let temporary_directory = match AdoptedTemporaryDirectory::adopt(temporary_directory, owner_pid)
-    {
-        Ok(directory) => directory,
-        Err(error) => {
-            return with_cleanup(error, tracker, false, cleanup_timeout);
-        }
-    };
-    if let Err(error) = register_owner_exit(&tracker, owner) {
-        return finish_startup_failure(error, tracker, temporary_directory, cleanup_timeout);
-    }
-    if let Err(error) = stream.write_all(&[READY]) {
+    let temporary_directory = platform::TemporaryDirectory::adopt(temporary_directory, owner_pid)?;
+    let root = info.identity;
+
+    if let Err(error) = stream.write_all(&[protocol::READY]) {
         return finish_startup_failure(
             format!("failed to report sandbox manager readiness: {error}"),
+            root,
             tracker,
             temporary_directory,
             cleanup_timeout,
         );
     }
-    match supervise_owner(tracker, owner, &mut stream, cleanup_timeout) {
-        Ok(TemporaryDirectoryDisposition::Remove) => Ok(()),
-        Ok(TemporaryDirectoryDisposition::Preserve) => {
+
+    let mut commit = [0];
+    if let Err(error) = stream.read_exact(&mut commit) {
+        return finish_startup_failure(
+            format!("sandbox manager ownership was not committed: {error}"),
+            root,
+            tracker,
+            temporary_directory,
+            cleanup_timeout,
+        );
+    }
+    if commit != [protocol::COMMIT] {
+        return finish_startup_failure(
+            "sandbox manager ownership commit is invalid".to_string(),
+            root,
+            tracker,
+            temporary_directory,
+            cleanup_timeout,
+        );
+    }
+
+    let tracker_control = match stream.try_clone() {
+        Ok(control) => control,
+        Err(error) => {
+            return finish_startup_failure(
+                format!("failed to monitor sandbox manager control: {error}"),
+                root,
+                tracker,
+                temporary_directory,
+                cleanup_timeout,
+            );
+        }
+    };
+    let group_backstop = Arc::new(GroupBackstop::new(false));
+    let tracker_group_backstop = Arc::clone(&group_backstop);
+    let tracker_thread = std::thread::spawn(move || {
+        supervise_tracker(
+            tracker,
+            cleanup_timeout,
+            root,
+            tracker_control,
+            tracker_group_backstop,
+        )
+    });
+    if let Err(error) = stream.write_all(&[protocol::COMMITTED]) {
+        return finish_committed_startup_failure(
+            format!("failed to confirm sandbox manager ownership: {error}"),
+            root,
+            &stream,
+            tracker_thread,
+            &group_backstop,
+            temporary_directory,
+        );
+    }
+    let disposition = protocol::read_owner_disposition(&mut stream);
+    if matches!(disposition, protocol::OwnerDisposition::RetirementStarted) {
+        return finish_retirement(
+            root,
+            &mut stream,
+            tracker_thread,
+            &group_backstop,
+            temporary_directory,
+        );
+    }
+    let stop_root = !matches!(&disposition, protocol::OwnerDisposition::Finish);
+    let mut error = match disposition {
+        protocol::OwnerDisposition::Finish
+        | protocol::OwnerDisposition::Stop
+        | protocol::OwnerDisposition::Closed => None,
+        protocol::OwnerDisposition::RemoveTemporaryDirectory
+        | protocol::OwnerDisposition::PreserveTemporaryDirectory => {
+            Some("sandbox manager received a disposition before retirement started".to_string())
+        }
+        protocol::OwnerDisposition::RetirementStarted => unreachable!(),
+        protocol::OwnerDisposition::Failed(error) => Some(error),
+    };
+    if stop_root {
+        if let Err(group_error) = run_group_backstop(root, &group_backstop) {
+            error = Some(with_prior_error(error, group_error));
+        }
+        if let Err(signal_error) = signal_process(root, libc::SIGKILL) {
+            error = Some(with_prior_error(error, signal_error));
+        }
+    }
+    if let Err(tracker_error) = join_tracker(tracker_thread) {
+        error = Some(with_prior_error(error, tracker_error));
+    }
+    if let Err(group_error) = run_group_backstop(root, &group_backstop) {
+        error = Some(with_prior_error(error, group_error));
+    }
+    if error.is_some() {
+        temporary_directory.preserve();
+    }
+    error.map_or(Ok(()), Err)
+}
+
+fn finish_retirement(
+    root: ProcessIdentity,
+    stream: &mut UnixStream,
+    tracker_thread: std::thread::JoinHandle<Result<(), String>>,
+    group_backstop: &GroupBackstop,
+    temporary_directory: platform::TemporaryDirectory,
+) -> Result<(), String> {
+    let mut error = join_tracker(tracker_thread).err();
+    if let Err(group_error) = run_group_backstop(root, group_backstop) {
+        error = Some(with_prior_error(error, group_error));
+    }
+    if let Some(error) = error {
+        temporary_directory.preserve();
+        return Err(error);
+    }
+
+    if protocol::write_cleanup_complete(stream).is_err() {
+        temporary_directory.preserve();
+        return Ok(());
+    }
+    match protocol::read_owner_disposition(stream) {
+        protocol::OwnerDisposition::RemoveTemporaryDirectory => Ok(()),
+        protocol::OwnerDisposition::PreserveTemporaryDirectory
+        | protocol::OwnerDisposition::Closed => {
             temporary_directory.preserve();
             Ok(())
         }
-        Err(error) => {
+        protocol::OwnerDisposition::Failed(error) => {
             temporary_directory.preserve();
             Err(error)
         }
-    }
-}
-
-enum TemporaryDirectoryDisposition {
-    Remove,
-    Preserve,
-}
-
-fn supervise_owner(
-    mut tracker: DescendantTracker,
-    owner: ProcessIdentity,
-    stream: &mut UnixStream,
-    cleanup_timeout: Duration,
-) -> Result<TemporaryDirectoryDisposition, String> {
-    loop {
-        match identity_is_live(owner) {
-            Ok(false) => {
-                finish_tracker(tracker, false, cleanup_timeout)?;
-                return await_temporary_directory_disposition(stream);
-            }
-            Ok(true) => {}
-            Err(error) => {
-                return with_cleanup(error, tracker, false, cleanup_timeout);
-            }
-        }
-        match tracker.root_has_exited() {
-            Ok(true) => {
-                finish_tracker(tracker, true, cleanup_timeout)?;
-                return await_temporary_directory_disposition(stream);
-            }
-            Ok(false) => {}
-            Err(error) => {
-                return with_cleanup(error, tracker, false, cleanup_timeout);
-            }
-        }
-
-        match tracker.wait_for_events(None) {
-            Ok(EventWait::Events | EventWait::RootExited | EventWait::Wakeup) => {}
-            Ok(EventWait::TimedOut) => {
-                return with_cleanup(
-                    "sandbox manager process wait unexpectedly timed out".to_string(),
-                    tracker,
-                    false,
-                    cleanup_timeout,
-                );
-            }
-            Err(error) => {
-                return with_cleanup(error, tracker, false, cleanup_timeout);
-            }
+        protocol::OwnerDisposition::Finish
+        | protocol::OwnerDisposition::Stop
+        | protocol::OwnerDisposition::RetirementStarted => {
+            temporary_directory.preserve();
+            Err("sandbox manager received an invalid retirement disposition".to_string())
         }
     }
-}
-
-fn await_temporary_directory_disposition(
-    stream: &mut UnixStream,
-) -> Result<TemporaryDirectoryDisposition, String> {
-    let mut retirement_started = false;
-    loop {
-        match protocol::read_retirement_command(stream)? {
-            Some(protocol::RetirementCommand::Started) if !retirement_started => {
-                retirement_started = true;
-                if protocol::write_cleanup_complete(stream).is_err() {
-                    return Ok(TemporaryDirectoryDisposition::Preserve);
-                }
-            }
-            Some(protocol::RetirementCommand::Started) => {
-                return Err("sandbox manager received duplicate retirement start".to_string());
-            }
-            Some(protocol::RetirementCommand::RemoveTemporaryDirectory) if retirement_started => {
-                return Ok(TemporaryDirectoryDisposition::Remove);
-            }
-            Some(protocol::RetirementCommand::PreserveTemporaryDirectory) if retirement_started => {
-                return Ok(TemporaryDirectoryDisposition::Preserve);
-            }
-            Some(
-                protocol::RetirementCommand::RemoveTemporaryDirectory
-                | protocol::RetirementCommand::PreserveTemporaryDirectory,
-            ) => {
-                return Err(
-                    "sandbox manager received a disposition before retirement started".to_string(),
-                );
-            }
-            None if retirement_started => {
-                return Ok(TemporaryDirectoryDisposition::Preserve);
-            }
-            None => return Ok(TemporaryDirectoryDisposition::Remove),
-        }
-    }
-}
-
-fn register_owner_exit(tracker: &DescendantTracker, owner: ProcessIdentity) -> Result<(), String> {
-    let event = libc::kevent {
-        ident: owner.pid as libc::uintptr_t,
-        filter: libc::EVFILT_PROC,
-        flags: libc::EV_ADD | libc::EV_CLEAR,
-        fflags: libc::NOTE_EXIT | PROCESS_REAP_EVENT,
-        data: 0,
-        udata: std::ptr::null_mut(),
-    };
-    loop {
-        // SAFETY: the kqueue descriptor is live, `event` is initialized, and
-        // this submission supplies no output buffer.
-        let result = unsafe {
-            libc::kevent(
-                tracker.kqueue.as_raw_fd(),
-                &event,
-                1,
-                std::ptr::null_mut(),
-                0,
-                std::ptr::null(),
-            )
-        };
-        if result >= 0 {
-            return Ok(());
-        }
-        let error = std::io::Error::last_os_error();
-        if error.kind() != std::io::ErrorKind::Interrupted {
-            return Err(format!("failed to observe sandbox manager owner: {error}"));
-        }
-    }
-}
-
-fn identity_is_live(identity: ProcessIdentity) -> Result<bool, String> {
-    Ok(
-        process_info(identity.pid)?
-            .is_some_and(|info| info.identity == identity && !info.is_zombie),
-    )
-}
-
-fn with_cleanup<T>(
-    error: String,
-    tracker: DescendantTracker,
-    root_exited: bool,
-    cleanup_timeout: Duration,
-) -> Result<T, String> {
-    match finish_tracker(tracker, root_exited, cleanup_timeout) {
-        Ok(()) => Err(error),
-        Err(cleanup_error) => Err(format!("{error}; additionally, {cleanup_error}")),
-    }
-}
-
-fn finish_tracker(
-    tracker: DescendantTracker,
-    root_exited: bool,
-    cleanup_timeout: Duration,
-) -> Result<(), String> {
-    tracker.terminate(root_exited, cleanup_timeout)
 }
 
 fn finish_startup_failure(
-    error: String,
+    mut error: String,
+    root: ProcessIdentity,
     tracker: DescendantTracker,
-    temporary_directory: AdoptedTemporaryDirectory,
+    temporary_directory: platform::TemporaryDirectory,
     cleanup_timeout: Duration,
 ) -> Result<(), String> {
-    let result = with_cleanup(error, tracker, false, cleanup_timeout);
-    if result.is_err() {
+    let mut cleanup_failed = false;
+    if let Err(group_error) = stop_process_group(root) {
+        error.push_str(&format!("; additionally, {group_error}"));
+        cleanup_failed = true;
+    }
+    if let Err(signal_error) = signal_process(root, libc::SIGKILL) {
+        error.push_str(&format!("; additionally, {signal_error}"));
+    }
+    if let Err(cleanup_error) = tracker.supervise(cleanup_timeout) {
+        error.push_str(&format!("; additionally, {cleanup_error}"));
+        cleanup_failed = true;
+    }
+    if cleanup_failed {
         temporary_directory.preserve();
     }
-    result
+    Err(error)
 }
 
-fn inherited_control() -> UnixStream {
-    // SAFETY: the hidden manager entry point is launched with its owned control
-    // stream on fd 0 and does not otherwise use standard input.
-    unsafe { UnixStream::from_raw_fd(libc::STDIN_FILENO) }
+fn supervise_tracker(
+    tracker: DescendantTracker,
+    cleanup_timeout: Duration,
+    root: ProcessIdentity,
+    control: UnixStream,
+    group_backstop: Arc<GroupBackstop>,
+) -> Result<(), String> {
+    let mut error = tracker.supervise(cleanup_timeout).err();
+    if let Err(group_error) = run_group_backstop(root, &group_backstop) {
+        error = Some(with_prior_error(error, group_error));
+    }
+    let Some(mut error) = error else {
+        return Ok(());
+    };
+    if let Err(signal_error) = signal_process(root, libc::SIGKILL) {
+        error = with_prior_error(Some(error), signal_error);
+    }
+    if let Err(control_error) = control.shutdown(Shutdown::Both) {
+        error = with_prior_error(
+            Some(error),
+            format!("failed to close sandbox manager control: {control_error}"),
+        );
+    }
+    Err(error)
 }
 
-struct AdoptedTemporaryDirectory(PathBuf);
-
-impl AdoptedTemporaryDirectory {
-    fn adopt(path: PathBuf, owner_pid: libc::pid_t) -> Result<Self, String> {
-        let path = path.canonicalize().map_err(|error| {
-            format!(
-                "failed to resolve sandbox temporary directory {}: {error}",
-                path.display()
-            )
-        })?;
-        let expected_prefix = format!("mcp-console-tmp-{owner_pid}-");
-        let valid_name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.starts_with(&expected_prefix));
-        let expected_parent = std::env::temp_dir().canonicalize().map_err(|error| {
-            format!("failed to resolve the system temporary directory: {error}")
-        })?;
-        if !valid_name || path.parent() != Some(expected_parent.as_path()) || !path.is_dir() {
-            return Err("sandbox temporary directory has invalid ownership".to_string());
-        }
-        Ok(Self(path))
+fn finish_committed_startup_failure(
+    mut error: String,
+    root: ProcessIdentity,
+    control: &UnixStream,
+    tracker_thread: std::thread::JoinHandle<Result<(), String>>,
+    group_backstop: &GroupBackstop,
+    temporary_directory: platform::TemporaryDirectory,
+) -> Result<(), String> {
+    let mut cleanup_failed = false;
+    if let Err(group_error) = run_group_backstop(root, group_backstop) {
+        error = with_prior_error(Some(error), group_error);
+        cleanup_failed = true;
     }
-
-    fn preserve(self) {
-        std::mem::forget(self);
+    if let Err(signal_error) = signal_process(root, libc::SIGKILL) {
+        error = with_prior_error(Some(error), signal_error);
     }
+    if let Err(control_error) = control.shutdown(Shutdown::Both) {
+        error = with_prior_error(
+            Some(error),
+            format!("failed to close sandbox manager control: {control_error}"),
+        );
+    }
+    if let Err(cleanup_error) = join_tracker(tracker_thread) {
+        error = with_prior_error(Some(error), cleanup_error);
+        cleanup_failed = true;
+    }
+    if cleanup_failed {
+        temporary_directory.preserve();
+    }
+    Err(error)
 }
 
-impl Drop for AdoptedTemporaryDirectory {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
+fn run_group_backstop(root: ProcessIdentity, group_backstop: &GroupBackstop) -> Result<(), String> {
+    // Tracker completion and owner loss can race. The first caller propagates
+    // failure from its validated root; do not retry across that identity boundary.
+    let mut started = group_backstop
+        .lock()
+        .map_err(|_| "sandbox manager group backstop state was poisoned".to_string())?;
+    if *started {
+        return Ok(());
     }
+    *started = true;
+    stop_process_group(root)
+}
+
+fn join_tracker(tracker_thread: std::thread::JoinHandle<Result<(), String>>) -> Result<(), String> {
+    tracker_thread
+        .join()
+        .map_err(|_| "sandbox manager process tracker failed".to_string())
+        .and_then(|result| result)
 }

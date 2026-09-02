@@ -469,8 +469,9 @@ def run_controlled_restart_requirements(relay: ScriptedRelay) -> None:
         relay.retire()
         return
 
-    relay.make_checkpoint(RESTART_REQUIREMENTS_EVALUATION_RECEIVED_NAME)
+    # The received checkpoint publishes that both sides of the gate are ready.
     relay.make_checkpoint(RESTART_REQUIREMENTS_EVALUATION_RELEASE_NAME)
+    relay.make_checkpoint(RESTART_REQUIREMENTS_EVALUATION_RECEIVED_NAME)
     relay.ready()
     relay.expect({"kind": "stdin", "data": "replacement requirement input\n"})
     relay.expect(

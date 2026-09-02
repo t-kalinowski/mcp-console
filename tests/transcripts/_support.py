@@ -218,11 +218,30 @@ def darwin_process_waits_for_control(
     if resources is None:
         return False
     file_descriptors, thread_info = resources
-    return file_descriptors == {
+    inherited_stdin_control = file_descriptors == {
         (0, prox_fdtype_socket),
         (1, prox_fdtype_vnode),
         (2, prox_fdtype_vnode),
-    } and _darwin_main_thread_waits(thread_info)
+    }
+    standard_descriptors = {
+        (0, prox_fdtype_vnode),
+        (1, prox_fdtype_vnode),
+        (2, prox_fdtype_vnode),
+    }
+    inherited_extra_control = (
+        standard_descriptors.issubset(file_descriptors)
+        and len(
+            {
+                descriptor
+                for descriptor, descriptor_type in file_descriptors
+                if descriptor > 2 and descriptor_type == prox_fdtype_socket
+            }
+        )
+        == 1
+    )
+    return (
+        inherited_stdin_control or inherited_extra_control
+    ) and _darwin_main_thread_waits(thread_info)
 
 
 def darwin_process_waits_for_startup_release(
@@ -292,6 +311,119 @@ class FifoCheckpoint:
 
     def release(self) -> None:
         assert os.write(self.descriptor, b"1") == 1
+
+
+def build_manager_interposer(directory: Path) -> Path:
+    source = directory / "manager-interposer.c"
+    library = directory / "manager-interposer.dylib"
+    source.write_text(
+        r"""
+#include <crt_externs.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <stdatomic.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <unistd.h>
+
+typedef int (*killpg_function)(pid_t, int);
+typedef ssize_t (*send_function)(int, const void *, size_t, int);
+
+static _Atomic int reported_group_close = 0;
+
+static killpg_function next_killpg(void) {
+    return killpg;
+}
+
+static send_function next_send(void) {
+    return send;
+}
+
+static int is_manager(void) {
+    int argc = *_NSGetArgc();
+    char **argv = *_NSGetArgv();
+    return argc > 1 && strcmp(argv[1], "sandbox-manager") == 0;
+}
+
+static void checkpoint(const char *name) {
+    const char *path = getenv(name);
+    if (path == NULL) {
+        return;
+    }
+    int descriptor = open(path, O_WRONLY);
+    if (descriptor < 0) {
+        return;
+    }
+    char byte = '1';
+    write(descriptor, &byte, sizeof(byte));
+    close(descriptor);
+}
+
+static ssize_t gate_manager_commit(
+    int socket,
+    const void *buffer,
+    size_t length,
+    int flags
+) {
+    if (is_manager()
+        && socket == STDIN_FILENO
+        && length == 1
+        && ((const uint8_t *)buffer)[0] == 7) {
+        checkpoint("MCP_CONSOLE_TEST_MANAGER_COMMITTED_READY");
+        const char *release = getenv("MCP_CONSOLE_TEST_MANAGER_COMMITTED_RELEASE");
+        if (release != NULL) {
+            int descriptor = open(release, O_RDONLY);
+            char byte;
+            if (descriptor >= 0) {
+                read(descriptor, &byte, sizeof(byte));
+                close(descriptor);
+            }
+        }
+    }
+    send_function send_next = next_send();
+    return send_next(socket, buffer, length, flags);
+}
+
+static int report_manager_group_close(pid_t process_group_id, int number) {
+    if (number == SIGKILL
+        && is_manager()
+        && atomic_exchange(&reported_group_close, 1) == 0) {
+        checkpoint("MCP_CONSOLE_TEST_MANAGER_GROUP_CLOSED");
+    }
+    killpg_function killpg_next = next_killpg();
+    return killpg_next(process_group_id, number);
+}
+
+__attribute__((used))
+static struct {
+    const void *replacement;
+    const void *replacee;
+} interposers[] __attribute__((section("__DATA,__interpose"))) = {
+    {(const void *)&gate_manager_commit, (const void *)&send},
+    {(const void *)&report_manager_group_close, (const void *)&killpg},
+};
+""".removeprefix("\n"),
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            "cc",
+            "-dynamiclib",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            source,
+            "-o",
+            library,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return library
 
 
 def checkpoint_uv_environment(
@@ -727,9 +859,26 @@ class McpClient:
         self.stdin.flush()
         return entry
 
-    def _receive(self, entry: TranscriptEntry) -> None:
+    def _read_response_line(self) -> str:
         line = self.stdout.readline()
-        assert line, "mcp-console stopped before replying"
+        if line:
+            return line
+
+        return_code = self.process.poll()
+        standard_error = ""
+        readable, _, _ = select.select([self.stderr], [], [], 0)
+        if readable:
+            standard_error = os.read(self.stderr.fileno(), 64 * 1024).decode(
+                "utf-8",
+                errors="replace",
+            )
+        raise AssertionError(
+            "mcp-console stdout closed before replying: "
+            f"return_code={return_code!r}, stderr={standard_error!r}"
+        )
+
+    def _receive(self, entry: TranscriptEntry) -> None:
+        line = self._read_response_line()
         message = json.loads(line)
         assert message.pop("jsonrpc", None) == "2.0", message
         assert message.pop("id", None) == entry["id"], message
@@ -741,8 +890,7 @@ class McpClient:
         pending = {entry["id"]: entry for entry in entries}
         assert len(pending) == len(entries), "response batch reused a request ID"
         for _ in entries:
-            line = self.stdout.readline()
-            assert line, "mcp-console stopped before replying"
+            line = self._read_response_line()
             message = json.loads(line)
             assert message.pop("jsonrpc", None) == "2.0", message
             request_id = message.pop("id", None)

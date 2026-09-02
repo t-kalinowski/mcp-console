@@ -148,6 +148,7 @@ fn set_foreground_process_group(
 pub(super) struct SignalRelay {
     wait_set: libc::sigset_t,
     previous_mask: libc::sigset_t,
+    restore_pending: bool,
 }
 
 impl SignalRelay {
@@ -164,9 +165,9 @@ impl SignalRelay {
         }
 
         // Preserve inherited masks and ignored dispositions. Previously blocked
-        // signals remain pending, while Darwin discards ignored signals. This
-        // one-shot launcher keeps its new mask until it exits; the child restores
-        // the inherited mask before exec.
+        // signals remain pending, while Darwin discards ignored signals. The
+        // child restores this mask before exec, and the launcher restores it
+        // after the sandbox root exits.
         let mut wait_set: libc::sigset_t = unsafe { std::mem::zeroed() };
         unsafe { libc::sigemptyset(&mut wait_set) };
         for signal in FORWARDED_SIGNALS {
@@ -178,6 +179,7 @@ impl SignalRelay {
         Ok(Self {
             wait_set,
             previous_mask,
+            restore_pending: true,
         })
     }
 
@@ -210,6 +212,27 @@ impl SignalRelay {
                 Ok(())
             });
         }
+    }
+
+    pub(super) fn restore(mut self) -> Result<(), String> {
+        self.restore_mask()
+    }
+
+    fn restore_mask(&mut self) -> Result<(), String> {
+        if !self.restore_pending {
+            return Ok(());
+        }
+        let mask_result = unsafe {
+            libc::pthread_sigmask(libc::SIG_SETMASK, &self.previous_mask, std::ptr::null_mut())
+        };
+        if mask_result != 0 {
+            return Err(format!(
+                "failed to restore the launcher signal mask: {}",
+                std::io::Error::from_raw_os_error(mask_result)
+            ));
+        }
+        self.restore_pending = false;
+        Ok(())
     }
 
     pub(super) fn relayed_signals(&self) -> impl Iterator<Item = libc::c_int> + '_ {
@@ -252,6 +275,12 @@ impl SignalRelay {
                 }
             }
         }
+    }
+}
+
+impl Drop for SignalRelay {
+    fn drop(&mut self) {
+        let _ = self.restore_mask();
     }
 }
 

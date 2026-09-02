@@ -32,7 +32,7 @@ pub(super) fn wait_for_process_exit_without_reaping(
         // SAFETY: `information` points to writable `siginfo_t` storage and the
         // positive PID names our direct child. `WNOWAIT` observes termination
         // without consuming the wait status, keeping the PID unavailable for
-        // reuse until the caller finishes process-group cleanup and reaps it.
+        // reuse until the caller finishes its cleanup and reaps it.
         let result = unsafe {
             libc::waitid(
                 libc::P_PID,
@@ -62,9 +62,9 @@ pub(super) fn wait_for_process_exit_without_reaping(
                 CHILD_STOPPED | CHILD_CONTINUED => {
                     // Darwin may report a pending stop or continue notification
                     // even though this observation requested only `WEXITED`.
-                    // Consume only non-exit notifications so a stopped relay is
-                    // not mistaken for an exited relay, while leaving any exit
-                    // status waitable to pin the process-group identity.
+                    // Consume only non-exit notifications so a stopped child is
+                    // not mistaken for an exited child, while leaving any exit
+                    // status waitable to pin its identity.
                     if let Err(error) = consume_non_exit_notification(wait_id, process_id) {
                         if error.kind() == io::ErrorKind::Interrupted {
                             if Instant::now() >= deadline {
@@ -98,6 +98,58 @@ pub(super) fn wait_for_process_exit_without_reaping(
             return Ok(false);
         }
         std::thread::sleep(CHILD_EXIT_POLL_INTERVAL.min(deadline.saturating_duration_since(now)));
+    }
+}
+
+pub(super) fn wait_for_process_exit_without_reaping_blocking(process_id: u32) -> io::Result<()> {
+    let process_id = valid_process_id(process_id, "process")?;
+    let wait_id = libc::id_t::try_from(process_id)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid process ID"))?;
+
+    loop {
+        let mut information = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+        // SAFETY: `information` points to writable `siginfo_t` storage and the
+        // positive PID names our direct child. `WNOWAIT` leaves the exit status
+        // available for the monitor thread to reap after it inspects the result.
+        let result = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                wait_id,
+                information.as_mut_ptr(),
+                libc::WEXITED | libc::WNOWAIT,
+            )
+        };
+        if result < 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error);
+        }
+
+        // SAFETY: successful `waitid` initialized the supplied `siginfo_t`.
+        let information = unsafe { information.assume_init() };
+        if information.si_pid != process_id {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "waitid returned process {} while waiting for {process_id}",
+                    information.si_pid
+                ),
+            ));
+        }
+        match information.si_code {
+            CHILD_EXITED | CHILD_KILLED | CHILD_DUMPED => return Ok(()),
+            CHILD_STOPPED | CHILD_CONTINUED => {
+                consume_non_exit_notification(wait_id, process_id)?;
+            }
+            code => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("waitid returned unexpected child status code {code}"),
+                ));
+            }
+        }
     }
 }
 
@@ -395,7 +447,7 @@ pub(super) fn sandboxed_command() -> Result<(Command, TemporaryDirectory), Strin
     Ok((launcher, temporary_directory))
 }
 
-pub(super) struct TemporaryDirectory(PathBuf);
+pub(crate) struct TemporaryDirectory(PathBuf);
 
 impl TemporaryDirectory {
     fn new() -> Result<Self, String> {
@@ -428,6 +480,41 @@ impl TemporaryDirectory {
 
     pub(super) fn path(&self) -> &Path {
         &self.0
+    }
+
+    pub(crate) fn adopt(path: PathBuf, owner_pid: libc::pid_t) -> Result<Self, String> {
+        if owner_pid <= 0 {
+            return Err("sandbox temporary directory has invalid ownership".to_string());
+        }
+
+        let path = path.canonicalize().map_err(|error| {
+            format!(
+                "failed to resolve sandbox temporary directory {}: {error}",
+                path.display()
+            )
+        })?;
+        let expected_prefix = format!("mcp-console-tmp-{owner_pid}-");
+        let valid_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with(&expected_prefix));
+        let expected_parent = std::env::temp_dir().canonicalize().map_err(|error| {
+            format!("failed to resolve the system temporary directory: {error}")
+        })?;
+        if !valid_name || path.parent() != Some(expected_parent.as_path()) {
+            return Err("sandbox temporary directory has invalid ownership".to_string());
+        }
+        if !path.is_dir() {
+            return Err(format!(
+                "sandbox temporary directory {} is not a directory",
+                path.display()
+            ));
+        }
+        Ok(Self(path))
+    }
+
+    pub(crate) fn preserve(self) {
+        std::mem::forget(self);
     }
 }
 

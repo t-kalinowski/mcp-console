@@ -58,9 +58,9 @@ They are not MCP, relay, sideband, or worker-stream records.
 MCP Console has four process boundaries:
 
 1. The client and server communicate through MCP JSON-RPC over stdio.
-2. Each host sandbox owner initializes one manager over a private fixed message on manager fd 0, receives its readiness response, and uses the same stream for the bounded normal-retirement disposition handoff.
+2. Each host sandbox owner initializes one manager over a private inherited Unix socket, receives its readiness and ownership-commit responses, and uses the same stream for bounded retirement.
    The server starts one manager for each worker generation, which may evaluate multiple cells before restart or replacement.
-   The standalone launcher starts one manager for each invocation of `mcp-console sandbox`, which runs one direct child command.
+   The standalone launcher starts one manager for each invocation of `mcp-console sandbox`, which runs one direct child command, and uses the stream for its final directory disposition.
 3. The server and one per-generation relay communicate through the private, ordered JSONL protocol in `docs/RELAY_PROTOCOL.md`.
 4. The relay and worker communicate through the worker sideband plus worker fd 0, 1, and 2 as documented in `docs/WORKER_PROTOCOL.md`.
 
@@ -69,14 +69,16 @@ Keep these ownership rules intact:
 - The relay is a thin ordered transport and worker supervisor.
   It owns local worker transports, sideband translation, and direct-worker signal delivery, bounded termination, and reaping.
   It preserves each producer's order and supplies serialized observation order; it does not reconstruct chronology across independent sideband, stdout, and stderr transports.
-- The server owns host-side relay lifetime observation and retirement, worker-generation state, operation admission, output cuts, pending-output budgets, response assembly, delivery ownership, retained requirements, and host resolvers.
-  It releases each relay root's private startup gate only after attaching its local observer and receiving manager readiness.
+- The server owns host-side relay lifetime orchestration and retirement, worker-generation state, operation admission, output cuts, pending-output budgets, response assembly, delivery ownership, retained requirements, and host resolvers.
+  It releases each relay root's private startup gate only after manager-failure recovery is installed and manager ownership is committed.
   Do not move these responsibilities into the relay.
-- The standalone launcher owns normal observation and retirement of its direct sandbox command, its exit status, and its final temporary-directory disposition.
-  It releases the command's private startup gate only after attaching its local observer and receiving manager readiness.
-  Do not move normal standalone cleanup or terminal semantics into the manager.
-- The sandbox manager owns only independent cleanup after abrupt loss of its server or standalone owner.
-  It observes exact process identities, does not own logical generation state or relay transport, and does not signal an unpinned process group.
+- Treat each relay and its worker process tree, and each standalone command tree, as one sandboxed lifetime.
+  A host-side sandbox manager owns primary observed-descendant tracking, bounded force termination, and private-directory cleanup for that lifetime.
+  Its host owner retains a backup directory guard and takes over bounded cleanup if the manager exits unsuccessfully while the sandbox root remains live and pinned.
+  That fallback can reconstruct only descendants still reachable from the root's current ancestry.
+- The standalone launcher owns the direct command's exit status, foreground-terminal transfer, signal relaying, and final temporary-directory disposition.
+  It releases the command's private startup gate only after manager ownership is committed, and retains the direct root waitably through manager cleanup.
+- The sandbox manager does not own logical generation state, command exit status, relay transport, or terminal semantics.
 - Restart, replacement, evaluation admission, stdin writes, resolver callbacks, and retained-environment commits are scoped to the worker generation that accepted them.
   Work admitted for an old generation must not reach its replacement.
 - R, Python, and DuckDB dependency resolution runs outside the worker sandbox.
@@ -102,7 +104,7 @@ Keep these ownership rules intact:
 - `src/relay_protocol.rs` — server-relay JSONL message and framing contract.
 - `src/worker_relay.rs` — sandboxed worker launch, I/O forwarding, signaling, shutdown, and reaping.
 - `src/worker_client.rs`, `src/worker_client/` — server-owned environment, evaluation, lifecycle, ordered event dispatch, output tape, and macOS relay transport.
-- `src/sandbox.rs`, `src/sandbox/{child,command,spawn}.rs`, `src/sandbox/supervision.rs`, `src/sandbox/supervision/` — sandbox command construction, launch, child retirement, owner-side descendant observation, and independent crash-manager supervision.
+- `src/sandbox.rs`, `src/sandbox/{child,command,spawn}.rs`, `src/sandbox/supervision.rs`, `src/sandbox/supervision/` — sandbox command construction, launch, child retirement, primary host-manager supervision, owner-side manager-failure recovery, and standalone job control.
 - `src/worker.rs`, `src/worker/embedded_r.rs`, `src/r_repl.c` — worker-facing facade, current embedded-R backend, cell dispatch, console callbacks, and the C-owned DLL-REPL boundary.
 
 ### Language adapters

@@ -382,7 +382,7 @@ Console, image, and permitted nested resolver frames do not by themselves change
 `python_activated` may occur while idle, evaluating, or preparing, but only for a matching managed environment.
 An input request during preparation is an error, as described above.
 
-The relay has independent producers for sideband, stdout, stderr, and process supervision.
+The relay has independent producers for sideband, stdout, stderr, and direct-worker lifecycle.
 It serializes their outer events without interleaving frames and preserves each producer's order.
 That serialized observation order does not reconstruct chronology between the worker's independent transports.
 
@@ -401,7 +401,9 @@ The shutdown frame may arrive while the worker is waiting for a nested resolver 
 
 Fd-0 closure and the `shutdown` frame are both generation-retirement signals, not evaluation or stdin-payload delimiters.
 A worker must not require both in a particular order.
-If it does not exit within the relay's supplied grace period, the relay forcibly terminates it and its supported process-group descendants.
+If it does not exit within the relay's supplied grace period, the relay forcibly terminates and reaps that direct child.
+This is a local relay-worker protocol mechanism, not whole-sandbox containment.
+The host-side sandbox manager owns primary cleanup of the relay-and-worker lifetime, including observed descendants that enter another process group or session, and the server waits for the sandbox-lifetime retirement barrier before replacement.
 The exact server-relay acceptance and retirement sequence is specified in [`RELAY_PROTOCOL.md`](RELAY_PROTOCOL.md).
 
 During retirement, the relay forwards every complete worker-sideband frame already buffered or immediately readable.

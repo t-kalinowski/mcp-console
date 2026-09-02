@@ -17,7 +17,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 #[cfg(target_os = "macos")]
-const CRASH_MANAGER_CLEANUP_TIMEOUT: Duration = Duration::from_secs(1);
+const MANAGER_CLEANUP_TIMEOUT: Duration = Duration::from_secs(1);
 #[cfg(target_os = "macos")]
 const TARGET_GATE_RELEASE: u8 = 1;
 
