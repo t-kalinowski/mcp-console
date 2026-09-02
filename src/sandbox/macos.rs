@@ -471,16 +471,17 @@ impl TemporaryDirectory {
                 )
             })?;
 
-        let path = path.canonicalize().map_err(|error| {
-            format!(
-                "failed to resolve temporary directory `{}`: {error}",
-                path.display()
-            )
-        })?;
-        Ok(Self {
+        let mut temporary_directory = Self {
             path,
             remove_on_drop: true,
-        })
+        };
+        temporary_directory.path = temporary_directory.path.canonicalize().map_err(|error| {
+            format!(
+                "failed to resolve temporary directory `{}`: {error}",
+                temporary_directory.path.display()
+            )
+        })?;
+        Ok(temporary_directory)
     }
 
     pub(super) fn path(&self) -> &Path {

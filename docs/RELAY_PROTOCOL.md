@@ -42,7 +42,8 @@ It passes one worker sideband endpoint through `MCP_CONSOLE_SIDEBAND_FD` togethe
 
 The relay owns the direct worker process and its local transports, translation between this protocol and the worker sideband, direct-worker signal delivery, deadline-bounded direct-worker termination, cleanup of remaining members of its worker process group, and direct-worker reaping.
 The host-side manager owns primary tracking and termination of the relay root and observed descendants across process-group and session changes, along with private-directory cleanup.
-The server retains a backup directory guard and a manager monitor outside the sandbox.
+The server retains the directory-creation guard until manager readiness, then relinquishes it while keeping the manager monitor and the path needed for successful pre-commit recovery.
+Once commitment begins, the manager is the sole directory-cleanup owner.
 The server owns generation state and host-side dependency resolution; see [Requirements and environments](REQUIREMENTS.md) for that trust boundary.
 
 ## Framing and raw bytes

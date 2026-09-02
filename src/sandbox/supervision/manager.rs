@@ -28,8 +28,7 @@ pub(crate) struct SandboxManager {
     child_identity: Option<ProcessIdentity>,
     monitor: Option<ManagerMonitor>,
     stream: Option<UnixStream>,
-    temporary_directory: Option<PathBuf>,
-    preserve_after_recovery: bool,
+    recovery_directory: Option<PathBuf>,
     cleanup_timeout: Duration,
     retirement_started: bool,
     cleanup_complete: bool,
@@ -101,8 +100,7 @@ impl SandboxManager {
             child_identity: Some(child_identity),
             monitor: None,
             stream: Some(stream),
-            temporary_directory: None,
-            preserve_after_recovery: false,
+            recovery_directory: None,
             cleanup_timeout,
             retirement_started: false,
             cleanup_complete: false,
@@ -152,7 +150,7 @@ impl SandboxManager {
         Ok(())
     }
 
-    /// Watches a ready manager and takes over cleanup only if it exits
+    /// Watches a ready manager and takes over process cleanup only if it exits
     /// unsuccessfully while the sandbox root remains live. The direct child
     /// remains waitable in its owner, so its PID cannot be reused while this
     /// monitor reconstructs the root's current process tree.
@@ -184,8 +182,8 @@ impl SandboxManager {
             "sandbox manager can be monitored only once"
         );
         assert!(
-            self.temporary_directory.is_none(),
-            "sandbox manager can own only one temporary directory"
+            self.recovery_directory.is_none(),
+            "sandbox manager can retain only one recovery directory"
         );
         let child = self
             .child
@@ -197,7 +195,7 @@ impl SandboxManager {
             .expect("ready sandbox manager identity should remain pinned");
         let root_pid = root_pid as libc::pid_t;
         assert!(root_pid > 0, "sandbox root PID should be valid");
-        self.temporary_directory = Some(temporary_directory.path().to_path_buf());
+        self.recovery_directory = Some(temporary_directory.path().to_path_buf());
         temporary_directory.relinquish();
         self.monitor = Some(ManagerMonitor::start(
             child,
@@ -209,9 +207,14 @@ impl SandboxManager {
     }
 
     pub(crate) fn commit(&mut self) -> Result<(), String> {
-        // Recovery after this point cannot reconstruct a descendant that the
-        // manager observed before it detached, so keep the directory in place.
-        self.preserve_after_recovery = true;
+        assert!(self.monitor.is_some(), "manager monitor is missing");
+        // From the COMMIT write onward, manager ownership may be committed.
+        // Leave the directory disposition to the manager.
+        drop(
+            self.recovery_directory
+                .take()
+                .expect("manager recovery directory is missing"),
+        );
         let stream = self
             .stream
             .as_mut()
@@ -374,10 +377,10 @@ impl SandboxManager {
     }
 
     fn finish_recovery_directory(&mut self, result: &Result<ManagerExit, String>) {
-        let Some(path) = self.temporary_directory.take() else {
+        let Some(path) = self.recovery_directory.take() else {
             return;
         };
-        if matches!(result, Ok(ManagerExit::Recovered)) && !self.preserve_after_recovery {
+        if matches!(result, Ok(ManagerExit::Recovered)) {
             // Before commitment, configured code is still gated. Successful
             // fallback cleanup therefore proves the adopted directory unused.
             let _ = fs::remove_dir_all(path);
