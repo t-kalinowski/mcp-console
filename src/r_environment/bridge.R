@@ -155,6 +155,81 @@ base::local(
       base::stop(outcome$message, call. = FALSE)
     }
 
+    # Keep R's loadNamespace syntax intact for packages that inspect its body.
+    # Intercept only the retryable missing-package path through lexical scope.
+    managed_with_restarts <- function(expr, ...) {
+      load_namespace_frame <- base::parent.frame()
+      base::withCallingHandlers(
+        base::withRestarts(expr, ...),
+        packageNotFoundError = function(condition) {
+          restart <- base::findRestart(
+            "retry_loadNamespace",
+            condition
+          )
+          partial <- base::get0(
+            "partial",
+            envir = load_namespace_frame,
+            inherits = FALSE,
+            ifnotfound = TRUE
+          )
+          if (
+            base::is.null(restart) ||
+              !base::is.null(condition$lib.loc) ||
+              !base::identical(partial, FALSE) ||
+              !is_plain_package_name(condition$package)
+          ) {
+            return(base::invisible(NULL))
+          }
+
+          outcome <- ensure_r_package(condition$package)
+          if (base::identical(outcome$kind, "failed")) {
+            signal_resolution_failure(outcome)
+          }
+          if (package_available(condition$package)) {
+            base::invokeRestart(restart)
+          }
+          base::invisible(NULL)
+        }
+      )
+    }
+
+    make_managed_load_namespace <- function() {
+      load_namespace_environment <- base::new.env(
+        parent = base::environment(original_load_namespace)
+      )
+      base::assign(
+        "withRestarts",
+        managed_with_restarts,
+        envir = load_namespace_environment
+      )
+
+      managed_load_namespace <- base::`environment<-`(
+        original_load_namespace,
+        load_namespace_environment
+      )
+      base::assign(
+        "loadNamespace",
+        managed_load_namespace,
+        envir = load_namespace_environment
+      )
+      base::lockEnvironment(load_namespace_environment, bindings = TRUE)
+      base::stopifnot(
+        !base::identical(
+          base::environment(managed_load_namespace),
+          base::environment(original_load_namespace)
+        ),
+        base::identical(
+          base::formals(managed_load_namespace),
+          base::formals(original_load_namespace)
+        ),
+        base::identical(
+          base::body(managed_load_namespace),
+          base::body(original_load_namespace)
+        )
+      )
+      managed_load_namespace
+    }
+
     library_wrapper <- function(
       package,
       help,
@@ -223,57 +298,6 @@ base::local(
       delegate(call, original_library, caller)
     }
 
-    load_namespace_wrapper <- function(
-      package,
-      lib.loc = NULL,
-      keep.source = getOption("keep.source.pkgs"),
-      partial = FALSE,
-      versionCheck = NULL,
-      keep.parse.data = getOption("keep.parse.data.pkgs")
-    ) {
-      call <- base::match.call(expand.dots = FALSE)
-      caller <- base::parent.frame()
-      package_value <- package
-      package_name <- base::as.character(package_value)[[1L]]
-      if (
-        !base::is.null(base::attr(
-          package_value,
-          "LibPath",
-          exact = TRUE
-        ))
-      ) {
-        call <- rewrite_argument(call, "package", package_value)
-        return(delegate(call, original_load_namespace, caller))
-      }
-      call <- rewrite_argument(call, "package", package_name)
-
-      library_paths <- lib.loc
-      if (!base::missing(lib.loc)) {
-        call <- rewrite_argument(call, "lib.loc", library_paths)
-      }
-      if (!base::is.null(library_paths)) {
-        return(delegate(call, original_load_namespace, caller))
-      }
-
-      partial_load <- partial
-      if (!base::missing(partial)) {
-        call <- rewrite_argument(call, "partial", partial_load)
-      }
-      if (!base::identical(partial_load, FALSE)) {
-        return(delegate(call, original_load_namespace, caller))
-      }
-
-      if (!is_plain_package_name(package_name)) {
-        return(delegate(call, original_load_namespace, caller))
-      }
-
-      outcome <- ensure_r_package(package_name)
-      if (base::identical(outcome$kind, "failed")) {
-        signal_resolution_failure(outcome)
-      }
-      delegate(call, original_load_namespace, caller)
-    }
-
     replace_base_binding <- function(name, value) {
       environment <- base::baseenv()
       base::stopifnot(base::bindingIsLocked(name, environment))
@@ -284,7 +308,7 @@ base::local(
 
     if (dynamic_resolution) {
       replace_base_binding("library", library_wrapper)
-      replace_base_binding("loadNamespace", load_namespace_wrapper)
+      replace_base_binding("loadNamespace", make_managed_load_namespace())
     }
 
     base::environment()

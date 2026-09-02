@@ -598,6 +598,52 @@ def test_preserves_base_r_loading_semantics_without_resolution(
         return client._finish()
 
 
+def test_loads_package_with_devtools(binary: Path) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        directory = Path(temporary)
+        fixture = Path(__file__).resolve().parents[2] / "fixtures" / "load_all"
+        package = directory / "package"
+        shutil.copytree(fixture, package)
+        environment, record = recording_ir_environment(directory)
+        client = McpClient(
+            binary,
+            ("serve",),
+            environment,
+            current_directory=package,
+        )
+        client._initialize_and_list_tools()
+        baseline = len(ir_run_records(record))
+
+        # fmt: r
+        r = code(r"""
+            stopifnot(
+              !isNamespaceLoaded("devtools"),
+              !isNamespaceLoaded("pkgload"),
+              !isNamespaceLoaded("mcpconsoleloadall")
+            )
+            devtools::load_all(
+              reset = TRUE,
+              recompile = FALSE,
+              export_all = FALSE,
+              helpers = FALSE,
+              quiet = TRUE
+            )
+            stopifnot(
+              !"internal_value" %in%
+                getNamespaceExports("mcpconsoleloadall")
+            )
+            list(
+              exported = mcpconsoleloadall::exported_value(),
+              internal = mcpconsoleloadall:::internal_value()
+            )
+            """)
+        client.send(r=r)
+        output = last_tool_text(client)
+        assert output == "$exported\n[1] 42\n\n$internal\n[1] 41\n\n", repr(output)
+        assert len(ir_run_records(record)) == baseline
+        return client._finish()
+
+
 def test_r_activation_failure_requires_restart_without_stopping_worker(
     binary: Path,
 ) -> Transcript:
