@@ -2,17 +2,15 @@ use std::collections::VecDeque;
 use std::error::Error;
 use std::ffi::{CStr, CString, c_char, c_int, c_uchar, c_void};
 use std::io;
-use std::os::fd::AsRawFd;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
 
+use super::core;
 use crate::cell::{Cell, Language};
 use crate::worker_protocol::{ConsoleChannel, ServerMessage, WorkerMessage};
 
 static R_MAIN_ARGS: OnceLock<Vec<CString>> = OnceLock::new();
-static WORKER_READER: OnceLock<Mutex<crate::sideband::Reader>> = OnceLock::new();
-static WORKER_WRITER: OnceLock<crate::sideband::Writer> = OnceLock::new();
 static R_REPL_INIT: OnceLock<ReplInit> = OnceLock::new();
 static R_REPL_DO_ONE: OnceLock<ReplDoOne> = OnceLock::new();
 static R_EVENTS: OnceLock<REvents> = OnceLock::new();
@@ -22,11 +20,7 @@ static CONSOLE_STDIN: Mutex<ConsoleStdin> = Mutex::new(ConsoleStdin {
     pushback: VecDeque::new(),
     line_prefix: Vec::new(),
 });
-static PENDING_SERVER_MESSAGES: Mutex<VecDeque<ServerMessage>> = Mutex::new(VecDeque::new());
-static WORKER_FAILURE: Mutex<Option<String>> = Mutex::new(None);
-static WORKER_SHUTDOWN: AtomicBool = AtomicBool::new(false);
 static EVALUATION_STARTED: AtomicBool = AtomicBool::new(false);
-static SQL_EVALUATION_STARTED: AtomicBool = AtomicBool::new(false);
 type ReplInit = unsafe extern "C-unwind" fn();
 type ReplDoOne = unsafe extern "C-unwind" fn() -> c_int;
 type TopLevelExec = unsafe extern "C-unwind" fn(
@@ -188,12 +182,7 @@ pub(crate) fn run() -> Result<(), Box<dyn Error>> {
     let r_home = harp::command::r_home_setup()?;
     normalize_interrupt_signal()?;
     initialize_r(&r_home)?;
-    WORKER_READER
-        .set(Mutex::new(reader))
-        .map_err(|_| io::Error::other("R worker sideband was already initialized"))?;
-    WORKER_WRITER
-        .set(writer.clone())
-        .map_err(|_| io::Error::other("R worker sideband was already initialized"))?;
+    core::initialize(reader, writer.clone())?;
     let graphics = crate::r_graphics::Bridge::initialize()?;
     let r_environment = crate::r_environment::Bridge::initialize()?;
     let python = crate::python::Runtime::initialize()?;
@@ -221,26 +210,23 @@ impl Runtime {
 
     fn wait_for_message(&self) -> Result<ServerMessage, String> {
         loop {
-            if WORKER_SHUTDOWN.load(Ordering::SeqCst) {
+            if core::is_shutting_down() {
                 return Ok(ServerMessage::Shutdown);
             }
-            if let Some(message) = take_pending_server_message()? {
+            if let Some(message) = core::take_pending_server_message()? {
                 return Ok(message);
             }
 
-            let (buffered, sideband_fd) = {
-                let reader = worker_reader()?;
-                (reader.has_buffered_data(), reader.as_raw_fd())
-            };
+            let (buffered, sideband_fd) = core::sideband_activity()?;
             if buffered {
-                return receive_sideband_message();
+                return core::receive_server_message();
             }
             if wait_for_activity(sideband_fd)? {
-                return receive_sideband_message();
+                return core::receive_server_message();
             }
 
             run_ready_handlers(&self.graphics)?;
-            if let Some(message) = take_worker_failure() {
+            if let Some(message) = core::take_worker_failure() {
                 return Err(message);
             }
         }
@@ -252,10 +238,10 @@ impl Runtime {
             ServerMessage::PreparePython { .. } | ServerMessage::PrepareR { .. }
         ) {
             run_ready_handlers(&self.graphics).map_err(io::Error::other)?;
-            if WORKER_SHUTDOWN.load(Ordering::SeqCst) {
+            if core::is_shutting_down() {
                 return Ok(false);
             }
-            if let Some(message) = take_worker_failure() {
+            if let Some(message) = core::take_worker_failure() {
                 return Err(io::Error::other(message).into());
             }
         }
@@ -271,10 +257,10 @@ impl Runtime {
                 );
                 check_interrupts();
 
-                if WORKER_SHUTDOWN.load(Ordering::SeqCst) {
+                if core::is_shutting_down() {
                     return Ok(false);
                 }
-                if let Some(message) = take_worker_failure().or_else(|| result.err()) {
+                if let Some(message) = core::take_worker_failure().or_else(|| result.err()) {
                     return Err(io::Error::other(message).into());
                 }
                 self.writer.send(&WorkerMessage::Completed)?;
@@ -283,10 +269,10 @@ impl Runtime {
             // nested host resolver registers its own interrupt target.
             ServerMessage::PreparePython { packages } => {
                 let result = defer_interrupts(|| self.python.prepare(packages), discard_interrupts);
-                if WORKER_SHUTDOWN.load(Ordering::SeqCst) {
+                if core::is_shutting_down() {
                     return Ok(false);
                 }
-                if let Some(message) = take_worker_failure() {
+                if let Some(message) = core::take_worker_failure() {
                     return Err(io::Error::other(message).into());
                 }
                 match result {
@@ -305,10 +291,10 @@ impl Runtime {
                     || self.r_environment.prepare(std::path::Path::new(&library)),
                     discard_interrupts,
                 );
-                if WORKER_SHUTDOWN.load(Ordering::SeqCst) {
+                if core::is_shutting_down() {
                     return Ok(false);
                 }
-                if let Some(message) = take_worker_failure() {
+                if let Some(message) = core::take_worker_failure() {
                     return Err(io::Error::other(message).into());
                 }
                 match result.map_err(io::Error::other)? {
@@ -389,209 +375,6 @@ fn console_interrupt_pending() -> bool {
         && unsafe { libr::get(libr::R_interrupts_suspended) == libr::Rboolean_FALSE }
 }
 
-pub(crate) fn resolve_python(
-    request: crate::worker_protocol::PythonResolveRequest,
-) -> Result<String, String> {
-    send_worker_message(&WorkerMessage::ResolvePython { request })?;
-    match receive_resolver_message().map_err(infrastructure_failure)? {
-        ServerMessage::PythonResolved { python } => {
-            crate::python::link_matplotlib_caches();
-            Ok(python)
-        }
-        ServerMessage::PythonResolutionFailed { message } => Err(message),
-        ServerMessage::RResolved { .. } | ServerMessage::RResolutionFailed { .. } => {
-            Err(infrastructure_failure(
-                "worker received an R environment response while resolving Python".to_string(),
-            ))
-        }
-        ServerMessage::PythonVersionResolved { .. }
-        | ServerMessage::PythonVersionResolutionFailed { .. } => Err(infrastructure_failure(
-            "worker received a Python version response while resolving Python".to_string(),
-        )),
-        ServerMessage::Shutdown => {
-            WORKER_SHUTDOWN.store(true, Ordering::SeqCst);
-            Err("worker is shutting down".to_string())
-        }
-        ServerMessage::Evaluate { .. } => Err(infrastructure_failure(
-            "worker received an evaluation while resolving Python".to_string(),
-        )),
-        ServerMessage::PreparePython { .. } => Err(infrastructure_failure(
-            "worker received Python preparation while resolving Python".to_string(),
-        )),
-        ServerMessage::PrepareR { .. } => Err(infrastructure_failure(
-            "worker received R preparation while resolving Python".to_string(),
-        )),
-    }
-}
-
-pub(crate) fn publish_python_activation(
-    requirements: crate::worker_protocol::PythonRequirementManifest,
-) -> Result<(), String> {
-    send_worker_message(&WorkerMessage::PythonActivated { requirements })
-}
-
-pub(crate) fn resolve_r(
-    packages: Vec<String>,
-) -> Result<crate::r_environment::ResolutionOutcome, String> {
-    use crate::r_environment::{ResolutionFailureKind, ResolutionOutcome};
-    use crate::worker_protocol::RResolutionFailureKind;
-
-    if SQL_EVALUATION_STARTED.load(Ordering::SeqCst) {
-        return Ok(ResolutionOutcome::Unavailable);
-    }
-    send_worker_message(&WorkerMessage::ResolveR { packages })?;
-    match receive_resolver_message().map_err(infrastructure_failure)? {
-        ServerMessage::RResolved { library } => Ok(ResolutionOutcome::Resolved { library }),
-        ServerMessage::RResolutionFailed { failure, message } => {
-            let failure = match failure {
-                RResolutionFailureKind::Host => ResolutionFailureKind::Host,
-                RResolutionFailureKind::Interrupted => ResolutionFailureKind::Interrupted,
-                RResolutionFailureKind::Operation => {
-                    return Err(infrastructure_failure(message));
-                }
-            };
-            Ok(ResolutionOutcome::Failed { failure, message })
-        }
-        ServerMessage::Shutdown => {
-            WORKER_SHUTDOWN.store(true, Ordering::SeqCst);
-            Err("worker is shutting down".to_string())
-        }
-        ServerMessage::PythonResolved { .. }
-        | ServerMessage::PythonResolutionFailed { .. }
-        | ServerMessage::PythonVersionResolved { .. }
-        | ServerMessage::PythonVersionResolutionFailed { .. } => Err(infrastructure_failure(
-            "worker received a Python resolver response while resolving R".to_string(),
-        )),
-        ServerMessage::Evaluate { .. }
-        | ServerMessage::PreparePython { .. }
-        | ServerMessage::PrepareR { .. } => Err(infrastructure_failure(
-            "worker received an operation while resolving R".to_string(),
-        )),
-    }
-}
-
-pub(crate) fn publish_r_activation(library: String) -> Result<(), String> {
-    send_worker_message(&WorkerMessage::RActivated { library })
-}
-
-pub(crate) fn publish_r_activation_failure(library: String, message: String) -> Result<(), String> {
-    send_worker_message(&WorkerMessage::RActivationFailed { library, message })
-}
-
-pub(crate) fn resolve_python_version(
-    request: crate::worker_protocol::PythonVersionResolveRequest,
-) -> Result<String, String> {
-    send_worker_message(&WorkerMessage::ResolvePythonVersion { request })?;
-    match receive_resolver_message().map_err(infrastructure_failure)? {
-        ServerMessage::PythonVersionResolved { version } => Ok(version),
-        ServerMessage::PythonVersionResolutionFailed { message } => Err(message),
-        ServerMessage::Shutdown => {
-            WORKER_SHUTDOWN.store(true, Ordering::SeqCst);
-            Err("worker is shutting down".to_string())
-        }
-        ServerMessage::Evaluate { .. } => Err(infrastructure_failure(
-            "worker received an evaluation while resolving a Python version".to_string(),
-        )),
-        ServerMessage::PreparePython { .. } => Err(infrastructure_failure(
-            "worker received Python preparation while resolving a Python version".to_string(),
-        )),
-        ServerMessage::PrepareR { .. } => Err(infrastructure_failure(
-            "worker received R preparation while resolving a Python version".to_string(),
-        )),
-        ServerMessage::RResolved { .. } | ServerMessage::RResolutionFailed { .. } => {
-            Err(infrastructure_failure(
-                "worker received an R environment response while resolving a Python version"
-                    .to_string(),
-            ))
-        }
-        ServerMessage::PythonResolved { .. } | ServerMessage::PythonResolutionFailed { .. } => {
-            Err(infrastructure_failure(
-                "worker received a Python environment response while resolving a Python version"
-                    .to_string(),
-            ))
-        }
-    }
-}
-
-fn receive_resolver_message() -> Result<ServerMessage, String> {
-    loop {
-        let message = receive_sideband_message()?;
-        match message {
-            ServerMessage::Evaluate { .. }
-            | ServerMessage::PreparePython { .. }
-            | ServerMessage::PrepareR { .. } => queue_server_message(message)?,
-            _ => return Ok(message),
-        }
-    }
-}
-
-fn receive_sideband_message() -> Result<ServerMessage, String> {
-    worker_reader()?
-        .receive()
-        .map_err(|error| format!("worker sideband read failed: {error}"))
-}
-
-fn worker_reader() -> Result<std::sync::MutexGuard<'static, crate::sideband::Reader>, String> {
-    WORKER_READER
-        .get()
-        .ok_or_else(|| "R worker sideband reader is not initialized".to_string())?
-        .lock()
-        .map_err(|_| "R worker sideband reader lock poisoned".to_string())
-}
-
-fn take_pending_server_message() -> Result<Option<ServerMessage>, String> {
-    PENDING_SERVER_MESSAGES
-        .lock()
-        .map_err(|_| "pending server message lock poisoned".to_string())
-        .map(|mut messages| messages.pop_front())
-}
-
-fn queue_server_message(message: ServerMessage) -> Result<(), String> {
-    PENDING_SERVER_MESSAGES
-        .lock()
-        .map_err(|_| "pending server message lock poisoned".to_string())?
-        .push_back(message);
-    Ok(())
-}
-
-fn observe_stdin_shutdown() -> Result<(), String> {
-    let mut event = libc::pollfd {
-        fd: libc::STDIN_FILENO,
-        events: libc::POLLIN,
-        revents: 0,
-    };
-    loop {
-        let result = unsafe { libc::poll(&mut event, 1, 0) };
-        if result >= 0 {
-            if event.revents & libc::POLLHUP != 0 {
-                WORKER_SHUTDOWN.store(true, Ordering::SeqCst);
-            }
-            return Ok(());
-        }
-        let error = io::Error::last_os_error();
-        if error.kind() != io::ErrorKind::Interrupted {
-            return Err(format!("worker stdin readiness check failed: {error}"));
-        }
-    }
-}
-
-fn send_worker_message(message: &WorkerMessage) -> Result<(), String> {
-    if !crate::sideband::available_in_process() {
-        return Err("managed environment resolution is unavailable in a fork child".to_string());
-    }
-    WORKER_WRITER
-        .get()
-        .ok_or_else(|| "R worker sideband writer is not initialized".to_string())?
-        .send(message)
-        .map_err(|error| format!("worker sideband write failed: {error}"))
-        .map_err(infrastructure_failure)
-}
-
-fn infrastructure_failure(message: String) -> String {
-    record_worker_failure(message.clone());
-    message
-}
-
 fn evaluate_cell(
     cell: Cell,
     graphics: &crate::r_graphics::Bridge,
@@ -599,10 +382,10 @@ fn evaluate_cell(
     sql: &mut crate::sql::Bridge,
 ) -> Result<(), String> {
     run_ready_handlers(graphics)?;
-    if WORKER_SHUTDOWN.load(Ordering::SeqCst) {
+    if core::is_shutting_down() {
         return Ok(());
     }
-    if let Some(message) = take_worker_failure() {
+    if let Some(message) = core::take_worker_failure() {
         return Err(message);
     }
     let result = match cell.language {
@@ -611,8 +394,8 @@ fn evaluate_cell(
         Language::Sql => evaluate_sql_cell(cell.source, sql),
     };
     finish_console_stdin_operation()?;
-    if result.is_ok() && !WORKER_SHUTDOWN.load(Ordering::SeqCst) {
-        if let Some(message) = take_worker_failure() {
+    if result.is_ok() && !core::is_shutting_down() {
+        if let Some(message) = core::take_worker_failure() {
             return Err(message);
         }
         run_ready_handlers(graphics)?;
@@ -622,7 +405,7 @@ fn evaluate_cell(
 
 fn evaluate_r_cell(r: String, graphics: &crate::r_graphics::Bridge) -> Result<(), String> {
     if r.contains('\0') {
-        emit_output(
+        core::emit_output(
             ConsoleChannel::Diagnostic,
             b"Error: R source cannot contain NUL\n",
         );
@@ -636,7 +419,7 @@ fn evaluate_r_cell(r: String, graphics: &crate::r_graphics::Bridge) -> Result<()
     let result = match status {
         0 | 1 => Ok(()),
         2 => {
-            emit_output(ConsoleChannel::Diagnostic, b"Error: Incomplete code\n");
+            core::emit_output(ConsoleChannel::Diagnostic, b"Error: Incomplete code\n");
             Ok(())
         }
         status => Err(format!(
@@ -653,7 +436,7 @@ fn evaluate_python_cell(
     python: &mut crate::python::Runtime,
 ) -> Result<(), String> {
     if source.contains('\0') {
-        emit_output(
+        core::emit_output(
             ConsoleChannel::Diagnostic,
             b"SyntaxError: source code string cannot contain null bytes\n",
         );
@@ -669,16 +452,16 @@ fn evaluate_python_cell(
 
 fn evaluate_sql_cell(source: String, sql: &mut crate::sql::Bridge) -> Result<(), String> {
     if source.contains('\0') {
-        emit_output(
+        core::emit_output(
             ConsoleChannel::Diagnostic,
             b"Error: SQL source cannot contain NUL\n",
         );
         return Ok(());
     }
     EVALUATION_STARTED.store(true, Ordering::SeqCst);
-    SQL_EVALUATION_STARTED.store(true, Ordering::SeqCst);
+    core::set_sql_evaluation_started(true);
     let result = sql.evaluate(&source);
-    SQL_EVALUATION_STARTED.store(false, Ordering::SeqCst);
+    core::set_sql_evaluation_started(false);
     EVALUATION_STARTED.store(false, Ordering::SeqCst);
     result
 }
@@ -780,7 +563,7 @@ fn run_ready_handlers(graphics: &crate::r_graphics::Bridge) -> Result<(), String
     EVALUATION_STARTED.store(false, Ordering::SeqCst);
     finish_console_stdin_operation()?;
     defer_interrupts(|| graphics.finish(), check_interrupts)?;
-    observe_stdin_shutdown()
+    core::observe_stdin_shutdown()
 }
 
 fn wait_for_activity(sideband_fd: c_int) -> Result<bool, String> {
@@ -915,48 +698,6 @@ fn console_eof(buf: *mut c_uchar) -> c_int {
     0
 }
 
-fn record_worker_failure(message: String) {
-    let mut failure = WORKER_FAILURE
-        .lock()
-        .expect("R worker failure lock should not be poisoned");
-    if failure.is_none() {
-        *failure = Some(message);
-    }
-}
-
-fn take_worker_failure() -> Option<String> {
-    WORKER_FAILURE
-        .lock()
-        .expect("R worker failure lock should not be poisoned")
-        .take()
-}
-
-fn emit_output(channel: ConsoleChannel, bytes: &[u8]) {
-    if let Err(error) = send_output(channel, bytes) {
-        record_worker_failure(error);
-    }
-}
-
-fn send_output(channel: ConsoleChannel, bytes: &[u8]) -> Result<(), String> {
-    if !crate::sideband::available_in_process() {
-        return Ok(());
-    }
-    let Some(writer) = WORKER_WRITER.get() else {
-        return Ok(());
-    };
-    if WORKER_FAILURE.lock().is_ok_and(|failure| failure.is_some()) {
-        return Ok(());
-    }
-    let data = String::from_utf8_lossy(bytes).into_owned();
-    let message = match channel {
-        ConsoleChannel::Output => WorkerMessage::ConsoleOutput { data },
-        ConsoleChannel::Diagnostic => WorkerMessage::ConsoleDiagnostic { data },
-    };
-    writer
-        .send(&message)
-        .map_err(|error| format!("R console output failed: {error}"))
-}
-
 extern "C-unwind" fn r_write_console(buf: *const c_char, buflen: c_int, otype: c_int) {
     if buf.is_null() || buflen <= 0 {
         return;
@@ -967,7 +708,7 @@ extern "C-unwind" fn r_write_console(buf: *const c_char, buflen: c_int, otype: c
     } else {
         ConsoleChannel::Diagnostic
     };
-    emit_output(channel, bytes);
+    core::emit_output(channel, bytes);
 }
 
 extern "C-unwind" fn r_show_message(buf: *const c_char) {
@@ -976,7 +717,7 @@ extern "C-unwind" fn r_show_message(buf: *const c_char) {
     }
     let mut message = unsafe { CStr::from_ptr(buf) }.to_bytes().to_vec();
     message.push(b'\n');
-    emit_output(ConsoleChannel::Diagnostic, &message);
+    core::emit_output(ConsoleChannel::Diagnostic, &message);
 }
 
 extern "C-unwind" fn r_read_console(
@@ -1005,73 +746,30 @@ extern "C-unwind" fn r_read_console(
             .to_string_lossy()
             .into_owned()
     };
-    if let Err(error) = send_input_requested(&prompt) {
-        record_worker_failure(error);
+    if let Err(error) = core::send_input_requested(&prompt) {
+        core::record_worker_failure(error);
         return console_eof(buf);
     }
 
     match read_console_stdin(buf, buflen) {
         Ok(read) => {
             let receipt = if read < 0 {
-                send_input_cancelled()
+                core::send_input_cancelled()
             } else if read != 0 {
-                send_input_received()
+                core::send_input_received()
             } else {
                 Ok(())
             };
             if let Err(error) = receipt {
-                record_worker_failure(error);
+                core::record_worker_failure(error);
                 return console_eof(buf);
             }
             read
         }
         Err(error) => {
-            record_worker_failure(error);
+            core::record_worker_failure(error);
             console_eof(buf)
         }
-    }
-}
-
-fn send_input_requested(prompt: &str) -> Result<(), String> {
-    WORKER_WRITER
-        .get()
-        .expect("R worker sideband writer should be initialized")
-        .send(&WorkerMessage::InputRequested {
-            prompt: prompt.to_string(),
-        })
-        .map_err(|error| format!("R worker failed to report an input request: {error}"))
-}
-
-fn send_input_received() -> Result<(), String> {
-    WORKER_WRITER
-        .get()
-        .expect("R worker sideband writer should be initialized")
-        .send(&WorkerMessage::InputReceived)
-        .map_err(|error| format!("R worker failed to report received input: {error}"))
-}
-
-fn send_input_cancelled() -> Result<(), String> {
-    WORKER_WRITER
-        .get()
-        .expect("R worker sideband writer should be initialized")
-        .send(&WorkerMessage::InputCancelled)
-        .map_err(|error| format!("R worker failed to cancel an input request: {error}"))
-}
-
-fn send_image(data: String) -> Result<(), String> {
-    WORKER_WRITER
-        .get()
-        .expect("R worker sideband writer should be initialized")
-        .send(&WorkerMessage::Image {
-            data,
-            mime_type: "image/png".to_string(),
-        })
-        .map_err(|error| format!("R worker failed to send a plot image: {error}"))
-}
-
-pub(crate) fn publish_plot(image: Result<String, String>) {
-    if let Err(error) = image.and_then(send_image) {
-        record_worker_failure(error);
     }
 }
 
@@ -1129,7 +827,7 @@ fn read_console_stdin(buf: *mut c_uchar, buflen: c_int) -> Result<c_int, String>
             continue;
         }
         if count == 0 {
-            WORKER_SHUTDOWN.store(true, Ordering::SeqCst);
+            core::mark_shutting_down();
             return Ok(console_eof(buf));
         }
 
