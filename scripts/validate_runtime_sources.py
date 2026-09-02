@@ -92,6 +92,57 @@ def validate_r(path: str, source_path: Path) -> list[str]:
     return [f"{path}: {detail}"]
 
 
+def validate_r_environment_bridge(source_path: Path) -> list[str]:
+    result = subprocess.run(
+        [
+            "Rscript",
+            "--vanilla",
+            "-e",
+            """
+            base_environment <- base::baseenv()
+            original <- base::get(
+              "loadNamespace",
+              envir = base_environment,
+              inherits = FALSE
+            )
+            base::Sys.setenv(MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION = "1")
+            base::sys.source(
+              commandArgs(trailingOnly = TRUE)[[1L]],
+              envir = base::globalenv()
+            )
+            managed <- base::get(
+              "loadNamespace",
+              envir = base_environment,
+              inherits = FALSE
+            )
+            base::stopifnot(
+              !base::identical(
+                base::environment(managed),
+                base::environment(original)
+              ),
+              base::identical(
+                base::formals(managed),
+                base::formals(original)
+              ),
+              base::identical(
+                base::body(managed),
+                base::body(original)
+              )
+            )
+            """,
+            str(source_path),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        return []
+    detail = result.stderr.strip() or result.stdout.strip() or "R bridge check failed"
+    return [f"src/r_environment/bridge.R: {detail}"]
+
+
 def main() -> int:
     sources = production_sources()
     discovered = set(sources)
@@ -116,6 +167,10 @@ def main() -> int:
             errors.extend(validate_python(path, source))
         else:
             errors.extend(validate_r(path, source_path))
+
+    errors.extend(
+        validate_r_environment_bridge(SOURCE_ROOT / "r_environment/bridge.R")
+    )
 
     if errors:
         print("\n".join(errors), file=sys.stderr)
