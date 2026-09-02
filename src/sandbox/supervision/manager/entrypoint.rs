@@ -161,6 +161,8 @@ pub(super) fn run() -> Result<(), String> {
     }
     if error.is_some() {
         temporary_directory.preserve();
+    } else {
+        temporary_directory.remove();
     }
     error.map_or(Ok(()), Err)
 }
@@ -186,7 +188,10 @@ fn finish_retirement(
         return Ok(());
     }
     match protocol::read_owner_disposition(stream) {
-        protocol::OwnerDisposition::RemoveTemporaryDirectory => Ok(()),
+        protocol::OwnerDisposition::RemoveTemporaryDirectory => {
+            temporary_directory.remove();
+            Ok(())
+        }
         protocol::OwnerDisposition::PreserveTemporaryDirectory
         | protocol::OwnerDisposition::Closed => {
             temporary_directory.preserve();
@@ -226,6 +231,8 @@ fn finish_startup_failure(
     }
     if cleanup_failed {
         temporary_directory.preserve();
+    } else {
+        temporary_directory.remove();
     }
     Err(error.expect("startup failure should retain its error"))
 }
@@ -286,6 +293,8 @@ fn finish_committed_startup_failure(
     }
     if cleanup_failed {
         temporary_directory.preserve();
+    } else {
+        temporary_directory.remove();
     }
     Err(error.expect("committed startup failure should retain its error"))
 }

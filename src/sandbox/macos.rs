@@ -518,13 +518,20 @@ impl TemporaryDirectory {
         }
         Ok(Self {
             path,
-            remove_on_drop: true,
+            // The adopting manager must prove cleanup before removing the
+            // directory. Preserve it if the manager unwinds unexpectedly.
+            remove_on_drop: false,
         })
     }
 
     /// Leaves the directory in place because cleanup could not prove that it is unused.
     pub(crate) fn preserve(mut self) {
         self.remove_on_drop = false;
+    }
+
+    /// Arms best-effort removal after cleanup proved that the directory is unused.
+    pub(crate) fn remove(mut self) {
+        self.remove_on_drop = true;
     }
 
     /// Transfers cleanup ownership to another guard for the same directory.

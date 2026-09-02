@@ -88,7 +88,8 @@ The fixed private initialization carries the owner and sandbox-root PIDs, cleanu
 Before reporting readiness, the manager validates the root's exact identity and direct-child relationship, attaches its PID-and-start-time descendant tracker, and adopts the directory.
 The owner retains its directory-creation guard until readiness and preserves it if manager adoption is ambiguous.
 After readiness, the owner relinquishes that guard and the manager becomes the sole directory-cleanup owner.
-If the manager later fails, owner-side fallback handles process cleanup only and leaves the private directory in place.
+The adopted guard preserves on unexpected unwind and is armed for removal only after the manager proves cleanup.
+If the manager later fails while the root remains live, owner-side fallback handles process cleanup only and does not remove the directory.
 The same private stream carries forced-stop requests and the standalone normal-retirement handoff: the launcher marks retirement, the manager acknowledges cleanup, and the launcher commits the final remove-or-preserve disposition before reaping the direct root.
 
 This is a private lifetime-management boundary rather than part of the relay protocol or public interface.
@@ -151,7 +152,7 @@ It does not own session state, operation admission, relay transport, command exi
 On normal standalone root exit, the manager remains alive until the launcher explicitly commits the directory disposition.
 Loss of owner control after retirement starts preserves the directory; earlier control loss selects forced cleanup and removal after success.
 If the manager itself fails while its owner retains a live, waitable root, the owner monitor reconstructs the root's current ancestry and performs bounded process cleanup.
-After readiness, a manager failure leaves the private directory in place even when fallback process cleanup succeeds.
+That fallback has no directory-cleanup state, so the directory remains if the manager exits before completing its own cleanup and removal.
 That fallback cannot recover a descendant that had already detached from the root's ancestry.
 
 ### Relay
