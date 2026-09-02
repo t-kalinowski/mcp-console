@@ -83,6 +83,7 @@ def _start_with_controlling_terminal(
 def _build_supervision_interposer(directory: Path, behavior: str) -> Path:
     definitions = {
         "manager-start": "-DMCP_CONSOLE_INTERPOSE_MANAGER_START",
+        "manager-stop-failure": "-DMCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE",
         "denied-sigkill": "-DMCP_CONSOLE_INTERPOSE_DENIED_SIGKILL",
         "failed-recovery-stop": "-DMCP_CONSOLE_INTERPOSE_FAILED_RECOVERY_STOP",
         "failed-root-observer": "-DMCP_CONSOLE_INTERPOSE_FAILED_ROOT_OBSERVER",
@@ -113,6 +114,12 @@ def _build_supervision_interposer(directory: Path, behavior: str) -> Path:
     || defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP)
 static _Atomic int denied_sigkill = 0;
 #endif
+#if defined(MCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE)
+static _Atomic int manager_group_stop_started = 0;
+static _Atomic int manager_group_stop_reported = 0;
+static _Atomic pid_t manager_direct_root = 0;
+static _Atomic int manager_root_stop_reported = 0;
+#endif
 #if defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP)
 static _Atomic int delayed_cleanup = 0;
 static _Atomic int delayed_late_recovery = 0;
@@ -133,7 +140,8 @@ static _Atomic int gated_retirement_disposition = 0;
 
 #if defined(MCP_CONSOLE_INTERPOSE_DENIED_SIGKILL) \
     || defined(MCP_CONSOLE_INTERPOSE_FAILED_ROOT_OBSERVER) \
-    || defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP)
+    || defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP) \
+    || defined(MCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE)
 typedef int (*kill_function)(pid_t, int);
 
 static kill_function next_kill(void) {
@@ -141,9 +149,18 @@ static kill_function next_kill(void) {
 }
 #endif
 
+#if defined(MCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE)
+typedef int (*killpg_function)(pid_t, int);
+
+static killpg_function next_killpg(void) {
+    return killpg;
+}
+#endif
+
 #if defined(MCP_CONSOLE_INTERPOSE_FAILED_RECOVERY_STOP) \
     || defined(MCP_CONSOLE_INTERPOSE_FAILED_ROOT_OBSERVER) \
-    || defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP)
+    || defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP) \
+    || defined(MCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE)
 typedef int (*proc_pidinfo_function)(int, int, uint64_t, void *, int);
 
 static proc_pidinfo_function next_proc_pidinfo(void) {
@@ -191,6 +208,23 @@ static int fail_group_stop(pid_t process_group_id, int number) {
         return -1;
     }
     return killpg(process_group_id, number);
+}
+#endif
+
+#if defined(MCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE)
+static int mark_manager_direct_root_stop(
+    int process_id,
+    int flavor,
+    uint64_t argument,
+    void *buffer,
+    int buffer_size
+) {
+    if (flavor == PROC_PIDTBSDINFO
+        && pthread_main_np() != 0
+        && atomic_load(&manager_group_stop_started) != 0) {
+        atomic_store(&manager_direct_root, process_id);
+    }
+    return next_proc_pidinfo()(process_id, flavor, argument, buffer, buffer_size);
 }
 #endif
 
@@ -266,6 +300,7 @@ static int fail_process_info(
 
 #if defined(MCP_CONSOLE_INTERPOSE_MANAGER_START) \
     || defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP) \
+    || defined(MCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE) \
     || defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_DISPOSITION)
 static int is_subcommand(const char *name) {
     int argc = *_NSGetArgc();
@@ -278,6 +313,7 @@ __attribute__((constructor))
 static void configure_interposer(void) {
 #if defined(MCP_CONSOLE_INTERPOSE_MANAGER_START) \
     || defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP) \
+    || defined(MCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE) \
     || defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_DISPOSITION)
     if (!is_subcommand("sandbox-manager") && !is_subcommand("sandbox")) {
         unsetenv("DYLD_INSERT_LIBRARIES");
@@ -324,6 +360,40 @@ static ssize_t gate_manager_initialization(
     return recvfrom(descriptor, buffer, length, flags, NULL, NULL);
 }
 
+#endif
+
+#if defined(MCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE)
+static int fail_manager_group_stop(pid_t process_group_id, int number) {
+    if (number == SIGKILL && is_subcommand("sandbox-manager")) {
+        atomic_store(&manager_group_stop_started, 1);
+        errno = EPERM;
+        return -1;
+    }
+    return next_killpg()(process_group_id, number);
+}
+
+static int fail_manager_root_stop(pid_t process_id, int number) {
+    if (process_id > 0
+        && number == SIGKILL
+        && is_subcommand("sandbox-manager")
+        && atomic_load(&manager_group_stop_started) != 0) {
+        pid_t direct_root = atomic_load(&manager_direct_root);
+        if (process_id == direct_root
+            && atomic_exchange(&manager_root_stop_reported, 1) == 0) {
+            signal_checkpoint("MCP_CONSOLE_TEST_MANAGER_ROOT_STOP_FAILURE");
+        } else if (atomic_exchange(&manager_group_stop_reported, 1) == 0) {
+            signal_checkpoint("MCP_CONSOLE_TEST_MANAGER_GROUP_STOP_FAILURE");
+        }
+        errno = EPERM;
+        return -1;
+    }
+    kill_function kill_next = next_kill();
+    if (kill_next == NULL) {
+        errno = ENOSYS;
+        return -1;
+    }
+    return kill_next(process_id, number);
+}
 #endif
 
 #if defined(MCP_CONSOLE_INTERPOSE_DENIED_SIGKILL)
@@ -438,6 +508,10 @@ static int delay_late_recovery(
 
 #if defined(MCP_CONSOLE_INTERPOSE_MANAGER_START)
 DYLD_INTERPOSE(gate_manager_initialization, recv)
+#elif defined(MCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE)
+DYLD_INTERPOSE(fail_manager_group_stop, killpg)
+DYLD_INTERPOSE(fail_manager_root_stop, kill)
+DYLD_INTERPOSE(mark_manager_direct_root_stop, proc_pidinfo)
 #elif defined(MCP_CONSOLE_INTERPOSE_DENIED_SIGKILL)
 DYLD_INTERPOSE(deny_first_sigkill, kill)
 #elif defined(MCP_CONSOLE_INTERPOSE_FAILED_RECOVERY_STOP)
@@ -1180,6 +1254,81 @@ def test_launcher_crash_retires_the_sandbox_lifetime(binary: Path) -> Transcript
         ]
     finally:
         _cleanup(lifetime)
+
+
+def test_manager_owner_loss_stop_failure_remains_bounded(
+    binary: Path,
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        fixture_directory = Path(temporary_directory)
+        group_stop_failed = FifoCheckpoint(
+            fixture_directory / "manager-group-stop-failed"
+        )
+        root_stop_failed = FifoCheckpoint(
+            fixture_directory / "manager-root-stop-failed"
+        )
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "DYLD_INSERT_LIBRARIES": str(
+                    _build_supervision_interposer(
+                        fixture_directory,
+                        "manager-stop-failure",
+                    )
+                ),
+                "MCP_CONSOLE_TEST_MANAGER_GROUP_STOP_FAILURE": str(
+                    group_stop_failed.path
+                ),
+                "MCP_CONSOLE_TEST_MANAGER_ROOT_STOP_FAILURE": str(
+                    root_stop_failed.path
+                ),
+            }
+        )
+        lifetime = _start_lifetime(binary, environment)
+        try:
+            with _observe_process_exit(lifetime.manager) as manager_exit:
+                assert signal_darwin_process(lifetime.launcher, signal.SIGKILL), (
+                    "sandbox launcher exited before owner-loss injection"
+                )
+                returncode = lifetime.process.wait(timeout=TIMEOUT)
+                group_stop_failed.wait("manager process-group stop failure")
+                root_stop_failed.wait("manager direct-root stop failure")
+                events = manager_exit.control(None, 1, TIMEOUT)
+
+            assert events, (
+                "sandbox manager did not exit after its bounded cleanup interval"
+            )
+            assert events[0].ident == lifetime.manager[0], events[0]
+            assert events[0].filter == select.KQ_FILTER_PROC, events[0]
+            assert events[0].fflags & select.KQ_NOTE_EXIT, events[0]
+            assert returncode == -signal.SIGKILL, returncode
+            _wait_for_process_exit(
+                (lifetime.manager,),
+                "sandbox manager remained live after bounded cleanup",
+            )
+            assert live_darwin_processes((lifetime.root, lifetime.descendant)) == [
+                lifetime.root[0],
+                lifetime.descendant[0],
+            ], "failed termination unexpectedly claimed sandbox process cleanup"
+            assert lifetime.temporary_directory.exists(), (
+                "manager stop failure removed the sandbox temporary directory"
+            )
+            return [
+                _command_record(lifetime),
+                {
+                    "launcher_signal": "SIGKILL",
+                    "manager_group_stop_signal": "EPERM",
+                    "manager_root_stop_signal": "EPERM",
+                    "verified_bounded_return": "within the cleanup deadline",
+                    "verified_preservation": (
+                        "sandbox root, detached descendant, and sandbox temp"
+                    ),
+                },
+            ]
+        finally:
+            group_stop_failed.close()
+            root_stop_failed.close()
+            _cleanup(lifetime)
 
 
 def test_manager_crash_retires_the_sandbox_lifetime(binary: Path) -> Transcript:
