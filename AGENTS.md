@@ -74,7 +74,10 @@ Keep these ownership rules intact:
   Do not move these responsibilities into the relay.
 - Treat each relay and its worker process tree, and each standalone command tree, as one sandboxed lifetime.
   A host-side sandbox manager owns primary observed-descendant tracking, bounded force termination, and private-directory cleanup for that lifetime.
-  Its host owner retains a backup directory guard and takes over bounded cleanup if the manager exits unsuccessfully while the sandbox root remains live and pinned.
+  Before readiness, the host owner retains the directory-creation guard.
+  After readiness, it relinquishes that guard and retains only the path needed for successful recovery before commitment begins.
+  Once commitment begins, the manager is the sole directory-cleanup owner.
+  The host owner still takes over bounded process cleanup if the manager exits unsuccessfully while the sandbox root remains live and pinned.
   That fallback can reconstruct only descendants still reachable from the root's current ancestry.
 - The standalone launcher owns the direct command's exit status, foreground-terminal transfer, signal relaying, and final temporary-directory disposition.
   It releases the command's private startup gate only after manager ownership is committed, and retains the direct root waitably through manager cleanup.

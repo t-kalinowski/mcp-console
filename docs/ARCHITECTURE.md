@@ -84,9 +84,11 @@ The client does not communicate directly with a relay, worker, or resolver.
 The server initializes one sandbox manager per worker generation, which may evaluate multiple cells before restart or replacement.
 The standalone launcher initializes one manager per invocation of `mcp-console sandbox`, which runs one direct child command.
 Initialization travels over a private inherited Unix socket and waits for one-byte readiness and ownership-commit responses.
-The owner preserves its backup directory guard if either response is ambiguous.
 The fixed private initialization carries the owner and sandbox-root PIDs, cleanup timeout, and private temporary-directory path.
 Before reporting readiness, the manager validates the root's exact identity and direct-child relationship, attaches its PID-and-start-time descendant tracker, and adopts the directory.
+The owner retains its directory-creation guard until readiness and preserves it if manager adoption is ambiguous.
+After readiness, the owner relinquishes that guard and retains only the path needed for successful fallback cleanup before commitment begins.
+Once commitment begins, the manager is the sole directory-cleanup owner.
 The same private stream carries forced-stop requests and the standalone normal-retirement handoff: the launcher marks retirement, the manager acknowledges cleanup, and the launcher commits the final remove-or-preserve disposition before reaping the direct root.
 
 This is a private lifetime-management boundary rather than part of the relay protocol or public interface.

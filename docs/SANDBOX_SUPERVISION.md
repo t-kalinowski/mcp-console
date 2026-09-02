@@ -14,20 +14,23 @@ Once observed, a descendant remains a cleanup target after changing process grou
 The manager also adopts the private temporary-directory guard for the lifetime.
 
 The host owner retains the manager process and direct sandbox root as waitable children.
-After the manager reports readiness, the owner starts monitoring manager exit and transfers its backup directory guard to that monitor before entering the ownership-commit exchange.
+After the manager reports readiness, the owner relinquishes its duplicate temporary-directory guard and starts monitoring manager exit.
+The manager's adopted guard is then the only active guard, while the owner retains only the path needed for successful recovery before commitment begins.
 The relay remains a transport and direct-worker owner, including local same-group cleanup; it does not own observed-descendant cleanup across process groups or sessions, or the private directory.
 
 ## Startup
 
 The host starts the manager before the sandbox root, then sends the owner PID, root PID, cleanup timeout, and private-directory path over a private inherited Unix socket.
 The manager validates the direct-child relationship and exact root identity, attaches its descendant tracker, adopts the directory guard, and reports readiness.
-The host installs manager-failure recovery while the direct root remains live and waitable, then commits primary cleanup ownership and waits for confirmation.
+The host relinquishes its duplicate guard, installs manager-failure recovery while the direct root remains live and waitable, then commits primary cleanup ownership and waits for confirmation.
 
 After ownership is committed, the owner writes one release byte.
 The hidden wrapper closes the channel and replaces itself with the configured relay or requested command in the same process identity.
 Configured sandbox code therefore cannot run before manager observation and ownership are committed.
 Abrupt owner loss before readiness or commitment closes the startup channel before configured code runs, but private-directory cleanup is not guaranteed.
-The owner preserves its backup directory guard whenever readiness or ownership confirmation is ambiguous.
+Before readiness, the owner retains its guard and preserves it whenever manager adoption is ambiguous.
+After readiness, it retains only the path needed for successful recovery before commitment begins.
+Once commitment begins, the manager is the sole directory-cleanup owner.
 
 Darwin cannot resolve every later fork atomically.
 A descendant that becomes orphaned before the manager resolves its fork event remains outside the implemented guarantee.
@@ -59,11 +62,11 @@ With no surviving owner to receive a filesystem error, directory removal itself 
 Each host owner retains a blocking monitor for the manager process.
 If the manager exits unsuccessfully while the owner still retains a live, waitable root, the monitor reconstructs the root's current process tree and performs bounded cleanup before the owner continues.
 The fallback revalidates process identities immediately before signaling and closes the still-pinned process group as a race backstop.
-Once ownership is committed for target release, it preserves the private directory even when fallback cleanup succeeds because a detached descendant observed only by the failed manager may remain live.
+Once ownership is committed for target release, the private directory remains in place even when fallback cleanup succeeds because a detached descendant observed only by the failed manager may remain live.
 If manager completion times out, the owner requests forced exit and allows one more bounded recovery interval.
 If the manager still does not report completion, the owner disables fallback recovery before releasing the root's PID pin and returns an error without joining the live monitor thread.
 If bounded fallback recovery has already started, the owner retains the pin until it finishes instead.
-That monitor still reaps the manager if it exits later and retains and preserves the backup directory guard.
+That monitor still reaps the manager if it exits later.
 
 This fallback can recover only descendants still reachable from the root's current ancestry.
 It cannot reconstruct a descendant that detached before the manager failed.
