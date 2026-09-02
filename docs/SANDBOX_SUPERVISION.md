@@ -15,7 +15,7 @@ The manager also adopts the private temporary-directory guard for the lifetime.
 
 The host owner retains the manager process and direct sandbox root as waitable children.
 After the manager reports readiness, the owner relinquishes its duplicate temporary-directory guard and starts monitoring manager exit.
-The manager's adopted guard is then the only active guard, while the owner retains only the path needed for successful recovery before commitment begins.
+The manager's adopted guard is then the only directory-cleanup owner; owner-side fallback retains no directory-cleanup state.
 The relay remains a transport and direct-worker owner, including local same-group cleanup; it does not own observed-descendant cleanup across process groups or sessions, or the private directory.
 
 ## Startup
@@ -29,8 +29,8 @@ The hidden wrapper closes the channel and replaces itself with the configured re
 Configured sandbox code therefore cannot run before manager observation and ownership are committed.
 Abrupt owner loss before readiness or commitment closes the startup channel before configured code runs, but private-directory cleanup is not guaranteed.
 Before readiness, the owner retains its guard and preserves it whenever manager adoption is ambiguous.
-After readiness, it retains only the path needed for successful recovery before commitment begins.
-Once commitment begins, the manager is the sole directory-cleanup owner.
+After readiness, the owner relinquishes that guard and the manager becomes the sole directory-cleanup owner.
+The adopted guard preserves on unexpected unwind and is armed for removal only after the manager proves cleanup.
 
 Darwin cannot resolve every later fork atomically.
 A descendant that becomes orphaned before the manager resolves its fork event remains outside the implemented guarantee.
@@ -54,15 +54,17 @@ The launcher preserves the directory if that acknowledgement times out, while st
 If the launcher exits after marking retirement but before sending the final disposition, the manager conservatively preserves the directory.
 Control closure before the marker is an abrupt owner exit: the manager stops the lifetime and removes the directory after successful cleanup.
 
-The manager preserves the private directory on any cleanup error because a surviving process may still use it.
+The manager preserves the private directory on unexpected unwind or any cleanup error because a surviving process may still use it.
+It arms the adopted guard for removal only after successful cleanup proves that the directory is unused.
 With no surviving owner to receive a filesystem error, directory removal itself is best effort and can leave the directory behind.
 
 ## Manager failure
 
 Each host owner retains a blocking monitor for the manager process.
-If the manager exits unsuccessfully while the owner still retains a live, waitable root, the monitor reconstructs the root's current process tree and performs bounded cleanup before the owner continues.
+If the manager exits unsuccessfully while the owner still retains a live, waitable root, the monitor reconstructs the root's current process tree and performs bounded process cleanup before the owner continues.
 The fallback revalidates process identities immediately before signaling and closes the still-pinned process group as a race backstop.
-Once ownership is committed for target release, the private directory remains in place even when fallback cleanup succeeds because a detached descendant observed only by the failed manager may remain live.
+The fallback has no directory-cleanup state.
+If the manager exits before completing its own cleanup and removal, the directory remains because a detached descendant observed only by the failed manager may still be live.
 If manager completion times out, the owner requests forced exit and allows one more bounded recovery interval.
 If the manager still does not report completion, the owner disables fallback recovery before releasing the root's PID pin and returns an error without joining the live monitor thread.
 If bounded fallback recovery has already started, the owner retains the pin until it finishes instead.

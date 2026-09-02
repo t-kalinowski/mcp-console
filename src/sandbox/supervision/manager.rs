@@ -8,12 +8,11 @@ use super::process_tracker::DescendantTracker;
 use super::root_exit_waiter::RootExitWakeup;
 use crate::sandbox::file_descriptors;
 use crate::sandbox::platform;
-use std::fs;
 use std::io::{Read, Write};
 use std::os::fd::OwnedFd;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt as _;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
@@ -28,7 +27,6 @@ pub(crate) struct SandboxManager {
     child_identity: Option<ProcessIdentity>,
     monitor: Option<ManagerMonitor>,
     stream: Option<UnixStream>,
-    recovery_directory: Option<PathBuf>,
     cleanup_timeout: Duration,
     retirement_started: bool,
     cleanup_complete: bool,
@@ -100,7 +98,6 @@ impl SandboxManager {
             child_identity: Some(child_identity),
             monitor: None,
             stream: Some(stream),
-            recovery_directory: None,
             cleanup_timeout,
             retirement_started: false,
             cleanup_complete: false,
@@ -181,10 +178,6 @@ impl SandboxManager {
             self.monitor.is_none(),
             "sandbox manager can be monitored only once"
         );
-        assert!(
-            self.recovery_directory.is_none(),
-            "sandbox manager can retain only one recovery directory"
-        );
         let child = self
             .child
             .take()
@@ -195,7 +188,6 @@ impl SandboxManager {
             .expect("ready sandbox manager identity should remain pinned");
         let root_pid = root_pid as libc::pid_t;
         assert!(root_pid > 0, "sandbox root PID should be valid");
-        self.recovery_directory = Some(temporary_directory.path().to_path_buf());
         temporary_directory.relinquish();
         self.monitor = Some(ManagerMonitor::start(
             child,
@@ -208,13 +200,6 @@ impl SandboxManager {
 
     pub(crate) fn commit(&mut self) -> Result<(), String> {
         assert!(self.monitor.is_some(), "manager monitor is missing");
-        // From the COMMIT write onward, manager ownership may be committed.
-        // Leave the directory disposition to the manager.
-        drop(
-            self.recovery_directory
-                .take()
-                .expect("manager recovery directory is missing"),
-        );
         let stream = self
             .stream
             .as_mut()
@@ -333,13 +318,11 @@ impl SandboxManager {
         }
         let finish_timeout = self.cleanup_timeout.saturating_add(FINISH_ALLOWANCE);
         if let Some(monitor) = self.monitor.take() {
-            let result = match monitor.finish(finish_timeout) {
+            return match monitor.finish(finish_timeout) {
                 Ok(ManagerExit::Normal) => error.map_or(Ok(ManagerExit::Normal), Err),
                 Ok(ManagerExit::Recovered) => Ok(ManagerExit::Recovered),
                 Err(monitor_error) => Err(with_prior_error(error, monitor_error)),
             };
-            self.finish_recovery_directory(&result);
-            return result;
         }
         let Some(mut child) = self.child.take() else {
             return error.map_or(Ok(ManagerExit::Normal), Err);
@@ -374,17 +357,6 @@ impl SandboxManager {
             return Err(with_prior_error(error, status_error));
         }
         error.map_or(Ok(ManagerExit::Normal), Err)
-    }
-
-    fn finish_recovery_directory(&mut self, result: &Result<ManagerExit, String>) {
-        let Some(path) = self.recovery_directory.take() else {
-            return;
-        };
-        if matches!(result, Ok(ManagerExit::Recovered)) {
-            // Before commitment, configured code is still gated. Successful
-            // fallback cleanup therefore proves the adopted directory unused.
-            let _ = fs::remove_dir_all(path);
-        }
     }
 }
 

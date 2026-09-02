@@ -83,6 +83,9 @@ def _start_with_controlling_terminal(
 def _build_supervision_interposer(directory: Path, behavior: str) -> Path:
     definitions = {
         "manager-start": "-DMCP_CONSOLE_INTERPOSE_MANAGER_START",
+        "manager-thread-start-failure": (
+            "-DMCP_CONSOLE_INTERPOSE_MANAGER_THREAD_START_FAILURE"
+        ),
         "manager-stop-failure": "-DMCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE",
         "denied-sigkill": "-DMCP_CONSOLE_INTERPOSE_DENIED_SIGKILL",
         "failed-recovery-stop": "-DMCP_CONSOLE_INTERPOSE_FAILED_RECOVERY_STOP",
@@ -132,6 +135,9 @@ static _Atomic int reaped_root = 0;
 #endif
 #if defined(MCP_CONSOLE_INTERPOSE_MANAGER_START)
 static _Atomic int gated_manager_read = 0;
+#endif
+#if defined(MCP_CONSOLE_INTERPOSE_MANAGER_THREAD_START_FAILURE)
+static _Atomic int failed_manager_thread_start = 0;
 #endif
 #if defined(MCP_CONSOLE_INTERPOSE_FAILED_RECOVERY_STOP)
 static _Atomic int failed_process_info = 0;
@@ -304,6 +310,7 @@ static void signal_checkpoint(const char *name) {
 }
 
 #if defined(MCP_CONSOLE_INTERPOSE_MANAGER_START) \
+    || defined(MCP_CONSOLE_INTERPOSE_MANAGER_THREAD_START_FAILURE) \
     || defined(MCP_CONSOLE_INTERPOSE_FAILED_RECOVERY_STOP) \
     || defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP) \
     || defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_DISPOSITION)
@@ -371,6 +378,7 @@ static int gate_recovery_root_stop(pid_t process_id, int number) {
 #endif
 
 #if defined(MCP_CONSOLE_INTERPOSE_MANAGER_START) \
+    || defined(MCP_CONSOLE_INTERPOSE_MANAGER_THREAD_START_FAILURE) \
     || defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP) \
     || defined(MCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE) \
     || defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_DISPOSITION)
@@ -384,6 +392,7 @@ static int is_subcommand(const char *name) {
 __attribute__((constructor))
 static void configure_interposer(void) {
 #if defined(MCP_CONSOLE_INTERPOSE_MANAGER_START) \
+    || defined(MCP_CONSOLE_INTERPOSE_MANAGER_THREAD_START_FAILURE) \
     || defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP) \
     || defined(MCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE) \
     || defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_DISPOSITION)
@@ -432,6 +441,35 @@ static ssize_t gate_manager_initialization(
     return recvfrom(descriptor, buffer, length, flags, NULL, NULL);
 }
 
+#endif
+
+#if defined(MCP_CONSOLE_INTERPOSE_MANAGER_THREAD_START_FAILURE)
+typedef int (*pthread_create_function)(
+    pthread_t *,
+    const pthread_attr_t *,
+    void *(*)(void *),
+    void *
+);
+
+static pthread_create_function next_pthread_create(void) {
+    return pthread_create;
+}
+
+static int fail_manager_tracker_start(
+    pthread_t *thread,
+    const pthread_attr_t *attributes,
+    void *(*start_routine)(void *),
+    void *argument
+) {
+    if (is_subcommand("sandbox-manager")
+        && getenv("MCP_CONSOLE_TEST_MANAGER_THREAD_START_FAILURE") != NULL
+        && atomic_exchange(&failed_manager_thread_start, 1) == 0) {
+        signal_checkpoint("MCP_CONSOLE_TEST_MANAGER_THREAD_START_FAILURE");
+        wait_for_release("MCP_CONSOLE_TEST_MANAGER_THREAD_START_RELEASE");
+        return EAGAIN;
+    }
+    return next_pthread_create()(thread, attributes, start_routine, argument);
+}
 #endif
 
 #if defined(MCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE)
@@ -644,6 +682,8 @@ static int delay_late_recovery(
 
 #if defined(MCP_CONSOLE_INTERPOSE_MANAGER_START)
 DYLD_INTERPOSE(gate_manager_initialization, recv)
+#elif defined(MCP_CONSOLE_INTERPOSE_MANAGER_THREAD_START_FAILURE)
+DYLD_INTERPOSE(fail_manager_tracker_start, pthread_create)
 #elif defined(MCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE)
 DYLD_INTERPOSE(observe_manager_tracker, kevent)
 DYLD_INTERPOSE(fail_manager_group_stop, killpg)
@@ -1387,6 +1427,108 @@ def test_pending_signal_during_failed_commit_preserves_error(
                     stream.close()
             committed_ready.close()
             committed_release.close()
+
+
+def test_manager_panic_during_commit_preserves_temporary_directory(
+    binary: Path,
+) -> Transcript:
+    arguments = ("sandbox", "--", "python", "-c", "raise SystemExit(23)")
+
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        fixture_directory = Path(temporary_directory)
+        thread_start_failed = FifoCheckpoint(
+            fixture_directory / "manager-thread-start-failed"
+        )
+        thread_start_release = FifoCheckpoint(
+            fixture_directory / "manager-thread-start-release"
+        )
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "DYLD_INSERT_LIBRARIES": str(
+                    _build_supervision_interposer(
+                        fixture_directory,
+                        "manager-thread-start-failure",
+                    )
+                ),
+                "MCP_CONSOLE_TEST_MANAGER_THREAD_START_FAILURE": str(
+                    thread_start_failed.path
+                ),
+                "MCP_CONSOLE_TEST_MANAGER_THREAD_START_RELEASE": str(
+                    thread_start_release.path
+                ),
+                "RUST_BACKTRACE": "0",
+                "TMPDIR": str(fixture_directory),
+            }
+        )
+        process = subprocess.Popen(
+            [binary, *arguments],
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        assert process.stdout is not None
+        assert process.stderr is not None
+        identities: list[DarwinProcessIdentity] = []
+        thread_start_released = False
+        sandbox_temporary_directory: Path | None = None
+        try:
+            thread_start_failed.wait("manager tracker-thread start failure")
+            launcher = capture_darwin_process_identity(process.pid)
+            root, manager = _wait_for_gated_root_and_manager(launcher)
+            identities.extend((root, manager))
+            temporary_directories = list(
+                fixture_directory.glob(f"mcp-console-tmp-{process.pid}-*")
+            )
+            assert len(temporary_directories) == 1, temporary_directories
+            sandbox_temporary_directory = temporary_directories[0]
+
+            thread_start_release.release()
+            thread_start_released = True
+            returncode = process.wait(timeout=TIMEOUT)
+            stdout = process.stdout.read().decode("utf-8")
+            stderr = process.stderr.read().decode("utf-8")
+            survivors = live_darwin_processes(identities)
+
+            assert returncode == 1, (returncode, stderr)
+            assert stdout == "", stdout
+            assert stderr == (
+                "sandbox manager did not confirm ownership: failed to fill whole buffer\n"
+            ), stderr
+            assert survivors == [], (
+                f"manager panic leaked sandbox processes: {survivors}"
+            )
+            assert sandbox_temporary_directory.exists(), (
+                "manager panic removed the sandbox temporary directory"
+            )
+            return [
+                {
+                    "command": _command(*arguments),
+                    "manager_checkpoint": "before tracker-thread creation",
+                    "manager_thread_start": "EAGAIN",
+                },
+                {
+                    "launcher_returncode": returncode,
+                    "stdout": stdout,
+                    "stderr": stderr,
+                    "verified_cleanup": "gated sandbox root and manager",
+                    "verified_preservation": "sandbox temp",
+                },
+            ]
+        finally:
+            if not thread_start_released:
+                thread_start_release.release()
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=TIMEOUT)
+            kill_darwin_processes(identities)
+            if sandbox_temporary_directory is not None:
+                shutil.rmtree(sandbox_temporary_directory, ignore_errors=True)
+            for stream in (process.stdout, process.stderr):
+                if not stream.closed:
+                    stream.close()
+            thread_start_failed.close()
+            thread_start_release.close()
 
 
 def test_launcher_crash_retires_the_sandbox_lifetime(binary: Path) -> Transcript:

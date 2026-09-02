@@ -42,8 +42,9 @@ It passes one worker sideband endpoint through `MCP_CONSOLE_SIDEBAND_FD` togethe
 
 The relay owns the direct worker process and its local transports, translation between this protocol and the worker sideband, direct-worker signal delivery, deadline-bounded direct-worker termination, cleanup of remaining members of its worker process group, and direct-worker reaping.
 The host-side manager owns primary tracking and termination of the relay root and observed descendants across process-group and session changes, along with private-directory cleanup.
-The server retains the directory-creation guard until manager readiness, then relinquishes it while keeping the manager monitor and the path needed for successful pre-commit recovery.
-Once commitment begins, the manager is the sole directory-cleanup owner.
+The server retains the directory-creation guard until manager readiness, then relinquishes it while keeping the manager monitor for process recovery.
+From readiness onward, the manager is the sole directory-cleanup owner.
+Its adopted guard preserves on unexpected unwind and removes the directory only after successful cleanup; server fallback has no directory-cleanup state.
 The server owns generation state and host-side dependency resolution; see [Requirements and environments](REQUIREMENTS.md) for that trust boundary.
 
 ## Framing and raw bytes
@@ -201,7 +202,8 @@ On forced retirement or server loss, it instead closes the group while the root 
 It adopts a private temporary-directory guard and removes the directory only after both cleanup steps succeed; a cleanup failure preserves the directory.
 If the relay exits or crashes, the manager treats root exit as retirement of the remaining observed lifetime.
 If the server exits or crashes, closure of the manager's owner channel makes the manager stop the relay root and complete the same cleanup independently.
-If the manager exits unsuccessfully after readiness while the server still owns a live, waitable relay root, including during the commit acknowledgement, the server reconstructs bounded tracking from that root's current process tree and completes cleanup before replacement.
+If the manager exits unsuccessfully after readiness while the server still owns a live, waitable relay root, including during the commit acknowledgement, the server reconstructs bounded tracking from that root's current process tree and completes process cleanup before replacement.
+The server does not remove the private directory; it remains if the manager exited before completing its own cleanup and removal.
 That fallback cannot recover a descendant that had already detached from the root's ancestry before the manager failed.
 
 The server leaves an exited relay waitable until sandbox-lifetime cleanup completes, preserving the relay identity while retirement finishes.
