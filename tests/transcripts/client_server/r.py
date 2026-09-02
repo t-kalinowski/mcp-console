@@ -1311,8 +1311,13 @@ def test_replays_console_prefix_after_operation_boundary_interrupt(
             "[waiting for stdin]"
         )
 
-        client.send(control="interrupt", timeout_ms=0)
-        assert last_tool_text(client) == "caught later-callback interrupt\n"
+        wait_for_evaluation_output(
+            client,
+            "caught later-callback interrupt\n",
+            "later console callback interrupt",
+            control="interrupt",
+            timeout_ms=0,
+        )
 
         client.send(r='readline("after later callback> ")', stdin="!\n")
         assert last_tool_text(client) == (
@@ -1355,8 +1360,14 @@ def test_replays_console_prefix_after_operation_boundary_interrupt(
             client,
         )
 
-        client.send(control="interrupt", timeout_ms=0)
-        assert last_tool_text(client) == "caught between-callback interrupt\n"
+        wait_for_evaluation_output(
+            client,
+            "caught between-callback interrupt\n",
+            "between-callback interrupt",
+            provisional="\n[running; poll with an empty send]",
+            control="interrupt",
+            timeout_ms=0,
+        )
 
         client.send(
             r='identical(readline("after boundary> "), paste0(strrep("x", 6), "!"))',

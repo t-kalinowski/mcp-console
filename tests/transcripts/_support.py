@@ -711,9 +711,11 @@ def wait_for_evaluation_output(
     client: "McpClient",
     expected: str,
     description: str,
+    *,
+    provisional: str = "\n[waiting for stdin]",
     **send_arguments: Any,
 ) -> None:
-    """Poll past a provisional input request and retain the submitted call."""
+    """Poll past one exact provisional state and retain the submitted call."""
     deadline = time.monotonic() + 3
     poll_start = len(client.transcript)
     result = client.send(**send_arguments)
@@ -724,7 +726,7 @@ def wait_for_evaluation_output(
         output = content[0]["text"]
         if output == expected:
             break
-        assert output == "\n[waiting for stdin]", repr(output)
+        assert output == provisional, repr(output)
         assert time.monotonic() < deadline, f"{description} did not complete"
         result = client.send(timeout_ms=3_000)
 
