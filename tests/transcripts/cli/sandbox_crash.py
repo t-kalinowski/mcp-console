@@ -368,6 +368,30 @@ def _wait_for_private_startup_gate(identity: DarwinProcessIdentity) -> None:
         time.sleep(0.01)
 
 
+def _wait_for_gated_root_and_manager(
+    launcher: DarwinProcessIdentity,
+) -> tuple[DarwinProcessIdentity, DarwinProcessIdentity]:
+    deadline = time.monotonic() + TIMEOUT
+    while True:
+        children = tuple(darwin_child_process_identities(launcher))
+        assert len(children) <= 2, children
+        gated = tuple(
+            child
+            for child in children
+            if darwin_process_waits_for_startup_release(child)
+        )
+        assert len(gated) <= 1, (children, gated)
+        if len(children) == 2 and gated:
+            root = gated[0]
+            manager = next(child for child in children if child != root)
+            return root, manager
+        assert live_darwin_processes((launcher,)) == [launcher[0]], launcher
+        assert time.monotonic() < deadline, (
+            "launcher did not expose its gated root and manager"
+        )
+        time.sleep(0.01)
+
+
 def _thread_count(identity: DarwinProcessIdentity) -> int | None:
     if not live_darwin_processes((identity,)):
         return None
@@ -620,29 +644,7 @@ def test_target_waits_for_manager_adoption(binary: Path) -> Transcript:
         try:
             manager_started.wait("manager startup before temporary-directory adoption")
             launcher = capture_darwin_process_identity(process.pid)
-            children = darwin_child_process_identities(launcher)
-            assert len(children) == 2, children
-            deadline = time.monotonic() + TIMEOUT
-            gated: list[DarwinProcessIdentity] = []
-            while not gated:
-                gated = [
-                    child
-                    for child in children
-                    if darwin_process_waits_for_startup_release(child)
-                ]
-                assert len(gated) <= 1, (children, gated)
-                if gated:
-                    break
-                assert live_darwin_processes(children) == [
-                    child[0] for child in children
-                ], children
-                assert time.monotonic() < deadline, (
-                    "sandbox root did not reach its private startup gate"
-                )
-                time.sleep(0.01)
-            assert len(gated) == 1, (children, gated)
-            root = gated[0]
-            manager = next(child for child in children if child != root)
+            root, manager = _wait_for_gated_root_and_manager(launcher)
             identities.extend((root, manager))
             temporary_directories = list(
                 fixture_directory.glob(f"mcp-console-tmp-{process.pid}-*")
@@ -727,28 +729,7 @@ def test_terminal_interrupt_before_manager_readiness_preserves_status(
         try:
             manager_started.wait("manager startup before readiness")
             launcher = capture_darwin_process_identity(process.pid)
-            children = darwin_child_process_identities(launcher)
-            assert len(children) == 2, children
-            deadline = time.monotonic() + TIMEOUT
-            gated: list[DarwinProcessIdentity] = []
-            while not gated:
-                gated = [
-                    child
-                    for child in children
-                    if darwin_process_waits_for_startup_release(child)
-                ]
-                assert len(gated) <= 1, (children, gated)
-                if gated:
-                    break
-                assert live_darwin_processes(children) == [
-                    child[0] for child in children
-                ], children
-                assert time.monotonic() < deadline, (
-                    "sandbox root did not reach its private startup gate"
-                )
-                time.sleep(0.01)
-            root = gated[0]
-            manager = next(child for child in children if child != root)
+            root, manager = _wait_for_gated_root_and_manager(launcher)
             identities.extend((root, manager))
             temporary_directories = list(
                 fixture_directory.glob(f"mcp-console-tmp-{process.pid}-*")
@@ -921,29 +902,7 @@ def test_pending_signal_during_failed_commit_preserves_error(
         try:
             committed_ready.wait("manager COMMITTED write")
             launcher = capture_darwin_process_identity(process.pid)
-            children = darwin_child_process_identities(launcher)
-            assert len(children) == 2, children
-            deadline = time.monotonic() + TIMEOUT
-            roots: tuple[DarwinProcessIdentity, ...] = ()
-            while not roots:
-                roots = tuple(
-                    child
-                    for child in children
-                    if darwin_process_waits_for_startup_release(child)
-                )
-                assert len(roots) <= 1, (children, roots)
-                if roots:
-                    break
-                assert live_darwin_processes(children) == [
-                    child[0] for child in children
-                ], children
-                assert time.monotonic() < deadline, (
-                    "sandbox root did not reach its private startup gate"
-                )
-                time.sleep(0.01)
-            assert len(roots) == 1, (children, roots)
-            root = roots[0]
-            manager = next(child for child in children if child != root)
+            root, manager = _wait_for_gated_root_and_manager(launcher)
             identities = (root, manager)
             sandbox_directories = tuple(
                 temporary.glob(f"mcp-console-tmp-{process.pid}-*")
