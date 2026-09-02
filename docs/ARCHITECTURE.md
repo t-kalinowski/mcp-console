@@ -174,7 +174,7 @@ The built-in worker embeds R on its main thread.
 Its language adapters provide persistent Python and SQL within that worker process.
 The SQL router uses a DBI provider in embedded R or a DB-API provider in CPython.
 The R provider owns a managed DuckDB connection by default and can retain a user-selected DBI connection; the Python provider retains a user-selected DB-API connection without converting it or its result rows through reticulate.
-Its private R environment bridge conditionally wraps `base::library` and `base::loadNamespace`, applies accepted managed libraries, and reports activation outcomes.
+Its private R environment bridge conditionally wraps `base::library` and runs R's unchanged `base::loadNamespace` body in a private lexical environment that intercepts its retry restart; it applies accepted managed libraries and reports activation outcomes.
 The Rust Python facade loads, retains, and initializes the selected file-backed `libpython`, or attaches its own handle if CPython was already initialized.
 It embeds and installs the private evaluator and DB-API adapter through that CPython API; reticulate attaches to the interpreter and continues to own object conversion, Python-cell evaluation dispatch, its manifest, event handling, and interrupts.
 Its private Python runtime conditionally appends a last-chance import finder, while the R Python bridge owns the reticulate manifest and the callback into the existing managed-Python resolver.
@@ -270,7 +270,7 @@ Control delivery, interrupt grace, restart, and explicit requirement preparation
 ### Worker-originated R resolution
 
 Automatic R resolution is a callback from the running built-in worker, not an idle preparation operation.
-The `library()` and `loadNamespace()` wrappers issue callbacks only when evaluation reaches a missing package load; the worker does not inspect the cell in advance.
+The `library()` wrapper and the managed `loadNamespace()` retry handler issue callbacks only when evaluation reaches a missing package load; the worker does not inspect the cell in advance.
 The relay only translates the callback messages and preserves their transport order.
 
 The server atomically assigns environment-change ownership to either an idle runtime R callback or explicit environment preparation.
