@@ -1,7 +1,9 @@
 use super::job_control::{ForegroundTerminal, SignalRelay};
 use super::manager::{CleanupPreparation, SandboxManager};
 use super::root_exit_waiter::{RootExitWaiter, RootWait};
-use crate::sandbox::{TARGET_GATE_RELEASE, file_descriptors, platform};
+use crate::sandbox::{
+    TARGET_GATE_RELEASE, child::terminate_standalone_root, file_descriptors, platform,
+};
 use std::io::{ErrorKind, Write as _};
 use std::os::fd::AsRawFd as _;
 use std::os::unix::net::UnixStream;
@@ -35,7 +37,7 @@ pub(in crate::sandbox) fn status(
     let mut root_waiter = match RootExitWaiter::start(child.id() as libc::pid_t, &signal_relay) {
         Ok(root_waiter) => root_waiter,
         Err(error) => {
-            let mut error = match kill_root(&mut child) {
+            let mut error = match terminate_standalone_root(&mut child, ROOT_STOP_TIMEOUT) {
                 Ok(_) => error,
                 Err(kill_error) => additional_error(error, kill_error),
             };
@@ -53,7 +55,7 @@ pub(in crate::sandbox) fn status(
 
     if let Err(error) = manager.observe(child.id(), temporary_directory.path()) {
         preserve(temporary_directory);
-        let root_result = kill_root(&mut child);
+        let root_result = terminate_standalone_root(&mut child, ROOT_STOP_TIMEOUT);
         let mut error = match root_result {
             Ok(_) => error,
             Err(kill_error) => additional_error(error, kill_error),
@@ -88,7 +90,7 @@ pub(in crate::sandbox) fn status(
                 }
             }
             Err(mut stop_error) => {
-                if let Err(kill_error) = kill_root(&mut child) {
+                if let Err(kill_error) = terminate_standalone_root(&mut child, ROOT_STOP_TIMEOUT) {
                     stop_error = additional_error(stop_error, kill_error);
                 }
                 error = additional_error(error, stop_error);
@@ -227,7 +229,7 @@ fn finish_after_manager_exit(
             let mut error = manager_result.err().unwrap_or_else(|| {
                 "sandbox manager recovery did not terminate the sandbox root".to_string()
             });
-            if let Err(kill_error) = kill_root(child) {
+            if let Err(kill_error) = terminate_standalone_root(child, ROOT_STOP_TIMEOUT) {
                 error = additional_error(error, kill_error);
             }
             Err(error)
@@ -237,7 +239,7 @@ fn finish_after_manager_exit(
                 Ok(()) => wait_error,
                 Err(error) => additional_error(error, wait_error),
             };
-            if let Err(kill_error) = kill_root(child) {
+            if let Err(kill_error) = terminate_standalone_root(child, ROOT_STOP_TIMEOUT) {
                 error = additional_error(error, kill_error);
             }
             Err(error)
@@ -299,84 +301,12 @@ fn stop_managed_root_with_status(
             )
         }),
         Err(mut error) => {
-            if let Err(kill_error) = kill_root(child) {
+            if let Err(kill_error) = terminate_standalone_root(child, ROOT_STOP_TIMEOUT) {
                 error = additional_error(error, kill_error);
             }
             Err(error)
         }
     }
-}
-
-// Callers retain the direct child waitably until after this function signals
-// its process group, so its PID and process-group ID cannot be reused.
-fn kill_root(child: &mut Child) -> Result<ExitStatus, String> {
-    let group_result = unsafe { libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL) };
-    let group_error = (group_result != 0)
-        .then(std::io::Error::last_os_error)
-        .filter(|error| error.raw_os_error() != Some(libc::ESRCH));
-
-    match child.try_wait() {
-        Ok(Some(status)) => {
-            return group_error.map_or(Ok(status), |group_error| {
-                Err(format!(
-                    "process-group termination also failed: {group_error}"
-                ))
-            });
-        }
-        Ok(None) => {}
-        Err(error) => {
-            return Err(format!(
-                "failed to read {} status during termination: {error}",
-                platform::SANDBOX_EXEC
-            ));
-        }
-    }
-
-    if let Err(error) = child.kill()
-        && error.raw_os_error() != Some(libc::ESRCH)
-    {
-        let group_error = group_error
-            .map(|group_error| format!("; process-group termination also failed: {group_error}"))
-            .unwrap_or_default();
-        return Err(format!(
-            "failed to terminate direct {} process: {error}{group_error}",
-            platform::SANDBOX_EXEC
-        ));
-    }
-
-    let exited = root_has_exited(child, ROOT_STOP_TIMEOUT).map_err(|error| {
-        let group_error = group_error
-            .as_ref()
-            .map(|group_error| format!("; process-group termination also failed: {group_error}"))
-            .unwrap_or_default();
-        format!("{error}{group_error}")
-    })?;
-    if !exited {
-        let group_error = group_error
-            .as_ref()
-            .map(|group_error| format!("; process-group termination also failed: {group_error}"))
-            .unwrap_or_default();
-        return Err(format!(
-            "timed out waiting for terminated {}{group_error}",
-            platform::SANDBOX_EXEC
-        ));
-    }
-
-    let status = child.wait().map_err(|error| {
-        let group_error = group_error
-            .as_ref()
-            .map(|group_error| format!("; process-group termination also failed: {group_error}"))
-            .unwrap_or_default();
-        format!(
-            "failed to wait for terminated {}: {error}{group_error}",
-            platform::SANDBOX_EXEC
-        )
-    })?;
-    group_error.map_or(Ok(status), |group_error| {
-        Err(format!(
-            "process-group termination also failed: {group_error}"
-        ))
-    })
 }
 
 fn preserve(temporary_directory: platform::TemporaryDirectory) {

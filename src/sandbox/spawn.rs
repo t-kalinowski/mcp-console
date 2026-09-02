@@ -1,13 +1,10 @@
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt as _;
 use std::process::{Child, ExitCode};
-use std::time::Duration;
 
-use super::child::append_retirement_error;
+use super::child::{append_retirement_error, terminate_unmanaged_child};
 use super::command::{SandboxedChild, SandboxedChildRetirement, SandboxedCommand};
 use super::{MANAGER_CLEANUP_TIMEOUT, platform, supervision};
-
-const CHILD_CLEANUP_TIMEOUT: Duration = Duration::from_secs(1);
 
 impl SandboxedCommand {
     /// Spawns a hidden gated root under one host-side lifetime manager.
@@ -34,7 +31,7 @@ impl SandboxedCommand {
             self.temporary_directory.preserve();
             drop(startup_gate);
             drop(manager);
-            return Err(stop_unmanaged_child(&mut child, error));
+            return Err(terminate_unmanaged_child(&mut child, error).error);
         }
         manager.monitor(child.id(), self.temporary_directory);
         if let Err(error) = manager.commit() {
@@ -50,7 +47,7 @@ impl SandboxedCommand {
         Ok(SandboxedChild {
             child,
             manager: Some(manager),
-            retirement: SandboxedChildRetirement::Active,
+            retirement: SandboxedChildRetirement::Managed,
         })
     }
 
@@ -80,67 +77,12 @@ fn stop_after_manager_failure(
     let Some(manager_error) = manager_error else {
         if let Err(wait_error) = child.wait() {
             error = append_retirement_error(
-                Some(error),
+                error,
                 format!("failed to reap `{}`: {wait_error}", platform::SANDBOX_EXEC),
             );
         }
         return error;
     };
-    error = append_retirement_error(Some(error), manager_error);
-    stop_unmanaged_child(child, error)
-}
-
-fn stop_unmanaged_child(child: &mut Child, mut error: String) -> String {
-    if let Err(group_error) = platform::kill_process_group(child.id()) {
-        error = append_retirement_error(
-            Some(error),
-            format!(
-                "failed to stop `{}` process group: {group_error}",
-                platform::SANDBOX_EXEC
-            ),
-        );
-    }
-    let mut exited =
-        platform::wait_for_process_exit_without_reaping(child.id(), CHILD_CLEANUP_TIMEOUT)
-            .unwrap_or(false);
-    if !exited
-        && let Err(kill_error) = child.kill()
-        && kill_error.raw_os_error() != Some(libc::ESRCH)
-    {
-        error = append_retirement_error(
-            Some(error),
-            format!("failed to stop `{}`: {kill_error}", platform::SANDBOX_EXEC),
-        );
-    }
-    if !exited {
-        match platform::wait_for_process_exit_without_reaping(child.id(), CHILD_CLEANUP_TIMEOUT) {
-            Ok(observed) => exited = observed,
-            Err(wait_error) => {
-                return append_retirement_error(
-                    Some(error),
-                    format!(
-                        "failed to wait for `{}` to exit before reaping it: {wait_error}",
-                        platform::SANDBOX_EXEC
-                    ),
-                );
-            }
-        }
-    }
-    if !exited {
-        return append_retirement_error(
-            Some(error),
-            format!(
-                "failed to reap `{}`: process remained live after {} ms",
-                platform::SANDBOX_EXEC,
-                CHILD_CLEANUP_TIMEOUT.as_millis()
-            ),
-        );
-    }
-    if let Err(wait_error) = child.wait() {
-        error = append_retirement_error(
-            Some(error),
-            format!("failed to reap `{}`: {wait_error}", platform::SANDBOX_EXEC),
-        );
-    }
-    error
+    error = append_retirement_error(error, manager_error);
+    terminate_unmanaged_child(child, error).error
 }

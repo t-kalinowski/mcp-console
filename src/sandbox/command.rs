@@ -33,7 +33,8 @@ pub(crate) struct SandboxedChild {
 }
 
 pub(super) enum SandboxedChildRetirement {
-    Active,
+    Managed,
+    Unmanaged { error: String },
     Retired { error: Option<String> },
 }
 
