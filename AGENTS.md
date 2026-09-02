@@ -95,7 +95,7 @@ Keep these ownership rules intact:
 
 - `src/main.rs`, `src/cli.rs` — binary entry point and command definitions.
 - `src/server.rs`, `src/server_transport.rs` — MCP tools, stdio transport, and response-delivery ownership.
-- `src/transcript.rs`, `src/transcript/markdown.rs` — append-only tool journal, Markdown and source-only Quarto projections, and image artifacts.
+- `src/transcript.rs`, `src/transcript/markdown.rs`, `src/transcript/output.rs` — append-only tool journal, Markdown and source-only Quarto projections, cell output files, and image artifacts.
 - `r/` — thin ellmer package that resolves and manages `mcp-console serve` as a persistent tool.
 
 ### Protocols, relay, and worker orchestration

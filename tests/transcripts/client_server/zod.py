@@ -35,6 +35,7 @@ from _support import (
 PLATFORMS = {"darwin"}
 LARGE_OUTPUT_SIZE = 2 * 1024 * 1024
 PENDING_TEXT_BUDGET = 8 * 1024 * 1024
+CELL_OUTPUT_RETENTION_LIMIT = 1024 * 1024 * 1024
 TEST_GATED_RESPONSE_SIZE = 128 * 1024
 FIXTURE_CHECKPOINT_TIMEOUT_SECONDS = 15
 PNG_1X1 = (
@@ -682,6 +683,7 @@ def test_materializes_records_only_for_console_use(binary: Path) -> Transcript:
         assert [event["event"] for event in events] == [
             "session_started",
             "tool_call",
+            "cell_output",
             "tool_result",
         ], events
         assert events[1]["request"]["name"] == "send", events[1]
@@ -839,6 +841,7 @@ def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanions
             "session_started",
             "tool_call",
             "artifact_created",
+            "cell_output",
             "tool_result",
             "tool_call",
             "tool_result",
@@ -852,8 +855,9 @@ def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanions
         assert Path(events[0]["working_directory"]).samefile(workspace), events[0]
         assert all(event["run_id"] == run_id for event in events), events
         assert all(event["schema_version"] == 1 for event in events), events
-        assert [event["sequence"] for event in events] == list(range(1, 9)), events
+        assert [event["sequence"] for event in events] == list(range(1, 10)), events
         assert events[1]["call_id"] == events[2]["call_id"] == 1, events
+        assert events[3]["call_id"] == events[2]["call_id"], events
         assert events[1]["request_id"] == image_request_id, events[1]
         assert events[1]["request"] == {
             "name": "send",
@@ -873,7 +877,23 @@ def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanions
             "mime_type": "image/png",
             "bytes": len(base64.b64decode(PNG_1X1)),
         }, events[2]
-        assert events[3]["result"] == {
+        assert {
+            key: events[3][key]
+            for key in (
+                "path",
+                "retained_bytes",
+                "inline_omitted_bytes",
+                "discarded_bytes",
+                "retention_limit_bytes",
+            )
+        } == {
+            "path": "outputs/call-000001.log",
+            "retained_bytes": len("before image\nafter image\n"),
+            "inline_omitted_bytes": 0,
+            "discarded_bytes": 0,
+            "retention_limit_bytes": CELL_OUTPUT_RETENTION_LIMIT,
+        }, events[3]
+        assert events[4]["result"] == {
             "content": [
                 {"type": "text", "text": "before image\n"},
                 {
@@ -885,15 +905,15 @@ def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanions
                 {"type": "text", "text": "after image\n"},
             ],
             "isError": False,
-        }, events[3]
-        assert events[4]["call_id"] == events[5]["call_id"] == 2, events
-        assert events[4]["request_id"] == invalid["id"], events[4]
-        assert events[4]["request"] == {
+        }, events[4]
+        assert events[5]["call_id"] == events[6]["call_id"] == 2, events
+        assert events[5]["request_id"] == invalid["id"], events[5]
+        assert events[5]["request"] == {
             "name": "send",
             "arguments": {"r": "1", "python": "1"},
             "_meta": {"progressToken": "record-me"},
-        }, events[4]
-        assert events[5]["result"] == {
+        }, events[5]
+        assert events[6]["result"] == {
             "content": [
                 {
                     "type": "text",
@@ -901,16 +921,16 @@ def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanions
                 }
             ],
             "isError": True,
-        }, events[5]
-        assert events[6]["call_id"] == events[7]["call_id"] == 3, events
-        assert events[6]["request_id"] == preparation_request_id, events[6]
-        assert events[6]["request"] == {
+        }, events[6]
+        assert events[7]["call_id"] == events[8]["call_id"] == 3, events
+        assert events[7]["request_id"] == preparation_request_id, events[7]
+        assert events[7]["request"] == {
             "name": "send",
             "arguments": {
                 "requirements": {"python": ["transcript-fixture"]},
             },
-        }, events[6]
-        assert events[7]["result"] == preparation_result, events[7]
+        }, events[7]
+        assert events[8]["result"] == preparation_result, events[8]
         assert [event["request"]["name"] for event in events if "request" in event] == [
             "send",
             "send",
@@ -920,9 +940,11 @@ def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanions
             event.get("request", {}).get("name") != "missing" for event in events
         ), events
 
-        image_path = session / events[3]["result"]["content"][1]["path"]
+        image_path = session / events[4]["result"]["content"][1]["path"]
+        output_path = session / events[3]["path"]
         image_bytes = image_path.read_bytes()
         assert image_bytes == base64.b64decode(PNG_1X1), image_path
+        assert output_path.read_text(encoding="utf-8") == "before image\nafter image\n"
         directory_modes = {
             path.relative_to(workspace).as_posix(): path.stat().st_mode & 0o777
             for path in (
@@ -931,6 +953,7 @@ def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanions
                 session,
                 session / "artifacts",
                 session / "internal",
+                session / "outputs",
             )
         }
         assert set(directory_modes.values()) == {0o700}, directory_modes
@@ -941,6 +964,7 @@ def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanions
                 markdown_path,
                 quarto_path,
                 image_path,
+                output_path,
             )
         }
         assert set(file_modes.values()) == {0o600}, file_modes
@@ -985,6 +1009,7 @@ def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanions
                                 "transcript.md",
                                 "transcript.qmd",
                                 "artifacts/call-000001-image-000001.png",
+                                "outputs/call-000001.log",
                             ],
                         }
                     },
@@ -1026,6 +1051,7 @@ def test_disables_recording_after_transcript_failure(binary: Path) -> Transcript
         assert [event["event"] for event in events] == [
             "session_started",
             "tool_call",
+            "cell_output",
             "tool_result",
             "tool_call",
         ], events
@@ -1052,6 +1078,75 @@ def test_disables_recording_after_transcript_failure(binary: Path) -> Transcript
             }
         )
         return transcript
+
+
+def test_keeps_recording_after_cell_output_failure(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        workspace = Path(temporary_directory)
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            current_directory=workspace,
+        )
+        client._initialize_and_list_tools()
+        client.send(r="echo first")
+
+        session = next((workspace / ".mcp-console" / "sessions").iterdir())
+        outputs = session / "outputs"
+        retained_outputs = session / "retained-outputs"
+        outputs.rename(retained_outputs)
+        outputs.write_text("not a directory", encoding="utf-8")
+
+        client.send(r="echo second")
+        failure = last_tool_text(client)
+        public_output = f".mcp-console/sessions/{session.name}/outputs/call-000002.log"
+        assert "cell output file was not created" in failure, failure
+        assert public_output in failure, failure
+        assert str(workspace) not in failure, failure
+        assert (
+            "text omitted from inline responses will be permanently discarded"
+            in failure
+        )
+        assert failure.endswith("zod: second\n"), failure
+        client.transcript[-1]["result"]["content"][0]["text"] = (
+            "[cell output file was not created: <output path is not a directory>; "
+            "text omitted from inline responses will be permanently discarded]\n"
+            "zod: second\n"
+        )
+
+        outputs.unlink()
+        retained_outputs.rename(outputs)
+        client.send(r="echo third")
+        assert last_tool_text(client) == "zod: third\n"
+        assert (outputs / "call-000003.log").read_text(encoding="utf-8") == (
+            "zod: third\n"
+        )
+
+        events = [
+            json.loads(line)
+            for line in (session / "internal" / "events.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ]
+        assert [event["event"] for event in events] == [
+            "session_started",
+            "tool_call",
+            "cell_output",
+            "tool_result",
+            "tool_call",
+            "tool_result",
+            "tool_call",
+            "cell_output",
+            "tool_result",
+        ], events
+        assert [
+            event["call_id"] for event in events if event["event"] == "cell_output"
+        ] == [
+            1,
+            3,
+        ], events
+        return client._finish()
 
 
 def test_flushes_calls_and_keeps_unpolled_images(binary: Path) -> Transcript:
@@ -1106,6 +1201,7 @@ def test_flushes_calls_and_keeps_unpolled_images(binary: Path) -> Transcript:
         assert [event["event"] for event in after_release] == [
             "session_started",
             "tool_call",
+            "cell_output",
             "tool_result",
         ], after_release
         after_release_markdown = markdown.read_text(encoding="utf-8")
@@ -1145,6 +1241,7 @@ def test_flushes_calls_and_keeps_unpolled_images(binary: Path) -> Transcript:
         assert [event["event"] for event in final_events] == [
             "session_started",
             "tool_call",
+            "cell_output",
             "tool_result",
             "tool_call",
             "tool_result",
@@ -1185,8 +1282,9 @@ def test_flushes_calls_and_keeps_unpolled_images(binary: Path) -> Transcript:
             json.loads(line)
             for line in journal.read_text(encoding="utf-8").splitlines()
         ]
-        assert [event["event"] for event in polled_events[-2:]] == [
+        assert [event["event"] for event in polled_events[-3:]] == [
             "tool_call",
+            "cell_output",
             "tool_result",
         ], polled_events
         assert polled_events[-1]["call_id"] == 3, polled_events[-1]
@@ -1806,6 +1904,12 @@ def test_captures_worker_stdout(binary: Path) -> Transcript:
     client.send(r="emit stdout")
     output = last_tool_text(client)
     assert_large_output(output, "zod stdout 👩🏽‍💻\n")
+    assert client.temporary_directory is not None
+    workspace = Path(client.temporary_directory.name)
+    session = next((workspace / ".mcp-console" / "sessions").iterdir())
+    assert (session / "outputs" / "call-000001.log").read_text(
+        encoding="utf-8"
+    ) == output
     client.transcript[-1]["result"]["content"][0]["text"] = (
         "zod stdout 👩🏽‍💻\n<large output>\n"
     )
@@ -2136,6 +2240,12 @@ def test_drains_pending_sideband_output_while_running(binary: Path) -> Transcrip
             ],
             "isError": False,
         }, result
+        assert client.temporary_directory is not None
+        workspace = Path(client.temporary_directory.name)
+        session = next((workspace / ".mcp-console" / "sessions").iterdir())
+        assert (session / "outputs" / "call-000001.log").read_text(
+            encoding="utf-8"
+        ) == "before pending image\nafter pending image\n"
 
         (image_started.parent / "zod-release-image-completion").touch()
         client.send(timeout_ms=3_000)
@@ -2907,29 +3017,82 @@ def test_bounds_pending_output_and_resets_after_completion(
     binary: Path,
 ) -> Transcript:
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
-    client = McpClient(
-        binary,
-        ("serve", "--worker", str(zod)),
-    )
-    client._initialize_and_list_tools()
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        workspace = Path(temporary_directory)
+        client = McpClient(
+            binary,
+            ("serve", "--worker", str(zod)),
+            current_directory=workspace,
+            umask=0,
+        )
+        client._initialize_and_list_tools()
 
-    client.send(r="overflow console output")
-    output = last_tool_text(client)
-    retained = "x" * PENDING_TEXT_BUDGET
-    notice = (
-        "\n[output truncated: omitted 7 text bytes and "
-        "0 encoded image bytes across 1 event]"
-    )
-    assert output == retained + notice, (
-        f"unexpected bounded output: length={len(output)}, tail={output[-200:]!r}"
-    )
-    client.transcript[-1]["result"]["content"][0]["text"] = (
-        f"<retained {PENDING_TEXT_BUDGET} text bytes>{notice}"
-    )
+        client.send(r="overflow console output")
+        overflow = client.transcript[-1]
+        output = last_tool_text(client)
+        session = next((workspace / ".mcp-console" / "sessions").iterdir())
+        relative_output = Path("outputs/call-000001.log")
+        public_output = (
+            f".mcp-console/sessions/{session.name}/{relative_output.as_posix()}"
+        )
+        retained = "x" * PENDING_TEXT_BUDGET
+        notice = (
+            "\n[output truncated: omitted 7 text bytes and "
+            "0 encoded image bytes across 1 event; "
+            f"retained text: {public_output}]"
+        )
+        assert output == retained + notice, (
+            f"unexpected bounded output: length={len(output)}, tail={output[-300:]!r}"
+        )
 
-    client.send(r="echo echo")
-    assert last_tool_text(client) == "zod: echo\n"
-    return client._finish()
+        output_path = session / relative_output
+        assert output_path.read_text(encoding="utf-8") == "x" * (
+            PENDING_TEXT_BUDGET + 7
+        )
+        assert output_path.stat().st_mode & 0o777 == 0o600, output_path
+
+        events = [
+            json.loads(line)
+            for line in (session / "internal" / "events.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ]
+        cell_output = next(event for event in events if event["event"] == "cell_output")
+        assert {
+            key: cell_output[key]
+            for key in (
+                "call_id",
+                "path",
+                "retained_bytes",
+                "inline_omitted_bytes",
+                "discarded_bytes",
+                "retention_limit_bytes",
+            )
+        } == {
+            "call_id": 1,
+            "path": relative_output.as_posix(),
+            "retained_bytes": PENDING_TEXT_BUDGET + 7,
+            "inline_omitted_bytes": 7,
+            "discarded_bytes": 0,
+            "retention_limit_bytes": CELL_OUTPUT_RETENTION_LIMIT,
+        }, cell_output
+        markdown = (session / "transcript.md").read_text(encoding="utf-8")
+        assert f"[Retained text output for call 1](<{relative_output}>)" in markdown
+        assert relative_output.as_posix() not in (session / "transcript.qmd").read_text(
+            encoding="utf-8"
+        )
+
+        normalized_notice = notice.replace(session.name, "<run ID>")
+        overflow["result"]["content"][0]["text"] = (
+            f"<retained {PENDING_TEXT_BUDGET} text bytes>{normalized_notice}"
+        )
+
+        client.send(r="echo echo")
+        assert last_tool_text(client) == "zod: echo\n"
+        assert (session / "outputs" / "call-000002.log").read_text(
+            encoding="utf-8"
+        ) == "zod: echo\n"
+        return client._finish()
 
 
 def assert_large_output(output: str, prefix: str) -> None:

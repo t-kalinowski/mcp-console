@@ -118,7 +118,7 @@ impl QuartoWriter {
                 }
                 changed
             }
-            "artifact_created" | "tool_result" => false,
+            "artifact_created" | "cell_output" | "tool_result" => false,
             kind => {
                 return Err(format!(
                     "Quarto source transcript has unsupported event kind {kind:?}"
@@ -301,6 +301,7 @@ fn render_event(document: &mut String, event: &Value) -> Result<(), String> {
         "session_started" => render_session_started(document, event),
         "tool_call" => render_tool_call(document, event),
         "artifact_created" => render_artifact(document, event),
+        "cell_output" => render_cell_output(document, event),
         "tool_result" => render_tool_result(document, event),
         kind => Err(format!(
             "Markdown transcript has unsupported event kind {kind:?}"
@@ -491,6 +492,29 @@ fn render_artifact(document: &mut String, event: &Value) -> Result<(), String> {
     writeln!(
         document,
         "## Artifact {artifact_id} for call {call_id}\n\n[Artifact {artifact_id} from call {call_id}](<{path}>)\n"
+    )
+    .expect("writing to a String cannot fail");
+    Ok(())
+}
+
+fn render_cell_output(document: &mut String, event: &Value) -> Result<(), String> {
+    let call_id = number(event, "call_id")?;
+    let path = artifact_path(field(event, "path")?)?;
+    let retained = number(event, "retained_bytes")?;
+    let inline_omitted = number(event, "inline_omitted_bytes")?;
+    let discarded = number(event, "discarded_bytes")?;
+    number(event, "retention_limit_bytes")?;
+    if inline_omitted == 0 && discarded == 0 {
+        return Ok(());
+    }
+    writeln!(
+        document,
+        "## Retained output for call {call_id}\n\n[Retained text output for call {call_id}](<{path}>)\n"
+    )
+    .expect("writing to a String cannot fail");
+    writeln!(
+        document,
+        "{retained} bytes retained; {inline_omitted} bytes omitted from inline responses; {discarded} bytes permanently discarded.\n"
     )
     .expect("writing to a String cannot fail");
     Ok(())

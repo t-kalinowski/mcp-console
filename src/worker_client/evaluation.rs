@@ -278,16 +278,35 @@ impl Evaluation {
     }
 
     /// Adopts output that remained idle until the worker operation became active.
-    pub(super) fn capture_prelude_before(&self, boundary: impl FnOnce()) -> Result<(), String> {
+    pub(super) fn capture_prelude_before(
+        &self,
+        capture_idle_prelude: bool,
+        boundary: impl FnOnce(),
+    ) -> Result<(), String> {
+        let (cell_output, failure) = match self.transcript.create_cell_output(self.call_id) {
+            Ok(cell_output) => (cell_output, None),
+            Err(error) => (
+                None,
+                Some(format!(
+                    "cell output file was not created: {error}; text omitted from inline responses will be permanently discarded"
+                )),
+            ),
+        };
         let mut state = self
             .state
             .lock()
             .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
-        let additional = self.output.take_prelude_before(boundary);
+        let additional =
+            self.output
+                .begin_cell_output_before(cell_output, capture_idle_prelude, boundary);
         if let Some(prelude) = state.idle_prelude.as_mut() {
             prelude.extend(additional);
         } else {
             state.idle_prelude = Some(additional);
+        }
+        drop(state);
+        if let Some(failure) = failure {
+            self.output.push_notice_line(failure);
         }
         Ok(())
     }
@@ -455,7 +474,7 @@ impl Evaluation {
             return;
         }
         state.phase = EvaluationPhase::Complete(CompletionKind::Cell);
-        state.completion_cut = Some(self.output.cut());
+        state.completion_cut = Some(self.finish_cell_output());
         state.completion_collected = false;
         self.changed.notify_one();
     }
@@ -474,6 +493,7 @@ impl Evaluation {
         };
         state.input_report_at = None;
         state.completion_cut = None;
+        self.finish_cell_output();
         self.output.push_failure(failure);
         state.phase = EvaluationPhase::ReplacementStarting;
         self.changed.notify_one();
@@ -504,7 +524,7 @@ impl Evaluation {
             self.output.push_failure(failure);
         }
         state.phase = EvaluationPhase::Complete(completion);
-        state.completion_cut = Some(cut.unwrap_or_else(|| self.output.cut()));
+        state.completion_cut = Some(cut.unwrap_or_else(|| self.finish_cell_output()));
         state.completion_collected = false;
         self.changed.notify_one();
     }
@@ -517,6 +537,10 @@ impl Evaluation {
             Ok(state) if !state.restart_reserved => failure.preceded_restart(),
             Ok(_) | Err(_) => failure,
         }
+    }
+
+    fn finish_cell_output(&self) -> OutputCut {
+        self.output.finish_cell_output()
     }
 
     pub(super) fn claim(self: &Arc<Self>) -> Result<WaitClaim, String> {
@@ -710,7 +734,9 @@ impl EvaluationReservation {
     }
 
     pub(super) fn take_output(&mut self, output: &OutputTape) -> (Response, Response) {
-        let cut = self.completion_cut.unwrap_or_else(|| output.cut());
+        let cut = self
+            .completion_cut
+            .unwrap_or_else(|| self.evaluation.finish_cell_output());
         let mut state = self
             .evaluation
             .state

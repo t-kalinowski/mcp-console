@@ -17,4 +17,5 @@ recording:
     send:
       - session_started
       - tool_call
+      - cell_output
       - tool_result

@@ -33,6 +33,17 @@
   run_id: <run ID>
   sequence: 3
   at: <UTC timestamp>
+- event: cell_output
+  call_id: 1
+  path: outputs/call-000001.log
+  retained_bytes: 25
+  inline_omitted_bytes: 0
+  discarded_bytes: 0
+  retention_limit_bytes: 1073741824
+  schema_version: 1
+  run_id: <run ID>
+  sequence: 4
+  at: <UTC timestamp>
 - event: tool_result
   call_id: 1
   result:
@@ -50,7 +61,7 @@
           after image
   schema_version: 1
   run_id: <run ID>
-  sequence: 4
+  sequence: 5
   at: <UTC timestamp>
 - event: tool_call
   call_id: 2
@@ -64,7 +75,7 @@
       python: "1"
   schema_version: 1
   run_id: <run ID>
-  sequence: 5
+  sequence: 6
   at: <UTC timestamp>
 - event: tool_result
   call_id: 2
@@ -75,7 +86,7 @@
         text: only one of `r`, `python`, or `sql` may be supplied
   schema_version: 1
   run_id: <run ID>
-  sequence: 6
+  sequence: 7
   at: <UTC timestamp>
 - event: tool_call
   call_id: 3
@@ -88,7 +99,7 @@
           - transcript-fixture
   schema_version: 1
   run_id: <run ID>
-  sequence: 7
+  sequence: 8
   at: <UTC timestamp>
 - event: tool_result
   call_id: 3
@@ -99,7 +110,7 @@
         text: Python requirements are unavailable with a custom worker
   schema_version: 1
   run_id: <run ID>
-  sequence: 8
+  sequence: 9
   at: <UTC timestamp>
 ---
 produced session:
@@ -109,3 +120,4 @@ produced session:
     - transcript.md
     - transcript.qmd
     - artifacts/call-000001-image-000001.png
+    - outputs/call-000001.log
