@@ -1,8 +1,10 @@
-use std::process::{ChildStderr, ChildStdin, ChildStdout};
+use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, ExitStatus};
 use std::time::Duration;
 
 use super::command::{SandboxedChild, SandboxedChildRetirement};
 use super::platform;
+
+const DIRECT_CHILD_CLEANUP_TIMEOUT: Duration = Duration::from_secs(1);
 
 impl SandboxedChild {
     #[allow(dead_code, reason = "used by spawned callers with piped stdin")]
@@ -27,10 +29,11 @@ impl SandboxedChild {
     /// ID, until sandbox-lifetime cleanup completes and the direct process is
     /// reaped.
     pub(crate) fn wait_timeout_without_reaping(&self, timeout: Duration) -> Result<bool, String> {
-        match &self.retirement {
-            SandboxedChildRetirement::Retired { .. } => return Ok(true),
-            SandboxedChildRetirement::Failed { error } => return Err(error.clone()),
-            SandboxedChildRetirement::Active | SandboxedChildRetirement::AwaitingReap { .. } => {}
+        if matches!(
+            &self.retirement,
+            SandboxedChildRetirement::Retired { .. }
+        ) {
+            return Ok(true);
         }
         platform::wait_for_process_exit_without_reaping(self.child.id(), timeout).map_err(|error| {
             format!(
@@ -43,82 +46,27 @@ impl SandboxedChild {
     /// Stops the root and observed descendants through the host-side manager or
     /// its recovery monitor, then reaps the direct sandbox process.
     pub(crate) fn force_stop(&mut self) -> Result<(), String> {
-        match &self.retirement {
-            SandboxedChildRetirement::Retired { error } => return stored_retirement_result(error),
-            SandboxedChildRetirement::AwaitingReap { error } => {
-                return self.reap_after_stop(error.clone());
-            }
-            SandboxedChildRetirement::Failed { error } => return Err(error.clone()),
-            SandboxedChildRetirement::Active => {}
+        if let SandboxedChildRetirement::Retired { error } = &self.retirement {
+            return stored_retirement_result(error);
         }
 
         let manager = self
             .manager
             .take()
             .expect("active sandbox child should retain its lifetime manager");
-        let mut error = manager.stop().err();
-        if error.is_some() {
-            if let Err(group_error) = platform::kill_process_group(self.child.id()) {
-                error = Some(append_retirement_error(
-                    error,
-                    format!(
-                        "failed to stop `{}` process group: {group_error}",
-                        platform::SANDBOX_EXEC
-                    ),
-                ));
-            }
-            if let Err(kill_error) = self.child.kill()
-                && kill_error.raw_os_error() != Some(libc::ESRCH)
-            {
-                let error = append_retirement_error(
-                    error,
-                    format!(
-                        "failed to stop direct `{}` process: {kill_error}",
-                        platform::SANDBOX_EXEC
-                    ),
-                );
-                self.retirement = SandboxedChildRetirement::Failed {
-                    error: error.clone(),
-                };
-                return Err(error);
-            }
-        }
-
-        self.retirement = SandboxedChildRetirement::AwaitingReap {
-            error: error.clone(),
+        let result = match manager.stop() {
+            Ok(()) => self.child.wait().map(|_| ()).map_err(|wait_error| {
+                format!(
+                    "failed to reap stopped `{}`: {wait_error}",
+                    platform::SANDBOX_EXEC
+                )
+            }),
+            Err(error) => terminate_unmanaged_child(&mut self.child, Some(error)),
         };
-        self.reap_after_stop(error)
-    }
-
-    fn reap_after_stop(&mut self, prior_error: Option<String>) -> Result<(), String> {
-        match self.child.wait() {
-            Ok(_) => {
-                self.retirement = SandboxedChildRetirement::Retired {
-                    error: prior_error.clone(),
-                };
-                stored_retirement_result(&prior_error)
-            }
-            Err(wait_error) => {
-                let identity_released = wait_error.raw_os_error() == Some(libc::ECHILD);
-                let error = append_retirement_error(
-                    prior_error,
-                    format!(
-                        "failed to reap stopped `{}`: {wait_error}",
-                        platform::SANDBOX_EXEC
-                    ),
-                );
-                if identity_released {
-                    self.retirement = SandboxedChildRetirement::Retired {
-                        error: Some(error.clone()),
-                    };
-                } else {
-                    self.retirement = SandboxedChildRetirement::AwaitingReap {
-                        error: Some(error.clone()),
-                    };
-                }
-                Err(error)
-            }
-        }
+        self.retirement = SandboxedChildRetirement::Retired {
+            error: result.as_ref().err().cloned(),
+        };
+        result
     }
 }
 
@@ -126,6 +74,151 @@ impl Drop for SandboxedChild {
     fn drop(&mut self) {
         let _ = self.force_stop();
     }
+}
+
+/// Stops the pinned sandbox process group, falls back to the direct child, and
+/// reaps the direct child without releasing its PID between those operations.
+pub(super) fn terminate_unmanaged_child(
+    child: &mut Child,
+    mut error: Option<String>,
+) -> Result<(), String> {
+    if let Err(group_error) = platform::kill_process_group(child.id()) {
+        error = Some(append_retirement_error(
+            error,
+            format!(
+                "failed to stop `{}` process group: {group_error}",
+                platform::SANDBOX_EXEC
+            ),
+        ));
+    }
+
+    let mut exited = platform::wait_for_process_exit_without_reaping(
+        child.id(),
+        DIRECT_CHILD_CLEANUP_TIMEOUT,
+    )
+    .unwrap_or(false);
+    if !exited
+        && let Err(kill_error) = child.kill()
+        && kill_error.raw_os_error() != Some(libc::ESRCH)
+    {
+        error = Some(append_retirement_error(
+            error,
+            format!("failed to stop `{}`: {kill_error}", platform::SANDBOX_EXEC),
+        ));
+    }
+    if !exited {
+        match platform::wait_for_process_exit_without_reaping(
+            child.id(),
+            DIRECT_CHILD_CLEANUP_TIMEOUT,
+        ) {
+            Ok(observed) => exited = observed,
+            Err(wait_error) => {
+                error = Some(append_retirement_error(
+                    error,
+                    format!(
+                        "failed to wait for `{}` to exit before reaping it: {wait_error}",
+                        platform::SANDBOX_EXEC
+                    ),
+                ));
+                return stored_retirement_result(&error);
+            }
+        }
+    }
+    if !exited {
+        error = Some(append_retirement_error(
+            error,
+            format!(
+                "failed to reap `{}`: process remained live after {} ms",
+                platform::SANDBOX_EXEC,
+                DIRECT_CHILD_CLEANUP_TIMEOUT.as_millis()
+            ),
+        ));
+        return stored_retirement_result(&error);
+    }
+    if let Err(wait_error) = child.wait() {
+        error = Some(append_retirement_error(
+            error,
+            format!("failed to reap `{}`: {wait_error}", platform::SANDBOX_EXEC),
+        ));
+    }
+    stored_retirement_result(&error)
+}
+
+/// Stops and reaps the standalone command while its waitable PID still pins the
+/// process-group identity. This retains the standalone launcher's historical
+/// diagnostics for partial group-termination failures.
+pub(super) fn terminate_standalone_root(
+    child: &mut Child,
+    timeout: Duration,
+) -> Result<ExitStatus, String> {
+    let group_result = unsafe { libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL) };
+    let group_error = (group_result != 0)
+        .then(std::io::Error::last_os_error)
+        .filter(|error| error.raw_os_error() != Some(libc::ESRCH));
+
+    match child.try_wait() {
+        Ok(Some(status)) => {
+            return group_error.map_or(Ok(status), |group_error| {
+                Err(format!(
+                    "process-group termination also failed: {group_error}"
+                ))
+            });
+        }
+        Ok(None) => {}
+        Err(error) => {
+            return Err(format!(
+                "failed to read {} status during termination: {error}",
+                platform::SANDBOX_EXEC
+            ));
+        }
+    }
+
+    if let Err(error) = child.kill()
+        && error.raw_os_error() != Some(libc::ESRCH)
+    {
+        return Err(format!(
+            "failed to terminate direct {} process: {error}{}",
+            platform::SANDBOX_EXEC,
+            group_error_suffix(&group_error)
+        ));
+    }
+
+    let exited = platform::wait_for_process_exit_without_reaping(child.id(), timeout).map_err(
+        |error| {
+            format!(
+                "failed to inspect `{}` exit status: {error}{}",
+                platform::SANDBOX_EXEC,
+                group_error_suffix(&group_error)
+            )
+        },
+    )?;
+    if !exited {
+        return Err(format!(
+            "timed out waiting for terminated {}{}",
+            platform::SANDBOX_EXEC,
+            group_error_suffix(&group_error)
+        ));
+    }
+
+    let status = child.wait().map_err(|error| {
+        format!(
+            "failed to wait for terminated {}: {error}{}",
+            platform::SANDBOX_EXEC,
+            group_error_suffix(&group_error)
+        )
+    })?;
+    group_error.map_or(Ok(status), |group_error| {
+        Err(format!(
+            "process-group termination also failed: {group_error}"
+        ))
+    })
+}
+
+fn group_error_suffix(group_error: &Option<std::io::Error>) -> String {
+    group_error
+        .as_ref()
+        .map(|error| format!("; process-group termination also failed: {error}"))
+        .unwrap_or_default()
 }
 
 pub(super) fn append_retirement_error(prior: Option<String>, error: String) -> String {
