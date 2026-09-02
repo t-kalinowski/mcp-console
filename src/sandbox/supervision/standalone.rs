@@ -137,7 +137,7 @@ pub(in crate::sandbox) fn status(
     }
     let _ = manager.begin_retirement();
     let terminal_result = foreground_terminal.restore();
-    let signal_result = signal_relay.restore();
+    let signal_result = signal_relay.drain_pending_and_restore();
     let owner_result = match (terminal_result, signal_result) {
         (Ok(()), Ok(())) => Ok(()),
         (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
@@ -246,7 +246,7 @@ fn finish_after_manager_exit(
         }
     };
     let terminal_result = foreground_terminal.restore();
-    let signal_result = signal_relay.restore();
+    let signal_result = signal_relay.drain_pending_and_restore();
 
     let status = match status_result {
         Ok(status) => status,

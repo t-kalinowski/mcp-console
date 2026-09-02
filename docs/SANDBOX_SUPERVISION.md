@@ -75,8 +75,8 @@ The standalone launcher gives the requested command its own process group.
 When the launcher's foreground process group has no peer, it transfers foreground-terminal ownership before exec so terminal-generated signals reach the command group directly.
 When a pipeline peer shares the launcher's foreground group, the launcher leaves terminal ownership unchanged.
 `SIGHUP`, `SIGINT`, `SIGQUIT`, and `SIGTERM` addressed to the launcher are blocked, consumed synchronously, and relayed once to that group.
-After root exit, the launcher marks normal retirement, restores its own foreground group when it transferred ownership, and restores its inherited signal mask before manager cleanup.
-A newly received or pending signal can then follow its inherited disposition; if that terminates the launcher, the committed manager completes lifetime cleanup.
+After root exit, the launcher marks normal retirement, restores its own foreground group when it transferred ownership, drains forwarded signals already pending at that boundary, and restores its inherited signal mask before manager cleanup.
+A signal received after that final drain can then follow its inherited disposition; if that terminates the launcher, the committed manager completes lifetime cleanup.
 
 ## Scope
 
