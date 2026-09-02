@@ -8,13 +8,13 @@ use super::process_tracker::DescendantTracker;
 use super::root_exit_waiter::RootExitWakeup;
 use crate::sandbox::file_descriptors;
 use crate::sandbox::platform;
+use std::fs;
 use std::io::{Read, Write};
 use std::os::fd::OwnedFd;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -22,15 +22,14 @@ use std::time::Duration;
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
 const FINISH_ALLOWANCE: Duration = Duration::from_secs(1);
-const PRESERVE_AFTER_RECOVERY: u8 = 1;
-const PRESERVE_AFTER_NORMAL_EXIT: u8 = 2;
-const PRESERVE_UNCONDITIONALLY: u8 = 4;
 
 pub(crate) struct SandboxManager {
     child: Option<Child>,
     child_identity: Option<ProcessIdentity>,
     monitor: Option<ManagerMonitor>,
     stream: Option<UnixStream>,
+    temporary_directory: Option<PathBuf>,
+    preserve_after_recovery: bool,
     cleanup_timeout: Duration,
     retirement_started: bool,
     cleanup_complete: bool,
@@ -39,7 +38,6 @@ pub(crate) struct SandboxManager {
 
 struct ManagerMonitor {
     identity: ProcessIdentity,
-    preservation: Arc<AtomicU8>,
     recovery_enabled: Arc<Mutex<bool>>,
     result: Receiver<Result<ManagerExit, String>>,
     thread: Option<JoinHandle<()>>,
@@ -103,6 +101,8 @@ impl SandboxManager {
             child_identity: Some(child_identity),
             monitor: None,
             stream: Some(stream),
+            temporary_directory: None,
+            preserve_after_recovery: false,
             cleanup_timeout,
             retirement_started: false,
             cleanup_complete: false,
@@ -183,6 +183,10 @@ impl SandboxManager {
             self.monitor.is_none(),
             "sandbox manager can be monitored only once"
         );
+        assert!(
+            self.temporary_directory.is_none(),
+            "sandbox manager can own only one temporary directory"
+        );
         let child = self
             .child
             .take()
@@ -193,21 +197,21 @@ impl SandboxManager {
             .expect("ready sandbox manager identity should remain pinned");
         let root_pid = root_pid as libc::pid_t;
         assert!(root_pid > 0, "sandbox root PID should be valid");
+        self.temporary_directory = Some(temporary_directory.path().to_path_buf());
+        temporary_directory.relinquish();
         self.monitor = Some(ManagerMonitor::start(
             child,
             child_identity,
             root_pid,
-            temporary_directory,
             self.cleanup_timeout,
             root_wakeup,
         ));
     }
 
     pub(crate) fn commit(&mut self) -> Result<(), String> {
-        self.monitor
-            .as_ref()
-            .expect("manager monitor is missing")
-            .preserve(PRESERVE_AFTER_RECOVERY);
+        // Recovery after this point cannot reconstruct a descendant that the
+        // manager observed before it detached, so keep the directory in place.
+        self.preserve_after_recovery = true;
         let stream = self
             .stream
             .as_mut()
@@ -233,9 +237,6 @@ impl SandboxManager {
         }
         if self.control_error.is_some() {
             return false;
-        }
-        if let Some(monitor) = self.monitor.as_ref() {
-            monitor.preserve(PRESERVE_AFTER_NORMAL_EXIT);
         }
         let stream = self
             .stream
@@ -288,24 +289,12 @@ impl SandboxManager {
         mut self,
         preserve_temporary_directory: bool,
     ) -> Result<(), String> {
-        if let Some(monitor) = self.monitor.as_ref() {
-            if preserve_temporary_directory {
-                monitor.preserve(PRESERVE_UNCONDITIONALLY);
-            } else if self.control_error.is_none() {
-                monitor.remove_after_normal_exit();
-            }
-        }
         if let Some(stream) = self.stream.as_mut()
             && let Err(error) =
                 protocol::write_retirement_disposition(stream, preserve_temporary_directory)
             && self.control_error.is_none()
         {
             self.control_error = Some(error);
-        }
-        if self.control_error.is_some()
-            && let Some(monitor) = self.monitor.as_ref()
-        {
-            monitor.preserve(PRESERVE_AFTER_NORMAL_EXIT);
         }
         let control_error = self.control_error.take();
         match self.finish_inner(None, true) {
@@ -341,14 +330,13 @@ impl SandboxManager {
         }
         let finish_timeout = self.cleanup_timeout.saturating_add(FINISH_ALLOWANCE);
         if let Some(monitor) = self.monitor.take() {
-            match monitor.finish(finish_timeout) {
-                Ok(ManagerExit::Normal) => {}
-                Ok(ManagerExit::Recovered) => return Ok(ManagerExit::Recovered),
-                Err(monitor_error) => {
-                    error = Some(with_prior_error(error, monitor_error));
-                }
-            }
-            return error.map_or(Ok(ManagerExit::Normal), Err);
+            let result = match monitor.finish(finish_timeout) {
+                Ok(ManagerExit::Normal) => error.map_or(Ok(ManagerExit::Normal), Err),
+                Ok(ManagerExit::Recovered) => Ok(ManagerExit::Recovered),
+                Err(monitor_error) => Err(with_prior_error(error, monitor_error)),
+            };
+            self.finish_recovery_directory(&result);
+            return result;
         }
         let Some(mut child) = self.child.take() else {
             return error.map_or(Ok(ManagerExit::Normal), Err);
@@ -384,6 +372,17 @@ impl SandboxManager {
         }
         error.map_or(Ok(ManagerExit::Normal), Err)
     }
+
+    fn finish_recovery_directory(&mut self, result: &Result<ManagerExit, String>) {
+        let Some(path) = self.temporary_directory.take() else {
+            return;
+        };
+        if matches!(result, Ok(ManagerExit::Recovered)) && !self.preserve_after_recovery {
+            // Before commitment, configured code is still gated. Successful
+            // fallback cleanup therefore proves the adopted directory unused.
+            let _ = fs::remove_dir_all(path);
+        }
+    }
 }
 
 impl ManagerMonitor {
@@ -391,13 +390,10 @@ impl ManagerMonitor {
         child: Child,
         identity: ProcessIdentity,
         root_pid: libc::pid_t,
-        temporary_directory: platform::TemporaryDirectory,
         cleanup_timeout: Duration,
         root_wakeup: Option<RootExitWakeup>,
     ) -> Self {
         let (result_sender, result) = mpsc::channel();
-        let preservation = Arc::new(AtomicU8::new(0));
-        let preservation_for_monitor = Arc::clone(&preservation);
         let recovery_enabled = Arc::new(Mutex::new(true));
         let recovery_enabled_for_monitor = Arc::clone(&recovery_enabled);
         let thread = std::thread::spawn(move || {
@@ -405,29 +401,17 @@ impl ManagerMonitor {
             let result = monitor_manager(
                 child,
                 root_pid,
-                temporary_directory,
                 cleanup_timeout,
-                preservation_for_monitor,
                 recovery_enabled_for_monitor,
             );
             let _ = result_sender.send(result);
         });
         Self {
             identity,
-            preservation,
             recovery_enabled,
             result,
             thread: Some(thread),
         }
-    }
-
-    fn preserve(&self, flag: u8) {
-        self.preservation.fetch_or(flag, Ordering::Release);
-    }
-
-    fn remove_after_normal_exit(&self) {
-        self.preservation
-            .fetch_and(!PRESERVE_AFTER_NORMAL_EXIT, Ordering::Release);
     }
 
     fn disable_recovery(&self) {
@@ -444,7 +428,6 @@ impl ManagerMonitor {
             Ok(result) => result,
             Err(RecvTimeoutError::Timeout) => {
                 error = Some("timed out waiting for sandbox manager cleanup".to_string());
-                self.preserve(PRESERVE_UNCONDITIONALLY);
                 if let Err(signal_error) = signal_process(self.identity, libc::SIGKILL) {
                     error = Some(with_prior_error(
                         error,
@@ -454,10 +437,9 @@ impl ManagerMonitor {
                 // Do not release the caller's pinned sandbox root while this
                 // thread still owns the exact, unreaped manager child. Allow a
                 // second cleanup deadline for forced-exit recovery, then detach
-                // the monitor and preserve its directory guard rather than
-                // extending the bounded retirement wait. If fallback recovery
-                // has already started, retain the root pin until that bounded
-                // cleanup finishes before detaching.
+                // the monitor rather than extending the bounded retirement wait.
+                // If fallback recovery has already started, retain the root pin
+                // until that bounded cleanup finishes before detaching.
                 match self.result.recv_timeout(timeout) {
                     Ok(result) => result,
                     Err(RecvTimeoutError::Disconnected) => {
@@ -505,9 +487,7 @@ impl ManagerMonitor {
 fn monitor_manager(
     mut child: Child,
     root_pid: libc::pid_t,
-    temporary_directory: platform::TemporaryDirectory,
     cleanup_timeout: Duration,
-    preservation: Arc<AtomicU8>,
     recovery_enabled: Arc<Mutex<bool>>,
 ) -> Result<ManagerExit, String> {
     let completion = match platform::wait_for_process_exit_without_reaping_blocking(child.id()) {
@@ -523,7 +503,7 @@ fn monitor_manager(
         }
     };
 
-    let result = match completion {
+    match completion {
         Ok(status) if status.success() => Ok(ManagerExit::Normal),
         Ok(status) => finish_manager_failure(
             format!("sandbox manager exited with status {status}"),
@@ -532,18 +512,7 @@ fn monitor_manager(
             &recovery_enabled,
         ),
         Err(error) => finish_manager_failure(error, root_pid, cleanup_timeout, &recovery_enabled),
-    };
-    let preservation = preservation.load(Ordering::Acquire);
-    if result.is_err()
-        || (matches!(&result, Ok(ManagerExit::Recovered))
-            && preservation & PRESERVE_AFTER_RECOVERY != 0)
-        || preservation & PRESERVE_UNCONDITIONALLY != 0
-        || (matches!(&result, Ok(ManagerExit::Normal))
-            && preservation & PRESERVE_AFTER_NORMAL_EXIT != 0)
-    {
-        temporary_directory.preserve();
     }
-    result
 }
 
 fn stop_manager_child(child: &mut Child) -> Result<ExitStatus, String> {
@@ -693,11 +662,6 @@ fn stop_and_reap(child: &mut Child, mut error: String) -> String {
 
 impl Drop for SandboxManager {
     fn drop(&mut self) {
-        if self.retirement_started
-            && let Some(monitor) = self.monitor.as_ref()
-        {
-            monitor.preserve(PRESERVE_AFTER_NORMAL_EXIT);
-        }
         let _ = self.finish_inner(None, false);
     }
 }

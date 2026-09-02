@@ -447,7 +447,10 @@ pub(super) fn sandboxed_command() -> Result<(Command, TemporaryDirectory), Strin
     Ok((launcher, temporary_directory))
 }
 
-pub(crate) struct TemporaryDirectory(PathBuf);
+pub(crate) struct TemporaryDirectory {
+    path: PathBuf,
+    remove_on_drop: bool,
+}
 
 impl TemporaryDirectory {
     fn new() -> Result<Self, String> {
@@ -468,18 +471,20 @@ impl TemporaryDirectory {
                 )
             })?;
 
-        let mut directory = Self(path);
-        directory.0 = directory.0.canonicalize().map_err(|error| {
+        let path = path.canonicalize().map_err(|error| {
             format!(
                 "failed to resolve temporary directory `{}`: {error}",
-                directory.0.display()
+                path.display()
             )
         })?;
-        Ok(directory)
+        Ok(Self {
+            path,
+            remove_on_drop: true,
+        })
     }
 
     pub(super) fn path(&self) -> &Path {
-        &self.0
+        &self.path
     }
 
     pub(crate) fn adopt(path: PathBuf, owner_pid: libc::pid_t) -> Result<Self, String> {
@@ -510,18 +515,29 @@ impl TemporaryDirectory {
                 path.display()
             ));
         }
-        Ok(Self(path))
+        Ok(Self {
+            path,
+            remove_on_drop: true,
+        })
     }
 
-    pub(crate) fn preserve(self) {
-        std::mem::forget(self);
+    /// Leaves the directory in place because cleanup could not prove that it is unused.
+    pub(crate) fn preserve(mut self) {
+        self.remove_on_drop = false;
+    }
+
+    /// Transfers cleanup ownership to another guard for the same directory.
+    pub(crate) fn relinquish(mut self) {
+        self.remove_on_drop = false;
     }
 }
 
 impl Drop for TemporaryDirectory {
     fn drop(&mut self) {
-        // Cleanup must not replace the child status if it changed directory modes.
-        let _ = fs::remove_dir_all(&self.0);
+        if self.remove_on_drop {
+            // Cleanup must not replace the child status if it changed directory modes.
+            let _ = fs::remove_dir_all(&self.path);
+        }
     }
 }
 
