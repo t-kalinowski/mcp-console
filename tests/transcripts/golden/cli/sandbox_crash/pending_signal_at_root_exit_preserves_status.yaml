@@ -29,7 +29,12 @@ stdout: |
   <detached descendant pid>
   <sandbox temp>
 ---
-manager_signal: SIGKILL
-launcher_returncode: 137
-verified_cleanup: sandbox root, detached descendant, and manager
-verified_preservation: sandbox temp
+launcher_signal: SIGSTOP
+pending_launcher_signal: SIGTERM
+root_action: exit 23
+verified_pending_signal: before launcher resume
+---
+launcher_signal: SIGCONT
+launcher_returncode: 23
+verified_signal: consumed without replacing root status
+verified_cleanup: sandbox root, detached descendant, manager, and temp

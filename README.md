@@ -175,17 +175,19 @@ On macOS, each worker generation commits one host-side manager that owns observe
 The built-in or configured relay starts only after that manager has adopted the directory, begun observation, and committed ownership.
 Normal restart, automatic worker replacement, orderly server shutdown, and abrupt server exit retire descendants the manager observed, including descendants that entered another process group or session.
 If the manager fails while the server retains a live, waitable relay root, the server reconstructs that root's current ancestry and performs bounded fallback cleanup.
+That fallback preserves the private directory after ownership commitment because a detached descendant known only to the failed manager may remain live.
 A later descendant that becomes orphaned before the manager resolves its fork event, or that detached before fallback reconstruction, remains outside that cleanup guarantee.
 The standalone `sandbox` command is available for development.
 Its requested command remains blocked on a private startup gate until the manager has adopted the private temporary directory, begun observation, and committed ownership.
 The launcher preserves the direct command's exit status while the manager retires observed descendants.
 Abrupt launcher loss after commitment retires that managed lifetime; owner loss after normal retirement begins preserves the directory when its final disposition is uncertain.
 Unexpected manager loss triggers bounded launcher-side recovery while the direct root remains live and waitable.
+The launcher likewise preserves the private directory after committed-manager recovery.
 The command inherits standard input, output, and error while closing other inherited file descriptors before the target runs.
 The launcher places the target in a dedicated process group and relays `SIGHUP`, `SIGINT`, `SIGQUIT`, and `SIGTERM` addressed to the launcher into that group.
 For a direct foreground invocation whose process group has no peer, it also transfers controlling-terminal ownership to the target and restores ownership after the direct root exits.
 If the launcher shares its foreground process group with a pipeline peer, it leaves terminal ownership with that group.
-After the direct root exits, the launcher restores its inherited signal mask before manager cleanup.
+After the direct root exits or startup cleanup stops it, the launcher drains forwarded signals already pending at that boundary and restores its inherited signal mask before returning.
 Stopped/continued job state and general shell-pipeline job-control semantics remain unsupported; `Ctrl-Z` followed by `fg` requires a separate terminal state machine.
 Use the MCP server for the supported worker-generation lifecycle.
 

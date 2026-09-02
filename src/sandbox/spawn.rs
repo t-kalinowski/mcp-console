@@ -31,6 +31,7 @@ impl SandboxedCommand {
         startup_gate.child_spawned();
 
         if let Err(error) = manager.observe(child.id(), self.temporary_directory.path()) {
+            self.temporary_directory.preserve();
             drop(startup_gate);
             drop(manager);
             return Err(stop_unmanaged_child(&mut child, error));

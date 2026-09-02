@@ -258,19 +258,14 @@ def _wait_for_process_state(
 
 def _wait_for_startup_cleanup(
     identities: tuple[DarwinProcessIdentity, ...],
-    temporary_directories: tuple[Path, ...],
 ) -> None:
     deadline = time.monotonic() + TIMEOUT
     while True:
         survivors = live_darwin_processes(identities)
-        remaining_directories = [
-            path for path in temporary_directories if path.exists()
-        ]
-        if not survivors and not remaining_directories:
+        if not survivors:
             return
         assert time.monotonic() < deadline, (
-            f"startup cleanup left processes {survivors} "
-            f"and directories {remaining_directories}"
+            f"startup cleanup left processes {survivors}"
         )
         time.sleep(0.01)
 
@@ -454,14 +449,17 @@ def test_manager_failure_before_readiness_keeps_custom_relay_gated(
                 "failed to stop `/usr/bin/sandbox-exec`: Operation not permitted"
                 in text
             ), result
-            _wait_for_startup_cleanup(identities, temporary_directories)
+            _wait_for_startup_cleanup(identities)
             assert list(temporary.glob(f"**/{MARKER_NAME}")) == []
+            assert temporary_directories[0].exists(), (
+                "ambiguous manager readiness removed the temporary directory"
+            )
             waiting["startup_gate_failure"] = {
                 "manager": "killed before readiness",
                 "cleanup_signals": "EPERM for group and direct root",
                 "root_signal": "SIGSTOP then SIGCONT",
                 "relay_root": "retired without executing the custom relay",
-                "temporary_directory": "removed",
+                "temporary_directory": "preserved",
             }
 
             replacement = client._start_send(r="echo echo")

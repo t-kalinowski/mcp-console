@@ -2765,6 +2765,26 @@ def test_idle_stdin_startup_blocks_preparation(binary: Path) -> Transcript:
                 stop_process(client.process)
 
 
+def submit_prompted_stdin(
+    client: McpClient,
+    temporary_path: Path,
+    stdin: str,
+    marker: str,
+    expected: str,
+) -> None:
+    poll_start = len(client.transcript)
+    submitted = client._start_send(stdin=stdin)
+    wait_for_marker(temporary_path, marker, client)
+    client._receive(submitted)
+    if last_tool_text(client) != expected:
+        assert last_tool_text(client) == "\n[waiting for stdin]"
+        client.send()
+    assert last_tool_text(client) == expected
+    calls = client.transcript[poll_start:]
+    submitted["result"] = calls[-1]["result"]
+    client.transcript[poll_start:] = [submitted]
+
+
 def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[2] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
@@ -2777,23 +2797,6 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
             environment,
         )
         client._initialize_and_list_tools()
-
-        def submit_prompted_stdin(
-            stdin: str,
-            marker: str,
-            expected: str,
-        ) -> None:
-            poll_start = len(client.transcript)
-            submitted = client._start_send(stdin=stdin)
-            wait_for_marker(temporary_path, marker, client)
-            client._receive(submitted)
-            if last_tool_text(client) != expected:
-                assert last_tool_text(client) == "\n[waiting for stdin]"
-                client.send()
-            assert last_tool_text(client) == expected
-            calls = client.transcript[poll_start:]
-            submitted["result"] = calls[-1]["result"]
-            client.transcript[poll_start:] = [submitted]
 
         client.send(
             r="input length without request",
@@ -2814,6 +2817,8 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
         client.send(stdin="")
         assert last_tool_text(client) == "\n[waiting for stdin]"
         submit_prompted_stdin(
+            client,
+            temporary_path,
             "prompted\n",
             "zod-prompted-input-processed",
             "zod stdin: prompted\n",
@@ -2827,6 +2832,8 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
             '[input requested: "second> "]\n[waiting for stdin]'
         )
         submit_prompted_stdin(
+            client,
+            temporary_path,
             "second\n",
             "zod-combined-input-processed",
             "zod stdin: first|second\n",
@@ -4782,8 +4789,13 @@ def test_demarcates_idle_prelude_across_cell_outcomes(binary: Path) -> Transcrip
                 '[input requested: "zod> "]\n'
                 "[waiting for stdin]"
             )
-            client.send(stdin="answer\n")
-            assert last_tool_text(client) == "zod stdin: answer\n"
+            submit_prompted_stdin(
+                client,
+                temporary_path,
+                "answer\n",
+                "zod-prompted-input-processed",
+                "zod stdin: answer\n",
+            )
 
             expose_idle_sideband_output(client, temporary_path, "language-error")
             client.send(r="language error")

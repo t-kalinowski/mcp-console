@@ -1311,8 +1311,13 @@ def test_replays_console_prefix_after_operation_boundary_interrupt(
             "[waiting for stdin]"
         )
 
-        client.send(control="interrupt", timeout_ms=0)
-        assert last_tool_text(client) == "caught later-callback interrupt\n"
+        wait_for_evaluation_output(
+            client,
+            "caught later-callback interrupt\n",
+            "later console callback interrupt",
+            control="interrupt",
+            timeout_ms=0,
+        )
 
         client.send(r='readline("after later callback> ")', stdin="!\n")
         assert last_tool_text(client) == (
@@ -1355,8 +1360,14 @@ def test_replays_console_prefix_after_operation_boundary_interrupt(
             client,
         )
 
-        client.send(control="interrupt", timeout_ms=0)
-        assert last_tool_text(client) == "caught between-callback interrupt\n"
+        wait_for_evaluation_output(
+            client,
+            "caught between-callback interrupt\n",
+            "between-callback interrupt",
+            provisional="\n[running; poll with an empty send]",
+            control="interrupt",
+            timeout_ms=0,
+        )
 
         client.send(
             r='identical(readline("after boundary> "), paste0(strrep("x", 6), "!"))',
@@ -1432,11 +1443,41 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
         second <- readline("second> ")
         cat(paste(first, second, sep = "|"), "\n", sep = "")
         """)
-    client.send(r=r, stdin="Ada\nLovelace\n")
-    output = last_tool_text(client)
-    assert output == (
+    # Same-call stdin is transport-ordered, but fd 0 consumption can lag the
+    # input-exposure response. Accumulate exact public output cuts in order.
+    expected = (
         '[input requested: "first> "]\n[input requested: "second> "]\nAda|Lovelace\n'
-    ), output
+    )
+    waiting = "[waiting for stdin]"
+    deadline = time.monotonic() + 3
+    call_start = len(client.transcript)
+    result = client.send(r=r, stdin="Ada\nLovelace\n")
+    collected = ""
+    while True:
+        assert result.get("isError") is not True, result
+        content = result["content"]
+        assert len(content) == 1 and content[0]["type"] == "text", content
+        output = content[0]["text"]
+        is_waiting = output.endswith(waiting)
+        if is_waiting:
+            delta = "" if output == "\n" + waiting else output.removesuffix(waiting)
+        else:
+            delta = output
+        collected += delta
+        assert expected.startswith(collected), repr(collected)
+        if not is_waiting:
+            assert collected == expected, repr(collected)
+            break
+        assert collected, "the first input request was not reported"
+        assert time.monotonic() < deadline, "combined same-call stdin did not complete"
+        result = client.send(timeout_ms=3_000)
+
+    calls = client.transcript[call_start:]
+    submitted = calls[0]
+    final_result = calls[-1]["result"]
+    final_result["content"][0]["text"] = collected
+    submitted["result"] = final_result
+    client.transcript[call_start:] = [submitted]
 
     # fmt: r
     r = code(r"""

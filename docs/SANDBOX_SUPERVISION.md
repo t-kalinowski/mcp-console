@@ -15,7 +15,7 @@ The manager also adopts the private temporary-directory guard for the lifetime.
 
 The host owner retains the manager process and direct sandbox root as waitable children.
 After the manager reports readiness, the owner starts monitoring manager exit and transfers its backup directory guard to that monitor before entering the ownership-commit exchange.
-The relay remains a transport and direct-worker owner; it does not own observed-descendant cleanup or the private directory.
+The relay remains a transport and direct-worker owner, including local same-group cleanup; it does not own observed-descendant cleanup across process groups or sessions, or the private directory.
 
 ## Startup
 
@@ -27,6 +27,7 @@ After ownership is committed, the owner writes one release byte.
 The hidden wrapper closes the channel and replaces itself with the configured relay or requested command in the same process identity.
 Configured sandbox code therefore cannot run before manager observation and ownership are committed.
 Abrupt owner loss before readiness or commitment closes the startup channel before configured code runs, but private-directory cleanup is not guaranteed.
+The owner preserves its backup directory guard whenever readiness or ownership confirmation is ambiguous.
 
 Darwin cannot resolve every later fork atomically.
 A descendant that becomes orphaned before the manager resolves its fork event remains outside the implemented guarantee.
@@ -74,13 +75,14 @@ The standalone launcher gives the requested command its own process group.
 When the launcher's foreground process group has no peer, it transfers foreground-terminal ownership before exec so terminal-generated signals reach the command group directly.
 When a pipeline peer shares the launcher's foreground group, the launcher leaves terminal ownership unchanged.
 `SIGHUP`, `SIGINT`, `SIGQUIT`, and `SIGTERM` addressed to the launcher are blocked, consumed synchronously, and relayed once to that group.
-After root exit, the launcher marks normal retirement, restores its own foreground group when it transferred ownership, and restores its inherited signal mask before manager cleanup.
-A newly received or pending signal can then follow its inherited disposition; if that terminates the launcher, the committed manager completes lifetime cleanup.
+After root exit, the launcher marks normal retirement, restores its own foreground group when it transferred ownership, drains forwarded signals already pending at that boundary, and restores its inherited signal mask before manager cleanup.
+If startup or recovery cleanup stops the root, the launcher drains pending forwarded signals before restoring the mask and returning the error.
+A signal received after that final drain can then follow its inherited disposition; if that terminates the launcher, the committed manager completes lifetime cleanup.
 
 ## Scope
 
 This ownership applies to `SandboxedCommand::spawn`, which is used for built-in and custom worker relay generations, and to `SandboxedCommand::status`, which implements `mcp-console sandbox`.
-The worker path retains its server-owned process-group race backstop and gates the relay before either relay implementation runs.
+The worker path retains its manager-owned process-group race backstop, with owner fallback after manager failure, and gates the relay before either relay implementation runs.
 The standalone path retains inherited standard streams, uses a dedicated target process group, and supplies the direct-foreground terminal and signal behavior above.
 It does not support `Ctrl-Z` followed by `fg` or general pipeline job-control semantics.
 Linux and Windows are not supported.

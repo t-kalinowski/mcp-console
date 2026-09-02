@@ -84,6 +84,7 @@ The client does not communicate directly with a relay, worker, or resolver.
 The server initializes one sandbox manager per worker generation, which may evaluate multiple cells before restart or replacement.
 The standalone launcher initializes one manager per invocation of `mcp-console sandbox`, which runs one direct child command.
 Initialization travels over a private inherited Unix socket and waits for one-byte readiness and ownership-commit responses.
+The owner preserves its backup directory guard if either response is ambiguous.
 The fixed private initialization carries the owner and sandbox-root PIDs, cleanup timeout, and private temporary-directory path.
 Before reporting readiness, the manager validates the root's exact identity and direct-child relationship, attaches its PID-and-start-time descendant tracker, and adopts the directory.
 The same private stream carries forced-stop requests and the standalone normal-retirement handoff: the launcher marks retirement, the manager acknowledges cleanup, and the launcher commits the final remove-or-preserve disposition before reaping the direct root.
@@ -133,7 +134,8 @@ It keeps the root blocked on a private descriptor while committing primary manag
 The root waiter uses one `kqueue` for root exit and launcher-addressed signals.
 The launcher relays `SIGHUP`, `SIGINT`, `SIGQUIT`, and `SIGTERM` addressed to it into the target group.
 When its foreground process group has no peer, it transfers controlling-terminal ownership to the target group; when a pipeline peer shares the group, it leaves terminal ownership unchanged.
-After root exit it marks normal retirement, restores terminal ownership when it transferred it, restores its inherited signal mask, waits for manager cleanup, supplies the final temporary-directory disposition, and reaps the root last.
+After root exit it marks normal retirement, restores terminal ownership when it transferred it, drains forwarded signals already pending at that boundary, restores its inherited signal mask, waits for manager cleanup, supplies the final temporary-directory disposition, and reaps the root last.
+Startup and recovery failures likewise drain pending forwarded signals after stopping the root and before restoring the inherited mask, so those signals cannot replace the reported error.
 It does not own descendant tracking, console state, dependency resolution, recording, relay transport, or worker protocol behavior.
 It does not implement stopped/continued job state or general shell-pipeline job control.
 
@@ -147,6 +149,7 @@ It does not own session state, operation admission, relay transport, command exi
 On normal standalone root exit, the manager remains alive until the launcher explicitly commits the directory disposition.
 Loss of owner control after retirement starts preserves the directory; earlier control loss selects forced cleanup and removal after success.
 If the manager itself fails while its owner retains a live, waitable root, the owner monitor reconstructs the root's current ancestry and performs bounded cleanup.
+After commitment, that recovery preserves the private directory even when cleanup succeeds.
 That fallback cannot recover a descendant that had already detached from the root's ancestry.
 
 ### Relay
@@ -222,8 +225,9 @@ A descendant that later escapes before the manager sees its fork remains outside
 
 The launcher blocks in the root waiter's `kqueue` until root exit or a supported signal is addressed to the launcher.
 It consumes pending launcher signals synchronously and relays them to the target process group.
-At root exit it marks normal retirement, restores terminal ownership when it transferred it, and restores its inherited signal mask before manager cleanup.
-Newly received or pending signals can then follow their inherited disposition; if one terminates the launcher, the committed manager completes lifetime cleanup.
+At root exit it marks normal retirement, restores terminal ownership when it transferred it, drains forwarded signals already pending at that boundary, and restores its inherited signal mask before manager cleanup.
+When startup or recovery cleanup stops the root instead, it applies the same drain before returning the error.
+A signal received after that final drain can then follow its inherited disposition; if it terminates the launcher, the committed manager completes lifetime cleanup.
 The launcher waits for the manager's cleanup acknowledgement and commits remove after success or preserve after an acknowledgement timeout or error.
 It then reaps the direct root and returns its status when cleanup succeeded.
 If the launcher exits after the retirement marker but before final disposition, the manager preserves the directory; owner loss before that marker selects crash cleanup and removal after successful manager retirement.

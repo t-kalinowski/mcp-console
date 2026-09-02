@@ -18,7 +18,7 @@ startup_gate_failure:
   cleanup_signals: EPERM for group and direct root
   root_signal: SIGSTOP then SIGCONT
   relay_root: retired without executing the custom relay
-  temporary_directory: removed
+  temporary_directory: preserved
 ---
 send:
   r: echo echo

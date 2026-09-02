@@ -214,7 +214,8 @@ impl SignalRelay {
         }
     }
 
-    pub(super) fn restore(mut self) -> Result<(), String> {
+    pub(super) fn drain_pending_and_restore(mut self) -> Result<(), String> {
+        self.drain_pending()?;
         self.restore_mask()
     }
 
@@ -242,29 +243,7 @@ impl SignalRelay {
     }
 
     pub(super) fn relay_pending(&self, process_group: libc::pid_t) -> Result<(), String> {
-        loop {
-            let mut pending: libc::sigset_t = unsafe { std::mem::zeroed() };
-            if unsafe { libc::sigpending(&mut pending) } != 0 {
-                return Err(format!(
-                    "failed to inspect pending launcher signals: {}",
-                    std::io::Error::last_os_error()
-                ));
-            }
-            if !FORWARDED_SIGNALS.iter().any(|signal| {
-                (unsafe { libc::sigismember(&self.wait_set, *signal) } == 1)
-                    && (unsafe { libc::sigismember(&pending, *signal) } == 1)
-            }) {
-                return Ok(());
-            }
-
-            let mut signal = 0;
-            let wait_result = unsafe { libc::sigwait(&self.wait_set, &mut signal) };
-            if wait_result != 0 {
-                return Err(format!(
-                    "failed to consume a pending launcher signal: {}",
-                    std::io::Error::from_raw_os_error(wait_result)
-                ));
-            }
+        while let Some(signal) = self.take_pending()? {
             let result = unsafe { libc::kill(-process_group, signal) };
             if result != 0 {
                 let error = std::io::Error::last_os_error();
@@ -275,12 +254,46 @@ impl SignalRelay {
                 }
             }
         }
+        Ok(())
+    }
+
+    fn drain_pending(&self) -> Result<(), String> {
+        while self.take_pending()?.is_some() {}
+        Ok(())
+    }
+
+    fn take_pending(&self) -> Result<Option<libc::c_int>, String> {
+        let mut pending: libc::sigset_t = unsafe { std::mem::zeroed() };
+        if unsafe { libc::sigpending(&mut pending) } != 0 {
+            return Err(format!(
+                "failed to inspect pending launcher signals: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        if !FORWARDED_SIGNALS.iter().any(|signal| {
+            (unsafe { libc::sigismember(&self.wait_set, *signal) } == 1)
+                && (unsafe { libc::sigismember(&pending, *signal) } == 1)
+        }) {
+            return Ok(None);
+        }
+
+        let mut signal = 0;
+        let wait_result = unsafe { libc::sigwait(&self.wait_set, &mut signal) };
+        if wait_result != 0 {
+            return Err(format!(
+                "failed to consume a pending launcher signal: {}",
+                std::io::Error::from_raw_os_error(wait_result)
+            ));
+        }
+        Ok(Some(signal))
     }
 }
 
 impl Drop for SignalRelay {
     fn drop(&mut self) {
-        let _ = self.restore_mask();
+        if self.restore_pending && self.drain_pending().is_ok() {
+            let _ = self.restore_mask();
+        }
     }
 }
 
