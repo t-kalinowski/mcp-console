@@ -1,4 +1,5 @@
 .onLoad <- function(libname, pkgname) {
+  stopifnot(!isNamespaceLoaded("pkgload"))
   compatibility_warnings <- character()
   namespace <- withCallingHandlers(
     loadNamespace("pkgload"),
