@@ -366,8 +366,10 @@ static ssize_t gate_manager_initialization(
 static int fail_manager_group_stop(pid_t process_group_id, int number) {
     if (number == SIGKILL && is_subcommand("sandbox-manager")) {
         atomic_store(&manager_group_stop_started, 1);
-        errno = EPERM;
-        return -1;
+        if (getenv("MCP_CONSOLE_TEST_MANAGER_GROUP_STOP_FAILURE") != NULL) {
+            errno = EPERM;
+            return -1;
+        }
     }
     return next_killpg()(process_group_id, number);
 }
@@ -722,9 +724,19 @@ def _start_lifetime(
     environment: dict[str, str] | None = None,
     *,
     detached: bool = True,
+    move_root_to_descendant_group: bool = False,
 ) -> _SandboxLifetime:
+    assert not (detached and move_root_to_descendant_group)
     # The detached child leaves the root's session, so cleanup must come from
     # exact descendant observation rather than an inherited process group.
+    child_group_option = (
+        "process_group=0"
+        if move_root_to_descendant_group
+        else f"start_new_session={detached!r}"
+    )
+    root_group_setup = (
+        "\n        os.setpgid(0, child.pid)" if move_root_to_descendant_group else ""
+    )
     # fmt: python
     script = code(rf"""
         import os
@@ -736,8 +748,8 @@ def _start_lifetime(
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            start_new_session={detached!r},
-        )
+            {child_group_option},
+        ){root_group_setup}
         print(os.getpid())
         print(child.pid)
         print(os.environ["TMPDIR"])
@@ -764,7 +776,7 @@ def _start_lifetime(
         root_pid, descendant_pid, temporary_directory_text = _read_lines(
             process.stdout,
             3,
-            "the sandbox root, detached descendant, and temporary directory",
+            "the sandbox root, descendant, and temporary directory",
         )
         temporary_directory = Path(temporary_directory_text)
         root = capture_darwin_process_identity(int(root_pid))
@@ -772,7 +784,11 @@ def _start_lifetime(
         descendant = capture_darwin_process_identity(int(descendant_pid))
         identities.append(descendant)
         launcher = capture_darwin_process_identity(process.pid)
-        if detached:
+        if move_root_to_descendant_group:
+            assert os.getpgid(root[0]) == descendant[0], (
+                "sandbox root did not join its descendant's process group"
+            )
+        elif detached:
             assert os.getsid(descendant[0]) != os.getsid(root[0]), (
                 "sandbox descendant did not leave the root session"
             )
@@ -1327,6 +1343,83 @@ def test_manager_owner_loss_stop_failure_remains_bounded(
             ]
         finally:
             group_stop_failed.close()
+            root_stop_failed.close()
+            _cleanup(lifetime)
+
+
+def test_manager_owner_loss_after_root_group_change_remains_bounded(
+    binary: Path,
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        fixture_directory = Path(temporary_directory)
+        root_stop_failed = FifoCheckpoint(
+            fixture_directory / "manager-root-stop-failed"
+        )
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "DYLD_INSERT_LIBRARIES": str(
+                    _build_supervision_interposer(
+                        fixture_directory,
+                        "manager-stop-failure",
+                    )
+                ),
+                "MCP_CONSOLE_TEST_MANAGER_ROOT_STOP_FAILURE": str(
+                    root_stop_failed.path
+                ),
+            }
+        )
+        lifetime = _start_lifetime(
+            binary,
+            environment,
+            detached=False,
+            move_root_to_descendant_group=True,
+        )
+        try:
+            with _observe_process_exit(lifetime.manager) as manager_exit:
+                assert signal_darwin_process(lifetime.launcher, signal.SIGKILL), (
+                    "sandbox launcher exited before owner-loss injection"
+                )
+                returncode = lifetime.process.wait(timeout=TIMEOUT)
+                root_stop_failed.wait("manager direct-root stop failure")
+                events = manager_exit.control(None, 1, TIMEOUT)
+
+            assert events, (
+                "sandbox manager did not exit after its bounded cleanup interval"
+            )
+            assert events[0].ident == lifetime.manager[0], events[0]
+            assert events[0].filter == select.KQ_FILTER_PROC, events[0]
+            assert events[0].fflags & select.KQ_NOTE_EXIT, events[0]
+            assert returncode == -signal.SIGKILL, returncode
+            _wait_for_process_exit(
+                (lifetime.manager,),
+                "sandbox manager remained live after bounded cleanup",
+            )
+            assert live_darwin_processes((lifetime.root, lifetime.descendant)) == [
+                lifetime.root[0],
+                lifetime.descendant[0],
+            ], "failed termination unexpectedly claimed sandbox process cleanup"
+            assert lifetime.temporary_directory.exists(), (
+                "manager stop failure removed the sandbox temporary directory"
+            )
+            command = _command_record(lifetime)
+            command["stdout"] = (
+                "<sandbox root pid>\n<new-group descendant pid>\n<sandbox temp>\n"
+            )
+            return [
+                command,
+                {
+                    "root_process_group": "descendant PID",
+                    "launcher_signal": "SIGKILL",
+                    "manager_old_group_stop": "already empty",
+                    "manager_root_stop_signal": "EPERM",
+                    "verified_bounded_return": "within the cleanup deadline",
+                    "verified_preservation": (
+                        "sandbox root, new-group descendant, and sandbox temp"
+                    ),
+                },
+            ]
+        finally:
             root_stop_failed.close()
             _cleanup(lifetime)
 

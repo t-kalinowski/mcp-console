@@ -200,7 +200,7 @@ fn finish_startup_failure(
 ) -> Result<(), String> {
     let mut error = Some(error);
     let stop = request_root_stop(root, stop_process_group(root), &mut error);
-    let mut cleanup_failed = stop.group_cleanup_failed;
+    let mut cleanup_failed = stop.group_cleanup_failed || !stop.root_exit_expected;
     if stop.root_exit_expected {
         if let Err(cleanup_error) = tracker.supervise(cleanup_timeout) {
             error = Some(with_prior_error(error, cleanup_error));
@@ -251,7 +251,7 @@ fn finish_committed_startup_failure(
 ) -> Result<(), String> {
     let mut error = Some(error);
     let stop = request_root_stop(root, run_group_backstop(root, group_backstop), &mut error);
-    let mut cleanup_failed = stop.group_cleanup_failed;
+    let mut cleanup_failed = stop.group_cleanup_failed || !stop.root_exit_expected;
     if let Err(control_error) = control.shutdown(Shutdown::Both) {
         error = Some(with_prior_error(
             error,
@@ -297,7 +297,7 @@ fn request_root_stop(
         }
     };
     RootStop {
-        root_exit_expected: !group_cleanup_failed || !root_signal_failed,
+        root_exit_expected: !root_signal_failed,
         group_cleanup_failed,
     }
 }
