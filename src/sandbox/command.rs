@@ -7,70 +7,6 @@ use std::process::{Child, Command, Stdio};
 use super::{TARGET_GATE_RELEASE, file_descriptors, platform, supervision};
 
 /// A command configured to run under the macOS sandbox.
-///
-/// The public worker-startup transcript exercises this interaction. This
-/// example is ignored as a doctest because the type is crate-private in a
-/// binary target.
-///
-/// # Example
-///
-/// ```ignore
-/// use crate::sandbox::SandboxedCommand;
-/// use std::ffi::OsStr;
-/// use std::io::{Read, Write};
-/// use std::process::Stdio;
-/// use std::time::Duration;
-///
-/// fn read_echo(mut stream: impl Read) -> [u8; 6] {
-///     let mut output = [0; 6];
-///     stream
-///         .read_exact(&mut output)
-///         .expect("output should be readable");
-///     output
-/// }
-///
-/// let script = r#"
-/// import sys
-///
-/// for line in sys.stdin:
-///     if line == "EXIT\n":
-///         break
-///
-///     sys.stdout.write(line)
-///     sys.stdout.flush()
-///     sys.stderr.write(line)
-///     sys.stderr.flush()
-/// "#;
-///
-/// let mut command =
-///     SandboxedCommand::new(OsStr::new("python")).expect("sandbox should be configured");
-/// command
-///     .args(["-c", script])
-///     .stdin(Stdio::piped())
-///     .stdout(Stdio::piped())
-///     .stderr(Stdio::piped());
-///
-/// let mut child = command.spawn().expect("sandboxed Python should spawn");
-/// let mut stdin = child.take_stdin().expect("stdin should be piped");
-/// let stdout = child.take_stdout().expect("stdout should be piped");
-/// let stderr = child.take_stderr().expect("stderr should be piped");
-/// let stdout = std::thread::spawn(move || read_echo(stdout));
-/// let stderr = std::thread::spawn(move || read_echo(stderr));
-///
-/// stdin
-///     .write_all(b"hello\n")
-///     .expect("input should be written");
-/// assert_eq!(stdout.join().expect("stdout reader should finish"), *b"hello\n");
-/// assert_eq!(stderr.join().expect("stderr reader should finish"), *b"hello\n");
-///
-/// stdin
-///     .write_all(b"EXIT\n")
-///     .expect("EXIT should be written");
-/// assert!(child
-///     .wait_timeout_without_reaping(Duration::from_secs(1))
-///     .expect("child exit should be observable"));
-/// child.force_stop().expect("child should be retired");
-/// ```
 pub(crate) struct SandboxedCommand {
     pub(super) command: Command,
     pub(super) temporary_directory: platform::TemporaryDirectory,
@@ -98,9 +34,7 @@ pub(crate) struct SandboxedChild {
 
 pub(super) enum SandboxedChildRetirement {
     Active,
-    AwaitingReap { error: Option<String> },
     Retired { error: Option<String> },
-    Failed { error: String },
 }
 
 impl StartupGate {
