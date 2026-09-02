@@ -1,5 +1,5 @@
 use super::super::process::{ProcessIdentity, process_info, signal_process};
-use super::super::process_tracker::DescendantTracker;
+use super::super::process_tracker::{DescendantTracker, TrackerStopWakeup};
 use super::{protocol, stop_process_group, with_prior_error};
 use crate::sandbox::platform;
 use std::io::{Read, Write};
@@ -86,6 +86,18 @@ pub(super) fn run() -> Result<(), String> {
     };
     let group_backstop = Arc::new(GroupBackstop::new(false));
     let tracker_group_backstop = Arc::clone(&group_backstop);
+    let tracker_stop_wakeup = match tracker.stop_wakeup() {
+        Ok(wakeup) => wakeup,
+        Err(error) => {
+            return finish_startup_failure(
+                error,
+                root,
+                tracker,
+                temporary_directory,
+                cleanup_timeout,
+            );
+        }
+    };
     let tracker_thread = std::thread::spawn(move || {
         supervise_tracker(
             tracker,
@@ -100,6 +112,7 @@ pub(super) fn run() -> Result<(), String> {
             format!("failed to confirm sandbox manager ownership: {error}"),
             root,
             &stream,
+            tracker_stop_wakeup,
             tracker_thread,
             &group_backstop,
             temporary_directory,
@@ -107,6 +120,7 @@ pub(super) fn run() -> Result<(), String> {
     }
     let disposition = protocol::read_owner_disposition(&mut stream);
     if matches!(disposition, protocol::OwnerDisposition::RetirementStarted) {
+        drop(tracker_stop_wakeup);
         return finish_retirement(
             root,
             &mut stream,
@@ -133,14 +147,14 @@ pub(super) fn run() -> Result<(), String> {
     } else {
         true
     };
-    if root_exit_expected {
-        if let Err(tracker_error) = join_tracker(tracker_thread) {
-            error = Some(with_prior_error(error, tracker_error));
-        }
+    let tracker_result = if root_exit_expected {
+        drop(tracker_stop_wakeup);
+        join_tracker(tracker_thread)
     } else {
-        // The tracker cannot finish while an unkillable root remains live.
-        // Returning ends this manager process and its detached tracker thread.
-        drop(tracker_thread);
+        stop_tracker(tracker_stop_wakeup, tracker_thread)
+    };
+    if let Err(tracker_error) = tracker_result {
+        error = Some(with_prior_error(error, tracker_error));
     }
     if let Err(group_error) = run_group_backstop(root, &group_backstop) {
         error = Some(with_prior_error(error, group_error));
@@ -206,8 +220,9 @@ fn finish_startup_failure(
             error = Some(with_prior_error(error, cleanup_error));
             cleanup_failed = true;
         }
-    } else {
-        drop(tracker);
+    } else if let Err(cleanup_error) = tracker.stop(cleanup_timeout) {
+        error = Some(with_prior_error(error, cleanup_error));
+        cleanup_failed = true;
     }
     if cleanup_failed {
         temporary_directory.preserve();
@@ -245,6 +260,7 @@ fn finish_committed_startup_failure(
     error: String,
     root: ProcessIdentity,
     control: &UnixStream,
+    tracker_stop_wakeup: TrackerStopWakeup,
     tracker_thread: std::thread::JoinHandle<Result<(), String>>,
     group_backstop: &GroupBackstop,
     temporary_directory: platform::TemporaryDirectory,
@@ -258,13 +274,15 @@ fn finish_committed_startup_failure(
             format!("failed to close sandbox manager control: {control_error}"),
         ));
     }
-    if stop.root_exit_expected {
-        if let Err(cleanup_error) = join_tracker(tracker_thread) {
-            error = Some(with_prior_error(error, cleanup_error));
-            cleanup_failed = true;
-        }
+    let tracker_result = if stop.root_exit_expected {
+        drop(tracker_stop_wakeup);
+        join_tracker(tracker_thread)
     } else {
-        drop(tracker_thread);
+        stop_tracker(tracker_stop_wakeup, tracker_thread)
+    };
+    if let Err(cleanup_error) = tracker_result {
+        error = Some(with_prior_error(error, cleanup_error));
+        cleanup_failed = true;
     }
     if cleanup_failed {
         temporary_directory.preserve();
@@ -320,4 +338,12 @@ fn join_tracker(tracker_thread: std::thread::JoinHandle<Result<(), String>>) -> 
         .join()
         .map_err(|_| "sandbox manager process tracker failed".to_string())
         .and_then(|result| result)
+}
+
+fn stop_tracker(
+    tracker_stop_wakeup: TrackerStopWakeup,
+    tracker_thread: std::thread::JoinHandle<Result<(), String>>,
+) -> Result<(), String> {
+    tracker_stop_wakeup.wake()?;
+    join_tracker(tracker_thread)
 }

@@ -1,5 +1,5 @@
 use super::process::{process_identity, process_info, signal_process};
-use super::process_tracker::{DescendantTracker, EventWait};
+use super::process_tracker::{DescendantTracker, EventWait, TRACKER_STOP_IDENT};
 use super::process_tree::{
     PROCESS_REAP_EVENT, add_children, discover_active_children, record_first_error,
     remove_stale_processes,
@@ -51,6 +51,7 @@ impl DescendantTracker {
         }
 
         let mut root_exited = false;
+        let mut stop_requested = false;
         for event in events.iter().take(event_count as usize) {
             let pid = event.ident as libc::pid_t;
             let event_data = event.data;
@@ -66,6 +67,8 @@ impl DescendantTracker {
                 ));
             }
             if event.filter != libc::EVFILT_PROC {
+                stop_requested |=
+                    event.filter == libc::EVFILT_USER && event.ident == TRACKER_STOP_IDENT;
                 continue;
             }
 
@@ -89,6 +92,8 @@ impl DescendantTracker {
         }
         Ok(if root_exited {
             EventWait::RootExited
+        } else if stop_requested {
+            EventWait::StopRequested
         } else {
             EventWait::Events
         })
@@ -106,7 +111,7 @@ impl DescendantTracker {
             // any queued fork event before removing it from the snapshot.
             match self.wait_for_events(Some(Duration::ZERO)) {
                 Ok(EventWait::RootExited) => root_exited = true,
-                Ok(EventWait::Events | EventWait::TimedOut) => {}
+                Ok(EventWait::Events | EventWait::StopRequested | EventWait::TimedOut) => {}
                 Err(error) => record_first_error(&mut cleanup_error, error),
             }
 
@@ -176,7 +181,7 @@ impl DescendantTracker {
                         return cleanup_error.map_or(Ok(()), Err);
                     }
                 }
-                Ok(EventWait::Events | EventWait::RootExited) => {}
+                Ok(EventWait::Events | EventWait::RootExited | EventWait::StopRequested) => {}
                 Err(error) => {
                     record_first_error(&mut cleanup_error, error);
                     std::thread::sleep(wait);

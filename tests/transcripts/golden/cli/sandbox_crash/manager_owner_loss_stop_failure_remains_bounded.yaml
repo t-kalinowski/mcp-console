@@ -33,4 +33,5 @@ launcher_signal: SIGKILL
 manager_group_stop_signal: EPERM
 manager_root_stop_signal: EPERM
 verified_bounded_return: within the cleanup deadline
-verified_preservation: sandbox root, detached descendant, and sandbox temp
+verified_cleanup: observed detached descendant and manager
+verified_preservation: sandbox root and sandbox temp

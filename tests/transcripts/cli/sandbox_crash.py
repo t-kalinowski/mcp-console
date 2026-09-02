@@ -120,6 +120,10 @@ static _Atomic int manager_group_stop_started = 0;
 static _Atomic int manager_group_stop_reported = 0;
 static _Atomic pid_t manager_direct_root = 0;
 static _Atomic int manager_root_stop_reported = 0;
+static _Atomic pid_t manager_observed_root = 0;
+static _Atomic pid_t manager_observed_descendant = 0;
+static _Atomic int manager_descendant_observed_reported = 0;
+static _Atomic int manager_descendant_stop_reported = 0;
 #endif
 #if defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP)
 static _Atomic int delayed_cleanup = 0;
@@ -173,9 +177,8 @@ static proc_pidinfo_function next_proc_pidinfo(void) {
 }
 #endif
 
-#if defined(MCP_CONSOLE_INTERPOSE_FAILED_ROOT_OBSERVER)
-static void signal_checkpoint(const char *name);
-
+#if defined(MCP_CONSOLE_INTERPOSE_FAILED_ROOT_OBSERVER) \
+    || defined(MCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE)
 typedef int (*kevent_function)(
     int,
     const struct kevent *,
@@ -188,6 +191,10 @@ typedef int (*kevent_function)(
 static kevent_function next_kevent(void) {
     return kevent;
 }
+#endif
+
+#if defined(MCP_CONSOLE_INTERPOSE_FAILED_ROOT_OBSERVER)
+static void signal_checkpoint(const char *name);
 
 static int arm_root_identity_recheck(
     int descriptor,
@@ -428,6 +435,57 @@ static ssize_t gate_manager_initialization(
 #endif
 
 #if defined(MCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE)
+static int observe_manager_tracker(
+    int descriptor,
+    const struct kevent *changes,
+    int change_count,
+    struct kevent *events,
+    int event_count,
+    const struct timespec *timeout
+) {
+    if (is_subcommand("sandbox-manager")
+        && pthread_main_np() == 0
+        && changes == NULL
+        && change_count == 0
+        && events != NULL
+        && event_count > 0
+        && timeout == NULL
+        && atomic_load(&manager_observed_descendant) != 0
+        && atomic_exchange(&manager_descendant_observed_reported, 1) == 0) {
+        signal_checkpoint("MCP_CONSOLE_TEST_MANAGER_DESCENDANT_OBSERVED");
+    }
+
+    int result = next_kevent()(
+        descriptor,
+        changes,
+        change_count,
+        events,
+        event_count,
+        timeout
+    );
+    if (result >= 0
+        && is_subcommand("sandbox-manager")
+        && changes != NULL
+        && change_count == 1
+        && changes[0].filter == EVFILT_PROC) {
+        pid_t process_id = (pid_t)changes[0].ident;
+        if ((changes[0].flags & EV_DELETE) != 0
+            && process_id == atomic_load(&manager_observed_descendant)) {
+            atomic_store(&manager_observed_descendant, 0);
+        } else if ((changes[0].flags & EV_ADD) != 0
+            && (changes[0].fflags & NOTE_EXIT) != 0) {
+            pid_t root = atomic_load(&manager_observed_root);
+            if (root == 0) {
+                atomic_store(&manager_observed_root, process_id);
+            } else if (process_id != root
+                && atomic_load(&manager_observed_descendant) == 0) {
+                atomic_store(&manager_observed_descendant, process_id);
+            }
+        }
+    }
+    return result;
+}
+
 static int fail_manager_group_stop(pid_t process_group_id, int number) {
     if (number == SIGKILL && is_subcommand("sandbox-manager")) {
         atomic_store(&manager_group_stop_started, 1);
@@ -445,6 +503,17 @@ static int fail_manager_root_stop(pid_t process_id, int number) {
         && is_subcommand("sandbox-manager")
         && atomic_load(&manager_group_stop_started) != 0) {
         pid_t direct_root = atomic_load(&manager_direct_root);
+        if (pthread_main_np() == 0
+            && direct_root != 0
+            && process_id != direct_root) {
+            int result = next_kill()(process_id, number);
+            if (result == 0
+                && process_id == atomic_load(&manager_observed_descendant)
+                && atomic_exchange(&manager_descendant_stop_reported, 1) == 0) {
+                signal_checkpoint("MCP_CONSOLE_TEST_MANAGER_DESCENDANT_SIGNAL");
+            }
+            return result;
+        }
         if (process_id == direct_root
             && atomic_exchange(&manager_root_stop_reported, 1) == 0) {
             signal_checkpoint("MCP_CONSOLE_TEST_MANAGER_ROOT_STOP_FAILURE");
@@ -576,6 +645,7 @@ static int delay_late_recovery(
 #if defined(MCP_CONSOLE_INTERPOSE_MANAGER_START)
 DYLD_INTERPOSE(gate_manager_initialization, recv)
 #elif defined(MCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE)
+DYLD_INTERPOSE(observe_manager_tracker, kevent)
 DYLD_INTERPOSE(fail_manager_group_stop, killpg)
 DYLD_INTERPOSE(fail_manager_root_stop, kill)
 DYLD_INTERPOSE(mark_manager_direct_root_stop, proc_pidinfo)
@@ -676,6 +746,10 @@ def _wait_for_private_startup_gate(identity: DarwinProcessIdentity) -> None:
             "sandbox target did not block at its private startup gate"
         )
         time.sleep(0.01)
+
+
+def _remaining_timeout(deadline: float) -> float:
+    return max(0.0, deadline - time.monotonic())
 
 
 @contextmanager
@@ -1352,6 +1426,12 @@ def test_manager_owner_loss_stop_failure_remains_bounded(
         root_stop_failed = FifoCheckpoint(
             fixture_directory / "manager-root-stop-failed"
         )
+        descendant_observed = FifoCheckpoint(
+            fixture_directory / "manager-descendant-observed"
+        )
+        descendant_signaled = FifoCheckpoint(
+            fixture_directory / "manager-descendant-signaled"
+        )
         environment = os.environ.copy()
         environment.update(
             {
@@ -1367,19 +1447,61 @@ def test_manager_owner_loss_stop_failure_remains_bounded(
                 "MCP_CONSOLE_TEST_MANAGER_ROOT_STOP_FAILURE": str(
                     root_stop_failed.path
                 ),
+                "MCP_CONSOLE_TEST_MANAGER_DESCENDANT_OBSERVED": str(
+                    descendant_observed.path
+                ),
+                "MCP_CONSOLE_TEST_MANAGER_DESCENDANT_SIGNAL": str(
+                    descendant_signaled.path
+                ),
             }
         )
         lifetime = _start_lifetime(binary, environment)
         try:
-            with _observe_process_exit(lifetime.manager) as manager_exit:
+            descendant_observed.wait("manager observation of detached descendant")
+            with (
+                _observe_process_exit(lifetime.manager) as manager_exit,
+                _observe_process_exit(lifetime.descendant) as descendant_exit,
+            ):
+                deadline = time.monotonic() + TIMEOUT
                 assert signal_darwin_process(lifetime.launcher, signal.SIGKILL), (
                     "sandbox launcher exited before owner-loss injection"
                 )
-                returncode = lifetime.process.wait(timeout=TIMEOUT)
-                group_stop_failed.wait("manager process-group stop failure")
-                root_stop_failed.wait("manager direct-root stop failure")
-                events = manager_exit.control(None, 1, TIMEOUT)
+                returncode = lifetime.process.wait(timeout=_remaining_timeout(deadline))
+                group_stop_failed.wait(
+                    "manager process-group stop failure",
+                    _remaining_timeout(deadline),
+                )
+                root_stop_failed.wait(
+                    "manager direct-root stop failure",
+                    _remaining_timeout(deadline),
+                )
+                descendant_signaled.wait(
+                    "manager tracker descendant signal",
+                    _remaining_timeout(deadline),
+                )
+                descendant_events = descendant_exit.control(
+                    None,
+                    1,
+                    _remaining_timeout(deadline),
+                )
+                events = manager_exit.control(
+                    None,
+                    1,
+                    _remaining_timeout(deadline),
+                )
 
+            assert descendant_events, (
+                "sandbox tracker did not retire the observed detached descendant"
+            )
+            assert descendant_events[0].ident == lifetime.descendant[0], (
+                descendant_events[0]
+            )
+            assert descendant_events[0].filter == select.KQ_FILTER_PROC, (
+                descendant_events[0]
+            )
+            assert descendant_events[0].fflags & select.KQ_NOTE_EXIT, descendant_events[
+                0
+            ]
             assert events, (
                 "sandbox manager did not exit after its bounded cleanup interval"
             )
@@ -1391,10 +1513,14 @@ def test_manager_owner_loss_stop_failure_remains_bounded(
                 (lifetime.manager,),
                 "sandbox manager remained live after bounded cleanup",
             )
-            assert live_darwin_processes((lifetime.root, lifetime.descendant)) == [
-                lifetime.root[0],
-                lifetime.descendant[0],
-            ], "failed termination unexpectedly claimed sandbox process cleanup"
+            _wait_for_process_state(
+                lifetime.descendant,
+                "Z",
+                "retired sandbox descendant",
+            )
+            assert live_darwin_processes((lifetime.root,)) == [lifetime.root[0]], (
+                "failed root termination unexpectedly stopped the sandbox root"
+            )
             assert lifetime.temporary_directory.exists(), (
                 "manager stop failure removed the sandbox temporary directory"
             )
@@ -1405,14 +1531,15 @@ def test_manager_owner_loss_stop_failure_remains_bounded(
                     "manager_group_stop_signal": "EPERM",
                     "manager_root_stop_signal": "EPERM",
                     "verified_bounded_return": "within the cleanup deadline",
-                    "verified_preservation": (
-                        "sandbox root, detached descendant, and sandbox temp"
-                    ),
+                    "verified_cleanup": "observed detached descendant and manager",
+                    "verified_preservation": "sandbox root and sandbox temp",
                 },
             ]
         finally:
             group_stop_failed.close()
             root_stop_failed.close()
+            descendant_observed.close()
+            descendant_signaled.close()
             _cleanup(lifetime)
 
 
@@ -1423,6 +1550,12 @@ def test_manager_owner_loss_after_root_group_change_remains_bounded(
         fixture_directory = Path(temporary_directory)
         root_stop_failed = FifoCheckpoint(
             fixture_directory / "manager-root-stop-failed"
+        )
+        descendant_observed = FifoCheckpoint(
+            fixture_directory / "manager-descendant-observed"
+        )
+        descendant_signaled = FifoCheckpoint(
+            fixture_directory / "manager-descendant-signaled"
         )
         environment = os.environ.copy()
         environment.update(
@@ -1436,6 +1569,12 @@ def test_manager_owner_loss_after_root_group_change_remains_bounded(
                 "MCP_CONSOLE_TEST_MANAGER_ROOT_STOP_FAILURE": str(
                     root_stop_failed.path
                 ),
+                "MCP_CONSOLE_TEST_MANAGER_DESCENDANT_OBSERVED": str(
+                    descendant_observed.path
+                ),
+                "MCP_CONSOLE_TEST_MANAGER_DESCENDANT_SIGNAL": str(
+                    descendant_signaled.path
+                ),
             }
         )
         lifetime = _start_lifetime(
@@ -1445,14 +1584,47 @@ def test_manager_owner_loss_after_root_group_change_remains_bounded(
             move_root_to_descendant_group=True,
         )
         try:
-            with _observe_process_exit(lifetime.manager) as manager_exit:
+            descendant_observed.wait("manager observation of new-group descendant")
+            with (
+                _observe_process_exit(lifetime.manager) as manager_exit,
+                _observe_process_exit(lifetime.descendant) as descendant_exit,
+            ):
+                deadline = time.monotonic() + TIMEOUT
                 assert signal_darwin_process(lifetime.launcher, signal.SIGKILL), (
                     "sandbox launcher exited before owner-loss injection"
                 )
-                returncode = lifetime.process.wait(timeout=TIMEOUT)
-                root_stop_failed.wait("manager direct-root stop failure")
-                events = manager_exit.control(None, 1, TIMEOUT)
+                returncode = lifetime.process.wait(timeout=_remaining_timeout(deadline))
+                root_stop_failed.wait(
+                    "manager direct-root stop failure",
+                    _remaining_timeout(deadline),
+                )
+                descendant_signaled.wait(
+                    "manager tracker descendant signal",
+                    _remaining_timeout(deadline),
+                )
+                descendant_events = descendant_exit.control(
+                    None,
+                    1,
+                    _remaining_timeout(deadline),
+                )
+                events = manager_exit.control(
+                    None,
+                    1,
+                    _remaining_timeout(deadline),
+                )
 
+            assert descendant_events, (
+                "sandbox tracker did not retire the observed new-group descendant"
+            )
+            assert descendant_events[0].ident == lifetime.descendant[0], (
+                descendant_events[0]
+            )
+            assert descendant_events[0].filter == select.KQ_FILTER_PROC, (
+                descendant_events[0]
+            )
+            assert descendant_events[0].fflags & select.KQ_NOTE_EXIT, descendant_events[
+                0
+            ]
             assert events, (
                 "sandbox manager did not exit after its bounded cleanup interval"
             )
@@ -1464,10 +1636,14 @@ def test_manager_owner_loss_after_root_group_change_remains_bounded(
                 (lifetime.manager,),
                 "sandbox manager remained live after bounded cleanup",
             )
-            assert live_darwin_processes((lifetime.root, lifetime.descendant)) == [
-                lifetime.root[0],
-                lifetime.descendant[0],
-            ], "failed termination unexpectedly claimed sandbox process cleanup"
+            _wait_for_process_state(
+                lifetime.descendant,
+                "Z",
+                "retired sandbox descendant",
+            )
+            assert live_darwin_processes((lifetime.root,)) == [lifetime.root[0]], (
+                "failed root termination unexpectedly stopped the sandbox root"
+            )
             assert lifetime.temporary_directory.exists(), (
                 "manager stop failure removed the sandbox temporary directory"
             )
@@ -1483,13 +1659,14 @@ def test_manager_owner_loss_after_root_group_change_remains_bounded(
                     "manager_old_group_stop": "already empty",
                     "manager_root_stop_signal": "EPERM",
                     "verified_bounded_return": "within the cleanup deadline",
-                    "verified_preservation": (
-                        "sandbox root, new-group descendant, and sandbox temp"
-                    ),
+                    "verified_cleanup": "observed new-group descendant and manager",
+                    "verified_preservation": "sandbox root and sandbox temp",
                 },
             ]
         finally:
             root_stop_failed.close()
+            descendant_observed.close()
+            descendant_signaled.close()
             _cleanup(lifetime)
 
 

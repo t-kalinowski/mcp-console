@@ -35,4 +35,5 @@ launcher_signal: SIGKILL
 manager_old_group_stop: already empty
 manager_root_stop_signal: EPERM
 verified_bounded_return: within the cleanup deadline
-verified_preservation: sandbox root, new-group descendant, and sandbox temp
+verified_cleanup: observed new-group descendant and manager
+verified_preservation: sandbox root and sandbox temp
