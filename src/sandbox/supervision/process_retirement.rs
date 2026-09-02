@@ -1,14 +1,13 @@
+use super::kqueue::KqueueWait;
 use super::process::{process_identity, process_info, signal_process};
 use super::process_tracker::{DescendantTracker, EventWait, TRACKER_STOP_IDENT};
 use super::process_tree::{
     PROCESS_REAP_EVENT, add_children, discover_active_children, record_first_error,
     remove_stale_processes,
 };
-use std::os::fd::AsRawFd;
 use std::time::{Duration, Instant};
 
 const PROCESS_RETIREMENT_CHECK_INTERVAL: Duration = Duration::from_millis(10);
-const TRACKER_EVENT_CAPACITY: usize = 32;
 
 impl DescendantTracker {
     pub(super) fn stop(self, retirement_grace: Duration) -> Result<(), String> {
@@ -19,40 +18,18 @@ impl DescendantTracker {
         &mut self,
         timeout: Option<Duration>,
     ) -> Result<EventWait, String> {
-        let mut events: [libc::kevent; TRACKER_EVENT_CAPACITY] =
-            unsafe { std::mem::MaybeUninit::zeroed().assume_init() };
-        let timeout = timeout.map(|duration| libc::timespec {
-            tv_sec: duration.as_secs() as libc::time_t,
-            tv_nsec: duration.subsec_nanos() as libc::c_long,
-        });
-        let timeout = timeout
-            .as_ref()
-            .map_or(std::ptr::null(), |timeout| timeout as *const _);
-
-        let event_count = unsafe {
-            libc::kevent(
-                self.kqueue.as_raw_fd(),
-                std::ptr::null(),
-                0,
-                events.as_mut_ptr(),
-                events.len() as libc::c_int,
-                timeout,
-            )
+        let events = match self
+            .kqueue
+            .wait(timeout, "sandbox process tracker failed")?
+        {
+            KqueueWait::Events(events) => events,
+            KqueueWait::Interrupted => return Ok(EventWait::Events),
+            KqueueWait::TimedOut => return Ok(EventWait::TimedOut),
         };
-        if event_count < 0 {
-            let error = std::io::Error::last_os_error();
-            if error.kind() == std::io::ErrorKind::Interrupted {
-                return Ok(EventWait::Events);
-            }
-            return Err(format!("sandbox process tracker failed: {error}"));
-        }
-        if event_count == 0 {
-            return Ok(EventWait::TimedOut);
-        }
 
         let mut root_exited = false;
         let mut stop_requested = false;
-        for event in events.iter().take(event_count as usize) {
+        for event in &events {
             let pid = event.ident as libc::pid_t;
             let event_data = event.data;
             if event.flags & libc::EV_ERROR != 0 {
@@ -87,7 +64,7 @@ impl DescendantTracker {
                 continue;
             }
             if event.fflags & libc::NOTE_FORK != 0 {
-                add_children(self.kqueue.as_raw_fd(), pid, &mut self.state)?;
+                add_children(&self.kqueue, pid, &mut self.state)?;
             }
         }
         Ok(if root_exited {
@@ -118,7 +95,7 @@ impl DescendantTracker {
             // Re-snapshot before each signal pass to narrow the teardown fork
             // window. A child that becomes orphaned before observation remains
             // outside the documented supervision boundary.
-            if let Err(error) = discover_active_children(self.kqueue.as_raw_fd(), &mut self.state) {
+            if let Err(error) = discover_active_children(&self.kqueue, &mut self.state) {
                 record_first_error(&mut cleanup_error, error);
             }
             match self.root_has_exited() {
