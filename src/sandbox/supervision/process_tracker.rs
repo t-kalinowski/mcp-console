@@ -1,19 +1,18 @@
+use super::kqueue::{Kqueue, WeakKqueue};
 use super::process::{process_identity, process_info};
 use super::process_tree::{TrackerState, add_process_tree};
 use std::collections::HashMap;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 pub(super) const TRACKER_STOP_IDENT: libc::uintptr_t = 1;
 
 pub(super) struct DescendantTracker {
-    pub(super) kqueue: Arc<OwnedFd>,
+    pub(super) kqueue: Kqueue,
     pub(super) state: TrackerState,
 }
 
 pub(super) struct TrackerStopWakeup {
-    kqueue: Weak<OwnedFd>,
+    kqueue: WeakKqueue,
 }
 
 pub(super) struct StartFailure {
@@ -58,35 +57,14 @@ pub(super) enum EventWait {
 
 impl TrackerStopWakeup {
     pub(super) fn wake(self) -> Result<(), String> {
-        let Some(kqueue) = self.kqueue.upgrade() else {
-            return Ok(());
-        };
-        let event = libc::kevent {
-            ident: TRACKER_STOP_IDENT,
-            filter: libc::EVFILT_USER,
-            flags: 0,
-            fflags: libc::NOTE_TRIGGER,
-            data: 0,
-            udata: std::ptr::null_mut(),
-        };
-        submit_tracker_event(
-            kqueue.as_raw_fd(),
-            &event,
-            "failed to wake sandbox process tracker",
-        )
+        self.kqueue
+            .trigger_user(TRACKER_STOP_IDENT, "failed to wake sandbox process tracker")
     }
 }
 
 impl DescendantTracker {
     pub(super) fn start(root_pid: libc::pid_t) -> Result<Self, StartFailure> {
-        let kqueue_descriptor = unsafe { libc::kqueue() };
-        if kqueue_descriptor < 0 {
-            return Err(StartFailure::new(format!(
-                "failed to create the sandbox process tracker: {}",
-                std::io::Error::last_os_error()
-            )));
-        }
-        let kqueue = Arc::new(unsafe { OwnedFd::from_raw_fd(kqueue_descriptor) });
+        let kqueue = Kqueue::new("the sandbox process tracker").map_err(StartFailure::new)?;
 
         // Darwin provides neither child subreapers nor PID namespaces, and its
         // kqueue NOTE_TRACK facility is unsupported. Supported callers prevent
@@ -107,12 +85,7 @@ impl DescendantTracker {
             active: HashMap::new(),
         };
         let mut tracker = Self { kqueue, state };
-        if let Err(error) = add_process_tree(
-            tracker.kqueue.as_raw_fd(),
-            root_pid,
-            None,
-            &mut tracker.state,
-        ) {
+        if let Err(error) = add_process_tree(&tracker.kqueue, root_pid, None, &mut tracker.state) {
             return Err(StartFailure::with_tracker(error, tracker));
         }
         if tracker.state.active.get(&root_pid) != Some(&root) {
@@ -138,9 +111,12 @@ impl DescendantTracker {
     }
 
     pub(super) fn stop_wakeup(&self) -> Result<TrackerStopWakeup, String> {
-        watch_stop_request(self.kqueue.as_raw_fd())?;
+        self.kqueue.watch_user(
+            TRACKER_STOP_IDENT,
+            "failed to register sandbox process tracker stop request",
+        )?;
         Ok(TrackerStopWakeup {
-            kqueue: Arc::downgrade(&self.kqueue),
+            kqueue: self.kqueue.downgrade(),
         })
     }
 
@@ -164,41 +140,6 @@ impl DescendantTracker {
                 Ok(()) => Err(error),
                 Err(cleanup_error) => Err(format!("{error}; additionally, {cleanup_error}")),
             },
-        }
-    }
-}
-
-fn watch_stop_request(kqueue: libc::c_int) -> Result<(), String> {
-    let event = libc::kevent {
-        ident: TRACKER_STOP_IDENT,
-        filter: libc::EVFILT_USER,
-        flags: libc::EV_ADD | libc::EV_CLEAR,
-        fflags: 0,
-        data: 0,
-        udata: std::ptr::null_mut(),
-    };
-    submit_tracker_event(
-        kqueue,
-        &event,
-        "failed to register sandbox process tracker stop request",
-    )
-}
-
-fn submit_tracker_event(
-    kqueue: libc::c_int,
-    event: &libc::kevent,
-    description: &str,
-) -> Result<(), String> {
-    loop {
-        let result =
-            unsafe { libc::kevent(kqueue, event, 1, std::ptr::null_mut(), 0, std::ptr::null()) };
-        if result >= 0 {
-            return Ok(());
-        }
-
-        let error = std::io::Error::last_os_error();
-        if error.kind() != std::io::ErrorKind::Interrupted {
-            return Err(format!("{description}: {error}"));
         }
     }
 }

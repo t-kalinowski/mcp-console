@@ -1,3 +1,4 @@
+use super::kqueue::{Kqueue, ProcessWatchError};
 use super::process::{ProcessIdentity, list_child_pids, process_identity, process_info};
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -33,7 +34,7 @@ pub(super) fn record_first_error(current: &mut Option<String>, error: String) {
 }
 
 pub(super) fn add_process_tree(
-    kqueue: libc::c_int,
+    kqueue: &Kqueue,
     root_pid: libc::pid_t,
     expected_parent: Option<ProcessIdentity>,
     state: &mut TrackerState,
@@ -69,9 +70,13 @@ pub(super) fn add_process_tree(
 
         if state.active.get(&pid) != Some(&identity) {
             state.active.remove(&pid);
-            match watch_process(kqueue, pid) {
+            // NOTE_REAP is deprecated for ordinary exit observation, but
+            // NOTE_EXIT fires while the PID may still exist as a zombie.
+            // Requesting both keeps descendant watches until processes are reaped.
+            match kqueue.watch_process(pid, libc::NOTE_FORK | libc::NOTE_EXIT | PROCESS_REAP_EVENT)
+            {
                 Ok(()) => {}
-                Err(WatchProcessError::Gone) => {
+                Err(ProcessWatchError::Gone) => {
                     if process_info(pid)?
                         .is_some_and(|current| current.identity == identity && current.is_zombie)
                     {
@@ -79,7 +84,7 @@ pub(super) fn add_process_tree(
                     }
                     continue;
                 }
-                Err(WatchProcessError::Other(error)) => {
+                Err(ProcessWatchError::Other(error)) => {
                     return Err(format!("failed to watch sandbox process {pid}: {error}"));
                 }
             }
@@ -87,7 +92,7 @@ pub(super) fn add_process_tree(
             // Confirm the watch still names the process whose start time was
             // recorded; PID reuse must not turn an old descendant into a new target.
             if process_identity(pid)? != Some(identity) {
-                remove_process_watch(kqueue, pid);
+                kqueue.remove_process_watch(pid);
                 continue;
             }
             state.active.insert(pid, identity);
@@ -104,7 +109,7 @@ pub(super) fn add_process_tree(
 }
 
 pub(super) fn add_children(
-    kqueue: libc::c_int,
+    kqueue: &Kqueue,
     parent: libc::pid_t,
     state: &mut TrackerState,
 ) -> Result<(), String> {
@@ -118,7 +123,7 @@ pub(super) fn add_children(
 }
 
 pub(super) fn discover_active_children(
-    kqueue: libc::c_int,
+    kqueue: &Kqueue,
     state: &mut TrackerState,
 ) -> Result<(), String> {
     let parents: Vec<_> = state.active.values().copied().collect();
@@ -131,47 +136,4 @@ pub(super) fn discover_active_children(
         }
     }
     Ok(())
-}
-
-enum WatchProcessError {
-    Gone,
-    Other(std::io::Error),
-}
-
-fn watch_process(kqueue: libc::c_int, pid: libc::pid_t) -> Result<(), WatchProcessError> {
-    // NOTE_REAP is deprecated for ordinary exit observation, but NOTE_EXIT
-    // fires while the PID may still exist as a zombie. Requesting both keeps
-    // descendant watches installed until their processes are reaped.
-    let event = libc::kevent {
-        ident: pid as libc::uintptr_t,
-        filter: libc::EVFILT_PROC,
-        flags: libc::EV_ADD | libc::EV_CLEAR,
-        fflags: libc::NOTE_FORK | libc::NOTE_EXIT | PROCESS_REAP_EVENT,
-        data: 0,
-        udata: std::ptr::null_mut(),
-    };
-    let result =
-        unsafe { libc::kevent(kqueue, &event, 1, std::ptr::null_mut(), 0, std::ptr::null()) };
-    if result >= 0 {
-        return Ok(());
-    }
-
-    let error = std::io::Error::last_os_error();
-    if error.raw_os_error() == Some(libc::ESRCH) {
-        Err(WatchProcessError::Gone)
-    } else {
-        Err(WatchProcessError::Other(error))
-    }
-}
-
-fn remove_process_watch(kqueue: libc::c_int, pid: libc::pid_t) {
-    let event = libc::kevent {
-        ident: pid as libc::uintptr_t,
-        filter: libc::EVFILT_PROC,
-        flags: libc::EV_DELETE,
-        fflags: 0,
-        data: 0,
-        udata: std::ptr::null_mut(),
-    };
-    let _ = unsafe { libc::kevent(kqueue, &event, 1, std::ptr::null_mut(), 0, std::ptr::null()) };
 }

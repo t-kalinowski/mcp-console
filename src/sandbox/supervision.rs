@@ -1,5 +1,7 @@
 #[path = "supervision/job_control.rs"]
 mod job_control;
+#[path = "supervision/kqueue.rs"]
+mod kqueue;
 #[path = "supervision/manager.rs"]
 mod manager;
 #[path = "supervision/process.rs"]
