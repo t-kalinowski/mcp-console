@@ -203,10 +203,9 @@ base::local(
         envir = load_namespace_environment
       )
 
-      managed_load_namespace <- base::`body<-`(
+      managed_load_namespace <- base::`environment<-`(
         original_load_namespace,
-        envir = load_namespace_environment,
-        value = base::body(original_load_namespace)
+        load_namespace_environment
       )
       base::assign(
         "loadNamespace",
