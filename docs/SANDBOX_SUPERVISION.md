@@ -31,6 +31,13 @@ Abrupt owner loss before readiness or commitment closes the startup channel befo
 Darwin cannot resolve every later fork atomically.
 A descendant that becomes orphaned before the manager resolves its fork event remains outside the implemented guarantee.
 
+The standalone requested command runs in a dedicated process group.
+Its root waiter blocks in `kevent()` for direct-root exit and signals addressed to the launcher.
+The launcher consumes pending `SIGHUP`, `SIGINT`, `SIGQUIT`, and `SIGTERM` and relays them to the target group.
+When the launcher exclusively owns its foreground process group, it transfers controlling-terminal ownership to the target group; when a pipeline peer shares that group, it leaves terminal ownership unchanged.
+The manager owns descendant cleanup and the private directory; the launcher owns the direct command's exit status, terminal state, and signal relay.
+Stopped/continued job state and general shell-pipeline job control remain unsupported.
+
 ## Retirement
 
 Normal restart, automatic replacement, orderly shutdown, relay failure, and abrupt owner exit all retire the same manager-owned lifetime.
@@ -63,14 +70,17 @@ For a standalone command, successful fallback preserves the root's signal-derive
 
 ## Standalone job control
 
-The standalone launcher gives the requested command its own process group and transfers foreground-terminal ownership before exec.
-Terminal-generated signals therefore reach the command group directly.
+The standalone launcher gives the requested command its own process group.
+When the launcher's foreground process group has no peer, it transfers foreground-terminal ownership before exec so terminal-generated signals reach the command group directly.
+When a pipeline peer shares the launcher's foreground group, the launcher leaves terminal ownership unchanged.
 `SIGHUP`, `SIGINT`, `SIGQUIT`, and `SIGTERM` addressed to the launcher are blocked, consumed synchronously, and relayed once to that group.
-After root exit, the launcher restores its own foreground group before returning the command status.
+After root exit, the launcher marks normal retirement, restores its own foreground group when it transferred ownership, and restores its inherited signal mask before manager cleanup.
+A newly received or pending signal can then follow its inherited disposition; if that terminates the launcher, the committed manager completes lifetime cleanup.
 
 ## Scope
 
 This ownership applies to `SandboxedCommand::spawn`, which is used for built-in and custom worker relay generations, and to `SandboxedCommand::status`, which implements `mcp-console sandbox`.
-The worker path gates the relay before either relay implementation runs.
-The standalone path retains inherited standard streams and uses the launcher-owned terminal and signal behavior described above.
+The worker path retains its server-owned process-group race backstop and gates the relay before either relay implementation runs.
+The standalone path retains inherited standard streams, uses a dedicated target process group, and supplies the direct-foreground terminal and signal behavior above.
+It does not support `Ctrl-Z` followed by `fg` or general pipeline job-control semantics.
 Linux and Windows are not supported.

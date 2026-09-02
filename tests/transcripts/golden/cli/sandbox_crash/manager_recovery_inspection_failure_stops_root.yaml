@@ -29,7 +29,7 @@ stdout: |
   <detached descendant pid>
   <sandbox temp>
 stderr: >
-  failed to control sandbox manager retirement: Broken pipe (os error 32);
+  failed to finish sandbox manager ownership: Broken pipe (os error 32);
   additionally, sandbox manager exited with status signal: 9 (SIGKILL);
   additionally, manager recovery failed: failed to inspect sandbox process
   <sandbox root pid>: Input/output error (os error 5); additionally,

@@ -182,7 +182,11 @@ The launcher preserves the direct command's exit status while the manager retire
 Abrupt launcher loss after commitment retires that managed lifetime; owner loss after normal retirement begins preserves the directory when its final disposition is uncertain.
 Unexpected manager loss triggers bounded launcher-side recovery while the direct root remains live and waitable.
 The command inherits standard input, output, and error while closing other inherited file descriptors before the target runs.
-It transfers foreground-terminal ownership to the command process group, relays supported signals addressed to the launcher, and restores terminal ownership after the command exits.
+The launcher places the target in a dedicated process group and relays `SIGHUP`, `SIGINT`, `SIGQUIT`, and `SIGTERM` addressed to the launcher into that group.
+For a direct foreground invocation whose process group has no peer, it also transfers controlling-terminal ownership to the target and restores ownership after the direct root exits.
+If the launcher shares its foreground process group with a pipeline peer, it leaves terminal ownership with that group.
+After the direct root exits, the launcher restores its inherited signal mask before manager cleanup.
+Stopped/continued job state and general shell-pipeline job-control semantics remain unsupported; `Ctrl-Z` followed by `fg` requires a separate terminal state machine.
 Use the MCP server for the supported worker-generation lifecycle.
 
 Run development commands from the repository root:
@@ -203,7 +207,7 @@ scripts/test --update BOUNDARY/SUITE[::CASE]
 The [documentation index](https://github.com/t-kalinowski/mcp-console/blob/main/docs/README.md) maps current documents by audience.
 
 - [Implemented architecture](https://github.com/t-kalinowski/mcp-console/blob/main/docs/ARCHITECTURE.md) explains current process boundaries, ownership, lifecycle, recording, and artifacts.
-- [macOS sandbox supervision](https://github.com/t-kalinowski/mcp-console/blob/main/docs/SANDBOX_SUPERVISION.md) explains manager-owned observed-descendant retirement, fallback cleanup, and remaining tracking limitations.
+- [macOS sandbox supervision](https://github.com/t-kalinowski/mcp-console/blob/main/docs/SANDBOX_SUPERVISION.md) explains standalone terminal and signal ownership, manager-owned observed-descendant retirement, fallback cleanup, and remaining tracking limitations.
 - [Built-in runtime](https://github.com/t-kalinowski/mcp-console/blob/main/docs/BUILTIN_RUNTIME.md) describes user-visible R, Python, SQL, input, output, and graphics behavior.
 - [Requirements and environments](https://github.com/t-kalinowski/mcp-console/blob/main/docs/REQUIREMENTS.md) describes dependency preparation and its trust boundary.
 - [Worker protocol](https://github.com/t-kalinowski/mcp-console/blob/main/docs/WORKER_PROTOCOL.md) and [relay protocol](https://github.com/t-kalinowski/mcp-console/blob/main/docs/RELAY_PROTOCOL.md) define the exact transport contracts.

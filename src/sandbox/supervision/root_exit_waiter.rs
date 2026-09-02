@@ -1,15 +1,61 @@
 use super::job_control::SignalRelay;
 use super::process::{ProcessIdentity, process_identity, process_info};
-use super::process_tracker::EventWait;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::sync::Arc;
 use std::time::Duration;
 
 const TRACKER_EVENT_CAPACITY: usize = 32;
+const OWNER_WAKE_IDENT: libc::uintptr_t = 1;
 
 pub(super) struct RootExitWaiter {
-    kqueue: OwnedFd,
+    kqueue: Arc<OwnedFd>,
     root: ProcessIdentity,
     root_exited: bool,
+}
+
+pub(super) struct RootExitWakeup {
+    // Keep the queue alive if the waiter exits before another owner-side
+    // component reports failure, so a reused descriptor cannot be triggered.
+    kqueue: Arc<OwnedFd>,
+}
+
+pub(super) enum RootWait {
+    Events,
+    RootExited,
+    Wakeup,
+    TimedOut,
+}
+
+impl RootExitWakeup {
+    pub(super) fn wake(self) -> Result<(), String> {
+        let event = libc::kevent {
+            ident: OWNER_WAKE_IDENT,
+            filter: libc::EVFILT_USER,
+            flags: 0,
+            fflags: libc::NOTE_TRIGGER,
+            data: 0,
+            udata: std::ptr::null_mut(),
+        };
+        submit_event(
+            self.kqueue.as_raw_fd(),
+            &event,
+            "failed to wake sandbox root observer",
+        )
+    }
+
+    pub(super) fn on_drop(self) -> RootExitWakeGuard {
+        RootExitWakeGuard(Some(self))
+    }
+}
+
+pub(super) struct RootExitWakeGuard(Option<RootExitWakeup>);
+
+impl Drop for RootExitWakeGuard {
+    fn drop(&mut self) {
+        if let Some(wakeup) = self.0.take() {
+            let _ = wakeup.wake();
+        }
+    }
 }
 
 impl RootExitWaiter {
@@ -21,7 +67,7 @@ impl RootExitWaiter {
                 std::io::Error::last_os_error()
             ));
         }
-        let kqueue = unsafe { OwnedFd::from_raw_fd(kqueue_descriptor) };
+        let kqueue = Arc::new(unsafe { OwnedFd::from_raw_fd(kqueue_descriptor) });
 
         let info = process_info(root_pid)?
             .ok_or_else(|| format!("sandbox root {root_pid} exited before exit observation"))?;
@@ -46,6 +92,7 @@ impl RootExitWaiter {
             }
         }
         watch_signals(kqueue.as_raw_fd(), signal_relay)?;
+        watch_owner_wakeup(kqueue.as_raw_fd())?;
 
         Ok(Self {
             kqueue,
@@ -54,12 +101,18 @@ impl RootExitWaiter {
         })
     }
 
+    pub(super) fn wakeup(&self) -> RootExitWakeup {
+        RootExitWakeup {
+            kqueue: Arc::clone(&self.kqueue),
+        }
+    }
+
     pub(super) fn wait_for_events(
         &mut self,
         timeout: Option<Duration>,
-    ) -> Result<EventWait, String> {
+    ) -> Result<RootWait, String> {
         if self.root_exited {
-            return Ok(EventWait::RootExited);
+            return Ok(RootWait::RootExited);
         }
 
         let mut events: [libc::kevent; TRACKER_EVENT_CAPACITY] =
@@ -85,14 +138,15 @@ impl RootExitWaiter {
         if event_count < 0 {
             let error = std::io::Error::last_os_error();
             if error.kind() == std::io::ErrorKind::Interrupted {
-                return Ok(EventWait::Events);
+                return Ok(RootWait::Events);
             }
             return Err(format!("sandbox root observer failed: {error}"));
         }
         if event_count == 0 {
-            return Ok(EventWait::TimedOut);
+            return Ok(RootWait::TimedOut);
         }
 
+        let mut owner_wakeup = false;
         for event in events.iter().take(event_count as usize) {
             let event_data = event.data;
             if event.flags & libc::EV_ERROR != 0 {
@@ -115,14 +169,53 @@ impl RootExitWaiter {
                 && event.fflags & libc::NOTE_EXIT != 0
             {
                 self.root_exited = true;
+            } else if event.filter == libc::EVFILT_USER && event.ident == OWNER_WAKE_IDENT {
+                owner_wakeup = true;
             }
         }
 
         Ok(if self.root_exited {
-            EventWait::RootExited
+            RootWait::RootExited
+        } else if owner_wakeup {
+            RootWait::Wakeup
         } else {
-            EventWait::Events
+            RootWait::Events
         })
+    }
+}
+
+fn watch_owner_wakeup(kqueue: libc::c_int) -> Result<(), String> {
+    let event = libc::kevent {
+        ident: OWNER_WAKE_IDENT,
+        filter: libc::EVFILT_USER,
+        flags: libc::EV_ADD | libc::EV_CLEAR,
+        fflags: 0,
+        data: 0,
+        udata: std::ptr::null_mut(),
+    };
+    submit_event(
+        kqueue,
+        &event,
+        "failed to register sandbox root observer wakeup",
+    )
+}
+
+fn submit_event(
+    kqueue: libc::c_int,
+    event: &libc::kevent,
+    description: &str,
+) -> Result<(), String> {
+    loop {
+        let result =
+            unsafe { libc::kevent(kqueue, event, 1, std::ptr::null_mut(), 0, std::ptr::null()) };
+        if result >= 0 {
+            return Ok(());
+        }
+
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return Err(format!("{description}: {error}"));
+        }
     }
 }
 
@@ -179,17 +272,22 @@ fn watch_root_exit(kqueue: libc::c_int, pid: libc::pid_t) -> Result<(), WatchPro
         data: 0,
         udata: std::ptr::null_mut(),
     };
-    let result =
-        unsafe { libc::kevent(kqueue, &event, 1, std::ptr::null_mut(), 0, std::ptr::null()) };
-    if result >= 0 {
-        return Ok(());
-    }
+    loop {
+        let result =
+            unsafe { libc::kevent(kqueue, &event, 1, std::ptr::null_mut(), 0, std::ptr::null()) };
+        if result >= 0 {
+            return Ok(());
+        }
 
-    let error = std::io::Error::last_os_error();
-    if error.raw_os_error() == Some(libc::ESRCH) {
-        Err(WatchProcessError::Gone)
-    } else {
-        Err(WatchProcessError::Other(error))
+        let error = std::io::Error::last_os_error();
+        if error.kind() == std::io::ErrorKind::Interrupted {
+            continue;
+        }
+        return if error.raw_os_error() == Some(libc::ESRCH) {
+            Err(WatchProcessError::Gone)
+        } else {
+            Err(WatchProcessError::Other(error))
+        };
     }
 }
 

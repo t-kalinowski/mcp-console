@@ -1,6 +1,8 @@
 #!/usr/bin/env -S uv run --script
 
+import fcntl
 import os
+import pty
 import re
 import select
 import selectors
@@ -9,6 +11,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import termios
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -50,6 +53,31 @@ def _command(*arguments: str) -> list[str]:
     return ["mcp-console", *arguments]
 
 
+def _start_with_controlling_terminal(
+    arguments: list[str | Path],
+    environment: dict[str, str],
+) -> tuple[subprocess.Popen[bytes], int]:
+    master, slave = pty.openpty()
+
+    def attach_controlling_terminal() -> None:
+        os.setsid()
+        fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+        os.tcsetpgrp(slave, os.getpid())
+
+    process = subprocess.Popen(
+        arguments,
+        env=environment,
+        stdin=slave,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        preexec_fn=attach_controlling_terminal,
+    )
+    os.close(slave)
+    assert process.stdout is not None
+    assert process.stderr is not None
+    return process, master
+
+
 def _build_supervision_interposer(directory: Path, behavior: str) -> Path:
     definitions = {
         "manager-start": "-DMCP_CONSOLE_INTERPOSE_MANAGER_START",
@@ -79,9 +107,12 @@ def _build_supervision_interposer(directory: Path, behavior: str) -> Path:
 #include <sys/wait.h>
 #include <unistd.h>
 
-#if defined(MCP_CONSOLE_INTERPOSE_DENIED_SIGKILL) \
-    || defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP)
+#if defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP)
 static _Atomic int denied_sigkill = 0;
+#endif
+#if defined(MCP_CONSOLE_INTERPOSE_DENIED_SIGKILL)
+static _Atomic int denied_monitor_sigkill = 0;
+static _Atomic int denied_owner_sigkill = 0;
 #endif
 #if defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP)
 static _Atomic int delayed_cleanup = 0;
@@ -333,14 +364,60 @@ static ssize_t fail_target_gate_release(
 }
 #endif
 
-#if defined(MCP_CONSOLE_INTERPOSE_DENIED_SIGKILL) \
-    || defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP)
+#if defined(MCP_CONSOLE_INTERPOSE_DENIED_SIGKILL)
+static int deny_sigkill_for_current_thread(int number) {
+    if (number != SIGKILL) {
+        return 0;
+    }
+
+    const int owner_thread = pthread_main_np() != 0;
+    const char *checkpoint = owner_thread
+        ? "MCP_CONSOLE_TEST_OWNER_SIGKILL_DENIED"
+        : "MCP_CONSOLE_TEST_MONITOR_SIGKILL_DENIED";
+    if (getenv(checkpoint) == NULL) {
+        return 0;
+    }
+
+    _Atomic int *denied = owner_thread
+        ? &denied_owner_sigkill
+        : &denied_monitor_sigkill;
+    if (atomic_exchange(denied, 1) == 0) {
+        signal_checkpoint(checkpoint);
+    }
+    errno = EPERM;
+    return 1;
+}
+
+static int deny_sigkill(pid_t process_id, int number) {
+    if (deny_sigkill_for_current_thread(number)) {
+        return -1;
+    }
+    kill_function kill_next = next_kill();
+    if (kill_next == NULL) {
+        errno = ENOSYS;
+        return -1;
+    }
+    return kill_next(process_id, number);
+}
+
+static int deny_sigkill_group(pid_t process_group_id, int number) {
+    if (deny_sigkill_for_current_thread(number)) {
+        return -1;
+    }
+    kill_function kill_next = next_kill();
+    if (kill_next == NULL) {
+        errno = ENOSYS;
+        return -1;
+    }
+    return kill_next(-process_group_id, number);
+}
+#endif
+
+#if defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP)
 static int deny_first_sigkill(pid_t process_id, int number) {
     if (number == SIGKILL
         && getenv("MCP_CONSOLE_TEST_DENIED_SIGKILL") != NULL
-#if defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP)
         && is_subcommand("sandbox")
-#endif
         && atomic_exchange(&denied_sigkill, 1) == 0) {
         signal_checkpoint("MCP_CONSOLE_TEST_DENIED_SIGKILL");
         errno = EPERM;
@@ -452,7 +529,8 @@ static ssize_t gate_retirement_disposition(
 DYLD_INTERPOSE(gate_manager_initialization, recv)
 DYLD_INTERPOSE(fail_target_gate_release, send)
 #elif defined(MCP_CONSOLE_INTERPOSE_DENIED_SIGKILL)
-DYLD_INTERPOSE(deny_first_sigkill, kill)
+DYLD_INTERPOSE(deny_sigkill, kill)
+DYLD_INTERPOSE(deny_sigkill_group, killpg)
 #elif defined(MCP_CONSOLE_INTERPOSE_FAILED_RECOVERY_STOP)
 DYLD_INTERPOSE(fail_process_info, proc_pidinfo)
 DYLD_INTERPOSE(fail_group_stop, killpg)
@@ -985,6 +1063,7 @@ def test_preserves_root_signal_status_when_startup_gate_breaks(
     binary: Path,
 ) -> Transcript:
     arguments = ("sandbox", "--", "/bin/sleep", "60")
+
     with tempfile.TemporaryDirectory() as temporary_directory:
         fixture_directory = Path(temporary_directory)
         manager_started = FifoCheckpoint(fixture_directory / "manager-started")
@@ -1073,6 +1152,130 @@ def test_preserves_root_signal_status_when_startup_gate_breaks(
             manager_started.close()
             manager_release.close()
             target_gate_write.close()
+
+
+def test_terminal_interrupt_before_manager_readiness_preserves_status(
+    binary: Path,
+) -> Transcript:
+    arguments = ("sandbox", "--", "python", "-c", "raise SystemExit(23)")
+
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        fixture_directory = Path(temporary_directory)
+        manager_started = FifoCheckpoint(fixture_directory / "manager-started")
+        manager_release = FifoCheckpoint(fixture_directory / "manager-release")
+        environment = os.environ.copy()
+        environment["DYLD_INSERT_LIBRARIES"] = str(
+            _build_supervision_interposer(fixture_directory, "manager-start")
+        )
+        environment["MCP_CONSOLE_TEST_MANAGER_START"] = str(manager_started.path)
+        environment["MCP_CONSOLE_TEST_MANAGER_RELEASE"] = str(manager_release.path)
+        environment["TMPDIR"] = str(fixture_directory)
+
+        process, master = _start_with_controlling_terminal(
+            [binary, *arguments],
+            environment,
+        )
+        identities: list[DarwinProcessIdentity] = []
+        manager_released = False
+        sandbox_temporary_directory: Path | None = None
+        try:
+            manager_started.wait("manager startup before readiness")
+            launcher = capture_darwin_process_identity(process.pid)
+            children = darwin_child_process_identities(launcher)
+            assert len(children) == 2, children
+            deadline = time.monotonic() + TIMEOUT
+            gated: list[DarwinProcessIdentity] = []
+            while not gated:
+                gated = [
+                    child
+                    for child in children
+                    if darwin_process_waits_for_startup_release(child)
+                ]
+                assert len(gated) <= 1, (children, gated)
+                if gated:
+                    break
+                assert live_darwin_processes(children) == [
+                    child[0] for child in children
+                ], children
+                assert time.monotonic() < deadline, (
+                    "sandbox root did not reach its private startup gate"
+                )
+                time.sleep(0.01)
+            root = gated[0]
+            manager = next(child for child in children if child != root)
+            identities.extend((root, manager))
+            temporary_directories = list(
+                fixture_directory.glob(f"mcp-console-tmp-{process.pid}-*")
+            )
+            assert len(temporary_directories) == 1, temporary_directories
+            sandbox_temporary_directory = temporary_directories[0]
+
+            assert os.getpgid(root[0]) == root[0]
+            assert os.tcgetpgrp(master) == root[0]
+            terminal_attributes = termios.tcgetattr(master)
+            assert terminal_attributes[3] & termios.ISIG
+            assert terminal_attributes[6][termios.VINTR] == b"\x03"
+            exit_queue = select.kqueue()
+            try:
+                exit_watch = select.kevent(
+                    root[0],
+                    filter=select.KQ_FILTER_PROC,
+                    flags=select.KQ_EV_ADD | select.KQ_EV_CLEAR,
+                    fflags=select.KQ_NOTE_EXIT,
+                )
+                assert exit_queue.control([exit_watch], 0, 0) == []
+                os.write(master, b"\x03")
+                exit_events = exit_queue.control(None, 1, TIMEOUT)
+                assert len(exit_events) == 1, "sandbox root did not exit"
+                exit_event = exit_events[0]
+                assert exit_event.ident == root[0], exit_event
+                assert exit_event.filter == select.KQ_FILTER_PROC, exit_event
+                assert exit_event.fflags & select.KQ_NOTE_EXIT, exit_event
+            finally:
+                exit_queue.close()
+
+            manager_release.release()
+            manager_released = True
+            returncode = process.wait(timeout=TIMEOUT)
+            stdout = process.stdout.read().decode("utf-8")
+            stderr = process.stderr.read().decode("utf-8")
+            survivors = live_darwin_processes(identities)
+
+            assert returncode == 130, returncode
+            assert stdout == "", stdout
+            assert stderr == "", stderr
+            assert survivors == [], f"sandbox processes survived: {survivors}"
+            assert not sandbox_temporary_directory.exists(), (
+                "sandbox temporary directory survived normal retirement"
+            )
+            return [
+                {
+                    "command": _command(*arguments),
+                    "manager_checkpoint": "before readiness",
+                    "terminal_foreground_group": "gated sandbox root",
+                },
+                {
+                    "stdin": "<Ctrl-C>",
+                    "root_state_before_manager_release": "exit observed",
+                    "launcher_returncode": returncode,
+                    "verified_cleanup": "sandbox root, manager, and temp",
+                },
+            ]
+        finally:
+            if not manager_released:
+                manager_release.release()
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=TIMEOUT)
+            kill_darwin_processes(identities)
+            if sandbox_temporary_directory is not None:
+                shutil.rmtree(sandbox_temporary_directory, ignore_errors=True)
+            for stream in (process.stdout, process.stderr):
+                if not stream.closed:
+                    stream.close()
+            os.close(master)
+            manager_started.close()
+            manager_release.close()
 
 
 def test_launcher_crash_retires_the_sandbox_lifetime(binary: Path) -> Transcript:
@@ -1188,20 +1391,38 @@ def test_manager_crash_with_zombie_root_stops_pinned_group(
 def test_manager_recovery_failure_wakes_launcher(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         fixture_directory = Path(temporary_directory)
-        denied_sigkill = FifoCheckpoint(fixture_directory / "denied-sigkill")
+        monitor_sigkill_denied = FifoCheckpoint(
+            fixture_directory / "monitor-sigkill-denied"
+        )
+        owner_sigkill_denied = FifoCheckpoint(
+            fixture_directory / "owner-sigkill-denied"
+        )
         environment = os.environ.copy()
         environment["DYLD_INSERT_LIBRARIES"] = str(
             _build_supervision_interposer(fixture_directory, "denied-sigkill")
         )
-        environment["MCP_CONSOLE_TEST_DENIED_SIGKILL"] = str(denied_sigkill.path)
+        environment["MCP_CONSOLE_TEST_MONITOR_SIGKILL_DENIED"] = str(
+            monitor_sigkill_denied.path
+        )
+        environment["MCP_CONSOLE_TEST_OWNER_SIGKILL_DENIED"] = str(
+            owner_sigkill_denied.path
+        )
         lifetime = _start_lifetime(binary, environment)
         try:
             assert signal_darwin_process(lifetime.manager, signal.SIGKILL), (
                 "manager exited before crash injection"
             )
-            denied_sigkill.wait("launcher manager-recovery signal denial")
+            monitor_sigkill_denied.wait("manager-monitor recovery signal denial")
+            owner_sigkill_denied.wait("owner-side recovery signal denial")
             returncode = lifetime.process.wait(timeout=TIMEOUT)
-            stderr = lifetime.process.stderr.read().decode("utf-8")
+            with selectors.DefaultSelector() as selector:
+                selector.register(lifetime.process.stderr, selectors.EVENT_READ)
+                assert selector.select(TIMEOUT), (
+                    "sandbox launcher did not report failure"
+                )
+            stderr = os.read(lifetime.process.stderr.fileno(), 64 * 1024).decode(
+                "utf-8"
+            )
             normalized_stderr = stderr
             for identity in (lifetime.root, lifetime.descendant):
                 normalized_stderr = normalized_stderr.replace(
@@ -1209,13 +1430,17 @@ def test_manager_recovery_failure_wakes_launcher(binary: Path) -> Transcript:
                     "<sandbox process pid>",
                 )
             _wait_for_process_exit(
-                (lifetime.root, lifetime.descendant, lifetime.manager),
-                "sandbox processes survived manager recovery failure",
+                (lifetime.manager,),
+                "sandbox manager survived recovery failure",
             )
+            survivors = live_darwin_processes((lifetime.root, lifetime.descendant))
 
             assert returncode == 1, returncode
             assert "manager recovery failed" in stderr, stderr
             assert "Operation not permitted" in stderr, stderr
+            assert survivors == [lifetime.root[0], lifetime.descendant[0]], (
+                f"failed recovery unexpectedly stopped sandbox processes: {survivors}"
+            )
             assert lifetime.temporary_directory.exists(), (
                 "manager recovery failure removed the sandbox temporary directory"
             )
@@ -1225,14 +1450,19 @@ def test_manager_recovery_failure_wakes_launcher(binary: Path) -> Transcript:
                 command,
                 {
                     "manager_signal": "SIGKILL",
-                    "manager_recovery_signal": "EPERM",
+                    "manager_monitor_signals": "EPERM",
+                    "owner_recovery_signals": "EPERM",
                     "launcher_returncode": returncode,
-                    "verified_cleanup": "sandbox root, detached descendant, and manager",
+                    "verified_bounded_return": (
+                        "with root and detached descendant still live"
+                    ),
+                    "verified_cleanup": "sandbox manager",
                     "verified_preservation": "sandbox temp",
                 },
             ]
         finally:
-            denied_sigkill.close()
+            monitor_sigkill_denied.close()
+            owner_sigkill_denied.close()
             _cleanup(lifetime)
 
 
@@ -1344,6 +1574,64 @@ def test_root_observer_failure_reports_group_cleanup_failure(
         finally:
             inspection_failed.close()
             group_stop_failed.close()
+
+
+def test_cleanup_signal_after_root_exit_terminates_launcher(
+    binary: Path,
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        fixture_directory = Path(temporary_directory)
+        late_cleanup = FifoCheckpoint(fixture_directory / "late-cleanup")
+        late_cleanup_release = FifoCheckpoint(
+            fixture_directory / "late-cleanup-release"
+        )
+        environment = os.environ.copy()
+        environment["DYLD_INSERT_LIBRARIES"] = str(
+            _build_supervision_interposer(fixture_directory, "late-cleanup")
+        )
+        environment["MCP_CONSOLE_TEST_LATE_CLEANUP"] = str(late_cleanup.path)
+        environment["MCP_CONSOLE_TEST_LATE_CLEANUP_RELEASE"] = str(
+            late_cleanup_release.path
+        )
+        lifetime = _start_lifetime(binary, environment)
+        cleanup_released = False
+        try:
+            lifetime.process.stdin.write(b"exit\n")
+            lifetime.process.stdin.close()
+            late_cleanup.wait("manager cleanup after sandbox root exit")
+            assert signal_darwin_process(lifetime.launcher, signal.SIGTERM), (
+                "launcher exited before cleanup signal"
+            )
+            returncode = lifetime.process.wait(timeout=TIMEOUT)
+            stderr = lifetime.process.stderr.read().decode("utf-8")
+            late_cleanup_release.release()
+            cleanup_released = True
+            _wait_for_process_exit(
+                (lifetime.root, lifetime.descendant, lifetime.manager),
+                "sandbox processes survived cleanup-time launcher signal",
+            )
+
+            assert returncode == -signal.SIGTERM, returncode
+            assert stderr == "", stderr
+            assert lifetime.temporary_directory.exists(), (
+                "cleanup-time signal removed the sandbox temporary directory"
+            )
+            return [
+                _command_record(lifetime),
+                {
+                    "manager_cleanup": "acknowledgement held after root exit",
+                    "launcher_signal": "SIGTERM",
+                    "launcher_returncode": returncode,
+                    "verified_cleanup": "sandbox root, detached descendant, and manager",
+                    "verified_preservation": "sandbox temp",
+                },
+            ]
+        finally:
+            if not cleanup_released:
+                late_cleanup_release.release()
+            late_cleanup.close()
+            late_cleanup_release.close()
+            _cleanup(lifetime)
 
 
 def test_cleanup_timeout_preserves_temporary_directory(binary: Path) -> Transcript:

@@ -5,6 +5,7 @@ mod protocol;
 
 use super::process::{ProcessIdentity, process_info, signal_process};
 use super::process_tracker::DescendantTracker;
+use super::root_exit_waiter::RootExitWakeup;
 use crate::sandbox::file_descriptors;
 use crate::sandbox::platform;
 use std::io::{Read, Write};
@@ -160,6 +161,24 @@ impl SandboxManager {
         root_pid: u32,
         temporary_directory: platform::TemporaryDirectory,
     ) {
+        self.start_monitor(root_pid, temporary_directory, None);
+    }
+
+    pub(super) fn monitor_for_standalone(
+        &mut self,
+        root_pid: u32,
+        temporary_directory: platform::TemporaryDirectory,
+        root_wakeup: RootExitWakeup,
+    ) {
+        self.start_monitor(root_pid, temporary_directory, Some(root_wakeup));
+    }
+
+    fn start_monitor(
+        &mut self,
+        root_pid: u32,
+        temporary_directory: platform::TemporaryDirectory,
+        root_wakeup: Option<RootExitWakeup>,
+    ) {
         assert!(
             self.monitor.is_none(),
             "sandbox manager can be monitored only once"
@@ -180,6 +199,7 @@ impl SandboxManager {
             root_pid,
             temporary_directory,
             self.cleanup_timeout,
+            root_wakeup,
         ));
     }
 
@@ -373,6 +393,7 @@ impl ManagerMonitor {
         root_pid: libc::pid_t,
         temporary_directory: platform::TemporaryDirectory,
         cleanup_timeout: Duration,
+        root_wakeup: Option<RootExitWakeup>,
     ) -> Self {
         let (result_sender, result) = mpsc::channel();
         let preservation = Arc::new(AtomicU8::new(0));
@@ -380,6 +401,7 @@ impl ManagerMonitor {
         let recovery_enabled = Arc::new(Mutex::new(true));
         let recovery_enabled_for_monitor = Arc::clone(&recovery_enabled);
         let thread = std::thread::spawn(move || {
+            let _wake_root = root_wakeup.map(RootExitWakeup::on_drop);
             let result = monitor_manager(
                 child,
                 root_pid,

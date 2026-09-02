@@ -128,11 +128,14 @@ It retains that root waitably so the manager or owner-side failure recovery can 
 ### Standalone launcher
 
 The standalone launcher owns one direct sandbox command's exit status, job control, and final directory disposition.
-It inherits the command's standard streams, closes every unrelated inherited descriptor before exec, retains the direct root as a waitable child, and returns that root's exit status when cleanup succeeds.
+It inherits the command's standard streams, closes every unrelated inherited descriptor before exec, places the target in a dedicated process group, retains the direct root as a waitable child, and returns that root's exit status when cleanup succeeds.
 It keeps the root blocked on a private descriptor while committing primary manager ownership, then releases the root into the requested command.
-After root exit it marks normal retirement, waits for manager cleanup, supplies the final temporary-directory disposition, and reaps the root last.
-It does not own console state, dependency resolution, recording, relay transport, or worker protocol behavior.
-It transfers foreground-terminal ownership to the command group, relays supported signals addressed to the launcher, and restores terminal ownership after root exit.
+The root waiter uses one `kqueue` for root exit and launcher-addressed signals.
+The launcher relays `SIGHUP`, `SIGINT`, `SIGQUIT`, and `SIGTERM` addressed to it into the target group.
+When its foreground process group has no peer, it transfers controlling-terminal ownership to the target group; when a pipeline peer shares the group, it leaves terminal ownership unchanged.
+After root exit it marks normal retirement, restores terminal ownership when it transferred it, restores its inherited signal mask, waits for manager cleanup, supplies the final temporary-directory disposition, and reaps the root last.
+It does not own descendant tracking, console state, dependency resolution, recording, relay transport, or worker protocol behavior.
+It does not implement stopped/continued job state or general shell-pipeline job control.
 
 ### Sandbox manager
 
@@ -217,8 +220,11 @@ The launcher starts the manager before that root, retains both children waitably
 It then writes one release byte; the same root closes the descriptor and replaces itself with the requested command.
 A descendant that later escapes before the manager sees its fork remains outside cleanup.
 
-The launcher blocks in a root-only event waiter that also wakes for supported signals addressed to the launcher.
-At root exit it marks normal retirement, waits for the manager's cleanup acknowledgement, and commits remove after success or preserve after an acknowledgement timeout or error.
+The launcher blocks in the root waiter's `kqueue` until root exit or a supported signal is addressed to the launcher.
+It consumes pending launcher signals synchronously and relays them to the target process group.
+At root exit it marks normal retirement, restores terminal ownership when it transferred it, and restores its inherited signal mask before manager cleanup.
+Newly received or pending signals can then follow their inherited disposition; if one terminates the launcher, the committed manager completes lifetime cleanup.
+The launcher waits for the manager's cleanup acknowledgement and commits remove after success or preserve after an acknowledgement timeout or error.
 It then reaps the direct root and returns its status when cleanup succeeded.
 If the launcher exits after the retirement marker but before final disposition, the manager preserves the directory; owner loss before that marker selects crash cleanup and removal after successful manager retirement.
 If the manager is killed while the launcher remains live, its monitor reconstructs the root's current ancestry and performs bounded cleanup while that root remains pinned.

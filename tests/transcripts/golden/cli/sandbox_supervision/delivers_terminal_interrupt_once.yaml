@@ -23,7 +23,7 @@ command:
     signal.signal(signal.SIGINT, handle_interrupt)
     previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
     assert signal.SIGINT not in previous_mask
-    print(f"ready {os.getpgrp()}", flush=True)
+    print(f"ready {os.getpid()} {os.getpgrp()}", flush=True)
     print(input(), flush=True)
     signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
     print("interrupt ready", flush=True)
@@ -34,3 +34,4 @@ stdin: |-
   <Ctrl-C>
 stdout: |
   1
+terminal_ownership: transferred to target

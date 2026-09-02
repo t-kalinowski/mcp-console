@@ -9,12 +9,11 @@ command:
     import os
     import signal
     import sys
-    import time
 
     signal.signal(signal.SIGHUP, signal.SIG_IGN)
     print("ready", flush=True)
-    while not os.path.exists(sys.argv[1]):
-        time.sleep(0.01)
+    with open(sys.argv[1], encoding="utf-8") as release:
+        assert release.readline() == "release\n"
     raise SystemExit(23)
   - <release gate>
 terminal: closed after readiness
