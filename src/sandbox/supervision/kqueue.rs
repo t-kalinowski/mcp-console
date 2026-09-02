@@ -52,9 +52,7 @@ impl Kqueue {
         let event = process_event(pid, libc::EV_ADD | libc::EV_CLEAR, flags);
         match submit_events(self.descriptor.as_raw_fd(), std::slice::from_ref(&event)) {
             Ok(()) => Ok(()),
-            Err(error) if error.raw_os_error() == Some(libc::ESRCH) => {
-                Err(ProcessWatchError::Gone)
-            }
+            Err(error) if error.raw_os_error() == Some(libc::ESRCH) => Err(ProcessWatchError::Gone),
             Err(error) => Err(ProcessWatchError::Other(error)),
         }
     }

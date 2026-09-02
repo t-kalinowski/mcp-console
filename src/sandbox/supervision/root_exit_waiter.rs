@@ -101,10 +101,7 @@ impl RootExitWaiter {
             return Ok(RootWait::RootExited);
         }
 
-        let events = match self
-            .kqueue
-            .wait(timeout, "sandbox root observer failed")?
-        {
+        let events = match self.kqueue.wait(timeout, "sandbox root observer failed")? {
             KqueueWait::Events(events) => events,
             KqueueWait::Interrupted => return Ok(RootWait::Events),
             KqueueWait::TimedOut => return Ok(RootWait::TimedOut),

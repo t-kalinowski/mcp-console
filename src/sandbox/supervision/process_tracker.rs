@@ -57,10 +57,8 @@ pub(super) enum EventWait {
 
 impl TrackerStopWakeup {
     pub(super) fn wake(self) -> Result<(), String> {
-        self.kqueue.trigger_user(
-            TRACKER_STOP_IDENT,
-            "failed to wake sandbox process tracker",
-        )
+        self.kqueue
+            .trigger_user(TRACKER_STOP_IDENT, "failed to wake sandbox process tracker")
     }
 }
 

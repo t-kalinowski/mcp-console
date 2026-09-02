@@ -73,10 +73,8 @@ pub(super) fn add_process_tree(
             // NOTE_REAP is deprecated for ordinary exit observation, but
             // NOTE_EXIT fires while the PID may still exist as a zombie.
             // Requesting both keeps descendant watches until processes are reaped.
-            match kqueue.watch_process(
-                pid,
-                libc::NOTE_FORK | libc::NOTE_EXIT | PROCESS_REAP_EVENT,
-            ) {
+            match kqueue.watch_process(pid, libc::NOTE_FORK | libc::NOTE_EXIT | PROCESS_REAP_EVENT)
+            {
                 Ok(()) => {}
                 Err(ProcessWatchError::Gone) => {
                     if process_info(pid)?
