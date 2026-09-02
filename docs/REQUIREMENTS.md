@@ -104,11 +104,12 @@ Prepared packages and extensions still must be attached, imported, or loaded by 
 ## Automatic R package resolution
 
 The built-in R worker resolves a missing plain package name when evaluated code reaches `library()`, `require()`, `requireNamespace()`, `loadNamespace()`, `::`, or `:::`.
-It installs thin wrappers around `base::library` and `base::loadNamespace`, preserves the original base functions, and delegates to them after making the package available.
-Both wrappers are needed because `library()` calls `find.package()` and can report a missing package before it reaches `loadNamespace()`.
+It wraps `base::library` because `library()` calls `find.package()` and can report a missing package before it reaches namespace loading.
+For `base::loadNamespace`, it runs R's original formals and body in a private lexical environment that intercepts the existing `retry_loadNamespace` restart, makes the package available, and lets R's implementation continue.
+Preserving the original body keeps packages that inspect `loadNamespace()` compatible.
 `require()` delegates to `library()`, `requireNamespace()` delegates to `loadNamespace()`, and the namespace operators use `loadNamespace()` when needed.
 
-The wrappers do not replace `find.package()` or `install.packages()`.
+These adapters do not replace `find.package()` or `install.packages()`.
 They skip resolution when the package is already attached, loaded, or findable, and preserve base behavior for `library()` help and listing calls.
 An explicit non-NULL `lib.loc` and a partial namespace load also bypass automatic resolution because adding a managed library would not satisfy those requests.
 

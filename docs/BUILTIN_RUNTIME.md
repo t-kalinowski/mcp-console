@@ -219,9 +219,10 @@ When dynamic environment resolution is available, the built-in worker can prepar
 This covers direct `library()`, `require()`, `requireNamespace()`, and `loadNamespace()` calls and package use through `::` and `:::`.
 Use these operations normally; there is no need to probe package availability or call `install.packages()` first.
 
-The worker wraps `base::library` and `base::loadNamespace` and delegates to their captured originals after any required activation.
-A `loadNamespace()` wrapper alone would miss `library()` because `library()` checks `find.package()` first.
-The wrappers preserve ordinary R behavior: `library()` and `require()` attach only when the original call does, while `::`, `:::`, `requireNamespace()`, and `loadNamespace()` load a namespace without attaching the package.
+The worker wraps `base::library` because `library()` checks `find.package()` before namespace loading.
+For `base::loadNamespace`, it runs R's original formals and body in a private lexical environment that intercepts the existing `retry_loadNamespace` restart after a retryable missing-package error.
+The handler makes the package available and lets R's implementation continue, while preserving the original body for packages that inspect it.
+These adapters preserve ordinary R behavior: `library()` and `require()` attach only when the original call does, while `::`, `:::`, `requireNamespace()`, and `loadNamespace()` load a namespace without attaching the package.
 They bypass automatic resolution for already available packages, `library()` help and listing calls, an explicit non-NULL `lib.loc`, and partial namespace loads.
 
 Runtime discovery accepts plain package names only.
