@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 pub(super) const PROCESS_REAP_EVENT: u32 = libc::NOTE_REAP;
 
 pub(super) struct TrackerState {
-    pub(super) root: Option<ProcessIdentity>,
+    pub(super) root: ProcessIdentity,
     pub(super) active: HashMap<libc::pid_t, ProcessIdentity>,
 }
 

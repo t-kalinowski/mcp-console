@@ -11,9 +11,10 @@ use std::io::Read;
 use std::os::fd::OwnedFd;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt as _;
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::process::{Child, Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
-use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -33,7 +34,7 @@ struct ManagerHandle {
 
 struct ManagerMonitor {
     identity: ProcessIdentity,
-    recovery_enabled: Arc<Mutex<bool>>,
+    recovery_enabled: Arc<AtomicBool>,
     result: Receiver<Result<(), String>>,
     thread: Option<JoinHandle<()>>,
 }
@@ -209,7 +210,7 @@ impl ManagerMonitor {
     ) -> Result<Self, ManagerMonitorStartError> {
         let (result_sender, result) = mpsc::channel();
         let (child_sender, child_receiver) = mpsc::sync_channel(0);
-        let recovery_enabled = Arc::new(Mutex::new(true));
+        let recovery_enabled = Arc::new(AtomicBool::new(true));
         let recovery_enabled_for_monitor = Arc::clone(&recovery_enabled);
         let thread = match std::thread::Builder::new().spawn(move || {
             let child = child_receiver
@@ -247,12 +248,8 @@ impl ManagerMonitor {
         })
     }
 
-    fn disable_recovery(&self) {
-        let mut enabled = self
-            .recovery_enabled
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        *enabled = false;
+    fn disable_recovery(&self) -> bool {
+        self.recovery_enabled.swap(false, Ordering::SeqCst)
     }
 
     fn finish(mut self, timeout: Duration) -> Result<(), String> {
@@ -279,7 +276,16 @@ impl ManagerMonitor {
                         Err("sandbox manager monitor ended without a result".to_string())
                     }
                     Err(RecvTimeoutError::Timeout) => {
-                        self.disable_recovery();
+                        if !self.disable_recovery() {
+                            // Fallback recovery claimed the root before
+                            // cancellation. Retain its PID pin until that
+                            // bounded cleanup finishes.
+                            let _ = self
+                                .thread
+                                .take()
+                                .expect("sandbox manager monitor thread should be joinable")
+                                .join();
+                        }
                         return Err(with_prior_error(
                             error,
                             "sandbox manager did not stop after forced termination".to_string(),
@@ -317,20 +323,11 @@ fn monitor_manager(
     mut child: Child,
     root_pid: libc::pid_t,
     cleanup_timeout: Duration,
-    recovery_enabled: Arc<Mutex<bool>>,
+    recovery_enabled: Arc<AtomicBool>,
 ) -> Result<(), String> {
-    let completion = match platform::wait_for_process_exit_without_reaping_blocking(child.id()) {
-        Ok(()) => child
-            .wait()
-            .map_err(|wait_error| format!("failed to reap sandbox manager: {wait_error}")),
-        Err(wait_error) => {
-            let mut error = format!("failed to monitor sandbox manager: {wait_error}");
-            if let Err(stop_error) = stop_manager_child(&mut child) {
-                error = with_prior_error(Some(error), stop_error);
-            }
-            Err(error)
-        }
-    };
+    let completion = child
+        .wait()
+        .map_err(|wait_error| format!("failed to reap sandbox manager: {wait_error}"));
 
     match completion {
         Ok(status) if status.success() => Ok(()),
@@ -344,33 +341,13 @@ fn monitor_manager(
     }
 }
 
-fn stop_manager_child(child: &mut Child) -> Result<ExitStatus, String> {
-    let mut error = None;
-    if let Err(kill_error) = child.kill()
-        && kill_error.raw_os_error() != Some(libc::ESRCH)
-    {
-        error = Some(format!("failed to stop sandbox manager: {kill_error}"));
-    }
-    let status = child
-        .wait()
-        .map_err(|wait_error| format!("failed to reap sandbox manager: {wait_error}"));
-    match (error, status) {
-        (None, Ok(status)) => Ok(status),
-        (Some(error), Ok(_)) | (None, Err(error)) => Err(error),
-        (Some(error), Err(wait_error)) => Err(with_prior_error(Some(error), wait_error)),
-    }
-}
-
 fn finish_manager_failure(
     mut error: String,
     root_pid: libc::pid_t,
     cleanup_timeout: Duration,
-    recovery_enabled: &Mutex<bool>,
+    recovery_enabled: &AtomicBool,
 ) -> Result<(), String> {
-    let enabled = recovery_enabled
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if !*enabled {
+    if !recovery_enabled.swap(false, Ordering::SeqCst) {
         return Err(error);
     }
     let root = match process_info(root_pid) {

@@ -73,7 +73,7 @@ impl DescendantTracker {
                 ))
             })?;
         let state = TrackerState {
-            root: Some(root),
+            root,
             active: HashMap::new(),
         };
         let mut tracker = Self {

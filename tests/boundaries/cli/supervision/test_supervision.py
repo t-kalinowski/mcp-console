@@ -2,29 +2,39 @@
 
 import ctypes
 import os
+import select
 import signal
 import subprocess
 import sys
 import tempfile
 import termios
+from contextlib import ExitStack
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from boundaries.cli._harness import (
+    _build_supervision_interposer,
+    _cleanup,
     _command,
+    _command_record,
+    _observe_process_exit,
     _read_lines,
+    _start_lifetime,
     _start_with_controlling_terminal,
+    _wait_for_process_exit,
 )
+from support.checkpoints import FifoCheckpoint
 from support.macos import (
     DarwinProcessIdentity as _ProcessIdentity,
     capture_darwin_process_identity as _capture_identity,
     kill_darwin_processes as _kill_survivors,
+    live_darwin_processes,
+    signal_darwin_process,
 )
 from support.normalization import code
 from support.records import Transcript
 from support.suites import run_this_suite
-
 
 PLATFORMS = {"darwin"}
 TIMEOUT = 10
@@ -253,6 +263,159 @@ def test_waits_for_processx_crash_supervision(binary: Path) -> Transcript:
             ],
         }
     ]
+
+
+def test_does_not_signal_reused_descendant_identity(binary: Path) -> Transcript:
+    # Preserve a process whose PID now names a different start-time identity.
+    # The test cleans up the stand-in only after the public sandbox command
+    # returns, so any direct signal from the manager remains observable.
+    with (
+        tempfile.TemporaryDirectory() as temporary_directory,
+        ExitStack() as checkpoints,
+    ):
+        fixture_directory = Path(temporary_directory)
+        descendant_observed = FifoCheckpoint.create(
+            fixture_directory / "retirement-descendant-observed"
+        )
+        checkpoints.callback(descendant_observed.close)
+        identity_changed = FifoCheckpoint.create(
+            fixture_directory / "retirement-identity-changed"
+        )
+        checkpoints.callback(identity_changed.close)
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "DYLD_INSERT_LIBRARIES": str(
+                    _build_supervision_interposer(
+                        fixture_directory,
+                        "retirement-reused-identity",
+                    )
+                ),
+                "MCP_CONSOLE_TEST_RETIREMENT_DESCENDANT_OBSERVED": str(
+                    descendant_observed.path
+                ),
+                "MCP_CONSOLE_TEST_RETIREMENT_IDENTITY_CHANGED": str(
+                    identity_changed.path
+                ),
+            }
+        )
+        lifetime = _start_lifetime(binary, environment)
+        try:
+            descendant_observed.wait("manager observation of detached descendant")
+            lifetime.process.stdin.write(b"exit\n")
+            lifetime.process.stdin.close()
+            identity_changed.wait("descendant identity change after child snapshot")
+            returncode = lifetime.process.wait(timeout=TIMEOUT)
+            stderr = lifetime.process.stderr.read().decode("utf-8")
+
+            assert returncode == 23, returncode
+            assert stderr == "", stderr
+            assert live_darwin_processes((lifetime.descendant,)) == [
+                lifetime.descendant[0]
+            ], "manager signaled a reused descendant PID"
+            assert not lifetime.temporary_directory.exists(), (
+                "reused descendant identity preserved the sandbox temporary directory"
+            )
+            return [
+                _command_record(lifetime),
+                {
+                    "simulated_pid_reuse": (
+                        "descendant start time changed after final child snapshot"
+                    ),
+                    "verified_no_signal": "reused descendant PID remained live",
+                    "launcher_returncode": returncode,
+                    "verified_removal": "sandbox temp",
+                },
+            ]
+        finally:
+            _cleanup(lifetime)
+
+
+def test_descendant_exit_during_retirement_signal_is_clean(
+    binary: Path,
+) -> Transcript:
+    # Hold the manager immediately before kill(2), stop the exact descendant,
+    # and then let the manager observe ESRCH from its original signal attempt.
+    with (
+        tempfile.TemporaryDirectory() as temporary_directory,
+        ExitStack() as checkpoints,
+    ):
+        fixture_directory = Path(temporary_directory)
+        descendant_observed = FifoCheckpoint.create(
+            fixture_directory / "retirement-descendant-observed"
+        )
+        checkpoints.callback(descendant_observed.close)
+        signal_gate = FifoCheckpoint.create(
+            fixture_directory / "retirement-signal-gate"
+        )
+        checkpoints.callback(signal_gate.close)
+        signal_release = FifoCheckpoint.create(
+            fixture_directory / "retirement-signal-release"
+        )
+        checkpoints.callback(signal_release.close)
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "DYLD_INSERT_LIBRARIES": str(
+                    _build_supervision_interposer(
+                        fixture_directory,
+                        "retirement-exit-race",
+                    )
+                ),
+                "MCP_CONSOLE_TEST_RETIREMENT_DESCENDANT_OBSERVED": str(
+                    descendant_observed.path
+                ),
+                "MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_GATE": str(signal_gate.path),
+                "MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_RELEASE": str(signal_release.path),
+            }
+        )
+        lifetime = _start_lifetime(binary, environment)
+        signal_released = False
+        try:
+            descendant_observed.wait("manager observation of detached descendant")
+            with _observe_process_exit(lifetime.descendant) as descendant_exit:
+                lifetime.process.stdin.write(b"exit\n")
+                lifetime.process.stdin.close()
+                signal_gate.wait("manager descendant signal")
+                assert signal_darwin_process(lifetime.descendant, signal.SIGKILL), (
+                    "detached descendant exited before signal-race injection"
+                )
+                events = descendant_exit.control(None, 1, TIMEOUT)
+                assert events, "detached descendant did not exit"
+                assert events[0].ident == lifetime.descendant[0], events[0]
+                assert events[0].filter == select.KQ_FILTER_PROC, events[0]
+                assert events[0].fflags & select.KQ_NOTE_EXIT, events[0]
+                signal_release.release()
+                signal_released = True
+
+            returncode = lifetime.process.wait(timeout=TIMEOUT)
+            stderr = lifetime.process.stderr.read().decode("utf-8")
+            _wait_for_process_exit(
+                (lifetime.root, lifetime.descendant, lifetime.manager),
+                "sandbox processes survived descendant signal race",
+            )
+
+            assert returncode == 23, returncode
+            assert stderr == "", stderr
+            assert not lifetime.temporary_directory.exists(), (
+                "descendant signal race preserved the sandbox temporary directory"
+            )
+            return [
+                _command_record(lifetime),
+                {
+                    "retirement_race": (
+                        "detached descendant exited immediately before manager SIGKILL"
+                    ),
+                    "manager_signal_result": "ESRCH",
+                    "launcher_returncode": returncode,
+                    "verified_cleanup": "sandbox root, detached descendant, and manager",
+                    "verified_removal": "sandbox temp",
+                },
+            ]
+        finally:
+            if not signal_released:
+                signal_release.release()
+            _cleanup(lifetime)
 
 
 def test_relays_interrupt_then_retires_descendants(binary: Path) -> Transcript:

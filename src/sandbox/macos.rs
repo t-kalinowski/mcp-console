@@ -101,58 +101,6 @@ pub(super) fn wait_for_process_exit_without_reaping(
     }
 }
 
-pub(super) fn wait_for_process_exit_without_reaping_blocking(process_id: u32) -> io::Result<()> {
-    let process_id = valid_process_id(process_id, "process")?;
-    let wait_id = libc::id_t::try_from(process_id)
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid process ID"))?;
-
-    loop {
-        let mut information = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
-        // SAFETY: `information` points to writable `siginfo_t` storage and the
-        // positive PID names our direct child. `WNOWAIT` leaves the exit status
-        // available for the monitor thread to reap after it inspects the result.
-        let result = unsafe {
-            libc::waitid(
-                libc::P_PID,
-                wait_id,
-                information.as_mut_ptr(),
-                libc::WEXITED | libc::WNOWAIT,
-            )
-        };
-        if result < 0 {
-            let error = io::Error::last_os_error();
-            if error.kind() == io::ErrorKind::Interrupted {
-                continue;
-            }
-            return Err(error);
-        }
-
-        // SAFETY: successful `waitid` initialized the supplied `siginfo_t`.
-        let information = unsafe { information.assume_init() };
-        if information.si_pid != process_id {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "waitid returned process {} while waiting for {process_id}",
-                    information.si_pid
-                ),
-            ));
-        }
-        match information.si_code {
-            CHILD_EXITED | CHILD_KILLED | CHILD_DUMPED => return Ok(()),
-            CHILD_STOPPED | CHILD_CONTINUED => {
-                consume_non_exit_notification(wait_id, process_id)?;
-            }
-            code => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("waitid returned unexpected child status code {code}"),
-                ));
-            }
-        }
-    }
-}
-
 fn consume_non_exit_notification(wait_id: libc::id_t, process_id: libc::pid_t) -> io::Result<()> {
     let mut information = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
     // SAFETY: `information` points to writable `siginfo_t` storage and the

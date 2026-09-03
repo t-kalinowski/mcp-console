@@ -84,6 +84,10 @@ def _build_supervision_interposer(directory: Path, behavior: str) -> Path:
         "failed-root-observer": "-DMCP_CONSOLE_INTERPOSE_FAILED_ROOT_OBSERVER",
         "late-cleanup": "-DMCP_CONSOLE_INTERPOSE_LATE_CLEANUP",
         "retirement-cleanup": "-DMCP_CONSOLE_INTERPOSE_RETIREMENT_CLEANUP",
+        "retirement-reused-identity": (
+            "-DMCP_CONSOLE_INTERPOSE_RETIREMENT_REUSED_IDENTITY"
+        ),
+        "retirement-exit-race": "-DMCP_CONSOLE_INTERPOSE_RETIREMENT_EXIT_RACE",
     }
     assert behavior in definitions, behavior
     source = directory / "supervision-interposer.c"
