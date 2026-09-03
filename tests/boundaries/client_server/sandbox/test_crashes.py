@@ -94,6 +94,21 @@ def _spawn_detached_generation(client: McpClient) -> Generation:
     return relay_identity, worker_identity, child_identity, temporary_directory
 
 
+def _wait_for_generation_cleanup(
+    generation: Generation,
+    timeout: float,
+    additional: tuple[DarwinProcessIdentity, ...] = (),
+) -> list[int]:
+    identities = (*generation[:3], *additional)
+    deadline = time.monotonic() + timeout
+    survivors = live_darwin_processes(identities)
+    while (survivors or generation[3].exists()) and time.monotonic() < deadline:
+        survivors = live_darwin_processes(identities)
+        if survivors or generation[3].exists():
+            time.sleep(0.01)
+    return live_darwin_processes(identities)
+
+
 def _wait_for_process_cleanup(
     identities: tuple[DarwinProcessIdentity, ...],
     timeout: float,
@@ -149,6 +164,51 @@ def _close_client_streams(client: McpClient) -> None:
             stream.close()
         except BrokenPipeError:
             pass
+
+
+def test_server_crash_retires_the_worker_generation(binary: Path) -> Transcript:
+    # The host-side sandbox manager must treat loss of the server as retirement
+    # of the entire worker generation. A detached child must not survive merely
+    # because the server received an uncatchable signal before it could run its
+    # normal shutdown path.
+    client = McpClient(binary, ("serve",))
+    generation: Generation | None = None
+    manager_identity: DarwinProcessIdentity | None = None
+    try:
+        client._initialize_and_list_tools()
+        generation = _spawn_detached_generation(client)
+        manager_identity = capture_darwin_process_identity(
+            _manager_pid(client.process.pid)
+        )
+
+        client.process.kill()
+        returncode = client.process.wait(timeout=TIMEOUT)
+        survivors = _wait_for_generation_cleanup(
+            generation,
+            timeout=5,
+            additional=(manager_identity,),
+        )
+
+        assert returncode == -signal.SIGKILL, returncode
+        assert survivors == [], f"worker-generation processes survived: {survivors}"
+        assert not generation[3].exists(), (
+            f"worker temporary directory survived server crash: {generation[3]}"
+        )
+        client.transcript.append(
+            {
+                "server_signal": "SIGKILL",
+                "server_returncode": returncode,
+            }
+        )
+        return client.transcript
+    finally:
+        stop_client(client)
+        if generation is not None:
+            kill_darwin_processes(generation[:3])
+            shutil.rmtree(generation[3], ignore_errors=True)
+        if manager_identity is not None:
+            kill_darwin_processes((manager_identity,))
+        _close_client_streams(client)
 
 
 def test_manager_crash_retires_the_worker_generation(binary: Path) -> Transcript:

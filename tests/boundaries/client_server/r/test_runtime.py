@@ -13,6 +13,23 @@ from support.suites import run_this_suite
 PLATFORMS = {"darwin"}
 
 
+def test_default_sandbox_supports_r_core_detection(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    # fmt: r
+    r = code(r"""
+        cores <- parallel::detectCores()
+        stopifnot(
+          length(cores) == 1L,
+          !is.na(cores),
+          cores >= 1L
+        )
+        writeLines("R core detection available")
+        """)
+    client.send(r=r)
+    return client._finish()
+
+
 def test_applies_complete_expressions_before_incomplete_source(
     binary: Path,
 ) -> Transcript:
