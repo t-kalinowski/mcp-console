@@ -2,6 +2,7 @@
 
 import os
 import re
+import select
 import shutil
 import signal
 import subprocess
@@ -25,6 +26,8 @@ from support.suites import run_this_suite
 
 PLATFORMS = {"darwin"}
 TIMEOUT = 10
+# Python's select module omits Darwin's deprecated process-reaping flag.
+_KQ_NOTE_REAP = 0x10000000
 Generation = tuple[
     DarwinProcessIdentity,
     DarwinProcessIdentity,
@@ -94,21 +97,6 @@ def _spawn_detached_generation(client: McpClient) -> Generation:
     return relay_identity, worker_identity, child_identity, temporary_directory
 
 
-def _wait_for_generation_cleanup(
-    generation: Generation,
-    timeout: float,
-    additional: tuple[DarwinProcessIdentity, ...] = (),
-) -> list[int]:
-    identities = (*generation[:3], *additional)
-    deadline = time.monotonic() + timeout
-    survivors = live_darwin_processes(identities)
-    while (survivors or generation[3].exists()) and time.monotonic() < deadline:
-        survivors = live_darwin_processes(identities)
-        if survivors or generation[3].exists():
-            time.sleep(0.01)
-    return live_darwin_processes(identities)
-
-
 def _wait_for_process_cleanup(
     identities: tuple[DarwinProcessIdentity, ...],
     timeout: float,
@@ -119,6 +107,26 @@ def _wait_for_process_cleanup(
         time.sleep(0.01)
         survivors = live_darwin_processes(identities)
     return survivors
+
+
+def _wait_for_process_reaping(
+    process_events: "select.kqueue",
+    identities: tuple[DarwinProcessIdentity, ...],
+    timeout: float,
+) -> None:
+    watched = {identity[0] for identity in identities}
+    pending = watched.copy()
+    deadline = time.monotonic() + timeout
+    while pending:
+        remaining = deadline - time.monotonic()
+        assert remaining > 0, f"processes were not reaped: {sorted(pending)}"
+        events = process_events.control(None, len(watched), remaining)
+        assert events, f"processes were not reaped: {sorted(pending)}"
+        for event in events:
+            assert event.ident in watched, event
+            assert event.filter == select.KQ_FILTER_PROC, event
+            if event.fflags & _KQ_NOTE_REAP:
+                pending.remove(event.ident)
 
 
 def _wait_for_generation_failure(client: McpClient) -> None:
@@ -174,23 +182,49 @@ def test_server_crash_retires_the_worker_generation(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     generation: Generation | None = None
     manager_identity: DarwinProcessIdentity | None = None
+    manager_exit = select.kqueue()
+    generation_reaping = select.kqueue()
     try:
         client._initialize_and_list_tools()
         generation = _spawn_detached_generation(client)
         manager_identity = capture_darwin_process_identity(
             _manager_pid(client.process.pid)
         )
+        exit_watch = select.kevent(
+            manager_identity[0],
+            filter=select.KQ_FILTER_PROC,
+            flags=select.KQ_EV_ADD | select.KQ_EV_CLEAR,
+            fflags=select.KQ_NOTE_EXIT,
+        )
+        assert manager_exit.control([exit_watch], 0, 0) == []
+        reap_watches = [
+            select.kevent(
+                identity[0],
+                filter=select.KQ_FILTER_PROC,
+                flags=select.KQ_EV_ADD | select.KQ_EV_CLEAR,
+                fflags=select.KQ_NOTE_EXIT | _KQ_NOTE_REAP,
+            )
+            for identity in generation[:3]
+        ]
+        assert generation_reaping.control(reap_watches, 0, 0) == []
+        assert live_darwin_processes(generation[:3]) == [
+            identity[0] for identity in generation[:3]
+        ], "worker generation changed while registering reap watches"
 
         client.process.kill()
         returncode = client.process.wait(timeout=TIMEOUT)
-        survivors = _wait_for_generation_cleanup(
-            generation,
-            timeout=5,
-            additional=(manager_identity,),
-        )
+        events = manager_exit.control(None, 1, TIMEOUT)
+        assert len(events) == 1, "sandbox manager did not exit after server crash"
+        event = events[0]
+        assert event.ident == manager_identity[0], event
+        assert event.filter == select.KQ_FILTER_PROC, event
+        assert event.fflags & select.KQ_NOTE_EXIT, event
+        # The manager treats zombies as stopped, but their new parent may reap
+        # them just after manager exit. The pre-registered process watches make
+        # that final transition observable without racing a libproc sample.
+        _wait_for_process_reaping(generation_reaping, generation[:3], TIMEOUT)
 
         assert returncode == -signal.SIGKILL, returncode
-        assert survivors == [], f"worker-generation processes survived: {survivors}"
         assert not generation[3].exists(), (
             f"worker temporary directory survived server crash: {generation[3]}"
         )
@@ -209,6 +243,8 @@ def test_server_crash_retires_the_worker_generation(binary: Path) -> Transcript:
         if manager_identity is not None:
             kill_darwin_processes((manager_identity,))
         _close_client_streams(client)
+        manager_exit.close()
+        generation_reaping.close()
 
 
 def test_manager_crash_retires_the_worker_generation(binary: Path) -> Transcript:

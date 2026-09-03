@@ -11,8 +11,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from support.client import McpClient
 from support.r import r_test_environment
 from support.records import Transcript
+from support.resolvers import ir_cache_directory
 from support.suites import run_this_suite
-
 
 PLATFORMS = {"darwin"}
 REQUIRED_COMMANDS = {"ir", "quarto"}
@@ -32,6 +32,7 @@ def test_renders_generated_document(binary: Path) -> Transcript:
         workspace = Path(temporary_directory)
         environment, _ = r_test_environment()
         environment.pop("RETICULATE_PYTHON", None)
+        ir_cache = ir_cache_directory(environment)
         client = McpClient(
             binary,
             ("serve",),
@@ -72,7 +73,16 @@ def test_renders_generated_document(binary: Path) -> Transcript:
         assert "python-version:" not in document_text
         assert "  python-packages:" in document_text
         assert f"    root.dir: {workspace.resolve()}" in document_text
-        rendering = subprocess.run(
+        render_environment = environment.copy()
+        render_environment.pop("RETICULATE_UV", None)
+        for name in tuple(render_environment):
+            if name.startswith("UV_"):
+                del render_environment[name]
+        render_environment["IR_CACHE_DIR"] = ir_cache
+        render_environment["XDG_CONFIG_HOME"] = str(workspace / ".config")
+        # Dependency resolution runs outside the network-denied sandbox. Prime
+        # the exact Quarto environment, then exercise rendering inside it.
+        prewarm = subprocess.run(
             [
                 "ir",
                 "render",
@@ -80,9 +90,42 @@ def test_renders_generated_document(binary: Path) -> Transcript:
                 "--to",
                 "html",
                 "--output",
-                "transcript.html",
+                "prewarm.html",
+                "--no-execute",
+                "--quiet",
             ],
             cwd=session,
+            env=render_environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert prewarm.returncode == 0, {
+            "stdout": prewarm.stdout,
+            "stderr": prewarm.stderr,
+            "document": document.read_text(encoding="utf-8"),
+        }
+
+        render_script = r"""
+set -eu
+cp "$1" "$TMPDIR/transcript.qmd"
+cd "$TMPDIR"
+export HOME="$TMPDIR"
+exec ir render transcript.qmd --to html --output - --quiet
+""".lstrip()
+        rendering = subprocess.run(
+            [
+                binary,
+                "sandbox",
+                "--",
+                "/bin/sh",
+                "-c",
+                render_script,
+                "mcp-console-quarto-render",
+                document,
+            ],
+            cwd=session,
+            env=render_environment,
             check=False,
             capture_output=True,
             text=True,
@@ -92,7 +135,7 @@ def test_renders_generated_document(binary: Path) -> Transcript:
             "stderr": rendering.stderr,
             "document": document.read_text(encoding="utf-8"),
         }
-        rendered = (session / "transcript.html").read_text(encoding="utf-8")
+        rendered = rendering.stdout
         rendered_text = RenderedText()
         rendered_text.feed(rendered)
         visible_text = "".join(rendered_text.parts)
@@ -106,7 +149,7 @@ def test_renders_generated_document(binary: Path) -> Transcript:
         transcript.append(
             {
                 "quarto document": {
-                    "executed client-authored R and Python cells through `ir`": True,
+                    "executed client-authored R and Python cells through `ir` inside the sandbox": True,
                     "selected Python through reticulate defaults": True,
                     "omitted recorded runtime results": True,
                     "kept Markdown-looking source inside a code block": True,
