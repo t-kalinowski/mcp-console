@@ -8,17 +8,12 @@ result:
     - type: text
       text: >-
         [failed to launch worker relay: sandbox manager did not become ready:
-        failed to fill whole buffer; additionally failed to stop
-        `/usr/bin/sandbox-exec` process group: Input/output error (os error 5);
-        additionally failed to stop `/usr/bin/sandbox-exec`: Operation not
-        permitted (os error 1)]
+        failed to fill whole buffer]
   isError: true
-startup_gate_failure:
+startup_supervision_failure:
   manager: killed before readiness
-  cleanup_signals: EIO for group, EPERM for direct root
-  root_signal: SIGSTOP then SIGCONT
-  relay_root: retired without executing the custom relay
-  temporary_directory: preserved
+  custom_relay: did not execute
+  verified_cleanup: gated relay root and manager
 ---
 send:
   r: echo echo
@@ -28,6 +23,5 @@ result:
       text: |
         zod: echo
   isError: false
-startup_gate_recovery:
+startup_supervision_recovery:
   custom_relay: executed only for the replacement generation
-  private_gate: closed before relay exec

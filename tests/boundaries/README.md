@@ -25,6 +25,9 @@ Private-boundary tests cover only the architectural seam they observe and do not
 Security and liveness cases may add causal or process assertions for facts a snapshot cannot represent.
 Do not test exact internal sequencing unless it is itself an observable contract.
 
+The direct CLI sandbox cases own argument and standard-stream fidelity, job control, signal and exit status, security policy, and manager-owned retirement.
+The public MCP sandbox cases are limited to a launch-path descriptor matrix and integration checks for startup gating, supervisor loss, restart, and shutdown.
+
 Each `test_` function in a suite is a transcript case.
 The runner passes the built binary path to each case.
 Each case returns a `Transcript`: an ordered list of transcript entries.

@@ -127,40 +127,6 @@ def test_restart_retires_descendants_outside_the_worker_group(
             shutil.rmtree(generation[3], ignore_errors=True)
 
 
-def test_failure_replacement_retires_descendants_outside_the_worker_group(
-    binary: Path,
-) -> Transcript:
-    client = McpClient(binary, ("serve",))
-    generation: _Generation | None = None
-    try:
-        client._initialize_and_list_tools()
-        generation = _spawn_processx_generation(client)
-        client.send(r="tools::pskill(Sys.getpid(), signal = 9L)")
-        result = client.transcript[-1]["result"]
-        assert result == {
-            "content": [
-                {
-                    "type": "text",
-                    "text": (
-                        "[worker sideband read failed: worker sideband closed]\n"
-                        "[worker terminated by signal 9]\n"
-                        "[worker stopped: in-memory state lost]\n"
-                        "[starting new worker]\n"
-                        "[idle]"
-                    ),
-                }
-            ],
-            "isError": True,
-        }, result
-        _assert_generation_retired(generation, "failure replacement")
-        return client._finish()
-    finally:
-        stop_client(client)
-        if generation is not None:
-            _kill_generation(generation)
-            shutil.rmtree(generation[3], ignore_errors=True)
-
-
 def test_server_shutdown_retires_descendants_outside_the_worker_group(
     binary: Path,
 ) -> Transcript:

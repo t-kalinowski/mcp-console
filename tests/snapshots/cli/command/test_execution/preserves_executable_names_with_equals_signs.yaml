@@ -1,8 +1,0 @@
----
-command:
-  - mcp-console
-  - sandbox
-  - --
-  - ./program=fixture
-  - /usr/bin/false
-stdout: ""

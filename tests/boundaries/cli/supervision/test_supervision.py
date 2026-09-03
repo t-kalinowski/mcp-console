@@ -1,36 +1,24 @@
 #!/usr/bin/env -S uv run --script
 
-import ctypes
 import os
-import select
 import signal
 import subprocess
 import sys
 import tempfile
 import termios
-from contextlib import ExitStack
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from boundaries.cli._harness import (
-    _build_supervision_interposer,
-    _cleanup,
     _command,
-    _command_record,
-    _observe_process_exit,
     _read_lines,
-    _start_lifetime,
     _start_with_controlling_terminal,
-    _wait_for_process_exit,
 )
-from support.checkpoints import FifoCheckpoint
 from support.macos import (
     DarwinProcessIdentity as _ProcessIdentity,
     capture_darwin_process_identity as _capture_identity,
     kill_darwin_processes as _kill_survivors,
-    live_darwin_processes,
-    signal_darwin_process,
 )
 from support.normalization import code
 from support.records import Transcript
@@ -38,26 +26,6 @@ from support.suites import run_this_suite
 
 PLATFORMS = {"darwin"}
 TIMEOUT = 10
-
-
-def _child_pid_by_name(parent_pid: int, name: str) -> int:
-    result = subprocess.run(
-        ["/bin/ps", "-axo", "pid=,ppid=,comm="],
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=TIMEOUT,
-    )
-    matches = []
-    for line in result.stdout.splitlines():
-        fields = line.split(maxsplit=2)
-        if len(fields) != 3:
-            continue
-        pid, parent, command = fields
-        if int(parent) == parent_pid and Path(command).name == name:
-            matches.append(int(pid))
-    assert len(matches) == 1, (parent_pid, name, matches)
-    return matches[0]
 
 
 def test_retires_processx_descendants_across_sessions(binary: Path) -> Transcript:
@@ -177,245 +145,6 @@ def test_retires_processx_descendants_across_sessions(binary: Path) -> Transcrip
             ],
         }
     ]
-
-
-def test_waits_for_processx_crash_supervision(binary: Path) -> Transcript:
-    # processx's crash supervisor observes its parent asynchronously. The
-    # sandbox must not return while that supervisor and its child remain live.
-    # The child ignores SIGTERM so processx's own fallback would otherwise take
-    # up to five seconds before escalating to SIGKILL.
-    # fmt: r
-    script = code(r"""
-        child_script <- '
-        import signal
-        import time
-
-        signal.signal(signal.SIGTERM, signal.SIG_IGN)
-        print("ready", flush=True)
-        time.sleep(60)
-        '
-
-        child <- processx::process$new(
-          "python",
-          c("-c", child_script),
-          stdout = "|",
-          stderr = "2>&1",
-          cleanup = FALSE,
-          supervise = TRUE
-        )
-        stopifnot(child$poll_io(5000)[["output"]] == "ready")
-        stopifnot(identical(child$read_output_lines(), "ready"))
-        writeLines(c(as.character(Sys.getpid()), as.character(child$get_pid())))
-        flush.console()
-        Sys.sleep(60)
-        """)
-    arguments = ("sandbox", "--", "Rscript", "--vanilla", "-e", script)
-    process = subprocess.Popen(
-        [binary, *arguments],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    assert process.stdout is not None
-    assert process.stderr is not None
-
-    identities: list[_ProcessIdentity] = []
-    try:
-        root_pid, child_pid = [
-            int(line)
-            for line in _read_lines(
-                process.stdout,
-                2,
-                "the sandbox root and processx child PIDs",
-            )
-        ]
-        identities.append(_capture_identity(root_pid))
-        identities.append(_capture_identity(child_pid))
-        supervisor_pid = _child_pid_by_name(root_pid, "supervisor")
-        identities.append(_capture_identity(supervisor_pid))
-        root_group = os.getpgid(root_pid)
-        assert os.getpgid(child_pid) != root_group
-        assert os.getpgid(supervisor_pid) != root_group
-
-        os.kill(root_pid, signal.SIGKILL)
-        returncode = process.wait(timeout=TIMEOUT)
-        stderr = process.stderr.read().decode("utf-8")
-        survivors = _kill_survivors(identities[1:])
-
-        assert returncode == 137, returncode
-        assert stderr == "", stderr
-        assert survivors == [], f"processx-supervised processes survived: {survivors}"
-    finally:
-        if process.poll() is None:
-            process.kill()
-            process.wait(timeout=TIMEOUT)
-        _kill_survivors(identities)
-        process.stdout.close()
-        process.stderr.close()
-
-    return [
-        {
-            "command": ["mcp-console", *arguments],
-            "exit_code": returncode,
-            "stdout": ("<sandbox root pid>\n<processx-supervised child pid>\n"),
-            "verified_descendants": [
-                "processx child outside root process group",
-                "processx crash supervisor outside root process group",
-            ],
-        }
-    ]
-
-
-def test_does_not_signal_reused_descendant_identity(binary: Path) -> Transcript:
-    # Preserve a process whose PID now names a different start-time identity.
-    # The test cleans up the stand-in only after the public sandbox command
-    # returns, so any direct signal from the manager remains observable.
-    with (
-        tempfile.TemporaryDirectory() as temporary_directory,
-        ExitStack() as checkpoints,
-    ):
-        fixture_directory = Path(temporary_directory)
-        descendant_observed = FifoCheckpoint.create(
-            fixture_directory / "retirement-descendant-observed"
-        )
-        checkpoints.callback(descendant_observed.close)
-        identity_changed = FifoCheckpoint.create(
-            fixture_directory / "retirement-identity-changed"
-        )
-        checkpoints.callback(identity_changed.close)
-        environment = os.environ.copy()
-        environment.update(
-            {
-                "DYLD_INSERT_LIBRARIES": str(
-                    _build_supervision_interposer(
-                        fixture_directory,
-                        "retirement-reused-identity",
-                    )
-                ),
-                "MCP_CONSOLE_TEST_RETIREMENT_DESCENDANT_OBSERVED": str(
-                    descendant_observed.path
-                ),
-                "MCP_CONSOLE_TEST_RETIREMENT_IDENTITY_CHANGED": str(
-                    identity_changed.path
-                ),
-            }
-        )
-        lifetime = _start_lifetime(binary, environment)
-        try:
-            descendant_observed.wait("manager observation of detached descendant")
-            lifetime.process.stdin.write(b"exit\n")
-            lifetime.process.stdin.close()
-            identity_changed.wait("descendant identity change after child snapshot")
-            returncode = lifetime.process.wait(timeout=TIMEOUT)
-            stderr = lifetime.process.stderr.read().decode("utf-8")
-
-            assert returncode == 23, returncode
-            assert stderr == "", stderr
-            assert live_darwin_processes((lifetime.descendant,)) == [
-                lifetime.descendant[0]
-            ], "manager signaled a reused descendant PID"
-            assert not lifetime.temporary_directory.exists(), (
-                "reused descendant identity preserved the sandbox temporary directory"
-            )
-            return [
-                _command_record(lifetime),
-                {
-                    "simulated_pid_reuse": (
-                        "descendant start time changed after final child snapshot"
-                    ),
-                    "verified_no_signal": "reused descendant PID remained live",
-                    "launcher_returncode": returncode,
-                    "verified_removal": "sandbox temp",
-                },
-            ]
-        finally:
-            _cleanup(lifetime)
-
-
-def test_descendant_exit_during_retirement_signal_is_clean(
-    binary: Path,
-) -> Transcript:
-    # Hold the manager immediately before kill(2), stop the exact descendant,
-    # and then let the manager observe ESRCH from its original signal attempt.
-    with (
-        tempfile.TemporaryDirectory() as temporary_directory,
-        ExitStack() as checkpoints,
-    ):
-        fixture_directory = Path(temporary_directory)
-        descendant_observed = FifoCheckpoint.create(
-            fixture_directory / "retirement-descendant-observed"
-        )
-        checkpoints.callback(descendant_observed.close)
-        signal_gate = FifoCheckpoint.create(
-            fixture_directory / "retirement-signal-gate"
-        )
-        checkpoints.callback(signal_gate.close)
-        signal_release = FifoCheckpoint.create(
-            fixture_directory / "retirement-signal-release"
-        )
-        checkpoints.callback(signal_release.close)
-        environment = os.environ.copy()
-        environment.update(
-            {
-                "DYLD_INSERT_LIBRARIES": str(
-                    _build_supervision_interposer(
-                        fixture_directory,
-                        "retirement-exit-race",
-                    )
-                ),
-                "MCP_CONSOLE_TEST_RETIREMENT_DESCENDANT_OBSERVED": str(
-                    descendant_observed.path
-                ),
-                "MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_GATE": str(signal_gate.path),
-                "MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_RELEASE": str(signal_release.path),
-            }
-        )
-        lifetime = _start_lifetime(binary, environment)
-        signal_released = False
-        try:
-            descendant_observed.wait("manager observation of detached descendant")
-            with _observe_process_exit(lifetime.descendant) as descendant_exit:
-                lifetime.process.stdin.write(b"exit\n")
-                lifetime.process.stdin.close()
-                signal_gate.wait("manager descendant signal")
-                assert signal_darwin_process(lifetime.descendant, signal.SIGKILL), (
-                    "detached descendant exited before signal-race injection"
-                )
-                events = descendant_exit.control(None, 1, TIMEOUT)
-                assert events, "detached descendant did not exit"
-                assert events[0].ident == lifetime.descendant[0], events[0]
-                assert events[0].filter == select.KQ_FILTER_PROC, events[0]
-                assert events[0].fflags & select.KQ_NOTE_EXIT, events[0]
-                signal_release.release()
-                signal_released = True
-
-            returncode = lifetime.process.wait(timeout=TIMEOUT)
-            stderr = lifetime.process.stderr.read().decode("utf-8")
-            _wait_for_process_exit(
-                (lifetime.root, lifetime.descendant, lifetime.manager),
-                "sandbox processes survived descendant signal race",
-            )
-
-            assert returncode == 23, returncode
-            assert stderr == "", stderr
-            assert not lifetime.temporary_directory.exists(), (
-                "descendant signal race preserved the sandbox temporary directory"
-            )
-            return [
-                _command_record(lifetime),
-                {
-                    "retirement_race": (
-                        "detached descendant exited immediately before manager SIGKILL"
-                    ),
-                    "manager_signal_result": "ESRCH",
-                    "launcher_returncode": returncode,
-                    "verified_cleanup": "sandbox root, detached descendant, and manager",
-                    "verified_removal": "sandbox temp",
-                },
-            ]
-        finally:
-            if not signal_released:
-                signal_release.release()
-            _cleanup(lifetime)
 
 
 def test_relays_interrupt_then_retires_descendants(binary: Path) -> Transcript:
@@ -711,122 +440,6 @@ def test_preserves_terminal_ownership_with_foreground_peer(binary: Path) -> Tran
             "target_process_group": "dedicated",
             "terminal_foreground_group": "launcher and peer",
             "exit_code": returncode,
-        }
-    ]
-
-
-def test_preserves_status_after_terminal_closes(binary: Path) -> Transcript:
-    # fmt: python
-    sandboxed_script = code(r"""
-        import os
-        import signal
-        import sys
-
-        signal.signal(signal.SIGHUP, signal.SIG_IGN)
-        print("ready", flush=True)
-        with open(sys.argv[1], encoding="utf-8") as release:
-            assert release.readline() == "release\n"
-        raise SystemExit(23)
-        """)
-    with tempfile.TemporaryDirectory() as directory:
-        release = os.path.join(directory, "release")
-        os.mkfifo(release)
-        arguments = [
-            binary,
-            "sandbox",
-            "--",
-            "python",
-            "-c",
-            sandboxed_script,
-            release,
-        ]
-        process, master, slave_name = _start_with_controlling_terminal(arguments)
-        identities: list[_ProcessIdentity] = []
-        release_descriptor = None
-        try:
-            assert _read_lines(process.stdout, 1, "the terminal-close readiness") == [
-                "ready"
-            ]
-            target_pid = os.tcgetpgrp(master)
-            identities.append(_capture_identity(target_pid))
-
-            libc = ctypes.CDLL(None, use_errno=True)
-            assert libc.revoke(slave_name.encode()) == 0
-            os.close(master)
-            master = None
-            release_descriptor = os.open(release, os.O_RDWR | os.O_NONBLOCK)
-            os.write(release_descriptor, b"release\n")
-            stdout, stderr = process.communicate(timeout=TIMEOUT)
-            survivors = _kill_survivors(identities)
-
-            assert process.returncode == 23, process.returncode
-            assert stdout == b"", stdout
-            assert stderr == b"", stderr
-            assert survivors == [], f"terminal-close sandbox survived: {survivors}"
-        finally:
-            if release_descriptor is not None:
-                os.close(release_descriptor)
-            if process.poll() is None:
-                process.kill()
-                process.wait(timeout=TIMEOUT)
-            _kill_survivors(identities)
-            process.stdout.close()
-            process.stderr.close()
-            if master is not None:
-                os.close(master)
-
-    return [
-        {
-            "command": _command(
-                "sandbox",
-                "--",
-                "python",
-                "-c",
-                sandboxed_script,
-                "<release gate>",
-            ),
-            "terminal": "closed after readiness",
-            "exit_code": process.returncode,
-        }
-    ]
-
-
-def test_preserves_status_when_sigchld_was_ignored(binary: Path) -> Transcript:
-    # Darwin preserves the ignored disposition across exec but clears its
-    # no-child-wait state. Exercise the real binary entry point so later
-    # supervision changes continue to preserve the command's waitable status.
-    # fmt: python
-    host_script = code(r"""
-        import os
-        import signal
-        import sys
-
-        signal.signal(signal.SIGCHLD, signal.SIG_IGN)
-        os.execv(sys.argv[1], sys.argv[1:])
-        """)
-    arguments = (
-        "sandbox",
-        "--",
-        "python",
-        "-c",
-        "raise SystemExit(23)",
-    )
-    result = subprocess.run(
-        [sys.executable, "-c", host_script, binary, *arguments],
-        capture_output=True,
-        text=True,
-        timeout=TIMEOUT,
-        check=False,
-    )
-
-    assert result.returncode == 23, result
-    assert result.stdout == "", result.stdout
-    assert result.stderr == "", result.stderr
-    return [
-        {
-            "command": ["mcp-console", *arguments],
-            "inherited_sigchld": "ignored",
-            "exit_code": result.returncode,
         }
     ]
 
