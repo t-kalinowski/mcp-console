@@ -30,14 +30,14 @@ The public MCP sandbox cases are limited to a launch-path descriptor matrix and 
 
 Map each non-generic sandbox allowance to the real workflow that requires it and the test that owns that workflow:
 
-| Sandbox allowance           | Motivating workflow          | Owning test                                                                                |
-| --------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------ |
-| `hw.logicalcpu`             | `parallel::detectCores()`    | `client_server/r/test_runtime::default_sandbox_supports_r_core_detection`                  |
-| `kern.sysv.semmns`          | joblib `loky`                | `client_server/python/test_environment::runs_joblib_process_backend`                       |
-| POSIX semaphores            | Python spawn multiprocessing | `client_server/python/test_environment::runs_spawn_process_after_live_resolution`          |
-| PTYs and `kern.boottime`    | `processx`                   | `cli/command/test_execution::allows_processx_pty_processes` and MCP process-lifetime cases |
-| Quarto device/sysctl access | Execute generated document   | `client_server/recording/test_quarto::renders_generated_document`                          |
-| `__KMP_REGISTERED_LIB_*`    | PyTorch/libomp               | Add a PyTorch workflow test, or remove the allowance                                       |
+| Sandbox allowance           | Motivating workflow                               | Owning test                                                                                |
+| --------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `hw.logicalcpu`             | `parallel::detectCores()`                         | `client_server/r/test_runtime::default_sandbox_supports_r_core_detection`                  |
+| `kern.sysv.semmns`          | joblib `loky`                                     | `client_server/python/test_environment::runs_joblib_process_backend`                       |
+| POSIX semaphores            | Python spawn multiprocessing                      | `client_server/python/test_environment::runs_spawn_process_after_live_resolution`          |
+| PTYs and `kern.boottime`    | `processx`                                        | `cli/command/test_execution::allows_processx_pty_processes` and MCP process-lifetime cases |
+| Quarto device/sysctl access | Render generated `ir` document inside the sandbox | `client_server/recording/test_quarto::renders_generated_document`                          |
+| `__KMP_REGISTERED_LIB_*`    | PyTorch/libomp                                    | Add a PyTorch workflow test, or remove the allowance                                       |
 
 When reviewing deletion candidates, separate tests may replace a combined test only when the interaction between those behaviors is not itself a plausible failure mode.
 
@@ -87,7 +87,7 @@ The Zod recording case projects `events.jsonl` and the literal generated `transc
 The live-recording case uses causal fixture gates to verify that each Markdown snapshot retains the prior bytes as an exact prefix while calls complete, artifacts arrive, and later polls collect them; the server regenerates the Quarto document for source-bearing calls and leaves it unchanged for results, artifacts, and polls.
 The Markdown suite's real mixed-language recording case snapshots the public stdio transcript and literal generated documents as sibling `.yaml`, `.md`, and `.qmd` files.
 It exercises the built-in R, Python, and SQL runtimes in one session and verifies that the recorded R image artifact is byte-identical to a reference plot.
-The suite also verifies both documents with Yamark, and the optional Quarto suite executes generated R and Python cells through `ir` when `ir` and `quarto` are installed.
+The suite also verifies both documents with Yamark, and the optional Quarto suite executes generated R and Python cells through `ir` inside the standalone sandbox when `ir` and `quarto` are installed.
 
 ## Test support map
 
