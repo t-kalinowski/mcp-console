@@ -1,0 +1,13 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  r: emit stdout
+result:
+  content:
+    - type: text
+      text: |
+        zod stdout 👩🏽‍💻
+        <large output>
+  isError: false
+...

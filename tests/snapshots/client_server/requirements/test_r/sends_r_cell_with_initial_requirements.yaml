@@ -1,0 +1,19 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  r: |
+    stopifnot(
+      identical(dirname(find.package("praise")), .libPaths()[[1L]])
+    )
+    praise::praise("ready")
+  requirements:
+    r:
+      - praise
+result:
+  content:
+    - type: text
+      text: |
+        [1] "ready"
+  isError: false
+...

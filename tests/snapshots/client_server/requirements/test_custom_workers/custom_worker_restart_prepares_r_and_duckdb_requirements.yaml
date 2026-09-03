@@ -1,0 +1,26 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  control: restart
+  requirements:
+    r:
+      - praise
+    duckdb:
+      - json
+result:
+  content:
+    - type: text
+      text: |-
+        [starting new worker]
+        [idle]
+  isError: false
+---
+send:
+  r: report managed R requirement
+result:
+  content:
+    - type: text
+      text: |
+        zod R requirement: prepared=true
+  isError: false

@@ -1,0 +1,65 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  python: |
+    answer = 41
+
+
+    def fail():
+        raise ValueError("boom")
+
+
+    fail()
+result:
+  content:
+    - type: text
+      text: |
+        Traceback (most recent call last):
+          File "<string>", line 469, in _mcp_console_eval_cell
+          File "<mcp-console:python:e1>", line 8, in <module>
+          File "<mcp-console:python:e1>", line 5, in fail
+        ValueError: boom
+  isError: false
+---
+send:
+  python: |
+    compile_partial = 9
+    await missing()
+result:
+  content:
+    - type: text
+      text: |
+        Traceback (most recent call last):
+          File "<string>", line 461, in _mcp_console_eval_cell
+          File "<mcp-console:python:e2>", line 2
+        SyntaxError: 'await' outside function
+  isError: false
+---
+send:
+  python: '"compile_partial" in globals()'
+result:
+  content:
+    - type: text
+      text: |
+        False
+  isError: false
+---
+send:
+  python: "nul_state = 42\0"
+result:
+  content:
+    - type: text
+      text: |
+        SyntaxError: source code string cannot contain null bytes
+  isError: false
+---
+send:
+  python: answer
+result:
+  content:
+    - type: text
+      text: |
+        41
+  isError: false
+...

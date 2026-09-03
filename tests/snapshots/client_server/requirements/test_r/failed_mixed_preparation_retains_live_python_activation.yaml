@@ -1,0 +1,49 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  r: |
+    invisible(reticulate::py_config())
+    cat(.libPaths()[[1L]])
+result:
+  content:
+    - type: text
+      text: <initial managed R library>
+  isError: false
+---
+send:
+  requirements:
+    r:
+      - mcpconsolepreparationfixture
+    python:
+      - py-yaml12
+result:
+  content:
+    - type: text
+      text: >-
+        resolved R library was not added to .libPaths(); further requirement
+        changes are unavailable until session restart
+  isError: true
+---
+send:
+  control: restart
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: false
+---
+send:
+  python: |
+    import yaml12
+
+    yaml12.format_yaml({"answer": 42})
+result:
+  content:
+    - type: text
+      text: |
+        'answer: 42'
+  isError: false

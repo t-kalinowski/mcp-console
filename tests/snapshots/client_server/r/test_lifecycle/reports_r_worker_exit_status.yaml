@@ -1,0 +1,26 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  r: |
+    quit(save = "no", status = 33L, runLast = FALSE)
+result:
+  content:
+    - type: text
+      text: |-
+        [worker sideband read failed: worker sideband closed]
+        [worker exited with status 33]
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: true
+---
+send:
+  r: 1 + 1
+result:
+  content:
+    - type: text
+      text: |
+        [1] 2
+  isError: false
+...

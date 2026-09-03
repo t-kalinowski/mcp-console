@@ -1,0 +1,43 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  stdin: |
+    cold
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false
+---
+send:
+  r: input without request
+result:
+  content:
+    - type: text
+      text: |
+        zod stdin: cold
+  isError: false
+---
+send:
+  stdin: |
+    idle
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false
+---
+send:
+  r: input without request
+result:
+  content:
+    - type: text
+      text: |
+        zod stdin: idle
+  isError: false
+...

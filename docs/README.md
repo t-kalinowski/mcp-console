@@ -22,7 +22,7 @@ Source and public acceptance tests remain the final authority when prose disagre
 
 ## Test contributors
 
-- The [transcript test guide](../tests/transcripts/README.md) is the source of truth for transcript boundaries, selectors, normalization, and golden-snapshot updates.
+- The [boundary test guide](../tests/boundaries/README.md) is the source of truth for process boundaries, selectors, normalization, and snapshot updates.
 - [`AGENTS.md`](../AGENTS.md) contains repository-wide maintenance rules and the source and test navigation map.
 
 ## Maintainers

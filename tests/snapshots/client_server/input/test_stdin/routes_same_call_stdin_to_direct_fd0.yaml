@@ -1,0 +1,14 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  r: read fd 0 directly
+  stdin: |
+    direct café
+result:
+  content:
+    - type: text
+      text: |
+        zod fd 0: 'direct café\n'
+  isError: false
+...

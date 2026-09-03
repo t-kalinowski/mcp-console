@@ -1,0 +1,51 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  r: |
+    cat("before\n")
+    value <- readline("partial> ")
+    value
+  stdin: without newline
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running; poll with an empty send]
+  isError: false
+---
+send:
+  timeout_ms: 3000
+result:
+  content:
+    - type: text
+      text: |-
+        before
+        [input requested: "partial> "]
+        [waiting for stdin]
+  isError: false
+---
+send:
+  stdin: "\n"
+result:
+  content:
+    - type: text
+      text: |
+        [1] "without newline"
+  isError: false
+---
+send:
+  r: |
+    readline("next> ")
+  stdin: |
+    next
+result:
+  content:
+    - type: text
+      text: |
+        [input requested: "next> "]
+        [1] "next"
+  isError: false
+...

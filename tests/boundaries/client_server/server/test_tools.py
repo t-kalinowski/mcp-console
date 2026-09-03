@@ -1,0 +1,593 @@
+#!/usr/bin/env -S uv run --script
+
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from _support import McpClient, Transcript, code, run_this_suite, stop_client
+
+
+def assert_invalid_send_has_no_external_effects(binary: Path) -> None:
+    zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        fake_bin = temporary / "bin"
+        fake_bin.mkdir()
+        resolver_probe = fake_bin / "resolver-probe"
+        resolver_probe.write_text(
+            code(r"""
+                #!/bin/sh
+
+                set -eu
+                printf 'resolver started\n' >> "$MCP_CONSOLE_TEST_RESOLVER_RECORD"
+                exit 97
+                """),
+            encoding="utf-8",
+        )
+        resolver_probe.chmod(0o755)
+        (fake_bin / "ir").symlink_to(resolver_probe)
+
+        environment = os.environ.copy()
+        path = environment.get("PATH")
+        assert path is not None, "PATH is required"
+        environment["PATH"] = os.pathsep.join((str(fake_bin), path))
+        environment["RETICULATE_UV"] = str(resolver_probe)
+        resolver_record = temporary / "resolver-record"
+        worker_started = temporary / "zod-started"
+        environment["MCP_CONSOLE_TEST_RESOLVER_RECORD"] = str(resolver_record)
+        environment["MCP_CONSOLE_TEST_ZOD_STARTED"] = str(worker_started)
+
+        client = McpClient(binary, ("serve", "--worker", str(zod)), environment)
+        passed = False
+        try:
+            client._initialize_and_list_tools()
+            invalid = (
+                (
+                    {"r": "echo invalid R cell ran", "requirements": {"r": [""]}},
+                    "R requirement strings must not be empty",
+                ),
+                (
+                    {
+                        "python": "echo invalid Python cell ran",
+                        "requirements": {
+                            "python": ["example @ https://example.invalid/example.whl"]
+                        },
+                    },
+                    (
+                        "Python requirement `example @ "
+                        "https://example.invalid/example.whl` is not accepted: "
+                        "host-side managed resolution accepts named package "
+                        "requirements only"
+                    ),
+                ),
+                (
+                    {
+                        "sql": "echo invalid DuckDB cell ran",
+                        "requirements": {"duckdb": ["spatial FROM community"]},
+                    },
+                    (
+                        "DuckDB extension names must start with a lowercase ASCII "
+                        "letter and contain only lowercase ASCII letters, digits, "
+                        "and underscores"
+                    ),
+                ),
+            )
+            for arguments, expected in invalid:
+                result = client.send(**arguments)
+                assert result["isError"] is True, result
+                assert result["content"] == [{"type": "text", "text": expected}], result
+
+            assert not resolver_record.exists(), "invalid input started a host resolver"
+            assert not worker_started.exists(), "invalid input started or ran a worker"
+            client._finish()
+            passed = True
+        finally:
+            if not passed:
+                stop_client(client)
+
+
+def test_initializes_and_lists_tools(binary: Path) -> Transcript:
+    assert_limits_send_languages_from_environment(binary)
+    environment = os.environ.copy()
+    environment.pop("MCP_CONSOLE_LANGUAGES", None)
+    client = McpClient(binary, ("serve",), environment)
+    assert client.temporary_directory is not None
+    workspace = Path(client.temporary_directory.name)
+    client._initialize_and_list_tools()
+    listed_tools = client.transcript[-1]["result"]["tools"]
+    assert [tool["name"] for tool in listed_tools] == ["send"], listed_tools
+    tools = {tool["name"]: tool for tool in listed_tools}
+    send = tools["send"]
+    send_description = " ".join(send["description"].split())
+    for guidance in (
+        "Persistent R, Python, and SQL workbench",
+        "State persists across sequential calls",
+        "Reassess the language for each cell and switch whenever another language is a better fit",
+        "do not stay in one language solely because state already exists there",
+        "Use the available live bridges when switching",
+        "Send one complete `r`, `python`, or `sql` cell per call",
+        "Code-bearing calls must be sequential because only one evaluation can be active",
+        "A control-only interrupt may overlap a pending `send`",
+        "leave the primary result last",
+        "R and Python display a final visible top-level expression",
+        "SQL returns a bounded preview",
+        "Cells are not transactional",
+        "Interrupt preserves in-memory state and waits 100 milliseconds",
+        "the cell is not run if the interrupted evaluation remains active",
+        "Restart discards in-memory R, Python, DuckDB, debugger, and unread-stdin state",
+        "same-call stdin and code only at the replacement",
+        "sole interaction with the persistent console",
+        "Omit code to poll, provide stdin, interrupt, or restart",
+        "When `requirements` is available, omit code to prepare requirements alone",
+        "with a cell, requirements prepare its preconditions",
+        "`timeout_ms = 0` gives the shortest post-grace observation after interrupt",
+        "`timeout_ms` limits how long the call waits",
+        "after dispatch or attachment",
+        "Inline control, interrupt grace, restart, and explicit requirement preparation can make the complete call take longer",
+        "do not consume the cell wait timeout",
+        "does not cancel startup, dependency resolution, or evaluation",
+        "[running; poll with an empty send]",
+        "call `send` again without code or stdin",
+        "do not resubmit the cell",
+        "Send `stdin` without code to answer an active prompt or debugger",
+        "`r.name`",
+        "`py$name`",
+        "managed DuckDB SQL can query R data frames by name",
+        "`sql_connection()`",
+        "`console_sql_connection(connection)`",
+        "R or Python selects a user-owned DBI or DB-API connection",
+        "resolves ordinary CRAN packages and missing imports",
+        "Use `requirements` for explicit R references, exact Python distribution metadata, or DuckDB extensions",
+        "preparation makes dependencies available but does not import, attach, or load them",
+        "open `matplotlib.pyplot` figures return as PNG images",
+        "cannot directly access the network",
+        "write only in the worker's private temporary directory",
+        "When used, dependency resolution runs outside the sandbox",
+        "use only trusted dependencies",
+    ):
+        assert guidance in send_description, guidance
+    for tutorial in (
+        "```",
+        "ls.str()",
+        "reticulate::py_run_string",
+        'DBI::dbGetQuery(sql_connection(), "SHOW TABLES")',
+        'stdin = "sys.calls()\\n"',
+        'stdin = "c\\n"',
+        "Inspect warnings before relying on a result",
+        "coercion, overflow, dropped observations, or model convergence",
+        "200-column startup width",
+        "Responses remain ordinary text and image content",
+    ):
+        assert tutorial not in send_description, tutorial
+    r_description = " ".join(
+        send["inputSchema"]["properties"]["r"]["description"].split()
+    )
+    for guidance in (
+        "One complete R cell",
+        "persistent global state",
+        "final visible expression autoprints",
+        "Leave the primary result last",
+        "missing plain CRAN package names on demand",
+        "`loadNamespace()`",
+        "do not probe package availability or call `install.packages()`",
+        "`py$name`",
+        "With managed DuckDB active, R data frames are directly queryable by name from later SQL cells",
+        "`sql_connection()` returns the R-owned SQL connection",
+        "`console_sql_connection(connection)`",
+        "`console_sql_connection(NULL)`",
+        "Do not disconnect the managed DuckDB connection",
+        "restore a selected connection before disconnecting it",
+        "Default-device plots return as PNG images",
+        "`options(console.plot.width",
+        "Omit this field for polling or stdin-only calls",
+    ):
+        assert guidance in r_description, guidance
+    python_description = " ".join(
+        send["inputSchema"]["properties"]["python"]["description"].split()
+    )
+    for guidance in (
+        "One complete Python cell",
+        "persistent `__main__` state",
+        "final visible expression autoprints",
+        "Leave the primary result last",
+        "When dynamic resolution is available and an import is missing",
+        "resolves a PyPI distribution on demand",
+        "curated mapping for well-known import/distribution differences",
+        "distribution matches the top-level module",
+        "Use `requirements.python` when the distribution differs from the inferred name",
+        "exact registry metadata is needed",
+        "user-selected Python environment or bare runtime disables both automatic resolution and managed requirements",
+        "`r.name`",
+        "Select a user-owned DB-API connection",
+        "`console_sql_connection(None)`",
+        "bind them to an R name before querying them there",
+        "open `matplotlib.pyplot` figure returns once as a PNG image and is closed",
+        "Omit this field for polling or stdin-only calls",
+    ):
+        assert guidance in python_description, guidance
+    sql_description = " ".join(
+        send["inputSchema"]["properties"]["sql"]["description"].split()
+    )
+    for guidance in (
+        "One complete SQL cell evaluated through the active connection",
+        "managed DuckDB backend is active by default",
+        "persistent catalog",
+        "result with columns returns a bounded preview",
+        "`DBI::dbSendQuery()`",
+        "Python DB-API connection executes them through its connection or cursor protocol",
+        "commands that require the statement interface",
+        "unqualified relation name can query a data frame in R global state",
+        "DuckDB table or view with the same name takes precedence",
+        "Managed DuckDB conveniences and extension requirements apply only to the managed backend",
+        "`SHOW TABLES`",
+        "outside the worker's private temporary directory",
+        "`ATTACH 'path' AS name (READ_ONLY)`",
+        "the sandbox blocks DuckDB's default writable mode for those paths",
+        "DuckDB CLI dot commands are not supported",
+        "Omit this field for polling or stdin-only calls",
+    ):
+        assert guidance in sql_description, guidance
+    send_requirements_description = " ".join(
+        send["inputSchema"]["properties"]["requirements"]["description"].split()
+    )
+    control = send["inputSchema"]["properties"]["control"]
+    assert control["type"] == "string", control
+    assert control["enum"] == ["interrupt", "restart"], control
+    control_description = " ".join(control["description"].split())
+    for guidance in (
+        "lifecycle control alone or before compatible same-call fields",
+        "preserves in-memory state",
+        "stdin is queued",
+        "waits a short grace",
+        "the cell is not run if the interrupted evaluation remains active",
+        "When `requirements` is available, restart resolves same-call requirements before replacement",
+        "discards R, Python, DuckDB, debugger, and unread-stdin state",
+        "same-call stdin and code only to the replacement",
+    ):
+        assert guidance in control_description, guidance
+    for guidance in (
+        "Requirements alone perform standalone preparation",
+        "With one cell, they are preconditions of that cell",
+        'With `control = "restart"`, they are part of the restart transaction, with or without a cell',
+        "Requirements are not accepted with interrupt unless a cell follows",
+        "On a code-bearing call without control, preparation completes before same-call nonempty stdin is queued",
+        "Standalone preparation cannot queue nonempty stdin",
+        "failure leaves the current worker unchanged and sends neither stdin nor code",
+        "With interrupt and a following cell, signal delivery and stdin enqueue happen before requirements are validated or prepared",
+        "are not rolled back if that later work fails",
+        "Ordinary CRAN packages used by the built-in R worker need not be declared here",
+        "use `requirements.r` to stage packages ahead of evaluation",
+        "missing imports normally resolve at runtime",
+        "Use `requirements.python` to stage a distribution before the cell",
+        "SQL does not trigger package discovery",
+        "A cell is not run if explicit preparation fails or further changes require restart",
+        "Resolution runs outside the worker sandbox",
+        "Use only trusted requirements",
+    ):
+        assert guidance in send_requirements_description, guidance
+    stdin_description = " ".join(
+        send["inputSchema"]["properties"]["stdin"]["description"].split()
+    )
+    for guidance in (
+        "Input for an active read, prompt, or debugger",
+        "omit R, Python, and SQL code",
+        "Its UTF-8 encoding is queued exactly",
+        "no newline is added",
+        "trailing `\\n`",
+        "On a code-bearing call without control, available requirements are prepared before nonempty stdin is queued",
+        "Standalone preparation cannot queue nonempty stdin",
+        "After `interrupt`, nonempty stdin is queued before the 100-millisecond grace",
+        "may be consumed while the earlier operation unwinds",
+        "After `restart`, same-call stdin is sent only to the replacement",
+        "When sent with a cell, nonempty text is queued before the code is run",
+        "an already waiting interactive read may consume it before the new cell begins",
+        "[waiting for stdin]",
+        "Unread text can satisfy later reads and is discarded by restart",
+    ):
+        assert guidance in stdin_description, guidance
+    assert "When sent with requirements and a cell" not in stdin_description
+    assert "sys.calls()" not in stdin_description
+    timeout_description = " ".join(
+        send["inputSchema"]["properties"]["timeout_ms"]["description"].split()
+    )
+    for guidance in (
+        "Maximum time this call waits",
+        "does not cancel evaluation",
+        "poll with an empty `send` call",
+        "once a cell has been dispatched or the call has attached",
+        "Inline control, interrupt grace, restart, and explicit requirement preparation happen before dispatch",
+        "may make the complete call take longer",
+        "does not limit standalone preparation",
+        "Automatic R and Python import resolution are part of the running evaluation",
+        "do not resubmit the cell",
+    ):
+        assert guidance in timeout_description, guidance
+    send_schema = json.dumps(send["inputSchema"])
+    assert '"$defs"' not in send_schema, send["inputSchema"]
+    assert '"$ref"' not in send_schema, send["inputSchema"]
+
+    send_requirements = send["inputSchema"]["properties"]["requirements"]
+    assert send_requirements["type"] == ["object", "null"], send_requirements
+    assert send_requirements["additionalProperties"] is False, send_requirements
+    requirement_properties = send_requirements["properties"]
+    assert requirement_properties.keys() == {"duckdb", "r", "python"}
+    for requirement in requirement_properties.values():
+        assert requirement["type"] == "array", requirement
+        assert requirement["maxItems"] == 64, requirement
+        assert requirement["default"] == [], requirement
+        assert requirement["items"]["type"] == "string", requirement
+        assert requirement["items"]["minLength"] == 1, requirement
+    assert requirement_properties["duckdb"]["items"]["maxLength"] == 64
+    r_requirements_description = " ".join(
+        send["inputSchema"]["properties"]["requirements"]["properties"]["r"][
+            "description"
+        ].split()
+    )
+    for guidance in (
+        "stage packages ahead of evaluation",
+        "explicit supported remote `ir` reference",
+        "Automatic R discovery accepts only plain package names",
+        "Local package sources are rejected",
+    ):
+        assert guidance in r_requirements_description, guidance
+    python_requirements_description = " ".join(
+        send["inputSchema"]["properties"]["requirements"]["properties"]["python"][
+            "description"
+        ].split()
+    )
+    for guidance in (
+        "named PEP 508 registry requirements",
+        "automatic import inference needs a different distribution",
+        "a version, an extra, or an environment marker",
+        "Automatic imports infer bare distribution names only",
+        "Paths, file URLs, editable requirements, direct references, local archives, and local projects are rejected",
+        "Preparation does not import the package",
+        "nonempty user-selected `RETICULATE_PYTHON` disables automatic resolution and managed Python requirements",
+    ):
+        assert guidance in python_requirements_description, guidance
+    duckdb_description = " ".join(
+        send["inputSchema"]["properties"]["requirements"]["properties"]["duckdb"][
+            "description"
+        ].split()
+    )
+    assert (
+        "JSON and ICU are already prepared for built-in workers" in duckdb_description
+    )
+    assert "for the managed DuckDB backend" in duckdb_description
+    transcript = client._finish()
+    assert not (workspace / ".mcp-console").exists(), workspace
+    return transcript
+
+
+def assert_limits_send_languages_from_environment(binary: Path) -> None:
+    zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
+    environment = os.environ.copy()
+    environment["MCP_CONSOLE_LANGUAGES"] = "r,sql"
+    client_directory = tempfile.TemporaryDirectory()
+    worker_started = Path(client_directory.name) / "zod-started"
+    environment["MCP_CONSOLE_TEST_ZOD_STARTED"] = str(worker_started)
+    client = McpClient(
+        binary,
+        ("serve", "--worker", str(zod)),
+        environment,
+    )
+    client._initialize_and_list_tools()
+
+    tools = {tool["name"]: tool for tool in client.transcript[-1]["result"]["tools"]}
+    send_properties = tools["send"]["inputSchema"]["properties"]
+    assert send_properties.keys() == {
+        "r",
+        "sql",
+        "control",
+        "requirements",
+        "stdin",
+        "timeout_ms",
+    }
+    result = client.send(python="raise AssertionError('disabled cell ran')")
+    assert result["isError"] is True, result
+    assert result["content"] == [
+        {
+            "type": "text",
+            "text": "`python` cells are disabled by `MCP_CONSOLE_LANGUAGES`",
+        }
+    ], result
+    assert not worker_started.exists(), worker_started
+    client._finish()
+    client_directory.cleanup()
+
+
+def test_validates_send_arguments(binary: Path) -> Transcript:
+    assert_invalid_send_has_no_external_effects(binary)
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    client.send(
+        # fmt: python
+        python=code("""
+            print("hello")
+        """),
+        wait_ms=0,
+    )
+    result = client.send(
+        r="1",
+        python="1",
+        sql="SELECT 1",
+        control="restart",
+        requirements={"r": ["praise"]},
+    )
+    assert result["isError"] is True, result
+    assert result["content"][0]["text"] == (
+        "only one of `r`, `python`, or `sql` may be supplied"
+    ), result
+
+    result = client.send(control="prepare")
+    assert result["isError"] is True, result
+    assert "prepare" in result["content"][0]["text"], result
+
+    result = client.send(requirements={"r": ["tidyverse"]})
+    assert result == {
+        "content": [{"type": "text", "text": "[prepared]"}],
+        "isError": False,
+    }, result
+
+    result = client.send(stdin="", requirements={"r": ["tidyverse"]})
+    assert result == {
+        "content": [{"type": "text", "text": "[prepared]"}],
+        "isError": False,
+    }, result
+
+    result = client.send(stdin="answer\n", requirements={"r": ["tidyverse"]})
+    assert result["isError"] is True, result
+    assert result["content"][0]["text"] == (
+        "requirements-only `send` performs standalone preparation and cannot also "
+        "queue stdin"
+    ), result
+
+    result = client.send(
+        control="interrupt",
+        requirements={"r": ["tidyverse"]},
+    )
+    assert result["isError"] is True, result
+    assert result["content"][0]["text"] == (
+        '`requirements` with `control = "interrupt"` requires a code cell'
+    ), result
+
+    result = client.send(
+        control="restart",
+        requirements={"r": ["tidyverse"]},
+    )
+    assert result.get("isError") is not True, result
+
+    result = client.send(r="stop('cell was run')", requirements={})
+    assert result["isError"] is True, result
+    assert result["content"][0]["text"] == (
+        "at least one of `requirements.r`, `requirements.python`, or "
+        "`requirements.duckdb` is required"
+    ), result
+
+    result = client.send(
+        r="stop('cell was run')",
+        requirements={"r": [""]},
+    )
+    assert result["isError"] is True, result
+    assert result["content"][0]["text"] == "R requirement strings must not be empty", (
+        result
+    )
+
+    invalid_python = "example @ https://example.invalid/example.whl"
+    result = client.send(
+        r="stop('cell was run')",
+        requirements={"python": [invalid_python]},
+    )
+    assert result["isError"] is True, result
+    assert result["content"][0]["text"] == (
+        f"Python requirement `{invalid_python}` is not accepted: host-side managed "
+        "resolution accepts named package requirements only"
+    ), result
+
+    result = client.send(
+        r="stop('cell was run')",
+        requirements={"duckdb": ["spatial FROM community"]},
+    )
+    assert result["isError"] is True, result
+    assert result["content"][0]["text"] == (
+        "DuckDB extension names must start with a lowercase ASCII letter and "
+        "contain only lowercase ASCII letters, digits, and underscores"
+    ), result
+
+    client.send(r=None)
+    output = client.transcript[-1]["result"]["content"][0]["text"]
+    assert output == "\n[idle]", output
+    return client._finish()
+
+
+def test_validates_standalone_requirement_arguments(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    client.send(requirements={})
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is True
+    assert result["content"][0]["text"] == (
+        "at least one of `requirements.r`, `requirements.python`, or "
+        "`requirements.duckdb` is required"
+    )
+
+    client.send(requirements={"duckdb": ["spatial FROM community"]})
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is True
+    assert result["content"][0]["text"] == (
+        "DuckDB extension names must start with a lowercase ASCII letter and "
+        "contain only lowercase ASCII letters, digits, and underscores"
+    )
+
+    client.send(requirements={"r": [""]})
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is True
+    assert result["content"][0]["text"] == "R requirement strings must not be empty"
+
+    client.send(requirements={"r": ["cli\ndplyr"]})
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is True
+    assert result["content"][0]["text"] == (
+        "R requirement strings must not contain NUL or line breaks"
+    )
+
+    client.send(
+        control="interrupt",
+        requirements={"python": ["py-yaml12"]},
+    )
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is True
+    assert result["content"][0]["text"] == (
+        '`requirements` with `control = "interrupt"` requires a code cell'
+    )
+
+    client.send(
+        control="restart",
+        requirements={},
+    )
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is True
+    assert result["content"][0]["text"] == (
+        "at least one of `requirements.r`, `requirements.python`, or "
+        "`requirements.duckdb` is required"
+    )
+
+    client.send(
+        control="restart",
+        requirements={"r": ["cli\ndplyr"]},
+    )
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is True
+    assert result["content"][0]["text"] == (
+        "R requirement strings must not contain NUL or line breaks"
+    )
+
+    client.send(
+        control="restart",
+        requirements={"duckdb": ["spatial FROM community"]},
+    )
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is True
+    assert result["content"][0]["text"] == (
+        "DuckDB extension names must start with a lowercase ASCII letter and "
+        "contain only lowercase ASCII letters, digits, and underscores"
+    )
+    return client._finish()
+
+
+def test_rejects_interrupt_without_worker(binary: Path) -> Transcript:
+    client = McpClient(binary, ("serve",))
+    client._initialize_and_list_tools()
+    client.send(control="interrupt", timeout_ms=0)
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is True
+    assert result["content"][0]["text"] == "[worker is not running]"
+    return client._finish()
+
+
+if __name__ == "__main__":
+    run_this_suite(__file__)

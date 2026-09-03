@@ -1,0 +1,20 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+input:
+  method: tools/call
+  params:
+    name: session
+    arguments:
+      action: restart
+error:
+  code: -32602
+  message: tool not found
+---
+recording:
+  initialization and removed session tool only: absent
+  materialized by:
+    send:
+      - session_started
+      - tool_call
+      - tool_result

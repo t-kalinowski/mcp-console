@@ -1,0 +1,118 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  r: |
+    invisible(suppressMessages(base::trace(
+      "py_eval",
+      tracer = quote({
+        invisible(file.create(file.path(
+          tempdir(),
+          "python-r-interrupt-started"
+        )))
+        repeat {
+          Sys.sleep(60)
+        }
+      }),
+      print = FALSE,
+      where = asNamespace("reticulate")
+    )))
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  python: "42"
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running; poll with an empty send]
+  isError: false
+---
+send:
+  control: interrupt
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: "\n"
+  isError: false
+---
+send:
+  r: |
+    invisible(suppressMessages(base::untrace(
+      "py_eval",
+      where = asNamespace("reticulate")
+    )))
+    # Poison reticulate's cached result wrapper after MCP Console
+    # initializes its private Python evaluator. Cell results must
+    # still return through direct conversion instead of that wrapper.
+    invisible(reticulate::py_eval(
+      r"---(
+    exec(
+        "import inspect\n"
+        "inspect._mcp_original_getmro_code = inspect.getmro.__code__\n"
+        "def _mcp_interrupting_getmro(cls):\n"
+        "    getmro.__code__ = _mcp_original_getmro_code\n"
+        "    raise KeyboardInterrupt\n"
+        "inspect.getmro.__code__ = _mcp_interrupting_getmro.__code__\n"
+    )
+    )---",
+      convert = TRUE
+    ))
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  python: |
+    import inspect
+    import os
+    import time
+    from pathlib import Path
+
+    inspect.getmro.__code__ = inspect._mcp_original_getmro_code
+    python_interrupt_state = 41
+    Path(
+        os.environ["TMPDIR"],
+        "python-interrupt-started",
+    ).touch()
+    while True:
+        time.sleep(60)
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running; poll with an empty send]
+  isError: false
+---
+send:
+  control: interrupt
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |
+        Traceback (most recent call last):
+          File "<string>", line 467, in _mcp_console_eval_cell
+          File "<mcp-console:python:e2>", line 13, in <module>
+        KeyboardInterrupt
+  isError: false
+---
+send:
+  python: python_interrupt_state + 1
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false

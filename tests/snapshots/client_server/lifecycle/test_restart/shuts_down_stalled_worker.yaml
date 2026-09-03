@@ -1,0 +1,7 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  r: stall
+  stdin: <large stdin>
+...

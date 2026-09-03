@@ -1,0 +1,11 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  control: interrupt
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: "[worker is not running]"
+  isError: true
