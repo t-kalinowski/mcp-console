@@ -82,9 +82,9 @@ jobs:
           # v3 covers the inline prewarm contract. Bump it when that contract changes.
           path: ${{ runner.temp }}/mcp-console-r-cache
           key: >-
-            ir-v3-${{ runner.os }}-${{ runner.arch }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ steps.tools.outputs.ir_version }}-${{ hashFiles('src/worker_client.rs', 'src/resolver/managed_r.rs', 'tests/transcripts/client_server/r_auto_requirements.py', 'tests/transcripts/client_server/r_requirements.py') }}-${{ steps.cache-epoch.outputs.value }}
+            ir-v3-${{ runner.os }}-${{ runner.arch }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ steps.tools.outputs.ir_version }}-${{ hashFiles('src/worker_client.rs', 'src/resolver/managed_r.rs', 'tests/boundaries/client_server/requirements/test_r_automatic.py', 'tests/boundaries/client_server/requirements/test_r.py') }}-${{ steps.cache-epoch.outputs.value }}
           restore-keys: |
-            ir-v3-${{ runner.os }}-${{ runner.arch }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ steps.tools.outputs.ir_version }}-${{ hashFiles('src/worker_client.rs', 'src/resolver/managed_r.rs', 'tests/transcripts/client_server/r_auto_requirements.py', 'tests/transcripts/client_server/r_requirements.py') }}-
+            ir-v3-${{ runner.os }}-${{ runner.arch }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ steps.tools.outputs.ir_version }}-${{ hashFiles('src/worker_client.rs', 'src/resolver/managed_r.rs', 'tests/boundaries/client_server/requirements/test_r_automatic.py', 'tests/boundaries/client_server/requirements/test_r.py') }}-
             ir-v3-${{ runner.os }}-${{ runner.arch }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ steps.tools.outputs.ir_version }}-
 
       - name: Cache Rust build data
@@ -181,4 +181,4 @@ jobs:
         with:
           path: ${{ runner.temp }}/mcp-console-r-cache
           key: >-
-            ir-v3-${{ runner.os }}-${{ runner.arch }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ steps.tools.outputs.ir_version }}-${{ hashFiles('src/worker_client.rs', 'src/resolver/managed_r.rs', 'tests/transcripts/client_server/r_auto_requirements.py', 'tests/transcripts/client_server/r_requirements.py') }}-${{ steps.cache-epoch.outputs.value }}
+            ir-v3-${{ runner.os }}-${{ runner.arch }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ steps.tools.outputs.ir_version }}-${{ hashFiles('src/worker_client.rs', 'src/resolver/managed_r.rs', 'tests/boundaries/client_server/requirements/test_r_automatic.py', 'tests/boundaries/client_server/requirements/test_r.py') }}-${{ steps.cache-epoch.outputs.value }}

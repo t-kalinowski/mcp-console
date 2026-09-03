@@ -1,0 +1,13 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  r: emit console kinds
+result:
+  content:
+    - type: text
+      text: |
+        zod output
+        zod diagnostic
+  isError: false
+...

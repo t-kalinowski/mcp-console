@@ -1,0 +1,22 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  r: overflow console output
+result:
+  content:
+    - type: text
+      text: |-
+        <retained 8388608 text bytes>
+        [output truncated: omitted 7 text bytes and 0 encoded image bytes across 1 event]
+  isError: false
+---
+send:
+  r: echo echo
+result:
+  content:
+    - type: text
+      text: |
+        zod: echo
+  isError: false
+...

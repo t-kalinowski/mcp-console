@@ -167,19 +167,21 @@ fn spawn_output_reader(
 fn runner_fixture(name: &str, slow_test_seconds: &str) -> (TestDirectory, PathBuf, File) {
     let repository = Path::new(env!("CARGO_MANIFEST_DIR"));
     let temporary = TestDirectory::new(name);
-    let transcripts = temporary.path().join("tests/transcripts");
-    let suite = transcripts.join("client_server/server.py");
-    let golden = transcripts.join("golden/client_server/server/initializes_and_lists_tools.yaml");
+    let boundaries = temporary.path().join("tests/boundaries");
+    let suite = boundaries.join("client_server/server/test_tools.py");
+    let snapshot = temporary
+        .path()
+        .join("tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml");
     let binary = temporary.path().join("target/debug/mcp-console");
     for parent in [
         suite.parent().unwrap(),
-        golden.parent().unwrap(),
+        snapshot.parent().unwrap(),
         binary.parent().unwrap(),
     ] {
         fs::create_dir_all(parent).unwrap();
     }
-    let runner = transcripts.join("_run.py");
-    fs::copy(repository.join("tests/transcripts/_run.py"), &runner).unwrap();
+    let runner = boundaries.join("_run.py");
+    fs::copy(repository.join("tests/boundaries/_run.py"), &runner).unwrap();
     let source = fs::read_to_string(&runner).unwrap();
     assert_eq!(source.matches("SLOW_TEST_SECONDS = 60.0").count(), 1);
     let slow_test_seconds = format!("SLOW_TEST_SECONDS = {slow_test_seconds}");
@@ -189,8 +191,8 @@ fn runner_fixture(name: &str, slow_test_seconds: &str) -> (TestDirectory, PathBu
     )
     .unwrap();
     fs::copy(
-        repository.join("tests/transcripts/_support.py"),
-        transcripts.join("_support.py"),
+        repository.join("tests/boundaries/_support.py"),
+        boundaries.join("_support.py"),
     )
     .unwrap();
     fs::copy(
@@ -205,7 +207,7 @@ fn runner_fixture(name: &str, slow_test_seconds: &str) -> (TestDirectory, PathBu
     ] {
         fs::copy(
             repository.join(format!("tests/fixtures/transcript_runner/{name}.yaml")),
-            golden.with_file_name(format!("{name}.yaml")),
+            snapshot.with_file_name(format!("{name}.yaml")),
         )
         .unwrap();
     }
@@ -223,20 +225,20 @@ fn runner_fixture(name: &str, slow_test_seconds: &str) -> (TestDirectory, PathBu
         .write(true)
         .open(temporary.path().join("release"))
         .unwrap();
-    (temporary, transcripts, release_gate)
+    (temporary, boundaries, release_gate)
 }
 
 #[cfg(unix)]
 fn spawn_runner(
     temporary: &TestDirectory,
-    transcripts: &Path,
+    boundaries: &Path,
     jobs: usize,
     selectors: &[&str],
 ) -> ChildProcess {
     let mut command = Command::new("uv");
     command
         .args(["run", "--script"])
-        .arg(transcripts.join("_run.py"))
+        .arg(boundaries.join("_run.py"))
         .arg("--jobs")
         .arg(jobs.to_string())
         .args(selectors)
@@ -292,15 +294,15 @@ fn wait_for_runner(mut child: ChildProcess, output: &mut RunnerOutput) -> ExitSt
 #[cfg(unix)]
 #[test]
 fn transcript_test_script_reports_one_dot_per_fast_case() {
-    let (temporary, transcripts, mut release_gate) = runner_fixture("fast-cases", "30.0");
+    let (temporary, boundaries, mut release_gate) = runner_fixture("fast-cases", "30.0");
     release_gate.write_all(b"11").unwrap();
     let mut child = spawn_runner(
         &temporary,
-        &transcripts,
+        &boundaries,
         1,
         &[
-            "client_server/server::initializes_and_lists_tools",
-            "client_server/server::blocks_before_queued_case",
+            "client_server/server/test_tools::initializes_and_lists_tools",
+            "client_server/server/test_tools::blocks_before_queued_case",
         ],
     );
     let mut output = RunnerOutput::start(&mut child);
@@ -317,16 +319,16 @@ fn transcript_test_script_reports_one_dot_per_fast_case() {
 #[cfg(unix)]
 #[test]
 fn transcript_test_script_reports_a_blocked_case_until_it_finishes() {
-    let (temporary, transcripts, mut release_gate) = runner_fixture("slow-case", "0.0");
+    let (temporary, boundaries, mut release_gate) = runner_fixture("slow-case", "0.0");
     let mut child = spawn_runner(
         &temporary,
-        &transcripts,
+        &boundaries,
         1,
-        &["client_server/server::initializes_and_lists_tools"],
+        &["client_server/server/test_tools::initializes_and_lists_tools"],
     );
     let mut output = RunnerOutput::start(&mut child);
 
-    let selector = "client_server/server::initializes_and_lists_tools";
+    let selector = "client_server/server/test_tools::initializes_and_lists_tools";
     let running_prefix = format!("{selector}: running for ");
     output.wait_for("slow-case running status", |line| {
         line.stream == OutputStream::Stdout && line.text.starts_with(&running_prefix)
@@ -353,20 +355,21 @@ fn transcript_test_script_reports_a_blocked_case_until_it_finishes() {
 #[cfg(unix)]
 #[test]
 fn transcript_test_script_does_not_time_cases_waiting_for_a_worker() {
-    let (temporary, transcripts, mut release_gate) = runner_fixture("queued-case", "0.0");
+    let (temporary, boundaries, mut release_gate) = runner_fixture("queued-case", "0.0");
     let mut child = spawn_runner(
         &temporary,
-        &transcripts,
+        &boundaries,
         1,
         &[
-            "client_server/server::blocks_before_queued_case",
-            "client_server/server::runs_after_blocked_case",
+            "client_server/server/test_tools::blocks_before_queued_case",
+            "client_server/server/test_tools::runs_after_blocked_case",
         ],
     );
     let mut output = RunnerOutput::start(&mut child);
 
-    let running_prefix = "client_server/server::blocks_before_queued_case: running for ";
-    let queued_running_prefix = "client_server/server::runs_after_blocked_case: running for ";
+    let running_prefix = "client_server/server/test_tools::blocks_before_queued_case: running for ";
+    let queued_running_prefix =
+        "client_server/server/test_tools::runs_after_blocked_case: running for ";
     output.wait_for("blocked-case running status", |line| {
         line.stream == OutputStream::Stdout && line.text.starts_with(running_prefix)
     });
@@ -391,9 +394,9 @@ fn transcript_test_script_does_not_time_cases_waiting_for_a_worker() {
     assert!(status.success(), "transcript test failed: {stderr:?}");
     let prefixes = [
         running_prefix,
-        "client_server/server::blocks_before_queued_case: finished in ",
+        "client_server/server/test_tools::blocks_before_queued_case: finished in ",
         queued_running_prefix,
-        "client_server/server::runs_after_blocked_case: finished in ",
+        "client_server/server/test_tools::runs_after_blocked_case: finished in ",
     ];
     assert!(
         lines.iter().all(|line| {
@@ -423,20 +426,21 @@ fn transcript_test_script_does_not_time_cases_waiting_for_a_worker() {
 #[cfg(unix)]
 #[test]
 fn transcript_test_script_keeps_reporting_running_cases_after_a_failure() {
-    let (temporary, transcripts, mut release_gate) = runner_fixture("failed-sibling", "0.0");
+    let (temporary, boundaries, mut release_gate) = runner_fixture("failed-sibling", "0.0");
     let mut child = spawn_runner(
         &temporary,
-        &transcripts,
+        &boundaries,
         2,
         &[
-            "client_server/server::blocks_while_sibling_fails",
-            "client_server/server::fails_after_sibling_starts",
+            "client_server/server/test_tools::blocks_while_sibling_fails",
+            "client_server/server/test_tools::fails_after_sibling_starts",
         ],
     );
     let mut output = RunnerOutput::start(&mut child);
 
-    let running_prefix = "client_server/server::blocks_while_sibling_fails: running for ";
-    let failure_prefix = "client_server/server::fails_after_sibling_starts: failed";
+    let running_prefix =
+        "client_server/server/test_tools::blocks_while_sibling_fails: running for ";
+    let failure_prefix = "client_server/server/test_tools::fails_after_sibling_starts: failed";
     // Require both causal events without imposing an order across stdout and stderr.
     // A running line alone does not prove that the runner has entered failure cleanup.
     output.wait_for("intentional sibling failure", |line| {
@@ -452,8 +456,10 @@ fn transcript_test_script_keeps_reporting_running_cases_after_a_failure() {
     let stderr = stderr.join("\n");
 
     assert!(!status.success(), "fixture failure unexpectedly passed");
-    let failing_running_prefix = "client_server/server::fails_after_sibling_starts: running for ";
-    let finished_prefix = "client_server/server::blocks_while_sibling_fails: finished in ";
+    let failing_running_prefix =
+        "client_server/server/test_tools::fails_after_sibling_starts: running for ";
+    let finished_prefix =
+        "client_server/server/test_tools::blocks_while_sibling_fails: finished in ";
     assert!(
         lines.iter().all(|line| line.starts_with(running_prefix)
             || line.starts_with(failing_running_prefix)
@@ -485,7 +491,7 @@ fn transcript_test_script_keeps_reporting_running_cases_after_a_failure() {
         "duplicate failing sibling status: {lines:?}"
     );
     assert!(
-        stderr.contains("client_server/server::fails_after_sibling_starts: failed"),
+        stderr.contains("client_server/server/test_tools::fails_after_sibling_starts: failed"),
         "missing failed case in stderr: {stderr}"
     );
     assert!(

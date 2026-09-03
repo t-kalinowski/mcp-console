@@ -13,7 +13,7 @@ The relay forwards the semantic messages in this document between the server and
 The separate server-relay JSONL protocol is specified in [`RELAY_PROTOCOL.md`](RELAY_PROTOCOL.md).
 
 Outside this wire contract, [`ARCHITECTURE.md`](ARCHITECTURE.md) owns process placement and lifecycle, [`BUILTIN_RUNTIME.md`](BUILTIN_RUNTIME.md) owns console behavior, [`REQUIREMENTS.md`](REQUIREMENTS.md) owns dependency preparation, and [`TOOL_DESCRIPTIONS.md`](TOOL_DESCRIPTIONS.md) mirrors the registered MCP descriptions.
-Process-boundary test guidance lives in [`../tests/transcripts/README.md`](../tests/transcripts/README.md).
+Process-boundary test guidance lives in [`../tests/boundaries/README.md`](../tests/boundaries/README.md).
 
 Direction labels below use the logical `server` and `worker` endpoints.
 The relay translates matching server-relay commands and events at the transport boundary.
@@ -454,4 +454,4 @@ A conforming custom worker:
 
 The executable fixture under `tests/fixtures/zod` exercises successful evaluation, exact text and image frames, stdin, R preparation, interruption, protocol violations, standard streams, and bounded shutdown.
 Its individual commands are fixture behavior, not additions to this protocol.
-See [`../tests/transcripts/README.md`](../tests/transcripts/README.md) for the corresponding public process-boundary suites.
+See [`../tests/boundaries/README.md`](../tests/boundaries/README.md) for the corresponding public process-boundary suites.

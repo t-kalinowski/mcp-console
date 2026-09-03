@@ -1,0 +1,41 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  r: |
+    invisible(addTaskCallback(
+      local({
+        first <- TRUE
+        function(expr, ...) {
+          if (first) {
+            first <<- FALSE
+            return(TRUE)
+          }
+          cat(deparse1(expr), "\n", sep = "")
+          FALSE
+        }
+      }),
+      name = "mcp-console-test"
+    ))
+    mcp_console_callback_probe <- 42
+result:
+  content:
+    - type: text
+      text: |
+        mcp_console_callback_probe <- 42
+  isError: false
+---
+send:
+  r: |
+    warning("careful", call. = FALSE)
+    invisible(42)
+    cat("last value: ", identical(base::.Last.value, 42), "\n", sep = "")
+result:
+  content:
+    - type: text
+      text: |
+        Warning message:
+        careful 
+        last value: TRUE
+  isError: false
+...

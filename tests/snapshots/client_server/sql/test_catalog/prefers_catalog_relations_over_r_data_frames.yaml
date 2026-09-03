@@ -1,0 +1,26 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  r: |
+    values <- data.frame(origin = "r")
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  sql: |
+    CREATE TABLE values AS SELECT 'sql' AS origin;
+    SELECT origin FROM values
+result:
+  content:
+    - type: text
+      text: |
+        # A tibble: 1 × 1
+          origin  
+          <string>
+        1 "sql"   
+  isError: false
+...

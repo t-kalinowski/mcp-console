@@ -1,0 +1,43 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  r: |
+    answer <- 42
+    answer + (
+result:
+  content:
+    - type: text
+      text: |
+        Error: Incomplete code
+  isError: false
+---
+send:
+  r: answer
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false
+---
+send:
+  r: |
+    answer <- 43
+    )
+result:
+  content:
+    - type: text
+      text: |
+        Error: unexpected ')' in ")"
+  isError: false
+---
+send:
+  r: answer
+result:
+  content:
+    - type: text
+      text: |
+        [1] 43
+  isError: false
+...

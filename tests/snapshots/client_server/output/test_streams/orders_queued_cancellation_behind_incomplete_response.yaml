@@ -1,0 +1,40 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  requirements:
+    python:
+      - <large invalid Python requirement>
+result:
+  content:
+    - type: text
+      text: <large invalid Python requirement rejected>
+  isError: true
+---
+send:
+  r: "check response gate: 4"
+---
+input:
+  method: notifications/cancelled
+  params:
+    requestId: 4
+    reason: cancel before worker admission
+---
+send:
+  r: "check response gate: 5"
+result:
+  content:
+    - type: text
+      text: |
+        zod response-gated operation
+  isError: false
+---
+input:
+  method: notifications/cancelled
+  params:
+    requestId: 1000000
+    reason: staged receive barrier
+---
+input:
+  method: ping
+result: {}

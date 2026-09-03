@@ -1,0 +1,22 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  r: start background stderr
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+        zod background stderr
+        <large output>
+        [idle]
+  isError: false
+...

@@ -1,0 +1,24 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  r: invisible(base::loadNamespace("RcppRoll")); 42L
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false
+---
+send:
+  requirements:
+    r:
+      - english
+result:
+  content:
+    - type: text
+      text: >-
+        worker is already evaluating a cell; poll it before preparing
+        requirements
+  isError: true

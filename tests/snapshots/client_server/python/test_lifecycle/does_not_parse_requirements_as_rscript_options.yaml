@@ -1,0 +1,17 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  requirements:
+    python:
+      - -e
+      - >-
+        base::writeLines('executed',
+        base::Sys.getenv('MCP_CONSOLE_HOST_MARKER'))
+result:
+  content:
+    - type: text
+      text: >-
+        Python requirement `-e` is not accepted: host-side managed resolution
+        accepts named package requirements only
+  isError: true

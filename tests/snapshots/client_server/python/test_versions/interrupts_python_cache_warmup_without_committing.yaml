@@ -1,0 +1,33 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  requirements:
+    python:
+      - py-yaml12
+result:
+  content:
+    - type: text
+      text: managed Python cache warmup interrupted
+  isError: true
+---
+send:
+  control: interrupt
+  timeout_ms: 30000
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false
+---
+send:
+  requirements:
+    python:
+      - py-yaml12
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false

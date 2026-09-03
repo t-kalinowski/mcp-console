@@ -1,0 +1,41 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  python: None
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  python: |
+    automatic_timeout_attempts = (
+        globals().get(
+            "automatic_timeout_attempts",
+            0,
+        )
+        + 1
+    )
+    import yaml12
+
+    (yaml12.__name__, automatic_timeout_attempts)
+  timeout_ms: 1
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running; poll with an empty send]
+  isError: false
+---
+send:
+  timeout_ms: 30000
+result:
+  content:
+    - type: text
+      text: |
+        [resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']
+        ('yaml12', 1)
+  isError: false

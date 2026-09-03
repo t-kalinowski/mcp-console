@@ -1,0 +1,75 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  python: import os; live_sentinel = 42; live_worker_pid = os.getpid()
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  r: |
+    reticulate_namespace <- asNamespace("reticulate")
+    original_py_require <- get("py_require", envir = reticulate_namespace)
+    unlockBinding("py_require", reticulate_namespace)
+    assign(
+      "py_require",
+      function(...) stop("synthetic live Python preparation failure"),
+      envir = reticulate_namespace
+    )
+    lockBinding("py_require", reticulate_namespace)
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  python: failed_live_python_cell = True
+  requirements:
+    python:
+      - py-yaml12
+result:
+  content:
+    - type: text
+      text: synthetic live Python preparation failure
+  isError: true
+---
+send:
+  r: |
+    unlockBinding("py_require", reticulate_namespace)
+    assign(
+      "py_require",
+      original_py_require,
+      envir = reticulate_namespace
+    )
+    lockBinding("py_require", reticulate_namespace)
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  python: |
+    import os
+    import yaml12
+
+    (
+        live_sentinel,
+        os.getpid() == live_worker_pid,
+        "failed_live_python_cell" not in globals(),
+        yaml12.__name__,
+    )
+  requirements:
+    python:
+      - py-yaml12
+result:
+  content:
+    - type: text
+      text: |
+        (42, True, True, 'yaml12')
+  isError: false
+...

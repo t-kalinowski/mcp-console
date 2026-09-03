@@ -18,7 +18,7 @@ The documents under `design-sketches/` describe intended behavior, not the curre
 - `docs/RELAY_PROTOCOL.md` defines the exact private server-relay transport.
 - `docs/TOOL_DESCRIPTIONS.md` is a human-readable mirror of registered MCP tool and property prose.
   The actual `tools/list` result and the registered strings and Rust doc comments in `src/server.rs` are authoritative.
-- `tests/transcripts/README.md` describes transcript boundaries, selectors, normalization, and snapshot updates.
+- `tests/boundaries/README.md` describes process boundaries, selectors, normalization, and snapshot updates.
 - `design-sketches/` contains intended or exploratory future design only.
 
 When documentation and code disagree, source and public acceptance tests are the final authority.
@@ -44,9 +44,9 @@ scripts/test --update BOUNDARY/SUITE[::CASE]
 A missing or failing formatter does not prevent the remaining formatters from running or make the script fail, so review its output and resulting changes.
 `scripts/check` validates extracted runtime sources, checks Rust formatting and Clippy, runs Rust tests, and runs the complete transcript suite.
 
-### Transcript goldens
+### Boundary snapshots
 
-Never hand-edit files under `tests/transcripts/golden/`.
+Never hand-edit files under `tests/snapshots/`.
 They may change only through `scripts/test --update ...` or Yamark via `scripts/format`.
 If regeneration produces an incorrect snapshot, fix the code or serializer and regenerate it.
 
@@ -131,11 +131,11 @@ Keep these ownership rules intact:
 
 - `tests/cli.rs` — public CLI and narrow OS/process-lifecycle acceptance tests that cannot be expressed at the MCP boundary.
 - `tests/fixtures/` — deterministic workers, relays, resolvers, and package fixtures.
-- `tests/transcripts/client_server/` — public MCP client-server behavior.
-- `tests/transcripts/server_relay/` — private server-relay wire behavior.
-- `tests/transcripts/relay_worker/` — worker sideband and standard-stream behavior through the relay.
-- `tests/transcripts/cli/` — direct CLI transcripts.
-- `tests/transcripts/golden/` — generated YAML 1.2 snapshots.
+- `tests/boundaries/client_server/` — public MCP client-server behavior.
+- `tests/boundaries/server_relay/` — private server-relay wire behavior.
+- `tests/boundaries/relay_worker/` — worker sideband and standard-stream behavior through the relay.
+- `tests/boundaries/cli/` — direct CLI behavior.
+- `tests/snapshots/` — generated YAML 1.2 snapshots, parallel to the boundary test hierarchy.
 - `r/tests/testthat/` — R package protocol and ellmer adapter tests.
 - `scripts/release.py`, `tests/release.py` — release validation and installed-wheel acceptance.
 - `scripts/test` — binary build and selected transcript execution.
@@ -146,7 +146,7 @@ Keep these ownership rules intact:
 
 - Keep PRs coherent and easy to review.
   For behavior-changing implementation, aim for fewer than 200 added and deleted lines as a heuristic.
-  Mechanical moves, internal-only reorganization, tests, goldens, and documentation do not count toward it.
+  Mechanical moves, internal-only reorganization, tests, snapshots, and documentation do not count toward it.
   Prefer a larger coherent change over an artificial split.
 - Keep each behavior-changing PR to one observable behavior.
   Internal-only refactors may stand alone but must preserve observable behavior.

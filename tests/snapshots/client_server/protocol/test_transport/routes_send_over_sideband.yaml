@@ -1,0 +1,30 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  r: echo hello
+result:
+  content:
+    - type: text
+      text: |
+        zod: hello
+  isError: false
+---
+send:
+  python: echo precise 👩🏽‍💻
+result:
+  content:
+    - type: text
+      text: |
+        zod python: precise 👩🏽‍💻
+  isError: false
+---
+send:
+  sql: echo two  spaces
+result:
+  content:
+    - type: text
+      text: |
+        zod sql: two  spaces
+  isError: false
+...

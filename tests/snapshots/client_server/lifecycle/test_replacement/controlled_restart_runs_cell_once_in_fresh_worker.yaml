@@ -1,0 +1,34 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  r: set controlled restart state
+result:
+  content:
+    - type: text
+      text: |
+        zod controlled state: old
+  isError: false
+---
+send:
+  control: restart
+  r: inspect controlled restart state
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        zod controlled state: fresh; evaluation=1
+        [done]
+  isError: false
+---
+send: {}
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false
+...
