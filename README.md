@@ -173,7 +173,10 @@ mcp-console --version
 `mcp-console serve` communicates with its MCP client over standard input and output.
 On macOS, each worker generation commits one host-side manager that owns observed-descendant cleanup and the private temporary directory.
 The built-in or configured relay starts only after that manager has adopted the directory, begun observation, and committed ownership.
-Normal restart, automatic worker replacement, orderly server shutdown, and abrupt server exit retire descendants the manager observed, including descendants that entered another process group or session.
+After commitment, the server holds the manager control socket open as the worker lifetime's ownership token.
+Normal restart, automatic worker replacement, orderly server shutdown, and abrupt server exit close that token and retire descendants the manager observed, including descendants that entered another process group or session.
+The manager decides whether the relay root must be stopped and removes the private directory only after successful cleanup.
+A successful manager exit is the cleanup barrier before the server reaps the root.
 If the manager fails while the server retains a live, waitable relay root, the server reconstructs that root's current ancestry and performs bounded fallback cleanup.
 That fallback owns only process cleanup.
 If the manager exits before proving its own cleanup, the private directory remains because a detached descendant known only to the failed manager may still be live.
@@ -181,7 +184,8 @@ A later descendant that becomes orphaned before the manager resolves its fork ev
 The standalone `sandbox` command is available for development.
 Its requested command remains blocked on a private startup gate until the manager has adopted the private temporary directory, begun observation, and committed ownership.
 The launcher preserves the direct command's exit status while the manager retires observed descendants.
-Abrupt launcher loss after commitment retires that managed lifetime; owner loss after normal retirement begins preserves the directory when its final disposition is uncertain.
+The launcher closes the ownership token after the direct root exits and waits for manager exit before reaping it.
+Abrupt launcher loss after commitment closes the same token, so the manager independently retires the lifetime and removes the directory after successful cleanup.
 Unexpected manager loss triggers bounded launcher-side recovery while the direct root remains live and waitable.
 The launcher recovery performs process cleanup only and never removes the private directory.
 The command inherits standard input, output, and error while closing other inherited file descriptors before the target runs.

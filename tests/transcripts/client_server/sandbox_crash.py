@@ -146,7 +146,7 @@ def _wait_for_private_startup_gate(identity: DarwinProcessIdentity) -> None:
         time.sleep(0.01)
 
 
-def _wait_for_manager_disposition(
+def _wait_for_manager_owner(
     identity: DarwinProcessIdentity,
     temporary_directory: Path,
     timeout: float,
@@ -154,13 +154,13 @@ def _wait_for_manager_disposition(
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         assert temporary_directory.exists(), (
-            "manager removed the temporary directory before server disposition"
+            "manager removed the temporary directory before server retirement"
         )
         if darwin_process_waits_for_control(identity):
             assert temporary_directory.exists()
             return
         time.sleep(0.01)
-    raise AssertionError("manager did not wait for server disposition")
+    raise AssertionError("manager did not wait for server retirement")
 
 
 def _wait_for_generation_failure(client: McpClient) -> None:
@@ -309,7 +309,7 @@ def test_server_crash_after_relay_exit_removes_temporary_directory(
         # Once cleanup consumes the manager's kqueue, its sole thread blocks on
         # the server control stream. This positive checkpoint rejects both an
         # active cleanup pass and an exited manager left as a zombie.
-        _wait_for_manager_disposition(manager_identity, generation[3], timeout=5)
+        _wait_for_manager_owner(manager_identity, generation[3], timeout=5)
         assert int(killpg_marker.read_text(encoding="utf-8")) == generation[0][0]
         late_member, late_member_group = map(
             int,

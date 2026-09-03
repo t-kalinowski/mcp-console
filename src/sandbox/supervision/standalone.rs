@@ -1,5 +1,5 @@
 use super::job_control::{ForegroundTerminal, SignalRelay};
-use super::manager::{CleanupPreparation, SandboxManager};
+use super::manager::SandboxManager;
 use super::root_exit_waiter::{RootExitWaiter, RootWait};
 use crate::sandbox::{
     TARGET_GATE_RELEASE, child::terminate_standalone_root, file_descriptors, platform,
@@ -63,7 +63,7 @@ pub(in crate::sandbox) fn status(
         if let Err(terminal_error) = foreground_terminal.restore() {
             error = additional_error(error, terminal_error);
         }
-        if let Err(manager_error) = manager.finish() {
+        if let Err(manager_error) = manager.retire() {
             error = additional_error(error, manager_error);
         }
         if let Err(signal_error) = signal_relay.drain_pending_and_restore() {
@@ -75,9 +75,9 @@ pub(in crate::sandbox) fn status(
     manager.monitor_for_standalone(child.id(), temporary_directory, root_waiter.wakeup());
     if let Err(mut error) = manager.commit() {
         // A failed acknowledgement is ambiguous: the manager may already have
-        // accepted ownership. Ask it to stop the lifetime before reaping the
-        // root, and use process-group cleanup only if that request fails.
-        match manager.stop() {
+        // accepted ownership. Close its ownership token before reaping the root,
+        // and use process-group cleanup only if retirement fails.
+        match manager.retire() {
             Ok(()) => {
                 if let Err(wait_error) = child.wait() {
                     error = additional_error(
@@ -141,11 +141,8 @@ pub(in crate::sandbox) fn status(
             signal_relay,
         );
     }
-    let _ = manager.begin_retirement();
     let owner_result = restore_launcher_state(&mut foreground_terminal, signal_relay);
-    let cleanup_preparation = manager.prepare_finish();
-    let manager_result =
-        manager.finish_retirement(cleanup_preparation == CleanupPreparation::TimedOut);
+    let manager_result = manager.retire();
 
     let status = match child.wait() {
         Ok(status) => status,
@@ -209,7 +206,7 @@ fn finish_after_manager_exit(
     foreground_terminal: &mut ForegroundTerminal,
     signal_relay: SignalRelay,
 ) -> Result<ExitCode, String> {
-    let manager_result = manager.stop();
+    let manager_result = manager.retire();
     let root_exit_result = root_has_exited(child, ROOT_STOP_TIMEOUT);
     let status_result = match root_exit_result {
         Ok(true) => match child.wait() {
@@ -293,7 +290,7 @@ fn stop_managed_root_with_status(
     child: &mut Child,
     manager: SandboxManager,
 ) -> Result<ExitStatus, String> {
-    match manager.stop() {
+    match manager.retire() {
         Ok(()) => child.wait().map_err(|wait_error| {
             format!(
                 "failed to wait for terminated {}: {wait_error}",

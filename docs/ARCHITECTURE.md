@@ -9,7 +9,7 @@ The material under `design-sketches/` is future or exploratory design, not evide
 
 ## Process layout
 
-MCP Console has three runtime communication boundaries, one private manager channel for each sandbox lifetime, and one host-only resolver path:
+MCP Console has three runtime communication boundaries, one private manager channel for startup and lifetime ownership of each sandbox, and one host-only resolver path:
 
 ```text
 MCP client
@@ -90,7 +90,10 @@ The owner retains its directory-creation guard until readiness and preserves it 
 After readiness, the owner relinquishes that guard and the manager becomes the sole directory-cleanup owner.
 The adopted guard preserves on unexpected unwind and is armed for removal only after the manager proves cleanup.
 If the manager later fails while the root remains live, owner-side fallback handles process cleanup only and does not remove the directory.
-The same private stream carries forced-stop requests and the standalone normal-retirement handoff: the launcher marks retirement, the manager acknowledges cleanup, and the launcher commits the final remove-or-preserve disposition before reaping the direct root.
+After commitment, the private stream carries no further messages.
+The owner holds it open as the live-sandbox ownership token, and EOF requests retirement whether the owner closes it deliberately or exits.
+The manager decides whether the root must be stopped, completes observed-descendant and process-group cleanup, and removes the directory only after complete success.
+Successful manager process exit is the primary cleanup barrier; the owner retains the direct root waitably through manager exit and any fallback cleanup, then reaps it.
 
 This is a private lifetime-management boundary rather than part of the relay protocol or public interface.
 
@@ -126,18 +129,18 @@ The server owns the logical console session and all state that must survive a wo
 
 These responsibilities remain on the host side of the sandbox boundary.
 The server does not execute submitted cells or ask the relay to interpret MCP calls.
-At generation retirement, it asks the manager to stop descendants observed across process-group and session changes, then reaps the direct relay.
+At generation retirement, it closes the manager ownership token, waits for manager exit, then reaps the direct relay.
 It retains that root waitably so the manager or owner-side failure recovery can close the original process group as a PID-reuse-safe backstop.
 
 ### Standalone launcher
 
-The standalone launcher owns one direct sandbox command's exit status, job control, and final directory disposition.
+The standalone launcher owns one direct sandbox command's exit status and job control.
 It inherits the command's standard streams, closes every unrelated inherited descriptor before exec, places the target in a dedicated process group, retains the direct root as a waitable child, and returns that root's exit status when cleanup succeeds.
 It keeps the root blocked on a private descriptor while committing primary manager ownership, then releases the root into the requested command.
 The root waiter uses one `kqueue` for root exit and launcher-addressed signals.
 The launcher relays `SIGHUP`, `SIGINT`, `SIGQUIT`, and `SIGTERM` addressed to it into the target group.
 When its foreground process group has no peer, it transfers controlling-terminal ownership to the target group; when a pipeline peer shares the group, it leaves terminal ownership unchanged.
-After root exit it marks normal retirement, restores terminal ownership when it transferred it, drains forwarded signals already pending at that boundary, restores its inherited signal mask, waits for manager cleanup, supplies the final temporary-directory disposition, and reaps the root last.
+After root exit it restores terminal ownership when it transferred it, drains forwarded signals already pending at that boundary, restores its inherited signal mask, closes the ownership token, waits for manager exit, and reaps the root last.
 Startup and recovery failures likewise drain pending forwarded signals after stopping the root and before restoring the inherited mask, so those signals cannot replace the reported error.
 It does not own descendant tracking, console state, dependency resolution, recording, relay transport, or worker protocol behavior.
 It does not implement stopped/continued job state or general shell-pipeline job control.
@@ -149,8 +152,9 @@ It records descendants by PID and process start time, validates the exact root i
 It retires only identities its tracker observed, uses the still-pinned root process group as a race backstop, and removes the directory only after successful cleanup.
 It does not own session state, operation admission, relay transport, command exit status, or terminal semantics.
 
-On normal standalone root exit, the manager remains alive until the launcher explicitly commits the directory disposition.
-Loss of owner control after retirement starts preserves the directory; earlier control loss selects forced cleanup and removal after success.
+After commitment, owner EOF requests retirement.
+The manager decides from the observed root state whether it must stop the root, retires the observed lifetime, applies the process-group backstop, and removes the directory only after complete success.
+A successful manager exit is the primary cleanup barrier for the owner.
 If the manager itself fails while its owner retains a live, waitable root, the owner monitor reconstructs the root's current ancestry and performs bounded process cleanup.
 That fallback has no directory-cleanup state, so the directory remains if the manager exits before completing its own cleanup and removal.
 That fallback cannot recover a descendant that had already detached from the root's ancestry.
@@ -228,12 +232,11 @@ A descendant that later escapes before the manager sees its fork remains outside
 
 The launcher blocks in the root waiter's `kqueue` until root exit or a supported signal is addressed to the launcher.
 It consumes pending launcher signals synchronously and relays them to the target process group.
-At root exit it marks normal retirement, restores terminal ownership when it transferred it, drains forwarded signals already pending at that boundary, and restores its inherited signal mask before manager cleanup.
+At root exit it restores terminal ownership when it transferred it, drains forwarded signals already pending at that boundary, and restores its inherited signal mask before requesting manager cleanup by closing the ownership token.
 When startup or recovery cleanup stops the root instead, it applies the same drain before returning the error.
 A signal received after that final drain can then follow its inherited disposition; if it terminates the launcher, the committed manager completes lifetime cleanup.
-The launcher waits for the manager's cleanup acknowledgement and commits remove after success or preserve after an acknowledgement timeout or error.
-It then reaps the direct root and returns its status when cleanup succeeded.
-If the launcher exits after the retirement marker but before final disposition, the manager preserves the directory; owner loss before that marker selects crash cleanup and removal after successful manager retirement.
+The launcher waits for successful manager exit as the cleanup barrier, then reaps the direct root and returns its status.
+The manager alone decides whether cleanup succeeded and removes the directory; launcher loss after commitment reaches the same EOF retirement path.
 If the manager is killed while the launcher remains live, its monitor reconstructs the root's current ancestry and performs bounded cleanup while that root remains pinned.
 
 ### Evaluation

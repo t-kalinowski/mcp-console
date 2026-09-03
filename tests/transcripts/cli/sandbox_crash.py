@@ -28,7 +28,6 @@ from _support import (
     capture_darwin_process_identity,
     code,
     darwin_child_process_identities,
-    darwin_process_waits_for_control,
     darwin_process_waits_for_startup_release,
     kill_darwin_processes,
     live_darwin_processes,
@@ -91,7 +90,7 @@ def _build_supervision_interposer(directory: Path, behavior: str) -> Path:
         "failed-recovery-stop": "-DMCP_CONSOLE_INTERPOSE_FAILED_RECOVERY_STOP",
         "failed-root-observer": "-DMCP_CONSOLE_INTERPOSE_FAILED_ROOT_OBSERVER",
         "late-cleanup": "-DMCP_CONSOLE_INTERPOSE_LATE_CLEANUP",
-        "retirement-disposition": ("-DMCP_CONSOLE_INTERPOSE_RETIREMENT_DISPOSITION"),
+        "retirement-cleanup": "-DMCP_CONSOLE_INTERPOSE_RETIREMENT_CLEANUP",
     }
     assert behavior in definitions, behavior
     source = directory / "supervision-interposer.c"
@@ -148,8 +147,8 @@ static _Atomic int gated_recovery_root_stop = 0;
 static _Atomic int root_exit_watch_registered = 0;
 static _Atomic int failed_root_identity_recheck = 0;
 #endif
-#if defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_DISPOSITION)
-static _Atomic int gated_retirement_disposition = 0;
+#if defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_CLEANUP)
+static _Atomic int gated_retirement_cleanup = 0;
 #endif
 
 #if defined(MCP_CONSOLE_INTERPOSE_DENIED_SIGKILL) \
@@ -161,6 +160,15 @@ typedef int (*kill_function)(pid_t, int);
 
 static kill_function next_kill(void) {
     return kill;
+}
+#endif
+
+#if defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP) \
+    || defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_CLEANUP)
+typedef int (*pthread_join_function)(pthread_t, void **);
+
+static pthread_join_function next_pthread_join(void) {
+    return pthread_join;
 }
 #endif
 
@@ -313,7 +321,7 @@ static void signal_checkpoint(const char *name) {
     || defined(MCP_CONSOLE_INTERPOSE_MANAGER_THREAD_START_FAILURE) \
     || defined(MCP_CONSOLE_INTERPOSE_FAILED_RECOVERY_STOP) \
     || defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP) \
-    || defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_DISPOSITION)
+    || defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_CLEANUP)
 static void wait_for_release(const char *name) {
     const char *release = getenv(name);
     if (release == NULL) {
@@ -381,7 +389,7 @@ static int gate_recovery_root_stop(pid_t process_id, int number) {
     || defined(MCP_CONSOLE_INTERPOSE_MANAGER_THREAD_START_FAILURE) \
     || defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP) \
     || defined(MCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE) \
-    || defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_DISPOSITION)
+    || defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_CLEANUP)
 static int is_subcommand(const char *name) {
     int argc = *_NSGetArgc();
     char **argv = *_NSGetArgv();
@@ -395,7 +403,7 @@ static void configure_interposer(void) {
     || defined(MCP_CONSOLE_INTERPOSE_MANAGER_THREAD_START_FAILURE) \
     || defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP) \
     || defined(MCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE) \
-    || defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_DISPOSITION)
+    || defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_CLEANUP)
     if (!is_subcommand("sandbox-manager") && !is_subcommand("sandbox")) {
         unsetenv("DYLD_INSERT_LIBRARIES");
     }
@@ -404,23 +412,18 @@ static void configure_interposer(void) {
 #endif
 }
 
-#if defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_DISPOSITION)
-static ssize_t gate_retirement_disposition(
-    int descriptor,
-    const void *buffer,
-    size_t length,
-    int flags
-) {
-    const unsigned char remove_temporary_directory = 9;
-    if (length == 1
-        && *(const unsigned char *)buffer == remove_temporary_directory
-        && getenv("MCP_CONSOLE_TEST_RETIREMENT_DISPOSITION") != NULL
-        && is_subcommand("sandbox")
-        && atomic_exchange(&gated_retirement_disposition, 1) == 0) {
-        signal_checkpoint("MCP_CONSOLE_TEST_RETIREMENT_DISPOSITION");
+#if defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_CLEANUP)
+static int gate_retirement_cleanup(pthread_t thread, void **value) {
+    int result = next_pthread_join()(thread, value);
+    if (result == 0
+        && getenv("MCP_CONSOLE_TEST_RETIREMENT_CLEANUP") != NULL
+        && is_subcommand("sandbox-manager")
+        && pthread_main_np() != 0
+        && atomic_exchange(&gated_retirement_cleanup, 1) == 0) {
+        signal_checkpoint("MCP_CONSOLE_TEST_RETIREMENT_CLEANUP");
         wait_for_release("MCP_CONSOLE_TEST_RETIREMENT_RELEASE");
     }
-    return sendto(descriptor, buffer, length, flags, NULL, 0);
+    return result;
 }
 #endif
 
@@ -608,34 +611,17 @@ static int deny_first_sigkill(pid_t process_id, int number) {
 #endif
 
 #if defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP)
-static ssize_t delay_cleanup_acknowledgement(
-    int descriptor,
-    const void *buffer,
-    size_t length,
-    int flags
-) {
-    const unsigned char cleanup_complete = 5;
-    const unsigned char preserve_temporary_directory = 4;
-    if (descriptor == STDIN_FILENO
-        && length == 1
-        && *(const unsigned char *)buffer == cleanup_complete
+static int delay_cleanup_completion(pthread_t thread, void **value) {
+    int result = next_pthread_join()(thread, value);
+    if (result == 0
         && getenv("MCP_CONSOLE_TEST_LATE_CLEANUP") != NULL
         && is_subcommand("sandbox-manager")
+        && pthread_main_np() != 0
         && atomic_exchange(&delayed_cleanup, 1) == 0) {
-        unsigned char disposition;
-        ssize_t count;
-        do {
-            count = recv(descriptor, &disposition, 1, MSG_PEEK);
-        } while (count < 0 && errno == EINTR);
-        if (count != 1 || disposition != preserve_temporary_directory) {
-            _exit(125);
-        }
         signal_checkpoint("MCP_CONSOLE_TEST_LATE_CLEANUP");
-        if (getenv("MCP_CONSOLE_TEST_LATE_CLEANUP_RELEASE") != NULL) {
-            wait_for_release("MCP_CONSOLE_TEST_LATE_CLEANUP_RELEASE");
-        }
+        wait_for_release("MCP_CONSOLE_TEST_LATE_CLEANUP_RELEASE");
     }
-    return sendto(descriptor, buffer, length, flags, NULL, 0);
+    return result;
 }
 
 static pid_t gate_root_reap(pid_t process_id, int *status, int options) {
@@ -700,12 +686,12 @@ DYLD_INTERPOSE(arm_root_identity_recheck, kevent)
 DYLD_INTERPOSE(fail_root_observer, proc_pidinfo)
 DYLD_INTERPOSE(fail_root_group_stop, kill)
 #elif defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP)
-DYLD_INTERPOSE(delay_cleanup_acknowledgement, send)
+DYLD_INTERPOSE(delay_cleanup_completion, pthread_join)
 DYLD_INTERPOSE(deny_first_sigkill, kill)
 DYLD_INTERPOSE(gate_root_reap, waitpid)
 DYLD_INTERPOSE(delay_late_recovery, proc_pidinfo)
-#elif defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_DISPOSITION)
-DYLD_INTERPOSE(gate_retirement_disposition, send)
+#elif defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_CLEANUP)
+DYLD_INTERPOSE(gate_retirement_cleanup, pthread_join)
 #endif
 """.removeprefix("\n"),
         encoding="utf-8",
@@ -1024,18 +1010,6 @@ def _wait_for_cleanup(lifetime: _SandboxLifetime, timeout: float = 5) -> list[in
         time.sleep(0.01)
         survivors = live_darwin_processes(identities)
     return live_darwin_processes(identities)
-
-
-def _wait_for_manager_disposition(lifetime: _SandboxLifetime) -> None:
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline:
-        assert lifetime.temporary_directory.exists(), (
-            "manager removed the temporary directory before launcher disposition"
-        )
-        if darwin_process_waits_for_control(lifetime.manager):
-            return
-        time.sleep(0.01)
-    raise AssertionError("manager did not wait for launcher disposition")
 
 
 def _wait_for_process_exit(
@@ -2118,17 +2092,17 @@ def test_cleanup_signal_after_root_exit_terminates_launcher(
 
             assert returncode == -signal.SIGTERM, returncode
             assert stderr == "", stderr
-            assert lifetime.temporary_directory.exists(), (
-                "cleanup-time signal removed the sandbox temporary directory"
+            assert not lifetime.temporary_directory.exists(), (
+                "cleanup-time signal preserved the sandbox temporary directory"
             )
             return [
                 _command_record(lifetime),
                 {
-                    "manager_cleanup": "acknowledgement held after root exit",
+                    "manager_cleanup": "completion held after root exit",
                     "launcher_signal": "SIGTERM",
                     "launcher_returncode": returncode,
                     "verified_cleanup": "sandbox root, detached descendant, and manager",
-                    "verified_preservation": "sandbox temp",
+                    "verified_removal": "sandbox temp",
                 },
             ]
         finally:
@@ -2143,39 +2117,54 @@ def test_cleanup_timeout_preserves_temporary_directory(binary: Path) -> Transcri
     with tempfile.TemporaryDirectory() as temporary_directory:
         fixture_directory = Path(temporary_directory)
         late_cleanup = FifoCheckpoint(fixture_directory / "late-cleanup")
+        late_cleanup_release = FifoCheckpoint(
+            fixture_directory / "late-cleanup-release"
+        )
         environment = os.environ.copy()
         environment["DYLD_INSERT_LIBRARIES"] = str(
             _build_supervision_interposer(fixture_directory, "late-cleanup")
         )
         environment["MCP_CONSOLE_TEST_LATE_CLEANUP"] = str(late_cleanup.path)
+        environment["MCP_CONSOLE_TEST_LATE_CLEANUP_RELEASE"] = str(
+            late_cleanup_release.path
+        )
         lifetime = _start_lifetime(binary, environment)
         try:
             lifetime.process.stdin.write(b"exit\n")
             lifetime.process.stdin.close()
-            late_cleanup.wait("cleanup acknowledgement after launcher timeout")
+            late_cleanup.wait("manager cleanup completion")
             returncode = lifetime.process.wait(timeout=TIMEOUT)
             stderr = lifetime.process.stderr.read().decode("utf-8")
+            normalized_stderr = stderr.replace(
+                str(lifetime.root[0]),
+                "<sandbox root pid>",
+            )
             _wait_for_process_exit(
                 (lifetime.root, lifetime.descendant, lifetime.manager),
-                "sandbox processes survived delayed cleanup acknowledgement",
+                "sandbox processes survived delayed cleanup completion",
             )
 
-            assert returncode == 23, returncode
-            assert stderr == "", stderr
+            assert returncode == 1, (returncode, stderr)
+            assert "timed out waiting for sandbox manager cleanup" in stderr, stderr
+            assert "manager recovery failed" in stderr, stderr
             assert lifetime.temporary_directory.exists(), (
                 "cleanup timeout removed the sandbox temporary directory"
             )
+            command = _command_record(lifetime)
+            command["stderr"] = normalized_stderr
             return [
-                _command_record(lifetime),
+                command,
                 {
-                    "manager_cleanup": "acknowledgement delayed past launcher timeout",
+                    "manager_cleanup": "completion held past launcher timeout",
                     "launcher_returncode": returncode,
                     "verified_cleanup": "sandbox root, detached descendant, and manager",
                     "verified_preservation": "sandbox temp",
                 },
             ]
         finally:
+            late_cleanup_release.release()
             late_cleanup.close()
+            late_cleanup_release.close()
             _cleanup(lifetime)
 
 
@@ -2216,7 +2205,7 @@ def test_manager_stop_failure_remains_bounded(binary: Path) -> Transcript:
         try:
             lifetime.process.stdin.write(b"exit\n")
             lifetime.process.stdin.close()
-            late_cleanup.wait("cleanup acknowledgement after launcher timeout")
+            late_cleanup.wait("cleanup completion after launcher timeout")
             denied_sigkill.wait("launcher manager-stop signal denial")
             root_reaped.wait("root reap after the second manager deadline")
             assert signal_darwin_process(lifetime.manager, signal.SIGKILL), (
@@ -2268,7 +2257,7 @@ def test_manager_stop_failure_remains_bounded(binary: Path) -> Transcript:
             return [
                 command,
                 {
-                    "manager_cleanup": "acknowledgement held past both owner deadlines",
+                    "manager_cleanup": "completion held past both owner deadlines",
                     "manager_stop_signal": "EPERM",
                     "launcher_returncode": returncode,
                     "verified_bounded_return": "within the recovery deadline",
@@ -2292,40 +2281,39 @@ def test_manager_stop_failure_remains_bounded(binary: Path) -> Transcript:
             _cleanup(lifetime)
 
 
-def test_launcher_crash_during_retirement_preserves_temporary_directory(
+def test_launcher_crash_during_retirement_removes_temporary_directory(
     binary: Path,
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         fixture_directory = Path(temporary_directory)
-        disposition = FifoCheckpoint(fixture_directory / "retirement-disposition")
-        disposition_release = FifoCheckpoint(
-            fixture_directory / "retirement-disposition-release"
+        cleanup = FifoCheckpoint(fixture_directory / "retirement-cleanup")
+        cleanup_release = FifoCheckpoint(
+            fixture_directory / "retirement-cleanup-release"
         )
         environment = os.environ.copy()
         environment["DYLD_INSERT_LIBRARIES"] = str(
             _build_supervision_interposer(
                 fixture_directory,
-                "retirement-disposition",
+                "retirement-cleanup",
             )
         )
-        environment["MCP_CONSOLE_TEST_RETIREMENT_DISPOSITION"] = str(disposition.path)
-        environment["MCP_CONSOLE_TEST_RETIREMENT_RELEASE"] = str(
-            disposition_release.path
-        )
+        environment["MCP_CONSOLE_TEST_RETIREMENT_CLEANUP"] = str(cleanup.path)
+        environment["MCP_CONSOLE_TEST_RETIREMENT_RELEASE"] = str(cleanup_release.path)
         lifetime = _start_lifetime(binary, environment)
+        cleanup_released = False
         try:
             lifetime.process.stdin.write(b"exit\n")
             lifetime.process.stdin.close()
-            disposition.wait("final directory disposition after cleanup")
+            cleanup.wait("manager retirement cleanup")
             _wait_for_process_exit(
                 (lifetime.descendant,),
                 "detached descendant survived retirement",
             )
             assert live_darwin_processes((lifetime.manager,)) == [
                 lifetime.manager[0]
-            ], "manager exited before final directory disposition"
+            ], "manager exited before retirement cleanup completed"
             assert lifetime.temporary_directory.exists(), (
-                "temporary directory disappeared before final disposition"
+                "temporary directory disappeared before retirement cleanup completed"
             )
 
             assert signal_darwin_process(lifetime.launcher, signal.SIGKILL), (
@@ -2333,34 +2321,38 @@ def test_launcher_crash_during_retirement_preserves_temporary_directory(
             )
             returncode = lifetime.process.wait(timeout=TIMEOUT)
             stderr = lifetime.process.stderr.read().decode("utf-8")
+            cleanup_release.release()
+            cleanup_released = True
             _wait_for_process_exit(
                 (lifetime.root, lifetime.descendant, lifetime.manager),
                 "sandbox processes survived owner loss during retirement",
             )
+            _wait_for_cleanup(lifetime)
 
             assert returncode == -signal.SIGKILL, returncode
             assert stderr == "", stderr
-            assert lifetime.temporary_directory.exists(), (
-                "manager removed the temporary directory after retirement began"
+            assert not lifetime.temporary_directory.exists(), (
+                "manager preserved the temporary directory after successful cleanup"
             )
             return [
                 _command_record(lifetime),
                 {
-                    "manager_checkpoint": "cleanup complete",
-                    "verified_manager_state": "waiting for directory disposition",
+                    "manager_checkpoint": "retirement cleanup",
+                    "verified_manager_state": "cleanup complete before directory removal",
                     "verified_cleanup": "detached descendant",
                 },
                 {
                     "launcher_signal": "SIGKILL",
                     "launcher_returncode": returncode,
                     "verified_cleanup": "sandbox root and manager",
-                    "verified_preservation": "sandbox temp",
+                    "verified_removal": "sandbox temp",
                 },
             ]
         finally:
-            disposition_release.release()
-            disposition.close()
-            disposition_release.close()
+            if not cleanup_released:
+                cleanup_release.release()
+            cleanup.close()
+            cleanup_release.close()
             _cleanup(lifetime)
 
 

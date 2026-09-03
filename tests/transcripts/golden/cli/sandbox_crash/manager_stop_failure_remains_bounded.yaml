@@ -34,7 +34,7 @@ stderr: >
   manager pid>: Operation not permitted (os error 1); additionally,
   sandbox manager did not stop after forced termination
 ---
-manager_cleanup: acknowledgement held past both owner deadlines
+manager_cleanup: completion held past both owner deadlines
 manager_stop_signal: EPERM
 launcher_returncode: 1
 verified_bounded_return: within the recovery deadline

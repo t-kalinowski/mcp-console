@@ -211,7 +211,7 @@ def _darwin_main_thread_waits(thread_info: _DarwinThreadInfo) -> bool:
 def darwin_process_waits_for_control(
     identity: DarwinProcessIdentity,
 ) -> bool:
-    """Return whether the exact manager process is waiting for disposition."""
+    """Return whether the exact manager process is waiting for owner EOF."""
     prox_fdtype_vnode = 1
     prox_fdtype_socket = 2
     resources = _darwin_process_resources(identity)
@@ -336,22 +336,14 @@ typedef int (*killpg_function)(pid_t, int);
 typedef int (*kill_function)(pid_t, int);
 typedef pid_t (*getpgid_function)(pid_t);
 typedef ssize_t (*send_function)(int, const void *, size_t, int);
-typedef pid_t (*waitpid_function)(pid_t, int *, int);
 
 static _Atomic int reported_group_close = 0;
-static _Atomic int manager_stop_send_failed = 0;
-static _Atomic pid_t relay_reap_target = 0;
-static _Atomic int relay_reap_failed = 0;
-static _Atomic int relay_reap_retried = 0;
 static pid_t denied_process_group = 0;
 static int added_late_member = 0;
 static pid_t seed_member = 0;
 static pid_t late_member = 0;
 
-enum {
-    MANAGER_STOP = 6,
-    MANAGER_COMMITTED = 7,
-};
+static const uint8_t MANAGER_COMMITTED = 7;
 
 static pid_t add_process_group_member(pid_t process_group);
 
@@ -369,10 +361,6 @@ static getpgid_function next_getpgid(void) {
 
 static send_function next_send(void) {
     return send;
-}
-
-static waitpid_function next_waitpid(void) {
-    return waitpid;
 }
 
 static int is_subcommand(const char *name) {
@@ -496,27 +484,11 @@ static ssize_t interpose_manager_control_send(
             }
         }
     }
-    if (is_subcommand("serve")
-        && length == 1
-        && ((const uint8_t *)buffer)[0] == MANAGER_STOP
-        && getenv("MCP_CONSOLE_TEST_MANAGER_STOP_SEND_FAILURE") != NULL
-        && atomic_exchange(&manager_stop_send_failed, 1) == 0) {
-        checkpoint("MCP_CONSOLE_TEST_MANAGER_STOP_SEND_FAILURE");
-        errno = EIO;
-        return -1;
-    }
     send_function send_next = next_send();
     return send_next(socket, buffer, length, flags);
 }
 
 static int manager_group_close(pid_t process_group, int number) {
-    if (number == SIGKILL
-        && process_group > 0
-        && is_subcommand("serve")
-        && atomic_load(&manager_stop_send_failed) != 0
-        && getenv("MCP_CONSOLE_TEST_RELAY_REAP_FAILURE") != NULL) {
-        atomic_store(&relay_reap_target, process_group);
-    }
     if (number == SIGKILL && is_manager()) {
         if (atomic_exchange(&reported_group_close, 1) == 0) {
             checkpoint("MCP_CONSOLE_TEST_MANAGER_GROUP_CLOSED");
@@ -578,30 +550,6 @@ static int kill_and_reap_added_member(pid_t process_id, int number) {
     return result;
 }
 
-static pid_t fail_relay_reap_once(
-    pid_t process_id,
-    int *status,
-    int options
-) {
-    pid_t target = atomic_load(&relay_reap_target);
-    if (target > 0
-        && process_id == target
-        && options == 0
-        && is_subcommand("serve")
-        && getenv("MCP_CONSOLE_TEST_RELAY_REAP_FAILURE") != NULL) {
-        if (atomic_exchange(&relay_reap_failed, 1) == 0) {
-            checkpoint("MCP_CONSOLE_TEST_RELAY_REAP_FAILURE");
-            errno = EIO;
-            return -1;
-        }
-        if (atomic_exchange(&relay_reap_retried, 1) == 0) {
-            checkpoint("MCP_CONSOLE_TEST_RELAY_REAP_RETRY");
-        }
-    }
-    waitpid_function waitpid_next = next_waitpid();
-    return waitpid_next(process_id, status, options);
-}
-
 __attribute__((used))
 static struct {
     const void *replacement;
@@ -611,7 +559,6 @@ static struct {
     {(const void *)&manager_group_close, (const void *)&killpg},
     {(const void *)&getpgid_and_add_member, (const void *)&getpgid},
     {(const void *)&kill_and_reap_added_member, (const void *)&kill},
-    {(const void *)&fail_relay_reap_once, (const void *)&waitpid},
 };
 """.removeprefix("\n"),
         encoding="utf-8",

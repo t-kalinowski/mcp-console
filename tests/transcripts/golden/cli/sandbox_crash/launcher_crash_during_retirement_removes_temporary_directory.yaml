@@ -29,11 +29,11 @@ stdout: |
   <detached descendant pid>
   <sandbox temp>
 ---
-manager_checkpoint: cleanup complete
-verified_manager_state: waiting for directory disposition
+manager_checkpoint: retirement cleanup
+verified_manager_state: cleanup complete before directory removal
 verified_cleanup: detached descendant
 ---
 launcher_signal: SIGKILL
 launcher_returncode: -9
 verified_cleanup: sandbox root and manager
-verified_preservation: sandbox temp
+verified_removal: sandbox temp
