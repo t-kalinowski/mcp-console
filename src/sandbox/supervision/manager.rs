@@ -5,7 +5,7 @@ use super::job_control::SignalRelay;
 use super::process::{ProcessIdentity, process_info, signal_process};
 use super::process_tracker::DescendantTracker;
 use super::root_exit_waiter::RootExitWakeup;
-use crate::sandbox::file_descriptors;
+use crate::process_descriptors;
 use crate::sandbox::platform;
 use std::io::Read;
 use std::os::fd::OwnedFd;
@@ -82,7 +82,7 @@ impl SandboxManager {
             .stderr(Stdio::null())
             .process_group(0);
         signal_relay.configure_manager(&mut command);
-        file_descriptors::close_unlisted_from_multithreaded_parent(&mut command)?;
+        process_descriptors::close_unlisted_from_multithreaded_parent(&mut command)?;
 
         let mut child = command
             .spawn()

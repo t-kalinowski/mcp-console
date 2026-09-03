@@ -28,7 +28,7 @@ The relay is also the dedicated sandbox process-group leader, and the worker inh
 The sandbox lifetime manager is a separate host-side process outside the parentheses.
 It observes and retires the relay, worker, and their observed descendants as one sandbox lifetime.
 
-The server configures piped launcher input and output and inherited error; the launcher passes those descriptors through to the target without a data proxy.
+The server configures piped launcher input and output and inherited error, closes every unrelated descriptor before launcher exec, and the launcher passes the three documented streams through to the target without a data proxy.
 Once relay code begins, only its standard input, standard output, and standard error cross the server/sandbox boundary.
 Standard input and output carry the framed relay protocol described below.
 Relay standard error is inherited from the server and is not part of the protocol; it is normally empty and is reserved for fatal or infrastructure diagnostics.

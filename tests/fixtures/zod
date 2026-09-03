@@ -384,6 +384,7 @@ def main() -> None:
     queued_message: dict[str, Any] | None = None
     block_next_sideband_write: int | None = None
     idle_input_received = False
+    fail_sideband_during_shutdown = False
     retain_blocked_sideband = False
     if os.environ.get("ZOD_BLOCK_NEXT_SIDEBAND_WRITE") == "1":
         command = wait_for_test_control(0, "block_next_sideband_write")
@@ -434,6 +435,11 @@ def main() -> None:
             queued_message = None
         message_kind = message["kind"]
         if message_kind == "shutdown":
+            if fail_sideband_during_shutdown:
+                writer.write('{"kind":"console_output","data":}\n')
+                writer.flush()
+                while True:
+                    signal.pause()
             return
 
         if message_kind == "prepare_r":
@@ -479,6 +485,11 @@ def main() -> None:
             continue
 
         assert language == "r"
+        if source == "fail sideband during shutdown":
+            fail_sideband_during_shutdown = True
+            send(writer, {"kind": "completed"})
+            continue
+
         if source.startswith("check response gate: "):
             operation = int(source.removeprefix("check response gate: "))
             gate_released = response_gate_completed()

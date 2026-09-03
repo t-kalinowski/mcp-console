@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io::BufReader;
+use std::os::fd::{AsFd as _, AsRawFd as _, OwnedFd};
 use std::os::unix::process::ExitStatusExt as _;
 use std::process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
@@ -64,8 +65,9 @@ struct RelayProcess {
     exit: super::child_exit::ChildExitWaiter,
     exited: bool,
     reaped: bool,
-    cleanup_barrier_confirmed: bool,
     ready_committed: bool,
+    owned_retirement_requested: bool,
+    failure_recovery_expected: bool,
     retirement: Option<Result<(), String>>,
 }
 
@@ -73,6 +75,7 @@ struct RelayTasks {
     dispatcher: WorkerEventDispatcher,
     command_writer: RelayCommandThread,
     event_reader: thread::JoinHandle<()>,
+    relay_stdout_observer: OwnedFd,
 }
 
 struct RelayCommandThread {
@@ -164,6 +167,7 @@ impl WorkerRuntime {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit());
+        crate::process_descriptors::close_unlisted_from_multithreaded_parent(&mut command)?;
 
         let (worker_events, worker_event_receiver) = mpsc::channel();
 
@@ -178,6 +182,10 @@ impl WorkerRuntime {
         let relay_stdout = child
             .take_stdout()
             .expect("piped worker relay stdout should be available");
+        let relay_stdout_observer = relay_stdout
+            .as_fd()
+            .try_clone_to_owned()
+            .map_err(|error| format!("failed to monitor worker relay stdout: {error}"))?;
         let child = Arc::new(Mutex::new(child));
 
         let operation = WorkerOperationState::new();
@@ -209,6 +217,7 @@ impl WorkerRuntime {
                 dispatcher,
                 command_writer,
                 event_reader,
+                relay_stdout_observer,
             })),
         };
         let mut worker = Worker {
@@ -281,8 +290,9 @@ impl RelayProcess {
             exit,
             exited: false,
             reaped: false,
-            cleanup_barrier_confirmed: false,
             ready_committed: false,
+            owned_retirement_requested: false,
+            failure_recovery_expected: false,
             retirement: None,
         })
     }
@@ -312,7 +322,9 @@ impl RelayProcess {
         }
         // SAFETY: the direct child remains unreaped here, so its PID cannot be
         // reused before `kill` returns.
-        if unsafe { libc::kill(self.child.id() as libc::pid_t, libc::SIGTERM) } != 0 {
+        if unsafe { libc::kill(self.child.id() as libc::pid_t, libc::SIGTERM) } == 0 {
+            self.owned_retirement_requested = true;
+        } else {
             let error = std::io::Error::last_os_error();
             if error.raw_os_error() != Some(libc::ESRCH) {
                 errors.push(format!(
@@ -419,9 +431,11 @@ impl RelayProcess {
     fn finish_reaped_status(&mut self, status: ExitStatus) -> Result<(), String> {
         self.exited = true;
         self.reaped = true;
-        self.cleanup_barrier_confirmed =
-            status.success() || status.code() == Some(128 + libc::SIGKILL);
-        if !self.ready_committed || status.success() || status.code() == Some(128 + libc::SIGKILL) {
+        if !self.ready_committed
+            || status.success()
+            || (self.owned_retirement_requested || self.failure_recovery_expected)
+                && status.code() == Some(128 + libc::SIGKILL)
+        {
             Ok(())
         } else if let Some(code) = status.code() {
             Err(format!("worker launcher exited with status {code}"))
@@ -442,10 +456,6 @@ impl RelayProcess {
 
     fn is_reaped(&self) -> bool {
         self.reaped
-    }
-
-    fn cleanup_barrier_confirmed(&self) -> bool {
-        self.cleanup_barrier_confirmed
     }
 }
 
@@ -1067,6 +1077,10 @@ impl WorkerShutdownHandle {
                 Err(error) => errors.push(error),
             }
         }
+        match self.operation.has_failure() {
+            Ok(failed) => child.failure_recovery_expected = failed,
+            Err(error) => errors.push(error),
+        }
         if exited {
             if let Err(error) = child.reap() {
                 errors.push(error);
@@ -1136,41 +1150,54 @@ impl RelayConnection {
     }
 
     fn finish_tasks(&mut self) -> Result<Option<WorkerProcessOutcome>, String> {
-        // The launcher owns relay stdout until sandbox cleanup completes. Make
-        // sure it has exited before waiting for the reader to observe EOF.
-        let (cleanup, cleanup_barrier_confirmed) = {
+        // Join only after HUP proves that neither the launcher nor a surviving
+        // sandbox descendant can keep the relay protocol stream open.
+        let cleanup = {
             let mut child = self
                 .child
                 .lock()
                 .map_err(|_| "worker child lock poisoned".to_string())?;
-            let prior_retirement_succeeded = child.retirement.as_ref().is_none_or(Result::is_ok);
-            let cleanup = if child.is_reaped() {
+            if child.is_reaped() {
                 Ok(())
             } else {
                 child.force_stop()
-            };
-            let cleanup_barrier_confirmed =
-                prior_retirement_succeeded && cleanup.is_ok() && child.cleanup_barrier_confirmed();
-            (cleanup, cleanup_barrier_confirmed)
+            }
         };
-        let tasks = match (self.tasks.take(), cleanup_barrier_confirmed) {
-            (Some(tasks), false) => {
+        let tasks = self.tasks.take();
+        let output_closed = tasks.as_ref().map_or(Ok(false), |tasks| {
+            relay_stdout_closed(&tasks.relay_stdout_observer)
+        });
+        let tasks = match (tasks, output_closed) {
+            (Some(tasks), Ok(false)) => {
                 let RelayTasks {
                     dispatcher,
                     command_writer,
                     event_reader,
+                    relay_stdout_observer: _,
                 } = *tasks;
                 drop(command_writer.stop());
                 drop(dispatcher);
                 drop(event_reader);
                 Ok(None)
             }
-            (Some(tasks), true) => {
+            (Some(tasks), Ok(true)) => {
                 let command_writer =
                     join_worker_thread(tasks.command_writer.stop(), "relay command writer");
                 let event_reader = join_worker_thread(tasks.event_reader, "relay event reader");
                 let outcome = tasks.dispatcher.join();
                 command_writer.and(event_reader).and(outcome)
+            }
+            (Some(tasks), Err(error)) => {
+                let RelayTasks {
+                    dispatcher,
+                    command_writer,
+                    event_reader,
+                    relay_stdout_observer: _,
+                } = *tasks;
+                drop(command_writer.stop());
+                drop(dispatcher);
+                drop(event_reader);
+                Err(error)
             }
             (None, _) => Ok(None),
         };
@@ -1182,6 +1209,28 @@ impl RelayConnection {
             )),
         }
     }
+}
+
+fn relay_stdout_closed(descriptor: &OwnedFd) -> Result<bool, String> {
+    let mut event = libc::pollfd {
+        fd: descriptor.as_raw_fd(),
+        events: libc::POLLIN | libc::POLLHUP,
+        revents: 0,
+    };
+    let result = loop {
+        let result = unsafe { libc::poll(&mut event, 1, 0) };
+        if result >= 0 {
+            break result;
+        }
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() != Some(libc::EINTR) {
+            return Err(format!("failed to inspect worker relay stdout: {error}"));
+        }
+    };
+    if event.revents & libc::POLLNVAL != 0 {
+        return Err("worker relay stdout descriptor became invalid".to_string());
+    }
+    Ok(result > 0 && event.revents & libc::POLLHUP != 0)
 }
 
 impl RelayCommandThread {

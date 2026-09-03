@@ -89,6 +89,7 @@ Keep these ownership rules intact:
   That fallback can reconstruct only descendants still reachable from the root's current ancestry.
   It has no directory-cleanup state, so the directory remains if the manager exits before completing its own cleanup and removal.
 - The sandbox launcher owns the direct target's exit status and, in ordinary interactive mode, foreground-terminal transfer and signal relaying.
+  In hidden owned mode, it transfers the server input pipe to the sandbox root and replaces its own copy with `/dev/null`; it retains standard output until cleanup completes.
   It releases the target's private startup gate only after the manager reports readiness and manager-failure recovery is installed, closes the ownership token to request retirement, and retains the direct root waitably through manager exit and any fallback cleanup.
   Its hidden owned mode validates and watches the exact parent identity before target release; parent exit or launcher-addressed `SIGTERM` requests managed retirement, and successful managed retirement keeps the launcher alive through manager cleanup and root reaping.
   If the launcher itself is killed, manager EOF still requests cleanup, but the server cannot synchronously observe manager completion.
@@ -118,7 +119,7 @@ Keep these ownership rules intact:
 - `src/relay_protocol.rs` — server-relay JSONL message and framing contract.
 - `src/worker_relay.rs`, `src/process_group.rs` — sandboxed worker launch, I/O forwarding, signaling, same-group cleanup, and reaping, plus shared exact process-group termination.
 - `src/worker_client.rs`, `src/worker_client/` — server-owned environment, evaluation, lifecycle, ordinary launcher child ownership, ordered event dispatch, output tape, and macOS relay transport.
-- `src/sandbox.rs`, `src/sandbox/{child,macos,file_descriptors}.rs`, `src/sandbox/supervision.rs`, `src/sandbox/supervision/` — launcher-owned sandbox construction and child cleanup, primary host-manager supervision, manager-failure recovery, and standalone job control.
+- `src/sandbox.rs`, `src/sandbox/{child,macos}.rs`, `src/sandbox/supervision.rs`, `src/sandbox/supervision/` — launcher-owned sandbox construction and child cleanup, primary host-manager supervision, manager-failure recovery, and standalone job control.
 - `src/worker.rs`, `src/worker/embedded_r.rs`, `src/r_repl.c` — worker-facing facade, current embedded-R backend, cell dispatch, console callbacks, and the C-owned DLL-REPL boundary.
 
 ### Language adapters
@@ -133,7 +134,7 @@ Keep these ownership rules intact:
 
 - `src/resolver.rs`, `src/resolver/` — retained host environments, direct Python-version selection, validation, platform implementations, and resolver process-group lifecycle.
 - `src/resolver/programs/` — compile-time R programs for DuckDB extension preparation, R-library resolution, and `uv` discovery.
-- `src/sandbox/macos.rs`, `src/sandbox/file_descriptors.rs` — macOS Seatbelt policy and inherited-descriptor boundary.
+- `src/sandbox/macos.rs`, `src/process_descriptors.rs` — macOS Seatbelt policy and inherited-descriptor boundary shared by the server and sandbox launcher.
 
 ### Tests and development scripts
 

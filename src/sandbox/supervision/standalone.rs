@@ -1,10 +1,11 @@
 use super::job_control::{ForegroundTerminal, SignalRelay};
 use super::manager::SandboxManager;
 use super::root_exit_waiter::{RootExitWaiter, RootWait};
+use crate::process_descriptors;
 use crate::sandbox::{
     TARGET_GATE_RELEASE,
     child::{append_retirement_error, terminate_standalone_root, terminate_unmanaged_child},
-    file_descriptors, platform,
+    platform,
 };
 use std::ffi::{OsStr, OsString};
 use std::io::{self, ErrorKind, Write as _};
@@ -161,13 +162,17 @@ fn start_managed_root(
     owner: Option<super::SandboxOwner>,
 ) -> Result<(ManagedRoot, RootExitWaiter), String> {
     let gate_descriptor = startup_gate.inherited_descriptor();
+    if owner.is_some() && terminal_descriptor != Some(libc::STDIN_FILENO) {
+        process_descriptors::transfer_stdin_to_child(&mut command)?;
+    }
     command.env("TMPDIR", temporary_directory.path());
     signal_relay.configure_child(&mut command, terminal_descriptor);
-    file_descriptors::close_unlisted_except(&mut command, gate_descriptor)?;
+    process_descriptors::close_unlisted_except(&mut command, gate_descriptor)?;
 
     let mut child = command
         .spawn()
         .map_err(|error| format!("failed to launch `{}`: {error}", platform::SANDBOX_EXEC))?;
+    drop(command);
     startup_gate.child_spawned();
     let root_waiter = match RootExitWaiter::start(child.id() as libc::pid_t, signal_relay, owner) {
         Ok(root_waiter) => root_waiter,

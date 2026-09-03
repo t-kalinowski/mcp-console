@@ -12,6 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import last_tool_text
+from support.checkpoints import FifoCheckpoint
 from support.client import McpClient, stop_client
 from support.macos import (
     DarwinProcessIdentity,
@@ -19,6 +20,7 @@ from support.macos import (
     live_darwin_processes,
     signal_darwin_process,
 )
+from support.normalization import code
 from support.processes import (
     process_exists,
     process_group_exists,
@@ -102,6 +104,200 @@ def test_restart_reports_nonzero_sandbox_launcher_exit(binary: Path) -> Transcri
             ],
             "isError": True,
         }, result
+        return client.transcript
+    finally:
+        stop_client(client)
+
+
+def test_restart_rejects_unsolicited_status_137(binary: Path) -> Transcript:
+    relay = (
+        Path(__file__).resolve().parents[3]
+        / "fixtures"
+        / "server_relay"
+        / "scripted_relay.py"
+    )
+    environment = os.environ.copy()
+    environment["MCP_CONSOLE_TEST_RELAY_SCENARIO"] = "shutdown_status_137"
+    client = McpClient(
+        binary,
+        ("serve", "--worker", str(binary), "--relay", str(relay)),
+        environment,
+    )
+    try:
+        client._initialize_and_list_tools()
+        client.send(control="restart")
+        assert last_tool_text(client) == "[starting new worker]\n[idle]"
+
+        client.send(control="restart")
+        result = client.transcript[-1]["result"]
+        assert result == {
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        "[worker stopped: in-memory state lost]\n"
+                        "[worker launcher exited with status 137]"
+                    ),
+                }
+            ],
+            "isError": True,
+        }, result
+        return client.transcript
+    finally:
+        stop_client(client)
+
+
+def _build_relay_stdout_read_interposer(directory: Path) -> Path:
+    source = (
+        Path(__file__).resolve().parents[3]
+        / "fixtures"
+        / "native"
+        / "relay_stdout_read_interposer.c"
+    )
+    library = directory / "relay-stdout-read-interposer.dylib"
+    subprocess.run(
+        [
+            "cc",
+            "-dynamiclib",
+            "-std=c11",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-o",
+            library,
+            source,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return library
+
+
+def test_restart_drains_relay_output_before_nonzero_launcher_error(
+    binary: Path,
+) -> Transcript:
+    return _restart_drains_relay_output_before_nonzero_launcher_error(binary, 73)
+
+
+def test_restart_drains_relay_output_before_status_one_launcher_error(
+    binary: Path,
+) -> Transcript:
+    return _restart_drains_relay_output_before_nonzero_launcher_error(binary, 1)
+
+
+def _restart_drains_relay_output_before_nonzero_launcher_error(
+    binary: Path,
+    status: int,
+) -> Transcript:
+    relay = (
+        Path(__file__).resolve().parents[3]
+        / "fixtures"
+        / "server_relay"
+        / "scripted_relay.py"
+    )
+    # fmt: python
+    launcher = code(r"""
+        import os
+        import sys
+
+        os.environ["MCP_CONSOLE_TEST_RELAY_READ_PID"] = str(os.getpid())
+        os.environ["DYLD_INSERT_LIBRARIES"] = os.environ.pop(
+            "MCP_CONSOLE_TEST_RELAY_READ_DYLIB"
+        )
+        os.execv(sys.argv[1], sys.argv[1:])
+        """)
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        blocked = FifoCheckpoint.create(temporary / "relay-read-blocked")
+        release = FifoCheckpoint.create(temporary / "relay-read-release")
+        relay_exit = FifoCheckpoint.create(temporary / "relay-exit-release")
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        environment["MCP_CONSOLE_TEST_RELAY_SCENARIO"] = "shutdown_nonzero_after_output"
+        environment["MCP_CONSOLE_TEST_RELAY_EXIT_STATUS"] = str(status)
+        environment["MCP_CONSOLE_TEST_RELAY_READ_DYLIB"] = str(
+            _build_relay_stdout_read_interposer(temporary)
+        )
+        environment["MCP_CONSOLE_TEST_RELAY_READ_MATCH"] = (
+            "old generation retirement output"
+        )
+        environment["MCP_CONSOLE_TEST_RELAY_READ_BLOCKED"] = str(blocked.path)
+        environment["MCP_CONSOLE_TEST_RELAY_READ_RELEASE"] = str(release.path)
+        environment["MCP_CONSOLE_TEST_RELAY_EXIT_RELEASE"] = str(relay_exit.path)
+        client = McpClient(
+            Path(sys.executable),
+            (
+                "-c",
+                launcher,
+                str(binary),
+                "serve",
+                "--worker",
+                str(binary),
+                "--relay",
+                str(relay),
+            ),
+            environment,
+            current_directory=temporary,
+        )
+        try:
+            client._initialize_and_list_tools()
+            client.send(control="restart")
+            assert last_tool_text(client) == "[starting new worker]\n[idle]"
+
+            restart = client._start_send(control="restart")
+            blocked.wait("relay stdout reader", FIXTURE_CHECKPOINT_TIMEOUT_SECONDS)
+            relay_exit.release()
+            client._receive(restart)
+            result = restart["result"]
+            release.release()
+            assert result == {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "old generation retirement output\n"
+                            "[worker stopped: in-memory state lost]\n"
+                            f"[worker launcher exited with status {status}]"
+                        ),
+                    }
+                ],
+                "isError": True,
+            }, result
+            return client.transcript
+        finally:
+            relay_exit.release()
+            release.release()
+            blocked.close()
+            release.close()
+            relay_exit.close()
+            stop_client(client)
+
+
+def test_restart_preserves_relay_retirement_failure(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
+    client = McpClient(binary, ("serve", "--worker", str(zod)))
+    try:
+        client._initialize_and_list_tools()
+        client.send(r="fail sideband during shutdown")
+        assert last_tool_text(client) == "[done]"
+
+        client.send(control="restart")
+        result = client.transcript[-1]["result"]
+        assert result["isError"] is True, result
+        output = result["content"][0]["text"]
+        prefix = "[worker sideband read failed: "
+        assert output.startswith(prefix), output
+        assert output.endswith("]"), output
+        assert "\n" not in output, output
+        assert "; additionally" not in output, output
+        assert "worker launcher" not in output, output
+        assert "[starting new worker]" not in output, output
+        result["content"][0]["text"] = prefix + "<invalid frame>]"
+        client.transcript[-1]["transcript_normalization"] = {
+            "target": "result.content[0].text",
+            "replacements": {"sideband_failure_detail": "<invalid frame>"},
+        }
         return client.transcript
     finally:
         stop_client(client)

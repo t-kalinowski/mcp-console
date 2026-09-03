@@ -185,13 +185,22 @@ class ScriptedRelay:
         self.send(COMPLETED)
         self.mark_done()
 
-    def retire(self, command: dict[str, Any] | None = None) -> None:
+    def retire(
+        self,
+        command: dict[str, Any] | None = None,
+        before_close: dict[str, Any] | None = None,
+    ) -> None:
         if command is None:
             command = self.receive()
         assert command.get("kind") == "shutdown", command
         grace_millis = command.get("grace_millis")
         assert isinstance(grace_millis, int) and 0 <= grace_millis <= 1_000, command
         self.send({"kind": "shutdown_started"})
+        if before_close is not None:
+            self.send(before_close)
+            if release := os.environ.get("MCP_CONSOLE_TEST_RELAY_EXIT_RELEASE"):
+                with open(release, "rb", buffering=0) as checkpoint:
+                    assert checkpoint.read(1) == b"1"
         self.send({"kind": "stdout_closed"})
         self.send({"kind": "stderr_closed"})
         self.send({"kind": "worker_sideband_closed"})
@@ -823,6 +832,23 @@ def run_shutdown_nonzero(relay: ScriptedRelay) -> None:
     raise SystemExit(73)
 
 
+def run_shutdown_status_137(relay: ScriptedRelay) -> None:
+    relay.ready()
+    relay.retire()
+    raise SystemExit(137)
+
+
+def run_shutdown_nonzero_after_output(relay: ScriptedRelay) -> None:
+    relay.ready()
+    relay.retire(
+        before_close={
+            "kind": "console_output",
+            "data": "old generation retirement output\n",
+        }
+    )
+    raise SystemExit(int(os.environ.get("MCP_CONSOLE_TEST_RELAY_EXIT_STATUS", "73")))
+
+
 def run_blocked_live_r_resolver_shutdown(relay: ScriptedRelay) -> None:
     relay.make_checkpoint(SHUTDOWN_RECEIVED_NAME)
     relay.make_checkpoint(RETIREMENT_RELEASE_NAME)
@@ -1162,6 +1188,8 @@ def main() -> None:
         "serialized_cross_source_order": run_serialized_cross_source_order,
         "shutdown": run_shutdown,
         "shutdown_nonzero": run_shutdown_nonzero,
+        "shutdown_status_137": run_shutdown_status_137,
+        "shutdown_nonzero_after_output": run_shutdown_nonzero_after_output,
         "blocked_live_r_resolver_shutdown": run_blocked_live_r_resolver_shutdown,
         "late_r_prepared_retirement": run_late_r_prepared_retirement,
         "pre_marker_r_prepared_replacement": run_pre_marker_r_prepared_replacement,

@@ -19,7 +19,8 @@ The manager's adopted guard is then the only directory-cleanup owner; launcher-s
 After readiness, the launcher holds the control socket open only as the live-sandbox ownership token.
 The launcher supports a hidden `--exit-with-parent <PID>` mode, which the server uses for one launcher subprocess per worker generation.
 It verifies and captures its exact parent identity before creating the sandbox, watches that identity for exit, and revalidates it after watch registration and immediately before releasing the target.
-The server owns only the launcher's piped input and output, inherited error stream, and normal child exit, signaling, and reaping.
+The server closes unrelated inherited descriptors before launcher exec and then owns only the launcher's piped input and output, inherited error stream, and normal child exit, signaling, and reaping.
+The owned launcher transfers the input pipe to the sandbox root and replaces its own copy with `/dev/null`, while retaining output through manager cleanup so relay input closure and cleanup completion remain observable at the server boundary.
 The relay remains a transport and direct-worker owner, including local same-group cleanup; it does not own observed-descendant cleanup across process groups or sessions, or the private directory.
 
 ## Startup

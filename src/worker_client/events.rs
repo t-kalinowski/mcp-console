@@ -29,7 +29,7 @@ pub(super) enum ReadyCommitOutcome {
 }
 
 pub(super) struct WorkerEventDispatcher {
-    thread: thread::JoinHandle<Option<WorkerProcessOutcome>>,
+    thread: thread::JoinHandle<Result<Option<WorkerProcessOutcome>, String>>,
 }
 
 struct OperationState {
@@ -616,7 +616,7 @@ impl WorkerEventDispatcher {
     pub(super) fn join(self) -> Result<Option<WorkerProcessOutcome>, String> {
         self.thread
             .join()
-            .map_err(|_| "worker event dispatcher task failed".to_string())
+            .map_err(|_| "worker event dispatcher task failed".to_string())?
     }
 }
 
@@ -631,7 +631,7 @@ fn dispatch_worker_events(
     ready_commit: mpsc::Receiver<ReadyCommitOutcome>,
     interrupts: super::platform::InterruptRequests,
     shutdown_started: super::platform::ShutdownAcceptance,
-) -> Option<WorkerProcessOutcome> {
+) -> Result<Option<WorkerProcessOutcome>, String> {
     let mut startup = Some(startup);
     let stdout = output.direct_stdout();
     let stderr = output.direct_stderr();
@@ -642,6 +642,7 @@ fn dispatch_worker_events(
     let mut stderr_closed = false;
     let mut sideband_closed = false;
     let mut relay_fatal = false;
+    let mut retirement_failure = None;
     let mut intentional_shutdown = false;
     let mut retiring = false;
     let mut process_outcome = None;
@@ -751,7 +752,9 @@ fn dispatch_worker_events(
                             Err("worker relay reported two fatal failures".to_string())
                         } else {
                             relay_fatal = true;
-                            if !retiring {
+                            if retiring {
+                                retirement_failure.get_or_insert(message);
+                            } else {
                                 fail_dispatch(&operation, &mut startup, &interrupts, message);
                                 semantic_failure = true;
                             }
@@ -866,7 +869,7 @@ fn dispatch_worker_events(
         );
     }
     interrupts.fail("worker stopped before interrupt completed".to_string());
-    process_outcome
+    retirement_failure.map_or(Ok(process_outcome), Err)
 }
 
 fn ignored_during_retirement(event: &RelayEvent) -> bool {

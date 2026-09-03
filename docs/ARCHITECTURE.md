@@ -61,6 +61,7 @@ The launcher is the server's direct child and the sole host-side sandbox owner.
 It retains the `sandbox-exec` root and manager waitably, while the root first runs a hidden wrapper blocked on a private release channel.
 After the manager reports readiness and manager-failure recovery is installed, the launcher releases the wrapper into the relay.
 The server's piped launcher input and output and inherited error stream pass through to that relay without a data proxy.
+After transferring standard input to the sandbox root, the owned launcher replaces its own copy with `/dev/null` so relay closure remains observable to the server's writer.
 The relay is the sandbox process-group leader and starts the configured worker inside the same sandbox and process group.
 Submitted R, Python, and SQL cells run in the worker, not in the server or a host resolver.
 
@@ -135,7 +136,7 @@ The server owns the logical console session and all state that must survive a wo
 
 These responsibilities remain on the host side of the sandbox boundary.
 The server does not execute submitted cells or ask the relay to interpret MCP calls.
-It knows the launcher's piped standard input and output, inherited standard error, and normal child exit and signaling, but no private directory, startup gate, sandbox root, manager, or manager monitor.
+It configures the launcher's piped standard input and output and inherited standard error, closes unrelated inherited descriptors before launcher exec, and knows normal child exit and signaling, but no private directory, startup gate, sandbox root, manager, or manager monitor.
 At generation retirement, it first requests graceful shutdown through the relay protocol and waits through the applicable relay deadline.
 It then sends `SIGTERM` to the launcher to request managed retirement and uses a hard launcher kill only as the final fail-safe.
 On normal and owned-retirement paths, successful managed launcher exit is the synchronous cleanup barrier before the server reaps it.
@@ -143,7 +144,7 @@ On normal and owned-retirement paths, successful managed launcher exit is the sy
 ### Sandbox launcher
 
 The sandbox launcher owns one direct sandbox target's exit status and the complete host-side sandbox lifetime.
-It inherits the command's standard streams, closes every unrelated inherited descriptor before exec, places the target in a dedicated process group, retains the direct root as a waitable child, and returns that root's exit status when cleanup succeeds.
+It inherits only the three documented streams from the server, independently closes every unrelated inherited descriptor before target exec, places the target in a dedicated process group, retains the direct root as a waitable child, and returns that root's exit status when cleanup succeeds.
 It keeps the root blocked on a private descriptor until the manager reports readiness and failure monitoring is installed, then releases the root into the requested command.
 The root waiter uses one `kqueue` for root exit and launcher-addressed signals.
 In ordinary mode, the launcher relays `SIGHUP`, `SIGINT`, `SIGQUIT`, and `SIGTERM` addressed to it into the target group.
@@ -154,6 +155,7 @@ Startup and recovery failures likewise drain pending forwarded signals after sto
 It does not own descendant tracking, console state, dependency resolution, recording, relay transport, or worker protocol behavior.
 It does not implement stopped/continued job state or general shell-pipeline job control.
 The launcher itself never writes to standard output because that stream carries relay JSONL in a worker generation.
+In parent-owned mode it relinquishes its copy of the relay input pipe after transferring that stream to the target; it retains standard output until cleanup finishes, so target output closure and launcher cleanup completion share one observable boundary.
 If the launcher is killed or crashes, manager-control EOF still requests cleanup, but the server can no longer wait synchronously for that manager.
 
 ### Sandbox manager
