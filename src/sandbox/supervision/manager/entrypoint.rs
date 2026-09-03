@@ -1,30 +1,35 @@
 use super::super::process::{ProcessIdentity, process_info, signal_process};
 use super::super::process_tracker::{DescendantTracker, EventWait};
-use super::{protocol, stop_process_group, with_prior_error};
+use super::{READY, stop_process_group, with_prior_error};
 use crate::sandbox::platform;
 use std::io::{ErrorKind, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::net::UnixStream;
+use std::path::PathBuf;
 use std::time::Duration;
 
-pub(super) fn run() -> Result<(), String> {
+pub(super) fn run(
+    root_pid: u32,
+    cleanup_timeout_millis: u64,
+    temporary_directory: PathBuf,
+) -> Result<(), String> {
     // SAFETY: the owner transfers its private control socket as the manager's
     // standard input and retains no manager-side copy after spawning.
     let mut stream = unsafe { UnixStream::from_raw_fd(libc::STDIN_FILENO) };
-    let protocol::Initialization {
-        owner_pid,
-        root_pid,
-        cleanup_timeout,
-        temporary_directory,
-    } = protocol::read(&mut stream)?;
 
     // SAFETY: getppid(2) has no pointer or lifetime preconditions.
-    let parent_pid = unsafe { libc::getppid() };
-    if parent_pid != owner_pid {
-        return Err(format!(
-            "sandbox manager owner changed before readiness: expected {owner_pid}, found {parent_pid}"
-        ));
+    let owner_pid = unsafe { libc::getppid() };
+    if owner_pid <= 0 {
+        return Err("sandbox manager owner PID is invalid".to_string());
     }
+    let root_pid = libc::pid_t::try_from(root_pid)
+        .ok()
+        .filter(|pid| *pid > 0)
+        .ok_or_else(|| "sandbox manager received an invalid root PID".to_string())?;
+    if cleanup_timeout_millis == 0 {
+        return Err("sandbox manager cleanup timeout is invalid".to_string());
+    }
+    let cleanup_timeout = Duration::from_millis(cleanup_timeout_millis);
     let info = process_info(root_pid)?
         .ok_or_else(|| format!("sandbox root {root_pid} exited before manager startup"))?;
     if info.parent_pid != owner_pid {
@@ -41,7 +46,7 @@ pub(super) fn run() -> Result<(), String> {
     if let Err(error) = tracker.watch_control(stream.as_raw_fd()) {
         return finish_startup_failure(error, root, tracker, temporary_directory, cleanup_timeout);
     }
-    if let Err(error) = stream.write_all(&[protocol::READY]) {
+    if let Err(error) = stream.write_all(&[READY]) {
         tracker.remove_control_watch();
         return finish_startup_failure(
             format!("failed to report sandbox manager readiness: {error}"),

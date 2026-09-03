@@ -166,8 +166,8 @@ impl SignalRelay {
 
         // Preserve inherited masks and ignored dispositions. Previously blocked
         // signals remain pending, while Darwin discards ignored signals. The
-        // child restores this mask before exec, and the launcher restores it
-        // after the sandbox root exits.
+        // spawned children restore this mask before exec, and the launcher
+        // restores it after the sandbox root exits.
         let mut wait_set: libc::sigset_t = unsafe { std::mem::zeroed() };
         unsafe { libc::sigemptyset(&mut wait_set) };
         for signal in FORWARDED_SIGNALS {
@@ -204,13 +204,16 @@ impl SignalRelay {
                 if let Some(descriptor) = terminal_descriptor {
                     set_foreground_process_group(descriptor, libc::getpid())?;
                 }
-                let mask_result =
-                    libc::pthread_sigmask(libc::SIG_SETMASK, &previous_mask, std::ptr::null_mut());
-                if mask_result != 0 {
-                    return Err(std::io::Error::from_raw_os_error(mask_result));
-                }
-                Ok(())
+                restore_signal_mask(&previous_mask)
             });
+        }
+    }
+
+    pub(super) fn configure_manager(&self, command: &mut Command) {
+        let previous_mask = unsafe { std::ptr::read(&self.previous_mask) };
+
+        unsafe {
+            command.pre_exec(move || restore_signal_mask(&previous_mask));
         }
     }
 
@@ -287,6 +290,14 @@ impl SignalRelay {
         }
         Ok(Some(signal))
     }
+}
+
+fn restore_signal_mask(mask: &libc::sigset_t) -> std::io::Result<()> {
+    let result = unsafe { libc::pthread_sigmask(libc::SIG_SETMASK, mask, std::ptr::null_mut()) };
+    if result != 0 {
+        return Err(std::io::Error::from_raw_os_error(result));
+    }
+    Ok(())
 }
 
 impl Drop for SignalRelay {

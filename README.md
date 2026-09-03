@@ -173,7 +173,7 @@ mcp-console --version
 `mcp-console serve` communicates with its MCP client over standard input and output.
 On macOS, each worker generation uses one host-side manager that owns observed-descendant cleanup and the private temporary directory.
 The manager adopts the directory and installs root, descendant, and control-socket observation before reporting readiness.
-After receiving readiness, the server relinquishes its duplicate directory guard, installs manager-failure recovery, and releases the built-in or configured relay's startup gate.
+After receiving readiness, the server installs manager-failure recovery, relinquishes its duplicate directory guard, and releases the built-in or configured relay's startup gate.
 The server then holds the manager control socket open only as the worker lifetime's ownership token.
 Normal restart, automatic worker replacement, orderly server shutdown, and abrupt server exit close that token and retire descendants the manager observed, including descendants that entered another process group or session.
 The manager decides whether the relay root must be stopped and removes the private directory only after successful cleanup.

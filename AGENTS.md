@@ -58,9 +58,9 @@ They are not MCP, relay, sideband, or worker-stream records.
 MCP Console has four process boundaries:
 
 1. The client and server communicate through MCP JSON-RPC over stdio.
-2. Each host sandbox owner initializes one manager over a private inherited Unix socket.
+2. Each host sandbox owner creates a gated root, then starts one manager with the root PID, cleanup timeout, and private path as native command arguments plus a private inherited control socket.
    Before reporting readiness, the manager installs root, descendant, and control-socket observation and adopts the private directory.
-   After receiving readiness, the owner relinquishes its duplicate directory guard, installs manager-failure recovery, and releases the root's startup gate.
+   After receiving readiness, the owner installs manager-failure recovery, relinquishes its duplicate directory guard, and releases the root's startup gate.
    The owner then holds the control stream open only as the live-sandbox ownership token; EOF requests retirement, and successful manager process exit is the primary cleanup barrier.
    The server starts one manager for each worker generation, which may evaluate multiple cells before restart or replacement.
    The standalone launcher starts one manager for each invocation of `mcp-console sandbox`, which runs one direct child command.

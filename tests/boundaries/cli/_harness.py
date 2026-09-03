@@ -71,6 +71,10 @@ def _start_with_controlling_terminal(
 def _build_supervision_interposer(directory: Path, behavior: str) -> Path:
     definitions = {
         "manager-start": "-DMCP_CONSOLE_INTERPOSE_MANAGER_START",
+        "root-before-manager": "-DMCP_CONSOLE_INTERPOSE_ROOT_BEFORE_MANAGER",
+        "owner-monitor-start-failure": (
+            "-DMCP_CONSOLE_INTERPOSE_OWNER_MONITOR_START_FAILURE"
+        ),
         "manager-stop-failure": "-DMCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE",
         "denied-sigkill": "-DMCP_CONSOLE_INTERPOSE_DENIED_SIGKILL",
         "failed-recovery-stop": "-DMCP_CONSOLE_INTERPOSE_FAILED_RECOVERY_STOP",
@@ -94,7 +98,6 @@ def _build_supervision_interposer(directory: Path, behavior: str) -> Path:
 #include <stdlib.h>
 #include <string.h>
 #include <sys/event.h>
-#include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -120,7 +123,14 @@ static _Atomic int reaped_root = 0;
 static _Atomic int gated_manager_group_cleanup = 0;
 #endif
 #if defined(MCP_CONSOLE_INTERPOSE_MANAGER_START)
-static _Atomic int gated_manager_read = 0;
+static _Atomic int gated_manager_start = 0;
+#endif
+#if defined(MCP_CONSOLE_INTERPOSE_ROOT_BEFORE_MANAGER)
+static _Atomic int sandbox_fork_count = 0;
+#endif
+#if defined(MCP_CONSOLE_INTERPOSE_OWNER_MONITOR_START_FAILURE)
+static _Atomic int failed_owner_monitor_start = 0;
+static _Atomic int gated_owner_manager_stop = 0;
 #endif
 #if defined(MCP_CONSOLE_INTERPOSE_FAILED_RECOVERY_STOP)
 static _Atomic int failed_process_info = 0;
@@ -135,7 +145,8 @@ static _Atomic int failed_root_identity_recheck = 0;
     || defined(MCP_CONSOLE_INTERPOSE_FAILED_RECOVERY_STOP) \
     || defined(MCP_CONSOLE_INTERPOSE_FAILED_ROOT_OBSERVER) \
     || defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP) \
-    || defined(MCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE)
+    || defined(MCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE) \
+    || defined(MCP_CONSOLE_INTERPOSE_OWNER_MONITOR_START_FAILURE)
 typedef int (*kill_function)(pid_t, int);
 
 static kill_function next_kill(void) {
@@ -273,6 +284,8 @@ static void signal_checkpoint(const char *name) {
 }
 
 #if defined(MCP_CONSOLE_INTERPOSE_MANAGER_START) \
+    || defined(MCP_CONSOLE_INTERPOSE_ROOT_BEFORE_MANAGER) \
+    || defined(MCP_CONSOLE_INTERPOSE_OWNER_MONITOR_START_FAILURE) \
     || defined(MCP_CONSOLE_INTERPOSE_FAILED_RECOVERY_STOP) \
     || defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP) \
     || defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_CLEANUP)
@@ -340,6 +353,8 @@ static int gate_recovery_root_stop(pid_t process_id, int number) {
 #endif
 
 #if defined(MCP_CONSOLE_INTERPOSE_MANAGER_START) \
+    || defined(MCP_CONSOLE_INTERPOSE_ROOT_BEFORE_MANAGER) \
+    || defined(MCP_CONSOLE_INTERPOSE_OWNER_MONITOR_START_FAILURE) \
     || defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP) \
     || defined(MCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE) \
     || defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_CLEANUP)
@@ -353,6 +368,8 @@ static int is_subcommand(const char *name) {
 __attribute__((constructor))
 static void configure_interposer(void) {
 #if defined(MCP_CONSOLE_INTERPOSE_MANAGER_START) \
+    || defined(MCP_CONSOLE_INTERPOSE_ROOT_BEFORE_MANAGER) \
+    || defined(MCP_CONSOLE_INTERPOSE_OWNER_MONITOR_START_FAILURE) \
     || defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP) \
     || defined(MCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE) \
     || defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_CLEANUP)
@@ -392,22 +409,68 @@ static int gate_manager_group_cleanup(pid_t process_group_id, int number) {
 #endif
 
 #if defined(MCP_CONSOLE_INTERPOSE_MANAGER_START)
-static ssize_t gate_manager_initialization(
-    int descriptor,
-    void *buffer,
-    size_t length,
-    int flags
-) {
-    if (descriptor == STDIN_FILENO
-        && getenv("MCP_CONSOLE_TEST_MANAGER_START") != NULL
+static pid_t gate_manager_start(void) {
+    if (getenv("MCP_CONSOLE_TEST_MANAGER_START") != NULL
         && is_subcommand("sandbox-manager")
-        && atomic_exchange(&gated_manager_read, 1) == 0) {
+        && atomic_exchange(&gated_manager_start, 1) == 0) {
         signal_checkpoint("MCP_CONSOLE_TEST_MANAGER_START");
         wait_for_release("MCP_CONSOLE_TEST_MANAGER_RELEASE");
     }
-    return recvfrom(descriptor, buffer, length, flags, NULL, NULL);
+    return getppid();
 }
 
+#endif
+
+#if defined(MCP_CONSOLE_INTERPOSE_ROOT_BEFORE_MANAGER)
+static pid_t gate_manager_spawn(void) {
+    int fork_index = atomic_fetch_add(&sandbox_fork_count, 1);
+    if (is_subcommand("sandbox") && fork_index == 1) {
+        signal_checkpoint("MCP_CONSOLE_TEST_MANAGER_SPAWN");
+        wait_for_release("MCP_CONSOLE_TEST_MANAGER_SPAWN_RELEASE");
+    }
+    return fork();
+}
+#endif
+
+#if defined(MCP_CONSOLE_INTERPOSE_OWNER_MONITOR_START_FAILURE)
+typedef int (*pthread_create_function)(
+    pthread_t *,
+    const pthread_attr_t *,
+    void *(*)(void *),
+    void *
+);
+
+static pthread_create_function next_pthread_create(void) {
+    return pthread_create;
+}
+
+static int fail_owner_monitor_start(
+    pthread_t *thread,
+    const pthread_attr_t *attributes,
+    void *(*start_routine)(void *),
+    void *argument
+) {
+    if (is_subcommand("sandbox")
+        && getenv("MCP_CONSOLE_TEST_OWNER_MONITOR_START_FAILURE") != NULL
+        && atomic_exchange(&failed_owner_monitor_start, 1) == 0) {
+        signal_checkpoint("MCP_CONSOLE_TEST_OWNER_MONITOR_START_FAILURE");
+        wait_for_release("MCP_CONSOLE_TEST_OWNER_MONITOR_START_RELEASE");
+        return EAGAIN;
+    }
+    return next_pthread_create()(thread, attributes, start_routine, argument);
+}
+
+static int gate_owner_manager_stop(pid_t process_id, int number) {
+    if (number == SIGKILL
+        && is_subcommand("sandbox")
+        && atomic_load(&failed_owner_monitor_start) != 0
+        && getenv("MCP_CONSOLE_TEST_OWNER_MANAGER_STOP") != NULL
+        && atomic_exchange(&gated_owner_manager_stop, 1) == 0) {
+        signal_checkpoint("MCP_CONSOLE_TEST_OWNER_MANAGER_STOP");
+        wait_for_release("MCP_CONSOLE_TEST_OWNER_MANAGER_STOP_RELEASE");
+    }
+    return next_kill()(process_id, number);
+}
 #endif
 
 #if defined(MCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE)
@@ -585,8 +648,13 @@ static int delay_late_recovery(
         (const void *)(uintptr_t)&replacee,                                    \
     };
 
-#if defined(MCP_CONSOLE_INTERPOSE_MANAGER_START)
-DYLD_INTERPOSE(gate_manager_initialization, recv)
+#if defined(MCP_CONSOLE_INTERPOSE_ROOT_BEFORE_MANAGER)
+DYLD_INTERPOSE(gate_manager_spawn, fork)
+#elif defined(MCP_CONSOLE_INTERPOSE_OWNER_MONITOR_START_FAILURE)
+DYLD_INTERPOSE(fail_owner_monitor_start, pthread_create)
+DYLD_INTERPOSE(gate_owner_manager_stop, kill)
+#elif defined(MCP_CONSOLE_INTERPOSE_MANAGER_START)
+DYLD_INTERPOSE(gate_manager_start, getppid)
 #elif defined(MCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE)
 DYLD_INTERPOSE(observe_manager_process_watches, kevent)
 DYLD_INTERPOSE(fail_manager_group_stop, killpg)

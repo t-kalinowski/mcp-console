@@ -1,0 +1,18 @@
+---
+command:
+  - mcp-console
+  - sandbox
+  - --
+  - python
+  - -c
+  - raise SystemExit(23)
+owner_checkpoint: before manager-monitor creation
+manager_monitor_start: EAGAIN
+---
+launcher_returncode: 1
+stdout: ""
+stderr: >
+  failed to start sandbox manager monitor: Resource temporarily
+  unavailable (os error 35)
+verified_cleanup: gated sandbox root and manager
+verified_preservation: sandbox temp

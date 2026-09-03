@@ -244,6 +244,22 @@ def darwin_process_waits_for_control(
     ) and _darwin_main_thread_waits(thread_info)
 
 
+def darwin_process_extra_socket_descriptors(
+    identity: DarwinProcessIdentity,
+) -> set[int] | None:
+    """Return extra sockets held by the exact single-threaded process."""
+    prox_fdtype_socket = 2
+    resources = _darwin_process_resources(identity)
+    if resources is None:
+        return None
+    file_descriptors, _ = resources
+    return {
+        descriptor
+        for descriptor, descriptor_type in file_descriptors
+        if descriptor > 2 and descriptor_type == prox_fdtype_socket
+    }
+
+
 def darwin_process_waits_for_startup_release(
     identity: DarwinProcessIdentity,
 ) -> bool:

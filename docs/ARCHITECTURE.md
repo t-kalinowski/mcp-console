@@ -81,13 +81,13 @@ The client does not communicate directly with a relay, worker, or resolver.
 
 ### Sandbox owner and sandbox manager
 
-The server initializes one sandbox manager per worker generation, which may evaluate multiple cells before restart or replacement.
-The standalone launcher initializes one manager per invocation of `mcp-console sandbox`, which runs one direct child command.
-Initialization travels over a private inherited Unix socket and waits for a one-byte readiness response.
-The fixed private initialization carries the owner and sandbox-root PIDs, cleanup timeout, and private temporary-directory path.
+The server starts one sandbox manager per worker generation, which may evaluate multiple cells before restart or replacement.
+The standalone launcher starts one manager per invocation of `mcp-console sandbox`, which runs one direct child command.
+The owner first creates the gated root, then starts the manager with the root PID, cleanup timeout, and private temporary-directory path as native command arguments.
+The manager derives the owner PID from its parent and uses a private inherited Unix socket to report one-byte readiness and retain lifetime ownership.
 Before reporting readiness, the manager validates the root's exact identity and direct-child relationship, installs root and descendant tracking plus control-socket observation, and adopts the directory.
 The owner retains its directory-creation guard until readiness and preserves it if manager adoption is ambiguous.
-After receiving readiness, the owner relinquishes that guard, installs manager-failure recovery, and then releases the root's startup gate.
+After receiving readiness, the owner installs manager-failure recovery, relinquishes that guard, and then releases the root's startup gate.
 The manager becomes the sole directory-cleanup owner when the duplicate guard is relinquished.
 The adopted guard preserves on unexpected unwind and is armed for removal only after the manager proves cleanup.
 If the manager later fails while the root remains live, owner-side fallback handles process cleanup only and does not remove the directory.
@@ -218,8 +218,8 @@ The worker itself starts lazily when an operation first needs it; preparing reta
 An explicit restart starts its replacement eagerly, including when the session had not started a worker before.
 
 For each worker start, the server configures a sandboxed relay from the retained environment.
-It starts the sandbox manager, launches a gated sandbox root as a waitable child, and waits while the manager installs root, descendant, and control-socket observation and adopts the private directory.
-After receiving readiness, the server relinquishes its duplicate directory guard, installs manager-failure recovery, and releases that same root process into the configured relay.
+It launches a gated sandbox root as a waitable child, starts the sandbox manager for that root, and waits while the manager installs root, descendant, and control-socket observation and adopts the private directory.
+After receiving readiness, the server installs manager-failure recovery, relinquishes its duplicate directory guard, and releases that same root process into the configured relay.
 Neither built-in nor configured relay code can run before manager observation is active and failure recovery is installed.
 Darwin can still miss a later descendant that becomes orphaned before the manager resolves its fork event.
 The relay creates the worker sideband and standard streams, launches the worker, and forwards its startup events.
@@ -229,8 +229,8 @@ The server admits the worker only after the required readiness exchange succeeds
 
 The standalone launcher creates a private temporary directory, configures `sandbox-exec`, closes unrelated nonstandard inherited descriptors, and asks it to run a hidden wrapper with inherited standard streams plus one private release descriptor.
 The wrapper blocks on that descriptor before requested command code executes.
-The launcher starts the manager before that root and retains both children waitably while the manager installs root, descendant, and control-socket observation and adopts the directory.
-After receiving readiness, the launcher relinquishes its duplicate directory guard, installs recovery monitoring, and writes one release byte; the same root closes the descriptor and replaces itself with the requested command.
+The launcher starts that gated root before the manager and retains both children waitably while the manager installs root, descendant, and control-socket observation and adopts the directory.
+After receiving readiness, the launcher installs recovery monitoring, relinquishes its duplicate directory guard, and writes one release byte; the same root closes the descriptor and replaces itself with the requested command.
 A descendant that later escapes before the manager sees its fork remains outside cleanup.
 
 The launcher blocks in the root waiter's `kqueue` until root exit or a supported signal is addressed to the launcher.

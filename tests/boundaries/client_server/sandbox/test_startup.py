@@ -46,10 +46,10 @@ def _build_manager_start_interposer(directory: Path) -> Path:
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
 #include <unistd.h>
 
-static _Atomic int gated_manager_read = 0;
+static _Atomic int gated_manager_start = 0;
+static _Atomic int server_fork_count = 0;
 static _Atomic pid_t denied_cleanup_root = 0;
 static _Atomic int reported_direct_cleanup_denial = 0;
 
@@ -113,19 +113,24 @@ static void wait_for_release(const char *name) {
     }
 }
 
-static ssize_t gate_manager_initialization(
-    int descriptor,
-    void *buffer,
-    size_t length,
-    int flags
-) {
-    if (descriptor == STDIN_FILENO
-        && is_subcommand("sandbox-manager")
-        && atomic_exchange(&gated_manager_read, 1) == 0) {
+static pid_t gate_manager_start(void) {
+    if (is_subcommand("sandbox-manager")
+        && atomic_exchange(&gated_manager_start, 1) == 0) {
         signal_checkpoint("MCP_CONSOLE_TEST_MANAGER_START");
         wait_for_release("MCP_CONSOLE_TEST_MANAGER_RELEASE");
     }
-    return recvfrom(descriptor, buffer, length, flags, NULL, NULL);
+    return getppid();
+}
+
+static pid_t gate_manager_spawn(void) {
+    int fork_index = atomic_fetch_add(&server_fork_count, 1);
+    if (is_subcommand("serve")
+        && getenv("MCP_CONSOLE_TEST_MANAGER_SPAWN") != NULL
+        && fork_index == 1) {
+        signal_checkpoint("MCP_CONSOLE_TEST_MANAGER_SPAWN");
+        wait_for_release("MCP_CONSOLE_TEST_MANAGER_SPAWN_RELEASE");
+    }
+    return fork();
 }
 
 static int deny_startup_cleanup_group(pid_t process_group_id, int number) {
@@ -164,7 +169,8 @@ static int deny_startup_cleanup_process(pid_t process_id, int number) {
         (const void *)(uintptr_t)&replacee,                                    \
     };
 
-DYLD_INTERPOSE(gate_manager_initialization, recv)
+DYLD_INTERPOSE(gate_manager_start, getppid)
+DYLD_INTERPOSE(gate_manager_spawn, fork)
 DYLD_INTERPOSE(deny_startup_cleanup_group, killpg)
 DYLD_INTERPOSE(deny_startup_cleanup_process, kill)
 """.removeprefix("\n"),
@@ -294,6 +300,8 @@ def _run_startup_case(binary: Path, custom_relay: bool) -> Transcript:
 
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
+        manager_spawn = FifoCheckpoint(temporary / "manager-spawn")
+        manager_spawn_release = FifoCheckpoint(temporary / "manager-spawn-release")
         manager_started = FifoCheckpoint(temporary / "manager-started")
         manager_release = FifoCheckpoint(temporary / "manager-release")
         environment = os.environ.copy()
@@ -301,6 +309,10 @@ def _run_startup_case(binary: Path, custom_relay: bool) -> Transcript:
         environment["MCP_CONSOLE_TEST_BINARY"] = str(binary)
         environment["MCP_CONSOLE_TEST_MANAGER_START"] = str(manager_started.path)
         environment["MCP_CONSOLE_TEST_MANAGER_RELEASE"] = str(manager_release.path)
+        environment["MCP_CONSOLE_TEST_MANAGER_SPAWN"] = str(manager_spawn.path)
+        environment["MCP_CONSOLE_TEST_MANAGER_SPAWN_RELEASE"] = str(
+            manager_spawn_release.path
+        )
         environment["DYLD_INSERT_LIBRARIES"] = str(
             _build_manager_start_interposer(temporary)
         )
@@ -310,14 +322,33 @@ def _run_startup_case(binary: Path, custom_relay: bool) -> Transcript:
             arguments.extend(["--relay", str(marker_relay)])
         client = McpClient(binary, tuple(arguments), environment)
         identities: tuple[DarwinProcessIdentity, ...] = ()
-        released = False
+        manager_spawn_released = False
+        manager_start_released = False
         try:
             client._initialize_and_list_tools()
             waiting = client._start_send(r="echo echo")
-            manager_started.wait("manager initialization")
+            manager_spawn.wait("manager spawn")
+
+            server = capture_darwin_process_identity(client.process.pid)
+            children = darwin_child_process_identities(server)
+            assert len(children) == 1, children
+            root = children[0]
+            identities = (root,)
+            _wait_for_private_startup_gate(root)
+            assert darwin_child_process_identities(root) == (), (
+                "worker started before sandbox supervision was ready"
+            )
+            markers = list(temporary.glob(f"**/{MARKER_NAME}"))
+            assert markers == [], (
+                "custom relay executed before sandbox supervision was ready"
+            )
+
+            manager_spawn_release.release()
+            manager_spawn_released = True
+            manager_started.wait("manager startup")
 
             root_pid, manager_pid = _worker_generation_processes(client.process.pid)
-            root = capture_darwin_process_identity(root_pid)
+            assert root_pid == root[0], (root_pid, root)
             manager = capture_darwin_process_identity(manager_pid)
             identities = (root, manager)
             _wait_for_private_startup_gate(root)
@@ -330,12 +361,12 @@ def _run_startup_case(binary: Path, custom_relay: bool) -> Transcript:
             )
 
             manager_release.release()
-            released = True
+            manager_start_released = True
             client._receive(waiting)
             _assert_zod_echo(waiting)
 
             gate_record = {
-                "manager": "blocked before readiness",
+                "manager": "started after relay root and blocked before readiness",
                 "relay_root": "blocked on private startup gate",
                 "worker": "not started before readiness",
             }
@@ -351,11 +382,15 @@ def _run_startup_case(binary: Path, custom_relay: bool) -> Transcript:
             waiting["startup_gate"] = gate_record
             return client._finish()
         finally:
-            if not released:
+            if not manager_spawn_released:
+                manager_spawn_release.release()
+            if not manager_start_released:
                 manager_release.release()
             stop_client(client)
             if identities:
                 kill_darwin_processes(identities)
+            manager_spawn.close()
+            manager_spawn_release.close()
             manager_started.close()
             manager_release.close()
 
@@ -465,7 +500,7 @@ def test_manager_failure_before_readiness_keeps_custom_relay_gated(
         try:
             client._initialize_and_list_tools()
             waiting = client._start_send(r="echo echo")
-            manager_started.wait("manager initialization")
+            manager_started.wait("manager startup")
 
             root_pid, manager_pid = _worker_generation_processes(client.process.pid)
             root = capture_darwin_process_identity(root_pid)
@@ -520,7 +555,7 @@ def test_manager_failure_before_readiness_keeps_custom_relay_gated(
             }
 
             replacement = client._start_send(r="echo echo")
-            manager_started.wait("replacement manager initialization")
+            manager_started.wait("replacement manager startup")
             manager_release.release()
             replacement_released = True
             client._receive(replacement)

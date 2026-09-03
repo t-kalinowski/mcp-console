@@ -19,6 +19,7 @@ from _support import (
     build_manager_interposer,
     capture_darwin_process_identity,
     code,
+    darwin_child_process_identities,
     kill_darwin_processes,
     live_darwin_processes,
     run_this_suite,
@@ -35,6 +36,92 @@ from cli._harness import (
 
 
 PLATFORMS = {"darwin"}
+
+
+def test_spawns_gated_root_before_manager(binary: Path) -> Transcript:
+    arguments = ("sandbox", "--", "python", "-c", "raise SystemExit(23)")
+
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        fixture_directory = Path(temporary_directory)
+        manager_spawn = FifoCheckpoint(fixture_directory / "manager-spawn")
+        manager_spawn_release = FifoCheckpoint(
+            fixture_directory / "manager-spawn-release"
+        )
+        environment = os.environ.copy()
+        environment["DYLD_INSERT_LIBRARIES"] = str(
+            _build_supervision_interposer(
+                fixture_directory,
+                "root-before-manager",
+            )
+        )
+        environment["MCP_CONSOLE_TEST_MANAGER_SPAWN"] = str(manager_spawn.path)
+        environment["MCP_CONSOLE_TEST_MANAGER_SPAWN_RELEASE"] = str(
+            manager_spawn_release.path
+        )
+        environment["TMPDIR"] = str(fixture_directory)
+
+        process = subprocess.Popen(
+            [binary, *arguments],
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        assert process.stdout is not None
+        assert process.stderr is not None
+        identities: list[DarwinProcessIdentity] = []
+        manager_released = False
+        try:
+            manager_spawn.wait("sandbox manager spawn")
+            launcher = capture_darwin_process_identity(process.pid)
+            children = darwin_child_process_identities(launcher)
+            assert len(children) == 1, children
+            root = children[0]
+            identities.append(root)
+            _wait_for_private_startup_gate(root)
+            sandbox_temporary_directories = list(
+                fixture_directory.glob(f"mcp-console-tmp-{process.pid}-*")
+            )
+            assert len(sandbox_temporary_directories) == 1, (
+                sandbox_temporary_directories
+            )
+            sandbox_temporary_directory = sandbox_temporary_directories[0]
+
+            manager_spawn_release.release()
+            manager_released = True
+            returncode = process.wait(timeout=TIMEOUT)
+            stdout = process.stdout.read().decode("utf-8")
+            stderr = process.stderr.read().decode("utf-8")
+
+            assert returncode == 23, (returncode, stderr)
+            assert stdout == "", stdout
+            assert stderr == "", stderr
+            assert live_darwin_processes(identities) == []
+            assert not sandbox_temporary_directory.exists(), (
+                "sandbox temporary directory survived normal retirement"
+            )
+            return [
+                {
+                    "command": _command(*arguments),
+                    "manager_checkpoint": "before spawn",
+                    "verified_root_state": "blocked on private startup gate",
+                },
+                {
+                    "launcher_returncode": returncode,
+                    "verified_cleanup": "sandbox root and temp",
+                },
+            ]
+        finally:
+            if not manager_released:
+                manager_spawn_release.release()
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=TIMEOUT)
+            kill_darwin_processes(identities)
+            for stream in (process.stdout, process.stderr):
+                if not stream.closed:
+                    stream.close()
+            manager_spawn.close()
+            manager_spawn_release.close()
 
 
 def test_target_starts_after_manager_readiness(binary: Path) -> Transcript:
@@ -116,9 +203,9 @@ def test_target_starts_after_manager_readiness(binary: Path) -> Transcript:
 
 
 def test_target_waits_for_manager_adoption(binary: Path) -> Transcript:
-    # The manager's first control read is held before it can consume
-    # initialization or adopt TMPDIR. The exact root must already be blocked on
-    # its private gate.
+    # The manager's owner-identity query is held before it can inspect the root
+    # or adopt TMPDIR. The exact root must already be blocked on its private
+    # gate.
     # fmt: python
     script = code(r"""
         import os

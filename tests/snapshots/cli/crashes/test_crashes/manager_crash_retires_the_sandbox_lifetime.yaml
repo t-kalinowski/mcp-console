@@ -29,7 +29,7 @@ stdout: |
   <detached descendant pid>
   <sandbox temp>
 ---
-manager_signal: SIGKILL
+manager_signal: SIGTERM
 launcher_returncode: 137
 verified_cleanup: sandbox root, detached descendant, and manager
 verified_preservation: sandbox temp

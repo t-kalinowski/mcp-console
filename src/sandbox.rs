@@ -70,8 +70,12 @@ pub fn run(command_line: &[OsString]) -> Result<ExitCode, String> {
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) fn run_manager() -> Result<(), String> {
-    supervision::run_manager()
+pub(crate) fn run_manager(
+    root_pid: u32,
+    cleanup_timeout_millis: u64,
+    temporary_directory: std::path::PathBuf,
+) -> Result<(), String> {
+    supervision::run_manager(root_pid, cleanup_timeout_millis, temporary_directory)
 }
 
 #[cfg(target_os = "macos")]
@@ -127,7 +131,11 @@ pub fn run(command_line: &[OsString]) -> Result<ExitCode, String> {
 }
 
 #[cfg(not(target_os = "macos"))]
-pub(crate) fn run_manager() -> Result<(), String> {
+pub(crate) fn run_manager(
+    _root_pid: u32,
+    _cleanup_timeout_millis: u64,
+    _temporary_directory: std::path::PathBuf,
+) -> Result<(), String> {
     Err("the sandbox manager is currently supported only on macOS".to_string())
 }
 

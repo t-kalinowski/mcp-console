@@ -43,7 +43,11 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
-        cli::Command::SandboxManager => match sandbox::run_manager() {
+        cli::Command::SandboxManager {
+            root_pid,
+            cleanup_timeout_millis,
+            temporary_directory,
+        } => match sandbox::run_manager(root_pid, cleanup_timeout_millis, temporary_directory) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
