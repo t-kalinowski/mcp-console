@@ -2,6 +2,7 @@
 
 import os
 import re
+import select
 import shutil
 import signal
 import subprocess
@@ -94,21 +95,6 @@ def _spawn_detached_generation(client: McpClient) -> Generation:
     return relay_identity, worker_identity, child_identity, temporary_directory
 
 
-def _wait_for_generation_cleanup(
-    generation: Generation,
-    timeout: float,
-    additional: tuple[DarwinProcessIdentity, ...] = (),
-) -> list[int]:
-    identities = (*generation[:3], *additional)
-    deadline = time.monotonic() + timeout
-    survivors = live_darwin_processes(identities)
-    while (survivors or generation[3].exists()) and time.monotonic() < deadline:
-        survivors = live_darwin_processes(identities)
-        if survivors or generation[3].exists():
-            time.sleep(0.01)
-    return live_darwin_processes(identities)
-
-
 def _wait_for_process_cleanup(
     identities: tuple[DarwinProcessIdentity, ...],
     timeout: float,
@@ -174,20 +160,30 @@ def test_server_crash_retires_the_worker_generation(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     generation: Generation | None = None
     manager_identity: DarwinProcessIdentity | None = None
+    manager_exit = select.kqueue()
     try:
         client._initialize_and_list_tools()
         generation = _spawn_detached_generation(client)
         manager_identity = capture_darwin_process_identity(
             _manager_pid(client.process.pid)
         )
+        exit_watch = select.kevent(
+            manager_identity[0],
+            filter=select.KQ_FILTER_PROC,
+            flags=select.KQ_EV_ADD | select.KQ_EV_CLEAR,
+            fflags=select.KQ_NOTE_EXIT,
+        )
+        assert manager_exit.control([exit_watch], 0, 0) == []
 
         client.process.kill()
         returncode = client.process.wait(timeout=TIMEOUT)
-        survivors = _wait_for_generation_cleanup(
-            generation,
-            timeout=5,
-            additional=(manager_identity,),
-        )
+        events = manager_exit.control(None, 1, TIMEOUT)
+        assert len(events) == 1, "sandbox manager did not exit after server crash"
+        event = events[0]
+        assert event.ident == manager_identity[0], event
+        assert event.filter == select.KQ_FILTER_PROC, event
+        assert event.fflags & select.KQ_NOTE_EXIT, event
+        survivors = live_darwin_processes(generation[:3])
 
         assert returncode == -signal.SIGKILL, returncode
         assert survivors == [], f"worker-generation processes survived: {survivors}"
@@ -209,6 +205,7 @@ def test_server_crash_retires_the_worker_generation(binary: Path) -> Transcript:
         if manager_identity is not None:
             kill_darwin_processes((manager_identity,))
         _close_client_streams(client)
+        manager_exit.close()
 
 
 def test_manager_crash_retires_the_worker_generation(binary: Path) -> Transcript:
