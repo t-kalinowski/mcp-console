@@ -20,7 +20,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
-const FINISH_ALLOWANCE: Duration = Duration::from_secs(1);
+const EXIT_ALLOWANCE: Duration = Duration::from_secs(1);
 
 pub(crate) struct SandboxManager {
     child: Option<Child>,
@@ -28,28 +28,13 @@ pub(crate) struct SandboxManager {
     monitor: Option<ManagerMonitor>,
     stream: Option<UnixStream>,
     cleanup_timeout: Duration,
-    retirement_started: bool,
-    cleanup_complete: bool,
-    control_error: Option<String>,
 }
 
 struct ManagerMonitor {
     identity: ProcessIdentity,
     recovery_enabled: Arc<Mutex<bool>>,
-    result: Receiver<Result<ManagerExit, String>>,
+    result: Receiver<Result<(), String>>,
     thread: Option<JoinHandle<()>>,
-}
-
-enum ManagerExit {
-    Normal,
-    Recovered,
-}
-
-#[derive(Clone, Copy, Eq, PartialEq)]
-pub(crate) enum CleanupPreparation {
-    Complete,
-    TimedOut,
-    Failed,
 }
 
 impl SandboxManager {
@@ -99,9 +84,6 @@ impl SandboxManager {
             monitor: None,
             stream: Some(stream),
             cleanup_timeout,
-            retirement_started: false,
-            cleanup_complete: false,
-            control_error: None,
         })
     }
 
@@ -217,115 +199,21 @@ impl SandboxManager {
         Ok(())
     }
 
-    /// Marks the point after which owner loss must preserve the private
-    /// directory because normal retirement has already begun.
-    pub(crate) fn begin_retirement(&mut self) -> bool {
-        if self.retirement_started {
-            return true;
-        }
-        if self.control_error.is_some() {
-            return false;
-        }
-        let stream = self
-            .stream
-            .as_mut()
-            .expect("sandbox manager control should be available");
-        match protocol::write_retirement_started(stream) {
-            Ok(()) => {
-                self.retirement_started = true;
-                true
-            }
-            Err(error) => {
-                self.control_error = Some(error);
-                false
-            }
-        }
+    /// Closes the ownership token and waits for the manager to retire the
+    /// sandbox lifetime. The manager removes the private directory only after
+    /// it has completed process cleanup successfully.
+    pub(crate) fn retire(mut self) -> Result<(), String> {
+        self.wait_for_exit()
     }
 
-    /// Waits until the manager has retired every observed identity.
-    pub(crate) fn prepare_finish(&mut self) -> CleanupPreparation {
-        if self.cleanup_complete {
-            return CleanupPreparation::Complete;
-        }
-        if !self.begin_retirement() {
-            return CleanupPreparation::Failed;
-        }
-        let timeout = self.cleanup_timeout.saturating_add(FINISH_ALLOWANCE);
-        let stream = self
-            .stream
-            .as_mut()
-            .expect("sandbox manager control should be available");
-        let result = stream
-            .set_read_timeout(Some(timeout))
-            .map_err(|error| format!("failed to configure sandbox manager control: {error}"))
-            .and_then(|()| protocol::read_cleanup_complete(stream));
-        match result {
-            Ok(protocol::CleanupAcknowledgement::Complete) => {
-                self.cleanup_complete = true;
-                CleanupPreparation::Complete
-            }
-            Ok(protocol::CleanupAcknowledgement::TimedOut) => CleanupPreparation::TimedOut,
-            Err(error) => {
-                self.control_error = Some(error);
-                CleanupPreparation::Failed
-            }
-        }
-    }
-
-    /// Commits the standalone launcher's final directory disposition.
-    pub(crate) fn finish_retirement(
-        mut self,
-        preserve_temporary_directory: bool,
-    ) -> Result<(), String> {
-        if let Some(stream) = self.stream.as_mut()
-            && let Err(error) =
-                protocol::write_retirement_disposition(stream, preserve_temporary_directory)
-            && self.control_error.is_none()
-        {
-            self.control_error = Some(error);
-        }
-        let control_error = self.control_error.take();
-        match self.finish_inner(None, true) {
-            Ok(ManagerExit::Recovered) => Ok(()),
-            Ok(ManagerExit::Normal) => control_error.map_or(Ok(()), Err),
-            Err(error) => Err(with_prior_error(control_error, error)),
-        }
-    }
-
-    /// Completes ownership after the sandbox root has already exited.
-    pub(crate) fn finish(mut self) -> Result<(), String> {
-        self.finish_inner(Some(protocol::FINISH), true).map(|_| ())
-    }
-
-    /// Stops the recorded sandbox root before completing ownership.
-    pub(crate) fn stop(mut self) -> Result<(), String> {
-        self.finish_inner(Some(protocol::STOP), true).map(|_| ())
-    }
-
-    fn finish_inner(
-        &mut self,
-        disposition: Option<u8>,
-        inspect_status: bool,
-    ) -> Result<ManagerExit, String> {
-        let mut error = None;
-        if let Some(mut stream) = self.stream.take()
-            && let Some(disposition) = disposition
-            && let Err(write_error) = stream.write_all(&[disposition])
-        {
-            error = Some(format!(
-                "failed to finish sandbox manager ownership: {write_error}"
-            ));
-        }
-        let finish_timeout = self.cleanup_timeout.saturating_add(FINISH_ALLOWANCE);
+    fn wait_for_exit(&mut self) -> Result<(), String> {
+        drop(self.stream.take());
+        let finish_timeout = self.cleanup_timeout.saturating_add(EXIT_ALLOWANCE);
         if let Some(monitor) = self.monitor.take() {
-            return match monitor.finish(finish_timeout) {
-                Ok(ManagerExit::Normal) => error.map_or(Ok(ManagerExit::Normal), Err),
-                Ok(ManagerExit::Recovered) => Ok(ManagerExit::Recovered),
-                Err(monitor_error) => Err(with_prior_error(error, monitor_error)),
-            };
+            return monitor.finish(finish_timeout);
         }
         let Some(mut child) = self.child.take() else {
-            return error.map_or(Ok(ManagerExit::Normal), Err);
+            return Ok(());
         };
         let exited =
             match platform::wait_for_process_exit_without_reaping(child.id(), finish_timeout) {
@@ -335,28 +223,25 @@ impl SandboxManager {
                         &mut child,
                         format!("failed to wait for sandbox manager: {wait_error}"),
                     );
-                    return Err(with_prior_error(error, wait_error));
+                    return Err(wait_error);
                 }
             };
         if !exited {
-            let timeout = stop_and_reap(
+            return Err(stop_and_reap(
                 &mut child,
                 "timed out waiting for sandbox manager cleanup".to_string(),
-            );
-            return Err(with_prior_error(error, timeout));
+            ));
         }
         let status = match child.wait() {
             Ok(status) => status,
             Err(wait_error) => {
-                let wait_error = format!("failed to reap sandbox manager: {wait_error}");
-                return Err(with_prior_error(error, wait_error));
+                return Err(format!("failed to reap sandbox manager: {wait_error}"));
             }
         };
-        if inspect_status && !status.success() {
-            let status_error = format!("sandbox manager exited with status {status}");
-            return Err(with_prior_error(error, status_error));
+        if !status.success() {
+            return Err(format!("sandbox manager exited with status {status}"));
         }
-        error.map_or(Ok(ManagerExit::Normal), Err)
+        Ok(())
     }
 }
 
@@ -397,7 +282,7 @@ impl ManagerMonitor {
         *enabled = false;
     }
 
-    fn finish(mut self, timeout: Duration) -> Result<ManagerExit, String> {
+    fn finish(mut self, timeout: Duration) -> Result<(), String> {
         let mut error = None;
         let result = match self.result.recv_timeout(timeout) {
             Ok(result) => result,
@@ -433,13 +318,12 @@ impl ManagerMonitor {
                 Err("sandbox manager monitor ended without a result".to_string())
             }
         };
-        let exit = match result {
-            Ok(exit) => Some(exit),
+        match result {
+            Ok(()) => {}
             Err(result_error) => {
                 error = Some(with_prior_error(error, result_error));
-                None
             }
-        };
+        }
         if self
             .thread
             .take()
@@ -452,10 +336,7 @@ impl ManagerMonitor {
                 "sandbox manager monitor failed".to_string(),
             ));
         }
-        match error {
-            Some(error) => Err(error),
-            None => Ok(exit.expect("successful manager monitor should report its exit")),
-        }
+        error.map_or(Ok(()), Err)
     }
 }
 
@@ -464,7 +345,7 @@ fn monitor_manager(
     root_pid: libc::pid_t,
     cleanup_timeout: Duration,
     recovery_enabled: Arc<Mutex<bool>>,
-) -> Result<ManagerExit, String> {
+) -> Result<(), String> {
     let completion = match platform::wait_for_process_exit_without_reaping_blocking(child.id()) {
         Ok(()) => child
             .wait()
@@ -479,7 +360,7 @@ fn monitor_manager(
     };
 
     match completion {
-        Ok(status) if status.success() => Ok(ManagerExit::Normal),
+        Ok(status) if status.success() => Ok(()),
         Ok(status) => finish_manager_failure(
             format!("sandbox manager exited with status {status}"),
             root_pid,
@@ -512,7 +393,7 @@ fn finish_manager_failure(
     root_pid: libc::pid_t,
     cleanup_timeout: Duration,
     recovery_enabled: &Mutex<bool>,
-) -> Result<ManagerExit, String> {
+) -> Result<(), String> {
     let enabled = recovery_enabled
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -558,7 +439,7 @@ fn finish_manager_failure(
     };
     let group_error = stop_process_group(root).err();
     if cleanup_error.is_none() && group_error.is_none() {
-        return Ok(ManagerExit::Recovered);
+        return Ok(());
     }
     if let Some(cleanup_error) = cleanup_error {
         error = with_prior_error(
@@ -637,7 +518,7 @@ fn stop_and_reap(child: &mut Child, mut error: String) -> String {
 
 impl Drop for SandboxManager {
     fn drop(&mut self) {
-        let _ = self.finish_inner(None, false);
+        let _ = self.wait_for_exit();
     }
 }
 

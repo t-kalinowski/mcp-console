@@ -28,8 +28,13 @@ stdout: |
   <sandbox root pid>
   <detached descendant pid>
   <sandbox temp>
+stderr: >
+  timed out waiting for sandbox manager cleanup; additionally, sandbox
+  manager exited with status signal: 9 (SIGKILL); additionally, manager
+  recovery failed: sandbox root <sandbox root pid> exited before fallback
+  supervision
 ---
-manager_cleanup: acknowledgement delayed past launcher timeout
-launcher_returncode: 23
+manager_cleanup: completion held past launcher timeout
+launcher_returncode: 1
 verified_cleanup: sandbox root, detached descendant, and manager
 verified_preservation: sandbox temp

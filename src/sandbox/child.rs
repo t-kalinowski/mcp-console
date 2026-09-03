@@ -58,7 +58,7 @@ impl SandboxedChild {
             .manager
             .take()
             .expect("active sandbox child should retain its lifetime manager");
-        match manager.stop() {
+        match manager.retire() {
             Ok(()) => self.reap_managed_child(),
             Err(error) => self.retry_unmanaged_retirement(error),
         }

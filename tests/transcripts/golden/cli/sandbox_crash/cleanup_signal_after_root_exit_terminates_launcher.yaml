@@ -29,8 +29,8 @@ stdout: |
   <detached descendant pid>
   <sandbox temp>
 ---
-manager_cleanup: acknowledgement held after root exit
+manager_cleanup: completion held after root exit
 launcher_signal: SIGTERM
 launcher_returncode: -15
 verified_cleanup: sandbox root, detached descendant, and manager
-verified_preservation: sandbox temp
+verified_removal: sandbox temp

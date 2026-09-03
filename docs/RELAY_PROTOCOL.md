@@ -35,7 +35,8 @@ The framed event is authoritative; stderr diagnostics are best effort because th
 The server marks every nonstandard inherited descriptor close-on-exec in the forked child except the private startup gate.
 The hidden wrapper closes that gate before relay exec, so a descriptor opened by another server thread and the private gate itself cannot reach relay code.
 The server releases the gate only after manager-failure monitoring is installed and manager ownership of the observed lifetime and private directory is committed.
-The gate is not part of the JSONL relay protocol, and the manager's private control channel never enters the sandbox.
+After commitment, the server holds the manager control channel open as the worker lifetime's ownership token and closes it to request retirement.
+The startup gate and manager channel are not part of the JSONL relay protocol, and neither enters relay code.
 
 The relay creates the worker's private full-duplex sideband socket pair and its standard-input, standard-output, and standard-error pipes after entering the sandbox.
 It passes one worker sideband endpoint through `MCP_CONSOLE_SIDEBAND_FD` together with the fd-0/1/2 contract documented in [`WORKER_PROTOCOL.md`](WORKER_PROTOCOL.md).
@@ -45,6 +46,7 @@ The host-side manager owns primary tracking and termination of the relay root an
 The server retains the directory-creation guard until manager readiness, then relinquishes it while keeping the manager monitor for process recovery.
 From readiness onward, the manager is the sole directory-cleanup owner.
 Its adopted guard preserves on unexpected unwind and removes the directory only after successful cleanup; server fallback has no directory-cleanup state.
+Successful manager process exit is the primary cleanup barrier before the server reaps the direct relay root.
 The server owns generation state and host-side dependency resolution; see [Requirements and environments](REQUIREMENTS.md) for that trust boundary.
 
 ## Framing and raw bytes
@@ -201,18 +203,19 @@ After a normal relay exit, it waits for observed-tree cleanup and then closes th
 On forced retirement or server loss, it instead closes the group while the root identity is still available, signals the exact recorded relay, and then waits for observed-tree cleanup.
 It adopts a private temporary-directory guard and removes the directory only after both cleanup steps succeed; a cleanup failure preserves the directory.
 If the relay exits or crashes, the manager treats root exit as retirement of the remaining observed lifetime.
-If the server exits or crashes, closure of the manager's owner channel makes the manager stop the relay root and complete the same cleanup independently.
+After commitment, the manager channel carries no further messages.
+Whether the server requests retirement or exits, owner-channel EOF asks the manager to decide whether the relay root must be stopped and complete cleanup independently.
 If the manager exits unsuccessfully after readiness while the server still owns a live, waitable relay root, including during the commit acknowledgement, the server reconstructs bounded tracking from that root's current process tree and completes process cleanup before replacement.
 The server does not remove the private directory; it remains if the manager exited before completing its own cleanup and removal.
 That fallback cannot recover a descendant that had already detached from the root's ancestry before the manager failed.
 
 The server leaves an exited relay waitable until sandbox-lifetime cleanup completes, preserving the relay identity while retirement finishes.
 It waits through the worker deadline and uses the additional two-second allowance only after timely `shutdown_started` acceptance or a pre-retirement failure.
-It then asks the lifetime owner to stop and join the relay root and observed descendants and reaps the relay, including when the relay stalls or has already exited.
+It then closes the manager ownership token, waits for manager exit, and reaps the relay, including when the relay stalls or has already exited.
 The background manager has a separate one-second cleanup timeout, and its owner allows one additional second for manager exit and reaping.
 If the manager misses that allowance, the owner sends exact-identity `SIGKILL`, keeps the relay root waitable while it reaps the manager, and may use one additional one-second cleanup interval to reconstruct and retire the root's current process tree.
 Those manager bounds can extend past the relay allowance when the outer stop begins only at that allowance's deadline.
-The server does not start the replacement sandbox lifetime until that retirement barrier completes.
+The server does not start the replacement sandbox lifetime until the manager-exit retirement barrier completes.
 Concurrent or repeated retirement reuses the recorded result and never signals a retired PID or process group again.
 Darwin cannot resolve every later fork atomically, so a descendant that becomes orphaned before its fork event is resolved remains outside the guarantee.
 The private startup gate prevents either relay implementation from running during initial manager observation and ownership commitment.

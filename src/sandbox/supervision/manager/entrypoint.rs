@@ -2,7 +2,7 @@ use super::super::process::{ProcessIdentity, process_info, signal_process};
 use super::super::process_tracker::{DescendantTracker, TrackerStopWakeup};
 use super::{protocol, stop_process_group, with_prior_error};
 use crate::sandbox::platform;
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::net::Shutdown;
 use std::os::fd::FromRawFd;
 use std::os::unix::net::UnixStream;
@@ -118,35 +118,22 @@ pub(super) fn run() -> Result<(), String> {
             temporary_directory,
         );
     }
-    let disposition = protocol::read_owner_disposition(&mut stream);
-    if matches!(disposition, protocol::OwnerDisposition::RetirementStarted) {
-        drop(tracker_stop_wakeup);
-        return finish_retirement(
-            root,
-            &mut stream,
-            tracker_thread,
-            &group_backstop,
-            temporary_directory,
-        );
-    }
-    let stop_root = !matches!(&disposition, protocol::OwnerDisposition::Finish);
-    let mut error = match disposition {
-        protocol::OwnerDisposition::Finish
-        | protocol::OwnerDisposition::Stop
-        | protocol::OwnerDisposition::Closed => None,
-        protocol::OwnerDisposition::RemoveTemporaryDirectory
-        | protocol::OwnerDisposition::PreserveTemporaryDirectory => {
-            Some("sandbox manager received a disposition before retirement started".to_string())
+    let mut control = [0];
+    let mut error = loop {
+        match stream.read(&mut control) {
+            Ok(0) => break None,
+            Ok(_) => {
+                break Some("sandbox manager received data after ownership commitment".to_string());
+            }
+            Err(read_error) if read_error.kind() == ErrorKind::Interrupted => {}
+            Err(read_error) => {
+                break Some(format!("sandbox manager control failed: {read_error}"));
+            }
         }
-        protocol::OwnerDisposition::RetirementStarted => unreachable!(),
-        protocol::OwnerDisposition::Failed(error) => Some(error),
     };
-    let root_exit_expected = if stop_root {
+    let root_exit_expected =
         request_root_stop(root, run_group_backstop(root, &group_backstop), &mut error)
-            .root_exit_expected
-    } else {
-        true
-    };
+            .root_exit_expected;
     let tracker_result = if root_exit_expected {
         drop(tracker_stop_wakeup);
         join_tracker(tracker_thread)
@@ -165,49 +152,6 @@ pub(super) fn run() -> Result<(), String> {
         temporary_directory.remove();
     }
     error.map_or(Ok(()), Err)
-}
-
-fn finish_retirement(
-    root: ProcessIdentity,
-    stream: &mut UnixStream,
-    tracker_thread: std::thread::JoinHandle<Result<(), String>>,
-    group_backstop: &GroupBackstop,
-    temporary_directory: platform::TemporaryDirectory,
-) -> Result<(), String> {
-    let mut error = join_tracker(tracker_thread).err();
-    if let Err(group_error) = run_group_backstop(root, group_backstop) {
-        error = Some(with_prior_error(error, group_error));
-    }
-    if let Some(error) = error {
-        temporary_directory.preserve();
-        return Err(error);
-    }
-
-    if protocol::write_cleanup_complete(stream).is_err() {
-        temporary_directory.preserve();
-        return Ok(());
-    }
-    match protocol::read_owner_disposition(stream) {
-        protocol::OwnerDisposition::RemoveTemporaryDirectory => {
-            temporary_directory.remove();
-            Ok(())
-        }
-        protocol::OwnerDisposition::PreserveTemporaryDirectory
-        | protocol::OwnerDisposition::Closed => {
-            temporary_directory.preserve();
-            Ok(())
-        }
-        protocol::OwnerDisposition::Failed(error) => {
-            temporary_directory.preserve();
-            Err(error)
-        }
-        protocol::OwnerDisposition::Finish
-        | protocol::OwnerDisposition::Stop
-        | protocol::OwnerDisposition::RetirementStarted => {
-            temporary_directory.preserve();
-            Err("sandbox manager received an invalid retirement disposition".to_string())
-        }
-    }
 }
 
 fn finish_startup_failure(

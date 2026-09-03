@@ -29,10 +29,9 @@ stdout: |
   <detached descendant pid>
   <sandbox temp>
 stderr: >
-  failed to control sandbox manager retirement: Broken pipe (os error 32);
-  additionally, sandbox manager exited with status signal: 9 (SIGKILL);
-  additionally, manager recovery failed: failed to signal sandbox
-  descendant <sandbox process pid>: Operation not permitted (os error 1)
+  sandbox manager exited with status signal: 9 (SIGKILL); additionally,
+  manager recovery failed: failed to signal sandbox descendant <sandbox
+  process pid>: Operation not permitted (os error 1)
 ---
 manager_signal: SIGKILL
 manager_recovery_signal: EPERM

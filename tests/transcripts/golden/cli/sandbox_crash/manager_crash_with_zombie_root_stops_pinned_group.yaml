@@ -29,10 +29,9 @@ stdout: |
   <same-group descendant pid>
   <sandbox temp>
 stderr: >
-  sandbox manager exited before cleanup completed: failed to fill whole
-  buffer; additionally, sandbox manager exited with status signal: 9
-  (SIGKILL); additionally, manager recovery failed: sandbox root <sandbox
-  root pid> exited before fallback supervision
+  sandbox manager exited with status signal: 9 (SIGKILL); additionally,
+  manager recovery failed: sandbox root <sandbox root pid> exited before
+  fallback supervision
 ---
 manager_signal: SIGSTOP then SIGKILL
 verified_root_state: waitable zombie during recovery
