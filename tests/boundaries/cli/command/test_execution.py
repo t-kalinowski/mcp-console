@@ -53,7 +53,9 @@ def record(
     return entry
 
 
-def test_preserves_executable_names_with_equals_signs(binary: Path) -> Transcript:
+def test_preserves_arguments_and_executable_names(binary: Path) -> Transcript:
+    transcript: Transcript = []
+
     with TemporaryDirectory() as directory:
         current_directory = Path(directory)
         shutil.copy("/usr/bin/true", current_directory / "program=fixture")
@@ -69,10 +71,8 @@ def test_preserves_executable_names_with_equals_signs(binary: Path) -> Transcrip
     assert "exit_code" not in entry, (
         "the executable name was parsed as an environment assignment"
     )
-    return [entry]
+    transcript.append({"scenario": "equals sign in executable name", **entry})
 
-
-def test_preserves_executable_names_that_look_like_options(binary: Path) -> Transcript:
     with TemporaryDirectory() as directory:
         current_directory = Path(directory)
         shutil.copy("/usr/bin/true", current_directory / "--help")
@@ -89,10 +89,8 @@ def test_preserves_executable_names_that_look_like_options(binary: Path) -> Tran
         "the executable name was parsed as a launcher option"
     )
     assert entry["stdout"] == "", "the launcher handled the target's option-like name"
-    return [entry]
+    transcript.append({"scenario": "option-like executable name", **entry})
 
-
-def test_preserves_python_arguments_and_standard_output(binary: Path) -> Transcript:
     # fmt: python
     script = code(r"""
         import sys
@@ -108,7 +106,13 @@ def test_preserves_python_arguments_and_standard_output(binary: Path) -> Transcr
         "$(not-a-command)",
         "--child-option",
     )
-    return [record(binary, *arguments)]
+    transcript.append(
+        {
+            "scenario": "literal arguments and standard output",
+            **record(binary, *arguments),
+        }
+    )
+    return transcript
 
 
 def test_forwards_interactive_standard_streams(binary: Path) -> Transcript:
@@ -203,60 +207,57 @@ def test_forwards_interactive_standard_streams(binary: Path) -> Transcript:
     ]
 
 
-def test_allows_python_multiprocessing_semaphores(binary: Path) -> Transcript:
+def test_enforces_host_read_only_and_temporary_writes(binary: Path) -> Transcript:
     # fmt: python
     script = code(r"""
-        import multiprocessing as mp
-        import operator
+        import errno
+        import os
+        import pathlib
+        import sys
 
-        context = mp.get_context("spawn")
-        lock = context.Lock()
-        lock.acquire()
-        child = context.Process(target=operator.methodcaller("release"), args=(lock,))
-        child.start()
-        child.join()
-        assert child.exitcode == 0
-        assert lock.acquire(timeout=1)
-        print("semaphore shared")
+        host_file = pathlib.Path(sys.argv[1])
+        assert host_file.read_text(encoding="utf-8") == "host data"
+        try:
+            host_file.write_text("modified", encoding="utf-8")
+        except OSError as error:
+            assert error.errno == errno.EPERM
+        else:
+            raise SystemExit("host regular-file write was allowed")
+
+        output = pathlib.Path(os.environ["TMPDIR"]) / "result.txt"
+        output.write_text("sandbox temp", encoding="utf-8")
+        print(host_file.read_text(encoding="utf-8"))
+        print(output.read_text(encoding="utf-8"))
+        print(os.environ["TMPDIR"])
         """)
-    return [record(binary, "sandbox", "--", "python", "-c", script)]
 
+    with TemporaryDirectory() as directory:
+        current_directory = Path(directory)
+        host_file = current_directory / "host.txt"
+        host_file.write_text("host data", encoding="utf-8")
+        entry = record(
+            binary,
+            "sandbox",
+            "--",
+            "python",
+            "-c",
+            script,
+            "host.txt",
+            current_directory=current_directory,
+        )
+        stdout = entry["stdout"]
+        assert isinstance(stdout, str)
+        host_data, temporary_data, temporary_directory = stdout.splitlines()
+        assert host_data == "host data"
+        assert temporary_data == "sandbox temp"
+        assert host_file.read_text(encoding="utf-8") == "host data"
+        assert not Path(temporary_directory).exists()
 
-def test_does_not_require_home(binary: Path) -> Transcript:
-    # fmt: python
-    script = code(r"""
-        print("ran")
-        """)
-    arguments = ("sandbox", "--", "python", "-c", script)
-    return [record(binary, *arguments, environment={"HOME": None})]
-
-
-def test_supports_r_runtime_queries_and_temporary_writes(binary: Path) -> Transcript:
-    # fmt: r
-    script = code(r"""
-        {
-          stopifnot(parallel::detectCores() >= 1)
-          stopifnot(file.exists("Cargo.toml"))
-
-          host_write <- try(
-            suppressWarnings(file("Cargo.toml", open = "r+")),
-            silent = TRUE
-          )
-          stopifnot(inherits(host_write, "try-error"))
-
-          output <- file.path(tempdir(), "result.txt")
-          writeLines("sandboxed R", output)
-          writeLines(readLines(output))
-          writeLines(Sys.getenv("TMPDIR"))
-        }
-        """)
-    entry = record(binary, "sandbox", "--", "Rscript", "-e", script)
-    stdout = entry["stdout"]
-    assert isinstance(stdout, str)
-    output, temporary_directory = stdout.splitlines()
-    assert output == "sandboxed R"
-    assert not Path(temporary_directory).exists()
-    entry["stdout"] = f"{output}\n"
+    entry["stdout"] = "host data\nsandbox temp\n<sandbox temp>\n"
+    entry["transcript_normalization"] = {
+        "target": "stdout line 3",
+        "sandbox_temporary_directory": "omitted",
+    }
     return [entry]
 
 

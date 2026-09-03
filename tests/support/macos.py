@@ -1,7 +1,6 @@
 import ctypes
 import errno
 import os
-import shutil
 import signal
 import subprocess
 import sys
@@ -197,58 +196,6 @@ def _darwin_main_thread_waits(thread_info: _DarwinThreadInfo) -> bool:
     )
 
 
-def darwin_process_waits_for_control(
-    identity: DarwinProcessIdentity,
-) -> bool:
-    """Return whether the exact manager process is waiting for owner EOF."""
-    prox_fdtype_vnode = 1
-    prox_fdtype_socket = 2
-    resources = _darwin_process_resources(identity)
-    if resources is None:
-        return False
-    file_descriptors, thread_info = resources
-    inherited_stdin_control = file_descriptors == {
-        (0, prox_fdtype_socket),
-        (1, prox_fdtype_vnode),
-        (2, prox_fdtype_vnode),
-    }
-    standard_descriptors = {
-        (0, prox_fdtype_vnode),
-        (1, prox_fdtype_vnode),
-        (2, prox_fdtype_vnode),
-    }
-    inherited_extra_control = (
-        standard_descriptors.issubset(file_descriptors)
-        and len(
-            {
-                descriptor
-                for descriptor, descriptor_type in file_descriptors
-                if descriptor > 2 and descriptor_type == prox_fdtype_socket
-            }
-        )
-        == 1
-    )
-    return (
-        inherited_stdin_control or inherited_extra_control
-    ) and _darwin_main_thread_waits(thread_info)
-
-
-def darwin_process_extra_socket_descriptors(
-    identity: DarwinProcessIdentity,
-) -> set[int] | None:
-    """Return extra sockets held by the exact single-threaded process."""
-    prox_fdtype_socket = 2
-    resources = _darwin_process_resources(identity)
-    if resources is None:
-        return None
-    file_descriptors, _ = resources
-    return {
-        descriptor
-        for descriptor, descriptor_type in file_descriptors
-        if descriptor > 2 and descriptor_type == prox_fdtype_socket
-    }
-
-
 def darwin_process_waits_for_startup_release(
     identity: DarwinProcessIdentity,
 ) -> bool:
@@ -336,31 +283,3 @@ def wait_for_darwin_startup_release(
             f"{description} did not block at its private startup gate"
         )
         time.sleep(0.01)
-
-
-def build_manager_interposer(directory: Path) -> Path:
-    source = directory / "manager-interposer.c"
-    library = directory / "manager-interposer.dylib"
-    fixture = (
-        Path(__file__).resolve().parents[1]
-        / "fixtures"
-        / "native"
-        / "manager_interposer.c"
-    )
-    shutil.copyfile(fixture, source)
-    subprocess.run(
-        [
-            "cc",
-            "-dynamiclib",
-            "-Wall",
-            "-Wextra",
-            "-Werror",
-            source,
-            "-o",
-            library,
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return library

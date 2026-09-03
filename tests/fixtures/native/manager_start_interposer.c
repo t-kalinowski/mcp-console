@@ -1,7 +1,6 @@
 #include <crt_externs.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <signal.h>
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -9,20 +8,6 @@
 #include <unistd.h>
 
 static _Atomic int gated_manager_start = 0;
-static _Atomic int server_fork_count = 0;
-static _Atomic pid_t denied_cleanup_root = 0;
-static _Atomic int reported_direct_cleanup_denial = 0;
-
-typedef int (*kill_function)(pid_t, int);
-typedef int (*killpg_function)(pid_t, int);
-
-static kill_function next_kill(void) {
-    return kill;
-}
-
-static killpg_function next_killpg(void) {
-    return killpg;
-}
 
 static int is_subcommand(const char *name) {
     int argc = *_NSGetArgc();
@@ -82,44 +67,6 @@ static pid_t gate_manager_start(void) {
     return getppid();
 }
 
-static pid_t gate_manager_spawn(void) {
-    int fork_index = atomic_fetch_add(&server_fork_count, 1);
-    if (is_subcommand("serve")
-        && getenv("MCP_CONSOLE_TEST_MANAGER_SPAWN") != NULL
-        && fork_index == 1) {
-        signal_checkpoint("MCP_CONSOLE_TEST_MANAGER_SPAWN");
-        wait_for_release("MCP_CONSOLE_TEST_MANAGER_SPAWN_RELEASE");
-    }
-    return fork();
-}
-
-static int deny_startup_cleanup_group(pid_t process_group_id, int number) {
-    if (number == SIGKILL
-        && is_subcommand("serve")
-        && getenv("MCP_CONSOLE_TEST_DENY_STARTUP_CLEANUP") != NULL) {
-        atomic_store(&denied_cleanup_root, process_group_id);
-        errno = EIO;
-        return -1;
-    }
-    killpg_function killpg_next = next_killpg();
-    return killpg_next(process_group_id, number);
-}
-
-static int deny_startup_cleanup_process(pid_t process_id, int number) {
-    if (number == SIGKILL
-        && process_id == atomic_load(&denied_cleanup_root)
-        && is_subcommand("serve")
-        && getenv("MCP_CONSOLE_TEST_DENY_STARTUP_CLEANUP") != NULL) {
-        if (atomic_exchange(&reported_direct_cleanup_denial, 1) == 0) {
-            signal_checkpoint("MCP_CONSOLE_TEST_DIRECT_KILL_DENIED");
-        }
-        errno = EPERM;
-        return -1;
-    }
-    kill_function kill_next = next_kill();
-    return kill_next(process_id, number);
-}
-
 #define DYLD_INTERPOSE(replacement, replacee)                                  \
     __attribute__((used)) static struct {                                      \
         const void *replacement;                                               \
@@ -130,6 +77,3 @@ static int deny_startup_cleanup_process(pid_t process_id, int number) {
     };
 
 DYLD_INTERPOSE(gate_manager_start, getppid)
-DYLD_INTERPOSE(gate_manager_spawn, fork)
-DYLD_INTERPOSE(deny_startup_cleanup_group, killpg)
-DYLD_INTERPOSE(deny_startup_cleanup_process, kill)

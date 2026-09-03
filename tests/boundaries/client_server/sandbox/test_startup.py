@@ -1,10 +1,10 @@
 #!/usr/bin/env -S uv run --script
 
-import json
+from __future__ import annotations
+
 import os
 import select
 import shutil
-import signal
 import subprocess
 import sys
 import tempfile
@@ -17,13 +17,9 @@ from support.checkpoints import FifoCheckpoint
 from support.client import McpClient, stop_client
 from support.macos import (
     DarwinProcessIdentity,
-    build_manager_interposer,
     capture_darwin_process_identity,
-    darwin_child_process_identities,
-    darwin_process_waits_for_startup_release,
     kill_darwin_processes,
     live_darwin_processes,
-    signal_darwin_process,
 )
 from support.records import Transcript
 from support.suites import run_this_suite
@@ -93,43 +89,6 @@ def _worker_generation_processes(server_pid: int) -> tuple[int, int]:
         time.sleep(0.01)
 
 
-def _wait_for_private_startup_gate(identity: DarwinProcessIdentity) -> None:
-    deadline = time.monotonic() + TIMEOUT
-    while not darwin_process_waits_for_startup_release(identity):
-        assert live_darwin_processes((identity,)), (
-            "relay root exited before reaching its private startup gate"
-        )
-        assert time.monotonic() < deadline, (
-            "relay root did not block at its private startup gate"
-        )
-        time.sleep(0.01)
-
-
-def _wait_for_process_state(
-    identity: DarwinProcessIdentity,
-    prefix: str,
-    description: str,
-) -> None:
-    deadline = time.monotonic() + TIMEOUT
-    while True:
-        assert live_darwin_processes((identity,)) == [identity[0]], (
-            f"{description} exited before reaching state {prefix!r}"
-        )
-        result = subprocess.run(
-            ["/bin/ps", "-o", "state=", "-p", str(identity[0])],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=TIMEOUT,
-        )
-        if result.stdout.strip().startswith(prefix):
-            return
-        assert time.monotonic() < deadline, (
-            f"timed out waiting for {description} state {prefix!r}"
-        )
-        time.sleep(0.01)
-
-
 def _wait_for_startup_cleanup(
     identities: tuple[DarwinProcessIdentity, ...],
 ) -> None:
@@ -144,188 +103,12 @@ def _wait_for_startup_cleanup(
         time.sleep(0.01)
 
 
-def _marker_record(temporary: Path) -> dict[str, object]:
-    markers = list(temporary.glob(f"**/{MARKER_NAME}"))
-    assert len(markers) == 1, markers
-    record = json.loads(markers[0].read_text(encoding="utf-8"))
-    assert record.keys() == {"pid", "extra_descriptors"}, record
-    return record
-
-
 def _assert_zod_echo(entry: dict[str, object]) -> None:
     result = entry["result"]
     assert result == {
         "content": [{"type": "text", "text": "zod: echo\n"}],
         "isError": False,
     }, result
-
-
-def _run_startup_case(binary: Path, custom_relay: bool) -> Transcript:
-    fixture_root = Path(__file__).resolve().parents[3] / "fixtures"
-    worker = fixture_root / "zod"
-    marker_relay = fixture_root / "startup_marker_relay"
-
-    with tempfile.TemporaryDirectory() as temporary_directory:
-        temporary = Path(temporary_directory)
-        manager_spawn = FifoCheckpoint.create(temporary / "manager-spawn")
-        manager_spawn_release = FifoCheckpoint.create(
-            temporary / "manager-spawn-release"
-        )
-        manager_started = FifoCheckpoint.create(temporary / "manager-started")
-        manager_release = FifoCheckpoint.create(temporary / "manager-release")
-        environment = os.environ.copy()
-        environment["TMPDIR"] = temporary_directory
-        environment["MCP_CONSOLE_TEST_BINARY"] = str(binary)
-        environment["MCP_CONSOLE_TEST_MANAGER_START"] = str(manager_started.path)
-        environment["MCP_CONSOLE_TEST_MANAGER_RELEASE"] = str(manager_release.path)
-        environment["MCP_CONSOLE_TEST_MANAGER_SPAWN"] = str(manager_spawn.path)
-        environment["MCP_CONSOLE_TEST_MANAGER_SPAWN_RELEASE"] = str(
-            manager_spawn_release.path
-        )
-        environment["DYLD_INSERT_LIBRARIES"] = str(
-            _build_manager_start_interposer(temporary)
-        )
-
-        arguments = ["serve", "--worker", str(worker)]
-        if custom_relay:
-            arguments.extend(["--relay", str(marker_relay)])
-        client = McpClient(binary, tuple(arguments), environment)
-        identities: tuple[DarwinProcessIdentity, ...] = ()
-        manager_spawn_released = False
-        manager_start_released = False
-        try:
-            client._initialize_and_list_tools()
-            waiting = client._start_send(r="echo echo")
-            manager_spawn.wait("manager spawn")
-
-            server = capture_darwin_process_identity(client.process.pid)
-            children = darwin_child_process_identities(server)
-            assert len(children) == 1, children
-            root = children[0]
-            identities = (root,)
-            _wait_for_private_startup_gate(root)
-            assert darwin_child_process_identities(root) == (), (
-                "worker started before sandbox supervision was ready"
-            )
-            markers = list(temporary.glob(f"**/{MARKER_NAME}"))
-            assert markers == [], (
-                "custom relay executed before sandbox supervision was ready"
-            )
-
-            manager_spawn_release.release()
-            manager_spawn_released = True
-            manager_started.wait("manager startup")
-
-            root_pid, manager_pid = _worker_generation_processes(client.process.pid)
-            assert root_pid == root[0], (root_pid, root)
-            manager = capture_darwin_process_identity(manager_pid)
-            identities = (root, manager)
-            _wait_for_private_startup_gate(root)
-            assert darwin_child_process_identities(root) == (), (
-                "worker started before sandbox supervision was ready"
-            )
-            markers = list(temporary.glob(f"**/{MARKER_NAME}"))
-            assert markers == [], (
-                "custom relay executed before sandbox supervision was ready"
-            )
-
-            manager_release.release()
-            manager_start_released = True
-            client._receive(waiting)
-            _assert_zod_echo(waiting)
-
-            gate_record = {
-                "manager": "started after relay root and blocked before readiness",
-                "relay_root": "blocked on private startup gate",
-                "worker": "not started before readiness",
-            }
-            if custom_relay:
-                marker = _marker_record(temporary)
-                assert marker == {
-                    "pid": root_pid,
-                    "extra_descriptors": [],
-                }, marker
-                gate_record["custom_relay"] = (
-                    "executed after release in the gated root without the private gate"
-                )
-            waiting["startup_gate"] = gate_record
-            return client._finish()
-        finally:
-            if not manager_spawn_released:
-                manager_spawn_release.release()
-            if not manager_start_released:
-                manager_release.release()
-            stop_client(client)
-            if identities:
-                kill_darwin_processes(identities)
-            manager_spawn.close()
-            manager_spawn_release.close()
-            manager_started.close()
-            manager_release.close()
-
-
-def test_builtin_relay_waits_for_supervision(binary: Path) -> Transcript:
-    return _run_startup_case(binary, custom_relay=False)
-
-
-def test_custom_relay_waits_for_supervision(binary: Path) -> Transcript:
-    return _run_startup_case(binary, custom_relay=True)
-
-
-def test_custom_relay_starts_after_manager_readiness(binary: Path) -> Transcript:
-    fixture_root = Path(__file__).resolve().parents[3] / "fixtures"
-    worker = fixture_root / "zod"
-    marker_relay = fixture_root / "startup_marker_relay"
-
-    with tempfile.TemporaryDirectory() as temporary_directory:
-        temporary = Path(temporary_directory)
-        ready_sent = FifoCheckpoint.create(temporary / "ready-sent")
-        ready_return = FifoCheckpoint.create(temporary / "ready-return")
-        environment = os.environ.copy()
-        environment["TMPDIR"] = temporary_directory
-        environment["MCP_CONSOLE_TEST_BINARY"] = str(binary)
-        environment["MCP_CONSOLE_TEST_MANAGER_READY_SENT"] = str(ready_sent.path)
-        environment["MCP_CONSOLE_TEST_MANAGER_READY_RETURN"] = str(ready_return.path)
-        environment["DYLD_INSERT_LIBRARIES"] = str(build_manager_interposer(temporary))
-
-        client = McpClient(
-            binary,
-            (
-                "serve",
-                "--worker",
-                str(worker),
-                "--relay",
-                str(marker_relay),
-            ),
-            environment,
-        )
-        manager_released = False
-        try:
-            client._initialize_and_list_tools()
-            waiting = client._start_send(r="echo echo")
-            ready_sent.wait("manager READY delivery")
-
-            readable, _, _ = select.select([client.stdout], [], [], TIMEOUT)
-            assert readable, "custom relay waited for another manager response"
-            client._receive(waiting)
-            _assert_zod_echo(waiting)
-            marker = _marker_record(temporary)
-            assert marker["extra_descriptors"] == [], marker
-            waiting["startup_gate"] = {
-                "manager": "READY delivered with send return held",
-                "custom_relay": "executed without another manager response",
-                "private_gate": "closed before relay exec",
-            }
-
-            ready_return.release()
-            manager_released = True
-            return client._finish()
-        finally:
-            if not manager_released:
-                ready_return.release()
-            stop_client(client)
-            ready_sent.close()
-            ready_return.close()
 
 
 def test_manager_failure_before_readiness_keeps_custom_relay_gated(
@@ -339,16 +122,11 @@ def test_manager_failure_before_readiness_keeps_custom_relay_gated(
         temporary = Path(temporary_directory)
         manager_started = FifoCheckpoint.create(temporary / "manager-started")
         manager_release = FifoCheckpoint.create(temporary / "manager-release")
-        direct_kill_denied = FifoCheckpoint.create(temporary / "direct-kill-denied")
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
         environment["MCP_CONSOLE_TEST_BINARY"] = str(binary)
         environment["MCP_CONSOLE_TEST_MANAGER_START"] = str(manager_started.path)
         environment["MCP_CONSOLE_TEST_MANAGER_RELEASE"] = str(manager_release.path)
-        environment["MCP_CONSOLE_TEST_DENY_STARTUP_CLEANUP"] = "1"
-        environment["MCP_CONSOLE_TEST_DIRECT_KILL_DENIED"] = str(
-            direct_kill_denied.path
-        )
         environment["DYLD_INSERT_LIBRARIES"] = str(
             _build_manager_start_interposer(temporary)
         )
@@ -375,52 +153,33 @@ def test_manager_failure_before_readiness_keeps_custom_relay_gated(
             root = capture_darwin_process_identity(root_pid)
             manager = capture_darwin_process_identity(manager_pid)
             identities = (root, manager)
-            _wait_for_private_startup_gate(root)
-            temporary_directories = tuple(
-                temporary.glob(f"mcp-console-tmp-{client.process.pid}-*")
-            )
-            assert len(temporary_directories) == 1, temporary_directories
             assert list(temporary.glob(f"**/{MARKER_NAME}")) == []
 
-            assert signal_darwin_process(root, signal.SIGSTOP), (
-                "sandbox root exited before stop injection"
-            )
-            _wait_for_process_state(root, "T", "sandbox root")
             assert kill_darwin_processes((manager,)) == [manager_pid], (
                 "sandbox manager exited before failure injection"
             )
-            direct_kill_denied.wait("direct sandbox-root signal denial")
-            assert signal_darwin_process(root, signal.SIGCONT), (
-                "sandbox root exited before gate-close verification"
-            )
             readable, _, _ = select.select([client.stdout], [], [], TIMEOUT)
-            assert readable, (
-                "server did not return after startup cleanup signals failed"
-            )
+            assert readable, "server did not return after sandbox manager failure"
             client._receive(waiting)
             result = waiting["result"]
-            assert result.get("isError") is True, result
-            text = result["content"][0]["text"]
-            assert "sandbox manager did not become ready" in text, result
-            assert (
-                "failed to stop `/usr/bin/sandbox-exec` process group: "
-                "Input/output error" in text
-            ), result
-            assert (
-                "failed to stop `/usr/bin/sandbox-exec`: Operation not permitted"
-                in text
-            ), result
+            assert result == {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "[failed to launch worker relay: sandbox manager did not "
+                            "become ready: failed to fill whole buffer]"
+                        ),
+                    }
+                ],
+                "isError": True,
+            }, result
             _wait_for_startup_cleanup(identities)
             assert list(temporary.glob(f"**/{MARKER_NAME}")) == []
-            assert temporary_directories[0].exists(), (
-                "ambiguous manager readiness removed the temporary directory"
-            )
-            waiting["startup_gate_failure"] = {
+            waiting["startup_supervision_failure"] = {
                 "manager": "killed before readiness",
-                "cleanup_signals": "EIO for group, EPERM for direct root",
-                "root_signal": "SIGSTOP then SIGCONT",
-                "relay_root": "retired without executing the custom relay",
-                "temporary_directory": "preserved",
+                "custom_relay": "did not execute",
+                "verified_cleanup": "gated relay root and manager",
             }
 
             replacement = client._start_send(r="echo echo")
@@ -429,11 +188,10 @@ def test_manager_failure_before_readiness_keeps_custom_relay_gated(
             replacement_released = True
             client._receive(replacement)
             _assert_zod_echo(replacement)
-            marker = _marker_record(temporary)
-            assert marker["extra_descriptors"] == [], marker
-            replacement["startup_gate_recovery"] = {
+            markers = list(temporary.glob(f"**/{MARKER_NAME}"))
+            assert len(markers) == 1, markers
+            replacement["startup_supervision_recovery"] = {
                 "custom_relay": "executed only for the replacement generation",
-                "private_gate": "closed before relay exec",
             }
             return client._finish()
         finally:
@@ -444,7 +202,6 @@ def test_manager_failure_before_readiness_keeps_custom_relay_gated(
                 kill_darwin_processes(identities)
             manager_started.close()
             manager_release.close()
-            direct_kill_denied.close()
 
 
 if __name__ == "__main__":

@@ -12,17 +12,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.client import McpClient, stop_client
 from support.normalization import code
-from support.records import Transcript
+from support.records import Transcript, TranscriptEntry
 from support.suites import run_this_suite
 
 PLATFORMS = {"darwin"}
 
 
-def descriptor_transcript(
+def descriptor_entry(
     binary: Path,
+    launch_path: str,
     serve_arguments: tuple[str, ...],
     environment_updates: dict[str, str] | None = None,
-) -> Transcript:
+) -> TranscriptEntry:
     # fmt: python
     launcher = code(r"""
         import os
@@ -82,31 +83,28 @@ def descriptor_transcript(
                 os.close(descriptor)
 
         assert host_path.read_bytes() == b""
-        return transcript
+        entry: TranscriptEntry = {"launch_path": launch_path}
+        entry.update(transcript[-1])
+        return entry
 
 
-def test_builtin_worker_closes_unlisted_server_descriptors(
-    binary: Path,
-) -> Transcript:
-    return descriptor_transcript(binary, ())
-
-
-def test_custom_worker_closes_unlisted_server_descriptors(
+def test_closes_unlisted_server_descriptors_on_every_launch_path(
     binary: Path,
 ) -> Transcript:
     probe = Path(__file__).resolve().parents[3] / "fixtures" / "descriptor_probe"
-    return descriptor_transcript(binary, ("--worker", str(probe)))
-
-
-def test_custom_relay_closes_unlisted_server_descriptors(
-    binary: Path,
-) -> Transcript:
-    probe = Path(__file__).resolve().parents[3] / "fixtures" / "descriptor_probe"
-    return descriptor_transcript(
-        binary,
-        ("--worker", str(probe), "--relay", str(probe)),
-        {"MCP_CONSOLE_TEST_BUILTIN_RELAY": str(binary)},
+    cases = (
+        ("builtin worker", (), None),
+        ("custom worker", ("--worker", str(probe)), None),
+        (
+            "custom relay and worker",
+            ("--worker", str(probe), "--relay", str(probe)),
+            {"MCP_CONSOLE_TEST_BUILTIN_RELAY": str(binary)},
+        ),
     )
+    return [
+        descriptor_entry(binary, launch_path, arguments, environment)
+        for launch_path, arguments, environment in cases
+    ]
 
 
 if __name__ == "__main__":

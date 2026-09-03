@@ -3,15 +3,12 @@ from __future__ import annotations
 import fcntl
 import os
 import pty
-import select
 import selectors
 import shutil
 import subprocess
 import sys
 import termios
 import time
-from collections.abc import Iterator
-from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -21,11 +18,8 @@ from support.capture import read_lines as _read_lines
 from support.macos import (
     DarwinProcessIdentity,
     capture_darwin_process_identity,
-    darwin_child_process_identities,
-    darwin_process_waits_for_startup_release,
     kill_darwin_processes,
     live_darwin_processes,
-    wait_for_darwin_startup_release,
 )
 from support.normalization import code
 
@@ -73,55 +67,6 @@ def _start_with_controlling_terminal(
     return process, master, slave_name
 
 
-def _build_supervision_interposer(directory: Path, behavior: str) -> Path:
-    definitions = {
-        "manager-start": "-DMCP_CONSOLE_INTERPOSE_MANAGER_START",
-        "root-before-manager": "-DMCP_CONSOLE_INTERPOSE_ROOT_BEFORE_MANAGER",
-        "owner-monitor-start-failure": (
-            "-DMCP_CONSOLE_INTERPOSE_OWNER_MONITOR_START_FAILURE"
-        ),
-        "manager-stop-failure": "-DMCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE",
-        "denied-sigkill": "-DMCP_CONSOLE_INTERPOSE_DENIED_SIGKILL",
-        "failed-recovery-stop": "-DMCP_CONSOLE_INTERPOSE_FAILED_RECOVERY_STOP",
-        "failed-root-observer": "-DMCP_CONSOLE_INTERPOSE_FAILED_ROOT_OBSERVER",
-        "late-cleanup": "-DMCP_CONSOLE_INTERPOSE_LATE_CLEANUP",
-        "retirement-cleanup": "-DMCP_CONSOLE_INTERPOSE_RETIREMENT_CLEANUP",
-        "retirement-reused-identity": (
-            "-DMCP_CONSOLE_INTERPOSE_RETIREMENT_REUSED_IDENTITY"
-        ),
-        "retirement-exit-race": "-DMCP_CONSOLE_INTERPOSE_RETIREMENT_EXIT_RACE",
-    }
-    assert behavior in definitions, behavior
-    source = directory / "supervision-interposer.c"
-    library = directory / "supervision-interposer.dylib"
-    fixture = (
-        Path(__file__).resolve().parents[2]
-        / "fixtures"
-        / "native"
-        / "sandbox_supervision_interposer.c"
-    )
-    shutil.copyfile(fixture, source)
-    subprocess.run(
-        [
-            "cc",
-            "-std=c11",
-            "-Wall",
-            "-Wextra",
-            "-Wpedantic",
-            "-Werror",
-            definitions[behavior],
-            "-dynamiclib",
-            "-o",
-            library,
-            source,
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return library
-
-
 def _manager_pid(launcher_pid: int) -> int:
     deadline = time.monotonic() + TIMEOUT
     while True:
@@ -148,117 +93,11 @@ def _manager_pid(launcher_pid: int) -> int:
         time.sleep(0.01)
 
 
-def _wait_for_private_startup_gate(identity: DarwinProcessIdentity) -> None:
-    wait_for_darwin_startup_release(identity, "sandbox target")
-
-
-def _remaining_timeout(deadline: float) -> float:
-    return max(0.0, deadline - time.monotonic())
-
-
-@contextmanager
-def _observe_process_exit(
-    identity: DarwinProcessIdentity,
-) -> Iterator[select.kqueue]:
-    events = select.kqueue()
-    events.control(
-        [
-            select.kevent(
-                identity[0],
-                filter=select.KQ_FILTER_PROC,
-                flags=select.KQ_EV_ADD | select.KQ_EV_ONESHOT,
-                fflags=select.KQ_NOTE_EXIT,
-            )
-        ],
-        0,
-        0,
-    )
-    try:
-        yield events
-    finally:
-        events.close()
-
-
-def _wait_for_gated_root_and_manager(
-    launcher: DarwinProcessIdentity,
-) -> tuple[DarwinProcessIdentity, DarwinProcessIdentity]:
-    deadline = time.monotonic() + TIMEOUT
-    while True:
-        children = tuple(darwin_child_process_identities(launcher))
-        assert len(children) <= 2, children
-        gated = tuple(
-            child
-            for child in children
-            if darwin_process_waits_for_startup_release(child)
-        )
-        assert len(gated) <= 1, (children, gated)
-        if len(children) == 2 and gated:
-            root = gated[0]
-            manager = next(child for child in children if child != root)
-            return root, manager
-        assert live_darwin_processes((launcher,)) == [launcher[0]], launcher
-        assert time.monotonic() < deadline, (
-            "launcher did not expose its gated root and manager"
-        )
-        time.sleep(0.01)
-
-
-def _thread_count(identity: DarwinProcessIdentity) -> int | None:
-    if not live_darwin_processes((identity,)):
-        return None
-    result = subprocess.run(
-        ["/bin/ps", "-M", "-p", str(identity[0])],
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=TIMEOUT,
-    )
-    if not live_darwin_processes((identity,)):
-        return None
-    lines = result.stdout.splitlines()
-    assert lines, result.stdout
-    return len(lines) - 1
-
-
-def _wait_for_manager_readiness(lifetime: _SandboxLifetime) -> None:
-    # SandboxManager starts its launcher-side monitor thread only after the
-    # manager's readiness byte has been received. This is a causal readiness
-    # checkpoint, unlike sleeping after discovering the manager process.
-    deadline = time.monotonic() + TIMEOUT
-    while True:
-        thread_count = _thread_count(lifetime.launcher)
-        assert thread_count is not None, (
-            "sandbox launcher exited before manager readiness"
-        )
-        assert live_darwin_processes((lifetime.manager,)), (
-            "sandbox manager exited before readiness"
-        )
-        if thread_count >= 2:
-            return
-        assert time.monotonic() < deadline, "sandbox manager did not become ready"
-        time.sleep(0.01)
-
-
-def _start_lifetime(
-    binary: Path,
-    environment: dict[str, str] | None = None,
-    *,
-    detached: bool = True,
-    move_root_to_descendant_group: bool = False,
-) -> _SandboxLifetime:
-    assert not (detached and move_root_to_descendant_group)
+def _start_lifetime(binary: Path) -> _SandboxLifetime:
     # The detached child leaves the root's session, so cleanup must come from
     # exact descendant observation rather than an inherited process group.
-    child_group_option = (
-        "process_group=0"
-        if move_root_to_descendant_group
-        else f"start_new_session={detached!r}"
-    )
-    root_group_setup = (
-        "\n        os.setpgid(0, child.pid)" if move_root_to_descendant_group else ""
-    )
     # fmt: python
-    script = code(rf"""
+    script = code(r"""
         import os
         import subprocess
         import sys
@@ -268,8 +107,8 @@ def _start_lifetime(
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            {child_group_option},
-        ){root_group_setup}
+            start_new_session=True,
+        )
         print(os.getpid())
         print(child.pid)
         print(os.environ["TMPDIR"])
@@ -281,7 +120,6 @@ def _start_lifetime(
     arguments = ("sandbox", "--", "python", "-c", script)
     process = subprocess.Popen(
         [binary, *arguments],
-        env=environment,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -304,18 +142,9 @@ def _start_lifetime(
         descendant = capture_darwin_process_identity(int(descendant_pid))
         identities.append(descendant)
         launcher = capture_darwin_process_identity(process.pid)
-        if move_root_to_descendant_group:
-            assert os.getpgid(root[0]) == descendant[0], (
-                "sandbox root did not join its descendant's process group"
-            )
-        elif detached:
-            assert os.getsid(descendant[0]) != os.getsid(root[0]), (
-                "sandbox descendant did not leave the root session"
-            )
-        else:
-            assert os.getpgid(descendant[0]) == os.getpgid(root[0]), (
-                "sandbox descendant did not remain in the root process group"
-            )
+        assert os.getsid(descendant[0]) != os.getsid(root[0]), (
+            "sandbox descendant did not leave the root session"
+        )
         manager = capture_darwin_process_identity(_manager_pid(process.pid))
         identities.append(manager)
         lifetime = _SandboxLifetime(
@@ -327,7 +156,6 @@ def _start_lifetime(
             manager=manager,
             temporary_directory=temporary_directory,
         )
-        _wait_for_manager_readiness(lifetime)
         return lifetime
     except BaseException as error:
         if process.poll() is None:
