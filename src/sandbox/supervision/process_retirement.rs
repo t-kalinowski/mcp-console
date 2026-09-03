@@ -1,6 +1,6 @@
 use super::kqueue::KqueueWait;
 use super::process::{process_identity, process_info, signal_process};
-use super::process_tracker::{DescendantTracker, EventWait, TRACKER_STOP_IDENT};
+use super::process_tracker::{DescendantTracker, EventWait, TrackerEvents};
 use super::process_tree::{
     PROCESS_REAP_EVENT, add_children, discover_active_children, record_first_error,
     remove_stale_processes,
@@ -23,12 +23,11 @@ impl DescendantTracker {
             .wait(timeout, "sandbox process tracker failed")?
         {
             KqueueWait::Events(events) => events,
-            KqueueWait::Interrupted => return Ok(EventWait::Events),
+            KqueueWait::Interrupted => return Ok(EventWait::Events(TrackerEvents::default())),
             KqueueWait::TimedOut => return Ok(EventWait::TimedOut),
         };
 
-        let mut root_exited = false;
-        let mut stop_requested = false;
+        let mut observed = TrackerEvents::default();
         for event in &events {
             let pid = event.ident as libc::pid_t;
             let event_data = event.data;
@@ -36,7 +35,7 @@ impl DescendantTracker {
                 if event.filter == libc::EVFILT_PROC && event_data == libc::ESRCH as libc::intptr_t
                 {
                     self.state.active.remove(&pid);
-                    root_exited |= self.state.root.is_some_and(|root| root.pid == pid);
+                    observed.root_exited |= self.state.root.is_some_and(|root| root.pid == pid);
                     continue;
                 }
                 return Err(format!(
@@ -44,12 +43,16 @@ impl DescendantTracker {
                 ));
             }
             if event.filter != libc::EVFILT_PROC {
-                stop_requested |=
-                    event.filter == libc::EVFILT_USER && event.ident == TRACKER_STOP_IDENT;
-                continue;
+                if event.filter == libc::EVFILT_READ
+                    && self.control_descriptor == libc::c_int::try_from(event.ident).ok()
+                {
+                    observed.control_readable = true;
+                    continue;
+                }
+                return Err("sandbox process tracker received an unexpected event".to_string());
             }
 
-            root_exited |= event.fflags & libc::NOTE_EXIT != 0
+            observed.root_exited |= event.fflags & libc::NOTE_EXIT != 0
                 && self.state.root.is_some_and(|root| root.pid == pid);
             if event.fflags & PROCESS_REAP_EVENT != 0 {
                 // XNU posts NOTE_REAP before removing the PID from its process
@@ -67,13 +70,7 @@ impl DescendantTracker {
                 add_children(&self.kqueue, pid, &mut self.state)?;
             }
         }
-        Ok(if root_exited {
-            EventWait::RootExited
-        } else if stop_requested {
-            EventWait::StopRequested
-        } else {
-            EventWait::Events
-        })
+        Ok(EventWait::Events(observed))
     }
 
     pub(super) fn terminate(
@@ -87,8 +84,8 @@ impl DescendantTracker {
             // The root may have exited before the event wait blocked. Consume
             // any queued fork event before removing it from the snapshot.
             match self.wait_for_events(Some(Duration::ZERO)) {
-                Ok(EventWait::RootExited) => root_exited = true,
-                Ok(EventWait::Events | EventWait::StopRequested | EventWait::TimedOut) => {}
+                Ok(EventWait::Events(events)) => root_exited |= events.root_exited,
+                Ok(EventWait::TimedOut) => {}
                 Err(error) => record_first_error(&mut cleanup_error, error),
             }
 
@@ -158,7 +155,7 @@ impl DescendantTracker {
                         return cleanup_error.map_or(Ok(()), Err);
                     }
                 }
-                Ok(EventWait::Events | EventWait::RootExited | EventWait::StopRequested) => {}
+                Ok(EventWait::Events(_)) => {}
                 Err(error) => {
                     record_first_error(&mut cleanup_error, error);
                     std::thread::sleep(wait);

@@ -51,7 +51,9 @@ The manager closes the original root process group as a race backstop and retire
 During owner-controlled retirement, the host retains the waitable root through cleanup and reaps it last.
 
 The owner closes its control endpoint to request retirement; abrupt owner loss produces the same EOF.
-The manager decides from the observed root state whether it must stop the root, completes observed-descendant and process-group cleanup, and removes the directory only after complete success.
+The manager's single thread receives root, descendant, and control-readiness events from one `kqueue`.
+Natural root exit first retires observed descendants and then closes the original process group; owner EOF with a live root closes the group and stops the root before draining observed descendants.
+After clean natural-root cleanup, the manager waits for owner EOF before removing the directory and exiting.
 Successful manager process exit is the primary cleanup barrier before the owner reaps the direct root.
 
 The manager preserves the private directory on unexpected unwind or any cleanup error because a surviving process may still use it.

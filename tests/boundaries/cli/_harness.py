@@ -81,9 +81,6 @@ def _start_with_controlling_terminal(
 def _build_supervision_interposer(directory: Path, behavior: str) -> Path:
     definitions = {
         "manager-start": "-DMCP_CONSOLE_INTERPOSE_MANAGER_START",
-        "manager-thread-start-failure": (
-            "-DMCP_CONSOLE_INTERPOSE_MANAGER_THREAD_START_FAILURE"
-        ),
         "manager-stop-failure": "-DMCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE",
         "denied-sigkill": "-DMCP_CONSOLE_INTERPOSE_DENIED_SIGKILL",
         "failed-recovery-stop": "-DMCP_CONSOLE_INTERPOSE_FAILED_RECOVERY_STOP",
@@ -118,8 +115,6 @@ static _Atomic int denied_sigkill = 0;
 #endif
 #if defined(MCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE)
 static _Atomic int manager_group_stop_started = 0;
-static _Atomic int manager_group_stop_reported = 0;
-static _Atomic pid_t manager_direct_root = 0;
 static _Atomic int manager_root_stop_reported = 0;
 static _Atomic pid_t manager_observed_root = 0;
 static _Atomic pid_t manager_observed_descendant = 0;
@@ -127,15 +122,15 @@ static _Atomic int manager_descendant_observed_reported = 0;
 static _Atomic int manager_descendant_stop_reported = 0;
 #endif
 #if defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP)
-static _Atomic int delayed_cleanup = 0;
 static _Atomic int delayed_late_recovery = 0;
 static _Atomic int reaped_root = 0;
 #endif
+#if defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP) \
+    || defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_CLEANUP)
+static _Atomic int gated_manager_group_cleanup = 0;
+#endif
 #if defined(MCP_CONSOLE_INTERPOSE_MANAGER_START)
 static _Atomic int gated_manager_read = 0;
-#endif
-#if defined(MCP_CONSOLE_INTERPOSE_MANAGER_THREAD_START_FAILURE)
-static _Atomic int failed_manager_thread_start = 0;
 #endif
 #if defined(MCP_CONSOLE_INTERPOSE_FAILED_RECOVERY_STOP)
 static _Atomic int failed_process_info = 0;
@@ -146,10 +141,6 @@ static _Atomic int gated_recovery_root_stop = 0;
 static _Atomic int root_exit_watch_registered = 0;
 static _Atomic int failed_root_identity_recheck = 0;
 #endif
-#if defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_CLEANUP)
-static _Atomic int gated_retirement_cleanup = 0;
-#endif
-
 #if defined(MCP_CONSOLE_INTERPOSE_DENIED_SIGKILL) \
     || defined(MCP_CONSOLE_INTERPOSE_FAILED_RECOVERY_STOP) \
     || defined(MCP_CONSOLE_INTERPOSE_FAILED_ROOT_OBSERVER) \
@@ -162,16 +153,9 @@ static kill_function next_kill(void) {
 }
 #endif
 
-#if defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP) \
+#if defined(MCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE) \
+    || defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP) \
     || defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_CLEANUP)
-typedef int (*pthread_join_function)(pthread_t, void **);
-
-static pthread_join_function next_pthread_join(void) {
-    return pthread_join;
-}
-#endif
-
-#if defined(MCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE)
 typedef int (*killpg_function)(pid_t, int);
 
 static killpg_function next_killpg(void) {
@@ -181,8 +165,7 @@ static killpg_function next_killpg(void) {
 
 #if defined(MCP_CONSOLE_INTERPOSE_FAILED_RECOVERY_STOP) \
     || defined(MCP_CONSOLE_INTERPOSE_FAILED_ROOT_OBSERVER) \
-    || defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP) \
-    || defined(MCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE)
+    || defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP)
 typedef int (*proc_pidinfo_function)(int, int, uint64_t, void *, int);
 
 static proc_pidinfo_function next_proc_pidinfo(void) {
@@ -278,23 +261,6 @@ static int fail_group_stop(pid_t process_group_id, int number) {
 }
 #endif
 
-#if defined(MCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE)
-static int mark_manager_direct_root_stop(
-    int process_id,
-    int flavor,
-    uint64_t argument,
-    void *buffer,
-    int buffer_size
-) {
-    if (flavor == PROC_PIDTBSDINFO
-        && pthread_main_np() != 0
-        && atomic_load(&manager_group_stop_started) != 0) {
-        atomic_store(&manager_direct_root, process_id);
-    }
-    return next_proc_pidinfo()(process_id, flavor, argument, buffer, buffer_size);
-}
-#endif
-
 #if defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP)
 typedef pid_t (*waitpid_function)(pid_t, int *, int);
 
@@ -317,7 +283,6 @@ static void signal_checkpoint(const char *name) {
 }
 
 #if defined(MCP_CONSOLE_INTERPOSE_MANAGER_START) \
-    || defined(MCP_CONSOLE_INTERPOSE_MANAGER_THREAD_START_FAILURE) \
     || defined(MCP_CONSOLE_INTERPOSE_FAILED_RECOVERY_STOP) \
     || defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP) \
     || defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_CLEANUP)
@@ -385,7 +350,6 @@ static int gate_recovery_root_stop(pid_t process_id, int number) {
 #endif
 
 #if defined(MCP_CONSOLE_INTERPOSE_MANAGER_START) \
-    || defined(MCP_CONSOLE_INTERPOSE_MANAGER_THREAD_START_FAILURE) \
     || defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP) \
     || defined(MCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE) \
     || defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_CLEANUP)
@@ -399,7 +363,6 @@ static int is_subcommand(const char *name) {
 __attribute__((constructor))
 static void configure_interposer(void) {
 #if defined(MCP_CONSOLE_INTERPOSE_MANAGER_START) \
-    || defined(MCP_CONSOLE_INTERPOSE_MANAGER_THREAD_START_FAILURE) \
     || defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP) \
     || defined(MCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE) \
     || defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_CLEANUP)
@@ -411,17 +374,29 @@ static void configure_interposer(void) {
 #endif
 }
 
-#if defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_CLEANUP)
-static int gate_retirement_cleanup(pthread_t thread, void **value) {
-    int result = next_pthread_join()(thread, value);
-    if (result == 0
-        && getenv("MCP_CONSOLE_TEST_RETIREMENT_CLEANUP") != NULL
-        && is_subcommand("sandbox-manager")
-        && pthread_main_np() != 0
-        && atomic_exchange(&gated_retirement_cleanup, 1) == 0) {
-        signal_checkpoint("MCP_CONSOLE_TEST_RETIREMENT_CLEANUP");
-        wait_for_release("MCP_CONSOLE_TEST_RETIREMENT_RELEASE");
+#if defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP) \
+    || defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_CLEANUP)
+static int gate_manager_group_cleanup(pid_t process_group_id, int number) {
+    int result = next_killpg()(process_group_id, number);
+    int saved_errno = errno;
+    if (number == SIGKILL && is_subcommand("sandbox-manager")) {
+        if (atomic_exchange(&gated_manager_group_cleanup, 1) != 0) {
+            errno = EIO;
+            return -1;
+        }
+#if defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP)
+        if (getenv("MCP_CONSOLE_TEST_LATE_CLEANUP") != NULL) {
+            signal_checkpoint("MCP_CONSOLE_TEST_LATE_CLEANUP");
+            wait_for_release("MCP_CONSOLE_TEST_LATE_CLEANUP_RELEASE");
+        }
+#else
+        if (getenv("MCP_CONSOLE_TEST_RETIREMENT_CLEANUP") != NULL) {
+            signal_checkpoint("MCP_CONSOLE_TEST_RETIREMENT_CLEANUP");
+            wait_for_release("MCP_CONSOLE_TEST_RETIREMENT_RELEASE");
+        }
+#endif
     }
+    errno = saved_errno;
     return result;
 }
 #endif
@@ -445,37 +420,8 @@ static ssize_t gate_manager_initialization(
 
 #endif
 
-#if defined(MCP_CONSOLE_INTERPOSE_MANAGER_THREAD_START_FAILURE)
-typedef int (*pthread_create_function)(
-    pthread_t *,
-    const pthread_attr_t *,
-    void *(*)(void *),
-    void *
-);
-
-static pthread_create_function next_pthread_create(void) {
-    return pthread_create;
-}
-
-static int fail_manager_tracker_start(
-    pthread_t *thread,
-    const pthread_attr_t *attributes,
-    void *(*start_routine)(void *),
-    void *argument
-) {
-    if (is_subcommand("sandbox-manager")
-        && getenv("MCP_CONSOLE_TEST_MANAGER_THREAD_START_FAILURE") != NULL
-        && atomic_exchange(&failed_manager_thread_start, 1) == 0) {
-        signal_checkpoint("MCP_CONSOLE_TEST_MANAGER_THREAD_START_FAILURE");
-        wait_for_release("MCP_CONSOLE_TEST_MANAGER_THREAD_START_RELEASE");
-        return EAGAIN;
-    }
-    return next_pthread_create()(thread, attributes, start_routine, argument);
-}
-#endif
-
 #if defined(MCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE)
-static int observe_manager_tracker(
+static int observe_manager_process_watches(
     int descriptor,
     const struct kevent *changes,
     int change_count,
@@ -484,7 +430,6 @@ static int observe_manager_tracker(
     const struct timespec *timeout
 ) {
     if (is_subcommand("sandbox-manager")
-        && pthread_main_np() == 0
         && changes == NULL
         && change_count == 0
         && events != NULL
@@ -530,6 +475,7 @@ static int fail_manager_group_stop(pid_t process_group_id, int number) {
     if (number == SIGKILL && is_subcommand("sandbox-manager")) {
         atomic_store(&manager_group_stop_started, 1);
         if (getenv("MCP_CONSOLE_TEST_MANAGER_GROUP_STOP_FAILURE") != NULL) {
+            signal_checkpoint("MCP_CONSOLE_TEST_MANAGER_GROUP_STOP_FAILURE");
             errno = EPERM;
             return -1;
         }
@@ -542,26 +488,23 @@ static int fail_manager_root_stop(pid_t process_id, int number) {
         && number == SIGKILL
         && is_subcommand("sandbox-manager")
         && atomic_load(&manager_group_stop_started) != 0) {
-        pid_t direct_root = atomic_load(&manager_direct_root);
-        if (pthread_main_np() == 0
-            && direct_root != 0
-            && process_id != direct_root) {
+        pid_t root = atomic_load(&manager_observed_root);
+        pid_t descendant = atomic_load(&manager_observed_descendant);
+        if (descendant != 0 && process_id == descendant) {
             int result = next_kill()(process_id, number);
             if (result == 0
-                && process_id == atomic_load(&manager_observed_descendant)
                 && atomic_exchange(&manager_descendant_stop_reported, 1) == 0) {
                 signal_checkpoint("MCP_CONSOLE_TEST_MANAGER_DESCENDANT_SIGNAL");
             }
             return result;
         }
-        if (process_id == direct_root
-            && atomic_exchange(&manager_root_stop_reported, 1) == 0) {
-            signal_checkpoint("MCP_CONSOLE_TEST_MANAGER_ROOT_STOP_FAILURE");
-        } else if (atomic_exchange(&manager_group_stop_reported, 1) == 0) {
-            signal_checkpoint("MCP_CONSOLE_TEST_MANAGER_GROUP_STOP_FAILURE");
+        if (root != 0 && process_id == root) {
+            if (atomic_exchange(&manager_root_stop_reported, 1) == 0) {
+                signal_checkpoint("MCP_CONSOLE_TEST_MANAGER_ROOT_STOP_FAILURE");
+            }
+            errno = EPERM;
+            return -1;
         }
-        errno = EPERM;
-        return -1;
     }
     kill_function kill_next = next_kill();
     if (kill_next == NULL) {
@@ -610,19 +553,6 @@ static int deny_first_sigkill(pid_t process_id, int number) {
 #endif
 
 #if defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP)
-static int delay_cleanup_completion(pthread_t thread, void **value) {
-    int result = next_pthread_join()(thread, value);
-    if (result == 0
-        && getenv("MCP_CONSOLE_TEST_LATE_CLEANUP") != NULL
-        && is_subcommand("sandbox-manager")
-        && pthread_main_np() != 0
-        && atomic_exchange(&delayed_cleanup, 1) == 0) {
-        signal_checkpoint("MCP_CONSOLE_TEST_LATE_CLEANUP");
-        wait_for_release("MCP_CONSOLE_TEST_LATE_CLEANUP_RELEASE");
-    }
-    return result;
-}
-
 static pid_t gate_root_reap(pid_t process_id, int *status, int options) {
     pid_t result = next_waitpid()(process_id, status, options);
     if (result > 0
@@ -667,13 +597,10 @@ static int delay_late_recovery(
 
 #if defined(MCP_CONSOLE_INTERPOSE_MANAGER_START)
 DYLD_INTERPOSE(gate_manager_initialization, recv)
-#elif defined(MCP_CONSOLE_INTERPOSE_MANAGER_THREAD_START_FAILURE)
-DYLD_INTERPOSE(fail_manager_tracker_start, pthread_create)
 #elif defined(MCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE)
-DYLD_INTERPOSE(observe_manager_tracker, kevent)
+DYLD_INTERPOSE(observe_manager_process_watches, kevent)
 DYLD_INTERPOSE(fail_manager_group_stop, killpg)
 DYLD_INTERPOSE(fail_manager_root_stop, kill)
-DYLD_INTERPOSE(mark_manager_direct_root_stop, proc_pidinfo)
 #elif defined(MCP_CONSOLE_INTERPOSE_DENIED_SIGKILL)
 DYLD_INTERPOSE(deny_first_sigkill, kill)
 #elif defined(MCP_CONSOLE_INTERPOSE_FAILED_RECOVERY_STOP)
@@ -685,12 +612,12 @@ DYLD_INTERPOSE(arm_root_identity_recheck, kevent)
 DYLD_INTERPOSE(fail_root_observer, proc_pidinfo)
 DYLD_INTERPOSE(fail_root_group_stop, kill)
 #elif defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP)
-DYLD_INTERPOSE(delay_cleanup_completion, pthread_join)
+DYLD_INTERPOSE(gate_manager_group_cleanup, killpg)
 DYLD_INTERPOSE(deny_first_sigkill, kill)
 DYLD_INTERPOSE(gate_root_reap, waitpid)
 DYLD_INTERPOSE(delay_late_recovery, proc_pidinfo)
 #elif defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_CLEANUP)
-DYLD_INTERPOSE(gate_retirement_cleanup, pthread_join)
+DYLD_INTERPOSE(gate_manager_group_cleanup, killpg)
 #endif
 """.removeprefix("\n"),
         encoding="utf-8",

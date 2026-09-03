@@ -1,18 +1,13 @@
-use super::kqueue::{Kqueue, WeakKqueue};
+use super::kqueue::Kqueue;
 use super::process::{process_identity, process_info};
 use super::process_tree::{TrackerState, add_process_tree};
 use std::collections::HashMap;
 use std::time::Duration;
 
-pub(super) const TRACKER_STOP_IDENT: libc::uintptr_t = 1;
-
 pub(super) struct DescendantTracker {
     pub(super) kqueue: Kqueue,
     pub(super) state: TrackerState,
-}
-
-pub(super) struct TrackerStopWakeup {
-    kqueue: WeakKqueue,
+    pub(super) control_descriptor: Option<libc::c_int>,
 }
 
 pub(super) struct StartFailure {
@@ -48,18 +43,15 @@ impl StartFailure {
     }
 }
 
-pub(super) enum EventWait {
-    Events,
-    RootExited,
-    StopRequested,
-    TimedOut,
+#[derive(Default)]
+pub(super) struct TrackerEvents {
+    pub(super) control_readable: bool,
+    pub(super) root_exited: bool,
 }
 
-impl TrackerStopWakeup {
-    pub(super) fn wake(self) -> Result<(), String> {
-        self.kqueue
-            .trigger_user(TRACKER_STOP_IDENT, "failed to wake sandbox process tracker")
-    }
+pub(super) enum EventWait {
+    Events(TrackerEvents),
+    TimedOut,
 }
 
 impl DescendantTracker {
@@ -84,7 +76,11 @@ impl DescendantTracker {
             root: Some(root),
             active: HashMap::new(),
         };
-        let mut tracker = Self { kqueue, state };
+        let mut tracker = Self {
+            kqueue,
+            state,
+            control_descriptor: None,
+        };
         if let Err(error) = add_process_tree(&tracker.kqueue, root_pid, None, &mut tracker.state) {
             return Err(StartFailure::with_tracker(error, tracker));
         }
@@ -110,14 +106,21 @@ impl DescendantTracker {
         Ok(tracker)
     }
 
-    pub(super) fn stop_wakeup(&self) -> Result<TrackerStopWakeup, String> {
-        self.kqueue.watch_user(
-            TRACKER_STOP_IDENT,
-            "failed to register sandbox process tracker stop request",
-        )?;
-        Ok(TrackerStopWakeup {
-            kqueue: self.kqueue.downgrade(),
-        })
+    pub(super) fn watch_control(&mut self, descriptor: libc::c_int) -> Result<(), String> {
+        assert!(
+            self.control_descriptor.is_none(),
+            "sandbox manager control can be watched only once"
+        );
+        self.kqueue
+            .watch_read(descriptor, "failed to watch sandbox manager control")?;
+        self.control_descriptor = Some(descriptor);
+        Ok(())
+    }
+
+    pub(super) fn remove_control_watch(&mut self) {
+        if let Some(descriptor) = self.control_descriptor.take() {
+            self.kqueue.remove_read_watch(descriptor);
+        }
     }
 
     pub(super) fn supervise(mut self, retirement_grace: Duration) -> Result<(), String> {
@@ -125,9 +128,8 @@ impl DescendantTracker {
             Ok(true) => Ok(()),
             Ok(false) => loop {
                 match self.wait_for_events(None) {
-                    Ok(EventWait::RootExited) => break Ok(()),
-                    Ok(EventWait::StopRequested) => return self.stop(retirement_grace),
-                    Ok(EventWait::Events | EventWait::TimedOut) => {}
+                    Ok(EventWait::Events(events)) if events.root_exited => break Ok(()),
+                    Ok(EventWait::Events(_) | EventWait::TimedOut) => {}
                     Err(error) => break Err(error),
                 }
             },

@@ -77,7 +77,9 @@ Keep these ownership rules intact:
   A host-side sandbox manager owns primary observed-descendant tracking, bounded force termination, and private-directory cleanup for that lifetime.
   Before readiness, the host owner retains the directory-creation guard.
   After readiness, it relinquishes that guard and the manager becomes the sole directory-cleanup owner.
+  The manager's single thread observes descendant and root events plus control-socket readability through one kqueue.
   After commitment, owner EOF asks the manager to retire the lifetime; the manager decides whether the root must be stopped and whether cleanup succeeded.
+  After natural root-exit cleanup, it still waits for owner EOF before removing the directory and exiting.
   The manager's adopted guard preserves the directory on unexpected unwind and removes it only after successful cleanup proves that it is unused.
   The host owner still takes over bounded process cleanup if the manager exits unsuccessfully while the sandbox root remains live and pinned.
   That fallback can reconstruct only descendants still reachable from the root's current ancestry.
