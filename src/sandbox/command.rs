@@ -1,21 +1,26 @@
 use std::ffi::OsStr;
-use std::io::Write as _;
+use std::io::{self, Write as _};
 use std::os::fd::{AsRawFd as _, RawFd};
 use std::os::unix::net::UnixStream;
 use std::process::{Child, Command, Stdio};
 
-use super::{TARGET_GATE_RELEASE, file_descriptors, platform, supervision};
+use super::{TARGET_GATE_RELEASE, platform, supervision};
 
 /// A command configured to run under the macOS sandbox.
 pub(crate) struct SandboxedCommand {
     pub(super) command: Command,
     pub(super) temporary_directory: platform::TemporaryDirectory,
-    pub(super) startup_gate: Option<StartupGate>,
+    pub(super) startup_gate: StartupGate,
 }
 
 pub(super) struct StartupGate {
     target: Option<UnixStream>,
     owner: UnixStream,
+}
+
+pub(super) struct ManagedRoot {
+    pub(super) child: Child,
+    pub(super) supervisor: supervision::SandboxManager,
 }
 
 /// A direct sandboxed child and its host-owned lifetime manager.
@@ -27,8 +32,7 @@ pub(super) struct StartupGate {
 /// to independent I/O tasks before retirement.
 #[must_use = "retain the sandboxed child until it is explicitly retired"]
 pub(crate) struct SandboxedChild {
-    pub(super) child: Child,
-    pub(super) manager: Option<supervision::SandboxManager>,
+    pub(super) root: ManagedRoot,
     pub(super) retirement: SandboxedChildRetirement,
 }
 
@@ -48,7 +52,7 @@ impl StartupGate {
         })
     }
 
-    fn inherited_descriptor(&self) -> RawFd {
+    pub(super) fn inherited_descriptor(&self) -> RawFd {
         self.target
             .as_ref()
             .expect("unspawned startup gate should retain its target endpoint")
@@ -59,11 +63,9 @@ impl StartupGate {
         drop(self.target.take());
     }
 
-    pub(super) fn release(mut self) -> Result<(), String> {
+    pub(super) fn release(mut self) -> io::Result<()> {
         debug_assert!(self.target.is_none());
-        self.owner
-            .write_all(&[TARGET_GATE_RELEASE])
-            .map_err(|error| format!("failed to release sandbox target startup gate: {error}"))
+        self.owner.write_all(&[TARGET_GATE_RELEASE])
     }
 }
 
@@ -73,30 +75,19 @@ impl SandboxedCommand {
         let target_gate_descriptor = startup_gate.inherited_descriptor();
         let executable = std::env::current_exe()
             .map_err(|error| format!("failed to locate the sandbox target gate: {error}"))?;
-        let mut sandboxed = Self::new_direct(executable.as_os_str())?;
-        sandboxed.startup_gate = Some(startup_gate);
-        sandboxed
+        let (mut command, temporary_directory) = platform::sandboxed_command()?;
+        command
+            .arg(executable)
             .arg("sandbox-target")
             .arg("--gate-fd")
             .arg(target_gate_descriptor.to_string())
             .arg("--")
             .arg(program);
-        sandboxed.configure_descriptor_boundary()?;
-        Ok(sandboxed)
-    }
-
-    pub(super) fn new_direct(program: &OsStr) -> Result<Self, String> {
-        let (command, temporary_directory) = platform::sandboxed_command()?;
-        let temporary_directory_path = temporary_directory.path().as_os_str().to_os_string();
-        let mut sandboxed = Self {
+        Ok(Self {
             command,
             temporary_directory,
-            startup_gate: None,
-        };
-        sandboxed
-            .env("TMPDIR", temporary_directory_path)
-            .arg(program);
-        Ok(sandboxed)
+            startup_gate,
+        })
     }
 
     pub(crate) fn arg(&mut self, argument: impl AsRef<OsStr>) -> &mut Self {
@@ -143,22 +134,5 @@ impl SandboxedCommand {
     pub(crate) fn stderr(&mut self, configuration: Stdio) -> &mut Self {
         self.command.stderr(configuration);
         self
-    }
-
-    fn configure_descriptor_boundary(&mut self) -> Result<(), String> {
-        // The server may be multithreaded, so scan in the forked child. Carry
-        // only the private gate through the hidden wrapper; run_target closes
-        // it before relay exec.
-        let inherited_descriptors = self
-            .startup_gate
-            .as_ref()
-            .map(StartupGate::inherited_descriptor)
-            .into_iter()
-            .collect();
-        file_descriptors::close_unlisted_from_multithreaded_parent_except(
-            &mut self.command,
-            inherited_descriptors,
-        )?;
-        Ok(())
     }
 }
