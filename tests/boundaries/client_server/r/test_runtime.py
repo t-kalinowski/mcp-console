@@ -1,30 +1,15 @@
 #!/usr/bin/env -S uv run --script
 
 import sys
-import tempfile
-import time
-from collections.abc import Iterator
-from contextlib import contextmanager
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from _support import (
-    FifoCheckpoint,
     McpClient,
     Transcript,
-    assert_result_content,
-    build_r_input_handler,
-    collect_running_output,
     code,
-    r_test_environment,
-    reference_plots,
-    release_worker_callback_gate,
     run_this_suite,
-    stop_client,
-    wait_for_evaluation_output,
-    wait_for_idle_output,
-    wait_for_worker_file,
 )
 
 PLATFORMS = {"darwin"}

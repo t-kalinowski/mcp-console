@@ -4,11 +4,9 @@
 # ///
 
 import array
-import base64
 import fcntl
 import json
 import os
-import plistlib
 import re
 import select
 import shutil
@@ -22,7 +20,6 @@ import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime
 from pathlib import Path
 from typing import Self
 
@@ -32,39 +29,17 @@ from _support import (
     FifoCheckpoint,
     McpClient,
     Transcript,
-    TranscriptWithCompanions,
-    assert_result_content,
-    build_manager_interposer,
     build_r_input_handler,
-    checkpoint_uv_environment,
     code,
-    collect_running_output,
-    normalize_python_resolution_error,
-    normalize_python_traceback_paths,
     r_test_environment,
-    reference_plots,
-    release_worker_callback_gate,
-    run_this_suite,
     stop_client,
-    wait_for_evaluation_output,
-    wait_for_idle_output,
-    wait_for_worker_file,
 )
 
-PLATFORMS = {"darwin"}
-
 LARGE_OUTPUT_SIZE = 2 * 1024 * 1024
-
-PENDING_TEXT_BUDGET = 8 * 1024 * 1024
 
 TEST_GATED_RESPONSE_SIZE = 128 * 1024
 
 FIXTURE_CHECKPOINT_TIMEOUT_SECONDS = 15
-
-PNG_1X1 = (
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42Y"
-    "AAAAASUVORK5CYII="
-)
 
 TEST_EVENT_FIFO_NAME = "zod-test-events"
 
@@ -1346,9 +1321,6 @@ def _r_last_tool_text(client: McpClient) -> str:
     result = client.transcript[-1]["result"]
     assert result.get("isError") is not True, result
     return result["content"][0]["text"]
-
-
-PENDING_TEXT_BUDGET = 8 * 1024 * 1024
 
 
 def recording_uv_environment(

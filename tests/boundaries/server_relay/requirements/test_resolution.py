@@ -1,10 +1,14 @@
 #!/usr/bin/env -S uv run --script
 
+import base64
+import select
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from _support import Transcript, run_this_suite, stop_client
 from server_relay._harness import (
     CAPTURE_NAME,
     CHECKPOINT_NAME,
@@ -17,7 +21,6 @@ from server_relay._harness import (
     PREPARATION_RECEIVED_NAME,
     PREPARATION_RESULT_RELEASE_NAME,
     PREPARATION_RESULT_SENT_NAME,
-    Path,
     RELEASE_NAME,
     RETIREMENT_RELEASE_NAME,
     R_PREPARATION_RESOLVE_CHECKPOINT_NAME,
@@ -25,18 +28,11 @@ from server_relay._harness import (
     SHUTDOWN_RECEIVED_NAME,
     STDIN_FAILURE_RELEASED_NAME,
     ServerRelayClient,
-    Transcript,
     _fake_ir_environment,
     _normalize_shutdown_grace,
     _receive_checkpointed,
     _tool_error,
     _tool_text,
-    base64,
-    run_this_suite,
-    select,
-    stop_client,
-    sys,
-    tempfile,
 )
 
 

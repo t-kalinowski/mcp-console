@@ -1,30 +1,26 @@
 #!/usr/bin/env -S uv run --script
 
+import select
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from _support import Transcript, run_this_suite, stop_client
 from server_relay._harness import (
     CAPTURE_NAME,
     FifoCheckpoint,
-    Path,
     RESTART_REQUIREMENTS_CHECKED_NAME,
     RESTART_REQUIREMENTS_CHECK_NAME,
     RESTART_REQUIREMENTS_EVALUATION_RECEIVED_NAME,
     RESTART_REQUIREMENTS_EVALUATION_RELEASE_NAME,
     RESTART_REQUIREMENTS_RESOLVED_NAME,
     ServerRelayClient,
-    Transcript,
     _fake_ir_environment,
     _normalize_shutdown_grace,
     _receive_checkpointed,
     _tool_text,
-    run_this_suite,
-    select,
-    stop_client,
-    sys,
-    tempfile,
 )
 
 

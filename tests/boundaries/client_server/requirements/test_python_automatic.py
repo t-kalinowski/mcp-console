@@ -1,26 +1,19 @@
 #!/usr/bin/env -S uv run --script
 
-import json
 import os
-import shutil
-import signal
 import sys
 import tempfile
-import threading
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from _support import (
-    FifoCheckpoint,
     McpClient,
     Transcript,
-    checkpoint_uv_environment,
     code,
     normalize_python_resolution_error,
     normalize_python_traceback_paths,
     run_this_suite,
-    stop_client,
 )
 
 PLATFORMS = {"darwin"}

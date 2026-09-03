@@ -15,11 +15,7 @@ from _support import (
     ToolResult,
     Transcript,
     r_test_environment,
-    run_this_suite,
-    stop_client,
 )
-
-PLATFORMS = {"darwin"}
 
 SCENARIO_ENV = "MCP_CONSOLE_TEST_RELAY_SCENARIO"
 

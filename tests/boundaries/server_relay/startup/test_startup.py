@@ -5,13 +5,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from _support import Transcript, run_this_suite
 from server_relay._harness import (
-    Path,
     ServerRelayClient,
-    Transcript,
     _tool_text,
-    run_this_suite,
-    sys,
 )
 
 

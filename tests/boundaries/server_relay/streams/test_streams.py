@@ -1,21 +1,18 @@
 #!/usr/bin/env -S uv run --script
 
+import base64
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from _support import Transcript, run_this_suite
 from server_relay._harness import (
     CHECKPOINT_NAME,
     DONE_NAME,
-    Path,
     RELEASE_NAME,
     ServerRelayClient,
-    Transcript,
     _tool_text,
-    base64,
-    run_this_suite,
-    sys,
 )
 
 

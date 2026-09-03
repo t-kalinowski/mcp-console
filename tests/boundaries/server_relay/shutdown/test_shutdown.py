@@ -1,10 +1,13 @@
 #!/usr/bin/env -S uv run --script
 
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from _support import Transcript, run_this_suite, stop_client
 from server_relay._harness import (
     CAPTURE_NAME,
     EVALUATION_OUTPUT_READY_NAME,
@@ -13,20 +16,13 @@ from server_relay._harness import (
     PNG_1X1,
     PRELUDE_PROCESSED_NAME,
     PRELUDE_RELEASE_NAME,
-    Path,
     RETIREMENT_RELEASE_NAME,
     SHUTDOWN_RECEIVED_NAME,
     ServerRelayClient,
-    Transcript,
     _fake_ir_environment,
     _normalize_shutdown_grace,
     _receive_checkpointed,
     _tool_text,
-    os,
-    run_this_suite,
-    stop_client,
-    sys,
-    tempfile,
 )
 
 
