@@ -1,23 +1,12 @@
 #!/usr/bin/env -S uv run --script
 
-import array
 import base64
-import fcntl
 import json
 import os
 import select
-import shutil
-import signal
-import socket
-import subprocess
 import sys
 import tempfile
-import threading
-import termios
-import time
-from datetime import datetime
 from pathlib import Path
-from typing import Self
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -25,8 +14,6 @@ from _support import (
     FifoCheckpoint,
     McpClient,
     Transcript,
-    TranscriptWithCompanions,
-    build_manager_interposer,
     code,
     r_test_environment,
     run_this_suite,
@@ -34,21 +21,10 @@ from _support import (
 )
 
 PLATFORMS = {"darwin"}
-LARGE_OUTPUT_SIZE = 2 * 1024 * 1024
-PENDING_TEXT_BUDGET = 8 * 1024 * 1024
-TEST_GATED_RESPONSE_SIZE = 128 * 1024
-FIXTURE_CHECKPOINT_TIMEOUT_SECONDS = 15
 PNG_1X1 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42Y"
     "AAAAASUVORK5CYII="
 )
-TEST_EVENT_FIFO_NAME = "zod-test-events"
-TEST_CONTROL_FIFO_NAME = "zod-test-control"
-TEST_CLEANUP_FIFO_NAME = "zod-test-cleanup"
-TEST_RESPONSE_QUERY_FIFO_NAME = "zod-test-response-query"
-TEST_RESPONSE_RESULT_FIFO_NAME = "zod-test-response-result"
-TEST_CONTROL_READY_NAME = "zod-test-control-ready"
-
 
 from client_server._harness import (
     expose_idle_input_request,

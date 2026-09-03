@@ -1,35 +1,35 @@
 #!/usr/bin/env -S uv run --script
 
+import os
+import select
+import shutil
+import signal
+import subprocess
 import sys
+import tempfile
+import termios
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from cli._harness import (
+from _support import (
     DarwinProcessIdentity,
     FifoCheckpoint,
-    Path,
-    TIMEOUT,
     Transcript,
+    capture_darwin_process_identity,
+    code,
+    kill_darwin_processes,
+    live_darwin_processes,
+    run_this_suite,
+    signal_darwin_process,
+)
+from cli._harness import (
+    TIMEOUT,
     _build_supervision_interposer,
     _command,
     _start_with_controlling_terminal,
     _wait_for_gated_root_and_manager,
     _wait_for_private_startup_gate,
-    capture_darwin_process_identity,
-    code,
-    kill_darwin_processes,
-    live_darwin_processes,
-    os,
-    run_this_suite,
-    select,
-    shutil,
-    signal,
-    signal_darwin_process,
-    subprocess,
-    sys,
-    tempfile,
-    termios,
 )
 
 

@@ -1,8 +1,5 @@
 import json
 import os
-import select
-import signal
-import subprocess
 import sys
 import tempfile
 import time
@@ -11,9 +8,7 @@ from typing import TextIO
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from _support import McpClient, ToolResult, Transcript, code, run_this_suite
-
-PLATFORMS = {"darwin"}
+from _support import McpClient, ToolResult, Transcript
 
 CAPTURE_NAME = "mcp-console-worker-wire.jsonl"
 

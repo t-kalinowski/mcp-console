@@ -1,15 +1,26 @@
 #!/usr/bin/env -S uv run --script
 
+import os
+import re
+import select
+import signal
+import subprocess
 import sys
+import tempfile
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from cli._harness import (
+from _support import (
     FifoCheckpoint,
-    Path,
-    TIMEOUT,
     Transcript,
+    live_darwin_processes,
+    run_this_suite,
+    signal_darwin_process,
+)
+from cli._harness import (
+    TIMEOUT,
     _build_supervision_interposer,
     _cleanup,
     _command,
@@ -19,17 +30,6 @@ from cli._harness import (
     _start_lifetime,
     _wait_for_process_exit,
     _wait_for_process_state,
-    live_darwin_processes,
-    os,
-    re,
-    run_this_suite,
-    select,
-    signal,
-    signal_darwin_process,
-    subprocess,
-    sys,
-    tempfile,
-    time,
 )
 
 

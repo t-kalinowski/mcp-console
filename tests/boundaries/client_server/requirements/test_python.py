@@ -1,16 +1,9 @@
 #!/usr/bin/env -S uv run --script
 
-import json
 import os
-import plistlib
-import re
-import select
-import shutil
-import signal
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 from pathlib import Path
 
@@ -20,22 +13,16 @@ from _support import (
     FifoCheckpoint,
     McpClient,
     Transcript,
-    assert_result_content,
     checkpoint_uv_environment,
     code,
     r_test_environment,
-    reference_plots,
     release_worker_callback_gate,
     run_this_suite,
     stop_client,
-    wait_for_evaluation_output,
     wait_for_idle_output,
-    wait_for_worker_file,
 )
 
 PLATFORMS = {"darwin"}
-PYTHON_DOWNLOAD_URL = "https://example.invalid/python.tar.zst"
-
 
 from client_server._harness import (
     _zod_last_tool_text as last_tool_text,

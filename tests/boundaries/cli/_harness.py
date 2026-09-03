@@ -1,14 +1,11 @@
 import fcntl
 import os
 import pty
-import re
 import select
 import selectors
 import shutil
-import signal
 import subprocess
 import sys
-import tempfile
 import termios
 import time
 from collections.abc import Iterator
@@ -20,20 +17,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from _support import (
     DarwinProcessIdentity,
-    FifoCheckpoint,
-    Transcript,
-    build_manager_interposer,
     capture_darwin_process_identity,
     code,
     darwin_child_process_identities,
     darwin_process_waits_for_startup_release,
     kill_darwin_processes,
     live_darwin_processes,
-    run_this_suite,
-    signal_darwin_process,
 )
-
-PLATFORMS = {"darwin"}
 
 TIMEOUT = 10
 
