@@ -5,19 +5,17 @@ import sys
 import tempfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from _support import (
-    McpClient,
-    Transcript,
-    run_this_suite,
-)
+from support.assertions import last_tool_text
+from support.client import McpClient
+from support.processes import stop_process
+from support.records import Transcript
+from support.suites import run_this_suite
 
 PLATFORMS = {"darwin"}
 
-from client_server._harness import (
-    _zod_last_tool_text as last_tool_text,
-    stop_process,
+from boundaries.client_server._harness import (
     submit_prompted_stdin,
     wait_for_marker,
 )

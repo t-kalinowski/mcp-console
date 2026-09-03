@@ -8,27 +8,26 @@ import threading
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from _support import (
-    FifoCheckpoint,
-    McpClient,
-    Transcript,
-    run_this_suite,
+from support.assertions import last_tool_text
+from support.checkpoints import FifoCheckpoint, release_partial_sideband
+from support.client import McpClient
+from support.processes import (
+    process_exists,
+    process_group_exists,
+    stop_process,
+    stop_process_group,
+    stop_process_id,
 )
+from support.records import Transcript
+from support.suites import run_this_suite
 
 PLATFORMS = {"darwin"}
 FIXTURE_CHECKPOINT_TIMEOUT_SECONDS = 15
 
-from client_server._harness import (
+from boundaries.client_server._harness import (
     ZodFixtureControl,
-    _zod_last_tool_text as last_tool_text,
-    process_exists,
-    process_group_exists,
-    release_partial_sideband,
-    stop_process,
-    stop_process_group,
-    stop_process_id,
     wait_for_marker,
 )
 
@@ -234,7 +233,9 @@ def test_restart_drains_readable_frame_before_abandoning_partial_tail(
             assert last_tool_text(client) == "[done]"
             control.connect(client)
             loaded = wait_for_marker(temporary, loaded_name, client)
-            cancellation_ready = FifoCheckpoint(loaded.parent / cancellation_ready_name)
+            cancellation_ready = FifoCheckpoint.create(
+                loaded.parent / cancellation_ready_name
+            )
             (loaded.parent / arm_name).touch()
 
             evaluation = client._start_send(

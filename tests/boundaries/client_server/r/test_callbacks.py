@@ -4,29 +4,23 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from _support import (
-    McpClient,
-    Transcript,
+from support.assertions import (
     assert_result_content,
-    code,
-    r_test_environment,
-    reference_plots,
+    last_tool_text,
     release_worker_callback_gate,
-    run_this_suite,
     wait_for_evaluation_output,
     wait_for_idle_output,
-    wait_for_worker_file,
 )
+from support.checkpoints import wait_for_worker_file
+from support.client import McpClient
+from support.normalization import code
+from support.r import r_input_handler_client, r_test_environment, reference_plots
+from support.records import Transcript
+from support.suites import run_this_suite
 
 PLATFORMS = {"darwin"}
-
-
-from client_server._harness import (
-    _r_last_tool_text as last_tool_text,
-    r_input_handler_client,
-)
 
 
 def test_evaluates_a_complete_cell(binary: Path) -> Transcript:

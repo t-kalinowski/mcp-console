@@ -8,22 +8,16 @@ import sys
 import tempfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from _support import (
-    McpClient,
-    Transcript,
-    code,
-    run_this_suite,
-)
+from support.assertions import assert_exact_interleaving
+from support.assertions import last_result_text
+from support.client import McpClient
+from support.normalization import code
+from support.records import Transcript
+from support.suites import run_this_suite
 
 PLATFORMS = {"darwin"}
-
-from client_server._harness import (
-    assert_exact_interleaving,
-    _python_last_tool_text as last_tool_text,
-    managed_python_transcript,
-)
 
 
 def test_preserves_configured_python_environment(binary: Path) -> Transcript:
@@ -44,7 +38,7 @@ def test_preserves_configured_python_environment(binary: Path) -> Transcript:
         "configured-by-user"
         """)
     client.send(r=r)
-    assert last_tool_text(client) == '[1] "configured-by-user"\n'
+    assert last_result_text(client) == '[1] "configured-by-user"\n'
     disabled = (
         "managed Python requirements are disabled because the session uses a "
         "user-selected Python environment"
@@ -56,7 +50,7 @@ def test_preserves_configured_python_environment(binary: Path) -> Transcript:
         )
         result = client.transcript[-1]["result"]
         assert result["isError"] is True, result
-        assert last_tool_text(client) == disabled
+        assert last_result_text(client) == disabled
 
     client.send(
         r="external_python_combined_side_effect <- TRUE",
@@ -64,7 +58,7 @@ def test_preserves_configured_python_environment(binary: Path) -> Transcript:
     )
     result = client.transcript[-1]["result"]
     assert result["isError"] is True, result
-    assert last_tool_text(client) == disabled
+    assert last_result_text(client) == disabled
     # Reach the same worker-originated resolver request used by reticulate's
     # managed hooks. The server must enforce the external-selection policy
     # even though those hooks are not installed for this worker.
@@ -88,7 +82,7 @@ def test_preserves_configured_python_environment(binary: Path) -> Transcript:
         cat(environment_error, version_error, sep = "\n")
         """)
     client.send(r=r)
-    output = last_tool_text(client)
+    output = last_result_text(client)
     assert output == f"{disabled}\n{disabled}\n", repr(output)
     # fmt: r
     r = code(r"""
@@ -104,7 +98,7 @@ def test_preserves_configured_python_environment(binary: Path) -> Transcript:
         42L
         """)
     client.send(r=r)
-    assert last_tool_text(client) == "[1] 42\n"
+    assert last_result_text(client) == "[1] 42\n"
     return client._finish()
 
 
@@ -118,7 +112,7 @@ def test_preserves_empty_python_environment(binary: Path) -> Transcript:
         Sys.getenv("RETICULATE_PYTHON", unset = NA_character_)
         """)
     client.send(r=r)
-    assert last_tool_text(client) == '[1] "managed"\n'
+    assert last_result_text(client) == '[1] "managed"\n'
     return client._finish()
 
 
@@ -162,6 +156,52 @@ def test_rejects_python_older_than_3_10(binary: Path) -> Transcript:
     return client._finish()
 
 
+def managed_python_transcript(binary: Path, configured: bool) -> Transcript:
+    environment = os.environ.copy()
+    if configured:
+        environment["RETICULATE_PYTHON"] = "managed"
+    else:
+        environment.pop("RETICULATE_PYTHON", None)
+    uv = shutil.which("uv")
+    assert uv is not None, "real uv is required for managed-Python tests"
+    environment.pop("RETICULATE_UV", None)
+    environment["UV_OFFLINE"] = "1"
+
+    client = McpClient(binary, ("serve",), environment)
+    client._initialize_and_list_tools()
+    # fmt: r
+    r = code(r"""
+        python <- Sys.getenv("RETICULATE_PYTHON", unset = NA_character_)
+        config <- reticulate::py_config()
+        history <- reticulate::py_require()$history
+        stopifnot(
+          identical(python, "managed"),
+          file.exists(config$python),
+          isTRUE(config$ephemeral),
+          "pandas" %in% reticulate::py_require()$packages,
+          !any(vapply(
+            history,
+            function(request) identical(request$requested_from, "base"),
+            logical(1L)
+          ))
+        )
+        """)
+    client.send(r=r)
+    assert last_result_text(client) == "[done]", client.transcript[-1]
+    # fmt: python
+    python = code("""
+        import io
+        import pandas as pd
+
+        frame = pd.read_csv(io.StringIO("value\\n40\\n2\\n"))
+        int(frame["value"].sum())
+        """)
+    client.send(python=python)
+    output = last_result_text(client)
+    assert output == "42\n", repr(output)
+    return client._finish()
+
+
 def test_evaluates_with_default_managed_python(binary: Path) -> Transcript:
     return managed_python_transcript(binary, configured=False)
 
@@ -185,7 +225,7 @@ def test_runs_joblib_process_backend(binary: Path) -> Transcript:
         python=python,
         requirements={"python": ["joblib"]},
     )
-    output = last_tool_text(client)
+    output = last_result_text(client)
     assert output == "[2, 1, 0, 1, 2]\n", repr(output)
     return client._finish()
 
@@ -196,7 +236,7 @@ def test_runs_joblib_process_backend_after_live_resolution(binary: Path) -> Tran
     client = McpClient(binary, ("serve",), environment)
     client._initialize_and_list_tools()
     client.send(python="import sys")
-    assert last_tool_text(client) == "[done]"
+    assert last_result_text(client) == "[done]"
     # fmt: python
     python = code("""
         from joblib import Parallel, delayed
@@ -204,7 +244,7 @@ def test_runs_joblib_process_backend_after_live_resolution(binary: Path) -> Tran
         Parallel(n_jobs=2)(delayed(abs)(value) for value in range(-2, 3))
         """)
     client.send(python=python)
-    output = last_tool_text(client)
+    output = last_result_text(client)
     assert output == "[2, 1, 0, 1, 2]\n", repr(output)
     return client._finish()
 
@@ -222,7 +262,7 @@ def test_runs_spawn_process_after_live_resolution(binary: Path) -> Transcript:
         initial_executable = sys.executable
         """)
     client.send(python=python)
-    assert last_tool_text(client) == "[done]"
+    assert last_result_text(client) == "[done]"
     # fmt: python
     python = code("""
         import multiprocessing
@@ -243,7 +283,7 @@ def test_runs_spawn_process_after_live_resolution(binary: Path) -> Transcript:
         )
         """)
     client.send(python=python)
-    output = last_tool_text(client)
+    output = last_result_text(client)
     assert output == "(True, True)\n", repr(output)
     return client._finish()
 
@@ -260,7 +300,7 @@ def test_inspects_sandbox_child_processes_with_psutil(binary: Path) -> Transcrip
         initial_executable = sys.executable
         """)
     client.send(python=python)
-    assert last_tool_text(client) == "[done]"
+    assert last_result_text(client) == "[done]"
     # fmt: python
     python = code("""
         import ctypes
@@ -307,7 +347,7 @@ def test_inspects_sandbox_child_processes_with_psutil(binary: Path) -> Transcrip
         )
         """)
     client.send(python=python)
-    output = last_tool_text(client)
+    output = last_result_text(client)
     assert output == "(True, True, True, True, True, True, True)\n", repr(output)
     return client._finish()
 
@@ -351,7 +391,7 @@ def test_retains_environment_when_optional_psutil_setup_fails(
         sys.meta_path.insert(0, failing_psutil_finder)
         """)
     client.send(python=python)
-    assert last_tool_text(client) == "[done]"
+    assert last_result_text(client) == "[done]"
 
     # fmt: python
     python = code("""
@@ -386,22 +426,22 @@ def test_retains_environment_when_optional_psutil_setup_fails(
         )
         """)
     client.send(python=python)
-    output = last_tool_text(client)
+    output = last_result_text(client)
     assert output == ("('psutil', 1, 42, True, True, True, True, True, True)\n"), repr(
         output
     )
 
     client.send(r='"psutil" %in% reticulate::py_require()$packages')
-    assert last_tool_text(client) == "[1] TRUE\n"
+    assert last_result_text(client) == "[1] TRUE\n"
 
     client.send(control="restart")
-    assert last_tool_text(client) == (
+    assert last_result_text(client) == (
         "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
     )
     client.send(r='"psutil" %in% reticulate::py_require()$packages')
-    assert last_tool_text(client) == "[1] TRUE\n"
+    assert last_result_text(client) == "[1] TRUE\n"
     client.send(python="import psutil; psutil.__name__")
-    assert last_tool_text(client) == "'psutil'\n"
+    assert last_result_text(client) == "'psutil'\n"
     return client._finish()
 
 
@@ -435,10 +475,10 @@ def test_does_not_import_local_psutil_during_bootstrap(binary: Path) -> Transcri
             )
             """)
         client.send(python=python)
-        output = last_tool_text(client)
+        output = last_result_text(client)
         assert output == "(42, False, False)\n", repr(output)
         client.send(python="import psutil; psutil.answer")
-        assert last_tool_text(client) == "42\n"
+        assert last_result_text(client) == "42\n"
         return client._finish()
 
 
@@ -455,7 +495,7 @@ def test_sends_python_cell_with_initial_requirements(binary: Path) -> Transcript
         python=python,
         requirements={"python": ["py-yaml12"]},
     )
-    assert last_tool_text(client) == "yaml12\n"
+    assert last_result_text(client) == "yaml12\n"
     return client._finish()
 
 
@@ -511,10 +551,10 @@ def test_compacts_native_duckdb_progress_bar(binary: Path) -> Transcript:
         requirements={"python": ["duckdb==1.5.5"]},
         timeout_ms=0,
     )
-    assert last_tool_text(client) == "\n[running; poll with an empty send]"
+    assert last_result_text(client) == "\n[running; poll with an empty send]"
 
     client.send(timeout_ms=220_000)
-    output = last_tool_text(client)
+    output = last_result_text(client)
     assert "\r" not in output, repr(output)
     final = output.rstrip()
     assert final.count("% ▕") == 1, repr(final)
@@ -550,7 +590,7 @@ def test_uses_200_column_default(binary: Path) -> Transcript:
         )
         """)
     client.send(python=python)
-    output = last_tool_text(client)
+    output = last_result_text(client)
     assert output.startswith(
         "terminal columns: 200\npandas display.width: 200\nNumPy linewidth: 200\n"
     ), repr(output)
@@ -584,7 +624,7 @@ def test_uses_200_column_default_after_r_initializes_python(
         )
         """)
     client.send(r=r)
-    assert last_tool_text(client) == (
+    assert last_result_text(client) == (
         "R-first NumPy linewidth: 200\nR-first pandas display.width: 200\n"
     )
     return client._finish()
@@ -635,7 +675,7 @@ def test_prints_requirements_with_host_uv_cache(binary: Path) -> Transcript:
             )
             """)
         client.send(r=r)
-        assert last_tool_text(client) == "[done]", client.transcript[-1]
+        assert last_result_text(client) == "[done]", client.transcript[-1]
         records = [
             json.loads(line)
             for line in uv_record.read_text(encoding="utf-8").splitlines()

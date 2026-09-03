@@ -8,16 +8,13 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from _support import (
-    McpClient,
-    Transcript,
-    TranscriptWithCompanions,
-    r_test_environment,
-    run_this_suite,
-    stop_client,
-)
+from support.client import McpClient, stop_client
+from support.r import r_test_environment
+from support.records import Transcript, TranscriptWithCompanions
+from support.resolvers import record_resolved_r_library
+from support.suites import run_this_suite
 
 PLATFORMS = {"darwin"}
 PNG_1X1 = (
@@ -25,10 +22,7 @@ PNG_1X1 = (
     "AAAAASUVORK5CYII="
 )
 
-from client_server._harness import (
-    record_resolved_r_library,
-    wait_for_marker,
-)
+from boundaries.client_server._harness import wait_for_marker
 
 
 def test_materializes_records_only_for_console_use(binary: Path) -> Transcript:

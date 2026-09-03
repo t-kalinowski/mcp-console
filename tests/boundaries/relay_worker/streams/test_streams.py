@@ -3,13 +3,13 @@
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from _support import Transcript, code, run_this_suite
-from relay_worker._harness import (
-    RelayWorkerClient,
-    _tool_text,
-)
+from boundaries.relay_worker._harness import RelayWorkerClient
+from support.assertions import tool_text as _tool_text
+from support.normalization import code
+from support.records import Transcript
+from support.suites import run_this_suite
 
 
 PLATFORMS = {"darwin"}

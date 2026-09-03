@@ -5,23 +5,25 @@ import sys
 import tempfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from _support import Transcript, run_this_suite, stop_client
-from server_relay._harness import (
+from boundaries.server_relay._harness import (
     CAPTURE_NAME,
-    FifoCheckpoint,
     RESTART_REQUIREMENTS_CHECKED_NAME,
     RESTART_REQUIREMENTS_CHECK_NAME,
     RESTART_REQUIREMENTS_EVALUATION_RECEIVED_NAME,
     RESTART_REQUIREMENTS_EVALUATION_RELEASE_NAME,
     RESTART_REQUIREMENTS_RESOLVED_NAME,
     ServerRelayClient,
-    _fake_ir_environment,
     _normalize_shutdown_grace,
     _receive_checkpointed,
-    _tool_text,
 )
+from support.assertions import tool_text as _tool_text
+from support.checkpoints import FifoCheckpoint
+from support.client import stop_client
+from support.records import Transcript
+from support.resolvers import fake_ir_environment as _fake_ir_environment
+from support.suites import run_this_suite
 
 
 PLATFORMS = {"darwin"}
@@ -121,11 +123,11 @@ def test_controlled_restart_resolves_requirements_before_replacement_and_timeout
         library = root / "restart-candidate"
         library.mkdir()
         environment = _fake_ir_environment(root, [library])
-        resolver_started = FifoCheckpoint(root / "resolver-started", create=True)
-        resolver_release = FifoCheckpoint(root / "resolver-release", create=True)
-        resolver_finished = FifoCheckpoint(root / "resolver-finished", create=True)
-        resolver_finish_release = FifoCheckpoint(
-            root / "resolver-finish-release", create=True
+        resolver_started = FifoCheckpoint.create(root / "resolver-started")
+        resolver_release = FifoCheckpoint.create(root / "resolver-release")
+        resolver_finished = FifoCheckpoint.create(root / "resolver-finished")
+        resolver_finish_release = FifoCheckpoint.create(
+            root / "resolver-finish-release"
         )
         environment["MCP_CONSOLE_TEST_IR_STARTED"] = str(resolver_started.path)
         environment["MCP_CONSOLE_TEST_IR_RELEASE"] = str(resolver_release.path)
@@ -141,11 +143,13 @@ def test_controlled_restart_resolves_requirements_before_replacement_and_timeout
         client.start_worker()
         old_root = client.relay_root()
         old_capture = (old_root / CAPTURE_NAME).open(encoding="utf-8")
-        requirement_check = FifoCheckpoint(old_root / RESTART_REQUIREMENTS_CHECK_NAME)
-        requirement_checked = FifoCheckpoint(
+        requirement_check = FifoCheckpoint.attach(
+            old_root / RESTART_REQUIREMENTS_CHECK_NAME
+        )
+        requirement_checked = FifoCheckpoint.attach(
             old_root / RESTART_REQUIREMENTS_CHECKED_NAME
         )
-        requirement_resolved = FifoCheckpoint(
+        requirement_resolved = FifoCheckpoint.attach(
             old_root / RESTART_REQUIREMENTS_RESOLVED_NAME
         )
         resolver_released = False
@@ -182,8 +186,10 @@ def test_controlled_restart_resolves_requirements_before_replacement_and_timeout
             evaluation_received_path = client._wait_for(
                 RESTART_REQUIREMENTS_EVALUATION_RECEIVED_NAME
             )
-            replacement_evaluation_received = FifoCheckpoint(evaluation_received_path)
-            replacement_evaluation_release = FifoCheckpoint(
+            replacement_evaluation_received = FifoCheckpoint.attach(
+                evaluation_received_path
+            )
+            replacement_evaluation_release = FifoCheckpoint.attach(
                 evaluation_received_path.with_name(
                     RESTART_REQUIREMENTS_EVALUATION_RELEASE_NAME
                 )

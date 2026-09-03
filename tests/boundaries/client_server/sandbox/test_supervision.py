@@ -1,7 +1,5 @@
 #!/usr/bin/env -S uv run --script
 
-import ctypes
-import errno
 import os
 import re
 import shutil
@@ -9,79 +7,24 @@ import signal
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from _support import McpClient, Transcript, code, run_this_suite, stop_client
+from support.assertions import last_tool_text as _last_text
+from support.client import McpClient, stop_client
+from support.macos import (
+    DarwinProcessIdentity as _ProcessIdentity,
+    capture_darwin_process_identity as _capture_identity,
+    signal_darwin_process,
+)
+from support.normalization import code
+from support.records import Transcript
+from support.suites import run_this_suite
 
 
 PLATFORMS = {"darwin"}
-PROC_PIDTBSDINFO = 3
-INCLUDE_ZOMBIES = 1
 
 
-_ProcessIdentity = tuple[int, int, int]
 _Generation = tuple[_ProcessIdentity, _ProcessIdentity, _ProcessIdentity, Path]
-
-
-class _ProcessInfo(ctypes.Structure):
-    # In Darwin's stable proc_bsdinfo ABI, the two start-time fields follow a
-    # 120-byte prefix and complete the 136-byte structure.
-    _fields_ = [
-        ("prefix", ctypes.c_byte * 120),
-        ("pbi_start_tvsec", ctypes.c_uint64),
-        ("pbi_start_tvusec", ctypes.c_uint64),
-    ]
-
-
-_LIBPROC = None
-if sys.platform == "darwin":
-    _LIBPROC = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
-    _LIBPROC.proc_pidinfo.argtypes = [
-        ctypes.c_int,
-        ctypes.c_int,
-        ctypes.c_uint64,
-        ctypes.c_void_p,
-        ctypes.c_int,
-    ]
-    _LIBPROC.proc_pidinfo.restype = ctypes.c_int
-
-
-def _last_text(client: McpClient) -> str:
-    result = client.transcript[-1]["result"]
-    assert result.get("isError") is not True, result
-    content = result["content"]
-    assert len(content) == 1 and content[0]["type"] == "text", content
-    return content[0]["text"]
-
-
-def _process_identity(pid: int) -> _ProcessIdentity | None:
-    assert _LIBPROC is not None
-    info = _ProcessInfo()
-    ctypes.set_errno(0)
-    size = _LIBPROC.proc_pidinfo(
-        pid,
-        PROC_PIDTBSDINFO,
-        INCLUDE_ZOMBIES,
-        ctypes.byref(info),
-        ctypes.sizeof(info),
-    )
-    if size == ctypes.sizeof(info):
-        return (pid, info.pbi_start_tvsec, info.pbi_start_tvusec)
-    error = ctypes.get_errno()
-    if size == 0 and error == errno.ESRCH:
-        return None
-    if size == 0 and error != 0:
-        raise OSError(error, f"failed to inspect process {pid}")
-    raise RuntimeError(
-        f"proc_pidinfo returned {size} bytes for process {pid}, "
-        f"expected {ctypes.sizeof(info)}"
-    )
-
-
-def _capture_identity(pid: int) -> _ProcessIdentity:
-    identity = _process_identity(pid)
-    assert identity is not None, f"process {pid} exited before identity capture"
-    return identity
 
 
 def _normalize_generation(client: McpClient) -> _Generation:
@@ -118,14 +61,7 @@ def _normalize_generation(client: McpClient) -> _Generation:
 
 
 def _kill_if_alive(identity: _ProcessIdentity) -> bool:
-    pid = identity[0]
-    if _process_identity(pid) != identity:
-        return False
-    try:
-        os.kill(pid, signal.SIGKILL)
-    except ProcessLookupError:
-        return False
-    return True
+    return signal_darwin_process(identity, signal.SIGKILL)
 
 
 def _kill_generation(generation: _Generation) -> list[str]:

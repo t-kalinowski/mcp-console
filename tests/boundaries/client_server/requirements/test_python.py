@@ -7,28 +7,26 @@ import tempfile
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from _support import (
-    FifoCheckpoint,
-    McpClient,
-    Transcript,
-    checkpoint_uv_environment,
-    code,
-    r_test_environment,
+from support.assertions import (
+    last_tool_text,
     release_worker_callback_gate,
-    run_this_suite,
-    stop_client,
     wait_for_idle_output,
 )
-
-PLATFORMS = {"darwin"}
-
-from client_server._harness import (
-    _zod_last_tool_text as last_tool_text,
+from support.checkpoints import FifoCheckpoint
+from support.client import McpClient, stop_client
+from support.normalization import code
+from support.r import r_test_environment
+from support.records import Transcript
+from support.resolvers import (
+    checkpoint_uv_environment,
     matplotlib_test_environment,
     named_requirement_error,
 )
+from support.suites import run_this_suite
+
+PLATFORMS = {"darwin"}
 
 
 def test_prepares_initial_python_requirements(binary: Path) -> Transcript:
@@ -221,7 +219,7 @@ def test_restart_discards_pre_marker_python_activation(binary: Path) -> Transcri
                 "<activation ready>\n<activation release>\n<activation sent>"
             )
             activation_ready, activation_release, activation_sent = [
-                FifoCheckpoint(Path(path)) for path in paths
+                FifoCheckpoint.create(Path(path)) for path in paths
             ]
             worker_checkpoints.extend(
                 (activation_ready, activation_release, activation_sent)

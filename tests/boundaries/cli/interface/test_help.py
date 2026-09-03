@@ -5,9 +5,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from _support import Transcript, TranscriptEntry, run_this_suite
+from support.records import Transcript, TranscriptEntry
+from support.suites import run_this_suite
 
 
 def record(binary: Path, *arguments: str) -> TranscriptEntry:

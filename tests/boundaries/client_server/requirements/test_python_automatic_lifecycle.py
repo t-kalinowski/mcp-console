@@ -6,28 +6,23 @@ import tempfile
 import threading
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from _support import (
-    FifoCheckpoint,
-    McpClient,
-    Transcript,
+from support.assertions import entry_result_text
+from support.assertions import last_result_text
+from support.checkpoints import FifoCheckpoint
+from support.client import McpClient, stop_client
+from support.normalization import code, normalize_python_resolution_error
+from support.records import Transcript
+from support.resolvers import (
     checkpoint_uv_environment,
-    code,
-    normalize_python_resolution_error,
-    run_this_suite,
-    stop_client,
-)
-
-PLATFORMS = {"darwin"}
-
-from client_server._harness import (
     initialize_python_and_record_baseline,
-    last_tool_text,
-    last_tool_text_from_entry,
     recording_uv_environment,
     uv_tool_run_requirements,
 )
+from support.suites import run_this_suite
+
+PLATFORMS = {"darwin"}
 
 
 def test_rejects_automatic_resolution_from_background_thread(
@@ -64,7 +59,7 @@ def test_rejects_automatic_resolution_from_background_thread(
             print(thread_result[2])
             """)
         client.send(python=python)
-        output = last_tool_text(client)
+        output = last_result_text(client)
         for expected in (
             "available module: json",
             "background-thread name: mcp_console_thread_missing",
@@ -76,7 +71,7 @@ def test_rejects_automatic_resolution_from_background_thread(
         assert len(uv_tool_run_requirements(record)) == baseline
 
         client.send(python="6 * 7")
-        assert last_tool_text(client) == "42\n"
+        assert last_result_text(client) == "42\n"
         return client._finish()
 
 
@@ -127,7 +122,7 @@ def test_rejects_automatic_resolution_from_fork_child(binary: Path) -> Transcrip
             print(payload)
             """)
         client.send(python=python)
-        output = last_tool_text(client)
+        output = last_result_text(client)
         for expected in (
             "fork-child name: mcp_console_fork_child_missing",
             "main worker process",
@@ -139,7 +134,7 @@ def test_rejects_automatic_resolution_from_fork_child(binary: Path) -> Transcrip
         assert len(uv_tool_run_requirements(record)) == baseline
 
         client.send(python="6 * 7")
-        assert last_tool_text(client) == "42\n"
+        assert last_result_text(client) == "42\n"
         return client._finish()
 
 
@@ -159,7 +154,7 @@ def test_times_out_and_polls_automatic_python_resolution(
         try:
             client._initialize_and_list_tools()
             client.send(python="None")
-            assert last_tool_text(client) == "[done]"
+            assert last_result_text(client) == "[done]"
             # fmt: python
             python = code("""
                 automatic_timeout_attempts = (
@@ -177,14 +172,13 @@ def test_times_out_and_polls_automatic_python_resolution(
             started.wait("automatic Python resolver")
             client._receive(evaluation)
             assert (
-                last_tool_text_from_entry(evaluation)
-                == "\n[running; poll with an empty send]"
+                entry_result_text(evaluation) == "\n[running; poll with an empty send]"
             )
 
             release.release()
             resolver_released = True
             client.send(timeout_ms=30_000)
-            assert last_tool_text(client) == (
+            assert last_result_text(client) == (
                 "[resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']\n"
                 "('yaml12', 1)\n"
             )
@@ -223,7 +217,7 @@ def test_interrupts_automatic_python_resolver_and_preserves_worker(
         try:
             client._initialize_and_list_tools()
             client.send(python="None")
-            assert last_tool_text(client) == "[done]"
+            assert last_result_text(client) == "[done]"
             # fmt: python
             python = code(f"""
                 import importlib
@@ -235,7 +229,7 @@ def test_interrupts_automatic_python_resolver_and_preserves_worker(
                 automatic_interrupt_cell_ran = True
                 """)
             client.send(python=python, timeout_ms=0)
-            assert last_tool_text(client) == "\n[running; poll with an empty send]"
+            assert last_result_text(client) == "\n[running; poll with an empty send]"
             started.wait("automatic Python resolver")
 
             interrupt = client._start_send(control="interrupt", timeout_ms=30_000)
@@ -255,7 +249,7 @@ def test_interrupts_automatic_python_resolver_and_preserves_worker(
             assert not forced_release.is_set(), (
                 "interrupt did not stop the automatic Python resolver"
             )
-            error = last_tool_text_from_entry(interrupt)
+            error = entry_result_text(interrupt)
             for expected in (
                 "ModuleNotFoundError",
                 requirement,
@@ -275,7 +269,7 @@ def test_interrupts_automatic_python_resolver_and_preserves_worker(
                     "int(__import__('os').getpid() == automatic_interrupt_pid) - 1"
                 )
             )
-            assert last_tool_text(client) == "42\n"
+            assert last_result_text(client) == "42\n"
             transcript = client._finish()
             passed = True
             return transcript
@@ -335,7 +329,7 @@ def test_restart_discards_unactivated_automatic_python_candidate(
                 "<activation ready>\n<activation release>\n<activation sent>"
             )
             activation_ready, activation_release, activation_sent = [
-                FifoCheckpoint(Path(path)) for path in paths
+                FifoCheckpoint.create(Path(path)) for path in paths
             ]
             worker_checkpoints.extend(
                 (activation_ready, activation_release, activation_sent)
@@ -364,7 +358,7 @@ def test_restart_discards_unactivated_automatic_python_candidate(
                 }, globals)
                 """)
             client.send(r=r)
-            assert last_tool_text(client) == "[done]"
+            assert last_result_text(client) == "[done]"
 
             evaluation = client._start_send(
                 python="import yaml12",
@@ -413,7 +407,7 @@ def test_restart_discards_unactivated_automatic_python_candidate(
                 c("{replacement_requirement}" %in% packages, "py-yaml12" %in% packages)
                 """)
             client.send(r=r)
-            assert last_tool_text(client) == "[1]  TRUE FALSE\n"
+            assert last_result_text(client) == "[1]  TRUE FALSE\n"
             assert reuse_record.read_text(encoding="utf-8").splitlines() == [
                 "py-yaml12",
                 replacement_requirement,

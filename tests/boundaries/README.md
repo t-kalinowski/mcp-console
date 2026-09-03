@@ -1,6 +1,6 @@
 # Boundary tests
 
-A boundary suite is a non-private Python file under one of four directories:
+A boundary suite is a Python file under one of four directories whose relative path has no component beginning with `_`:
 
 - `client_server` records the public MCP JSON-RPC boundary.
 - `server_relay` records the private JSONL boundary between the server and relay.
@@ -55,6 +55,23 @@ The Markdown suite's real mixed-language recording case snapshots the public std
 It exercises the built-in R, Python, and SQL runtimes in one session and verifies that the recorded R image artifact is byte-identical to a reference plot.
 The suite also verifies both documents with Yamark, and the optional Quarto suite executes generated R and Python cells through `ir` when `ir` and `quarto` are installed.
 
+## Test support map
+
+Shared helpers under `tests/support/` are grouped by responsibility:
+
+- `client.py` owns the public stdio MCP client.
+- `snapshots.py` formats and compares primary and companion snapshots.
+- `normalization.py` contains source-text and diagnostic normalization.
+- `checkpoints.py`, `capture.py`, and `processes.py` contain reusable synchronization, stream-reading, and cleanup mechanics.
+- `macos.py` contains shared Darwin process inspection and native fixture compilation.
+- `assertions.py` contains transcript result assertions and public-output collection.
+- `r.py` and `resolvers.py` contain runtime-specific fixture setup.
+- `records.py` defines transcript record types, and `suites.py` supports direct suite execution.
+
+Each boundary keeps its concrete launch and capture mechanics in its local `_harness.py`.
+Scenarios and their assertions remain in the `test_*.py` suite files.
+Large fixture programs live in searchable files under `tests/fixtures/native/`, `tests/fixtures/server_relay/`, and `tests/fixtures/relay_worker/`.
+
 Run commands from the repository root:
 
 ```bash
@@ -62,6 +79,8 @@ scripts/test
 scripts/test client_server/server/test_tools
 scripts/test client_server/server/test_tools::initializes_and_lists_tools
 scripts/test --list
+scripts/test --locate client_server/server/test_tools
+scripts/test --locate client_server/server/test_tools::initializes_and_lists_tools
 scripts/test --jobs 1 client_server/python/test_runtime
 scripts/test --update client_server/server/test_tools::initializes_and_lists_tools
 ```
@@ -75,6 +94,10 @@ On failure, the runner prints the fully qualified selector before the error or d
 Snapshot updates retain their named `updated ...` and `removed ...` records instead of dots.
 This output belongs only to the test-runner user interface; it is not captured transcript data or part of the MCP or relay protocol.
 A `BOUNDARY/SUITE` selector runs every case in that file; a `BOUNDARY/SUITE::CASE` selector runs one named function.
+`--locate SELECTOR` does not run cases.
+It prints every matching case, its source file and definition line, and its mechanically derived primary snapshot path.
+Collection fails before listing, locating, or running cases when a snapshot has no matching suite and case.
+Companion snapshots remain owned by the case-name prefix.
 Use `--update` only to accept an intentional transcript change.
 A full `scripts/test --update` also removes snapshots for deleted suites and cases, as well as obsolete companion snapshots for cases that ran; selected updates leave other snapshots alone.
 A suite may set `PLATFORMS = {"darwin"}` to restrict execution and snapshot updates to those `sys.platform` values.

@@ -5,29 +5,27 @@ import sys
 import tempfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from _support import (
-    McpClient,
-    Transcript,
+from support.assertions import last_result_text
+from support.client import McpClient
+from support.normalization import (
     code,
     normalize_python_resolution_error,
     normalize_python_traceback_paths,
-    run_this_suite,
 )
-
-PLATFORMS = {"darwin"}
-PENDING_TEXT_BUDGET = 8 * 1024 * 1024
-
-
-from client_server._harness import (
+from support.records import Transcript
+from support.resolvers import (
     initialize_python_and_record_baseline,
-    last_tool_text,
     recording_uv_environment,
     resolve_managed_python,
     send_and_collect_runtime_python_resolution,
     uv_tool_run_requirements,
 )
+from support.suites import run_this_suite
+
+PLATFORMS = {"darwin"}
+PENDING_TEXT_BUDGET = 8 * 1024 * 1024
 
 
 def test_resolves_missing_python_import_without_replaying_cell(
@@ -39,7 +37,7 @@ def test_resolves_missing_python_import_without_replaying_cell(
     client._initialize_and_list_tools()
 
     client.send(r="automatic_python_r_state <- 42L")
-    assert last_tool_text(client) == "[done]"
+    assert last_result_text(client) == "[done]"
     client.send(sql="CREATE TABLE automatic_python_state AS SELECT 42 AS answer")
 
     # fmt: python
@@ -50,7 +48,7 @@ def test_resolves_missing_python_import_without_replaying_cell(
         automatic_python_pid = os.getpid()
         """)
     client.send(python=setup)
-    assert last_tool_text(client) == "[done]", repr(last_tool_text(client))
+    assert last_result_text(client) == "[done]", repr(last_result_text(client))
 
     # fmt: python
     python = code("""
@@ -68,7 +66,7 @@ def test_resolves_missing_python_import_without_replaying_cell(
         )
         """)
     client.send(python=python, stdin="42\n")
-    output = last_tool_text(client)
+    output = last_result_text(client)
     assert output == (
         "prefix\n"
         "[resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']\n"
@@ -78,9 +76,9 @@ def test_resolves_missing_python_import_without_replaying_cell(
     assert "[prepared]" not in output
 
     client.send(r="automatic_python_r_state")
-    assert last_tool_text(client) == "[1] 42\n"
+    assert last_result_text(client) == "[1] 42\n"
     client.send(sql="SELECT answer FROM automatic_python_state")
-    assert last_tool_text(client).splitlines()[-1].split() == ["1", "42"]
+    assert last_result_text(client).splitlines()[-1].split() == ["1", "42"]
     return client._finish()
 
 
@@ -101,7 +99,7 @@ def test_keeps_mapped_resolution_notice_atomic_at_output_limit(
         yaml12.__name__
         """)
     client.send(python=python, timeout_ms=120_000)
-    output = last_tool_text(client)
+    output = last_result_text(client)
     prefix = "x" * retained
     assert output.startswith(prefix), len(output)
     remainder = output.removeprefix(prefix)
@@ -153,7 +151,7 @@ def test_retries_new_meta_path_finders_after_automatic_resolution(
             automatic_meta_finder = AutomaticMetaFinder()
             """)
         client.send(python=python)
-        assert last_tool_text(client) == "[done]"
+        assert last_result_text(client) == "[done]"
 
         # Register the finder only after reticulate activates the inferred
         # environment, while the original import is waiting in this runtime.
@@ -184,7 +182,7 @@ def test_retries_new_meta_path_finders_after_automatic_resolution(
             lockBinding("py_require", reticulate_namespace)
             """)
         client.send(r=r)
-        assert last_tool_text(client) == "[done]"
+        assert last_result_text(client) == "[done]"
 
         output = send_and_collect_runtime_python_resolution(
             client,
@@ -290,7 +288,7 @@ def test_does_not_resolve_unreached_or_available_python_imports(
             )
             """)
         client.send(python=python)
-        output = last_tool_text(client)
+        output = last_result_text(client)
         assert output == ("(42, 'numpy', 'pandas', 42, True)\n"), repr(output)
         runs = uv_tool_run_requirements(record)
         assert len(runs) == baseline, (baseline, runs)
@@ -317,7 +315,7 @@ def test_does_not_resolve_unreached_or_available_python_imports(
         assert resolved == baseline + 2
 
         client.send(python="import yaml12; yaml12.__name__")
-        assert last_tool_text(client) == "'yaml12'\n"
+        assert last_result_text(client) == "'yaml12'\n"
         assert len(uv_tool_run_requirements(record)) == resolved
         return client._finish()
 
@@ -336,7 +334,7 @@ def test_does_not_resolve_missing_python_imports_from_sql(
         client._initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
         client.send(sql="CREATE TABLE managed_restore_value AS SELECT 42 AS answer")
-        assert last_tool_text(client) == "[done]"
+        assert last_result_text(client) == "[done]"
 
         # Exercise every driver-controlled call made by the DB-API adapter.
         # fmt: python
@@ -393,14 +391,14 @@ def test_does_not_resolve_missing_python_imports_from_sql(
             console_sql_connection(Connection())
             """)
         client.send(python=python)
-        assert last_tool_text(client) == "[done]"
+        assert last_result_text(client) == "[done]"
 
         client.send(sql="ANSWER")
-        preview = last_tool_text(client)
+        preview = last_result_text(client)
         assert "answer" in preview and "42" in preview, preview
 
         client.send(python="sorted(set(sql_import_stages))")
-        assert last_tool_text(client) == (
+        assert last_result_text(client) == (
             "['close', 'cursor', 'description', 'execute', 'fetch', 'name', 'repr']\n"
         )
         runs = uv_tool_run_requirements(record)
@@ -427,7 +425,7 @@ def test_does_not_resolve_missing_python_imports_from_sql(
             sys.settrace(restore_hook)
             """)
         client.send(python=python)
-        assert last_tool_text(client) == "[done]"
+        assert last_result_text(client) == "[done]"
 
         output = send_and_collect_runtime_python_resolution(
             client,
@@ -436,10 +434,10 @@ def test_does_not_resolve_missing_python_imports_from_sql(
         assert "SystemExit: managed SQL restoration exit" in output, output
 
         client.send(python="sql_import_stages[-1]")
-        assert last_tool_text(client) == "'restore'\n"
+        assert last_result_text(client) == "'restore'\n"
 
         client.send(sql="SELECT answer FROM managed_restore_value")
-        preview = last_tool_text(client)
+        preview = last_result_text(client)
         assert "answer" in preview and "42" in preview, preview
         runs = uv_tool_run_requirements(record)
         assert len(runs) == baseline, (baseline, runs)
@@ -503,7 +501,7 @@ def test_does_not_reenter_automatic_python_resolution(binary: Path) -> Transcrip
             lockBinding("py_require", reticulate_namespace)
             """)
         client.send(r=r)
-        assert last_tool_text(client) == "[done]"
+        assert last_result_text(client) == "[done]"
 
         output = send_and_collect_runtime_python_resolution(
             client,
@@ -525,9 +523,9 @@ def test_does_not_reenter_automatic_python_resolution(binary: Path) -> Transcrip
             )
             """)
         client.send(r=r)
-        assert last_tool_text(client) == "1\nTRUE\n", repr(last_tool_text(client))
+        assert last_result_text(client) == "1\nTRUE\n", repr(last_result_text(client))
         client.send(python="6 * 7")
-        assert last_tool_text(client) == "42\n"
+        assert last_result_text(client) == "42\n"
         return client._finish()
 
 
@@ -553,15 +551,15 @@ def test_retains_automatic_python_requirement_after_error_and_restart(
         assert resolved == baseline + 1
 
         client.send(python="import yaml12; yaml12.__name__")
-        assert last_tool_text(client) == "'yaml12'\n"
+        assert last_result_text(client) == "'yaml12'\n"
         assert len(uv_tool_run_requirements(record)) == resolved
 
         client.send(control="restart")
-        assert last_tool_text(client) == (
+        assert last_result_text(client) == (
             "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
         )
         client.send(python="import yaml12; yaml12.__name__")
-        assert last_tool_text(client) == "'yaml12'\n"
+        assert last_result_text(client) == "'yaml12'\n"
         assert len(uv_tool_run_requirements(record)) == resolved
         return client._finish()
 
@@ -600,9 +598,9 @@ def test_reports_automatic_python_resolution_failure(binary: Path) -> Transcript
         client.transcript[-1]["result"]["content"][0]["text"] = normalized
 
         client.send(r=f'"{requirement}" %in% reticulate::py_require()$packages')
-        assert last_tool_text(client) == "[1] FALSE\n"
+        assert last_result_text(client) == "[1] FALSE\n"
         client.send(python="6 * 7")
-        assert last_tool_text(client) == "42\n"
+        assert last_result_text(client) == "42\n"
         return client._finish()
 
 
@@ -621,7 +619,7 @@ def test_retains_inferred_distribution_that_does_not_provide_import(
         baseline = initialize_python_and_record_baseline(client, record)
 
         client.send(python=f"import {inferred}")
-        output = last_tool_text(client)
+        output = last_result_text(client)
         for expected in (
             "ModuleNotFoundError",
             inferred,
@@ -639,17 +637,17 @@ def test_retains_inferred_distribution_that_does_not_provide_import(
         resolved = len(uv_tool_run_requirements(record))
 
         client.send(r=f'"{inferred}" %in% reticulate::py_require()$packages')
-        assert last_tool_text(client) == "[1] TRUE\n"
+        assert last_result_text(client) == "[1] TRUE\n"
         client.send(python="import yaml12; yaml12.__name__")
-        assert last_tool_text(client) == "'yaml12'\n"
+        assert last_result_text(client) == "'yaml12'\n"
         assert len(uv_tool_run_requirements(record)) == resolved
 
         client.send(control="restart")
-        assert last_tool_text(client) == (
+        assert last_result_text(client) == (
             "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
         )
         client.send(r=f'"{inferred}" %in% reticulate::py_require()$packages')
-        assert last_tool_text(client) == "[1] TRUE\n"
+        assert last_result_text(client) == "[1] TRUE\n"
         assert len(uv_tool_run_requirements(record)) == resolved
         return client._finish()
 
@@ -668,7 +666,7 @@ def test_explicit_python_requirements_preempt_automatic_resolution(
             python="import yaml12; yaml12.__name__",
             requirements={"python": ["py-yaml12"]},
         )
-        assert last_tool_text(client) == "'yaml12'\n"
+        assert last_result_text(client) == "'yaml12'\n"
         runs = uv_tool_run_requirements(record)[baseline:]
         assert len(runs) == 1, runs
         assert runs[0].count("py-yaml12") == 1, runs
@@ -734,7 +732,7 @@ except ModuleNotFoundError as error:
             print(f"nested-direct name: {nested_direct.missing_name}")
             """)
         client.send(python=python)
-        output = last_tool_text(client)
+        output = last_result_text(client)
         for expected in (
             "ambiguous name: azure",
             "could not safely infer a PyPI distribution",
@@ -771,13 +769,13 @@ def test_reports_unavailable_standard_library_module_without_resolution(
                 print(error)
             """)
         client.send(python=python)
-        output = last_tool_text(client)
+        output = last_result_text(client)
         assert "missing standard-library name: winreg" in output, output
         assert "selected Python build" in output, output
         assert len(uv_tool_run_requirements(record)) == baseline
 
         client.send(python="6 * 7")
-        assert last_tool_text(client) == "42\n"
+        assert last_result_text(client) == "42\n"
         return client._finish()
 
 
@@ -796,7 +794,7 @@ def test_disables_automatic_resolution_for_user_selected_python(
         baseline = initialize_python_and_record_baseline(client, record)
 
         client.send(python=f"import {missing}")
-        output = last_tool_text(client)
+        output = last_result_text(client)
         for expected in (
             "ModuleNotFoundError",
             missing,
@@ -814,7 +812,7 @@ def test_disables_automatic_resolution_for_user_selected_python(
         assert len(uv_tool_run_requirements(record)) == baseline
 
         client.send(python="6 * 7")
-        assert last_tool_text(client) == "42\n"
+        assert last_result_text(client) == "42\n"
         return client._finish()
 
 

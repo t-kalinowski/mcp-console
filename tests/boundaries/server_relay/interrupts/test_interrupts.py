@@ -4,15 +4,13 @@ import sys
 import tempfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from _support import Transcript, run_this_suite, stop_client
-from server_relay._harness import (
+from boundaries.server_relay._harness import (
     CAPTURE_NAME,
     CONTROLLED_COMPLETION_RELEASE_NAME,
     CONTROLLED_COMPLETION_SENT_NAME,
     EVALUATING_NAME,
-    FifoCheckpoint,
     INTERRUPT_ACKNOWLEDGED_NAME,
     INTERRUPT_ACK_RELEASE_NAME,
     INTERRUPT_ACTIVE_RELEASE_NAME,
@@ -21,11 +19,15 @@ from server_relay._harness import (
     PREPARATION_RESULT_RELEASE_NAME,
     PREPARATION_RESULT_SENT_NAME,
     ServerRelayClient,
-    _fake_ir_environment,
     _ordered_input_barrier,
-    _tool_text,
     _wait_for_recorded_tool_result,
 )
+from support.assertions import tool_text as _tool_text
+from support.checkpoints import FifoCheckpoint
+from support.client import stop_client
+from support.records import Transcript
+from support.resolvers import fake_ir_environment as _fake_ir_environment
+from support.suites import run_this_suite
 
 
 PLATFORMS = {"darwin"}
@@ -78,13 +80,11 @@ def test_control_only_interrupt_targets_blocked_controlled_restart_resolver(
         library = root / "unused-interrupted-candidate"
         library.mkdir()
         environment = _fake_ir_environment(root, [library])
-        resolver_started = FifoCheckpoint(root / "resolver-started", create=True)
-        resolver_release = FifoCheckpoint(root / "resolver-release", create=True)
-        resolver_interrupted = FifoCheckpoint(
-            root / "resolver-interrupted", create=True
-        )
-        resolver_interrupt_release = FifoCheckpoint(
-            root / "resolver-interrupt-release", create=True
+        resolver_started = FifoCheckpoint.create(root / "resolver-started")
+        resolver_release = FifoCheckpoint.create(root / "resolver-release")
+        resolver_interrupted = FifoCheckpoint.create(root / "resolver-interrupted")
+        resolver_interrupt_release = FifoCheckpoint.create(
+            root / "resolver-interrupt-release"
         )
         environment["MCP_CONSOLE_TEST_IR_STARTED"] = str(resolver_started.path)
         environment["MCP_CONSOLE_TEST_IR_RELEASE"] = str(resolver_release.path)
@@ -182,8 +182,12 @@ def test_control_only_interrupt_preserves_controlled_completion_marker(
     assert _tool_text(result).endswith("[running; poll with an empty send]"), result
 
     relay_root = client.relay_root()
-    completion_release = FifoCheckpoint(relay_root / CONTROLLED_COMPLETION_RELEASE_NAME)
-    completion_sent = FifoCheckpoint(relay_root / CONTROLLED_COMPLETION_SENT_NAME)
+    completion_release = FifoCheckpoint.attach(
+        relay_root / CONTROLLED_COMPLETION_RELEASE_NAME
+    )
+    completion_sent = FifoCheckpoint.attach(
+        relay_root / CONTROLLED_COMPLETION_SENT_NAME
+    )
     finished = False
     released = False
     try:
@@ -438,7 +442,7 @@ def test_controlled_interrupt_does_not_run_cell_while_evaluation_remains_active(
         "\n[running; poll with an empty send]"
     )
     client._wait_for(EVALUATING_NAME)
-    release = FifoCheckpoint(client.relay_root() / INTERRUPT_ACTIVE_RELEASE_NAME)
+    release = FifoCheckpoint.attach(client.relay_root() / INTERRUPT_ACTIVE_RELEASE_NAME)
     finished = False
     released = False
     try:
@@ -493,7 +497,7 @@ def test_control_only_interrupt_timeout_zero_returns_after_grace_then_poll_colle
         "\n[running; poll with an empty send]"
     )
     client._wait_for(EVALUATING_NAME)
-    release = FifoCheckpoint(client.relay_root() / INTERRUPT_ACTIVE_RELEASE_NAME)
+    release = FifoCheckpoint.attach(client.relay_root() / INTERRUPT_ACTIVE_RELEASE_NAME)
     finished = False
     released = False
     try:
@@ -539,8 +543,8 @@ def test_control_only_interrupt_honors_timeout_after_attachment(
     )
     client._wait_for(EVALUATING_NAME)
     relay_root = client.relay_root()
-    acknowledged = FifoCheckpoint(relay_root / INTERRUPT_ACKNOWLEDGED_NAME)
-    release = FifoCheckpoint(relay_root / INTERRUPT_ACTIVE_RELEASE_NAME)
+    acknowledged = FifoCheckpoint.attach(relay_root / INTERRUPT_ACKNOWLEDGED_NAME)
+    release = FifoCheckpoint.attach(relay_root / INTERRUPT_ACTIVE_RELEASE_NAME)
     finished = False
     released = False
     try:
@@ -589,9 +593,13 @@ def test_controlled_interrupt_does_not_wait_for_an_existing_poll(
     )
     client._wait_for(EVALUATING_NAME)
     relay_root = client.relay_root()
-    interrupt_received = FifoCheckpoint(relay_root / INTERRUPT_RECEIVED_NAME)
-    interrupt_ack_release = FifoCheckpoint(relay_root / INTERRUPT_ACK_RELEASE_NAME)
-    evaluation_release = FifoCheckpoint(relay_root / INTERRUPT_ACTIVE_RELEASE_NAME)
+    interrupt_received = FifoCheckpoint.attach(relay_root / INTERRUPT_RECEIVED_NAME)
+    interrupt_ack_release = FifoCheckpoint.attach(
+        relay_root / INTERRUPT_ACK_RELEASE_NAME
+    )
+    evaluation_release = FifoCheckpoint.attach(
+        relay_root / INTERRUPT_ACTIVE_RELEASE_NAME
+    )
     interrupt_ack_released = False
     evaluation_released = False
     finished = False
@@ -676,13 +684,19 @@ def test_cancelled_interrupt_during_live_preparation_does_not_recover_running(
         )
         client.start_worker()
         relay_root = client.relay_root()
-        preparation_received = FifoCheckpoint(relay_root / PREPARATION_RECEIVED_NAME)
-        preparation_release = FifoCheckpoint(
+        preparation_received = FifoCheckpoint.attach(
+            relay_root / PREPARATION_RECEIVED_NAME
+        )
+        preparation_release = FifoCheckpoint.attach(
             relay_root / PREPARATION_RESULT_RELEASE_NAME
         )
-        preparation_sent = FifoCheckpoint(relay_root / PREPARATION_RESULT_SENT_NAME)
-        interrupt_received = FifoCheckpoint(relay_root / INTERRUPT_RECEIVED_NAME)
-        interrupt_ack_release = FifoCheckpoint(relay_root / INTERRUPT_ACK_RELEASE_NAME)
+        preparation_sent = FifoCheckpoint.attach(
+            relay_root / PREPARATION_RESULT_SENT_NAME
+        )
+        interrupt_received = FifoCheckpoint.attach(relay_root / INTERRUPT_RECEIVED_NAME)
+        interrupt_ack_release = FifoCheckpoint.attach(
+            relay_root / INTERRUPT_ACK_RELEASE_NAME
+        )
         preparation_released = False
         interrupt_ack_released = False
         finished = False

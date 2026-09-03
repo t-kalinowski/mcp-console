@@ -7,16 +7,22 @@ import tempfile
 import threading
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from _support import (
-    FifoCheckpoint,
-    McpClient,
-    Transcript,
-    r_test_environment,
-    run_this_suite,
-    stop_client,
+from support.assertions import large_output, last_tool_text
+from support.checkpoints import FifoCheckpoint, release_fixture_checkpoint
+from support.client import McpClient, stop_client
+from support.processes import (
+    process_exists,
+    process_group_exists,
+    stop_process,
+    stop_process_group,
+    stop_process_id,
 )
+from support.r import r_test_environment
+from support.records import Transcript
+from support.resolvers import record_resolved_r_library
+from support.suites import run_this_suite
 
 PLATFORMS = {"darwin"}
 FIXTURE_CHECKPOINT_TIMEOUT_SECONDS = 15
@@ -25,17 +31,8 @@ PNG_1X1 = (
     "AAAAASUVORK5CYII="
 )
 
-from client_server._harness import (
+from boundaries.client_server._harness import (
     expose_idle_sideband_output,
-    large_output,
-    _zod_last_tool_text as last_tool_text,
-    process_exists,
-    process_group_exists,
-    record_resolved_r_library,
-    release_fixture_checkpoint,
-    stop_process,
-    stop_process_group,
-    stop_process_id,
     wait_for_marker,
 )
 
@@ -359,9 +356,11 @@ def test_controlled_interrupt_preserves_idle_worker_startup_failure(
         fake_bin = temporary_path / "bin"
         fake_bin.mkdir()
         (fake_bin / "ir").symlink_to(ordered_ir)
-        resolver_started = FifoCheckpoint(temporary_path / "resolver-started")
-        resolver_release = FifoCheckpoint(temporary_path / "resolver-release")
-        resolver_interrupted = FifoCheckpoint(temporary_path / "resolver-interrupted")
+        resolver_started = FifoCheckpoint.create(temporary_path / "resolver-started")
+        resolver_release = FifoCheckpoint.create(temporary_path / "resolver-release")
+        resolver_interrupted = FifoCheckpoint.create(
+            temporary_path / "resolver-interrupted"
+        )
 
         environment, _ = r_test_environment()
         path = environment.get("PATH")
@@ -440,10 +439,12 @@ def test_control_only_interrupt_returns_while_explicit_preparation_settles(
         fake_bin = temporary_path / "bin"
         fake_bin.mkdir()
         (fake_bin / "ir").symlink_to(ordered_ir)
-        resolver_started = FifoCheckpoint(temporary_path / "resolver-started")
-        resolver_release = FifoCheckpoint(temporary_path / "resolver-release")
-        resolver_interrupted = FifoCheckpoint(temporary_path / "resolver-interrupted")
-        interrupt_release = FifoCheckpoint(temporary_path / "interrupt-release")
+        resolver_started = FifoCheckpoint.create(temporary_path / "resolver-started")
+        resolver_release = FifoCheckpoint.create(temporary_path / "resolver-release")
+        resolver_interrupted = FifoCheckpoint.create(
+            temporary_path / "resolver-interrupted"
+        )
+        interrupt_release = FifoCheckpoint.create(temporary_path / "interrupt-release")
 
         environment, _ = r_test_environment()
         path = environment.get("PATH")

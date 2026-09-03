@@ -1,4 +1,3 @@
-import json
 import os
 import sys
 import tempfile
@@ -6,9 +5,12 @@ import time
 from pathlib import Path
 from typing import TextIO
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from _support import McpClient, ToolResult, Transcript
+from support.assertions import tool_text as _tool_text
+from support.capture import read_jsonl, read_jsonl_path
+from support.client import McpClient
+from support.records import ToolResult, Transcript
 
 CAPTURE_NAME = "mcp-console-worker-wire.jsonl"
 
@@ -17,11 +19,6 @@ CAPTURE_STDIN_CLOSE_ENV = "MCP_CONSOLE_MITM_CAPTURE_STDIN_CLOSE"
 CAPTURE_WORKER_SIDEBAND_CLOSE_ENV = "MCP_CONSOLE_MITM_CAPTURE_WORKER_SIDEBAND_CLOSE"
 
 SHUTDOWN_ENOTCONN_ENV = "MCP_CONSOLE_MITM_SHUTDOWN_ENOTCONN"
-
-
-def _tool_text(result: ToolResult) -> str:
-    assert result.get("isError") is not True, result
-    return result["content"][0]["text"]
 
 
 class RelayWorkerClient:
@@ -47,7 +44,12 @@ class RelayWorkerClient:
             environment["R_NO_SEGV_HANDLER"] = "1"
         if inject_shutdown_enotconn:
             environment[SHUTDOWN_ENOTCONN_ENV] = "relay"
-        mitm = Path(__file__).resolve().parents[2] / "fixtures" / "worker_mitm"
+        mitm = (
+            Path(__file__).resolve().parents[2]
+            / "fixtures"
+            / "relay_worker"
+            / "proxy.py"
+        )
         self._client = McpClient(
             binary,
             ("serve", "--worker", str(mitm)),
@@ -104,14 +106,8 @@ class RelayWorkerClient:
 
     @staticmethod
     def _read_capture(capture: Path) -> Transcript:
-        return [
-            json.loads(line)
-            for line in capture.read_text(encoding="utf-8").splitlines()
-        ]
+        return read_jsonl_path(capture)
 
     @staticmethod
     def _read_open_capture(capture: TextIO) -> Transcript:
-        return [json.loads(line) for line in capture.read().splitlines()]
-
-
-__all__ = [name for name in globals() if name not in {"__builtins__"}]
+        return read_jsonl(capture)

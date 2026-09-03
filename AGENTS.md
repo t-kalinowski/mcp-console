@@ -134,11 +134,14 @@ Keep these ownership rules intact:
 ### Tests and development scripts
 
 - `tests/cli.rs` — public CLI and narrow OS/process-lifecycle acceptance tests that cannot be expressed at the MCP boundary.
-- `tests/fixtures/` — deterministic workers, relays, resolvers, and package fixtures.
+- `tests/support/` — shared transcript records, snapshots, normalization, checkpoints, capture, process, macOS, assertion, R, resolver, client, and direct-suite helpers.
+- `tests/fixtures/` — deterministic workers, resolvers, package fixtures, searchable native interposers, and boundary-specific relay and worker programs.
 - `tests/boundaries/client_server/` — public MCP client-server behavior.
 - `tests/boundaries/server_relay/` — private server-relay wire behavior.
 - `tests/boundaries/relay_worker/` — worker sideband and standard-stream behavior through the relay.
 - `tests/boundaries/cli/` — direct CLI behavior.
+- `tests/boundaries/*/_harness.py` — boundary-specific process launch and capture mechanics.
+- `tests/boundaries/_run.py`, `tests/transcript_test_script.rs` — recursive transcript discovery, selection, location, snapshot checking, progress reporting, and runner regressions.
 - `tests/snapshots/` — generated YAML 1.2 snapshots, parallel to the boundary test hierarchy.
 - `r/tests/testthat/` — R package protocol and ellmer adapter tests.
 - `scripts/release.py`, `tests/release.py` — release validation and installed-wheel acceptance.

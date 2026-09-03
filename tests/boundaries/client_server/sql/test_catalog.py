@@ -6,17 +6,15 @@ import sys
 import tempfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from _support import (
-    McpClient,
-    Transcript,
-    code,
-    r_test_environment,
-    run_this_suite,
-    stop_client,
-    wait_for_worker_file,
-)
+from support.assertions import last_tool_text
+from support.checkpoints import wait_for_worker_file
+from support.client import McpClient, stop_client
+from support.normalization import code
+from support.r import r_test_environment
+from support.records import Transcript
+from support.suites import run_this_suite
 
 PLATFORMS = {"darwin"}
 
@@ -1142,12 +1140,6 @@ def test_keeps_repeated_previews_deterministic(binary: Path) -> Transcript:
     for entry in transcript[-3:]:
         entry["result"]["content"][0]["text"] = "<same bounded preview>\n"
     return transcript
-
-
-def last_tool_text(client: McpClient) -> str:
-    result = client.transcript[-1]["result"]
-    assert result.get("isError") is not True, result
-    return result["content"][0]["text"]
 
 
 def normalize_duckdb_progress(client: McpClient) -> str:

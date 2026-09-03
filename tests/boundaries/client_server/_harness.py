@@ -7,9 +7,7 @@ import array
 import fcntl
 import json
 import os
-import re
 import select
-import shutil
 import signal
 import socket
 import subprocess
@@ -18,24 +16,19 @@ import tempfile
 import termios
 import threading
 import time
-from collections.abc import Iterator
-from contextlib import contextmanager
 from pathlib import Path
 from typing import Self
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from _support import (
-    FifoCheckpoint,
-    McpClient,
-    Transcript,
-    build_r_input_handler,
-    code,
-    r_test_environment,
-    stop_client,
+from support.assertions import last_result_text
+from support.checkpoints import release_fixture_checkpoint
+from support.client import McpClient
+from support.processes import (
+    process_group_exists,
+    stop_process_group,
+    stop_process_id,
 )
-
-LARGE_OUTPUT_SIZE = 2 * 1024 * 1024
 
 TEST_GATED_RESPONSE_SIZE = 128 * 1024
 
@@ -487,100 +480,6 @@ class SocketGateMcpClient(McpClient):
         self.test_stdio_closed = True
 
 
-def build_killpg_denial_interposer(directory: Path) -> Path:
-    source = directory / "deny-killpg.c"
-    library = directory / "deny-killpg.dylib"
-    source.write_text(
-        r"""
-#include <errno.h>
-#include <fcntl.h>
-#include <signal.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <sys/syscall.h>
-#include <sys/types.h>
-#include <unistd.h>
-
-static void write_pid_marker(const char *name, pid_t process_id) {
-    const char *marker = getenv(name);
-    if (marker == NULL) {
-        return;
-    }
-    int descriptor = open(marker, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-    if (descriptor >= 0) {
-        dprintf(descriptor, "%d\n", process_id);
-        close(descriptor);
-    }
-}
-
-static int deny_killpg(pid_t process_group, int signal) {
-    if (signal == SIGINT
-        && getenv("MCP_CONSOLE_TEST_DENIED_SIGINT") != NULL) {
-        write_pid_marker("MCP_CONSOLE_TEST_DENIED_SIGINT", process_group);
-        errno = EPERM;
-        return -1;
-    }
-    return (int)syscall(SYS_kill, -process_group, signal);
-}
-
-__attribute__((constructor))
-static void remove_interposer_from_child_environment(void) {
-    unsetenv("DYLD_INSERT_LIBRARIES");
-}
-
-__attribute__((used))
-static struct {
-    const void *replacement;
-    const void *replacee;
-} interposers[] __attribute__((section("__DATA,__interpose"))) = {
-    {(const void *)&deny_killpg, (const void *)&killpg},
-};
-""".removeprefix("\n"),
-        encoding="utf-8",
-    )
-    subprocess.run(
-        ["cc", "-dynamiclib", "-o", library, source],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return library
-
-
-def record_resolved_r_library(environment: dict[str, str], directory: Path) -> None:
-    real_ir = shutil.which("ir", path=environment.get("PATH"))
-    assert real_ir is not None, "ir is required"
-    identity = directory / "resolved-r-library"
-    fake_bin = directory / "fixture-r-bin"
-    fake_bin.mkdir()
-    ir = fake_bin / "ir"
-    ir.write_text(
-        code(r"""
-            #!/bin/sh
-
-            set -eu
-            if [ "$#" -eq 1 ] && [ "$1" = "--version" ]; then
-              exec "$MCP_CONSOLE_TEST_REAL_IR" "$@"
-            fi
-            if [ -n "${MCP_CONSOLE_TEST_R_RESOLUTION_FAILURE:-}" ] &&
-              [ -e "$MCP_CONSOLE_TEST_R_RESOLUTION_FAILURE" ]; then
-              printf 'fixture R resolver failed\n' >&2
-              exit 1
-            fi
-            library=$("$MCP_CONSOLE_TEST_REAL_IR" "$@")
-            printf '%s' "$library" > "$MCP_CONSOLE_TEST_R_LIBRARY_IDENTITY"
-            printf '%s' "$library"
-            """),
-        encoding="utf-8",
-    )
-    ir.chmod(0o755)
-    path = environment.get("PATH")
-    assert path is not None, "PATH is required"
-    environment["PATH"] = os.pathsep.join((str(fake_bin), path))
-    environment["MCP_CONSOLE_TEST_REAL_IR"] = real_ir
-    environment["MCP_CONSOLE_TEST_R_LIBRARY_IDENTITY"] = str(identity)
-
-
 def expose_idle_input_request(client: McpClient, temporary_path: Path) -> None:
     requested = client._start_send(r="request input while idle")
     completed = wait_for_marker(
@@ -589,7 +488,7 @@ def expose_idle_input_request(client: McpClient, temporary_path: Path) -> None:
         client,
     )
     client._receive(requested)
-    assert last_tool_text(client) == "[done]"
+    assert last_result_text(client) == "[done]"
 
     release_fixture_checkpoint(completed.parent / "zod-release-idle-input-request")
     wait_for_marker(
@@ -598,60 +497,8 @@ def expose_idle_input_request(client: McpClient, temporary_path: Path) -> None:
         client,
     )
     client.send()
-    assert last_tool_text(client) == (
+    assert last_result_text(client) == (
         '[input requested: "idle> "]\n[waiting for stdin]'
-    )
-
-
-def resolver_interrupt_permission_environment(
-    temporary_path: Path,
-) -> tuple[dict[str, str], FifoCheckpoint, FifoCheckpoint, Path, Path]:
-    environment, _ = r_test_environment()
-    environment["RETICULATE_PYTHON"] = ""
-    fake_bin = temporary_path / "bin"
-    fake_bin.mkdir()
-    fake_ir = fake_bin / "ir"
-    fake_ir.write_text(
-        code(r"""
-            #!/bin/sh
-
-            set -eu
-            if [ "$#" -eq 1 ] && [ "$1" = "--version" ]; then
-              printf 'ir 0.4.0\n'
-              exit 0
-            fi
-            exec 3< "$MCP_CONSOLE_TEST_RESOLVER_LIFETIME"
-            printf '%s\n' "$$" > "$MCP_CONSOLE_TEST_RESOLVER_GROUP"
-            printf 1 > "$MCP_CONSOLE_TEST_RESOLVER_STARTED"
-            IFS= read -r _ <&3
-            """),
-        encoding="utf-8",
-    )
-    fake_ir.chmod(0o755)
-
-    path = environment.get("PATH")
-    assert path is not None, "PATH is required"
-    environment["PATH"] = os.pathsep.join((str(fake_bin), path))
-    environment["TMPDIR"] = str(temporary_path)
-    denied_interrupt = temporary_path / "resolver-sigint-denied"
-    resolver_group = temporary_path / "resolver-group"
-    resolver_started = FifoCheckpoint(temporary_path / "resolver-started")
-    resolver_lifetime = FifoCheckpoint(temporary_path / "resolver-lifetime")
-    environment["MCP_CONSOLE_TEST_DENIED_SIGINT"] = str(denied_interrupt)
-    environment["MCP_CONSOLE_TEST_RESOLVER_GROUP"] = str(resolver_group)
-    environment["MCP_CONSOLE_TEST_RESOLVER_STARTED"] = str(resolver_started.path)
-    environment["MCP_CONSOLE_TEST_RESOLVER_LIFETIME"] = str(resolver_lifetime.path)
-    # The interposer removes its loader variable after reaching the server, so
-    # the resolver and Zod do not inherit it.
-    environment["DYLD_INSERT_LIBRARIES"] = str(
-        build_killpg_denial_interposer(temporary_path)
-    )
-    return (
-        environment,
-        resolver_started,
-        resolver_lifetime,
-        resolver_group,
-        denied_interrupt,
     )
 
 
@@ -666,47 +513,13 @@ def submit_prompted_stdin(
     submitted = client._start_send(stdin=stdin)
     wait_for_marker(temporary_path, marker, client)
     client._receive(submitted)
-    if last_tool_text(client) != expected:
-        assert last_tool_text(client) == "\n[waiting for stdin]"
+    if last_result_text(client) != expected:
+        assert last_result_text(client) == "\n[waiting for stdin]"
         client.send()
-    assert last_tool_text(client) == expected
+    assert last_result_text(client) == expected
     calls = client.transcript[poll_start:]
     submitted["result"] = calls[-1]["result"]
     client.transcript[poll_start:] = [submitted]
-
-
-def _zod_last_tool_text(client: McpClient) -> str:
-    result = client.transcript[-1]["result"]
-    assert result.get("isError") is not True, result
-    return result["content"][0]["text"]
-
-
-def assert_large_output(output: str, prefix: str) -> None:
-    expected = prefix + ("x" * LARGE_OUTPUT_SIZE)
-    assert output.startswith(expected), (
-        f"captured {len(output)} bytes without the complete {len(expected)}-byte payload"
-    )
-    barrier = output.removeprefix(expected)
-    assert barrier and not barrier.strip("y"), "unexpected text after captured payload"
-
-
-def large_output(prefix: str) -> str:
-    return prefix + ("x" * LARGE_OUTPUT_SIZE) + ("y" * LARGE_OUTPUT_SIZE)
-
-
-def remove_length_marker(output: str, marker_prefix: str) -> tuple[str, int]:
-    marker_start = output.find(marker_prefix)
-    assert marker_start >= 0, (
-        f"raw output lost length marker {marker_prefix!r}: {output[-500:]!r}"
-    )
-    marker_end = output.find("\n", marker_start)
-    if marker_end < 0:
-        marker_end = len(output)
-        after_marker = marker_end
-    else:
-        after_marker = marker_end + 1
-    length = int(output[marker_start + len(marker_prefix) : marker_end])
-    return output[:marker_start] + output[after_marker:], length
 
 
 def expose_idle_sideband_output(
@@ -721,7 +534,7 @@ def expose_idle_sideband_output(
         else "start background sideband"
     )
     client.send(r=source)
-    assert last_tool_text(client) == "[done]", repr(last_tool_text(client))
+    assert last_result_text(client) == "[done]", repr(last_result_text(client))
     started = wait_for_marker(
         temporary_path,
         f"zod-background-sideband-started{suffix}",
@@ -978,46 +791,6 @@ def read_worker_group(marker: Path) -> int:
     return worker_group
 
 
-def release_partial_sideband(marker: Path) -> None:
-    release = marker.with_name("zod-release-partial-sideband")
-    with release.open("wb", buffering=0) as stream:
-        assert stream.write(b"x") == 1
-
-
-def release_fixture_checkpoint(path: Path) -> None:
-    with path.open("wb", buffering=0) as stream:
-        assert stream.write(b"1") == 1
-
-
-def process_group_exists(process_group: int) -> bool:
-    try:
-        os.killpg(process_group, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-
-def process_exists(process_id: int) -> bool:
-    try:
-        os.kill(process_id, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-
-def stop_process_id(process_id: int | None) -> None:
-    if process_id is None:
-        return
-    try:
-        os.kill(process_id, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-
-
 def wait_for_process_group_exit(process_group: int, client: McpClient) -> None:
     deadline = time.monotonic() + FIXTURE_CHECKPOINT_TIMEOUT_SECONDS
     while process_group_exists(process_group):
@@ -1026,425 +799,3 @@ def wait_for_process_group_exit(process_group: int, client: McpClient) -> None:
             "restart did not enforce its shutdown deadline"
         )
         time.sleep(0.01)
-
-
-def stop_process_group(process_group: int | None) -> None:
-    if process_group is None:
-        return
-    assert process_group > 0, process_group
-    assert process_group != os.getpgrp(), process_group
-    try:
-        os.killpg(process_group, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-
-
-def stop_process(process: subprocess.Popen[str]) -> None:
-    if process.poll() is None:
-        process.kill()
-    process.wait()
-
-
-PYTHON_DOWNLOAD_URL = "https://example.invalid/python.tar.zst"
-
-
-def named_requirement_error(requirement: str) -> str:
-    return (
-        f"Python requirement `{requirement}` is not accepted: host-side managed "
-        "resolution accepts named package requirements only"
-    )
-
-
-def python_version_constraint_error(constraint: str) -> str:
-    return (
-        f"Python version constraint `{constraint}` is not accepted: host-side managed "
-        "resolution accepts version numbers and supported PEP 440 version specifiers only"
-    )
-
-
-def normalize_duckdb_resolution_error(error: str, extension: str) -> str:
-    detail = next(
-        line.strip().removeprefix("! ")
-        for line in error.splitlines()
-        if f'Failed to download extension "{extension}"' in line
-    )
-    return detail.partition(' at URL "')[0]
-
-
-def ir_cache_directory(environment: dict[str, str]) -> str:
-    ir = shutil.which("ir", path=environment.get("PATH"))
-    assert ir is not None, "ir is required"
-    cache = subprocess.run(
-        [ir, "cache", "dir"],
-        check=True,
-        capture_output=True,
-        text=True,
-        env=environment,
-    ).stdout.strip()
-    assert cache and Path(cache).is_absolute(), (
-        f"ir returned invalid cache directory: {cache}"
-    )
-    return cache
-
-
-def matplotlib_test_environment(cache_home: Path) -> dict[str, str]:
-    environment = os.environ.copy()
-    cache = ir_cache_directory(environment)
-    environment["IR_CACHE_DIR"] = cache
-    environment["XDG_CACHE_HOME"] = str(cache_home)
-    assert ir_cache_directory(environment) == cache
-    return environment
-
-
-def python_inventory_client(
-    binary: Path,
-    directory: Path,
-    *,
-    preference: str | None = None,
-    install_directory: Path | None = None,
-    resolver_python: Path | None = None,
-    resolver_record: Path | None = None,
-    extra_environment: dict[str, str] | None = None,
-) -> tuple[McpClient, Path, Path]:
-    real_uv = shutil.which("uv")
-    assert real_uv is not None, "real uv is required"
-    environment = os.environ.copy()
-    environment.pop("RETICULATE_PYTHON", None)
-    environment.pop("UV_PYTHON_PREFERENCE", None)
-    environment["RETICULATE_UV"] = str(
-        Path(__file__).parents[2] / "fixtures" / "record_uv_environment"
-    )
-    environment["MCP_CONSOLE_TEST_REAL_UV"] = real_uv
-    environment["MCP_CONSOLE_TEST_UV_RECORD"] = str(directory / "uv.jsonl")
-    arguments = directory / "uv-arguments.jsonl"
-    environment["MCP_CONSOLE_TEST_UV_ARGUMENTS_RECORD"] = str(arguments)
-    inventories = directory / "uv-python-inventories.json"
-    environment["MCP_CONSOLE_TEST_UV_PYTHON_INVENTORIES"] = str(inventories)
-    if preference is not None:
-        environment["UV_PYTHON_PREFERENCE"] = preference
-    if install_directory is not None:
-        environment["UV_PYTHON_INSTALL_DIR"] = str(install_directory)
-    if resolver_python is not None:
-        environment["MCP_CONSOLE_TEST_UV_PYTHON"] = str(resolver_python)
-    if resolver_record is not None:
-        environment["MCP_CONSOLE_TEST_UV_RESOLVER_RECORD"] = str(resolver_record)
-    if extra_environment is not None:
-        environment.update(extra_environment)
-    client = McpClient(
-        binary,
-        ("serve",),
-        environment,
-        current_directory=directory,
-    )
-    client._initialize_and_list_tools()
-    arguments.write_text("", encoding="utf-8")
-    if resolver_record is not None:
-        resolver_record.write_text("", encoding="utf-8")
-    return client, inventories, arguments
-
-
-def uv_python_row(
-    version: str,
-    *,
-    path: str | Path | None = None,
-    url: str | None = PYTHON_DOWNLOAD_URL,
-    variant: str = "default",
-    implementation: str = "cpython",
-) -> dict[str, object]:
-    match = re.match(r"^(\d+)\.(\d+)\.(\d+)", version)
-    assert match is not None, version
-    major, minor, patch = (int(part) for part in match.groups())
-    return {
-        "key": f"{implementation}-{version}-macos-aarch64-none",
-        "version": version,
-        "version_parts": {"major": major, "minor": minor, "patch": patch},
-        "path": None if path is None else str(path),
-        "symlink": None,
-        "url": url,
-        "variant": variant,
-        "implementation": implementation,
-    }
-
-
-def write_uv_python_inventories(path: Path, inventories: dict[str, object]) -> None:
-    path.write_text(json.dumps(inventories), encoding="utf-8")
-
-
-def recorded_python_preferences(arguments: Path) -> list[str]:
-    invocations = [
-        json.loads(line) for line in arguments.read_text(encoding="utf-8").splitlines()
-    ]
-    return [
-        invocation[invocation.index("--python-preference") + 1]
-        for invocation in invocations
-        if invocation[:2] == ["python", "list"]
-    ]
-
-
-def recorded_tool_run_pythons(arguments: Path) -> list[str]:
-    invocations = [
-        json.loads(line) for line in arguments.read_text(encoding="utf-8").splitlines()
-    ]
-    return [
-        invocation[invocation.index("--python") + 1]
-        for invocation in invocations
-        if invocation[:2] == ["tool", "run"] and "--python" in invocation
-    ]
-
-
-def read_uv_resolver_records(path: Path) -> list[dict[str, object]]:
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
-
-
-def resolve_public_python_version(
-    client: McpClient,
-    constraints: list[str],
-) -> str:
-    constraints_r = (
-        "character()"
-        if not constraints
-        else f"c({', '.join(json.dumps(value) for value in constraints)})"
-    )
-    # fmt: r
-    r = code(rf"""
-        reticulate::py_require(
-          python_version = {
-            constraints_r
-          },
-          action = "set"
-        )
-        result <- tryCatch(
-          reticulate::py_write_requirements(
-            NULL,
-            NULL,
-            freeze = FALSE,
-            python = NULL
-          )$python_version,
-          error = conditionMessage
-        )
-        cat(result, "\n", sep = "")
-        """)
-    client.send(r=r)
-    return last_tool_text(client)
-
-
-def write_python_executable(path: Path, source: str) -> None:
-    path.write_text(source, encoding="utf-8")
-    path.chmod(0o755)
-
-
-def managed_python_transcript(binary: Path, configured: bool) -> Transcript:
-    environment = os.environ.copy()
-    if configured:
-        environment["RETICULATE_PYTHON"] = "managed"
-    else:
-        environment.pop("RETICULATE_PYTHON", None)
-    uv = shutil.which("uv")
-    assert uv is not None, "real uv is required for managed-Python tests"
-    environment.pop("RETICULATE_UV", None)
-    environment["UV_OFFLINE"] = "1"
-
-    client = McpClient(binary, ("serve",), environment)
-    client._initialize_and_list_tools()
-    # fmt: r
-    r = code(r"""
-        python <- Sys.getenv("RETICULATE_PYTHON", unset = NA_character_)
-        config <- reticulate::py_config()
-        history <- reticulate::py_require()$history
-        stopifnot(
-          identical(python, "managed"),
-          file.exists(config$python),
-          isTRUE(config$ephemeral),
-          "pandas" %in% reticulate::py_require()$packages,
-          !any(vapply(
-            history,
-            function(request) identical(request$requested_from, "base"),
-            logical(1L)
-          ))
-        )
-        """)
-    client.send(r=r)
-    assert last_tool_text(client) == "[done]", client.transcript[-1]
-    # fmt: python
-    python = code("""
-        import io
-        import pandas as pd
-
-        frame = pd.read_csv(io.StringIO("value\\n40\\n2\\n"))
-        int(frame["value"].sum())
-        """)
-    client.send(python=python)
-    output = last_tool_text(client)
-    assert output == "42\n", repr(output)
-    return client._finish()
-
-
-def _python_last_tool_text(client: McpClient) -> str:
-    return client.transcript[-1]["result"]["content"][0]["text"]
-
-
-def assert_exact_interleaving(actual: str, first: str, second: str) -> None:
-    assert len(actual) == len(first) + len(second), repr(actual)
-    first_offsets = {0}
-    for offset, character in enumerate(actual):
-        next_offsets = set()
-        for first_offset in first_offsets:
-            second_offset = offset - first_offset
-            if first_offset < len(first) and first[first_offset] == character:
-                next_offsets.add(first_offset + 1)
-            if second_offset < len(second) and second[second_offset] == character:
-                next_offsets.add(first_offset)
-        first_offsets = next_offsets
-    assert len(first) in first_offsets, repr(actual)
-
-
-@contextmanager
-def r_input_handler_client(binary: Path) -> Iterator[tuple[McpClient, Path]]:
-    with tempfile.TemporaryDirectory() as temporary_directory:
-        directory = Path(temporary_directory)
-        environment, rscript = r_test_environment()
-        environment["TMPDIR"] = temporary_directory
-        build_r_input_handler(directory, environment, rscript)
-        client = McpClient(
-            binary,
-            ("serve",),
-            environment=environment,
-            current_directory=directory,
-        )
-        try:
-            yield client, directory
-        finally:
-            stop_client(client)
-
-
-def _r_last_tool_text(client: McpClient) -> str:
-    result = client.transcript[-1]["result"]
-    assert result.get("isError") is not True, result
-    return result["content"][0]["text"]
-
-
-def recording_uv_environment(
-    directory: Path,
-    *,
-    fail_requirement: str | None = None,
-    substitute_requirement: tuple[str, str] | None = None,
-) -> tuple[dict[str, str], Path]:
-    real_uv = shutil.which("uv")
-    assert real_uv is not None, "real uv is required"
-    environment = os.environ.copy()
-    environment.pop("RETICULATE_PYTHON", None)
-    environment["RETICULATE_UV"] = str(
-        Path(__file__).resolve().parents[2] / "fixtures" / "record_uv_environment"
-    )
-    environment["MCP_CONSOLE_TEST_REAL_UV"] = real_uv
-    environment["MCP_CONSOLE_TEST_UV_RECORD"] = str(directory / "uv-environment.jsonl")
-    arguments_record = directory / "uv-arguments.jsonl"
-    environment["MCP_CONSOLE_TEST_UV_ARGUMENTS_RECORD"] = str(arguments_record)
-    if fail_requirement is not None:
-        failure_marker = directory / "uv-failure"
-        failure_marker.touch()
-        environment["MCP_CONSOLE_TEST_UV_FAILURE_MARKER"] = str(failure_marker)
-        environment["MCP_CONSOLE_TEST_UV_FAILURE_ARGUMENT"] = fail_requirement
-    if substitute_requirement is not None:
-        substitute, replacement = substitute_requirement
-        environment["MCP_CONSOLE_TEST_UV_SUBSTITUTE_REQUIREMENT"] = substitute
-        environment["MCP_CONSOLE_TEST_UV_REPLACEMENT_REQUIREMENT"] = replacement
-    return environment, arguments_record
-
-
-def uv_tool_run_requirements(record: Path) -> list[list[str]]:
-    if not record.exists():
-        return []
-    arguments = [
-        json.loads(line) for line in record.read_text(encoding="utf-8").splitlines()
-    ]
-    requirements = []
-    for invocation in arguments:
-        if invocation[:2] != ["tool", "run"]:
-            continue
-        separator = invocation.index("--")
-        manifest = [
-            invocation[index + 1]
-            for index, argument in enumerate(invocation[:separator])
-            if argument == "--with"
-        ]
-        requirements.append(manifest)
-    return requirements
-
-
-def initialize_python_and_record_baseline(client: McpClient, record: Path) -> int:
-    client.send(python="None")
-    assert last_tool_text(client) == "[done]"
-    return len(uv_tool_run_requirements(record))
-
-
-def resolve_managed_python(binary: Path, directory: Path) -> Path:
-    workspace = directory / "managed-python"
-    workspace.mkdir()
-    environment = os.environ.copy()
-    environment.pop("RETICULATE_PYTHON", None)
-    environment.pop("UV_PYTHON", None)
-    client = McpClient(
-        binary,
-        ("serve",),
-        environment,
-        current_directory=workspace,
-    )
-    client._initialize_and_list_tools()
-    client.send(python='import sys\nprint(f"managed-python={sys.executable}")')
-    output = last_tool_text(client)
-    client._finish()
-    executable = Path(
-        next(
-            line for line in output.splitlines() if line.startswith("managed-python=")
-        ).split("=", 1)[1]
-    ).resolve()
-    assert executable.is_file(), executable
-    return executable
-
-
-def send_and_collect_runtime_python_resolution(
-    client: McpClient,
-    **arguments: object,
-) -> str:
-    call_start = len(client.transcript)
-    client.send(**arguments)
-    chunks = []
-    for attempt in range(8):
-        output = last_tool_text(client)
-        if output.endswith("\n[running; poll with an empty send]"):
-            chunks.append(output.removesuffix("\n[running; poll with an empty send]"))
-            if attempt == 7:
-                raise AssertionError(
-                    "automatic Python resolution remained running after eight "
-                    f"responses: collected={''.join(chunks)!r}, last={output!r}"
-                )
-            client.send(timeout_ms=30_000)
-            continue
-
-        if output != "[done]" or not chunks:
-            chunks.append(output)
-        collected = "".join(chunks)
-
-        calls = client.transcript[call_start:]
-        submitted = calls[0]
-        final_result = calls[-1]["result"]
-        content = final_result["content"]
-        assert len(content) == 1 and content[0]["type"] == "text", content
-        content[0]["text"] = collected
-        submitted["result"] = final_result
-        client.transcript[call_start:] = [submitted]
-        return collected
-    raise AssertionError("unreachable")
-
-
-def last_tool_text(client: McpClient) -> str:
-    return client.transcript[-1]["result"]["content"][0]["text"]
-
-
-def last_tool_text_from_entry(entry: dict[str, object]) -> str:
-    result = entry["result"]
-    assert isinstance(result, dict), result
-    content = result["content"]
-    assert len(content) == 1 and content[0]["type"] == "text", content
-    return content[0]["text"]

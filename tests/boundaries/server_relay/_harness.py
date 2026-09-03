@@ -8,14 +8,12 @@ import time
 from pathlib import Path
 from typing import Any, TextIO
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from _support import (
-    McpClient,
-    ToolResult,
-    Transcript,
-    r_test_environment,
-)
+from support.assertions import tool_text as _tool_text
+from support.capture import read_jsonl, read_jsonl_path
+from support.client import McpClient
+from support.records import ToolResult, Transcript
 
 SCENARIO_ENV = "MCP_CONSOLE_TEST_RELAY_SCENARIO"
 
@@ -101,13 +99,6 @@ PNG_1X1 = (
 )
 
 
-def _tool_text(result: ToolResult) -> str:
-    assert result.get("isError") is not True, result
-    content = result["content"]
-    assert len(content) == 1 and content[0]["type"] == "text", content
-    return content[0]["text"]
-
-
 def _tool_error(entry: dict[str, Any], expected: str) -> None:
     result = entry["result"]
     assert result.get("isError") is True, result
@@ -137,7 +128,12 @@ class ServerRelayClient:
             environment[STDIN_FAILURE_RELEASED_ENV] = str(
                 self.root / STDIN_FAILURE_RELEASED_NAME
             )
-        relay = Path(__file__).resolve().parents[2] / "fixtures" / "scripted_relay"
+        relay = (
+            Path(__file__).resolve().parents[2]
+            / "fixtures"
+            / "server_relay"
+            / "scripted_relay.py"
+        )
         self.client = McpClient(
             binary,
             (
@@ -221,8 +217,9 @@ class ServerRelayClient:
 
     @staticmethod
     def _read_capture(capture: Path) -> Transcript:
-        with capture.open(encoding="utf-8") as stream:
-            return ServerRelayClient._read_open_capture(stream)
+        transcript = read_jsonl_path(capture)
+        ServerRelayClient._validate_capture(transcript)
+        return transcript
 
     @staticmethod
     def _read_open_capture(
@@ -230,7 +227,16 @@ class ServerRelayClient:
         *,
         allow_raw: bool = False,
     ) -> Transcript:
-        transcript = [json.loads(line) for line in capture.read().splitlines()]
+        transcript = read_jsonl(capture)
+        ServerRelayClient._validate_capture(transcript, allow_raw=allow_raw)
+        return transcript
+
+    @staticmethod
+    def _validate_capture(
+        transcript: Transcript,
+        *,
+        allow_raw: bool = False,
+    ) -> None:
         for entry in transcript:
             if entry.keys() in ({"server"}, {"relay"}):
                 message = next(iter(entry.values()))
@@ -238,45 +244,6 @@ class ServerRelayClient:
                 continue
             assert allow_raw and entry.keys() in ({"server_raw"}, {"relay_raw"}), entry
             base64.b64decode(next(iter(entry.values())), validate=True)
-        return transcript
-
-
-class FifoCheckpoint:
-    def __init__(self, path: Path, *, create: bool = False) -> None:
-        self.path = path
-        if create:
-            os.mkfifo(path)
-        # Keep a writer open so an early release cannot strand a later reader
-        # in its blocking open.
-        self.descriptor = os.open(path, os.O_RDWR | os.O_NONBLOCK)
-
-    def close(self) -> None:
-        os.close(self.descriptor)
-
-    def wait(self) -> None:
-        readable, _, _ = select.select([self.descriptor], [], [], 10)
-        assert readable, f"checkpoint was not reached: {self.path.name}"
-        assert os.read(self.descriptor, 1) == b"1"
-
-    def release(self) -> None:
-        assert os.write(self.descriptor, b"1") == 1
-
-
-def _fake_ir_environment(
-    root: Path,
-    libraries: list[Path],
-) -> dict[str, str]:
-    environment, _ = r_test_environment()
-    fake_bin = root / "bin"
-    fake_bin.mkdir()
-    fixture = Path(__file__).resolve().parents[2] / "fixtures" / "ordered_retirement_ir"
-    (fake_bin / "ir").symlink_to(fixture)
-    path = environment.get("PATH")
-    assert path is not None, "PATH is required"
-    environment["PATH"] = os.pathsep.join((str(fake_bin), path))
-    environment["MCP_CONSOLE_TEST_IR_COUNTER"] = str(root / "ir-counter")
-    environment["MCP_CONSOLE_TEST_IR_LIBRARIES"] = os.pathsep.join(map(str, libraries))
-    return environment
 
 
 def _normalize_shutdown_grace(transcript: Transcript) -> list[dict[str, Any]]:
@@ -357,27 +324,3 @@ def _wait_for_recorded_tool_result(
                 )
         finally:
             journal_events.close()
-
-
-def _reports_worker_outcome(
-    binary: Path,
-    scenario: str,
-    diagnostic: str,
-) -> tuple[Transcript, str]:
-    client = ServerRelayClient(binary, scenario)
-    failed = client.client._start_send(r="42")
-    transcript = client.release_failure(failed, diagnostic)
-    result = failed["result"]
-    assert result.get("isError") is True, result
-    content = result["content"]
-    assert len(content) == 1 and content[0]["type"] == "text", content
-    output = content[0]["text"]
-    stopped = "[worker stopped: in-memory state lost]"
-    replacement = "[starting new worker]"
-    assert (
-        output.index(diagnostic) < output.index(stopped) < output.index(replacement)
-    ), output
-    return transcript, output
-
-
-__all__ = [name for name in globals() if name not in {"__builtins__"}]

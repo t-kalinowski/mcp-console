@@ -5,13 +5,11 @@ import sys
 import tempfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from _support import Transcript, run_this_suite, stop_client
-from server_relay._harness import (
+from boundaries.server_relay._harness import (
     CAPTURE_NAME,
     EVALUATION_OUTPUT_READY_NAME,
-    FifoCheckpoint,
     PENDING_TEXT_BUDGET,
     PNG_1X1,
     PRELUDE_PROCESSED_NAME,
@@ -19,11 +17,15 @@ from server_relay._harness import (
     RETIREMENT_RELEASE_NAME,
     SHUTDOWN_RECEIVED_NAME,
     ServerRelayClient,
-    _fake_ir_environment,
     _normalize_shutdown_grace,
     _receive_checkpointed,
-    _tool_text,
 )
+from support.assertions import tool_text as _tool_text
+from support.checkpoints import FifoCheckpoint
+from support.client import stop_client
+from support.records import Transcript
+from support.resolvers import fake_ir_environment as _fake_ir_environment
+from support.suites import run_this_suite
 
 
 PLATFORMS = {"darwin"}
@@ -43,7 +45,7 @@ def test_shutdown_precedes_blocked_resolver_cancellation(binary: Path) -> Transc
         library = root / "blocked-candidate"
         library.mkdir()
         environment = _fake_ir_environment(root, [library])
-        resolver_started = FifoCheckpoint(root / "resolver-started", create=True)
+        resolver_started = FifoCheckpoint.create(root / "resolver-started")
         resolver_release = root / "resolver-release"
         os.mkfifo(resolver_release)
         environment["MCP_CONSOLE_TEST_IR_STARTED"] = str(resolver_started.path)
@@ -57,8 +59,8 @@ def test_shutdown_precedes_blocked_resolver_cancellation(binary: Path) -> Transc
         client.start_worker()
         relay_root = client.relay_root()
         capture = (relay_root / CAPTURE_NAME).open(encoding="utf-8")
-        shutdown_received = FifoCheckpoint(relay_root / SHUTDOWN_RECEIVED_NAME)
-        retirement_release = FifoCheckpoint(relay_root / RETIREMENT_RELEASE_NAME)
+        shutdown_received = FifoCheckpoint.attach(relay_root / SHUTDOWN_RECEIVED_NAME)
+        retirement_release = FifoCheckpoint.attach(relay_root / RETIREMENT_RELEASE_NAME)
         finished = False
         try:
             preparation = client.client._start_send(
@@ -106,11 +108,11 @@ def test_cancelled_send_returns_owned_output_to_restart(binary: Path) -> Transcr
     client = ServerRelayClient(binary, "cancelled_waiting_send")
     client.start_worker()
     relay_root = client.relay_root()
-    prelude_release = FifoCheckpoint(relay_root / PRELUDE_RELEASE_NAME)
-    prelude_processed = FifoCheckpoint(relay_root / PRELUDE_PROCESSED_NAME)
-    output_ready = FifoCheckpoint(relay_root / EVALUATION_OUTPUT_READY_NAME)
-    shutdown_received = FifoCheckpoint(relay_root / SHUTDOWN_RECEIVED_NAME)
-    retirement_release = FifoCheckpoint(relay_root / RETIREMENT_RELEASE_NAME)
+    prelude_release = FifoCheckpoint.attach(relay_root / PRELUDE_RELEASE_NAME)
+    prelude_processed = FifoCheckpoint.attach(relay_root / PRELUDE_PROCESSED_NAME)
+    output_ready = FifoCheckpoint.attach(relay_root / EVALUATION_OUTPUT_READY_NAME)
+    shutdown_received = FifoCheckpoint.attach(relay_root / SHUTDOWN_RECEIVED_NAME)
+    retirement_release = FifoCheckpoint.attach(relay_root / RETIREMENT_RELEASE_NAME)
     finished = False
     retirement_released = False
     try:

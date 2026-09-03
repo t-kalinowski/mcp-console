@@ -9,20 +9,9 @@ import sys
 import tempfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from _support import (
-    DarwinProcessIdentity,
-    FifoCheckpoint,
-    Transcript,
-    build_manager_interposer,
-    capture_darwin_process_identity,
-    kill_darwin_processes,
-    live_darwin_processes,
-    run_this_suite,
-    signal_darwin_process,
-)
-from cli._harness import (
+from boundaries.cli._harness import (
     TIMEOUT,
     _cleanup,
     _command,
@@ -30,8 +19,19 @@ from cli._harness import (
     _start_lifetime,
     _wait_for_cleanup,
     _wait_for_gated_root_and_manager,
-    _wait_for_process_state,
 )
+from support.checkpoints import FifoCheckpoint
+from support.macos import (
+    DarwinProcessIdentity,
+    build_manager_interposer,
+    capture_darwin_process_identity,
+    kill_darwin_processes,
+    live_darwin_processes,
+    signal_darwin_process,
+    wait_for_darwin_process_state as _wait_for_process_state,
+)
+from support.records import Transcript
+from support.suites import run_this_suite
 
 
 PLATFORMS = {"darwin"}
@@ -110,8 +110,8 @@ def test_pending_signal_during_manager_crash_before_gate_release_preserves_statu
 
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
-        gate_ready = FifoCheckpoint(temporary / "gate-ready")
-        gate_release = FifoCheckpoint(temporary / "gate-release")
+        gate_ready = FifoCheckpoint.create(temporary / "gate-ready")
+        gate_release = FifoCheckpoint.create(temporary / "gate-release")
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
         environment["MCP_CONSOLE_TEST_OWNER_GATE_READY"] = str(gate_ready.path)

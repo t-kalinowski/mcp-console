@@ -6,15 +6,13 @@ import sys
 import tempfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from _support import Transcript, run_this_suite, stop_client
-from server_relay._harness import (
+from boundaries.server_relay._harness import (
     CAPTURE_NAME,
     CHECKPOINT_NAME,
     EXPLICIT_R_PREPARATION_CALLBACK_NAME,
     EXPLICIT_R_PREPARATION_CALLBACK_REPLY_NAME,
-    FifoCheckpoint,
     IDLE_R_EVALUATION_RECEIVED_NAME,
     IDLE_R_RESOLUTION_READY_NAME,
     IDLE_R_RESOLUTION_RELEASE_NAME,
@@ -28,12 +26,16 @@ from server_relay._harness import (
     SHUTDOWN_RECEIVED_NAME,
     STDIN_FAILURE_RELEASED_NAME,
     ServerRelayClient,
-    _fake_ir_environment,
     _normalize_shutdown_grace,
     _receive_checkpointed,
     _tool_error,
-    _tool_text,
 )
+from support.assertions import tool_text as _tool_text
+from support.checkpoints import FifoCheckpoint
+from support.client import stop_client
+from support.records import Transcript
+from support.resolvers import fake_ir_environment as _fake_ir_environment
+from support.suites import run_this_suite
 
 
 PLATFORMS = {"darwin"}
@@ -96,8 +98,8 @@ def test_send_timeout_starts_after_blocked_requirements_resolver(
         library = root / "timeout-candidate"
         library.mkdir()
         environment = _fake_ir_environment(root, [library])
-        resolver_started = FifoCheckpoint(root / "resolver-started", create=True)
-        resolver_release = FifoCheckpoint(root / "resolver-release", create=True)
+        resolver_started = FifoCheckpoint.create(root / "resolver-started")
+        resolver_release = FifoCheckpoint.create(root / "resolver-release")
         environment["MCP_CONSOLE_TEST_IR_STARTED"] = str(resolver_started.path)
         environment["MCP_CONSOLE_TEST_IR_RELEASE"] = str(resolver_release.path)
         client = ServerRelayClient(
@@ -232,9 +234,11 @@ def test_restart_consumes_late_r_preparation_retirement_events(
         client.start_worker()
         old_root = client.relay_root()
         old_capture = (old_root / CAPTURE_NAME).open(encoding="utf-8")
-        preparation_received = FifoCheckpoint(old_root / PREPARATION_RECEIVED_NAME)
-        shutdown_received = FifoCheckpoint(old_root / SHUTDOWN_RECEIVED_NAME)
-        retirement_release = FifoCheckpoint(old_root / RETIREMENT_RELEASE_NAME)
+        preparation_received = FifoCheckpoint.attach(
+            old_root / PREPARATION_RECEIVED_NAME
+        )
+        shutdown_received = FifoCheckpoint.attach(old_root / SHUTDOWN_RECEIVED_NAME)
+        retirement_release = FifoCheckpoint.attach(old_root / RETIREMENT_RELEASE_NAME)
         finished = False
         try:
             preparation = client.client._start_send(
@@ -338,12 +342,10 @@ def test_restart_discards_pre_marker_r_preparation_result(
         for library in libraries:
             library.mkdir()
         environment = _fake_ir_environment(root, libraries)
-        resolver_started = FifoCheckpoint(root / "resolver-started", create=True)
-        resolver_release_gate = FifoCheckpoint(
-            root / "resolver-release-gate", create=True
-        )
-        resolver_release = FifoCheckpoint(root / "resolver-release", create=True)
-        resolver_finished = FifoCheckpoint(root / "resolver-finished", create=True)
+        resolver_started = FifoCheckpoint.create(root / "resolver-started")
+        resolver_release_gate = FifoCheckpoint.create(root / "resolver-release-gate")
+        resolver_release = FifoCheckpoint.create(root / "resolver-release")
+        resolver_finished = FifoCheckpoint.create(root / "resolver-finished")
         environment["MCP_CONSOLE_TEST_IR_GATE_INDEX"] = "1"
         environment["MCP_CONSOLE_TEST_IR_STARTED"] = str(resolver_started.path)
         environment["MCP_CONSOLE_TEST_IR_RELEASE_GATE"] = str(
@@ -360,10 +362,14 @@ def test_restart_discards_pre_marker_r_preparation_result(
         client.start_worker()
         old_root = client.relay_root()
         old_capture = (old_root / CAPTURE_NAME).open(encoding="utf-8")
-        preparation_received = FifoCheckpoint(old_root / PREPARATION_RECEIVED_NAME)
-        result_release = FifoCheckpoint(old_root / PREPARATION_RESULT_RELEASE_NAME)
-        result_sent = FifoCheckpoint(old_root / PREPARATION_RESULT_SENT_NAME)
-        shutdown_received = FifoCheckpoint(old_root / SHUTDOWN_RECEIVED_NAME)
+        preparation_received = FifoCheckpoint.attach(
+            old_root / PREPARATION_RECEIVED_NAME
+        )
+        result_release = FifoCheckpoint.attach(
+            old_root / PREPARATION_RESULT_RELEASE_NAME
+        )
+        result_sent = FifoCheckpoint.attach(old_root / PREPARATION_RESULT_SENT_NAME)
+        shutdown_received = FifoCheckpoint.attach(old_root / SHUTDOWN_RECEIVED_NAME)
         finished = False
         try:
             preparation = client.client._start_send(
@@ -549,8 +555,10 @@ def test_rejects_runtime_r_resolution_during_r_preparation(
         )
         client.start_worker()
         old_root = client.relay_root()
-        checkpoint = FifoCheckpoint(old_root / R_PREPARATION_RESOLVE_CHECKPOINT_NAME)
-        release = FifoCheckpoint(old_root / R_PREPARATION_RESOLVE_RELEASE_NAME)
+        checkpoint = FifoCheckpoint.attach(
+            old_root / R_PREPARATION_RESOLVE_CHECKPOINT_NAME
+        )
+        release = FifoCheckpoint.attach(old_root / R_PREPARATION_RESOLVE_RELEASE_NAME)
         old_capture = (old_root / CAPTURE_NAME).open(encoding="utf-8")
         finished = False
         try:
@@ -611,8 +619,8 @@ def test_idle_runtime_r_resolution_owns_environment_until_activation(
         for library in libraries:
             library.mkdir()
         environment = _fake_ir_environment(root, libraries)
-        resolver_started = FifoCheckpoint(root / "resolver-started", create=True)
-        resolver_release = FifoCheckpoint(root / "resolver-release", create=True)
+        resolver_started = FifoCheckpoint.create(root / "resolver-started")
+        resolver_release = FifoCheckpoint.create(root / "resolver-release")
         environment["MCP_CONSOLE_TEST_IR_STARTED"] = str(resolver_started.path)
         environment["MCP_CONSOLE_TEST_IR_RELEASE"] = str(resolver_release.path)
         client = ServerRelayClient(
@@ -622,9 +630,9 @@ def test_idle_runtime_r_resolution_owns_environment_until_activation(
         )
         client.start_worker()
         relay_root = client.relay_root()
-        ready = FifoCheckpoint(relay_root / IDLE_R_RESOLUTION_READY_NAME)
-        release = FifoCheckpoint(relay_root / IDLE_R_RESOLUTION_RELEASE_NAME)
-        evaluation_received = FifoCheckpoint(
+        ready = FifoCheckpoint.attach(relay_root / IDLE_R_RESOLUTION_READY_NAME)
+        release = FifoCheckpoint.attach(relay_root / IDLE_R_RESOLUTION_RELEASE_NAME)
+        evaluation_received = FifoCheckpoint.attach(
             relay_root / IDLE_R_EVALUATION_RECEIVED_NAME
         )
         resolver_released = False
@@ -696,8 +704,8 @@ def test_explicit_r_preparation_owns_environment_before_host_resolution(
         library = root / "explicit-candidate"
         library.mkdir()
         environment = _fake_ir_environment(root, [library])
-        resolver_started = FifoCheckpoint(root / "resolver-started", create=True)
-        resolver_release = FifoCheckpoint(root / "resolver-release", create=True)
+        resolver_started = FifoCheckpoint.create(root / "resolver-started")
+        resolver_release = FifoCheckpoint.create(root / "resolver-release")
         environment["MCP_CONSOLE_TEST_IR_STARTED"] = str(resolver_started.path)
         environment["MCP_CONSOLE_TEST_IR_RELEASE"] = str(resolver_release.path)
         client = ServerRelayClient(
@@ -707,8 +715,10 @@ def test_explicit_r_preparation_owns_environment_before_host_resolution(
         )
         client.start_worker()
         relay_root = client.relay_root()
-        callback = FifoCheckpoint(relay_root / EXPLICIT_R_PREPARATION_CALLBACK_NAME)
-        callback_reply = FifoCheckpoint(
+        callback = FifoCheckpoint.attach(
+            relay_root / EXPLICIT_R_PREPARATION_CALLBACK_NAME
+        )
+        callback_reply = FifoCheckpoint.attach(
             relay_root / EXPLICIT_R_PREPARATION_CALLBACK_REPLY_NAME
         )
         callback_released = False

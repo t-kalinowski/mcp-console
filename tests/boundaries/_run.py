@@ -4,14 +4,12 @@
 # ///
 
 import argparse
-import difflib
-import json
 import os
 import runpy
 import shutil
 import sys
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
 from dataclasses import dataclass
 from multiprocessing import Manager
@@ -19,19 +17,25 @@ from pathlib import Path
 from queue import Empty
 from typing import Protocol
 
-from _support import Transcript, TranscriptWithCompanions, YamlStream
-from yaml12 import Yaml, format_yaml, parse_yaml, read_yaml
-
 directory = Path(__file__).resolve().parent
 root = directory.parents[1]
+sys.path.insert(0, str(root / "tests"))
+
+from support.records import Transcript, TranscriptWithCompanions
+from support.snapshots import (
+    check_recording,
+    initialization_case,
+    initialization_suite,
+    snapshot_directory,
+    snapshot_path,
+)
+
 binary = root / "target" / "debug" / "mcp-console"
-snapshot_directory = root / "tests" / "snapshots"
 boundaries = {"client_server", "server_relay", "relay_worker", "cli"}
-suite_paths = sorted(directory.rglob("[!_]*.py"))
-initialization_suite = "client_server/server/test_tools"
-initialization_case = "initializes_and_lists_tools"
-initialization_reference = (
-    f"tests/snapshots/{initialization_suite}/{initialization_case}.yaml"
+suite_paths = sorted(
+    path
+    for path in directory.rglob("*.py")
+    if not any(part.startswith("_") for part in path.relative_to(directory).parts)
 )
 SLOW_TEST_SECONDS = 60.0
 FREQUENT_STATUS_SECONDS = 120.0
@@ -39,7 +43,9 @@ FREQUENT_STATUS_UNTIL_SECONDS = 600.0
 LATER_STATUS_SECONDS = 300.0
 
 parser = argparse.ArgumentParser(prog="scripts/test")
-parser.add_argument("--list", action="store_true", dest="list_tests")
+actions = parser.add_mutually_exclusive_group()
+actions.add_argument("--list", action="store_true", dest="list_tests")
+actions.add_argument("--locate", metavar="SELECTOR")
 parser.add_argument("--update", action="store_true")
 parser.add_argument(
     "-j",
@@ -89,132 +95,45 @@ def load_suite(
     return cases, platforms, required_commands
 
 
-def identical(left: object, right: object) -> bool:
-    if type(left) is not type(right):
-        return False
-    if isinstance(left, dict):
-        return left.keys() == right.keys() and all(
-            identical(left[key], right[key]) for key in left
-        )
-    if isinstance(left, list):
-        return len(left) == len(right) and all(
-            identical(left_item, right_item)
-            for left_item, right_item in zip(left, right)
-        )
-    return left == right
+def orphan_snapshots(suites: dict[str, Path]) -> list[Path]:
+    cases_by_suite: dict[str, tuple[str, ...]] = {}
+    orphans = []
+    for snapshot in sorted(snapshot_directory.rglob("*")):
+        if not snapshot.is_file() or snapshot.suffix not in {".yaml", ".md", ".qmd"}:
+            continue
+        suite_name = snapshot.parent.relative_to(snapshot_directory).as_posix()
+        if suite_name not in suites:
+            orphans.append(snapshot)
+            continue
+        if suite_name not in cases_by_suite:
+            cases, _, _ = load_suite(suites[suite_name])
+            cases_by_suite[suite_name] = tuple(f"{case_name}." for case_name in cases)
+        if not snapshot.name.startswith(cases_by_suite[suite_name]):
+            orphans.append(snapshot)
+    return orphans
 
 
-def iter_strings(value: object) -> Iterator[str]:
-    if isinstance(value, Yaml):
-        yield from iter_strings(value.value)
-    elif isinstance(value, dict):
-        for key, item in value.items():
-            yield from iter_strings(key)
-            yield from iter_strings(item)
-    elif isinstance(value, list):
-        for item in value:
-            yield from iter_strings(item)
-    elif isinstance(value, str):
-        yield value
+def locate(suites: dict[str, Path], selector: str) -> None:
+    suite_name, separator, case_name = selector.partition("::")
+    if suite_name not in suites:
+        parser.error(f"unknown transcript suite: {suite_name}")
 
+    suite_path = suites[suite_name]
+    cases, _, _ = load_suite(suite_path)
+    if separator:
+        if case_name not in cases:
+            parser.error(f"unknown transcript case in {suite_name}: {case_name}")
+        case_names = [case_name]
+    else:
+        case_names = list(cases)
 
-def format_transcript(value: YamlStream) -> str:
-    strings = tuple(iter_strings(value))
-    prefix = "__MCP_CONSOLE_WHITESPACE_SCALAR_"
-    while any(prefix in string for string in strings):
-        prefix = f"_{prefix}"
-
-    replacements: dict[str, str] = {}
-
-    def protect(item: object) -> object:
-        if isinstance(item, Yaml):
-            return Yaml(protect(item.value), tag=item.tag)
-        if isinstance(item, dict):
-            return {protect(key): protect(mapped) for key, mapped in item.items()}
-        if isinstance(item, list):
-            return [protect(value) for value in item]
-        if isinstance(item, str) and item:
-            lines = item.splitlines()
-            first_nonempty = next((line for line in lines if line), "")
-            needs_quotes = (
-                item.isspace()
-                or first_nonempty.startswith((" ", "\t"))
-                or any(line.isspace() for line in lines)
-            )
-        else:
-            needs_quotes = False
-        if needs_quotes:
-            placeholder = f"{prefix}{len(replacements)}__"
-            replacements[placeholder] = item
-            return placeholder
-        return item
-
-    formatted = format_yaml(protect(value), multi=True)
-    for placeholder, original in replacements.items():
-        assert formatted.count(placeholder) == 1, placeholder
-        formatted = formatted.replace(placeholder, json.dumps(original))
-    formatted = "\n".join(
-        "" if line.isspace() else line for line in formatted.split("\n")
-    )
-    assert identical(value, parse_yaml(formatted, multi=True)), (
-        "formatted transcript did not round-trip"
-    )
-    return formatted
-
-
-def check_snapshot(
-    snapshot: Path, actual: YamlStream, case: str, *, update: bool
-) -> None:
-    actual_text = format_transcript(actual)
-
-    if update:
-        snapshot.parent.mkdir(parents=True, exist_ok=True)
-        snapshot.write_text(actual_text, encoding="utf-8")
-        print(f"updated {snapshot.relative_to(root)}", flush=True)
-        return
-    if not snapshot.exists():
-        raise SystemExit(
-            f"{snapshot.relative_to(root)} is missing; run scripts/test --update {case}"
-        )
-
-    expected = read_yaml(snapshot, multi=True)
-    if not identical(actual, expected):
-        expected_text = format_transcript(expected)
-        difference = "".join(
-            difflib.unified_diff(
-                expected_text.splitlines(keepends=True),
-                actual_text.splitlines(keepends=True),
-                fromfile=str(snapshot.relative_to(root)),
-                tofile="actual",
-            )
-        )
-        raise SystemExit(f"{difference}{case} differs from its snapshot")
-
-
-def check_text_snapshot(
-    snapshot: Path, actual: str, case: str, *, update: bool
-) -> None:
-    if update:
-        snapshot.parent.mkdir(parents=True, exist_ok=True)
-        snapshot.write_text(actual, encoding="utf-8")
-        print(f"updated {snapshot.relative_to(root)}", flush=True)
-        return
-    if not snapshot.exists():
-        raise SystemExit(
-            f"{snapshot.relative_to(root)} is missing; run scripts/test --update {case}"
-        )
-
-    expected = snapshot.read_text(encoding="utf-8")
-    if actual != expected:
-        difference = "".join(
-            difflib.unified_diff(
-                expected.splitlines(keepends=True),
-                actual.splitlines(keepends=True),
-                fromfile=str(snapshot.relative_to(root)),
-                tofile="actual",
-            )
-        )
-        raise SystemExit(f"{difference}{case} differs from its snapshot")
+    source = suite_path.relative_to(root)
+    for case_name in case_names:
+        line = cases[case_name].__code__.co_firstlineno
+        snapshot = snapshot_path(suite_name, case_name).relative_to(root)
+        print(f"{suite_name}::{case_name}")
+        print(f"  source: {source}:{line}")
+        print(f"  snapshot: {snapshot}")
 
 
 def record_case(
@@ -228,57 +147,6 @@ def record_case(
         progress.put((progress_id, time.monotonic()))
     cases, _, _ = load_suite(suite_path)
     return cases[case_name](binary)
-
-
-def without_request_ids(transcript: Transcript) -> Transcript:
-    rendered = []
-    for entry in transcript:
-        entry = entry.copy()
-        if entry.keys() & {"input", "send"}:
-            entry.pop("id", None)
-        rendered.append(entry)
-    return rendered
-
-
-def check_recording(
-    suite_name: str,
-    case_name: str,
-    recorded: RecordedTranscript,
-    *,
-    update: bool,
-) -> set[Path]:
-    snapshot = snapshot_directory / suite_name / f"{case_name}.yaml"
-    case = f"{suite_name}::{case_name}"
-    if isinstance(recorded, TranscriptWithCompanions):
-        actual = without_request_ids(recorded.transcript)
-        companions = []
-        for name, contents in recorded.companions.items():
-            assert name and Path(name).name == name and not name.startswith("."), name
-            assert name in {"md", "qmd"} or name.endswith(".yaml"), name
-            companions.append((snapshot.with_suffix(f".{name}"), contents))
-    else:
-        actual = without_request_ids(recorded)
-        companions = []
-    if snapshot != root / initialization_reference:
-        reference = without_request_ids(
-            read_yaml(root / initialization_reference, multi=True)
-        )
-        assert reference, f"{initialization_reference} contains no documents"
-        if identical(actual[: len(reference)], reference):
-            actual = [
-                Yaml(initialization_reference, tag="!same-as"),
-                *actual[len(reference) :],
-            ]
-    check_snapshot(snapshot, actual, case, update=update)
-    checked = {snapshot}
-    for companion, contents in companions:
-        if isinstance(contents, str):
-            check_text_snapshot(companion, contents, case, update=update)
-        else:
-            assert companion.suffix == ".yaml", companion
-            check_snapshot(companion, contents, case, update=update)
-        checked.add(companion)
-    return checked
 
 
 def format_duration(elapsed: float) -> str:
@@ -445,31 +313,21 @@ def selected_cases(
     return selected
 
 
-def prune_stale_snapshots(
-    suites: dict[str, Path], checked_snapshots: set[Path]
-) -> None:
+def prune_stale_snapshots(checked_snapshots: set[Path], orphans: list[Path]) -> None:
     snapshot_root = snapshot_directory
     checked_suites = {
         snapshot.parent.relative_to(snapshot_root).as_posix()
         for snapshot in checked_snapshots
     }
-    cases_by_suite: dict[str, tuple[str, ...]] = {}
+    orphans = set(orphans)
 
     for snapshot in snapshot_root.rglob("*"):
         if not snapshot.is_file() or snapshot.suffix not in {".yaml", ".md", ".qmd"}:
             continue
         suite_name = snapshot.parent.relative_to(snapshot_root).as_posix()
-        if suite_name not in suites:
-            stale = True
-        elif suite_name in checked_suites:
-            stale = snapshot not in checked_snapshots
-        else:
-            if suite_name not in cases_by_suite:
-                cases, _, _ = load_suite(suites[suite_name])
-                cases_by_suite[suite_name] = tuple(
-                    f"{case_name}." for case_name in cases
-                )
-            stale = not snapshot.name.startswith(cases_by_suite[suite_name])
+        stale = snapshot in orphans or (
+            suite_name in checked_suites and snapshot not in checked_snapshots
+        )
 
         if stale:
             snapshot.unlink()
@@ -578,16 +436,35 @@ def main() -> None:
     options = parser.parse_args()
     if options.jobs < 1:
         parser.error("--jobs must be at least 1")
+    if options.locate is not None and options.update:
+        parser.error("--locate cannot be combined with --update")
 
     assert binary.is_file(), f"{binary.relative_to(root)} is missing; run scripts/test"
     assert suite_paths, "no transcript suites found"
 
     suites = {suite_identifier(path): path for path in suite_paths}
+    orphans = orphan_snapshots(suites)
+    full_update = (
+        options.update
+        and not options.selectors
+        and not options.list_tests
+        and options.locate is None
+    )
+    if orphans and not full_update:
+        for orphan in orphans:
+            print(f"orphan snapshot: {orphan.relative_to(root)}", file=sys.stderr)
+        raise SystemExit("run scripts/test --update to remove orphan snapshots")
+
     if options.list_tests:
         for suite_name, suite_path in suites.items():
             cases, _, _ = load_suite(suite_path)
             for case_name in cases:
                 print(f"{suite_name}::{case_name}")
+        return
+    if options.locate is not None:
+        if options.selectors:
+            parser.error("--locate does not accept additional selectors")
+        locate(suites, options.locate)
         return
 
     selected = selected_cases(suites, options.selectors)
@@ -616,7 +493,7 @@ def main() -> None:
             reporter=reporter,
         )
         if options.update and not options.selectors:
-            prune_stale_snapshots(suites, checked_snapshots)
+            prune_stale_snapshots(checked_snapshots, orphans)
     finally:
         reporter.close()
 

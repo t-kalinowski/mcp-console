@@ -10,18 +10,16 @@ import tempfile
 import threading
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from _support import (
-    FifoCheckpoint,
-    McpClient,
-    Transcript,
-    code,
-    r_test_environment,
-    run_this_suite,
-    stop_client,
-    wait_for_worker_file,
-)
+from support.assertions import entry_result_text
+from support.assertions import last_result_text
+from support.checkpoints import FifoCheckpoint, wait_for_worker_file
+from support.client import McpClient, stop_client
+from support.normalization import code
+from support.r import r_test_environment
+from support.records import Transcript
+from support.suites import run_this_suite
 
 PLATFORMS = {"darwin"}
 REQUIRED_COMMANDS = {"ir"}
@@ -158,7 +156,7 @@ def send_and_collect_runtime_r_resolution(
     client.send(**arguments)
     chunks = []
     for attempt in range(5):
-        output = last_tool_text(client)
+        output = last_result_text(client)
         # A timeout can drain final R output before the completion event,
         # so retain every output delta instead of only the last poll.
         if output.endswith("\n[running; poll with an empty send]"):
@@ -197,7 +195,7 @@ def test_resolves_missing_r_packages_during_evaluation(binary: Path) -> Transcri
         client._initialize_and_list_tools()
 
         client.send(python="python_sentinel = 40")
-        output = last_tool_text(client)
+        output = last_result_text(client)
         assert output == "[done]", repr(output)
         client.send(sql="CREATE TABLE automatic_r_state AS SELECT 42 AS answer")
 
@@ -207,7 +205,7 @@ def test_resolves_missing_r_packages_during_evaluation(binary: Path) -> Transcri
             worker_pid <- Sys.getpid()
             """)
         client.send(r=setup)
-        assert last_tool_text(client) == "[done]"
+        assert last_result_text(client) == "[done]"
 
         # fmt: r
         r = code(r"""
@@ -225,13 +223,13 @@ def test_resolves_missing_r_packages_during_evaluation(binary: Path) -> Transcri
             cat("answer: ", input, "\n", sep = "")
             """)
         client.send(r=r, stdin="42\n")
-        output = last_tool_text(client)
+        output = last_result_text(client)
         assert output == "answer: 42\n", repr(output)
 
         client.send(python="python_sentinel + 2")
-        assert last_tool_text(client) == "42\n"
+        assert last_result_text(client) == "42\n"
         client.send(sql="SELECT answer FROM automatic_r_state")
-        assert last_tool_text(client).splitlines()[-1].split() == ["1", "42"]
+        assert last_result_text(client).splitlines()[-1].split() == ["1", "42"]
         return client._finish()
 
 
@@ -256,7 +254,7 @@ def test_does_not_resolve_missing_r_packages_from_sql_callbacks(
             invisible()
             """)
         client.send(r=r)
-        assert last_tool_text(client) == "[done]"
+        assert last_result_text(client) == "[done]"
 
         # fmt: python
         python = code("""
@@ -267,11 +265,11 @@ def test_does_not_resolve_missing_r_packages_from_sql_callbacks(
             console_sql_connection(connection)
             """)
         client.send(python=python)
-        assert last_tool_text(client) == "[done]"
+        assert last_result_text(client) == "[done]"
         baseline = len(ir_run_records(record))
 
         client.send(sql="SELECT sql_requires_package() AS resolved")
-        preview = last_tool_text(client)
+        preview = last_result_text(client)
         assert preview.splitlines()[-1].split() == ["0"], preview
         assert len(ir_run_records(record)) == baseline
 
@@ -395,19 +393,19 @@ def test_retains_automatic_r_package_after_error_and_restart(
             stop("after activation")
             """)
         client.send(r=r)
-        assert "Error: after activation" in last_tool_text(client)
+        assert "Error: after activation" in last_result_text(client)
         assert len(ir_run_records(record)) == baseline + 1
 
         client.send(r='stopifnot(requireNamespace("fortunes", quietly = TRUE)); 42L')
-        assert last_tool_text(client) == "[1] 42\n"
+        assert last_result_text(client) == "[1] 42\n"
         assert len(ir_run_records(record)) == baseline + 1
 
         client.send(control="restart")
-        assert last_tool_text(client) == (
+        assert last_result_text(client) == (
             "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
         )
         client.send(r='stopifnot(requireNamespace("fortunes", quietly = TRUE)); 42L')
-        assert last_tool_text(client) == "[1] 42\n"
+        assert last_result_text(client) == "[1] 42\n"
         assert len(ir_run_records(record)) == baseline + 1
         return client._finish()
 
@@ -424,18 +422,18 @@ def test_does_not_resolve_unreached_package_loads(binary: Path) -> Transcript:
         baseline = len(ir_run_records(record))
 
         client.send(r=f"if (FALSE) library({missing}); 42L")
-        assert last_tool_text(client) == "[1] 42\n"
+        assert last_result_text(client) == "[1] 42\n"
         assert len(ir_run_records(record)) == baseline
 
         client.send(r=f"library({missing})")
-        assert f"synthetic `ir` failure for {missing}" in last_tool_text(client)
+        assert f"synthetic `ir` failure for {missing}" in last_result_text(client)
         failed = len(ir_run_records(record))
         assert failed == baseline + 1
 
         client.send(r="42L")
-        assert last_tool_text(client) == "[1] 42\n"
+        assert last_result_text(client) == "[1] 42\n"
         client.send(r=f"library({missing})")
-        assert f"synthetic `ir` failure for {missing}" in last_tool_text(client)
+        assert f"synthetic `ir` failure for {missing}" in last_result_text(client)
         assert len(ir_run_records(record)) == failed + 1
         return client._finish()
 
@@ -472,7 +470,7 @@ def test_rejects_non_package_runtime_names_before_ir(binary: Path) -> Transcript
             42L
             """)
         client.send(r=r)
-        output = last_tool_text(client)
+        output = last_result_text(client)
         assert output == "[1] 42\n", repr(output)
         assert len(ir_run_records(record)) == baseline
         return client._finish()
@@ -544,7 +542,7 @@ def test_preserves_base_r_loading_semantics_without_resolution(
             42L
             """)
         client.send(r=r)
-        output = last_tool_text(client)
+        output = last_result_text(client)
         assert output == "[1] 42\n", repr(output)
 
         # fmt: r
@@ -568,7 +566,7 @@ def test_preserves_base_r_loading_semantics_without_resolution(
             42L
             """)
         client.send(r=r)
-        output = last_tool_text(client)
+        output = last_result_text(client)
         assert output == "[1] 42\n", repr(output)
 
         # fmt: r
@@ -592,7 +590,7 @@ def test_preserves_base_r_loading_semantics_without_resolution(
             42L
             """)
         client.send(r=r)
-        output = last_tool_text(client)
+        output = last_result_text(client)
         assert output == "[1] 42\n", repr(output)
         assert len(ir_run_records(record)) == baseline
         return client._finish()
@@ -638,7 +636,7 @@ def test_loads_package_with_devtools(binary: Path) -> Transcript:
             )
             """)
         client.send(r=r)
-        output = last_tool_text(client)
+        output = last_result_text(client)
         assert output == "$exported\n[1] 42\n\n$internal\n[1] 41\n\n", repr(output)
         assert len(ir_run_records(record)) == baseline
         return client._finish()
@@ -652,7 +650,7 @@ def test_r_activation_failure_requires_restart_without_stopping_worker(
         client = McpClient(binary, ("serve",), environment)
         client._initialize_and_list_tools()
         client.send(r="activation_state <- 41L; activation_pid <- Sys.getpid()")
-        assert last_tool_text(client) == "[done]"
+        assert last_result_text(client) == "[done]"
         baseline = len(ir_run_records(record))
 
         # The private bridge deliberately uses the live base::.libPaths binding
@@ -680,18 +678,18 @@ def test_r_activation_failure_requires_restart_without_stopping_worker(
             })
             """)
         client.send(r=r)
-        assert "synthetic managed R activation failure" in last_tool_text(client)
+        assert "synthetic managed R activation failure" in last_result_text(client)
         assert len(ir_run_records(record)) == baseline + 1
 
         client.send(
             r=("activation_state + as.integer(identical(Sys.getpid(), activation_pid))")
         )
-        assert last_tool_text(client) == "[1] 42\n"
+        assert last_result_text(client) == "[1] 42\n"
         client.send(requirements={"r": ["english"]})
-        assert last_tool_text(client) == "[restart required]"
+        assert last_result_text(client) == "[restart required]"
 
         client.send(control="restart")
-        assert last_tool_text(client) == (
+        assert last_result_text(client) == (
             "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
         )
         client.send(
@@ -701,7 +699,7 @@ def test_r_activation_failure_requires_restart_without_stopping_worker(
                 "list(package = package, quietly = TRUE))); 42L"
             )
         )
-        assert last_tool_text(client) == "[1] 42\n"
+        assert last_result_text(client) == "[1] 42\n"
         assert len(ir_run_records(record)) == baseline + 2
         return client._finish()
 
@@ -718,7 +716,7 @@ def test_restart_discards_unactivated_r_candidate(binary: Path) -> Transcript:
         try:
             client._initialize_and_list_tools()
             client.send(r="invisible(NULL)")
-            assert last_tool_text(client) == "[done]"
+            assert last_result_text(client) == "[done]"
             baseline = len(ir_run_records(record))
 
             # The live .libPaths() binding is reached after RResolved and
@@ -770,10 +768,9 @@ def test_restart_discards_unactivated_r_candidate(binary: Path) -> Transcript:
             restart = client._start_send(control="restart")
             client._receive_many([evaluation, restart])
             assert (
-                last_tool_text_from_entry(evaluation)
-                == "\n[running; poll with an empty send]"
+                entry_result_text(evaluation) == "\n[running; poll with an empty send]"
             )
-            assert last_tool_text_from_entry(restart) == (
+            assert entry_result_text(restart) == (
                 "[active evaluation stopped by session restart request]\n"
                 "[worker stopped: in-memory state lost]\n"
                 "[starting new worker]\n"
@@ -788,7 +785,7 @@ def test_restart_discards_unactivated_r_candidate(binary: Path) -> Transcript:
                     "list(package = package))); 42L"
                 )
             )
-            output = last_tool_text(client)
+            output = last_result_text(client)
             assert output == "[1] 42\n", repr(output)
             assert len(ir_run_records(record)) == baseline + 2
             transcript = client._finish()
@@ -806,8 +803,8 @@ def test_rejects_preparation_while_automatic_r_resolver_is_running(
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
         environment, record = recording_ir_environment(directory)
-        started = FifoCheckpoint(directory / "ir-started")
-        release = FifoCheckpoint(directory / "ir-release")
+        started = FifoCheckpoint.create(directory / "ir-started")
+        release = FifoCheckpoint.create(directory / "ir-release")
         environment["MCP_CONSOLE_TEST_IR_BLOCK_REQUIREMENT"] = package
         environment["MCP_CONSOLE_TEST_IR_STARTED"] = str(started.path)
         environment["MCP_CONSOLE_TEST_IR_RELEASE"] = str(release.path)
@@ -825,8 +822,7 @@ def test_rejects_preparation_while_automatic_r_resolver_is_running(
             started.wait("automatic R resolver")
             client._receive(evaluation)
             assert (
-                last_tool_text_from_entry(evaluation)
-                == "\n[running; poll with an empty send]"
+                entry_result_text(evaluation) == "\n[running; poll with an empty send]"
             )
             preparation = client._start_send(
                 requirements={"r": ["english"]},
@@ -851,7 +847,7 @@ def test_rejects_preparation_while_automatic_r_resolver_is_running(
             release.release()
             resolver_released = True
             client._receive(poll)
-            assert last_tool_text_from_entry(poll) == "[1] 42\n"
+            assert entry_result_text(poll) == "[1] 42\n"
             evaluation["result"] = poll["result"]
             assert client.transcript.pop() is poll
             assert len(ir_run_records(record)) == baseline + 1
@@ -874,8 +870,8 @@ def test_interrupts_automatic_r_resolver_and_preserves_worker(
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
         environment, record = recording_ir_environment(directory)
-        started = FifoCheckpoint(directory / "ir-started")
-        release = FifoCheckpoint(directory / "ir-release")
+        started = FifoCheckpoint.create(directory / "ir-started")
+        release = FifoCheckpoint.create(directory / "ir-release")
         environment["MCP_CONSOLE_TEST_IR_BLOCK_REQUIREMENT"] = package
         environment["MCP_CONSOLE_TEST_IR_STARTED"] = str(started.path)
         environment["MCP_CONSOLE_TEST_IR_RELEASE"] = str(release.path)
@@ -886,7 +882,7 @@ def test_interrupts_automatic_r_resolver_and_preserves_worker(
             client.send(
                 r="resolver_interrupt_state <- 41L; resolver_pid <- Sys.getpid()"
             )
-            assert last_tool_text(client) == "[done]"
+            assert last_result_text(client) == "[done]"
             baseline = len(ir_run_records(record))
 
             # fmt: r
@@ -912,8 +908,8 @@ def test_interrupts_automatic_r_resolver_and_preserves_worker(
             calls_returned.set()
             watchdog.join()
             assert not forced_release.is_set(), "interrupt did not stop the R resolver"
-            assert last_tool_text_from_entry(interrupt) == "\n[idle]"
-            error = last_tool_text_from_entry(evaluation)
+            assert entry_result_text(interrupt) == "\n[idle]"
+            error = entry_result_text(evaluation)
             assert error == "Error: R package resolution interrupted\n", repr(error)
             assert len(ir_run_records(record)) == baseline + 1
 
@@ -924,7 +920,7 @@ def test_interrupts_automatic_r_resolver_and_preserves_worker(
                     "as.integer(identical(Sys.getpid(), resolver_pid)) - 1L"
                 )
             )
-            assert last_tool_text(client) == "[1] 42\n"
+            assert last_result_text(client) == "[1] 42\n"
             transcript = client._finish()
             passed = True
             return transcript
@@ -934,19 +930,6 @@ def test_interrupts_automatic_r_resolver_and_preserves_worker(
             release.close()
             if not passed:
                 stop_client(client)
-
-
-def last_tool_text(client: McpClient) -> str:
-    return last_tool_text_from_entry(client.transcript[-1])
-
-
-def last_tool_text_from_entry(entry: dict[str, object]) -> str:
-    result = entry["result"]
-    assert isinstance(result, dict), result
-    content = result["content"]
-    assert len(content) == 1, content
-    assert content[0]["type"] == "text", content
-    return content[0]["text"]
 
 
 if __name__ == "__main__":

@@ -9,25 +9,17 @@ import tempfile
 import threading
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from _support import (
-    FifoCheckpoint,
-    McpClient,
-    Transcript,
-    checkpoint_uv_environment,
-    code,
-    run_this_suite,
-    stop_client,
-    wait_for_worker_file,
-)
+from support.assertions import last_result_text
+from support.checkpoints import FifoCheckpoint, wait_for_worker_file
+from support.client import McpClient, stop_client
+from support.normalization import code
+from support.records import Transcript
+from support.resolvers import checkpoint_uv_environment, named_requirement_error
+from support.suites import run_this_suite
 
 PLATFORMS = {"darwin"}
-
-from client_server._harness import (
-    _python_last_tool_text as last_tool_text,
-    named_requirement_error,
-)
 
 
 def test_rejects_python_preparation_while_evaluation_is_running(
@@ -52,7 +44,7 @@ def test_rejects_python_preparation_while_evaluation_is_running(
             preparation_gate = input("preparation gate> ")
             """)
         client.send(python=python)
-        assert last_tool_text(client) == (
+        assert last_result_text(client) == (
             '[input requested: "preparation gate> "]\n[waiting for stdin]'
         )
         uv_record.write_text("", encoding="utf-8")
@@ -92,12 +84,12 @@ def test_rejects_python_preparation_while_evaluation_is_running(
         assert uv_record.read_text(encoding="utf-8") == ""
 
         client.send(stdin="continue\n")
-        output = last_tool_text(client)
+        output = last_result_text(client)
         assert output == "[done]", repr(output)
         client.send(
             python=("runtime_generation_marker, 'combined_cell_ran' not in globals()")
         )
-        assert last_tool_text(client) == "('original runtime retained', True)\n"
+        assert last_result_text(client) == "('original runtime retained', True)\n"
         return client._finish()
 
 
@@ -128,11 +120,11 @@ def test_interrupts_running_python_evaluation(binary: Path) -> Transcript:
                 )))
                 """)
             client.send(r=r)
-            output = last_tool_text(client)
+            output = last_result_text(client)
             assert output == "[done]", repr(output)
 
             client.send(python="42", timeout_ms=0)
-            assert last_tool_text(client) == "\n[running; poll with an empty send]"
+            assert last_result_text(client) == "\n[running; poll with an empty send]"
             wait_for_worker_file(
                 temporary_path,
                 "python-r-interrupt-started",
@@ -142,7 +134,7 @@ def test_interrupts_running_python_evaluation(binary: Path) -> Transcript:
             client.send(control="interrupt", timeout_ms=0)
             result = client.transcript[-1]["result"]
             assert result["isError"] is False, result
-            output = last_tool_text(client)
+            output = last_result_text(client)
             assert output == "\n", repr(output)
 
             # fmt: r
@@ -169,7 +161,7 @@ def test_interrupts_running_python_evaluation(binary: Path) -> Transcript:
                 ))
                 """)
             client.send(r=r)
-            assert last_tool_text(client) == "[done]"
+            assert last_result_text(client) == "[done]"
 
             # fmt: python
             python = code("""
@@ -188,7 +180,7 @@ def test_interrupts_running_python_evaluation(binary: Path) -> Transcript:
                     time.sleep(60)
                 """)
             client.send(python=python, timeout_ms=0)
-            assert last_tool_text(client) == "\n[running; poll with an empty send]"
+            assert last_result_text(client) == "\n[running; poll with an empty send]"
             wait_for_worker_file(
                 temporary_path,
                 "python-interrupt-started",
@@ -196,10 +188,10 @@ def test_interrupts_running_python_evaluation(binary: Path) -> Transcript:
             )
 
             client.send(control="interrupt", timeout_ms=0)
-            assert "KeyboardInterrupt" in last_tool_text(client)
+            assert "KeyboardInterrupt" in last_result_text(client)
 
             client.send(python="python_interrupt_state + 1")
-            assert last_tool_text(client) == "42\n"
+            assert last_result_text(client) == "42\n"
             transcript = client._finish()
             passed = True
             return transcript
@@ -218,15 +210,15 @@ def test_initializes_private_runtime_once_on_first_python_cell(
         length(getHook("reticulate::matplotlib.pyplot::load"))
         """)
     client.send(r=r)
-    assert last_tool_text(client) == "[1] 1\n"
+    assert last_result_text(client) == "[1] 1\n"
     client.send(python="42")
-    assert last_tool_text(client) == "42\n"
+    assert last_result_text(client) == "42\n"
     # fmt: r
     r = code(r"""
         length(getHook("reticulate::matplotlib.pyplot::load"))
         """)
     client.send(r=r)
-    assert last_tool_text(client) == "[1] 1\n"
+    assert last_result_text(client) == "[1] 1\n"
     return client._finish()
 
 
@@ -264,10 +256,10 @@ def test_retries_python_runtime_initialization_after_interrupt(
                 )))
                 """)
             client.send(r=r)
-            assert last_tool_text(client) == "[done]"
+            assert last_result_text(client) == "[done]"
 
             client.send(python="42", timeout_ms=0)
-            assert last_tool_text(client) == "\n[running; poll with an empty send]"
+            assert last_result_text(client) == "\n[running; poll with an empty send]"
             wait_for_worker_file(
                 temporary_path,
                 "python-runtime-configuring",
@@ -277,7 +269,7 @@ def test_retries_python_runtime_initialization_after_interrupt(
             client.send(control="interrupt", timeout_ms=0)
             result = client.transcript[-1]["result"]
             assert result["isError"] is False, result
-            output = last_tool_text(client)
+            output = last_result_text(client)
             assert output in {"", "\n"}, repr(output)
             result["content"][0]["text"] = output.rstrip("\n")
 
@@ -290,13 +282,13 @@ def test_retries_python_runtime_initialization_after_interrupt(
                 length(getHook("reticulate::matplotlib.pyplot::load"))
                 """)
             client.send(r=r)
-            assert last_tool_text(client) == "[1] 1\n"
+            assert last_result_text(client) == "[1] 1\n"
 
             client.send(python="42")
-            output = last_tool_text(client)
+            output = last_result_text(client)
             assert output == "42\n", repr(output)
             client.send(python="import yaml12; yaml12.__name__")
-            output = last_tool_text(client)
+            output = last_result_text(client)
             assert output == (
                 "[resolved PyPI distribution 'py-yaml12' "
                 "for Python import 'yaml12']\n"
@@ -312,7 +304,7 @@ def test_retries_python_runtime_initialization_after_interrupt(
                 )
                 """)
             client.send(python=python)
-            assert last_tool_text(client) == "1\n"
+            assert last_result_text(client) == "1\n"
             transcript = client._finish()
             passed = True
             return transcript
@@ -351,7 +343,7 @@ def test_dispatch_does_not_mutate_python_globals(binary: Path) -> Transcript:
         None
         """)
     client.send(python=python)
-    assert last_tool_text(client) == "[done]"
+    assert last_result_text(client) == "[done]"
     # fmt: python
     python = code("""
         globals_iteration_continue.set()
@@ -359,7 +351,7 @@ def test_dispatch_does_not_mutate_python_globals(binary: Path) -> Transcript:
         globals_iteration_result
         """)
     client.send(python=python)
-    assert last_tool_text(client) == "['stable']\n"
+    assert last_result_text(client) == "['stable']\n"
     return client._finish()
 
 
@@ -369,8 +361,8 @@ def test_interrupts_live_python_resolver(binary: Path) -> Transcript:
         environment, uv_started, uv_release = checkpoint_uv_environment(
             temporary, "mcp-console-blocked-live-preparation"
         )
-        uv_interrupted = FifoCheckpoint(temporary / "uv-interrupted")
-        uv_interrupt_release = FifoCheckpoint(temporary / "uv-interrupt-release")
+        uv_interrupted = FifoCheckpoint.create(temporary / "uv-interrupted")
+        uv_interrupt_release = FifoCheckpoint.create(temporary / "uv-interrupt-release")
         environment["MCP_CONSOLE_TEST_UV_INTERRUPTED"] = str(uv_interrupted.path)
         environment["MCP_CONSOLE_TEST_UV_INTERRUPT_RELEASE"] = str(
             uv_interrupt_release.path
@@ -388,7 +380,7 @@ def test_interrupts_live_python_resolver(binary: Path) -> Transcript:
         try:
             client._initialize_and_list_tools()
             client.send(r="resolver_interrupt_state <- 41L")
-            assert last_tool_text(client) == "[done]"
+            assert last_result_text(client) == "[done]"
 
             preparation = client._start_send(
                 r="resolver_interrupt_cell_ran <- TRUE",
@@ -424,7 +416,7 @@ def test_interrupts_live_python_resolver(binary: Path) -> Transcript:
             )
 
             client.send()
-            assert last_tool_text(client) == "\n[idle]"
+            assert last_result_text(client) == "\n[idle]"
 
             client.send(
                 r=(
@@ -432,7 +424,7 @@ def test_interrupts_live_python_resolver(binary: Path) -> Transcript:
                     "as.integer(!exists('resolver_interrupt_cell_ran'))"
                 )
             )
-            assert last_tool_text(client) == "[1] 42\n"
+            assert last_result_text(client) == "[1] 42\n"
             transcript = client._finish()
             passed = True
             return transcript
@@ -459,7 +451,7 @@ def test_restart_cancels_live_python_preparation(binary: Path) -> Transcript:
         try:
             client._initialize_and_list_tools()
             client.send(r="restart_marker <- 42L")
-            assert last_tool_text(client) == "[done]"
+            assert last_result_text(client) == "[done]"
 
             preparation = client._start_send(
                 r="stop('cancelled requirements cell ran')",
@@ -532,7 +524,7 @@ def test_restart_cancels_live_python_preparation(binary: Path) -> Transcript:
                 )
                 """)
             client.send(r=r)
-            assert last_tool_text(client) == "[done]"
+            assert last_result_text(client) == "[done]"
             transcript = client._finish()
             passed = True
             return transcript
@@ -576,7 +568,7 @@ def test_forces_uv_offline_in_builtin_worker(binary: Path) -> Transcript:
         Sys.getenv("UV_OFFLINE", unset = NA_character_)
         """)
     client.send(r=r)
-    assert last_tool_text(client) == '[1] "1"\n'
+    assert last_result_text(client) == '[1] "1"\n'
     return client._finish()
 
 
