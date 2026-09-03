@@ -26,7 +26,20 @@ Security and liveness cases may add causal or process assertions for facts a sna
 Do not test exact internal sequencing unless it is itself an observable contract.
 
 The direct CLI sandbox cases own argument and standard-stream fidelity, job control, signal and exit status, security policy, and manager-owned retirement.
-The public MCP sandbox cases are limited to a launch-path descriptor matrix and integration checks for startup gating, supervisor loss, restart, and shutdown.
+The public MCP sandbox cases are limited to a launch-path descriptor matrix and integration checks for sandbox-dependent runtime workflows, startup gating, worker replacement, supervisor loss, restart, and shutdown.
+
+Map each non-generic sandbox allowance to the real workflow that requires it and the test that owns that workflow:
+
+| Sandbox allowance           | Motivating workflow          | Owning test                                                                                |
+| --------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------ |
+| `hw.logicalcpu`             | `parallel::detectCores()`    | `client_server/r/test_runtime::default_sandbox_supports_r_core_detection`                  |
+| `kern.sysv.semmns`          | joblib `loky`                | `client_server/python/test_environment::runs_joblib_process_backend`                       |
+| POSIX semaphores            | Python spawn multiprocessing | `client_server/python/test_environment::runs_spawn_process_after_live_resolution`          |
+| PTYs and `kern.boottime`    | `processx`                   | `cli/command/test_execution::allows_processx_pty_processes` and MCP process-lifetime cases |
+| Quarto device/sysctl access | Execute generated document   | `client_server/recording/test_quarto::renders_generated_document`                          |
+| `__KMP_REGISTERED_LIB_*`    | PyTorch/libomp               | Add a PyTorch workflow test, or remove the allowance                                       |
+
+When reviewing deletion candidates, separate tests may replace a combined test only when the interaction between those behaviors is not itself a plausible failure mode.
 
 Each `test_` function in a suite is a transcript case.
 The runner passes the built binary path to each case.
