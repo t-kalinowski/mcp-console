@@ -6,32 +6,21 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from cli._harness import (
-    DarwinProcessIdentity,
-    FifoCheckpoint,
     Path,
     TIMEOUT,
     Transcript,
-    _build_supervision_interposer,
     _cleanup,
     _command,
     _command_record,
     _observe_process_exit,
     _start_lifetime,
     _wait_for_cleanup,
-    _wait_for_gated_root_and_manager,
     _wait_for_process_exit,
     _wait_for_process_state,
-    capture_darwin_process_identity,
-    kill_darwin_processes,
-    live_darwin_processes,
-    os,
     run_this_suite,
-    shutil,
     signal,
     signal_darwin_process,
-    subprocess,
     sys,
-    tempfile,
 )
 
 
