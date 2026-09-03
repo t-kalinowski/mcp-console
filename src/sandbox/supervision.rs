@@ -17,9 +17,7 @@ mod root_exit_waiter;
 #[path = "supervision/standalone.rs"]
 mod standalone;
 
-pub(super) use self::job_control::SignalRelay;
-pub(crate) use self::manager::SandboxManager;
-pub(super) use self::root_exit_waiter::{RootExitWaiter, SandboxOwner};
+pub(super) use self::root_exit_waiter::SandboxOwner;
 pub(super) use self::standalone::status;
 
 pub(super) fn run_manager(

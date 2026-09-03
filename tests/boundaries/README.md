@@ -66,7 +66,7 @@ When accepting a handshake change, update the full snapshot before the abbreviat
 The `cli/interface/test_help` suite records command lines and stdout in one stream with color disabled.
 It adds the exit code for failures and stderr when nonempty.
 The `server_relay` suites launch a deterministic scripted relay through an internal development seam.
-That relay is the server's direct sandbox child and process-group leader, and it communicates only through the same fd 0/1/2 boundary as the production relay.
+That relay is the sandbox root and process-group leader behind the server's owned launcher child, and it communicates only through the same fd 0/1/2 boundary as the production relay.
 The suite records complete parsed JSONL frames under `server` and `relay` direction labels.
 The truncated-frame case instead records the exact incomplete bytes as base64 under `relay_raw`.
 Its snapshots show flat commands and semantic events, operation results without acknowledgments, readable UTF-8 raw chunks and base64 byte fallbacks, interrupt results, structured worker outcomes, and complete stream drainage.
@@ -74,7 +74,7 @@ The cross-source case records serialized observation order without claiming chro
 Server-side response-cut, pending-output-budget, and truncation cases assert the public MCP result while their wire snapshots verify that no cut, budget, or acknowledgment field enters the relay protocol.
 The fixture uses explicit filesystem and FIFO release gates so completion, cancellation, retirement, and failure captures do not depend on sleeps, and tests keep capture descriptors open across sandbox cleanup when necessary.
 The `relay_worker` suites drive the public MCP server through a transparent worker proxy.
-The proxy starts the built-in worker inside the server's sandbox, forwards sideband messages and standard streams, and writes parsed events to its private temporary directory for the test to read before shutdown.
+The proxy starts the built-in worker inside the server's launcher-owned sandbox, forwards sideband messages and standard streams, and writes parsed events to its private temporary directory for the test to read before shutdown.
 The restart case keeps the old generation's capture descriptor open across sandbox cleanup and records the sideband shutdown frame, worker-stdin EOF, and worker-sideband EOF.
 The crash-recovery case does the same across an unexpected worker exit and records the observed worker-sideband EOF before the replacement starts.
 The suite asserts the public `send` result and records relay-to-worker and worker-to-relay frames under `relay` and `worker` direction labels in approximate order.

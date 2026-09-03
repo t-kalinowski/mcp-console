@@ -817,6 +817,12 @@ def run_shutdown(relay: ScriptedRelay) -> None:
     relay.retire()
 
 
+def run_shutdown_nonzero(relay: ScriptedRelay) -> None:
+    relay.ready()
+    relay.retire()
+    raise SystemExit(73)
+
+
 def run_blocked_live_r_resolver_shutdown(relay: ScriptedRelay) -> None:
     relay.make_checkpoint(SHUTDOWN_RECEIVED_NAME)
     relay.make_checkpoint(RETIREMENT_RELEASE_NAME)
@@ -1155,6 +1161,7 @@ def main() -> None:
         ),
         "serialized_cross_source_order": run_serialized_cross_source_order,
         "shutdown": run_shutdown,
+        "shutdown_nonzero": run_shutdown_nonzero,
         "blocked_live_r_resolver_shutdown": run_blocked_live_r_resolver_shutdown,
         "late_r_prepared_retirement": run_late_r_prepared_retirement,
         "pre_marker_r_prepared_replacement": run_pre_marker_r_prepared_replacement,

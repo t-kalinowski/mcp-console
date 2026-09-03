@@ -404,7 +404,7 @@ A worker must not require both in a particular order.
 If it does not exit within the relay's supplied grace period, the relay forcibly terminates it.
 After direct-worker exit or force-stop, the relay stops any remaining member of its worker process group and reaps the direct child.
 This is a local relay-worker mechanism, not whole-sandbox containment across process groups or sessions.
-The host-side sandbox manager owns primary cleanup of the relay-and-worker lifetime, including observed descendants that enter another process group or session, and the server waits for the sandbox-lifetime retirement barrier before replacement.
+The launcher-owned sandbox manager performs primary cleanup of the relay-and-worker lifetime, including observed descendants that enter another process group or session, and the server requires successful managed launcher exit as the sandbox-lifetime retirement barrier before replacement.
 The exact server-relay acceptance and retirement sequence is specified in [`RELAY_PROTOCOL.md`](RELAY_PROTOCOL.md).
 
 During retirement, the relay forwards every complete worker-sideband frame already buffered or immediately readable.

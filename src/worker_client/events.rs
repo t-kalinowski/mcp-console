@@ -836,12 +836,12 @@ fn dispatch_worker_events(
                         && sideband_closed
                         && process_outcome.is_some())
                 {
-                    fail_dispatch(
-                        &operation,
-                        &mut startup,
-                        &interrupts,
-                        "worker relay stdout closed before retirement completed".to_string(),
-                    );
+                    let error = if startup.is_some() {
+                        "worker relay exited before readiness"
+                    } else {
+                        "worker relay stdout closed before retirement completed"
+                    };
+                    fail_dispatch(&operation, &mut startup, &interrupts, error.to_string());
                     semantic_failure = true;
                 }
                 if retiring || semantic_failure || !intentional_shutdown {

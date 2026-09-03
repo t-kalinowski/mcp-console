@@ -51,8 +51,8 @@ impl SandboxManager {
         root_pid: u32,
         temporary_directory: &mut platform::TemporaryDirectory,
         cleanup_timeout: Duration,
-        signal_relay: Option<&SignalRelay>,
-        root_wakeup: Option<RootExitWakeup>,
+        signal_relay: &SignalRelay,
+        root_wakeup: RootExitWakeup,
     ) -> Result<Self, String> {
         let root_pid_value = libc::pid_t::try_from(root_pid)
             .ok()
@@ -81,9 +81,7 @@ impl SandboxManager {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .process_group(0);
-        if let Some(signal_relay) = signal_relay {
-            signal_relay.configure_manager(&mut command);
-        }
+        signal_relay.configure_manager(&mut command);
         file_descriptors::close_unlisted_from_multithreaded_parent(&mut command)?;
 
         let mut child = command
@@ -162,7 +160,7 @@ impl SandboxManager {
     /// Closes the ownership token and waits for the manager to retire the
     /// sandbox lifetime. The manager removes the private directory only after
     /// it has completed process cleanup successfully.
-    pub(crate) fn retire(&mut self) -> Result<(), String> {
+    pub(in crate::sandbox) fn retire(&mut self) -> Result<(), String> {
         self.wait_for_exit()
     }
 
@@ -182,7 +180,7 @@ impl ManagerMonitor {
         identity: ProcessIdentity,
         root_pid: libc::pid_t,
         cleanup_timeout: Duration,
-        root_wakeup: Option<RootExitWakeup>,
+        root_wakeup: RootExitWakeup,
     ) -> Result<Self, ManagerMonitorStartError> {
         let (result_sender, result) = mpsc::channel();
         let (child_sender, child_receiver) = mpsc::sync_channel(0);
@@ -192,7 +190,7 @@ impl ManagerMonitor {
             let child = child_receiver
                 .recv()
                 .expect("sandbox manager child should be sent to its monitor");
-            let _wake_root = root_wakeup.map(RootExitWakeup::on_drop);
+            let _wake_root = root_wakeup.on_drop();
             let result = monitor_manager(
                 child,
                 root_pid,

@@ -58,12 +58,12 @@ They are not MCP, relay, sideband, or worker-stream records.
 MCP Console has four process boundaries:
 
 1. The client and server communicate through MCP JSON-RPC over stdio.
-2. Each host sandbox owner creates a gated root, then starts one manager with the root PID, cleanup timeout, and private path as native command arguments plus a private inherited control socket.
+2. One `mcp-console sandbox` launcher is the sole host-side sandbox owner for each lifetime.
+   For a worker generation, the server starts the launcher in hidden parent-owned mode with the relay command line as its target.
+   The launcher creates a gated root, starts one manager with the root PID, cleanup timeout, and private path as native command arguments plus a private inherited control socket, and retains both children waitably.
    Before reporting readiness, the manager installs root, descendant, and control-socket observation and adopts the private directory.
-   After receiving readiness, the owner installs manager-failure recovery, relinquishes its duplicate directory guard, and releases the root's startup gate.
-   The owner then holds the control stream open only as the live-sandbox ownership token; EOF requests retirement, and successful manager process exit is the primary cleanup barrier.
-   The server starts one manager for each worker generation, which may evaluate multiple cells before restart or replacement.
-   The standalone launcher starts one manager for each invocation of `mcp-console sandbox`, which runs one direct child command.
+   After receiving readiness, the launcher installs manager-failure recovery, relinquishes its duplicate directory guard, and releases the root's startup gate.
+   The launcher then holds the control stream open only as the live-sandbox ownership token; EOF requests retirement, and successful manager process exit is its primary cleanup barrier.
 3. The server and one per-generation relay communicate through the private, ordered JSONL protocol in `docs/RELAY_PROTOCOL.md`.
 4. The relay and worker communicate through the worker sideband plus worker fd 0, 1, and 2 as documented in `docs/WORKER_PROTOCOL.md`.
 
@@ -72,23 +72,26 @@ Keep these ownership rules intact:
 - The relay is a thin ordered transport and worker supervisor.
   It owns local worker transports, sideband translation, direct-worker signal delivery, bounded termination, same-process-group cleanup, and direct-worker reaping.
   It preserves each producer's order and supplies serialized observation order; it does not reconstruct chronology across independent sideband, stdout, and stderr transports.
-- The server owns host-side relay lifetime orchestration and retirement, worker-generation state, operation admission, output cuts, pending-output budgets, response assembly, delivery ownership, retained requirements, and host resolvers.
-  It releases each relay root's private startup gate only after the manager reports readiness and manager-failure recovery is installed.
+- The server owns logical relay lifetime orchestration and retirement, worker-generation state, operation admission, output cuts, pending-output budgets, response assembly, delivery ownership, retained requirements, and host resolvers.
+  It constructs the relay target independently, applies the retained environment to an ordinary launcher command, and owns only the launcher's piped standard input and output plus normal child exit, signaling, and reaping.
+  It first requests graceful relay shutdown through the relay protocol, sends `SIGTERM` to the owned launcher after the relay deadline, and uses a hard launcher kill only as the final fail-safe.
+  Successful managed launcher exit is the synchronous cleanup barrier on normal and owned-retirement paths.
   Do not move these responsibilities into the relay.
 - Treat each relay and its worker process tree, and each standalone command tree, as one sandboxed lifetime.
   A host-side sandbox manager owns primary observed-descendant tracking, bounded force termination, and private-directory cleanup for that lifetime.
-  Before readiness, the host owner retains the directory-creation guard.
+  Before readiness, the launcher retains the directory-creation guard.
   After readiness, it relinquishes that guard and the manager becomes the sole directory-cleanup owner.
   The manager's single thread observes descendant and root events plus control-socket readability through one kqueue.
   After readiness, the control socket carries no messages; owner EOF asks the manager to retire the lifetime, and the manager decides whether the root must be stopped and whether cleanup succeeded.
   After natural root-exit cleanup, it still waits for owner EOF before removing the directory and exiting.
   The manager's adopted guard preserves the directory on unexpected unwind and removes it only after successful cleanup proves that it is unused.
-  The host owner still takes over bounded process cleanup if the manager exits unsuccessfully while the sandbox root remains live and pinned.
+  The launcher takes over bounded process cleanup if the manager exits unsuccessfully while the sandbox root remains live and pinned.
   That fallback can reconstruct only descendants still reachable from the root's current ancestry.
   It has no directory-cleanup state, so the directory remains if the manager exits before completing its own cleanup and removal.
-- The standalone launcher owns the direct command's exit status, foreground-terminal transfer, and signal relaying.
-  It releases the command's private startup gate only after the manager reports readiness and manager-failure recovery is installed, closes the ownership token to request retirement, and retains the direct root waitably through manager exit and any fallback cleanup.
-  Its hidden owned mode validates and watches the exact parent identity before target release; parent exit or launcher-addressed `SIGTERM` requests managed retirement, and the launcher exits only after manager cleanup and root reaping.
+- The sandbox launcher owns the direct target's exit status and, in ordinary interactive mode, foreground-terminal transfer and signal relaying.
+  It releases the target's private startup gate only after the manager reports readiness and manager-failure recovery is installed, closes the ownership token to request retirement, and retains the direct root waitably through manager exit and any fallback cleanup.
+  Its hidden owned mode validates and watches the exact parent identity before target release; parent exit or launcher-addressed `SIGTERM` requests managed retirement, and successful managed retirement keeps the launcher alive through manager cleanup and root reaping.
+  If the launcher itself is killed, manager EOF still requests cleanup, but the server cannot synchronously observe manager completion.
 - The sandbox manager does not own logical generation state, command exit status, relay transport, or terminal semantics.
 - Restart, replacement, evaluation admission, stdin writes, resolver callbacks, and retained-environment commits are scoped to the worker generation that accepted them.
   Work admitted for an old generation must not reach its replacement.
@@ -113,9 +116,9 @@ Keep these ownership rules intact:
 
 - `src/worker_protocol.rs`, `src/sideband.rs` — relay-worker message and framing contract.
 - `src/relay_protocol.rs` — server-relay JSONL message and framing contract.
-- `src/worker_relay.rs` — sandboxed worker launch, I/O forwarding, signaling, shutdown, and reaping.
-- `src/worker_client.rs`, `src/worker_client/` — server-owned environment, evaluation, lifecycle, ordered event dispatch, output tape, and macOS relay transport.
-- `src/sandbox.rs`, `src/sandbox/{child,command,spawn}.rs`, `src/sandbox/supervision.rs`, `src/sandbox/supervision/` — sandbox command construction, launch, child retirement, primary host-manager supervision, owner-side manager-failure recovery, and standalone job control.
+- `src/worker_relay.rs`, `src/process_group.rs` — sandboxed worker launch, I/O forwarding, signaling, same-group cleanup, and reaping, plus shared exact process-group termination.
+- `src/worker_client.rs`, `src/worker_client/` — server-owned environment, evaluation, lifecycle, ordinary launcher child ownership, ordered event dispatch, output tape, and macOS relay transport.
+- `src/sandbox.rs`, `src/sandbox/{child,macos,file_descriptors}.rs`, `src/sandbox/supervision.rs`, `src/sandbox/supervision/` — launcher-owned sandbox construction and child cleanup, primary host-manager supervision, manager-failure recovery, and standalone job control.
 - `src/worker.rs`, `src/worker/embedded_r.rs`, `src/r_repl.c` — worker-facing facade, current embedded-R backend, cell dispatch, console callbacks, and the C-owned DLL-REPL boundary.
 
 ### Language adapters

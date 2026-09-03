@@ -159,8 +159,8 @@ def _manager_pid(server_pid: int) -> int:
         if len(fields) == 3:
             records.append((int(fields[0]), int(fields[1]), fields[2]))
 
-    # The sandbox owner may be the server or an intermediate CLI launcher.
-    # Locate the manager by ancestry and its internal executable role.
+    # The CLI launcher is the sandbox owner. Locate its manager by ancestry and
+    # its internal executable role.
     descendants = {server_pid}
     while True:
         discovered = {pid for pid, parent, _ in records if parent in descendants}
@@ -186,10 +186,9 @@ def _close_client_streams(client: McpClient) -> None:
 
 
 def test_server_crash_retires_the_worker_generation(binary: Path) -> Transcript:
-    # The host-side sandbox manager must treat loss of the server as retirement
-    # of the entire worker generation. A detached child must not survive merely
-    # because the server received an uncatchable signal before it could run its
-    # normal shutdown path.
+    # The owned launcher must treat loss of the server as retirement of the
+    # entire worker generation. A detached child must not survive merely because
+    # the server received an uncatchable signal before its normal shutdown path.
     client = McpClient(binary, ("serve",))
     generation: Generation | None = None
     manager_identity: DarwinProcessIdentity | None = None
@@ -259,8 +258,8 @@ def test_server_crash_retires_the_worker_generation(binary: Path) -> Transcript:
 
 
 def test_manager_crash_retires_the_worker_generation(binary: Path) -> Transcript:
-    # While the relay root remains live and pinned, the host owner must take
-    # over bounded cleanup if the ready manager exits.
+    # While the relay root remains live and pinned, the launcher must take over
+    # bounded cleanup if the ready manager exits.
     client = McpClient(binary, ("serve",))
     generation: Generation | None = None
     manager_identity: DarwinProcessIdentity | None = None

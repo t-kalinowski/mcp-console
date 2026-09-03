@@ -75,8 +75,8 @@ def _worker_generation_processes(server_pid: int) -> tuple[int, int]:
             if len(fields) == 3:
                 records.append((int(fields[0]), int(fields[1]), fields[2]))
 
-        # The sandbox owner may be the server or an intermediate CLI launcher.
-        # Locate the gated root and manager by ancestry and executable role.
+        # The CLI launcher is the sandbox owner. Locate its gated root and
+        # manager by ancestry and executable role.
         descendants = {server_pid}
         while True:
             discovered = {pid for pid, parent, _ in records if parent in descendants}
@@ -181,19 +181,23 @@ def test_manager_failure_before_readiness_keeps_custom_relay_gated(
                 "content": [
                     {
                         "type": "text",
-                        "text": (
-                            "[failed to launch worker relay: sandbox manager did not "
-                            "become ready: failed to fill whole buffer]"
-                        ),
+                        "text": "[worker relay exited before readiness]",
                     }
                 ],
                 "isError": True,
             }, result
+            readable, _, _ = select.select([client.stderr], [], [], TIMEOUT)
+            assert readable, "sandbox launcher did not report its startup failure"
+            diagnostic = client.stderr.readline().rstrip("\n")
+            assert diagnostic == (
+                "sandbox manager did not become ready: failed to fill whole buffer"
+            ), diagnostic
             _wait_for_startup_cleanup(identities)
             assert list(temporary.glob(f"**/{MARKER_NAME}")) == []
             waiting["startup_supervision_failure"] = {
                 "manager": "killed before readiness",
                 "custom_relay": "did not execute",
+                "sandbox_stderr": diagnostic,
                 "verified_cleanup": "gated relay root and manager",
             }
 

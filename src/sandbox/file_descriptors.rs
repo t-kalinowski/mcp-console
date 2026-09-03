@@ -33,34 +33,15 @@ pub(super) fn close_unlisted_except(
 pub(super) fn close_unlisted_from_multithreaded_parent(
     command: &mut Command,
 ) -> Result<(), String> {
-    close_unlisted_from_multithreaded_parent_except(command, Vec::new())
-}
-
-pub(super) fn close_unlisted_from_multithreaded_parent_except(
-    command: &mut Command,
-    inherited_descriptors: Vec<RawFd>,
-) -> Result<(), String> {
-    if inherited_descriptors
-        .iter()
-        .any(|descriptor| *descriptor <= libc::STDERR_FILENO)
-    {
-        return Err("sandbox inherited descriptor is invalid".to_string());
-    }
     // A server thread can open a descriptor after any parent-side snapshot.
     // Scan every possible child slot after fork instead. Descriptors created by
     // Rust for spawn failure reporting already carry close-on-exec and remain
-    // usable until a successful exec closes them. Only the private startup gate
-    // is allowlisted through the hidden wrapper; that wrapper closes it before
-    // executing the configured relay.
+    // usable until a successful exec closes them.
     let descriptor_limit = descriptor_limit()?;
     unsafe {
         command.pre_exec(move || {
             for descriptor in (libc::STDERR_FILENO + 1)..descriptor_limit {
-                update_close_on_exec(
-                    descriptor,
-                    !inherited_descriptors.contains(&descriptor),
-                    true,
-                )?;
+                update_close_on_exec(descriptor, true, true)?;
             }
             Ok(())
         });

@@ -1,6 +1,7 @@
 #!/usr/bin/env -S uv run --script
 
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -11,7 +12,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import last_tool_text
-from support.client import McpClient
+from support.client import McpClient, stop_client
+from support.macos import (
+    DarwinProcessIdentity,
+    capture_darwin_process_identity,
+    live_darwin_processes,
+    signal_darwin_process,
+)
 from support.processes import (
     process_exists,
     process_group_exists,
@@ -34,6 +41,70 @@ from boundaries.client_server._harness import (
     wait_for_process_group_exit,
     wait_for_stopped_process,
 )
+
+
+def _manager_pid(server_pid: int) -> int:
+    processes = subprocess.check_output(
+        ["/bin/ps", "-axo", "pid=,ppid=,command="],
+        text=True,
+    )
+    records = []
+    for process in processes.splitlines():
+        fields = process.strip().split(None, 2)
+        if len(fields) == 3:
+            records.append((int(fields[0]), int(fields[1]), fields[2]))
+
+    descendants = {server_pid}
+    while True:
+        discovered = {pid for pid, parent, _ in records if parent in descendants}
+        if discovered.issubset(descendants):
+            break
+        descendants.update(discovered)
+    managers = [
+        pid
+        for pid, _, command in records
+        if pid in descendants and "sandbox-manager" in command.split()
+    ]
+    assert len(managers) == 1, managers
+    return managers[0]
+
+
+def test_restart_reports_nonzero_sandbox_launcher_exit(binary: Path) -> Transcript:
+    relay = (
+        Path(__file__).resolve().parents[3]
+        / "fixtures"
+        / "server_relay"
+        / "scripted_relay.py"
+    )
+    environment = os.environ.copy()
+    environment["MCP_CONSOLE_TEST_RELAY_SCENARIO"] = "shutdown_nonzero"
+    client = McpClient(
+        binary,
+        ("serve", "--worker", str(binary), "--relay", str(relay)),
+        environment,
+    )
+    try:
+        client._initialize_and_list_tools()
+        client.send(control="restart")
+        assert last_tool_text(client) == "[starting new worker]\n[idle]"
+
+        client.send(control="restart")
+        result = client.transcript[-1]["result"]
+        assert result == {
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        "[worker stopped: in-memory state lost]\n"
+                        "[worker launcher exited with status 73]"
+                    ),
+                }
+            ],
+            "isError": True,
+        }, result
+        return client.transcript
+    finally:
+        stop_client(client)
 
 
 def test_restart_closes_worker_stdin(binary: Path) -> Transcript:
@@ -199,7 +270,11 @@ def test_restart_allows_accepted_relay_shutdown_to_finish(
                 stop_process(client.process)
 
 
-def test_restart_outer_force_stops_unresponsive_relay(binary: Path) -> Transcript:
+def _restart_outer_force_stops_unresponsive_relay(
+    binary: Path,
+    *,
+    stop_manager: bool,
+) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
@@ -213,6 +288,7 @@ def test_restart_outer_force_stops_unresponsive_relay(binary: Path) -> Transcrip
         )
         helper_pid = None
         worker_group = None
+        manager: DarwinProcessIdentity | None = None
         passed = False
         try:
             client._initialize_and_list_tools()
@@ -255,9 +331,16 @@ def test_restart_outer_force_stops_unresponsive_relay(binary: Path) -> Transcrip
                 client,
                 "outer relay force-stop",
             )
+            if stop_manager:
+                manager = capture_darwin_process_identity(
+                    _manager_pid(client.process.pid)
+                )
+                assert signal_darwin_process(manager, signal.SIGSTOP), (
+                    "sandbox manager exited before the stall injection"
+                )
 
             restarted = client._start_send(control="restart")
-            retirement_deadline = time.monotonic() + 5
+            retirement_deadline = time.monotonic() + (10 if stop_manager else 5)
             while (
                 process_exists(relay_target)
                 or process_group_exists(worker_group)
@@ -275,10 +358,35 @@ def test_restart_outer_force_stops_unresponsive_relay(binary: Path) -> Transcrip
             assert not process_group_exists(worker_group), (
                 "stopped relay process group outlived restart"
             )
-            assert not process_exists(relay_target), "server did not reap the relay"
+            assert not process_exists(relay_target), (
+                "sandbox launcher did not reap the relay"
+            )
             assert not process_exists(helper_pid), (
                 "detached worker descendant outlived sandbox retirement"
             )
+            if manager is not None:
+                assert live_darwin_processes((manager,)) == [], (
+                    "stopped sandbox manager outlived launcher recovery"
+                )
+                restarted["launcher_recovery"] = {
+                    "manager": "stopped before owned retirement",
+                    "verified_barrier": "manager, relay, worker, and detached descendant",
+                }
+                assert restarted["result"] == {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": (
+                                "[active evaluation stopped by session restart request]\n"
+                                "[worker stopped: in-memory state lost]\n"
+                                "[worker launcher exited with status 1]"
+                            ),
+                        }
+                    ],
+                    "isError": True,
+                }, restarted["result"]
+                passed = True
+                return client.transcript
             assert last_tool_text(client) == (
                 "[active evaluation stopped by session restart request]\n"
                 "[worker stopped: in-memory state lost]\n"
@@ -292,10 +400,30 @@ def test_restart_outer_force_stops_unresponsive_relay(binary: Path) -> Transcrip
             passed = True
             return transcript
         finally:
+            if manager is not None:
+                signal_darwin_process(manager, signal.SIGCONT)
+            if stop_manager:
+                stop_client(client)
             if not passed:
                 stop_process_id(helper_pid)
                 stop_process_group(worker_group)
                 stop_process(client.process)
+
+
+def test_restart_outer_force_stops_unresponsive_relay(binary: Path) -> Transcript:
+    return _restart_outer_force_stops_unresponsive_relay(
+        binary,
+        stop_manager=False,
+    )
+
+
+def test_restart_waits_for_owned_launcher_manager_recovery(
+    binary: Path,
+) -> Transcript:
+    return _restart_outer_force_stops_unresponsive_relay(
+        binary,
+        stop_manager=True,
+    )
 
 
 def test_restart_starts_first_worker_and_waits_until_ready(

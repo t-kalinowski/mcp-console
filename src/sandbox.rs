@@ -23,25 +23,14 @@ const TARGET_GATE_RELEASE: u8 = 1;
 #[path = "sandbox/child.rs"]
 mod child;
 #[cfg(target_os = "macos")]
-#[path = "sandbox/command.rs"]
-mod command;
-#[cfg(target_os = "macos")]
 #[path = "sandbox/file_descriptors.rs"]
 mod file_descriptors;
 #[cfg(target_os = "macos")]
 #[path = "sandbox/macos.rs"]
 mod platform;
 #[cfg(target_os = "macos")]
-#[path = "sandbox/spawn.rs"]
-mod spawn;
-#[cfg(target_os = "macos")]
 #[path = "sandbox/supervision.rs"]
 mod supervision;
-
-#[cfg(target_os = "macos")]
-pub(crate) use child::force_stop_process_group_members_except_self;
-#[cfg(target_os = "macos")]
-pub(crate) use command::{SandboxedChild, SandboxedCommand};
 
 #[cfg(not(target_os = "macos"))]
 #[path = "sandbox/unsupported.rs"]
@@ -55,13 +44,12 @@ pub fn run(command_line: &[OsString], exit_with_parent: Option<u32>) -> Result<E
     let (program, arguments) = command_line
         .split_first()
         .expect("sandbox command must include a program");
-    let mut sandboxed = SandboxedCommand::new(program)?;
+    let (mut sandboxed, temporary_directory) = platform::sandboxed_command()?;
     sandboxed
-        .args(arguments)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
-    sandboxed.status(owner)
+    supervision::status(sandboxed, temporary_directory, program, arguments, owner)
 }
 
 #[cfg(target_os = "macos")]
