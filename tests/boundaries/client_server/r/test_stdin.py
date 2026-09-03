@@ -311,15 +311,25 @@ def test_keeps_stdin_open_after_partial_payload(binary: Path) -> Transcript:
     expected = 'before\n[input requested: "partial> "]\n[waiting for stdin]'
     assert output == expected, repr(output)
 
-    client.send(stdin="\n")
-    assert last_tool_text(client) == '[1] "without newline"\n'
+    wait_for_evaluation_output(
+        client,
+        '[1] "without newline"\n',
+        "partial stdin completion",
+        stdin="\n",
+    )
 
     # fmt: r
     r = code(r"""
         readline("next> ")
         """)
-    client.send(r=r, stdin="next\n")
-    assert last_tool_text(client) == '[input requested: "next> "]\n[1] "next"\n'
+    wait_for_evaluation_output(
+        client,
+        '[input requested: "next> "]\n[1] "next"\n',
+        "same-call stdin completion",
+        provisional='[input requested: "next> "]\n[waiting for stdin]',
+        r=r,
+        stdin="next\n",
+    )
     return client._finish()
 
 
