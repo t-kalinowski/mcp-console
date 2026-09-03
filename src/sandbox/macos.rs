@@ -535,7 +535,7 @@ impl TemporaryDirectory {
     }
 
     /// Transfers cleanup ownership to another guard for the same directory.
-    pub(crate) fn relinquish(mut self) {
+    pub(crate) fn relinquish(&mut self) {
         self.remove_on_drop = false;
     }
 }

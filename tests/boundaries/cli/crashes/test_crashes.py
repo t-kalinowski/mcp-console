@@ -1,14 +1,27 @@
 #!/usr/bin/env -S uv run --script
 
+import os
+import shutil
 import signal
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from _support import Transcript, run_this_suite, signal_darwin_process
+from _support import (
+    FifoCheckpoint,
+    Transcript,
+    capture_darwin_process_identity,
+    kill_darwin_processes,
+    live_darwin_processes,
+    run_this_suite,
+    signal_darwin_process,
+)
 from cli._harness import (
     TIMEOUT,
+    _build_supervision_interposer,
     _cleanup,
     _command,
     _command_record,
@@ -17,10 +30,106 @@ from cli._harness import (
     _wait_for_cleanup,
     _wait_for_process_exit,
     _wait_for_process_state,
+    _wait_for_gated_root_and_manager,
 )
 
 
 PLATFORMS = {"darwin"}
+
+
+def test_owner_monitor_start_failure_preserves_temporary_directory(
+    binary: Path,
+) -> Transcript:
+    arguments = ("sandbox", "--", "python", "-c", "raise SystemExit(23)")
+
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        fixture_directory = Path(temporary_directory)
+        monitor_start_failed = FifoCheckpoint(
+            fixture_directory / "owner-monitor-start-failed"
+        )
+        monitor_start_release = FifoCheckpoint(
+            fixture_directory / "owner-monitor-start-release"
+        )
+        environment = os.environ.copy()
+        environment["DYLD_INSERT_LIBRARIES"] = str(
+            _build_supervision_interposer(
+                fixture_directory,
+                "owner-monitor-start-failure",
+            )
+        )
+        environment["MCP_CONSOLE_TEST_OWNER_MONITOR_START_FAILURE"] = str(
+            monitor_start_failed.path
+        )
+        environment["MCP_CONSOLE_TEST_OWNER_MONITOR_START_RELEASE"] = str(
+            monitor_start_release.path
+        )
+        environment["TMPDIR"] = str(fixture_directory)
+
+        process = subprocess.Popen(
+            [binary, *arguments],
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        assert process.stdout is not None
+        assert process.stderr is not None
+        identities = ()
+        monitor_start_released = False
+        sandbox_temporary_directory: Path | None = None
+        try:
+            monitor_start_failed.wait("owner manager-monitor start failure")
+            launcher = capture_darwin_process_identity(process.pid)
+            identities = _wait_for_gated_root_and_manager(launcher)
+            temporary_directories = list(
+                fixture_directory.glob(f"mcp-console-tmp-{process.pid}-*")
+            )
+            assert len(temporary_directories) == 1, temporary_directories
+            sandbox_temporary_directory = temporary_directories[0]
+
+            monitor_start_release.release()
+            monitor_start_released = True
+            returncode = process.wait(timeout=TIMEOUT)
+            stdout = process.stdout.read().decode("utf-8")
+            stderr = process.stderr.read().decode("utf-8")
+
+            assert returncode == 1, (returncode, stderr)
+            assert stdout == "", stdout
+            assert stderr == (
+                "failed to start sandbox manager monitor: "
+                "Resource temporarily unavailable (os error 35)\n"
+            ), stderr
+            assert live_darwin_processes(identities) == []
+            assert sandbox_temporary_directory.exists(), (
+                "monitor startup failure removed the sandbox temporary directory"
+            )
+            return [
+                {
+                    "command": _command(*arguments),
+                    "owner_checkpoint": "before manager-monitor creation",
+                    "manager_monitor_start": "EAGAIN",
+                },
+                {
+                    "launcher_returncode": returncode,
+                    "stdout": stdout,
+                    "stderr": stderr,
+                    "verified_cleanup": "gated sandbox root and manager",
+                    "verified_preservation": "sandbox temp",
+                },
+            ]
+        finally:
+            if not monitor_start_released:
+                monitor_start_release.release()
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=TIMEOUT)
+            kill_darwin_processes(identities)
+            if sandbox_temporary_directory is not None:
+                shutil.rmtree(sandbox_temporary_directory, ignore_errors=True)
+            for stream in (process.stdout, process.stderr):
+                if not stream.closed:
+                    stream.close()
+            monitor_start_failed.close()
+            monitor_start_release.close()
 
 
 def test_launcher_crash_retires_the_sandbox_lifetime(binary: Path) -> Transcript:
@@ -52,7 +161,7 @@ def test_launcher_crash_retires_the_sandbox_lifetime(binary: Path) -> Transcript
 def test_manager_crash_retires_the_sandbox_lifetime(binary: Path) -> Transcript:
     lifetime = _start_lifetime(binary)
     try:
-        assert signal_darwin_process(lifetime.manager, signal.SIGKILL), (
+        assert signal_darwin_process(lifetime.manager, signal.SIGTERM), (
             "manager exited before crash injection"
         )
         returncode = lifetime.process.wait(timeout=TIMEOUT)
@@ -70,7 +179,7 @@ def test_manager_crash_retires_the_sandbox_lifetime(binary: Path) -> Transcript:
         return [
             _command_record(lifetime),
             {
-                "manager_signal": "SIGKILL",
+                "manager_signal": "SIGTERM",
                 "launcher_returncode": returncode,
                 "verified_cleanup": "sandbox root, detached descendant, and manager",
                 "verified_preservation": "sandbox temp",

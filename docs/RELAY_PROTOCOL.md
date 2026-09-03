@@ -14,7 +14,7 @@ The server remains outside the sandbox.
 For each worker generation it starts `sandbox-exec` as the direct child.
 That root first runs a hidden wrapper blocked on a private startup gate.
 The host manager installs root, descendant, and control-socket observation and adopts the private directory before reporting readiness.
-After receiving readiness, the server relinquishes its duplicate directory guard, installs manager-failure recovery, and releases the wrapper; it closes the gate and replaces itself with the configured relay in the same process identity.
+After receiving readiness, the server installs manager-failure recovery, relinquishes its duplicate directory guard, and releases the wrapper; it closes the gate and replaces itself with the configured relay in the same process identity.
 The relay then starts the configured worker inside the same sandbox:
 
 ```text

@@ -14,16 +14,17 @@ Once observed, a descendant remains a cleanup target after changing process grou
 The manager also adopts the private temporary-directory guard for the lifetime.
 
 The host owner retains the manager process and direct sandbox root as waitable children.
-After the manager reports readiness, the owner relinquishes its duplicate temporary-directory guard and starts monitoring manager exit.
+After the manager reports readiness, the owner starts monitoring manager exit and relinquishes its duplicate temporary-directory guard.
 The manager's adopted guard is then the only directory-cleanup owner; owner-side fallback retains no directory-cleanup state.
 After readiness, the owner holds the control socket open only as the live-sandbox ownership token.
 The relay remains a transport and direct-worker owner, including local same-group cleanup; it does not own observed-descendant cleanup across process groups or sessions, or the private directory.
 
 ## Startup
 
-The host starts the manager before the sandbox root, then sends the owner PID, root PID, cleanup timeout, and private-directory path over a private inherited Unix socket.
+The host starts the sandbox root behind its private gate, then launches the manager with the root PID, cleanup timeout, and private-directory path as native command arguments.
+The manager derives the owner PID from its parent, while the private inherited Unix socket carries readiness and then remains open as the ownership token.
 The manager validates the direct-child relationship and exact root identity, installs root and descendant tracking plus control-socket observation, adopts the directory guard, and reports readiness.
-After receiving readiness, the host relinquishes its duplicate guard, installs manager-failure recovery while the direct root remains live and waitable, and writes one release byte.
+After receiving readiness, the host installs manager-failure recovery while the direct root remains live and waitable, relinquishes its duplicate guard, and writes one release byte.
 The hidden wrapper closes the channel and replaces itself with the configured relay or requested command in the same process identity.
 Configured sandbox code therefore cannot run before manager observation is active and failure recovery is installed.
 The manager control socket carries no messages after readiness; it remains open only as an ownership token, and owner EOF requests retirement.

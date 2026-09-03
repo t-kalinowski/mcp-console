@@ -20,6 +20,10 @@ mod standalone;
 pub(crate) use self::manager::SandboxManager;
 pub(super) use self::standalone::status;
 
-pub(super) fn run_manager() -> Result<(), String> {
-    manager::run()
+pub(super) fn run_manager(
+    root_pid: u32,
+    cleanup_timeout_millis: u64,
+    temporary_directory: std::path::PathBuf,
+) -> Result<(), String> {
+    manager::run(root_pid, cleanup_timeout_millis, temporary_directory)
 }

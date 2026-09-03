@@ -9,9 +9,10 @@ use super::{MANAGER_CLEANUP_TIMEOUT, platform, supervision};
 impl SandboxedCommand {
     /// Spawns a hidden gated root under one host-side lifetime manager.
     ///
-    /// The manager starts before the root, adopts descendant observation and
-    /// the private directory, and installs manager-failure recovery before the
-    /// root is released into either the built-in or a configured relay.
+    /// The root starts behind its private gate. The manager then adopts
+    /// descendant observation and the private directory and installs
+    /// manager-failure recovery before the root is released into either the
+    /// built-in or a configured relay.
     pub(crate) fn spawn(mut self) -> Result<SandboxedChild, String> {
         let mut startup_gate = self
             .startup_gate
@@ -20,20 +21,24 @@ impl SandboxedCommand {
         self.command
             .env("TMPDIR", self.temporary_directory.path())
             .process_group(0);
-        let mut manager = supervision::SandboxManager::spawn(MANAGER_CLEANUP_TIMEOUT)?;
         let mut child = self
             .command
             .spawn()
             .map_err(|error| format!("failed to launch `{}`: {error}", platform::SANDBOX_EXEC))?;
         startup_gate.child_spawned();
 
-        if let Err(error) = manager.observe(child.id(), self.temporary_directory.path()) {
-            self.temporary_directory.preserve();
-            drop(startup_gate);
-            drop(manager);
-            return Err(terminate_unmanaged_child(&mut child, error).error);
-        }
-        manager.monitor(child.id(), self.temporary_directory);
+        let manager = match supervision::SandboxManager::start(
+            child.id(),
+            &mut self.temporary_directory,
+            MANAGER_CLEANUP_TIMEOUT,
+        ) {
+            Ok(manager) => manager,
+            Err(error) => {
+                self.temporary_directory.preserve();
+                drop(startup_gate);
+                return Err(terminate_unmanaged_child(&mut child, error).error);
+            }
+        };
         if let Err(error) = startup_gate.release() {
             let manager_error = manager.retire().err();
             return Err(finish_failed_startup(&mut child, error, manager_error));

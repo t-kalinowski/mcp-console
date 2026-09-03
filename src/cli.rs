@@ -58,7 +58,19 @@ pub enum Command {
 
     /// Run the internal sandbox lifetime manager
     #[command(hide = true)]
-    SandboxManager,
+    SandboxManager {
+        /// Direct sandbox root to supervise
+        #[arg(long, value_name = "PID")]
+        root_pid: u32,
+
+        /// Maximum process-cleanup interval
+        #[arg(long, value_name = "MILLISECONDS")]
+        cleanup_timeout_millis: u64,
+
+        /// Private directory owned by the sandbox lifetime
+        #[arg(long, value_name = "PATH")]
+        temporary_directory: PathBuf,
+    },
 
     /// Hold a sandbox target until host supervision is ready
     #[command(hide = true)]

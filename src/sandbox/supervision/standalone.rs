@@ -14,11 +14,10 @@ const ROOT_STOP_TIMEOUT: Duration = Duration::from_secs(1);
 
 pub(in crate::sandbox) fn status(
     mut sandbox_command: Command,
-    temporary_directory: platform::TemporaryDirectory,
+    mut temporary_directory: platform::TemporaryDirectory,
     target_gate: UnixStream,
     mut launcher_gate: UnixStream,
 ) -> Result<ExitCode, String> {
-    let mut manager = SandboxManager::spawn(Duration::from_secs(5))?;
     let signal_relay = SignalRelay::install()?;
     let mut foreground_terminal = ForegroundTerminal::detect()?;
     signal_relay.configure_child(&mut sandbox_command, foreground_terminal.descriptor());
@@ -44,7 +43,6 @@ pub(in crate::sandbox) fn status(
             if let Err(terminal_error) = foreground_terminal.restore() {
                 error = additional_error(error, terminal_error);
             }
-            drop(manager);
             if let Err(signal_error) = signal_relay.drain_pending_and_restore() {
                 error = additional_error(error, signal_error);
             }
@@ -53,26 +51,30 @@ pub(in crate::sandbox) fn status(
         }
     };
 
-    if let Err(error) = manager.observe(child.id(), temporary_directory.path()) {
-        preserve(temporary_directory);
-        let root_result = terminate_standalone_root(&mut child, ROOT_STOP_TIMEOUT);
-        let mut error = match root_result {
-            Ok(_) => error,
-            Err(kill_error) => additional_error(error, kill_error),
-        };
-        if let Err(terminal_error) = foreground_terminal.restore() {
-            error = additional_error(error, terminal_error);
+    let manager = match SandboxManager::start_for_standalone(
+        child.id(),
+        &mut temporary_directory,
+        Duration::from_secs(5),
+        &signal_relay,
+        root_waiter.wakeup(),
+    ) {
+        Ok(manager) => manager,
+        Err(error) => {
+            preserve(temporary_directory);
+            let root_result = terminate_standalone_root(&mut child, ROOT_STOP_TIMEOUT);
+            let mut error = match root_result {
+                Ok(_) => error,
+                Err(kill_error) => additional_error(error, kill_error),
+            };
+            if let Err(terminal_error) = foreground_terminal.restore() {
+                error = additional_error(error, terminal_error);
+            }
+            if let Err(signal_error) = signal_relay.drain_pending_and_restore() {
+                error = additional_error(error, signal_error);
+            }
+            return Err(error);
         }
-        if let Err(manager_error) = manager.retire() {
-            error = additional_error(error, manager_error);
-        }
-        if let Err(signal_error) = signal_relay.drain_pending_and_restore() {
-            error = additional_error(error, signal_error);
-        }
-        return Err(error);
-    }
-
-    manager.monitor_for_standalone(child.id(), temporary_directory, root_waiter.wakeup());
+    };
     if let Err(write_error) = launcher_gate.write_all(&[TARGET_GATE_RELEASE])
         && write_error.kind() != ErrorKind::BrokenPipe
     {
