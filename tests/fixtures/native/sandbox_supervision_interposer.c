@@ -17,6 +17,21 @@
     || defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP)
 static _Atomic int denied_sigkill = 0;
 #endif
+#if defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_REUSED_IDENTITY) \
+    || defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_EXIT_RACE)
+#define MCP_CONSOLE_INTERPOSE_RETIREMENT_IDENTITY 1
+static _Atomic pid_t retirement_root = 0;
+static _Atomic pid_t retirement_descendant = 0;
+static _Atomic int retirement_descendant_observed = 0;
+static _Atomic int retirement_root_exited = 0;
+static _Atomic int retirement_descendant_snapshotted = 0;
+#endif
+#if defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_REUSED_IDENTITY)
+static _Atomic int retirement_identity_changed = 0;
+#endif
+#if defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_EXIT_RACE)
+static _Atomic int retirement_signal_gated = 0;
+#endif
 #if defined(MCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE)
 static _Atomic int manager_group_stop_started = 0;
 static _Atomic int manager_root_stop_reported = 0;
@@ -57,7 +72,8 @@ static _Atomic int failed_root_identity_recheck = 0;
     || defined(MCP_CONSOLE_INTERPOSE_FAILED_ROOT_OBSERVER) \
     || defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP) \
     || defined(MCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE) \
-    || defined(MCP_CONSOLE_INTERPOSE_OWNER_MONITOR_START_FAILURE)
+    || defined(MCP_CONSOLE_INTERPOSE_OWNER_MONITOR_START_FAILURE) \
+    || defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_EXIT_RACE)
 typedef int (*kill_function)(pid_t, int);
 
 static kill_function next_kill(void) {
@@ -77,7 +93,8 @@ static killpg_function next_killpg(void) {
 
 #if defined(MCP_CONSOLE_INTERPOSE_FAILED_RECOVERY_STOP) \
     || defined(MCP_CONSOLE_INTERPOSE_FAILED_ROOT_OBSERVER) \
-    || defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP)
+    || defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP) \
+    || defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_REUSED_IDENTITY)
 typedef int (*proc_pidinfo_function)(int, int, uint64_t, void *, int);
 
 static proc_pidinfo_function next_proc_pidinfo(void) {
@@ -86,7 +103,8 @@ static proc_pidinfo_function next_proc_pidinfo(void) {
 #endif
 
 #if defined(MCP_CONSOLE_INTERPOSE_FAILED_ROOT_OBSERVER) \
-    || defined(MCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE)
+    || defined(MCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE) \
+    || defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_IDENTITY)
 typedef int (*kevent_function)(
     int,
     const struct kevent *,
@@ -98,6 +116,14 @@ typedef int (*kevent_function)(
 
 static kevent_function next_kevent(void) {
     return kevent;
+}
+#endif
+
+#if defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_IDENTITY)
+typedef int (*proc_listchildpids_function)(pid_t, void *, int);
+
+static proc_listchildpids_function next_proc_listchildpids(void) {
+    return proc_listchildpids;
 }
 #endif
 
@@ -199,7 +225,8 @@ static void signal_checkpoint(const char *name) {
     || defined(MCP_CONSOLE_INTERPOSE_OWNER_MONITOR_START_FAILURE) \
     || defined(MCP_CONSOLE_INTERPOSE_FAILED_RECOVERY_STOP) \
     || defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP) \
-    || defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_CLEANUP)
+    || defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_CLEANUP) \
+    || defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_EXIT_RACE)
 static void wait_for_release(const char *name) {
     const char *release = getenv(name);
     if (release == NULL) {
@@ -268,11 +295,133 @@ static int gate_recovery_root_stop(pid_t process_id, int number) {
     || defined(MCP_CONSOLE_INTERPOSE_OWNER_MONITOR_START_FAILURE) \
     || defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP) \
     || defined(MCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE) \
-    || defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_CLEANUP)
+    || defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_CLEANUP) \
+    || defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_IDENTITY)
 static int is_subcommand(const char *name) {
     int argc = *_NSGetArgc();
     char **argv = *_NSGetArgv();
     return argc > 1 && strcmp(argv[1], name) == 0;
+}
+#endif
+
+#if defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_IDENTITY)
+static int observe_retirement_processes(
+    int descriptor,
+    const struct kevent *changes,
+    int change_count,
+    struct kevent *events,
+    int event_count,
+    const struct timespec *timeout
+) {
+    if (is_subcommand("sandbox-manager")
+        && changes == NULL
+        && change_count == 0
+        && events != NULL
+        && event_count > 0
+        && timeout == NULL
+        && atomic_load(&retirement_descendant) != 0
+        && atomic_exchange(&retirement_descendant_observed, 1) == 0) {
+        signal_checkpoint("MCP_CONSOLE_TEST_RETIREMENT_DESCENDANT_OBSERVED");
+    }
+
+    int result = next_kevent()(
+        descriptor,
+        changes,
+        change_count,
+        events,
+        event_count,
+        timeout
+    );
+    if (result < 0 || !is_subcommand("sandbox-manager")) {
+        return result;
+    }
+
+    if (changes != NULL
+        && change_count == 1
+        && changes[0].filter == EVFILT_PROC
+        && (changes[0].flags & EV_ADD) != 0
+        && (changes[0].fflags & NOTE_EXIT) != 0) {
+        pid_t process_id = (pid_t)changes[0].ident;
+        pid_t root = atomic_load(&retirement_root);
+        if (root == 0) {
+            atomic_store(&retirement_root, process_id);
+        } else if (process_id != root
+            && atomic_load(&retirement_descendant) == 0) {
+            atomic_store(&retirement_descendant, process_id);
+        }
+    }
+
+    if (events != NULL) {
+        pid_t root = atomic_load(&retirement_root);
+        for (int index = 0; index < result; index++) {
+            if (events[index].filter == EVFILT_PROC
+                && (pid_t)events[index].ident == root
+                && (events[index].fflags & NOTE_EXIT) != 0) {
+                atomic_store(&retirement_root_exited, 1);
+            }
+        }
+    }
+    return result;
+}
+
+static int observe_retirement_child_snapshot(
+    pid_t process_id,
+    void *buffer,
+    int buffer_size
+) {
+    int result = next_proc_listchildpids()(process_id, buffer, buffer_size);
+    if (is_subcommand("sandbox-manager")
+        && atomic_load(&retirement_root_exited) != 0
+        && process_id == atomic_load(&retirement_descendant)) {
+        atomic_store(&retirement_descendant_snapshotted, 1);
+    }
+    return result;
+}
+#endif
+
+#if defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_REUSED_IDENTITY)
+static int reuse_retirement_descendant_identity(
+    int process_id,
+    int flavor,
+    uint64_t argument,
+    void *buffer,
+    int buffer_size
+) {
+    int result = next_proc_pidinfo()(
+        process_id,
+        flavor,
+        argument,
+        buffer,
+        buffer_size
+    );
+    if (result == (int)sizeof(struct proc_bsdinfo)
+        && flavor == PROC_PIDTBSDINFO
+        && is_subcommand("sandbox-manager")
+        && atomic_load(&retirement_descendant_snapshotted) != 0
+        && process_id == atomic_load(&retirement_descendant)) {
+        struct proc_bsdinfo *info = buffer;
+        info->pbi_start_tvusec ^= 1;
+        if (atomic_exchange(&retirement_identity_changed, 1) == 0) {
+            signal_checkpoint("MCP_CONSOLE_TEST_RETIREMENT_IDENTITY_CHANGED");
+        }
+    }
+    return result;
+}
+#endif
+
+#if defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_EXIT_RACE)
+static int race_retirement_descendant_exit(pid_t process_id, int number) {
+    if (number == SIGKILL
+        && is_subcommand("sandbox-manager")
+        && atomic_load(&retirement_descendant_snapshotted) != 0
+        && process_id == atomic_load(&retirement_descendant)
+        && atomic_exchange(&retirement_signal_gated, 1) == 0) {
+        signal_checkpoint("MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_GATE");
+        wait_for_release("MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_RELEASE");
+        errno = ESRCH;
+        return -1;
+    }
+    return next_kill()(process_id, number);
 }
 #endif
 
@@ -283,7 +432,8 @@ static void configure_interposer(void) {
     || defined(MCP_CONSOLE_INTERPOSE_OWNER_MONITOR_START_FAILURE) \
     || defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP) \
     || defined(MCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE) \
-    || defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_CLEANUP)
+    || defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_CLEANUP) \
+    || defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_IDENTITY)
     if (!is_subcommand("sandbox-manager") && !is_subcommand("sandbox")) {
         unsetenv("DYLD_INSERT_LIBRARIES");
     }
@@ -587,4 +737,12 @@ DYLD_INTERPOSE(gate_root_reap, waitpid)
 DYLD_INTERPOSE(delay_late_recovery, proc_pidinfo)
 #elif defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_CLEANUP)
 DYLD_INTERPOSE(gate_manager_group_cleanup, killpg)
+#elif defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_REUSED_IDENTITY)
+DYLD_INTERPOSE(observe_retirement_processes, kevent)
+DYLD_INTERPOSE(observe_retirement_child_snapshot, proc_listchildpids)
+DYLD_INTERPOSE(reuse_retirement_descendant_identity, proc_pidinfo)
+#elif defined(MCP_CONSOLE_INTERPOSE_RETIREMENT_EXIT_RACE)
+DYLD_INTERPOSE(observe_retirement_processes, kevent)
+DYLD_INTERPOSE(observe_retirement_child_snapshot, proc_listchildpids)
+DYLD_INTERPOSE(race_retirement_descendant_exit, kill)
 #endif
