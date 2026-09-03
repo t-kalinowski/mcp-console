@@ -1,25 +1,21 @@
 #!/usr/bin/env -S uv run --script
 
+import json
+import os
+import select
+import signal
+import subprocess
 import sys
+import tempfile
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from _support import Transcript, code, run_this_suite
 from relay_worker._harness import (
-    Path,
     RelayWorkerClient,
-    Transcript,
     _tool_text,
-    code,
-    json,
-    os,
-    run_this_suite,
-    select,
-    signal,
-    subprocess,
-    sys,
-    tempfile,
-    time,
 )
 
 

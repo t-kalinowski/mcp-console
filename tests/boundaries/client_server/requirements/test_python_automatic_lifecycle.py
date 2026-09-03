@@ -1,8 +1,5 @@
 #!/usr/bin/env -S uv run --script
 
-import json
-import os
-import shutil
 import signal
 import sys
 import tempfile
@@ -18,14 +15,11 @@ from _support import (
     checkpoint_uv_environment,
     code,
     normalize_python_resolution_error,
-    normalize_python_traceback_paths,
     run_this_suite,
     stop_client,
 )
 
 PLATFORMS = {"darwin"}
-PENDING_TEXT_BUDGET = 8 * 1024 * 1024
-
 
 from client_server._harness import (
     initialize_python_and_record_baseline,

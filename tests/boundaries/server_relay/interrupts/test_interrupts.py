@@ -1,10 +1,12 @@
 #!/usr/bin/env -S uv run --script
 
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from _support import Transcript, run_this_suite, stop_client
 from server_relay._harness import (
     CAPTURE_NAME,
     CONTROLLED_COMPLETION_RELEASE_NAME,
@@ -18,17 +20,11 @@ from server_relay._harness import (
     PREPARATION_RECEIVED_NAME,
     PREPARATION_RESULT_RELEASE_NAME,
     PREPARATION_RESULT_SENT_NAME,
-    Path,
     ServerRelayClient,
-    Transcript,
     _fake_ir_environment,
     _ordered_input_barrier,
     _tool_text,
     _wait_for_recorded_tool_result,
-    run_this_suite,
-    stop_client,
-    sys,
-    tempfile,
 )
 
 

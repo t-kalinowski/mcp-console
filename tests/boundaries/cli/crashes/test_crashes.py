@@ -1,14 +1,14 @@
 #!/usr/bin/env -S uv run --script
 
+import signal
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from _support import Transcript, run_this_suite, signal_darwin_process
 from cli._harness import (
-    Path,
     TIMEOUT,
-    Transcript,
     _cleanup,
     _command,
     _command_record,
@@ -17,10 +17,6 @@ from cli._harness import (
     _wait_for_cleanup,
     _wait_for_process_exit,
     _wait_for_process_state,
-    run_this_suite,
-    signal,
-    signal_darwin_process,
-    sys,
 )
 
 

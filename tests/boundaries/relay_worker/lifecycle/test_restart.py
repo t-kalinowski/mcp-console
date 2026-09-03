@@ -5,14 +5,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from _support import Transcript, code, run_this_suite
 from relay_worker._harness import (
-    Path,
     RelayWorkerClient,
-    Transcript,
     _tool_text,
-    code,
-    run_this_suite,
-    sys,
 )
 
 

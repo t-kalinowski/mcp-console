@@ -63,7 +63,7 @@ class ProgressQueue(Protocol):
 def suite_identifier(suite_path: Path) -> str:
     relative = suite_path.relative_to(directory).with_suffix("")
     assert len(relative.parts) >= 2 and relative.parts[0] in boundaries, (
-        f"{suite_path.relative_to(root)} is not under a transcript boundary"
+        f"{suite_path.relative_to(root)} is not under a test boundary"
     )
     return relative.as_posix()
 
