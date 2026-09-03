@@ -150,10 +150,12 @@ It does not implement stopped/continued job state or general shell-pipeline job 
 The sandbox manager owns primary observed-descendant cleanup for one committed sandbox lifetime.
 It records descendants by PID and process start time, validates the exact root identity, and adopts the private temporary-directory path.
 It retires only identities its tracker observed, uses the still-pinned root process group as a race backstop, and removes the directory only after successful cleanup.
+Its single thread uses one `kqueue` for descendant and root events plus control-socket readability.
 It does not own session state, operation admission, relay transport, command exit status, or terminal semantics.
 
 After commitment, owner EOF requests retirement.
-The manager decides from the observed root state whether it must stop the root, retires the observed lifetime, applies the process-group backstop, and removes the directory only after complete success.
+Natural root exit first retires the observed lifetime and then applies the process-group backstop; owner EOF with a live root applies the backstop and stops the root before draining observed descendants.
+After clean natural-root cleanup, the manager waits for owner EOF before removing the directory and exiting.
 A successful manager exit is the primary cleanup barrier for the owner.
 If the manager itself fails while its owner retains a live, waitable root, the owner monitor reconstructs the root's current ancestry and performs bounded process cleanup.
 That fallback has no directory-cleanup state, so the directory remains if the manager exits before completing its own cleanup and removal.

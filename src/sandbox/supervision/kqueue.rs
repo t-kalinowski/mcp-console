@@ -1,5 +1,5 @@
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 use std::time::Duration;
 
 const EVENT_CAPACITY: usize = 32;
@@ -7,10 +7,6 @@ const EVENT_CAPACITY: usize = 32;
 #[derive(Clone)]
 pub(super) struct Kqueue {
     descriptor: Arc<OwnedFd>,
-}
-
-pub(super) struct WeakKqueue {
-    descriptor: Weak<OwnedFd>,
 }
 
 pub(super) enum KqueueWait {
@@ -38,12 +34,6 @@ impl Kqueue {
         })
     }
 
-    pub(super) fn downgrade(&self) -> WeakKqueue {
-        WeakKqueue {
-            descriptor: Arc::downgrade(&self.descriptor),
-        }
-    }
-
     pub(super) fn watch_process(
         &self,
         pid: libc::pid_t,
@@ -59,6 +49,20 @@ impl Kqueue {
 
     pub(super) fn remove_process_watch(&self, pid: libc::pid_t) {
         let event = process_event(pid, libc::EV_DELETE, 0);
+        let _ = submit_events(self.descriptor.as_raw_fd(), std::slice::from_ref(&event));
+    }
+
+    pub(super) fn watch_read(
+        &self,
+        descriptor: libc::c_int,
+        description: &str,
+    ) -> Result<(), String> {
+        let event = read_event(descriptor, libc::EV_ADD | libc::EV_CLEAR);
+        self.submit(std::slice::from_ref(&event), description)
+    }
+
+    pub(super) fn remove_read_watch(&self, descriptor: libc::c_int) {
+        let event = read_event(descriptor, libc::EV_DELETE);
         let _ = submit_events(self.descriptor.as_raw_fd(), std::slice::from_ref(&event));
     }
 
@@ -145,21 +149,6 @@ impl Kqueue {
     }
 }
 
-impl WeakKqueue {
-    pub(super) fn trigger_user(
-        self,
-        ident: libc::uintptr_t,
-        description: &str,
-    ) -> Result<(), String> {
-        let Some(descriptor) = self.descriptor.upgrade() else {
-            return Ok(());
-        };
-        let event = user_event(ident, 0, libc::NOTE_TRIGGER);
-        submit_events(descriptor.as_raw_fd(), std::slice::from_ref(&event))
-            .map_err(|error| format!("{description}: {error}"))
-    }
-}
-
 fn submit_events(descriptor: libc::c_int, events: &[libc::kevent]) -> std::io::Result<()> {
     if events.is_empty() {
         return Ok(());
@@ -191,6 +180,17 @@ fn process_event(pid: libc::pid_t, flags: u16, fflags: u32) -> libc::kevent {
         filter: libc::EVFILT_PROC,
         flags,
         fflags,
+        data: 0,
+        udata: std::ptr::null_mut(),
+    }
+}
+
+fn read_event(descriptor: libc::c_int, flags: u16) -> libc::kevent {
+    libc::kevent {
+        ident: descriptor as libc::uintptr_t,
+        filter: libc::EVFILT_READ,
+        flags,
+        fflags: 0,
         data: 0,
         udata: std::ptr::null_mut(),
     }

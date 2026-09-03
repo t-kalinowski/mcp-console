@@ -203,6 +203,7 @@ After a normal relay exit, it waits for observed-tree cleanup and then closes th
 On forced retirement or server loss, it instead closes the group while the root identity is still available, signals the exact recorded relay, and then waits for observed-tree cleanup.
 It adopts a private temporary-directory guard and removes the directory only after both cleanup steps succeed; a cleanup failure preserves the directory.
 If the relay exits or crashes, the manager treats root exit as retirement of the remaining observed lifetime.
+The manager receives process events and control readability through one `kqueue`; after clean root-exit cleanup, it waits for owner EOF before removing the directory and exiting.
 After commitment, the manager channel carries no further messages.
 Whether the server requests retirement or exits, owner-channel EOF asks the manager to decide whether the relay root must be stopped and complete cleanup independently.
 If the manager exits unsuccessfully after readiness while the server still owns a live, waitable relay root, including during the commit acknowledgement, the server reconstructs bounded tracking from that root's current process tree and completes process cleanup before replacement.

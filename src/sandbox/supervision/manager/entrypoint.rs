@@ -1,15 +1,11 @@
 use super::super::process::{ProcessIdentity, process_info, signal_process};
-use super::super::process_tracker::{DescendantTracker, TrackerStopWakeup};
+use super::super::process_tracker::{DescendantTracker, EventWait};
 use super::{protocol, stop_process_group, with_prior_error};
 use crate::sandbox::platform;
 use std::io::{ErrorKind, Read, Write};
-use std::net::Shutdown;
-use std::os::fd::FromRawFd;
+use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::net::UnixStream;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
-
-type GroupBackstop = Mutex<bool>;
 
 pub(super) fn run() -> Result<(), String> {
     // SAFETY: the owner transfers its private control socket as the manager's
@@ -37,7 +33,7 @@ pub(super) fn run() -> Result<(), String> {
         ));
     }
 
-    let tracker =
+    let mut tracker =
         DescendantTracker::start(root_pid).map_err(|failure| failure.retire(cleanup_timeout))?;
     let temporary_directory = platform::TemporaryDirectory::adopt(temporary_directory, owner_pid)?;
     let root = info.identity;
@@ -72,86 +68,84 @@ pub(super) fn run() -> Result<(), String> {
         );
     }
 
-    let tracker_control = match stream.try_clone() {
-        Ok(control) => control,
-        Err(error) => {
-            return finish_startup_failure(
-                format!("failed to monitor sandbox manager control: {error}"),
-                root,
-                tracker,
-                temporary_directory,
-                cleanup_timeout,
-            );
-        }
-    };
-    let group_backstop = Arc::new(GroupBackstop::new(false));
-    let tracker_group_backstop = Arc::clone(&group_backstop);
-    let tracker_stop_wakeup = match tracker.stop_wakeup() {
-        Ok(wakeup) => wakeup,
-        Err(error) => {
-            return finish_startup_failure(
-                error,
-                root,
-                tracker,
-                temporary_directory,
-                cleanup_timeout,
-            );
-        }
-    };
-    let tracker_thread = std::thread::spawn(move || {
-        supervise_tracker(
-            tracker,
-            cleanup_timeout,
-            root,
-            tracker_control,
-            tracker_group_backstop,
-        )
-    });
+    if let Err(error) = tracker.watch_control(stream.as_raw_fd()) {
+        return finish_startup_failure(error, root, tracker, temporary_directory, cleanup_timeout);
+    }
     if let Err(error) = stream.write_all(&[protocol::COMMITTED]) {
-        return finish_committed_startup_failure(
+        tracker.remove_control_watch();
+        return finish_startup_failure(
             format!("failed to confirm sandbox manager ownership: {error}"),
             root,
-            &stream,
-            tracker_stop_wakeup,
-            tracker_thread,
-            &group_backstop,
+            tracker,
             temporary_directory,
+            cleanup_timeout,
         );
     }
-    let mut control = [0];
-    let mut error = loop {
-        match stream.read(&mut control) {
-            Ok(0) => break None,
-            Ok(_) => {
-                break Some("sandbox manager received data after ownership commitment".to_string());
-            }
-            Err(read_error) if read_error.kind() == ErrorKind::Interrupted => {}
-            Err(read_error) => {
-                break Some(format!("sandbox manager control failed: {read_error}"));
-            }
+
+    let observation = observe_lifetime(&mut stream, &mut tracker);
+    tracker.remove_control_watch();
+    let result = match observation {
+        Ok(Retirement::RootExited(control_error)) => {
+            finish_root_exit(root, tracker, cleanup_timeout, control_error)
+                .and_then(|()| read_owner_control(&mut stream))
         }
+        Ok(Retirement::OwnerLost(control_error)) => {
+            finish_owner_loss(root, tracker, cleanup_timeout, control_error)
+        }
+        Err(error) => finish_observation_failure(error, root, tracker, cleanup_timeout),
     };
-    let root_exit_expected =
-        request_root_stop(root, run_group_backstop(root, &group_backstop), &mut error)
-            .root_exit_expected;
-    let tracker_result = if root_exit_expected {
-        drop(tracker_stop_wakeup);
-        join_tracker(tracker_thread)
-    } else {
-        stop_tracker(tracker_stop_wakeup, tracker_thread)
-    };
-    if let Err(tracker_error) = tracker_result {
-        error = Some(with_prior_error(error, tracker_error));
-    }
-    if let Err(group_error) = run_group_backstop(root, &group_backstop) {
-        error = Some(with_prior_error(error, group_error));
-    }
-    if error.is_some() {
+    if result.is_err() {
         temporary_directory.preserve();
     } else {
         temporary_directory.remove();
     }
-    error.map_or(Ok(()), Err)
+    result
+}
+
+enum Retirement {
+    OwnerLost(Option<String>),
+    RootExited(Option<String>),
+}
+
+fn observe_lifetime(
+    stream: &mut UnixStream,
+    tracker: &mut DescendantTracker,
+) -> Result<Retirement, String> {
+    loop {
+        if tracker.root_has_exited()? {
+            return Ok(Retirement::RootExited(None));
+        }
+        match tracker.wait_for_events(None)? {
+            EventWait::Events(events) => {
+                let control_error = if events.control_readable {
+                    read_owner_control(stream).err()
+                } else {
+                    None
+                };
+                if events.root_exited || events.control_readable && tracker.root_has_exited()? {
+                    return Ok(Retirement::RootExited(control_error));
+                }
+                if events.control_readable {
+                    return Ok(Retirement::OwnerLost(control_error));
+                }
+            }
+            EventWait::TimedOut => {}
+        }
+    }
+}
+
+fn read_owner_control(stream: &mut UnixStream) -> Result<(), String> {
+    let mut control = [0];
+    loop {
+        match stream.read(&mut control) {
+            Ok(0) => return Ok(()),
+            Ok(_) => {
+                return Err("sandbox manager received data after ownership commitment".to_string());
+            }
+            Err(error) if error.kind() == ErrorKind::Interrupted => {}
+            Err(error) => return Err(format!("sandbox manager control failed: {error}")),
+        }
+    }
 }
 
 fn finish_startup_failure(
@@ -181,66 +175,61 @@ fn finish_startup_failure(
     Err(error.expect("startup failure should retain its error"))
 }
 
-fn supervise_tracker(
+fn finish_root_exit(
+    root: ProcessIdentity,
     tracker: DescendantTracker,
     cleanup_timeout: Duration,
-    root: ProcessIdentity,
-    control: UnixStream,
-    group_backstop: Arc<GroupBackstop>,
+    mut error: Option<String>,
 ) -> Result<(), String> {
-    let mut error = tracker.supervise(cleanup_timeout).err();
-    if let Err(group_error) = run_group_backstop(root, &group_backstop) {
+    if let Err(cleanup_error) = tracker.terminate(true, cleanup_timeout) {
+        error = Some(with_prior_error(error, cleanup_error));
+    }
+    if let Err(group_error) = stop_process_group(root) {
         error = Some(with_prior_error(error, group_error));
     }
-    let Some(mut error) = error else {
-        return Ok(());
-    };
-    if let Err(signal_error) = signal_process(root, libc::SIGKILL) {
-        error = with_prior_error(Some(error), signal_error);
+    if error.is_some()
+        && let Err(signal_error) = signal_process(root, libc::SIGKILL)
+    {
+        error = Some(with_prior_error(error, signal_error));
     }
-    if let Err(control_error) = control.shutdown(Shutdown::Both) {
-        error = with_prior_error(
-            Some(error),
-            format!("failed to close sandbox manager control: {control_error}"),
-        );
-    }
-    Err(error)
+    error.map_or(Ok(()), Err)
 }
 
-fn finish_committed_startup_failure(
-    error: String,
+fn finish_owner_loss(
     root: ProcessIdentity,
-    control: &UnixStream,
-    tracker_stop_wakeup: TrackerStopWakeup,
-    tracker_thread: std::thread::JoinHandle<Result<(), String>>,
-    group_backstop: &GroupBackstop,
-    temporary_directory: platform::TemporaryDirectory,
+    tracker: DescendantTracker,
+    cleanup_timeout: Duration,
+    mut error: Option<String>,
 ) -> Result<(), String> {
-    let mut error = Some(error);
-    let stop = request_root_stop(root, run_group_backstop(root, group_backstop), &mut error);
-    let mut cleanup_failed = stop.group_cleanup_failed || !stop.root_exit_expected;
-    if let Err(control_error) = control.shutdown(Shutdown::Both) {
-        error = Some(with_prior_error(
-            error,
-            format!("failed to close sandbox manager control: {control_error}"),
-        ));
-    }
+    let stop = request_root_stop(root, stop_process_group(root), &mut error);
     let tracker_result = if stop.root_exit_expected {
-        drop(tracker_stop_wakeup);
-        join_tracker(tracker_thread)
+        tracker.supervise(cleanup_timeout)
     } else {
-        stop_tracker(tracker_stop_wakeup, tracker_thread)
+        tracker.stop(cleanup_timeout)
     };
     if let Err(cleanup_error) = tracker_result {
         error = Some(with_prior_error(error, cleanup_error));
-        cleanup_failed = true;
     }
-    if cleanup_failed {
-        temporary_directory.preserve();
-    } else {
-        temporary_directory.remove();
+    error.map_or(Ok(()), Err)
+}
+
+fn finish_observation_failure(
+    observation_error: String,
+    root: ProcessIdentity,
+    tracker: DescendantTracker,
+    cleanup_timeout: Duration,
+) -> Result<(), String> {
+    let mut error = Some(observation_error);
+    if let Err(cleanup_error) = tracker.terminate(false, cleanup_timeout) {
+        error = Some(with_prior_error(error, cleanup_error));
     }
-    Err(error.expect("committed startup failure should retain its error"))
+    if let Err(group_error) = stop_process_group(root) {
+        error = Some(with_prior_error(error, group_error));
+    }
+    if let Err(signal_error) = signal_process(root, libc::SIGKILL) {
+        error = Some(with_prior_error(error, signal_error));
+    }
+    Err(error.expect("observation failure should retain its error"))
 }
 
 struct RootStop {
@@ -271,32 +260,4 @@ fn request_root_stop(
         root_exit_expected: !root_signal_failed,
         group_cleanup_failed,
     }
-}
-
-fn run_group_backstop(root: ProcessIdentity, group_backstop: &GroupBackstop) -> Result<(), String> {
-    // Tracker completion and owner loss can race. The first caller propagates
-    // failure from its validated root; do not retry across that identity boundary.
-    let mut started = group_backstop
-        .lock()
-        .map_err(|_| "sandbox manager group backstop state was poisoned".to_string())?;
-    if *started {
-        return Ok(());
-    }
-    *started = true;
-    stop_process_group(root)
-}
-
-fn join_tracker(tracker_thread: std::thread::JoinHandle<Result<(), String>>) -> Result<(), String> {
-    tracker_thread
-        .join()
-        .map_err(|_| "sandbox manager process tracker failed".to_string())
-        .and_then(|result| result)
-}
-
-fn stop_tracker(
-    tracker_stop_wakeup: TrackerStopWakeup,
-    tracker_thread: std::thread::JoinHandle<Result<(), String>>,
-) -> Result<(), String> {
-    tracker_stop_wakeup.wake()?;
-    join_tracker(tracker_thread)
 }
