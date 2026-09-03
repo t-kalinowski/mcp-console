@@ -795,7 +795,7 @@ def _wait_for_process_state(
 
 def _wait_for_manager_readiness(lifetime: _SandboxLifetime) -> None:
     # SandboxManager starts its launcher-side monitor thread only after the
-    # manager's readiness byte has been received. This is a causal commitment
+    # manager's readiness byte has been received. This is a causal readiness
     # checkpoint, unlike sleeping after discovering the manager process.
     deadline = time.monotonic() + TIMEOUT
     while True:

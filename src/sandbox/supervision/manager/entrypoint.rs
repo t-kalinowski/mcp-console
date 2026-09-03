@@ -22,7 +22,7 @@ pub(super) fn run() -> Result<(), String> {
     let parent_pid = unsafe { libc::getppid() };
     if parent_pid != owner_pid {
         return Err(format!(
-            "sandbox manager owner changed before commitment: expected {owner_pid}, found {parent_pid}"
+            "sandbox manager owner changed before readiness: expected {owner_pid}, found {parent_pid}"
         ));
     }
     let info = process_info(root_pid)?
@@ -38,43 +38,13 @@ pub(super) fn run() -> Result<(), String> {
     let temporary_directory = platform::TemporaryDirectory::adopt(temporary_directory, owner_pid)?;
     let root = info.identity;
 
-    if let Err(error) = stream.write_all(&[protocol::READY]) {
-        return finish_startup_failure(
-            format!("failed to report sandbox manager readiness: {error}"),
-            root,
-            tracker,
-            temporary_directory,
-            cleanup_timeout,
-        );
-    }
-
-    let mut commit = [0];
-    if let Err(error) = stream.read_exact(&mut commit) {
-        return finish_startup_failure(
-            format!("sandbox manager ownership was not committed: {error}"),
-            root,
-            tracker,
-            temporary_directory,
-            cleanup_timeout,
-        );
-    }
-    if commit != [protocol::COMMIT] {
-        return finish_startup_failure(
-            "sandbox manager ownership commit is invalid".to_string(),
-            root,
-            tracker,
-            temporary_directory,
-            cleanup_timeout,
-        );
-    }
-
     if let Err(error) = tracker.watch_control(stream.as_raw_fd()) {
         return finish_startup_failure(error, root, tracker, temporary_directory, cleanup_timeout);
     }
-    if let Err(error) = stream.write_all(&[protocol::COMMITTED]) {
+    if let Err(error) = stream.write_all(&[protocol::READY]) {
         tracker.remove_control_watch();
         return finish_startup_failure(
-            format!("failed to confirm sandbox manager ownership: {error}"),
+            format!("failed to report sandbox manager readiness: {error}"),
             root,
             tracker,
             temporary_directory,
@@ -140,7 +110,7 @@ fn read_owner_control(stream: &mut UnixStream) -> Result<(), String> {
         match stream.read(&mut control) {
             Ok(0) => return Ok(()),
             Ok(_) => {
-                return Err("sandbox manager received data after ownership commitment".to_string());
+                return Err("sandbox manager received data after readiness".to_string());
             }
             Err(error) if error.kind() == ErrorKind::Interrupted => {}
             Err(error) => return Err(format!("sandbox manager control failed: {error}")),

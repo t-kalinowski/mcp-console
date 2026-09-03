@@ -17,6 +17,7 @@ from _support import (
     FifoCheckpoint,
     McpClient,
     Transcript,
+    build_manager_interposer,
     capture_darwin_process_identity,
     darwin_child_process_identities,
     darwin_process_waits_for_startup_release,
@@ -365,6 +366,62 @@ def test_builtin_relay_waits_for_supervision(binary: Path) -> Transcript:
 
 def test_custom_relay_waits_for_supervision(binary: Path) -> Transcript:
     return _run_startup_case(binary, custom_relay=True)
+
+
+def test_custom_relay_starts_after_manager_readiness(binary: Path) -> Transcript:
+    fixture_root = Path(__file__).resolve().parents[3] / "fixtures"
+    worker = fixture_root / "zod"
+    marker_relay = fixture_root / "startup_marker_relay"
+
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        ready_sent = FifoCheckpoint(temporary / "ready-sent")
+        ready_return = FifoCheckpoint(temporary / "ready-return")
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        environment["MCP_CONSOLE_TEST_BINARY"] = str(binary)
+        environment["MCP_CONSOLE_TEST_MANAGER_READY_SENT"] = str(ready_sent.path)
+        environment["MCP_CONSOLE_TEST_MANAGER_READY_RETURN"] = str(ready_return.path)
+        environment["DYLD_INSERT_LIBRARIES"] = str(build_manager_interposer(temporary))
+
+        client = McpClient(
+            binary,
+            (
+                "serve",
+                "--worker",
+                str(worker),
+                "--relay",
+                str(marker_relay),
+            ),
+            environment,
+        )
+        manager_released = False
+        try:
+            client._initialize_and_list_tools()
+            waiting = client._start_send(r="echo echo")
+            ready_sent.wait("manager READY delivery")
+
+            readable, _, _ = select.select([client.stdout], [], [], TIMEOUT)
+            assert readable, "custom relay waited for another manager response"
+            client._receive(waiting)
+            _assert_zod_echo(waiting)
+            marker = _marker_record(temporary)
+            assert marker["extra_descriptors"] == [], marker
+            waiting["startup_gate"] = {
+                "manager": "READY delivered with send return held",
+                "custom_relay": "executed without another manager response",
+                "private_gate": "closed before relay exec",
+            }
+
+            ready_return.release()
+            manager_released = True
+            return client._finish()
+        finally:
+            if not manager_released:
+                ready_return.release()
+            stop_client(client)
+            ready_sent.close()
+            ready_return.close()
 
 
 def test_manager_failure_before_readiness_keeps_custom_relay_gated(

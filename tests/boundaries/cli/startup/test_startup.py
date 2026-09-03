@@ -16,6 +16,7 @@ from cli._harness import (
     _start_with_controlling_terminal,
     _wait_for_gated_root_and_manager,
     _wait_for_private_startup_gate,
+    build_manager_interposer,
     capture_darwin_process_identity,
     code,
     kill_darwin_processes,
@@ -34,6 +35,84 @@ from cli._harness import (
 
 
 PLATFORMS = {"darwin"}
+
+
+def test_target_starts_after_manager_readiness(binary: Path) -> Transcript:
+    # fmt: python
+    script = code(r"""
+        import os
+
+        print(os.environ["TMPDIR"], flush=True)
+        """)
+    arguments = ("sandbox", "--", "python", "-c", script)
+
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        ready_sent = FifoCheckpoint(temporary / "ready-sent")
+        ready_return = FifoCheckpoint(temporary / "ready-return")
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        environment["MCP_CONSOLE_TEST_MANAGER_READY_SENT"] = str(ready_sent.path)
+        environment["MCP_CONSOLE_TEST_MANAGER_READY_RETURN"] = str(ready_return.path)
+        environment["DYLD_INSERT_LIBRARIES"] = str(build_manager_interposer(temporary))
+
+        process = subprocess.Popen(
+            [binary, *arguments],
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        assert process.stdout is not None
+        assert process.stderr is not None
+        manager_released = False
+        sandbox_temporary_directory: Path | None = None
+        try:
+            ready_sent.wait("manager READY delivery")
+
+            readable, _, _ = select.select([process.stdout], [], [], TIMEOUT)
+            assert readable, "sandbox target waited for another manager response"
+            sandbox_temporary_directory = Path(
+                process.stdout.readline().decode("utf-8").strip()
+            )
+            assert sandbox_temporary_directory.exists()
+
+            ready_return.release()
+            manager_released = True
+            returncode = process.wait(timeout=TIMEOUT)
+            stdout = process.stdout.read().decode("utf-8")
+            stderr = process.stderr.read().decode("utf-8")
+
+            assert returncode == 0, (returncode, stderr)
+            assert stdout == "", stdout
+            assert stderr == "", stderr
+            assert not sandbox_temporary_directory.exists(), (
+                "sandbox temporary directory survived normal retirement"
+            )
+            return [
+                {
+                    "command": _command(*arguments),
+                    "manager_checkpoint": "READY delivered with send return held",
+                    "stdout": "<sandbox temporary directory>\n",
+                },
+                {
+                    "launcher_returncode": returncode,
+                    "verified_target": "started without another manager response",
+                    "verified_cleanup": "sandbox root, manager, and temp",
+                },
+            ]
+        finally:
+            if not manager_released:
+                ready_return.release()
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=TIMEOUT)
+            if sandbox_temporary_directory is not None:
+                shutil.rmtree(sandbox_temporary_directory, ignore_errors=True)
+            for stream in (process.stdout, process.stderr):
+                if not stream.closed:
+                    stream.close()
+            ready_sent.close()
+            ready_return.close()
 
 
 def test_target_waits_for_manager_adoption(binary: Path) -> Transcript:

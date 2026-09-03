@@ -16,20 +16,18 @@ The manager also adopts the private temporary-directory guard for the lifetime.
 The host owner retains the manager process and direct sandbox root as waitable children.
 After the manager reports readiness, the owner relinquishes its duplicate temporary-directory guard and starts monitoring manager exit.
 The manager's adopted guard is then the only directory-cleanup owner; owner-side fallback retains no directory-cleanup state.
-After ownership commitment, the owner holds the control socket open as the live-sandbox ownership token.
+After readiness, the owner holds the control socket open only as the live-sandbox ownership token.
 The relay remains a transport and direct-worker owner, including local same-group cleanup; it does not own observed-descendant cleanup across process groups or sessions, or the private directory.
 
 ## Startup
 
 The host starts the manager before the sandbox root, then sends the owner PID, root PID, cleanup timeout, and private-directory path over a private inherited Unix socket.
-The manager validates the direct-child relationship and exact root identity, attaches its descendant tracker, adopts the directory guard, and reports readiness.
-The host relinquishes its duplicate guard, installs manager-failure recovery while the direct root remains live and waitable, then commits primary cleanup ownership and waits for confirmation.
-
-After ownership is committed, the owner writes one release byte.
+The manager validates the direct-child relationship and exact root identity, installs root and descendant tracking plus control-socket observation, adopts the directory guard, and reports readiness.
+After receiving readiness, the host relinquishes its duplicate guard, installs manager-failure recovery while the direct root remains live and waitable, and writes one release byte.
 The hidden wrapper closes the channel and replaces itself with the configured relay or requested command in the same process identity.
-Configured sandbox code therefore cannot run before manager observation and ownership are committed.
-The committed manager control socket then carries no further messages; owner EOF requests retirement.
-Abrupt owner loss before readiness or commitment closes the startup channel before configured code runs, but private-directory cleanup is not guaranteed.
+Configured sandbox code therefore cannot run before manager observation is active and failure recovery is installed.
+The manager control socket carries no messages after readiness; it remains open only as an ownership token, and owner EOF requests retirement.
+Abrupt owner loss before readiness closes the control socket and startup gate before configured code runs, but private-directory cleanup is not guaranteed.
 Before readiness, the owner retains its guard and preserves it whenever manager adoption is ambiguous.
 After readiness, the owner relinquishes that guard and the manager becomes the sole directory-cleanup owner.
 The adopted guard preserves on unexpected unwind and is armed for removal only after the manager proves cleanup.
@@ -84,7 +82,7 @@ When a pipeline peer shares the launcher's foreground group, the launcher leaves
 `SIGHUP`, `SIGINT`, `SIGQUIT`, and `SIGTERM` addressed to the launcher are blocked, consumed synchronously, and relayed once to that group.
 After root exit, the launcher restores its own foreground group when it transferred ownership, drains forwarded signals already pending at that boundary, restores its inherited signal mask, and closes the ownership token to request manager cleanup.
 If startup or recovery cleanup stops the root, the launcher drains pending forwarded signals before restoring the mask and returning the error.
-A signal received after that final drain can then follow its inherited disposition; if that terminates the launcher, the committed manager completes lifetime cleanup.
+A signal received after that final drain can then follow its inherited disposition; if that terminates the launcher, the manager completes lifetime cleanup.
 
 ## Scope
 

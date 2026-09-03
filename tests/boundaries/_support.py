@@ -338,12 +338,14 @@ typedef pid_t (*getpgid_function)(pid_t);
 typedef ssize_t (*send_function)(int, const void *, size_t, int);
 
 static _Atomic int reported_group_close = 0;
+static _Atomic int gated_owner_release = 0;
 static pid_t denied_process_group = 0;
 static int added_late_member = 0;
 static pid_t seed_member = 0;
 static pid_t late_member = 0;
 
-static const uint8_t MANAGER_COMMITTED = 7;
+static const uint8_t MANAGER_READY = 1;
+static const uint8_t TARGET_GATE_RELEASE = 1;
 
 static pid_t add_process_group_member(pid_t process_group);
 
@@ -385,6 +387,19 @@ static void checkpoint(const char *name) {
     char byte = '1';
     write(descriptor, &byte, sizeof(byte));
     close(descriptor);
+}
+
+static void wait_for_checkpoint_release(const char *name) {
+    const char *path = getenv(name);
+    if (path == NULL) {
+        return;
+    }
+    int descriptor = open(path, O_RDONLY);
+    char byte;
+    if (descriptor >= 0) {
+        read(descriptor, &byte, sizeof(byte));
+        close(descriptor);
+    }
 }
 
 static void write_pid_marker(const char *name, pid_t process_id) {
@@ -469,23 +484,26 @@ static ssize_t interpose_manager_control_send(
     size_t length,
     int flags
 ) {
-    if (is_manager()
-        && socket == STDIN_FILENO
+    if (!is_manager()
+        && (is_subcommand("serve") || is_subcommand("sandbox"))
         && length == 1
-        && ((const uint8_t *)buffer)[0] == MANAGER_COMMITTED) {
-        checkpoint("MCP_CONSOLE_TEST_MANAGER_COMMITTED_READY");
-        const char *release = getenv("MCP_CONSOLE_TEST_MANAGER_COMMITTED_RELEASE");
-        if (release != NULL) {
-            int descriptor = open(release, O_RDONLY);
-            char byte;
-            if (descriptor >= 0) {
-                read(descriptor, &byte, sizeof(byte));
-                close(descriptor);
-            }
-        }
+        && ((const uint8_t *)buffer)[0] == TARGET_GATE_RELEASE
+        && getenv("MCP_CONSOLE_TEST_OWNER_GATE_READY") != NULL
+        && atomic_exchange(&gated_owner_release, 1) == 0) {
+        checkpoint("MCP_CONSOLE_TEST_OWNER_GATE_READY");
+        wait_for_checkpoint_release("MCP_CONSOLE_TEST_OWNER_GATE_RELEASE");
     }
     send_function send_next = next_send();
-    return send_next(socket, buffer, length, flags);
+    ssize_t sent = send_next(socket, buffer, length, flags);
+    if (is_manager()
+        && socket == STDIN_FILENO
+        && sent == (ssize_t)length
+        && length == 1
+        && ((const uint8_t *)buffer)[0] == MANAGER_READY) {
+        checkpoint("MCP_CONSOLE_TEST_MANAGER_READY_SENT");
+        wait_for_checkpoint_release("MCP_CONSOLE_TEST_MANAGER_READY_RETURN");
+    }
+    return sent;
 }
 
 static int manager_group_close(pid_t process_group, int number) {

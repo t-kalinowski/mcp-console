@@ -517,7 +517,7 @@ The [implemented architecture](ARCHITECTURE.md) describes the session record and
 - SQL previews do not include affected-row counts or total result counts.
 - Only default-device R graphics and open pyplot figures are captured automatically.
 - Normal restart, automatic failure replacement, orderly server shutdown, and unexpected server or relay failure retire descendants observed by the host-side sandbox manager across process-group and session changes.
-  The configured relay starts only after the manager has adopted the private directory, begun observation, and committed ownership.
+  The configured relay starts only after the manager has adopted the private directory, installed root, descendant, and control-socket observation, and reported readiness, and the server has installed manager-failure recovery.
   A later descendant that becomes orphaned before the manager resolves its fork event remains outside this guarantee.
 - Linux and Windows are not supported.
 

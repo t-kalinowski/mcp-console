@@ -7,12 +7,12 @@ result:
   content:
     - type: text
       text: >-
-        [failed to launch worker relay: sandbox manager did not confirm
-        ownership: failed to fill whole buffer]
+        [failed to launch worker relay: failed to release sandbox target startup
+        gate: Broken pipe (os error 32)]
   isError: true
 ---
-manager_signal: SIGKILL before COMMITTED
+manager_signal: SIGKILL before gate release
 ---
-verified_startup_gate: custom relay did not execute before COMMITTED
+verified_startup_gate: custom relay did not execute
 verified_cleanup: gated relay root and manager
 verified_preservation: sandbox temp

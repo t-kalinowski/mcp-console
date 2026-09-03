@@ -7,8 +7,6 @@ use std::time::Duration;
 const INITIALIZATION_MAGIC: &[u8; 4] = b"MCG4";
 const MAXIMUM_PATH_BYTES: usize = 16 * 1024;
 pub(super) const READY: u8 = 1;
-pub(super) const COMMIT: u8 = 2;
-pub(super) const COMMITTED: u8 = 7;
 
 pub(super) struct Initialization {
     pub(super) owner_pid: libc::pid_t,

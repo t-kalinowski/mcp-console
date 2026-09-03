@@ -8,7 +8,7 @@ use super::process_tracker::DescendantTracker;
 use super::root_exit_waiter::RootExitWakeup;
 use crate::sandbox::file_descriptors;
 use crate::sandbox::platform;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::os::fd::OwnedFd;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt as _;
@@ -178,25 +178,6 @@ impl SandboxManager {
             self.cleanup_timeout,
             root_wakeup,
         ));
-    }
-
-    pub(crate) fn commit(&mut self) -> Result<(), String> {
-        assert!(self.monitor.is_some(), "manager monitor is missing");
-        let stream = self
-            .stream
-            .as_mut()
-            .expect("sandbox manager control should be available");
-        stream
-            .write_all(&[protocol::COMMIT])
-            .map_err(|error| format!("failed to commit sandbox manager ownership: {error}"))?;
-        let mut committed = [0];
-        stream
-            .read_exact(&mut committed)
-            .map_err(|error| format!("sandbox manager did not confirm ownership: {error}"))?;
-        if committed != [protocol::COMMITTED] {
-            return Err("sandbox manager sent an invalid ownership confirmation".to_string());
-        }
-        Ok(())
     }
 
     /// Closes the ownership token and waits for the manager to retire the
