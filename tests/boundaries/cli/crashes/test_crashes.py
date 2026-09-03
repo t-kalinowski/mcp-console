@@ -14,6 +14,7 @@ from _support import (
     FifoCheckpoint,
     Transcript,
     capture_darwin_process_identity,
+    darwin_process_extra_socket_descriptors,
     kill_darwin_processes,
     live_darwin_processes,
     run_this_suite,
@@ -50,6 +51,12 @@ def test_owner_monitor_start_failure_preserves_temporary_directory(
         monitor_start_release = FifoCheckpoint(
             fixture_directory / "owner-monitor-start-release"
         )
+        manager_stop_started = FifoCheckpoint(
+            fixture_directory / "owner-manager-stop-started"
+        )
+        manager_stop_release = FifoCheckpoint(
+            fixture_directory / "owner-manager-stop-release"
+        )
         environment = os.environ.copy()
         environment["DYLD_INSERT_LIBRARIES"] = str(
             _build_supervision_interposer(
@@ -63,6 +70,12 @@ def test_owner_monitor_start_failure_preserves_temporary_directory(
         environment["MCP_CONSOLE_TEST_OWNER_MONITOR_START_RELEASE"] = str(
             monitor_start_release.path
         )
+        environment["MCP_CONSOLE_TEST_OWNER_MANAGER_STOP"] = str(
+            manager_stop_started.path
+        )
+        environment["MCP_CONSOLE_TEST_OWNER_MANAGER_STOP_RELEASE"] = str(
+            manager_stop_release.path
+        )
         environment["TMPDIR"] = str(fixture_directory)
 
         process = subprocess.Popen(
@@ -75,11 +88,15 @@ def test_owner_monitor_start_failure_preserves_temporary_directory(
         assert process.stderr is not None
         identities = ()
         monitor_start_released = False
+        manager_stop_released = False
         sandbox_temporary_directory: Path | None = None
         try:
             monitor_start_failed.wait("owner manager-monitor start failure")
             launcher = capture_darwin_process_identity(process.pid)
             identities = _wait_for_gated_root_and_manager(launcher)
+            owner_sockets = darwin_process_extra_socket_descriptors(launcher)
+            assert owner_sockets is not None, "failed to inspect launcher sockets"
+            assert len(owner_sockets) == 2, owner_sockets
             temporary_directories = list(
                 fixture_directory.glob(f"mcp-console-tmp-{process.pid}-*")
             )
@@ -88,6 +105,14 @@ def test_owner_monitor_start_failure_preserves_temporary_directory(
 
             monitor_start_release.release()
             monitor_start_released = True
+            manager_stop_started.wait("owner manager stop after monitor failure")
+            sockets_at_manager_stop = darwin_process_extra_socket_descriptors(launcher)
+            assert sockets_at_manager_stop == owner_sockets, (
+                "owner released the manager control before stopping it: "
+                f"before={owner_sockets}, at stop={sockets_at_manager_stop}"
+            )
+            manager_stop_release.release()
+            manager_stop_released = True
             returncode = process.wait(timeout=TIMEOUT)
             stdout = process.stdout.read().decode("utf-8")
             stderr = process.stderr.read().decode("utf-8")
@@ -119,6 +144,8 @@ def test_owner_monitor_start_failure_preserves_temporary_directory(
         finally:
             if not monitor_start_released:
                 monitor_start_release.release()
+            if not manager_stop_released:
+                manager_stop_release.release()
             if process.poll() is None:
                 process.kill()
                 process.wait(timeout=TIMEOUT)
@@ -130,6 +157,8 @@ def test_owner_monitor_start_failure_preserves_temporary_directory(
                     stream.close()
             monitor_start_failed.close()
             monitor_start_release.close()
+            manager_stop_started.close()
+            manager_stop_release.close()
 
 
 def test_launcher_crash_retires_the_sandbox_lifetime(binary: Path) -> Transcript:

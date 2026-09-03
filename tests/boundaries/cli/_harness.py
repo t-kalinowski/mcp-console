@@ -130,6 +130,7 @@ static _Atomic int sandbox_fork_count = 0;
 #endif
 #if defined(MCP_CONSOLE_INTERPOSE_OWNER_MONITOR_START_FAILURE)
 static _Atomic int failed_owner_monitor_start = 0;
+static _Atomic int gated_owner_manager_stop = 0;
 #endif
 #if defined(MCP_CONSOLE_INTERPOSE_FAILED_RECOVERY_STOP)
 static _Atomic int failed_process_info = 0;
@@ -144,7 +145,8 @@ static _Atomic int failed_root_identity_recheck = 0;
     || defined(MCP_CONSOLE_INTERPOSE_FAILED_RECOVERY_STOP) \
     || defined(MCP_CONSOLE_INTERPOSE_FAILED_ROOT_OBSERVER) \
     || defined(MCP_CONSOLE_INTERPOSE_LATE_CLEANUP) \
-    || defined(MCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE)
+    || defined(MCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE) \
+    || defined(MCP_CONSOLE_INTERPOSE_OWNER_MONITOR_START_FAILURE)
 typedef int (*kill_function)(pid_t, int);
 
 static kill_function next_kill(void) {
@@ -457,6 +459,18 @@ static int fail_owner_monitor_start(
     }
     return next_pthread_create()(thread, attributes, start_routine, argument);
 }
+
+static int gate_owner_manager_stop(pid_t process_id, int number) {
+    if (number == SIGKILL
+        && is_subcommand("sandbox")
+        && atomic_load(&failed_owner_monitor_start) != 0
+        && getenv("MCP_CONSOLE_TEST_OWNER_MANAGER_STOP") != NULL
+        && atomic_exchange(&gated_owner_manager_stop, 1) == 0) {
+        signal_checkpoint("MCP_CONSOLE_TEST_OWNER_MANAGER_STOP");
+        wait_for_release("MCP_CONSOLE_TEST_OWNER_MANAGER_STOP_RELEASE");
+    }
+    return next_kill()(process_id, number);
+}
 #endif
 
 #if defined(MCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE)
@@ -638,6 +652,7 @@ static int delay_late_recovery(
 DYLD_INTERPOSE(gate_manager_spawn, fork)
 #elif defined(MCP_CONSOLE_INTERPOSE_OWNER_MONITOR_START_FAILURE)
 DYLD_INTERPOSE(fail_owner_monitor_start, pthread_create)
+DYLD_INTERPOSE(gate_owner_manager_stop, kill)
 #elif defined(MCP_CONSOLE_INTERPOSE_MANAGER_START)
 DYLD_INTERPOSE(gate_manager_start, getppid)
 #elif defined(MCP_CONSOLE_INTERPOSE_MANAGER_STOP_FAILURE)

@@ -165,8 +165,11 @@ impl SandboxManager {
         ) {
             Ok(monitor) => monitor,
             Err(mut error) => {
-                drop(stream);
-                return Err(stop_and_reap(&mut error.child, error.message));
+                return Err(stop_and_reap_before_ownership_release(
+                    &mut error.child,
+                    stream,
+                    error.message,
+                ));
             }
         };
         temporary_directory.relinquish();
@@ -471,13 +474,38 @@ fn with_prior_error(prior: Option<String>, error: String) -> String {
 }
 
 fn stop_and_reap(child: &mut Child, mut error: String) -> String {
+    signal_manager_stop(child, &mut error);
+    reap_manager(child, error)
+}
+
+fn stop_and_reap_before_ownership_release(
+    child: &mut Child,
+    stream: UnixStream,
+    mut error: String,
+) -> String {
+    if !signal_manager_stop(child, &mut error) {
+        // EOF is the only bounded route to manager exit when signaling fails.
+        drop(stream);
+        return reap_manager(child, error);
+    }
+    let error = reap_manager(child, error);
+    drop(stream);
+    error
+}
+
+fn signal_manager_stop(child: &mut Child, error: &mut String) -> bool {
     if let Err(kill_error) = child.kill()
         && kill_error.raw_os_error() != Some(libc::ESRCH)
     {
         error.push_str(&format!(
             "; additionally, failed to stop manager: {kill_error}"
         ));
+        return false;
     }
+    true
+}
+
+fn reap_manager(child: &mut Child, mut error: String) -> String {
     if let Err(wait_error) = child.wait() {
         error.push_str(&format!(
             "; additionally, failed to reap manager: {wait_error}"
