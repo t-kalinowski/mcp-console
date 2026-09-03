@@ -92,4 +92,3 @@ result:
       text: |
         [input requested: "quoted \"prompt\"\n> "]
   isError: false
-...

@@ -4,4 +4,3 @@
 send:
   r: stall
   stdin: <large stdin>
-...

@@ -33,4 +33,3 @@ result:
       text: |
         zod stdin: replacement
   isError: false
-...

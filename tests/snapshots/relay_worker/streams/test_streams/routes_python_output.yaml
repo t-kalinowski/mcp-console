@@ -91,4 +91,3 @@ stderr: |
 ---
 worker:
   kind: completed
-...

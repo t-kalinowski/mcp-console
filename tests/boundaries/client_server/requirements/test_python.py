@@ -1,6 +1,8 @@
 #!/usr/bin/env -S uv run --script
 
 import os
+import select
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -17,6 +19,7 @@ from support.assertions import (
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient, stop_client
 from support.normalization import code
+from support.processes import process_group_exists, stop_process_group
 from support.r import r_test_environment
 from support.records import Transcript
 from support.resolvers import (
@@ -86,6 +89,119 @@ def test_prepares_initial_python_requirements(binary: Path) -> Transcript:
     )
     assert last_tool_text(client) == "[prepared]"
     return client._finish()
+
+
+def test_retires_python_resolver_descendant_after_leader_exit(
+    binary: Path,
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        real_uv = shutil.which("uv")
+        assert real_uv is not None, "uv is required"
+        started = FifoCheckpoint.create(temporary / "descendant-started")
+        leader_release = FifoCheckpoint.create(temporary / "leader-release")
+        lifetime = FifoCheckpoint.create(temporary / "descendant-lifetime")
+        identity = temporary / "descendant-identity"
+        wrapper = temporary / "uv"
+        wrapper.write_text(
+            code(r"""
+                #!/usr/bin/env python3
+
+                import os
+                import sys
+
+
+                def notify(path):
+                    with open(path, "wb", buffering=0) as stream:
+                        stream.write(b"1")
+
+
+                def wait(path):
+                    with open(path, "rb", buffering=0) as stream:
+                        assert stream.read(1) == b"1"
+
+
+                requirement = os.environ["MCP_CONSOLE_TEST_REQUIREMENT"]
+                if requirement in sys.argv[1:]:
+                    child = os.fork()
+                    if child == 0:
+                        identity = os.environ["MCP_CONSOLE_TEST_DESCENDANT_IDENTITY"]
+                        with open(identity, "x", encoding="utf-8") as stream:
+                            stream.write(f"{os.getpid()} {os.getpgrp()}\n")
+                        lifetime = os.environ["MCP_CONSOLE_TEST_DESCENDANT_LIFETIME"]
+                        with open(lifetime, "rb", buffering=0) as stream:
+                            notify(os.environ["MCP_CONSOLE_TEST_DESCENDANT_STARTED"])
+                            stream.read(1)
+                        os._exit(0)
+                    wait(os.environ["MCP_CONSOLE_TEST_LEADER_RELEASE"])
+
+                uv = os.environ["MCP_CONSOLE_TEST_REAL_UV"]
+                os.execv(uv, [uv, *sys.argv[1:]])
+                """),
+            encoding="utf-8",
+        )
+        wrapper.chmod(0o755)
+
+        environment = os.environ.copy()
+        environment.pop("RETICULATE_PYTHON", None)
+        environment["RETICULATE_UV"] = str(wrapper)
+        environment["MCP_CONSOLE_TEST_REAL_UV"] = real_uv
+        environment["MCP_CONSOLE_TEST_REQUIREMENT"] = "py-yaml12"
+        environment["MCP_CONSOLE_TEST_DESCENDANT_IDENTITY"] = str(identity)
+        environment["MCP_CONSOLE_TEST_DESCENDANT_STARTED"] = str(started.path)
+        environment["MCP_CONSOLE_TEST_LEADER_RELEASE"] = str(leader_release.path)
+        environment["MCP_CONSOLE_TEST_DESCENDANT_LIFETIME"] = str(lifetime.path)
+
+        client = McpClient(binary, ("serve",), environment)
+        resolver_group = None
+        exit_events = select.kqueue()
+        try:
+            client._initialize_and_list_tools()
+            preparation = client._start_send(
+                requirements={"python": ["py-yaml12"]},
+            )
+            started.wait("Python resolver descendant")
+            descendant, resolver_group = map(
+                int,
+                identity.read_text(encoding="utf-8").split(),
+            )
+            assert descendant != resolver_group
+            assert resolver_group != os.getpgrp()
+            watch = select.kevent(
+                descendant,
+                filter=select.KQ_FILTER_PROC,
+                flags=select.KQ_EV_ADD | select.KQ_EV_ONESHOT,
+                fflags=select.KQ_NOTE_EXIT,
+            )
+            assert exit_events.control([watch], 0, 0) == []
+
+            leader_release.release()
+            observed = exit_events.control(None, 1, 10)
+            assert len(observed) == 1, "resolver descendant did not exit"
+            event = observed[0]
+            assert event.ident == descendant, event
+            assert event.filter == select.KQ_FILTER_PROC, event
+            assert event.fflags & select.KQ_NOTE_EXIT, event
+
+            client._receive(preparation)
+            assert preparation["result"] == {
+                "content": [{"type": "text", "text": "[prepared]"}],
+                "isError": False,
+            }, preparation
+            assert not process_group_exists(resolver_group), (
+                "resolver process group outlived its leader"
+            )
+            resolver_group = None
+            transcript = client._finish()
+            return transcript
+        finally:
+            leader_release.release()
+            stop_process_group(resolver_group)
+            stop_client(client)
+            exit_events.close()
+            started.close()
+            leader_release.close()
+            lifetime.close()
 
 
 def test_prepares_explicit_numpy_requirement(binary: Path) -> Transcript:

@@ -3,6 +3,8 @@
 # dependencies = ["py-yaml12"]
 # ///
 
+from __future__ import annotations
+
 import array
 import fcntl
 import json

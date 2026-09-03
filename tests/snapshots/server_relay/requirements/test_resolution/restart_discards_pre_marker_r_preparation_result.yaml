@@ -60,4 +60,3 @@ relay:
 relay:
   kind: worker_exited
   code: 0
-...

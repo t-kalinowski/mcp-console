@@ -72,4 +72,3 @@ result:
       text: |
         (42, True, True, 'yaml12')
   isError: false
-...

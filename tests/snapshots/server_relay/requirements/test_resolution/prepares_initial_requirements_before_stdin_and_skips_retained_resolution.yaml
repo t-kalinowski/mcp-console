@@ -22,4 +22,3 @@ server:
 ---
 relay:
   kind: completed
-...

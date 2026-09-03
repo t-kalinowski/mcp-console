@@ -43,4 +43,3 @@ worker:
 ---
 worker:
   kind: completed
-...

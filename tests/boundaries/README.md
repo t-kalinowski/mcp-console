@@ -7,6 +7,24 @@ A boundary suite is a Python file under one of four directories whose relative p
 - `relay_worker` records the worker sideband and standard-stream boundary owned by the relay.
 - `cli` records direct command-line invocations.
 
+## Contract ownership
+
+Give each behavior one primary owner and test it at the outermost boundary that can observe the regression:
+
+| Contract                                                                         | Primary owner                                          |
+| -------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| MCP negotiation, schemas, descriptions, result text, errors, and output ordering | `client_server` snapshots                              |
+| CLI syntax, exit status, terminal behavior, and signal behavior                  | `cli` snapshots                                        |
+| Sandbox security and process-lifetime guarantees                                 | `cli`, with only necessary MCP integration smoke tests |
+| Server-to-relay frame shape, correlation, ordering, and generation ownership     | `server_relay` snapshots                               |
+| Relay-to-worker stream routing, framing, EOF, crash, and shutdown behavior       | `relay_worker` snapshots                               |
+| Pure parsing or validation policy that cannot usefully be reached externally     | Small table-driven unit tests                          |
+
+Classify a proposed case as a public snapshot, architecture-boundary test, security-or-liveness test, or incidental-implementation test.
+Private-boundary tests cover only the architectural seam they observe and do not repeat public result language.
+Security and liveness cases may add causal or process assertions for facts a snapshot cannot represent.
+Do not test exact internal sequencing unless it is itself an observable contract.
+
 Each `test_` function in a suite is a transcript case.
 The runner passes the built binary path to each case.
 Each case returns a `Transcript`: an ordered list of transcript entries.

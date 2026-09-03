@@ -78,4 +78,3 @@ result:
         [input requested: "bundled> "]
         [1] "café|timed out fd 0"
   isError: false
-...

@@ -40,4 +40,3 @@ transcript_normalization:
   replacements:
     large_output: <large output>
     sideband_failure_detail: <invalid frame>
-...

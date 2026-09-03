@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["py-yaml12"]
+# dependencies = ["py-yaml12>=0.2.0"]
 # ///
 
 import argparse
@@ -398,10 +398,11 @@ def run_cases(
                         checked_snapshots.update(checked)
                         reporter.finish(index, succeeded=True)
                 reporter.report_due()
-        except BaseException:
+        except BaseException as primary_error:
             for future in futures:
                 future.cancel()
             unfinished = set(futures)
+            cleanup_errors: list[BaseException] = []
             while unfinished:
                 done, unfinished = wait(
                     unfinished,
@@ -409,15 +410,24 @@ def run_cases(
                     return_when=FIRST_COMPLETED,
                 )
                 drain_started(progress, selected, reporter)
-                for future in done:
+                for future in sorted(done, key=futures.__getitem__):
                     index = futures[future]
                     if not reporter.is_running(index):
                         continue
+                    suite_name, case_name, _ = selected[index]
                     try:
-                        future.result()
-                    except BaseException:
+                        recorded = future.result()
+                        checked = check_recording(
+                            suite_name,
+                            case_name,
+                            recorded,
+                            update=update,
+                        )
+                    except BaseException as error:
+                        cleanup_errors.append(error)
                         reporter.finish(index, succeeded=False)
                     else:
+                        checked_snapshots.update(checked)
                         reporter.finish(
                             index,
                             succeeded=True,
@@ -426,6 +436,11 @@ def run_cases(
                 reporter.report_due()
             executor.shutdown(cancel_futures=True)
             drain_started(progress, selected, reporter)
+            if cleanup_errors:
+                raise BaseExceptionGroup(
+                    "multiple transcript cases failed",
+                    [primary_error, *cleanup_errors],
+                ) from None
             raise
         else:
             executor.shutdown()

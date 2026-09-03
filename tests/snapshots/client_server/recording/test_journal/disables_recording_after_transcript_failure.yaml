@@ -44,4 +44,3 @@ post-failure append: false
 server stderr: >-
   mcp-console: transcript recording disabled: <artifact persistence
   failed>
-...

@@ -35,4 +35,3 @@ server:
 relay:
   kind: r_preparation_failed
   message: scripted controlled interrupt R preparation failed
-...

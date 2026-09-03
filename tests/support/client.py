@@ -49,6 +49,7 @@ class McpClient:
         self.transcript: Transcript = []
         self._next_request_id = 1
         self._issued_request_ids: set[int] = set()
+        self._last_serialized_message: str | None = None
 
     def send(self, **arguments: Any) -> ToolResult:
         return self._call_tool("send", **arguments)
@@ -79,7 +80,9 @@ class McpClient:
         else:
             entry["input"] = recorded_message
         self.transcript.append(entry)
-        self.stdin.write(json.dumps(message) + "\n")
+        serialized_message = json.dumps(message, ensure_ascii=False)
+        self._last_serialized_message = serialized_message
+        self.stdin.write(serialized_message + "\n")
         self.stdin.flush()
         return entry
 

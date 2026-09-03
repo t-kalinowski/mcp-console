@@ -78,4 +78,3 @@ relay:
 server:
   kind: python_version_resolution_failed
   message: Python requirements are unavailable with a custom worker
-...
