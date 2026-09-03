@@ -3,6 +3,7 @@
 import json
 import os
 import select
+import shutil
 import signal
 import subprocess
 import sys
@@ -10,23 +11,22 @@ import tempfile
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from _support import (
+from support.checkpoints import FifoCheckpoint
+from support.client import McpClient, stop_client
+from support.macos import (
     DarwinProcessIdentity,
-    FifoCheckpoint,
-    McpClient,
-    Transcript,
     build_manager_interposer,
     capture_darwin_process_identity,
     darwin_child_process_identities,
     darwin_process_waits_for_startup_release,
     kill_darwin_processes,
     live_darwin_processes,
-    run_this_suite,
     signal_darwin_process,
-    stop_client,
 )
+from support.records import Transcript
+from support.suites import run_this_suite
 
 PLATFORMS = {"darwin"}
 TIMEOUT = 10
@@ -36,146 +36,13 @@ MARKER_NAME = "mcp-console-startup-marker"
 def _build_manager_start_interposer(directory: Path) -> Path:
     source = directory / "manager-start-interposer.c"
     library = directory / "manager-start-interposer.dylib"
-    source.write_text(
-        r"""
-#include <crt_externs.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <signal.h>
-#include <stdatomic.h>
-#include <stdint.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-
-static _Atomic int gated_manager_start = 0;
-static _Atomic int server_fork_count = 0;
-static _Atomic pid_t denied_cleanup_root = 0;
-static _Atomic int reported_direct_cleanup_denial = 0;
-
-typedef int (*kill_function)(pid_t, int);
-typedef int (*killpg_function)(pid_t, int);
-
-static kill_function next_kill(void) {
-    return kill;
-}
-
-static killpg_function next_killpg(void) {
-    return killpg;
-}
-
-static int is_subcommand(const char *name) {
-    int argc = *_NSGetArgc();
-    char **argv = *_NSGetArgv();
-    return argc > 1 && strcmp(argv[1], name) == 0;
-}
-
-static void signal_checkpoint(const char *name) {
-    const char *checkpoint = getenv(name);
-    if (checkpoint == NULL) {
-        _exit(125);
-    }
-    int descriptor = open(checkpoint, O_WRONLY | O_NONBLOCK);
-    if (descriptor < 0) {
-        _exit(125);
-    }
-    const char value = '1';
-    ssize_t count;
-    do {
-        count = write(descriptor, &value, sizeof(value));
-    } while (count < 0 && errno == EINTR);
-    close(descriptor);
-    if (count != sizeof(value)) {
-        _exit(125);
-    }
-}
-
-static void wait_for_release(const char *name) {
-    const char *release = getenv(name);
-    if (release == NULL) {
-        _exit(125);
-    }
-    int descriptor;
-    do {
-        descriptor = open(release, O_RDONLY);
-    } while (descriptor < 0 && errno == EINTR);
-    if (descriptor < 0) {
-        _exit(125);
-    }
-    char value;
-    ssize_t count;
-    do {
-        count = read(descriptor, &value, sizeof(value));
-    } while (count < 0 && errno == EINTR);
-    close(descriptor);
-    if (count != sizeof(value)) {
-        _exit(125);
-    }
-}
-
-static pid_t gate_manager_start(void) {
-    if (is_subcommand("sandbox-manager")
-        && atomic_exchange(&gated_manager_start, 1) == 0) {
-        signal_checkpoint("MCP_CONSOLE_TEST_MANAGER_START");
-        wait_for_release("MCP_CONSOLE_TEST_MANAGER_RELEASE");
-    }
-    return getppid();
-}
-
-static pid_t gate_manager_spawn(void) {
-    int fork_index = atomic_fetch_add(&server_fork_count, 1);
-    if (is_subcommand("serve")
-        && getenv("MCP_CONSOLE_TEST_MANAGER_SPAWN") != NULL
-        && fork_index == 1) {
-        signal_checkpoint("MCP_CONSOLE_TEST_MANAGER_SPAWN");
-        wait_for_release("MCP_CONSOLE_TEST_MANAGER_SPAWN_RELEASE");
-    }
-    return fork();
-}
-
-static int deny_startup_cleanup_group(pid_t process_group_id, int number) {
-    if (number == SIGKILL
-        && is_subcommand("serve")
-        && getenv("MCP_CONSOLE_TEST_DENY_STARTUP_CLEANUP") != NULL) {
-        atomic_store(&denied_cleanup_root, process_group_id);
-        errno = EIO;
-        return -1;
-    }
-    killpg_function killpg_next = next_killpg();
-    return killpg_next(process_group_id, number);
-}
-
-static int deny_startup_cleanup_process(pid_t process_id, int number) {
-    if (number == SIGKILL
-        && process_id == atomic_load(&denied_cleanup_root)
-        && is_subcommand("serve")
-        && getenv("MCP_CONSOLE_TEST_DENY_STARTUP_CLEANUP") != NULL) {
-        if (atomic_exchange(&reported_direct_cleanup_denial, 1) == 0) {
-            signal_checkpoint("MCP_CONSOLE_TEST_DIRECT_KILL_DENIED");
-        }
-        errno = EPERM;
-        return -1;
-    }
-    kill_function kill_next = next_kill();
-    return kill_next(process_id, number);
-}
-
-#define DYLD_INTERPOSE(replacement, replacee)                                  \
-    __attribute__((used)) static struct {                                      \
-        const void *replacement;                                               \
-        const void *replacee;                                                  \
-    } interpose_##replacee __attribute__((section("__DATA,__interpose"))) = {  \
-        (const void *)(uintptr_t)&replacement,                                 \
-        (const void *)(uintptr_t)&replacee,                                    \
-    };
-
-DYLD_INTERPOSE(gate_manager_start, getppid)
-DYLD_INTERPOSE(gate_manager_spawn, fork)
-DYLD_INTERPOSE(deny_startup_cleanup_group, killpg)
-DYLD_INTERPOSE(deny_startup_cleanup_process, kill)
-""".removeprefix("\n"),
-        encoding="utf-8",
+    fixture = (
+        Path(__file__).resolve().parents[3]
+        / "fixtures"
+        / "native"
+        / "manager_start_interposer.c"
     )
+    shutil.copyfile(fixture, source)
     subprocess.run(
         [
             "cc",
@@ -300,10 +167,12 @@ def _run_startup_case(binary: Path, custom_relay: bool) -> Transcript:
 
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
-        manager_spawn = FifoCheckpoint(temporary / "manager-spawn")
-        manager_spawn_release = FifoCheckpoint(temporary / "manager-spawn-release")
-        manager_started = FifoCheckpoint(temporary / "manager-started")
-        manager_release = FifoCheckpoint(temporary / "manager-release")
+        manager_spawn = FifoCheckpoint.create(temporary / "manager-spawn")
+        manager_spawn_release = FifoCheckpoint.create(
+            temporary / "manager-spawn-release"
+        )
+        manager_started = FifoCheckpoint.create(temporary / "manager-started")
+        manager_release = FifoCheckpoint.create(temporary / "manager-release")
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
         environment["MCP_CONSOLE_TEST_BINARY"] = str(binary)
@@ -410,8 +279,8 @@ def test_custom_relay_starts_after_manager_readiness(binary: Path) -> Transcript
 
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
-        ready_sent = FifoCheckpoint(temporary / "ready-sent")
-        ready_return = FifoCheckpoint(temporary / "ready-return")
+        ready_sent = FifoCheckpoint.create(temporary / "ready-sent")
+        ready_return = FifoCheckpoint.create(temporary / "ready-return")
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
         environment["MCP_CONSOLE_TEST_BINARY"] = str(binary)
@@ -468,9 +337,9 @@ def test_manager_failure_before_readiness_keeps_custom_relay_gated(
 
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
-        manager_started = FifoCheckpoint(temporary / "manager-started")
-        manager_release = FifoCheckpoint(temporary / "manager-release")
-        direct_kill_denied = FifoCheckpoint(temporary / "direct-kill-denied")
+        manager_started = FifoCheckpoint.create(temporary / "manager-started")
+        manager_release = FifoCheckpoint.create(temporary / "manager-release")
+        direct_kill_denied = FifoCheckpoint.create(temporary / "direct-kill-denied")
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
         environment["MCP_CONSOLE_TEST_BINARY"] = str(binary)

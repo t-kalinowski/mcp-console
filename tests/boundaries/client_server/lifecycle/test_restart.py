@@ -8,28 +8,28 @@ import threading
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from _support import (
-    McpClient,
-    Transcript,
-    run_this_suite,
+from support.assertions import last_tool_text
+from support.client import McpClient
+from support.processes import (
+    process_exists,
+    process_group_exists,
+    stop_process,
+    stop_process_group,
+    stop_process_id,
 )
+from support.records import Transcript
+from support.suites import run_this_suite
 
 PLATFORMS = {"darwin"}
 LARGE_OUTPUT_SIZE = 2 * 1024 * 1024
 PENDING_TEXT_BUDGET = 8 * 1024 * 1024
 FIXTURE_CHECKPOINT_TIMEOUT_SECONDS = 15
 
-from client_server._harness import (
+from boundaries.client_server._harness import (
     ZodFixtureControl,
-    _zod_last_tool_text as last_tool_text,
-    process_exists,
-    process_group_exists,
     read_worker_group,
-    stop_process,
-    stop_process_group,
-    stop_process_id,
     wait_for_marker,
     wait_for_process_group_exit,
     wait_for_stopped_process,

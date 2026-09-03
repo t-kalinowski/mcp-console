@@ -4,16 +4,17 @@ import base64
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from _support import Transcript, run_this_suite
-from server_relay._harness import (
+from boundaries.server_relay._harness import (
     CHECKPOINT_NAME,
     DONE_NAME,
     RELEASE_NAME,
     ServerRelayClient,
-    _tool_text,
 )
+from support.assertions import tool_text as _tool_text
+from support.records import Transcript
+from support.suites import run_this_suite
 
 
 PLATFORMS = {"darwin"}

@@ -3,14 +3,12 @@
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from _support import (
-    McpClient,
-    Transcript,
-    code,
-    run_this_suite,
-)
+from support.client import McpClient
+from support.normalization import code
+from support.records import Transcript
+from support.suites import run_this_suite
 
 PLATFORMS = {"darwin"}
 

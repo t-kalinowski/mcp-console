@@ -8,16 +8,9 @@ import tempfile
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from _support import (
-    FifoCheckpoint,
-    Transcript,
-    live_darwin_processes,
-    run_this_suite,
-    signal_darwin_process,
-)
-from cli._harness import (
+from boundaries.cli._harness import (
     TIMEOUT,
     _build_supervision_interposer,
     _cleanup,
@@ -27,6 +20,10 @@ from cli._harness import (
     _wait_for_cleanup,
     _wait_for_process_exit,
 )
+from support.checkpoints import FifoCheckpoint
+from support.macos import live_darwin_processes, signal_darwin_process
+from support.records import Transcript
+from support.suites import run_this_suite
 
 
 PLATFORMS = {"darwin"}
@@ -37,8 +34,8 @@ def test_cleanup_signal_after_root_exit_terminates_launcher(
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         fixture_directory = Path(temporary_directory)
-        late_cleanup = FifoCheckpoint(fixture_directory / "late-cleanup")
-        late_cleanup_release = FifoCheckpoint(
+        late_cleanup = FifoCheckpoint.create(fixture_directory / "late-cleanup")
+        late_cleanup_release = FifoCheckpoint.create(
             fixture_directory / "late-cleanup-release"
         )
         environment = os.environ.copy()
@@ -93,8 +90,8 @@ def test_cleanup_signal_after_root_exit_terminates_launcher(
 def test_cleanup_timeout_preserves_temporary_directory(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         fixture_directory = Path(temporary_directory)
-        late_cleanup = FifoCheckpoint(fixture_directory / "late-cleanup")
-        late_cleanup_release = FifoCheckpoint(
+        late_cleanup = FifoCheckpoint.create(fixture_directory / "late-cleanup")
+        late_cleanup_release = FifoCheckpoint.create(
             fixture_directory / "late-cleanup-release"
         )
         environment = os.environ.copy()
@@ -148,15 +145,17 @@ def test_cleanup_timeout_preserves_temporary_directory(binary: Path) -> Transcri
 def test_manager_stop_failure_remains_bounded(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         fixture_directory = Path(temporary_directory)
-        late_cleanup = FifoCheckpoint(fixture_directory / "late-cleanup")
-        late_cleanup_release = FifoCheckpoint(
+        late_cleanup = FifoCheckpoint.create(fixture_directory / "late-cleanup")
+        late_cleanup_release = FifoCheckpoint.create(
             fixture_directory / "late-cleanup-release"
         )
-        denied_sigkill = FifoCheckpoint(fixture_directory / "denied-sigkill")
-        root_reaped = FifoCheckpoint(fixture_directory / "root-reaped")
-        root_reap_release = FifoCheckpoint(fixture_directory / "root-reap-release")
-        late_recovery = FifoCheckpoint(fixture_directory / "late-recovery")
-        late_recovery_release = FifoCheckpoint(
+        denied_sigkill = FifoCheckpoint.create(fixture_directory / "denied-sigkill")
+        root_reaped = FifoCheckpoint.create(fixture_directory / "root-reaped")
+        root_reap_release = FifoCheckpoint.create(
+            fixture_directory / "root-reap-release"
+        )
+        late_recovery = FifoCheckpoint.create(fixture_directory / "late-recovery")
+        late_recovery_release = FifoCheckpoint.create(
             fixture_directory / "late-recovery-release"
         )
         environment = os.environ.copy()
@@ -263,8 +262,8 @@ def test_launcher_crash_during_retirement_removes_temporary_directory(
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         fixture_directory = Path(temporary_directory)
-        cleanup = FifoCheckpoint(fixture_directory / "retirement-cleanup")
-        cleanup_release = FifoCheckpoint(
+        cleanup = FifoCheckpoint.create(fixture_directory / "retirement-cleanup")
+        cleanup_release = FifoCheckpoint.create(
             fixture_directory / "retirement-cleanup-release"
         )
         environment = os.environ.copy()

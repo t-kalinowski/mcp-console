@@ -190,11 +190,18 @@ fn runner_fixture(name: &str, slow_test_seconds: &str) -> (TestDirectory, PathBu
         source.replace("SLOW_TEST_SECONDS = 60.0", &slow_test_seconds),
     )
     .unwrap();
-    fs::copy(
-        repository.join("tests/boundaries/_support.py"),
-        boundaries.join("_support.py"),
-    )
-    .unwrap();
+    let support = temporary.path().join("tests/support");
+    fs::create_dir_all(&support).unwrap();
+    for entry in fs::read_dir(repository.join("tests/support")).unwrap() {
+        let entry = entry.unwrap();
+        if entry
+            .path()
+            .extension()
+            .is_some_and(|extension| extension == "py")
+        {
+            fs::copy(entry.path(), support.join(entry.file_name())).unwrap();
+        }
+    }
     fs::copy(
         repository.join("tests/fixtures/transcript_runner/server.py"),
         &suite,
@@ -289,6 +296,133 @@ fn wait_for_runner(mut child: ChildProcess, output: &mut RunnerOutput) -> ExitSt
             }
         }
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn transcript_test_script_excludes_suites_in_private_directories() {
+    let (temporary, boundaries, _release_gate) = runner_fixture("private-suite", "30.0");
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let private_suite = boundaries.join("client_server/server/_private/test_hidden.py");
+    fs::create_dir_all(private_suite.parent().unwrap()).unwrap();
+    fs::copy(
+        repository.join("tests/fixtures/transcript_runner/server.py"),
+        private_suite,
+    )
+    .unwrap();
+
+    let mut child = spawn_runner(&temporary, &boundaries, 1, &["--list"]);
+    let mut output = RunnerOutput::start(&mut child);
+    let status = wait_for_runner(child, &mut output);
+    let (stdout, stderr) = output.into_streams();
+
+    assert!(status.success(), "transcript test failed: {stderr:?}");
+    assert!(
+        stdout
+            .iter()
+            .all(|line| !line.contains("client_server/server/_private")),
+        "private suite was collected: {stdout:?}"
+    );
+    assert!(
+        stdout
+            .iter()
+            .any(|line| { line == "client_server/server/test_tools::initializes_and_lists_tools" }),
+        "public suite was not collected: {stdout:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn transcript_test_script_locates_suites_and_cases() {
+    let (temporary, boundaries, _release_gate) = runner_fixture("locate", "30.0");
+    let suite = "client_server/server/test_tools";
+    let case = "client_server/server/test_tools::initializes_and_lists_tools";
+
+    let mut child = spawn_runner(&temporary, &boundaries, 1, &["--locate", case]);
+    let mut output = RunnerOutput::start(&mut child);
+    let status = wait_for_runner(child, &mut output);
+    let (stdout, stderr) = output.into_streams();
+
+    assert!(status.success(), "transcript test failed: {stderr:?}");
+    assert_eq!(
+        stdout,
+        [
+            case,
+            "  source: tests/boundaries/client_server/server/test_tools.py:5",
+            "  snapshot: tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml",
+        ]
+    );
+
+    let mut child = spawn_runner(&temporary, &boundaries, 1, &["--locate", suite]);
+    let mut output = RunnerOutput::start(&mut child);
+    let status = wait_for_runner(child, &mut output);
+    let (stdout, stderr) = output.into_streams();
+
+    assert!(status.success(), "transcript test failed: {stderr:?}");
+    assert_eq!(stdout.len(), 15, "unexpected locate output: {stdout:?}");
+    assert_eq!(
+        &stdout[..3],
+        [
+            case,
+            "  source: tests/boundaries/client_server/server/test_tools.py:5",
+            "  snapshot: tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml",
+        ]
+    );
+    assert_eq!(
+        &stdout[12..],
+        [
+            "client_server/server/test_tools::runs_after_blocked_case",
+            "  source: tests/boundaries/client_server/server/test_tools.py:39",
+            "  snapshot: tests/snapshots/client_server/server/test_tools/runs_after_blocked_case.yaml",
+        ]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn transcript_test_script_rejects_locate_with_update() {
+    let (temporary, boundaries, _release_gate) = runner_fixture("locate-update", "30.0");
+    let case = "client_server/server/test_tools::initializes_and_lists_tools";
+
+    let mut child = spawn_runner(&temporary, &boundaries, 1, &["--locate", case, "--update"]);
+    let mut output = RunnerOutput::start(&mut child);
+    let status = wait_for_runner(child, &mut output);
+    let (stdout, stderr) = output.into_streams();
+
+    assert!(!status.success(), "contradictory options were accepted");
+    assert!(stdout.is_empty(), "collection continued: {stdout:?}");
+    assert!(
+        stderr
+            .last()
+            .is_some_and(|line| line.ends_with("--locate cannot be combined with --update")),
+        "unexpected stderr: {stderr:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn transcript_test_script_rejects_orphan_snapshots_during_collection() {
+    let (temporary, boundaries, _release_gate) = runner_fixture("orphan-snapshot", "30.0");
+    let orphan = temporary
+        .path()
+        .join("tests/snapshots/client_server/server/test_tools/deleted_case.yaml");
+    fs::write(&orphan, "---\nrunner: orphan\n...\n").unwrap();
+
+    let mut child = spawn_runner(&temporary, &boundaries, 1, &["--list"]);
+    let mut output = RunnerOutput::start(&mut child);
+    let status = wait_for_runner(child, &mut output);
+    let (stdout, stderr) = output.into_streams();
+
+    assert!(!status.success(), "orphan snapshot was accepted");
+    assert!(stdout.is_empty(), "collection continued: {stdout:?}");
+    assert!(
+        stderr.ends_with(&[
+            "orphan snapshot: tests/snapshots/client_server/server/test_tools/deleted_case.yaml"
+                .to_owned(),
+            "run scripts/test --update to remove orphan snapshots".to_owned(),
+        ]),
+        "unexpected stderr: {stderr:?}"
+    );
 }
 
 #[cfg(unix)]

@@ -4,16 +4,35 @@ import base64
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from _support import Transcript, run_this_suite
-from server_relay._harness import (
-    ServerRelayClient,
-    _reports_worker_outcome,
-)
+from boundaries.server_relay._harness import ServerRelayClient
+from support.records import Transcript
+from support.suites import run_this_suite
 
 
 PLATFORMS = {"darwin"}
+
+
+def _reports_worker_outcome(
+    binary: Path,
+    scenario: str,
+    diagnostic: str,
+) -> tuple[Transcript, str]:
+    client = ServerRelayClient(binary, scenario)
+    failed = client.client._start_send(r="42")
+    transcript = client.release_failure(failed, diagnostic)
+    result = failed["result"]
+    assert result.get("isError") is True, result
+    content = result["content"]
+    assert len(content) == 1 and content[0]["type"] == "text", content
+    output = content[0]["text"]
+    stopped = "[worker stopped: in-memory state lost]"
+    replacement = "[starting new worker]"
+    assert (
+        output.index(diagnostic) < output.index(stopped) < output.index(replacement)
+    ), output
+    return transcript, output
 
 
 def test_reports_fatal_failure(binary: Path) -> Transcript:

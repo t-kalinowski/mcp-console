@@ -9,21 +9,15 @@ import tempfile
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from _support import (
-    McpClient,
-    Transcript,
-    code,
-    r_test_environment,
-    run_this_suite,
-)
-
-PLATFORMS = {"darwin"}
-
-from client_server._harness import (
+from support.assertions import last_result_text
+from support.client import McpClient
+from support.normalization import code
+from support.r import r_test_environment
+from support.records import Transcript
+from support.resolvers import (
     ir_cache_directory,
-    _python_last_tool_text as last_tool_text,
     named_requirement_error,
     normalize_duckdb_resolution_error,
     python_inventory_client,
@@ -36,6 +30,9 @@ from client_server._harness import (
     write_python_executable,
     write_uv_python_inventories,
 )
+from support.suites import run_this_suite
+
+PLATFORMS = {"darwin"}
 
 
 def test_uses_current_r_library_for_managed_python_resolution(
@@ -62,7 +59,7 @@ def test_uses_current_r_library_for_managed_python_resolution(
         )
         client._initialize_and_list_tools()
         client.send(r="initial_r_library <- .libPaths()[[1L]]")
-        assert last_tool_text(client) == "[done]"
+        assert last_result_text(client) == "[done]"
 
         def current_r_library() -> str:
             # fmt: r
@@ -70,7 +67,7 @@ def test_uses_current_r_library_for_managed_python_resolution(
                 cat(jsonlite::toJSON(.libPaths()[[1L]], auto_unbox = TRUE))
                 """)
             client.send(r=r)
-            output = last_tool_text(client)
+            output = last_result_text(client)
             library = json.loads(output)
             client.transcript[-1]["result"]["content"][0]["text"] = (
                 '"<current managed R library>"'
@@ -88,7 +85,7 @@ def test_uses_current_r_library_for_managed_python_resolution(
             assert first_libraries == [library] * len(records), first_libraries
 
         client.send(requirements={"r": ["zeallot"]})
-        assert last_tool_text(client) == "[prepared]"
+        assert last_result_text(client) == "[prepared]"
         prepared_r_library = current_r_library()
         uv_record.write_text("", encoding="utf-8")
         r_libs_record.write_text("", encoding="utf-8")
@@ -99,7 +96,7 @@ def test_uses_current_r_library_for_managed_python_resolution(
             invisible(capture.output(print(reticulate::py_require())))
             """)
         client.send(r=r)
-        assert last_tool_text(client) == "[done]", client.transcript[-1]
+        assert last_result_text(client) == "[done]", client.transcript[-1]
         assert_resolver_used(prepared_r_library)
 
         uv_record.write_text("", encoding="utf-8")
@@ -110,7 +107,7 @@ def test_uses_current_r_library_for_managed_python_resolution(
             invisible(reticulate::py_config())
             """)
         client.send(r=r)
-        assert last_tool_text(client) == "[done]", client.transcript[-1]
+        assert last_result_text(client) == "[done]", client.transcript[-1]
         assert_resolver_used(prepared_r_library)
 
         uv_record.write_text("", encoding="utf-8")
@@ -119,7 +116,7 @@ def test_uses_current_r_library_for_managed_python_resolution(
             control="restart",
             requirements={"r": ["praise"], "python": ["six"]},
         )
-        assert last_tool_text(client) == (
+        assert last_result_text(client) == (
             "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
         )
         restarted_r_library = current_r_library()
@@ -175,7 +172,7 @@ def test_validates_registry_only_python_requirements(binary: Path) -> Transcript
             )
             result = client.transcript[-1]["result"]
             assert result["isError"] is True, result
-            assert last_tool_text(client) == named_requirement_error(requirement)
+            assert last_result_text(client) == named_requirement_error(requirement)
         assert uv_record.read_text(encoding="utf-8") == ""
 
         client.send(
@@ -191,14 +188,14 @@ def test_validates_registry_only_python_requirements(binary: Path) -> Transcript
         client.send(
             requirements={"python": [prepared]},
         )
-        assert last_tool_text(client) == "[prepared]"
+        assert last_result_text(client) == "[prepared]"
         assert uv_record.read_text(encoding="utf-8") != ""
         restarted = "urllib3!=2.0.0; python_version < '0'"
         client.send(
             control="restart",
             requirements={"python": [restarted]},
         )
-        assert last_tool_text(client) == "[starting new worker]\n[idle]"
+        assert last_result_text(client) == "[starting new worker]\n[idle]"
 
         # fmt: r
         r = code(rf"""
@@ -212,7 +209,7 @@ def test_validates_registry_only_python_requirements(binary: Path) -> Transcript
             )
             """)
         client.send(r=r)
-        assert last_tool_text(client) == "[done]", client.transcript[-1]
+        assert last_result_text(client) == "[done]", client.transcript[-1]
 
         worker_executable = temporary / "worker-python"
         worker_retained_selector = temporary / "worker-retained-python"
@@ -333,7 +330,7 @@ def test_validates_registry_only_python_requirements(binary: Path) -> Transcript
             )
             """)
         client.send(r=r)
-        output = last_tool_text(client)
+        output = last_result_text(client)
         assert output == (
             python_version_constraint_error("python3")
             + "\n"
@@ -359,7 +356,7 @@ def test_validates_registry_only_python_requirements(binary: Path) -> Transcript
               is.null(reticulate::py_require()$python_version)
             """)
         client.send(r=r)
-        assert last_tool_text(client) == "[1] TRUE\n"
+        assert last_result_text(client) == "[1] TRUE\n"
 
         runtime_rejected = "./runtime-project"
         uv_record.write_text("", encoding="utf-8")
@@ -425,7 +422,7 @@ def test_recovers_from_python_version_resolution_failure(binary: Path) -> Transc
         )
 
         client.send(r="identical(Sys.getpid(), worker_pid)")
-        assert last_tool_text(client) == "[1] TRUE\n"
+        assert last_result_text(client) == "[1] TRUE\n"
         return client._finish()
 
 
@@ -452,7 +449,7 @@ def test_resolves_python_version_inventory_semantics(binary: Path) -> Transcript
         )
 
         client.send(requirements={"python": ["py-yaml12"]})
-        assert last_tool_text(client) == "[prepared]"
+        assert last_result_text(client) == "[prepared]"
         assert recorded_python_preferences(arguments) == ["only-managed"]
         assert recorded_tool_run_pythons(arguments) == ["3.12.12"]
         return client._finish()
@@ -536,7 +533,7 @@ def test_falls_back_after_filtering_unsupported_python_versions(
         )
 
         client.send(requirements={"python": ["py-yaml12"]})
-        assert last_tool_text(client) == "[prepared]"
+        assert last_result_text(client) == "[prepared]"
         assert recorded_python_preferences(arguments) == [
             "only-managed",
             "only-system",
@@ -586,7 +583,7 @@ def test_respects_system_python_preference_with_custom_install_directory(
         )
 
         client.send(requirements={"python": ["py-yaml12"]})
-        assert last_tool_text(client) == "[prepared]"
+        assert last_result_text(client) == "[prepared]"
         assert recorded_python_preferences(arguments) == [
             "only-managed",
             "only-system",
@@ -690,7 +687,7 @@ def test_uses_reticulate_managed_uv_for_python_resolution(
         intercept_marker.touch()
 
         client.send(requirements={"python": ["py-yaml12"]})
-        assert last_tool_text(client) == "[prepared]"
+        assert last_result_text(client) == "[prepared]"
         assert not path_uv_log.exists(), "PATH uv handled managed resolution"
         records = read_uv_resolver_records(resolver_record)
         version_lists = [
@@ -733,7 +730,7 @@ def test_retains_managed_python_when_uv_caching_is_disabled(
         )
 
         client.send(requirements={"python": ["py-yaml12"]})
-        assert last_tool_text(client) == "[prepared]"
+        assert last_result_text(client) == "[prepared]"
         records = read_uv_resolver_records(resolver_record)
         version_lists = [
             record
@@ -768,7 +765,7 @@ def test_removes_disabled_uv_python_source_aliases(binary: Path) -> Transcript:
         )
 
         client.send(requirements={"python": ["py-yaml12"]})
-        assert last_tool_text(client) == "[prepared]"
+        assert last_result_text(client) == "[prepared]"
         records = read_uv_resolver_records(resolver_record)
         assert records, "managed Python resolution did not invoke uv"
         assert all(record["UV_MANAGED_PYTHON"] is None for record in records), records
@@ -859,7 +856,7 @@ def test_interrupts_python_cache_warmup_without_committing(
         assert interrupt_result.get("isError") is not True, interrupt_result
 
         client.send(requirements={"python": ["py-yaml12"]})
-        assert last_tool_text(client) == "[prepared]"
+        assert last_result_text(client) == "[prepared]"
         assert len(recorded_tool_run_pythons(arguments)) == 2
         return client._finish()
 
@@ -950,7 +947,7 @@ def test_stops_before_cache_warmup_after_python_resolver_interrupt(
 
         block_tool_run.unlink()
         client.send(requirements={"python": ["py-yaml12"]})
-        assert last_tool_text(client) == "[prepared]"
+        assert last_result_text(client) == "[prepared]"
         assert len(recorded_tool_run_pythons(arguments)) == 2
         return client._finish()
 

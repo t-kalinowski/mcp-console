@@ -5,21 +5,19 @@ import sys
 import tempfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from _support import (
-    McpClient,
-    Transcript,
-    run_this_suite,
-)
+from support.assertions import last_tool_text
+from support.checkpoints import release_fixture_checkpoint
+from support.client import McpClient
+from support.processes import stop_process
+from support.records import Transcript
+from support.suites import run_this_suite
 
 PLATFORMS = {"darwin"}
 
-from client_server._harness import (
+from boundaries.client_server._harness import (
     expose_idle_sideband_output,
-    _zod_last_tool_text as last_tool_text,
-    release_fixture_checkpoint,
-    stop_process,
     submit_prompted_stdin,
     wait_for_marker,
 )

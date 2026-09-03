@@ -6,9 +6,12 @@ import tempfile
 from html.parser import HTMLParser
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from _support import McpClient, Transcript, r_test_environment, run_this_suite
+from support.client import McpClient
+from support.r import r_test_environment
+from support.records import Transcript
+from support.suites import run_this_suite
 
 
 PLATFORMS = {"darwin"}

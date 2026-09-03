@@ -10,22 +10,9 @@ import tempfile
 import termios
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from _support import (
-    DarwinProcessIdentity,
-    FifoCheckpoint,
-    Transcript,
-    build_manager_interposer,
-    capture_darwin_process_identity,
-    code,
-    darwin_child_process_identities,
-    kill_darwin_processes,
-    live_darwin_processes,
-    run_this_suite,
-    signal_darwin_process,
-)
-from cli._harness import (
+from boundaries.cli._harness import (
     TIMEOUT,
     _build_supervision_interposer,
     _command,
@@ -33,6 +20,19 @@ from cli._harness import (
     _wait_for_gated_root_and_manager,
     _wait_for_private_startup_gate,
 )
+from support.checkpoints import FifoCheckpoint
+from support.macos import (
+    DarwinProcessIdentity,
+    build_manager_interposer,
+    capture_darwin_process_identity,
+    darwin_child_process_identities,
+    kill_darwin_processes,
+    live_darwin_processes,
+    signal_darwin_process,
+)
+from support.normalization import code
+from support.records import Transcript
+from support.suites import run_this_suite
 
 
 PLATFORMS = {"darwin"}
@@ -43,8 +43,8 @@ def test_spawns_gated_root_before_manager(binary: Path) -> Transcript:
 
     with tempfile.TemporaryDirectory() as temporary_directory:
         fixture_directory = Path(temporary_directory)
-        manager_spawn = FifoCheckpoint(fixture_directory / "manager-spawn")
-        manager_spawn_release = FifoCheckpoint(
+        manager_spawn = FifoCheckpoint.create(fixture_directory / "manager-spawn")
+        manager_spawn_release = FifoCheckpoint.create(
             fixture_directory / "manager-spawn-release"
         )
         environment = os.environ.copy()
@@ -135,8 +135,8 @@ def test_target_starts_after_manager_readiness(binary: Path) -> Transcript:
 
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
-        ready_sent = FifoCheckpoint(temporary / "ready-sent")
-        ready_return = FifoCheckpoint(temporary / "ready-return")
+        ready_sent = FifoCheckpoint.create(temporary / "ready-sent")
+        ready_return = FifoCheckpoint.create(temporary / "ready-return")
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
         environment["MCP_CONSOLE_TEST_MANAGER_READY_SENT"] = str(ready_sent.path)
@@ -218,8 +218,8 @@ def test_target_waits_for_manager_adoption(binary: Path) -> Transcript:
 
     with tempfile.TemporaryDirectory() as temporary_directory:
         fixture_directory = Path(temporary_directory)
-        manager_started = FifoCheckpoint(fixture_directory / "manager-started")
-        manager_release = FifoCheckpoint(fixture_directory / "manager-release")
+        manager_started = FifoCheckpoint.create(fixture_directory / "manager-started")
+        manager_release = FifoCheckpoint.create(fixture_directory / "manager-release")
         environment = os.environ.copy()
         environment["DYLD_INSERT_LIBRARIES"] = str(
             _build_supervision_interposer(fixture_directory, "manager-start")
@@ -307,8 +307,8 @@ def test_terminal_interrupt_before_manager_readiness_preserves_status(
 
     with tempfile.TemporaryDirectory() as temporary_directory:
         fixture_directory = Path(temporary_directory)
-        manager_started = FifoCheckpoint(fixture_directory / "manager-started")
-        manager_release = FifoCheckpoint(fixture_directory / "manager-release")
+        manager_started = FifoCheckpoint.create(fixture_directory / "manager-started")
+        manager_release = FifoCheckpoint.create(fixture_directory / "manager-release")
         environment = os.environ.copy()
         environment["DYLD_INSERT_LIBRARIES"] = str(
             _build_supervision_interposer(fixture_directory, "manager-start")
@@ -317,7 +317,7 @@ def test_terminal_interrupt_before_manager_readiness_preserves_status(
         environment["MCP_CONSOLE_TEST_MANAGER_RELEASE"] = str(manager_release.path)
         environment["TMPDIR"] = str(fixture_directory)
 
-        process, master = _start_with_controlling_terminal(
+        process, master, _ = _start_with_controlling_terminal(
             [binary, *arguments],
             environment,
         )

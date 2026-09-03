@@ -8,25 +8,21 @@ import tempfile
 import threading
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from _support import (
-    McpClient,
-    Transcript,
-    run_this_suite,
-    stop_client,
-)
+from support.assertions import last_tool_text
+from support.client import McpClient, stop_client
+from support.processes import stop_process, stop_process_group
+from support.records import Transcript
+from support.resolvers import resolver_interrupt_permission_environment
+from support.suites import run_this_suite
 
 PLATFORMS = {"darwin"}
 FIXTURE_CHECKPOINT_TIMEOUT_SECONDS = 15
 
-from client_server._harness import (
+from boundaries.client_server._harness import (
     ZodFixtureControl,
     continue_stopped_worker,
-    _zod_last_tool_text as last_tool_text,
-    resolver_interrupt_permission_environment,
-    stop_process,
-    stop_process_group,
     stop_recorded_worker,
     wait_for_path,
     wait_for_process_group_exit,

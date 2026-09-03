@@ -10,16 +10,9 @@ import tempfile
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from _support import (
-    FifoCheckpoint,
-    Transcript,
-    live_darwin_processes,
-    run_this_suite,
-    signal_darwin_process,
-)
-from cli._harness import (
+from boundaries.cli._harness import (
     TIMEOUT,
     _build_supervision_interposer,
     _cleanup,
@@ -29,8 +22,15 @@ from cli._harness import (
     _remaining_timeout,
     _start_lifetime,
     _wait_for_process_exit,
-    _wait_for_process_state,
 )
+from support.checkpoints import FifoCheckpoint
+from support.macos import (
+    live_darwin_processes,
+    signal_darwin_process,
+    wait_for_darwin_process_state as _wait_for_process_state,
+)
+from support.records import Transcript
+from support.suites import run_this_suite
 
 
 PLATFORMS = {"darwin"}
@@ -41,16 +41,16 @@ def test_manager_owner_loss_stop_failure_remains_bounded(
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         fixture_directory = Path(temporary_directory)
-        group_stop_failed = FifoCheckpoint(
+        group_stop_failed = FifoCheckpoint.create(
             fixture_directory / "manager-group-stop-failed"
         )
-        root_stop_failed = FifoCheckpoint(
+        root_stop_failed = FifoCheckpoint.create(
             fixture_directory / "manager-root-stop-failed"
         )
-        descendant_observed = FifoCheckpoint(
+        descendant_observed = FifoCheckpoint.create(
             fixture_directory / "manager-descendant-observed"
         )
-        descendant_signaled = FifoCheckpoint(
+        descendant_signaled = FifoCheckpoint.create(
             fixture_directory / "manager-descendant-signaled"
         )
         environment = os.environ.copy()
@@ -169,13 +169,13 @@ def test_manager_owner_loss_after_root_group_change_remains_bounded(
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         fixture_directory = Path(temporary_directory)
-        root_stop_failed = FifoCheckpoint(
+        root_stop_failed = FifoCheckpoint.create(
             fixture_directory / "manager-root-stop-failed"
         )
-        descendant_observed = FifoCheckpoint(
+        descendant_observed = FifoCheckpoint.create(
             fixture_directory / "manager-descendant-observed"
         )
-        descendant_signaled = FifoCheckpoint(
+        descendant_signaled = FifoCheckpoint.create(
             fixture_directory / "manager-descendant-signaled"
         )
         environment = os.environ.copy()
@@ -294,7 +294,7 @@ def test_manager_owner_loss_after_root_group_change_remains_bounded(
 def test_manager_recovery_failure_wakes_launcher(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         fixture_directory = Path(temporary_directory)
-        denied_sigkill = FifoCheckpoint(fixture_directory / "denied-sigkill")
+        denied_sigkill = FifoCheckpoint.create(fixture_directory / "denied-sigkill")
         environment = os.environ.copy()
         environment["DYLD_INSERT_LIBRARIES"] = str(
             _build_supervision_interposer(fixture_directory, "denied-sigkill")
@@ -345,10 +345,16 @@ def test_manager_recovery_failure_wakes_launcher(binary: Path) -> Transcript:
 def test_manager_recovery_inspection_failure_stops_root(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         fixture_directory = Path(temporary_directory)
-        inspection_failed = FifoCheckpoint(fixture_directory / "inspection-failed")
-        group_stop_failed = FifoCheckpoint(fixture_directory / "group-stop-failed")
-        root_stopped = FifoCheckpoint(fixture_directory / "root-stopped")
-        root_stop_release = FifoCheckpoint(fixture_directory / "root-stop-release")
+        inspection_failed = FifoCheckpoint.create(
+            fixture_directory / "inspection-failed"
+        )
+        group_stop_failed = FifoCheckpoint.create(
+            fixture_directory / "group-stop-failed"
+        )
+        root_stopped = FifoCheckpoint.create(fixture_directory / "root-stopped")
+        root_stop_release = FifoCheckpoint.create(
+            fixture_directory / "root-stop-release"
+        )
         failure_trigger = fixture_directory / "fail-process-info"
         environment = os.environ.copy()
         environment.update(
@@ -433,8 +439,8 @@ def test_root_observer_failure_reports_group_cleanup_failure(
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
-        inspection_failed = FifoCheckpoint(temporary / "inspection-failed")
-        group_stop_failed = FifoCheckpoint(temporary / "group-stop-failed")
+        inspection_failed = FifoCheckpoint.create(temporary / "inspection-failed")
+        group_stop_failed = FifoCheckpoint.create(temporary / "group-stop-failed")
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
         environment["DYLD_INSERT_LIBRARIES"] = str(

@@ -8,28 +8,23 @@ import sys
 import tempfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from _support import (
-    McpClient,
-    Transcript,
+from support.assertions import (
+    assert_exact_interleaving,
     assert_result_content,
-    code,
-    r_test_environment,
-    reference_plots,
-    run_this_suite,
-    stop_client,
     wait_for_evaluation_output,
-    wait_for_worker_file,
 )
+from support.assertions import last_result_text
+from support.checkpoints import wait_for_worker_file
+from support.client import McpClient, stop_client
+from support.normalization import code
+from support.r import r_test_environment, reference_plots
+from support.records import Transcript
+from support.resolvers import matplotlib_test_environment
+from support.suites import run_this_suite
 
 PLATFORMS = {"darwin"}
-
-from client_server._harness import (
-    assert_exact_interleaving,
-    _python_last_tool_text as last_tool_text,
-    matplotlib_test_environment,
-)
 
 
 def test_evaluates_cells_in_persistent_reticulate_state(binary: Path) -> Transcript:
@@ -75,7 +70,7 @@ def test_evaluates_cells_in_persistent_reticulate_state(binary: Path) -> Transcr
         )
         """)
     client.send(python=python)
-    output = last_tool_text(client)
+    output = last_result_text(client)
     assert output == "from Python\n(42, True, True, True)\n", repr(output)
     # fmt: python
     python = code("""
@@ -83,9 +78,9 @@ def test_evaluates_cells_in_persistent_reticulate_state(binary: Path) -> Transcr
         2
         """)
     client.send(python=python)
-    assert last_tool_text(client) == "2\n"
+    assert last_result_text(client) == "2\n"
     client.send(python="answer")
-    assert last_tool_text(client) == "41\n"
+    assert last_result_text(client) == "41\n"
     # fmt: r
     r = code(r"""
         stopifnot(!"package:reticulate" %in% search())
@@ -95,14 +90,14 @@ def test_evaluates_cells_in_persistent_reticulate_state(binary: Path) -> Transcr
         py$answer
         """)
     client.send(r=r)
-    assert last_tool_text(client) == "[1] 41\n"
+    assert last_result_text(client) == "[1] 41\n"
     # fmt: python
     python = code("""
         unique_python_source_marker = r.python_source_visible()
         unique_python_source_marker
         """)
     client.send(python=python)
-    output = last_tool_text(client)
+    output = last_result_text(client)
     assert output == "False\n", repr(output)
     # fmt: r
     r = code(r"""
@@ -113,7 +108,7 @@ def test_evaluates_cells_in_persistent_reticulate_state(binary: Path) -> Transcr
         """)
     client.send(r=r)
     client.send(python="answer + 1")
-    assert last_tool_text(client) == "42\n"
+    assert last_result_text(client) == "42\n"
     # fmt: python
     python = code("""
         compile = "user compile"
@@ -123,9 +118,9 @@ def test_evaluates_cells_in_persistent_reticulate_state(binary: Path) -> Transcr
         BaseException = "user BaseException"
         """)
     client.send(python=python)
-    assert last_tool_text(client) == "[done]"
+    assert last_result_text(client) == "[done]"
     client.send(python="answer + 1")
-    assert last_tool_text(client) == "42\n"
+    assert last_result_text(client) == "42\n"
     # fmt: python
     python = code("""
         import builtins as test_builtins
@@ -134,16 +129,16 @@ def test_evaluates_cells_in_persistent_reticulate_state(binary: Path) -> Transcr
         test_builtins.__import__ = None
         """)
     client.send(python=python)
-    assert last_tool_text(client) == "[done]"
+    assert last_result_text(client) == "[done]"
     # fmt: python
     python = code("""
         test_builtins.__import__ = test_original_import
         answer + 1
         """)
     client.send(python=python)
-    assert last_tool_text(client) == "42\n"
+    assert last_result_text(client) == "42\n"
     client.send(python="silent = True")
-    assert last_tool_text(client) == "[done]"
+    assert last_result_text(client) == "[done]"
     # fmt: r
     r = code(r"""
         rm(list = ls())
@@ -151,13 +146,13 @@ def test_evaluates_cells_in_persistent_reticulate_state(binary: Path) -> Transcr
         py$answer
         """)
     client.send(r=r)
-    assert last_tool_text(client) == "[1] 41\n"
+    assert last_result_text(client) == "[1] 41\n"
     # fmt: python
     python = code("""
         assigned_from_r
         """)
     client.send(python=python)
-    assert last_tool_text(client) == "43\n"
+    assert last_result_text(client) == "43\n"
     return client._finish()
 
 
@@ -173,7 +168,7 @@ def test_returns_r_plots_from_python_bridge(binary: Path) -> Transcript:
         }
         """)
     client.send(r=r)
-    assert last_tool_text(client) == "[done]"
+    assert last_result_text(client) == "[done]"
 
     expected_plot = reference_plots(
         rscript,
@@ -268,7 +263,7 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
             invisible(reticulate::py_config())
             """)
         client.send(r=r)
-        assert last_tool_text(client) == "[done]"
+        assert last_result_text(client) == "[done]"
         host_discovery = temporary / "mcp-console-font-discovery"
         assert host_discovery.is_file()
         persistent_caches = list(host_matplotlib.glob("fontlist-v*.json"))
@@ -370,7 +365,7 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
             client,
         )
         assert closed_reference.is_file()
-        assert last_tool_text(client) == "[]\n"
+        assert last_result_text(client) == "[]\n"
 
         # fmt: python
         python = code("""
@@ -378,7 +373,7 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
             plt.get_fignums()
             """)
         client.send(python=python)
-        assert last_tool_text(client) == "[]\n"
+        assert last_result_text(client) == "[]\n"
 
         # fmt: python
         python = code("""
@@ -406,7 +401,7 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
         )
 
         client.send(python="plt.get_fignums()")
-        assert last_tool_text(client) == "[]\n"
+        assert last_result_text(client) == "[]\n"
 
         # fmt: python
         python = code("""
@@ -439,7 +434,7 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
         )
 
         client.send(python="plt.get_fignums()")
-        assert last_tool_text(client) == "[]\n"
+        assert last_result_text(client) == "[]\n"
 
         # Replacing the private link must not make a later runtime resolution
         # overwrite user-owned worker state or discard the worker.
@@ -456,19 +451,19 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
             cache_link_replaced = True
             """)
         client.send(python=python)
-        assert last_tool_text(client) == "[done]"
+        assert last_result_text(client) == "[done]"
 
         # fmt: r
         r = code(r"""
             reticulate::py_require("py-yaml12")
             """)
         client.send(r=r)
-        assert last_tool_text(client) == "[done]"
+        assert last_result_text(client) == "[done]"
         client.send(python="(cache_link_replaced, __import__('yaml12').__name__)")
-        assert last_tool_text(client) == "(True, 'yaml12')\n"
+        assert last_result_text(client) == "(True, 'yaml12')\n"
 
         client.send(control="restart")
-        assert last_tool_text(client) == (
+        assert last_result_text(client) == (
             "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
         )
         # fmt: python
@@ -523,7 +518,7 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
             )
             """)
         client.send(python=python)
-        output = last_tool_text(client)
+        output = last_result_text(client)
         assert output == "(True, 7.25, True, True, True, True, False, False)\n", repr(
             output
         )
@@ -568,7 +563,7 @@ def test_inherits_explicit_matplotlib_config(binary: Path) -> Transcript:
         client.send(
             requirements={"python": ["matplotlib"]},
         )
-        assert last_tool_text(client) == "[prepared]"
+        assert last_result_text(client) == "[prepared]"
         # fmt: python
         python = code("""
             import os
@@ -596,7 +591,7 @@ def test_inherits_explicit_matplotlib_config(binary: Path) -> Transcript:
             )
             """)
         client.send(python=python)
-        output = last_tool_text(client)
+        output = last_result_text(client)
         assert output == "(True, 8.25, True, True)\n", repr(output)
         transcript = client._finish()
         assert explicit_rc.read_text(encoding="utf-8") == "lines.linewidth: 8.25\n"
@@ -661,7 +656,7 @@ def test_inherits_default_matplotlib_config(binary: Path) -> Transcript:
         client.send(
             requirements={"python": ["matplotlib"]},
         )
-        assert last_tool_text(client) == "[prepared]"
+        assert last_result_text(client) == "[prepared]"
         # fmt: python
         python = code("""
             import os
@@ -676,7 +671,7 @@ def test_inherits_default_matplotlib_config(binary: Path) -> Transcript:
             )
             """)
         client.send(python=python)
-        output = last_tool_text(client)
+        output = last_result_text(client)
         assert output == "(True, 9.25)\n", repr(output)
         transcript = client._finish()
         assert matplotlibrc.read_text(encoding="utf-8") == "lines.linewidth: 9.25\n"
@@ -703,9 +698,9 @@ def test_runs_async_python_explicitly(binary: Path) -> Transcript:
             return 42
         """)
     client.send(python=python)
-    assert last_tool_text(client) == "[done]"
+    assert last_result_text(client) == "[done]"
     client.send(python="asyncio.run(answer())")
-    assert last_tool_text(client) == "42\n"
+    assert last_result_text(client) == "42\n"
     return client._finish()
 
 
@@ -724,7 +719,7 @@ def test_recovers_from_python_errors(binary: Path) -> Transcript:
         fail()
         """)
     client.send(python=python)
-    output = last_tool_text(client)
+    output = last_result_text(client)
     assert client.transcript[-1]["result"]["isError"] is False
     assert output.startswith("Traceback (most recent call last):\n")
     assert "<mcp-console:python:" in output
@@ -736,20 +731,20 @@ def test_recovers_from_python_errors(binary: Path) -> Transcript:
         await missing()
         """)
     client.send(python=python)
-    output = last_tool_text(client)
+    output = last_result_text(client)
     assert output.startswith("Traceback (most recent call last):\n")
     assert "<mcp-console:python:" in output
     assert output.endswith("SyntaxError: 'await' outside function\n")
     client.send(python='"compile_partial" in globals()')
-    assert last_tool_text(client) == "False\n"
+    assert last_result_text(client) == "False\n"
 
     client.send(python="nul_state = 42\0")
-    output = last_tool_text(client)
+    output = last_result_text(client)
     assert client.transcript[-1]["result"]["isError"] is False
     assert "SyntaxError" in output
     assert "null bytes" in output
     client.send(python="answer")
-    assert last_tool_text(client) == "41\n"
+    assert last_result_text(client) == "41\n"
     return client._finish()
 
 
@@ -787,7 +782,7 @@ def test_releases_python_threads_before_running_init_hooks(
                 cat(message, "\n", sep = "")
                 """)
             client.send(r=r)
-            output = last_tool_text(client)
+            output = last_result_text(client)
             assert output == "synthetic Python initialization hook failure\n", repr(
                 output
             )
@@ -821,7 +816,7 @@ def test_releases_python_threads_before_running_init_hooks(
                     time.sleep(0.01)
                 """)
             client.send(python=python)
-            assert last_tool_text(client) == "[done]"
+            assert last_result_text(client) == "[done]"
 
             started = wait_for_worker_file(
                 Path(temporary_directory),
@@ -840,7 +835,7 @@ def test_releases_python_threads_before_running_init_hooks(
                 python='hook_input = input("hook> "); hook_input',
                 stdin="after hook\n",
             )
-            assert last_tool_text(client) == (
+            assert last_result_text(client) == (
                 "[input requested: \"hook> \"]\n'after hook'\n"
             )
             return client._finish()
@@ -860,7 +855,9 @@ def test_routes_python_input(binary: Path) -> Transcript:
         name
         """)
     client.send(python=python)
-    assert last_tool_text(client) == '[input requested: "name> "]\n[waiting for stdin]'
+    assert (
+        last_result_text(client) == '[input requested: "name> "]\n[waiting for stdin]'
+    )
     wait_for_evaluation_output(
         client,
         "'Ada'\n",
@@ -875,7 +872,7 @@ def test_routes_python_input(binary: Path) -> Transcript:
         color
         """)
     client.send(python=python, stdin="blue\n")
-    assert last_tool_text(client) == ("[input requested: \"color> \"]\n'blue'\n")
+    assert last_result_text(client) == ("[input requested: \"color> \"]\n'blue'\n")
 
     # fmt: python
     python = code("""
@@ -885,7 +882,7 @@ def test_routes_python_input(binary: Path) -> Transcript:
         direct
         """)
     client.send(python=python, stdin="fd 0\n")
-    assert last_tool_text(client) == "'fd 0\\n'\n"
+    assert last_result_text(client) == "'fd 0\\n'\n"
     return client._finish()
 
 
@@ -902,7 +899,7 @@ def test_python_debugger_input(binary: Path) -> Transcript:
         debug_value += 1
         """)
     client.send(python=python, stdin="p debug_value\n")
-    output = last_tool_text(client)
+    output = last_result_text(client)
     assert output.count('[input requested: "(Pdb) "]') == 2, output
     assert output.endswith('41\n[input requested: "(Pdb) "]\n[waiting for stdin]'), (
         output
@@ -916,7 +913,7 @@ def test_python_debugger_input(binary: Path) -> Transcript:
         timeout_ms=3_000,
     )
     client.send(python="debug_value")
-    assert last_tool_text(client) == "42\n"
+    assert last_result_text(client) == "42\n"
     return client._finish()
 
 
@@ -963,9 +960,9 @@ def test_restarts_after_python_bridge_failure(binary: Path) -> Transcript:
     )
     result["content"][0]["text"] = bridge_failure + python_failure + worker_failure
     client.send(r='exists("python_worker_marker", inherits = FALSE)')
-    assert last_tool_text(client) == "[1] FALSE\n"
+    assert last_result_text(client) == "[1] FALSE\n"
     client.send(python="6 * 7")
-    assert last_tool_text(client) == "42\n"
+    assert last_result_text(client) == "42\n"
     return client._finish()
 
 

@@ -5,27 +5,17 @@ import tempfile
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from _support import (
-    McpClient,
-    Transcript,
-    build_r_input_handler,
-    code,
-    r_test_environment,
-    run_this_suite,
-    stop_client,
-    wait_for_evaluation_output,
-    wait_for_worker_file,
-)
+from support.assertions import last_tool_text, wait_for_evaluation_output
+from support.checkpoints import wait_for_worker_file
+from support.client import McpClient, stop_client
+from support.normalization import code
+from support.r import build_r_input_handler, r_input_handler_client, r_test_environment
+from support.records import Transcript
+from support.suites import run_this_suite
 
 PLATFORMS = {"darwin"}
-
-
-from client_server._harness import (
-    _r_last_tool_text as last_tool_text,
-    r_input_handler_client,
-)
 
 
 def test_evaluates_source_without_final_newline(binary: Path) -> Transcript:

@@ -6,18 +6,15 @@ import tempfile
 import unicodedata
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from _support import (
-    FifoCheckpoint,
-    McpClient,
-    Transcript,
-    code,
-    r_test_environment,
-    run_this_suite,
-    stop_client,
-    wait_for_worker_file,
-)
+from support.assertions import last_tool_text
+from support.checkpoints import FifoCheckpoint, wait_for_worker_file
+from support.client import McpClient, stop_client
+from support.normalization import code
+from support.r import r_test_environment
+from support.records import Transcript
+from support.suites import run_this_suite
 
 PLATFORMS = {"darwin"}
 
@@ -496,7 +493,7 @@ def test_allows_python_dbapi_callbacks_to_select_an_r_connection(
             paths = setup["content"][0]["text"].splitlines()
             assert len(paths) == 2, setup
             setup["content"][0]["text"] = "<callback started>\n<callback release>"
-            started, release = [FifoCheckpoint(Path(path)) for path in paths]
+            started, release = [FifoCheckpoint.create(Path(path)) for path in paths]
             checkpoints.extend((started, release))
 
             # The SQLite UDF re-enters R while the Python DB-API provider is
@@ -654,7 +651,7 @@ def test_interrupts_python_dbapi_provider_probe(binary: Path) -> Transcript:
             setup = client.transcript[-1]["result"]
             path = Path(setup["content"][0]["text"])
             setup["content"][0]["text"] = "<probe started>"
-            started = FifoCheckpoint(path)
+            started = FifoCheckpoint.create(path)
             checkpoints.append(started)
 
             # fmt: python
@@ -826,12 +823,6 @@ def test_recovers_when_r_provider_switch_trace_raises_system_exit(
     preview = last_tool_text(client)
     assert "value" in preview and "7" in preview
     return client._finish()
-
-
-def last_tool_text(client: McpClient) -> str:
-    result = client.transcript[-1]["result"]
-    assert result.get("isError") is not True, result
-    return result["content"][0]["text"]
 
 
 def display_width(text: str) -> int:

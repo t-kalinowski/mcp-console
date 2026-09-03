@@ -6,9 +6,12 @@ import sys
 import tempfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from _support import McpClient, Transcript, code, run_this_suite, stop_client
+from support.client import McpClient, stop_client
+from support.normalization import code
+from support.records import Transcript
+from support.suites import run_this_suite
 
 
 def assert_invalid_send_has_no_external_effects(binary: Path) -> None:

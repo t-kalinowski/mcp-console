@@ -8,17 +8,16 @@ import sys
 import tempfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from _support import (
-    FifoCheckpoint,
-    McpClient,
-    Transcript,
-    code,
-    r_test_environment,
-    run_this_suite,
-    stop_client,
-)
+from support.assertions import last_tool_text
+from support.checkpoints import FifoCheckpoint
+from support.client import McpClient, stop_client
+from support.normalization import code
+from support.r import r_test_environment
+from support.records import Transcript
+from support.resolvers import record_resolved_r_library
+from support.suites import run_this_suite
 
 PLATFORMS = {"darwin"}
 PNG_1X1 = (
@@ -26,11 +25,9 @@ PNG_1X1 = (
     "AAAAASUVORK5CYII="
 )
 
-from client_server._harness import (
+from boundaries.client_server._harness import (
     expose_idle_input_request,
     expose_idle_sideband_output,
-    _zod_last_tool_text as last_tool_text,
-    record_resolved_r_library,
     wait_for_marker,
 )
 
@@ -83,7 +80,12 @@ def test_standalone_preparation_before_worker_startup_is_causal_and_idempotent(
     binary: Path,
 ) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
-    relay = Path(__file__).resolve().parents[3] / "fixtures" / "scripted_relay"
+    relay = (
+        Path(__file__).resolve().parents[3]
+        / "fixtures"
+        / "server_relay"
+        / "scripted_relay.py"
+    )
     ir = Path(__file__).resolve().parents[3] / "fixtures" / "ordered_retirement_ir"
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
@@ -92,8 +94,8 @@ def test_standalone_preparation_before_worker_startup_is_causal_and_idempotent(
         fake_bin = temporary / "bin"
         fake_bin.mkdir()
         (fake_bin / "ir").symlink_to(ir)
-        resolver_started = FifoCheckpoint(temporary / "resolver-started")
-        resolver_release = FifoCheckpoint(temporary / "resolver-release")
+        resolver_started = FifoCheckpoint.create(temporary / "resolver-started")
+        resolver_release = FifoCheckpoint.create(temporary / "resolver-release")
         worker_started = temporary / "zod-started"
         resolver_counter = temporary / "ir-counter"
         environment, _ = r_test_environment()

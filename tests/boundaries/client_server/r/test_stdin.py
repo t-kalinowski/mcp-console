@@ -4,26 +4,21 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from _support import (
-    FifoCheckpoint,
-    McpClient,
-    Transcript,
+from support.assertions import (
     collect_running_output,
-    code,
-    run_this_suite,
-    stop_client,
+    last_tool_text,
     wait_for_evaluation_output,
 )
+from support.checkpoints import FifoCheckpoint
+from support.client import McpClient, stop_client
+from support.normalization import code
+from support.r import r_input_handler_client
+from support.records import Transcript
+from support.suites import run_this_suite
 
 PLATFORMS = {"darwin"}
-
-
-from client_server._harness import (
-    _r_last_tool_text as last_tool_text,
-    r_input_handler_client,
-)
 
 
 def test_routes_idle_and_timed_out_stdin(binary: Path) -> Transcript:
@@ -186,7 +181,7 @@ def test_preserves_fd0_order_between_readers(binary: Path) -> Transcript:
         setup["content"][0]["text"] = (
             "<fd 0 started checkpoint>\n<fd 0 release checkpoint>"
         )
-        started, release = [FifoCheckpoint(Path(path)) for path in paths]
+        started, release = [FifoCheckpoint.create(Path(path)) for path in paths]
         checkpoints.extend((started, release))
 
         # Hold the worker after same-call stdin has been queued but before

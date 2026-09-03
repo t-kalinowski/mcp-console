@@ -5,21 +5,15 @@ import sys
 import tempfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from _support import (
-    McpClient,
-    Transcript,
-    run_this_suite,
-)
+from support.assertions import large_output, last_tool_text
+from support.client import McpClient
+from support.records import Transcript
+from support.suites import run_this_suite
 
 PLATFORMS = {"darwin"}
 PENDING_TEXT_BUDGET = 8 * 1024 * 1024
-
-from client_server._harness import (
-    large_output,
-    _zod_last_tool_text as last_tool_text,
-)
 
 
 def test_bounds_pending_output_and_resets_after_completion(

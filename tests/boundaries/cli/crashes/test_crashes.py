@@ -8,19 +8,9 @@ import sys
 import tempfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from _support import (
-    FifoCheckpoint,
-    Transcript,
-    capture_darwin_process_identity,
-    darwin_process_extra_socket_descriptors,
-    kill_darwin_processes,
-    live_darwin_processes,
-    run_this_suite,
-    signal_darwin_process,
-)
-from cli._harness import (
+from boundaries.cli._harness import (
     TIMEOUT,
     _build_supervision_interposer,
     _cleanup,
@@ -29,10 +19,20 @@ from cli._harness import (
     _observe_process_exit,
     _start_lifetime,
     _wait_for_cleanup,
-    _wait_for_process_exit,
-    _wait_for_process_state,
     _wait_for_gated_root_and_manager,
+    _wait_for_process_exit,
 )
+from support.checkpoints import FifoCheckpoint
+from support.macos import (
+    capture_darwin_process_identity,
+    darwin_process_extra_socket_descriptors,
+    kill_darwin_processes,
+    live_darwin_processes,
+    signal_darwin_process,
+    wait_for_darwin_process_state as _wait_for_process_state,
+)
+from support.records import Transcript
+from support.suites import run_this_suite
 
 
 PLATFORMS = {"darwin"}
@@ -45,16 +45,16 @@ def test_owner_monitor_start_failure_preserves_temporary_directory(
 
     with tempfile.TemporaryDirectory() as temporary_directory:
         fixture_directory = Path(temporary_directory)
-        monitor_start_failed = FifoCheckpoint(
+        monitor_start_failed = FifoCheckpoint.create(
             fixture_directory / "owner-monitor-start-failed"
         )
-        monitor_start_release = FifoCheckpoint(
+        monitor_start_release = FifoCheckpoint.create(
             fixture_directory / "owner-monitor-start-release"
         )
-        manager_stop_started = FifoCheckpoint(
+        manager_stop_started = FifoCheckpoint.create(
             fixture_directory / "owner-manager-stop-started"
         )
-        manager_stop_release = FifoCheckpoint(
+        manager_stop_release = FifoCheckpoint.create(
             fixture_directory / "owner-manager-stop-release"
         )
         environment = os.environ.copy()

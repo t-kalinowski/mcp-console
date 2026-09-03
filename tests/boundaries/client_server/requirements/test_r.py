@@ -6,19 +6,19 @@ import sys
 import tempfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from _support import (
-    McpClient,
-    Transcript,
-    checkpoint_uv_environment,
-    code,
-    r_test_environment,
+from support.assertions import (
+    last_result_text,
     release_worker_callback_gate,
-    run_this_suite,
-    stop_client,
     wait_for_idle_output,
 )
+from support.client import McpClient, stop_client
+from support.normalization import code
+from support.r import r_test_environment
+from support.records import Transcript
+from support.resolvers import checkpoint_uv_environment
+from support.suites import run_this_suite
 
 PLATFORMS = {"darwin"}
 REQUIRED_COMMANDS = {"ir"}
@@ -149,7 +149,7 @@ def test_prepares_and_uses_cran_packages(binary: Path) -> Transcript:
     client.send(
         requirements={"r": ["praise, zeallot"]},
     )
-    assert last_tool_text(client) == "[prepared]", client.transcript[-1]
+    assert last_result_text(client) == "[prepared]", client.transcript[-1]
 
     # fmt: r
     r = code(r"""
@@ -164,7 +164,7 @@ def test_prepares_and_uses_cran_packages(binary: Path) -> Transcript:
         praise::praise(sprintf("answer: %d", result$answer))
         """)
     client.send(r=r)
-    assert last_tool_text(client) == '[1] "answer: 42"\n'
+    assert last_result_text(client) == '[1] "answer: 42"\n'
     return client._finish()
 
 
@@ -182,7 +182,7 @@ def test_sends_r_cell_with_initial_requirements(binary: Path) -> Transcript:
         praise::praise("ready")
         """)
     client.send(r=r, requirements={"r": ["praise"]})
-    output = last_tool_text(client)
+    output = last_result_text(client)
     assert output.startswith('[1] "') and "ready" in output, output
     assert "[prepared]" not in output, output
     return client._finish()
@@ -194,7 +194,7 @@ def test_prepares_r_requirements_after_worker_startup(binary: Path) -> Transcrip
     client = McpClient(binary, ("serve",), environment)
     client._initialize_and_list_tools()
     client.send(requirements={"r": ["praise"]})
-    assert last_tool_text(client) == "[prepared]"
+    assert last_result_text(client) == "[prepared]"
 
     # fmt: r
     r = code(r"""
@@ -203,7 +203,7 @@ def test_prepares_r_requirements_after_worker_startup(binary: Path) -> Transcrip
         initial_library <- .libPaths()[[1L]]
         """)
     client.send(r=r)
-    assert last_tool_text(client) == "[done]"
+    assert last_result_text(client) == "[done]"
 
     # fmt: r
     r = code(r"""
@@ -216,7 +216,7 @@ def test_prepares_r_requirements_after_worker_startup(binary: Path) -> Transcrip
         42L
         """)
     client.send(r=r, requirements={"r": ["zeallot"]})
-    assert last_tool_text(client) == "[1] 42\n"
+    assert last_result_text(client) == "[1] 42\n"
     return client._finish()
 
 
@@ -316,7 +316,7 @@ def test_failed_mixed_preparation_retains_live_python_activation(
                 cat(.libPaths()[[1L]])
                 """)
             client.send(r=setup)
-            initial_library = Path(last_tool_text(client))
+            initial_library = Path(last_result_text(client))
             assert initial_library.is_dir(), initial_library
             client.transcript[-1]["result"]["content"][0]["text"] = (
                 "<initial managed R library>"
@@ -345,7 +345,7 @@ def test_failed_mixed_preparation_retains_live_python_activation(
             )
 
             client.send(control="restart")
-            assert last_tool_text(client) == (
+            assert last_result_text(client) == (
                 "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
             )
             # fmt: python
@@ -355,7 +355,7 @@ def test_failed_mixed_preparation_retains_live_python_activation(
                 yaml12.format_yaml({"answer": 42})
                 """)
             client.send(python=python)
-            assert last_tool_text(client) == "'answer: 42'\n", client.transcript[-1]
+            assert last_result_text(client) == "'answer: 42'\n", client.transcript[-1]
             transcript = client._finish()
             passed = True
             return transcript
@@ -372,7 +372,7 @@ def test_failed_late_mixed_preparation_preserves_worker(binary: Path) -> Transcr
     client = McpClient(binary, ("serve",), environment)
     client._initialize_and_list_tools()
     client.send(requirements={"r": ["praise"]})
-    assert last_tool_text(client) == "[prepared]"
+    assert last_result_text(client) == "[prepared]"
 
     # fmt: r
     r = code(r"""
@@ -381,7 +381,7 @@ def test_failed_late_mixed_preparation_preserves_worker(binary: Path) -> Transcr
         initial_lib_paths <- .libPaths()
         """)
     client.send(r=r)
-    assert last_tool_text(client) == "[done]", client.transcript[-1]
+    assert last_result_text(client) == "[done]", client.transcript[-1]
 
     invalid_python = "example @ https://example.invalid/example.whl"
     client.send(
@@ -405,7 +405,7 @@ def test_failed_late_mixed_preparation_preserves_worker(binary: Path) -> Transcr
         42L
         """)
     client.send(r=r)
-    assert last_tool_text(client) == "[1] 42\n"
+    assert last_result_text(client) == "[1] 42\n"
     return client._finish()
 
 
@@ -451,11 +451,11 @@ def test_evaluates_with_default_managed_r(binary: Path) -> Transcript:
             dplyr::summarise(csv, answer = sum(.data$value))$answer
             """)
         client.send(r=r)
-        assert last_tool_text(client) == "[1] 42\n", client.transcript[-1]
+        assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
         client.send(
             requirements={"r": ["DBI", "duckdb", "arrow", "nanoarrow"]},
         )
-        assert last_tool_text(client) == "[prepared]", client.transcript[-1]
+        assert last_result_text(client) == "[prepared]", client.transcript[-1]
         return client._finish()
 
 
@@ -482,7 +482,7 @@ def test_prepares_initial_r_requirements(binary: Path) -> Transcript:
         client.send(
             requirements={"r": [initial_r]},
         )
-        assert last_tool_text(client) == "[prepared]"
+        assert last_result_text(client) == "[prepared]"
 
         invalid_r = "not a valid requirement !!!"
         client.send(
@@ -523,19 +523,19 @@ def test_prepares_initial_r_requirements(binary: Path) -> Transcript:
             42L
             """)
         client.send(r=r)
-        assert last_tool_text(client) == "[1] 42\n"
+        assert last_result_text(client) == "[1] 42\n"
 
         client.send(
             requirements={"r": [initial_r]},
         )
-        assert last_tool_text(client) == "[prepared]"
+        assert last_result_text(client) == "[prepared]"
         client.send(
             requirements={
                 "r": [candidate_r],
                 "python": ["py-yaml12"],
             },
         )
-        assert last_tool_text(client) == "[prepared]"
+        assert last_result_text(client) == "[prepared]"
 
         # fmt: r
         prepared_r = code(r"""
@@ -555,23 +555,15 @@ def test_prepares_initial_r_requirements(binary: Path) -> Transcript:
             42L
             """)
         client.send(r=prepared_r)
-        assert last_tool_text(client) == "[1] 42\n"
+        assert last_result_text(client) == "[1] 42\n"
 
         client.send(control="restart")
-        assert last_tool_text(client) == (
+        assert last_result_text(client) == (
             "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
         )
         client.send(r=prepared_r)
-        assert last_tool_text(client) == "[1] 42\n"
+        assert last_result_text(client) == "[1] 42\n"
         return client._finish()
-
-
-def last_tool_text(client: McpClient) -> str:
-    result = client.transcript[-1]["result"]
-    content = result["content"]
-    assert len(content) == 1, content
-    assert content[0]["type"] == "text", content
-    return content[0]["text"]
 
 
 if __name__ == "__main__":

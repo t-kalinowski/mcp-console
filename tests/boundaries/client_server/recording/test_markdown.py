@@ -6,18 +6,14 @@ import sys
 import tempfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from _support import (
-    McpClient,
-    Transcript,
-    TranscriptWithCompanions,
-    assert_result_content,
-    code,
-    r_test_environment,
-    reference_plots,
-    run_this_suite,
-)
+from support.assertions import assert_result_content
+from support.client import McpClient
+from support.normalization import code
+from support.r import r_test_environment, reference_plots
+from support.records import Transcript, TranscriptWithCompanions
+from support.suites import run_this_suite
 
 
 PLATFORMS = {"darwin"}

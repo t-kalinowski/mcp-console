@@ -11,25 +11,24 @@ import tempfile
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from _support import (
+from support.checkpoints import FifoCheckpoint
+from support.client import McpClient, stop_client
+from support.macos import (
     DarwinProcessIdentity,
-    FifoCheckpoint,
-    McpClient,
-    Transcript,
     build_manager_interposer,
     capture_darwin_process_identity,
-    code,
     darwin_child_process_identities,
     darwin_process_waits_for_control,
     darwin_process_waits_for_startup_release,
     kill_darwin_processes,
     live_darwin_processes,
-    run_this_suite,
     signal_darwin_process,
-    stop_client,
 )
+from support.normalization import code
+from support.records import Transcript
+from support.suites import run_this_suite
 
 PLATFORMS = {"darwin"}
 TIMEOUT = 10
@@ -262,7 +261,7 @@ def test_server_crash_after_relay_exit_removes_temporary_directory(
     # so a later server crash still completes cleanup.
     temporary_owner = tempfile.TemporaryDirectory()
     temporary = Path(temporary_owner.name)
-    group_closed = FifoCheckpoint(temporary / "manager-group-closed")
+    group_closed = FifoCheckpoint.create(temporary / "manager-group-closed")
     killpg_marker = temporary / "manager-killpg-denied"
     late_member_marker = temporary / "late-process-group-member"
     late_member_reap_marker = temporary / "late-process-group-member-reaped"
@@ -464,8 +463,8 @@ def test_manager_crash_before_gate_release_retires_the_custom_relay_generation(
     marker_name = "mcp-console-startup-marker"
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
-        gate_ready = FifoCheckpoint(temporary / "gate-ready")
-        gate_release = FifoCheckpoint(temporary / "gate-release")
+        gate_ready = FifoCheckpoint.create(temporary / "gate-ready")
+        gate_release = FifoCheckpoint.create(temporary / "gate-release")
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
         environment["MCP_CONSOLE_TEST_BINARY"] = str(binary)

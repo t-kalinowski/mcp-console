@@ -5,14 +5,17 @@ import sys
 import tempfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from _support import (
-    McpClient,
-    Transcript,
-    run_this_suite,
-    stop_client,
+from support.assertions import (
+    assert_large_output,
+    large_output,
+    last_tool_text,
+    remove_length_marker,
 )
+from support.client import McpClient, stop_client
+from support.records import Transcript
+from support.suites import run_this_suite
 
 PLATFORMS = {"darwin"}
 TEST_GATED_RESPONSE_SIZE = 128 * 1024
@@ -21,14 +24,10 @@ PNG_1X1 = (
     "AAAAASUVORK5CYII="
 )
 
-from client_server._harness import (
+from boundaries.client_server._harness import (
     ResponseGateObserver,
     SocketGateMcpClient,
     ZodFixtureControl,
-    assert_large_output,
-    large_output,
-    _zod_last_tool_text as last_tool_text,
-    remove_length_marker,
     wait_for_marker,
 )
 
