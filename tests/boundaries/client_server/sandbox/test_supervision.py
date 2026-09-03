@@ -75,6 +75,11 @@ def _build_manager_observation_interposer(directory: Path) -> Path:
         / "native"
         / "manager_observation_interposer.c"
     )
+    architectures = []
+    if os.uname().machine == "arm64":
+        # The loader variable also reaches host helpers before the manager.
+        # Host executables can use the arm64e ABI.
+        architectures = ["-arch", "arm64", "-arch", "arm64e"]
     subprocess.run(
         [
             "cc",
@@ -84,6 +89,7 @@ def _build_manager_observation_interposer(directory: Path) -> Path:
             "-Wpedantic",
             "-Werror",
             "-dynamiclib",
+            *architectures,
             "-o",
             library,
             source,
