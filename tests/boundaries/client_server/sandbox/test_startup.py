@@ -69,20 +69,35 @@ def _worker_generation_processes(server_pid: int) -> tuple[int, int]:
             text=True,
             timeout=TIMEOUT,
         ).stdout
-        manager = []
-        root = []
+        records = []
         for process in processes.splitlines():
             fields = process.strip().split(maxsplit=2)
-            if len(fields) != 3 or int(fields[1]) != server_pid:
-                continue
-            if "sandbox-manager" in fields[2]:
-                manager.append(int(fields[0]))
-            else:
-                root.append(int(fields[0]))
-        assert len(manager) <= 1, manager
-        assert len(root) <= 1, root
-        if manager and root:
-            return root[0], manager[0]
+            if len(fields) == 3:
+                records.append((int(fields[0]), int(fields[1]), fields[2]))
+
+        # The sandbox owner may be the server or an intermediate CLI launcher.
+        # Locate the gated root and manager by ancestry and executable role.
+        descendants = {server_pid}
+        while True:
+            discovered = {pid for pid, parent, _ in records if parent in descendants}
+            if discovered.issubset(descendants):
+                break
+            descendants.update(discovered)
+
+        managers = [
+            pid
+            for pid, _, command in records
+            if pid in descendants and "sandbox-manager" in command.split()
+        ]
+        roots = [
+            pid
+            for pid, _, command in records
+            if pid in descendants and "sandbox-target" in command.split()
+        ]
+        assert len(managers) <= 1, managers
+        assert len(roots) <= 1, roots
+        if managers and roots:
+            return roots[0], managers[0]
         assert time.monotonic() < deadline, (
             "worker generation did not start its root and manager"
         )

@@ -88,6 +88,7 @@ Keep these ownership rules intact:
   It has no directory-cleanup state, so the directory remains if the manager exits before completing its own cleanup and removal.
 - The standalone launcher owns the direct command's exit status, foreground-terminal transfer, and signal relaying.
   It releases the command's private startup gate only after the manager reports readiness and manager-failure recovery is installed, closes the ownership token to request retirement, and retains the direct root waitably through manager exit and any fallback cleanup.
+  Its hidden owned mode validates and watches the exact parent identity before target release; parent exit or launcher-addressed `SIGTERM` requests managed retirement, and the launcher exits only after manager cleanup and root reaping.
 - The sandbox manager does not own logical generation state, command exit status, relay transport, or terminal semantics.
 - Restart, replacement, evaluation admission, stdin writes, resolver callbacks, and retained-environment commits are scoped to the worker generation that accepted them.
   Work admitted for an old generation must not reach its replacement.

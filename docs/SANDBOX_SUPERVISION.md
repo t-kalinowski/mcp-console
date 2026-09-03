@@ -17,6 +17,8 @@ The host owner retains the manager process and direct sandbox root as waitable c
 After the manager reports readiness, the owner starts monitoring manager exit and relinquishes its duplicate temporary-directory guard.
 The manager's adopted guard is then the only directory-cleanup owner; owner-side fallback retains no directory-cleanup state.
 After readiness, the owner holds the control socket open only as the live-sandbox ownership token.
+The standalone launcher also supports a hidden `--exit-with-parent <PID>` mode for use as an owned subprocess.
+It verifies and captures its exact parent identity before creating the sandbox, watches that identity for exit, and revalidates it after watch registration and immediately before releasing the target.
 The relay remains a transport and direct-worker owner, including local same-group cleanup; it does not own observed-descendant cleanup across process groups or sessions, or the private directory.
 
 ## Startup
@@ -37,8 +39,9 @@ Darwin cannot resolve every later fork atomically.
 A descendant that becomes orphaned before the manager resolves its fork event remains outside the implemented guarantee.
 
 The standalone requested command runs in a dedicated process group.
-Its root waiter blocks in `kevent()` for direct-root exit and signals addressed to the launcher.
-The launcher consumes pending `SIGHUP`, `SIGINT`, `SIGQUIT`, and `SIGTERM` and relays them to the target group.
+Its root waiter blocks in `kevent()` for direct-root exit, signals addressed to the launcher, and the configured parent identity in owned mode.
+The ordinary launcher consumes pending `SIGHUP`, `SIGINT`, `SIGQUIT`, and `SIGTERM` and relays them to the target group.
+In owned mode, parent exit or launcher-addressed `SIGTERM` requests managed retirement instead; the other supported signals retain their relay behavior.
 When the launcher exclusively owns its foreground process group, it transfers controlling-terminal ownership to the target group; when a pipeline peer shares that group, it leaves terminal ownership unchanged.
 The manager owns descendant cleanup and the private directory; the launcher owns the direct command's exit status, terminal state, and signal relay.
 Stopped/continued job state and general shell-pipeline job control remain unsupported.
@@ -54,6 +57,7 @@ The manager's single thread receives root, descendant, and control-readiness eve
 Natural root exit first retires observed descendants and then closes the original process group; owner EOF with a live root closes the group and stops the root before draining observed descendants.
 After clean natural-root cleanup, the manager waits for owner EOF before removing the directory and exiting.
 Successful manager process exit is the primary cleanup barrier before the owner reaps the direct root.
+In owned launcher mode, the launcher keeps its signals blocked until manager cleanup and direct-root reaping finish, so launcher exit is the cleanup barrier for parent loss, explicit retirement, and natural root exit.
 
 The manager preserves the private directory on unexpected unwind or any cleanup error because a surviving process may still use it.
 It arms the adopted guard for removal only after successful cleanup proves that the directory is unused.
@@ -80,15 +84,18 @@ For a standalone command, successful fallback preserves the root's signal-derive
 The standalone launcher gives the requested command its own process group.
 When the launcher's foreground process group has no peer, it transfers foreground-terminal ownership before exec so terminal-generated signals reach the command group directly.
 When a pipeline peer shares the launcher's foreground group, the launcher leaves terminal ownership unchanged.
-`SIGHUP`, `SIGINT`, `SIGQUIT`, and `SIGTERM` addressed to the launcher are blocked, consumed synchronously, and relayed once to that group.
-After root exit, the launcher restores its own foreground group when it transferred ownership, drains forwarded signals already pending at that boundary, restores its inherited signal mask, and closes the ownership token to request manager cleanup.
+In ordinary mode, `SIGHUP`, `SIGINT`, `SIGQUIT`, and `SIGTERM` addressed to the launcher are blocked, consumed synchronously, and relayed once to that group.
+After root exit, the ordinary launcher restores its own foreground group when it transferred ownership, drains forwarded signals already pending at that boundary, restores its inherited signal mask, and closes the ownership token to request manager cleanup.
 If startup or recovery cleanup stops the root, the launcher drains pending forwarded signals before restoring the mask and returning the error.
 A signal received after that final drain can then follow its inherited disposition; if that terminates the launcher, the manager completes lifetime cleanup.
+With `--exit-with-parent`, `SIGTERM` is reserved for managed retirement rather than relayed.
+The launcher closes the ownership token, waits for manager cleanup, reaps the direct root, and only then drains pending signals and restores its inherited mask.
 
 ## Scope
 
 This ownership applies to `SandboxedCommand::spawn`, which is used for built-in and custom worker relay generations, and to `SandboxedCommand::status`, which implements `mcp-console sandbox`.
 The worker path retains its manager-owned process-group race backstop, with owner fallback after manager failure, and gates the relay before either relay implementation runs.
 The standalone path retains inherited standard streams, uses a dedicated target process group, and supplies the direct-foreground terminal and signal behavior above.
+Its hidden owned mode adds exact parent-exit observation and a `SIGTERM` retirement request without another control descriptor.
 It does not support `Ctrl-Z` followed by `fg` or general pipeline job-control semantics.
 Linux and Windows are not supported.

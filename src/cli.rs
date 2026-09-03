@@ -93,6 +93,10 @@ pub enum Command {
     /// Run a command with the MCP Console sandbox policy
     #[command(after_help = SANDBOX_EXAMPLES)]
     Sandbox {
+        /// Retire the sandbox when this parent process exits
+        #[arg(long, hide = true, value_name = "PID")]
+        exit_with_parent: Option<u32>,
+
         /// Command and arguments to run
         #[arg(
             value_name = "COMMAND",

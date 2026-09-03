@@ -1,5 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
+import os
 import select
 import signal
 import subprocess
@@ -10,10 +11,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from boundaries.cli._harness import (
     TIMEOUT,
+    _assert_launcher_cleanup_barrier,
     _cleanup,
     _command_record,
     _start_lifetime,
     _wait_for_cleanup,
+    _watch_process_exits,
 )
 from support.macos import (
     signal_darwin_process,
@@ -89,6 +92,147 @@ def test_pending_signal_at_root_exit_preserves_status(binary: Path) -> Transcrip
     finally:
         if not launcher_resumed:
             signal_darwin_process(lifetime.launcher, signal.SIGCONT)
+        exit_events.close()
+        _cleanup(lifetime)
+
+
+def test_owned_sigterm_retires_the_sandbox_lifetime(binary: Path) -> Transcript:
+    lifetime = _start_lifetime(binary, exit_with_parent=os.getpid())
+    cleanup = (lifetime.root, lifetime.descendant, lifetime.manager)
+    exit_events, watches = _watch_process_exits((*cleanup, lifetime.launcher))
+    try:
+        assert signal_darwin_process(lifetime.launcher, signal.SIGTERM), (
+            "owned sandbox launcher exited before force-retirement request"
+        )
+        _assert_launcher_cleanup_barrier(
+            exit_events,
+            watches,
+            lifetime.launcher,
+            cleanup,
+            lifetime.temporary_directory,
+            "forced",
+        )
+
+        returncode = lifetime.process.wait(timeout=TIMEOUT)
+        stderr = lifetime.process.stderr.read().decode("utf-8")
+        survivors = _wait_for_cleanup(lifetime)
+        command = _command_record(lifetime)
+        command["command"][3] = "<parent pid>"
+
+        assert returncode == 128 + signal.SIGKILL, returncode
+        assert stderr == "", stderr
+        assert survivors == [], f"owned sandbox processes survived SIGTERM: {survivors}"
+        assert not lifetime.temporary_directory.exists(), (
+            "owned sandbox SIGTERM preserved the temporary directory"
+        )
+        return [
+            command,
+            {
+                "launcher_signal": "SIGTERM",
+                "launcher_returncode": returncode,
+                "verified_cleanup_barrier": (
+                    "launcher exited after sandbox root, detached descendant, manager, "
+                    "and temp"
+                ),
+            },
+        ]
+    finally:
+        exit_events.close()
+        _cleanup(lifetime)
+
+
+def test_owned_sigterm_retires_when_inherited_ignored(binary: Path) -> Transcript:
+    lifetime = _start_lifetime(
+        binary,
+        exit_with_parent=os.getpid(),
+        ignore_sigterm=True,
+    )
+    cleanup = (lifetime.root, lifetime.descendant, lifetime.manager)
+    exit_events, watches = _watch_process_exits((*cleanup, lifetime.launcher))
+    try:
+        assert signal_darwin_process(lifetime.launcher, signal.SIGTERM), (
+            "owned sandbox launcher exited before force-retirement request"
+        )
+        _assert_launcher_cleanup_barrier(
+            exit_events,
+            watches,
+            lifetime.launcher,
+            cleanup,
+            lifetime.temporary_directory,
+            "forced",
+        )
+
+        returncode = lifetime.process.wait(timeout=TIMEOUT)
+        stderr = lifetime.process.stderr.read().decode("utf-8")
+        survivors = _wait_for_cleanup(lifetime)
+        command = _command_record(lifetime)
+        command["command"][3] = "<parent pid>"
+
+        assert returncode == 128 + signal.SIGKILL, returncode
+        assert stderr == "", stderr
+        assert survivors == [], f"owned sandbox processes survived SIGTERM: {survivors}"
+        assert not lifetime.temporary_directory.exists(), (
+            "owned sandbox SIGTERM preserved the temporary directory"
+        )
+        return [
+            command,
+            {
+                "inherited_sigterm": "ignored",
+                "launcher_signal": "SIGTERM",
+                "launcher_returncode": returncode,
+                "verified_cleanup_barrier": (
+                    "launcher exited after sandbox root, detached descendant, manager, "
+                    "and temp"
+                ),
+            },
+        ]
+    finally:
+        exit_events.close()
+        _cleanup(lifetime)
+
+
+def test_owned_root_exit_waits_for_cleanup(binary: Path) -> Transcript:
+    lifetime = _start_lifetime(binary, exit_with_parent=os.getpid())
+    cleanup = (lifetime.root, lifetime.descendant, lifetime.manager)
+    exit_events, watches = _watch_process_exits((*cleanup, lifetime.launcher))
+    try:
+        lifetime.process.stdin.write(b"exit\n")
+        lifetime.process.stdin.close()
+        _assert_launcher_cleanup_barrier(
+            exit_events,
+            watches,
+            lifetime.launcher,
+            cleanup,
+            lifetime.temporary_directory,
+            "natural-root",
+        )
+
+        returncode = lifetime.process.wait(timeout=TIMEOUT)
+        stderr = lifetime.process.stderr.read().decode("utf-8")
+        survivors = _wait_for_cleanup(lifetime)
+        command = _command_record(lifetime)
+        command["command"][3] = "<parent pid>"
+
+        assert returncode == 23, returncode
+        assert stderr == "", stderr
+        assert survivors == [], (
+            f"owned sandbox processes survived root exit: {survivors}"
+        )
+        assert not lifetime.temporary_directory.exists(), (
+            "owned sandbox root exit preserved the temporary directory"
+        )
+        return [
+            command,
+            {
+                "root_action": "exit 23",
+                "launcher_returncode": returncode,
+                "verified_cleanup_barrier": (
+                    "launcher exited after sandbox root, detached descendant, manager, "
+                    "and temp"
+                ),
+            },
+        ]
+    finally:
         exit_events.close()
         _cleanup(lifetime)
 

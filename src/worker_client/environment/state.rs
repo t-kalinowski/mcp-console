@@ -1,5 +1,7 @@
 use std::collections::BTreeSet;
 use std::ffi::OsString;
+#[cfg(target_os = "macos")]
+use std::process::Command;
 
 use super::requirements::push_duckdb_r_target;
 
@@ -93,10 +95,7 @@ impl PythonEnvironment {
     }
 
     #[cfg(target_os = "macos")]
-    pub(in crate::worker_client) fn configure_worker(
-        &self,
-        command: &mut crate::sandbox::SandboxedCommand,
-    ) {
+    pub(in crate::worker_client) fn configure_worker(&self, command: &mut Command) {
         match self {
             Self::Managed { selected, .. } => selected.configure_worker(command),
             Self::UserSelected(python) => {

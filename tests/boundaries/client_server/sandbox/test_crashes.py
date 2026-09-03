@@ -150,18 +150,29 @@ def _wait_for_generation_failure(client: McpClient) -> None:
 
 def _manager_pid(server_pid: int) -> int:
     processes = subprocess.check_output(
-        ["ps", "-axo", "pid=,ppid=,command="],
+        ["/bin/ps", "-axo", "pid=,ppid=,command="],
         text=True,
     )
-    managers = []
+    records = []
     for process in processes.splitlines():
         fields = process.strip().split(None, 2)
-        if (
-            len(fields) == 3
-            and int(fields[1]) == server_pid
-            and "sandbox-manager" in fields[2]
-        ):
-            managers.append(int(fields[0]))
+        if len(fields) == 3:
+            records.append((int(fields[0]), int(fields[1]), fields[2]))
+
+    # The sandbox owner may be the server or an intermediate CLI launcher.
+    # Locate the manager by ancestry and its internal executable role.
+    descendants = {server_pid}
+    while True:
+        discovered = {pid for pid, parent, _ in records if parent in descendants}
+        if discovered.issubset(descendants):
+            break
+        descendants.update(discovered)
+
+    managers = [
+        pid
+        for pid, _, command in records
+        if pid in descendants and "sandbox-manager" in command.split()
+    ]
     assert len(managers) == 1, managers
     return managers[0]
 

@@ -233,12 +233,18 @@ The launcher starts that gated root before the manager and retains both children
 After receiving readiness, the launcher installs recovery monitoring, relinquishes its duplicate directory guard, and writes one release byte; the same root closes the descriptor and replaces itself with the requested command.
 A descendant that later escapes before the manager sees its fork remains outside cleanup.
 
-The launcher blocks in the root waiter's `kqueue` until root exit or a supported signal is addressed to the launcher.
-It consumes pending launcher signals synchronously and relays them to the target process group.
-At root exit it restores terminal ownership when it transferred it, drains forwarded signals already pending at that boundary, and restores its inherited signal mask before requesting manager cleanup by closing the ownership token.
+The hidden `--exit-with-parent <PID>` mode binds the launcher to an owning parent process.
+Before creating the sandbox, the launcher verifies that PID is its current parent and captures the parent's PID and start time.
+It registers a `kqueue` exit watch, revalidates the identity after registration, and checks it again after manager readiness immediately before releasing the target.
+
+The launcher blocks in the root waiter's `kqueue` until root exit, configured-parent exit, or a supported signal is addressed to the launcher.
+Ordinary mode consumes pending launcher signals synchronously and relays them to the target process group.
+In owned mode, parent exit and launcher-addressed `SIGTERM` request managed retirement; other supported signals retain their relay behavior.
+At root exit, the ordinary launcher restores terminal ownership when it transferred it, drains forwarded signals already pending at that boundary, and restores its inherited signal mask before requesting manager cleanup by closing the ownership token.
 When startup or recovery cleanup stops the root instead, it applies the same drain before returning the error.
 A signal received after that final drain can then follow its inherited disposition; if it terminates the launcher, the manager completes lifetime cleanup.
 The launcher waits for successful manager exit as the cleanup barrier, then reaps the direct root and returns its status.
+Owned mode keeps launcher signals blocked until manager cleanup and root reaping complete, including after natural root exit, so launcher exit remains a synchronous cleanup barrier.
 The manager alone decides whether cleanup succeeded and removes the directory; launcher loss after readiness reaches the same EOF retirement path.
 If the manager is killed while the launcher remains live, its monitor reconstructs the root's current ancestry and performs bounded cleanup while that root remains pinned.
 

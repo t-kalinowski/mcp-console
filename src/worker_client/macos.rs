@@ -131,13 +131,14 @@ impl WorkerRuntime {
                 format!("failed to locate the worker relay executable: {error}")
             })?,
         };
-        let mut command = crate::sandbox::SandboxedCommand::new(relay_executable.as_os_str())
+        let mut sandboxed = crate::sandbox::SandboxedCommand::new(relay_executable.as_os_str())
             .map_err(|error| format!("failed to prepare worker sandbox: {error}"))?;
+        let command = sandboxed.command_mut();
         if let Some(python) = python {
-            python.configure_worker(&mut command);
+            python.configure_worker(command);
         }
         if let Some(managed_r) = managed_r {
-            managed_r.configure_worker(&mut command)?;
+            managed_r.configure_worker(command)?;
         }
         command.env(
             "MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION",
@@ -155,7 +156,7 @@ impl WorkerRuntime {
 
         let (worker_events, worker_event_receiver) = mpsc::channel();
 
-        let mut child = command
+        let mut child = sandboxed
             .spawn()
             .map_err(|error| format!("failed to launch worker relay: {error}"))?;
         let relay_stdin = child
