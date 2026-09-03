@@ -1,10 +1,81 @@
-use std::os::unix::net::UnixStream;
+use std::io::ErrorKind;
 use std::os::unix::process::CommandExt as _;
 use std::process::{Child, ExitCode};
+use std::time::Duration;
 
 use super::child::{append_retirement_error, terminate_unmanaged_child};
-use super::command::{SandboxedChild, SandboxedChildRetirement, SandboxedCommand};
-use super::{MANAGER_CLEANUP_TIMEOUT, platform, supervision};
+use super::command::{ManagedRoot, SandboxedChild, SandboxedChildRetirement, SandboxedCommand};
+use super::{file_descriptors, platform, supervision};
+
+pub(super) struct StartOptions<'a> {
+    pub(super) signal_relay: Option<&'a supervision::SignalRelay>,
+    pub(super) terminal_descriptor: Option<libc::c_int>,
+    pub(super) cleanup_timeout: Duration,
+}
+
+impl ManagedRoot {
+    pub(super) fn start(
+        sandboxed: SandboxedCommand,
+        options: StartOptions<'_>,
+    ) -> Result<(Self, Option<supervision::RootExitWaiter>), String> {
+        let SandboxedCommand {
+            mut command,
+            mut temporary_directory,
+            mut startup_gate,
+        } = sandboxed;
+        let gate_descriptor = startup_gate.inherited_descriptor();
+        command.env("TMPDIR", temporary_directory.path());
+        if let Some(signal_relay) = options.signal_relay {
+            signal_relay.configure_child(&mut command, options.terminal_descriptor);
+            file_descriptors::close_unlisted_except(&mut command, gate_descriptor)?;
+        } else {
+            command.process_group(0);
+            file_descriptors::close_unlisted_from_multithreaded_parent_except(
+                &mut command,
+                vec![gate_descriptor],
+            )?;
+        }
+
+        let mut child = command
+            .spawn()
+            .map_err(|error| format!("failed to launch `{}`: {error}", platform::SANDBOX_EXEC))?;
+        startup_gate.child_spawned();
+        let root_waiter = match options.signal_relay {
+            Some(signal_relay) => {
+                match supervision::RootExitWaiter::start(child.id() as libc::pid_t, signal_relay) {
+                    Ok(root_waiter) => Some(root_waiter),
+                    Err(error) => {
+                        return Err(fail_unmanaged_startup(child, temporary_directory, error));
+                    }
+                }
+            }
+            None => None,
+        };
+        let supervisor = match supervision::SandboxManager::start(
+            child.id(),
+            &mut temporary_directory,
+            options.cleanup_timeout,
+            options.signal_relay,
+            root_waiter
+                .as_ref()
+                .map(supervision::RootExitWaiter::wakeup),
+        ) {
+            Ok(supervisor) => supervisor,
+            Err(error) => {
+                return Err(fail_unmanaged_startup(child, temporary_directory, error));
+            }
+        };
+
+        if let Err(write_error) = startup_gate.release()
+            && !(options.signal_relay.is_some() && write_error.kind() == ErrorKind::BrokenPipe)
+        {
+            let error = format!("failed to release sandbox target startup gate: {write_error}");
+            return Err(finish_failed_startup(&mut child, supervisor, error));
+        }
+
+        Ok((Self { child, supervisor }, root_waiter))
+    }
+}
 
 impl SandboxedCommand {
     /// Spawns a hidden gated root under one host-side lifetime manager.
@@ -13,76 +84,53 @@ impl SandboxedCommand {
     /// descendant observation and the private directory and installs
     /// manager-failure recovery before the root is released into either the
     /// built-in or a configured relay.
-    pub(crate) fn spawn(mut self) -> Result<SandboxedChild, String> {
-        let mut startup_gate = self
-            .startup_gate
-            .take()
-            .expect("sandboxed relay spawn should retain its startup gate");
-        self.command
-            .env("TMPDIR", self.temporary_directory.path())
-            .process_group(0);
-        let mut child = self
-            .command
-            .spawn()
-            .map_err(|error| format!("failed to launch `{}`: {error}", platform::SANDBOX_EXEC))?;
-        startup_gate.child_spawned();
-
-        let manager = match supervision::SandboxManager::start(
-            child.id(),
-            &mut self.temporary_directory,
-            MANAGER_CLEANUP_TIMEOUT,
-        ) {
-            Ok(manager) => manager,
-            Err(error) => {
-                self.temporary_directory.preserve();
-                drop(startup_gate);
-                return Err(terminate_unmanaged_child(&mut child, error).error);
-            }
-        };
-        if let Err(error) = startup_gate.release() {
-            let manager_error = manager.retire().err();
-            return Err(finish_failed_startup(&mut child, error, manager_error));
-        }
+    pub(crate) fn spawn(self) -> Result<SandboxedChild, String> {
+        let (root, root_waiter) = ManagedRoot::start(
+            self,
+            StartOptions {
+                signal_relay: None,
+                terminal_descriptor: None,
+                cleanup_timeout: super::MANAGER_CLEANUP_TIMEOUT,
+            },
+        )?;
+        debug_assert!(root_waiter.is_none());
 
         Ok(SandboxedChild {
-            child,
-            manager: Some(manager),
+            root,
             retirement: SandboxedChildRetirement::Managed,
         })
     }
 
     /// Runs a standalone command with launcher-owned job control and the same
     /// primary host-side lifetime manager used for worker relays.
-    pub(crate) fn status(
-        mut self,
-        target_gate: UnixStream,
-        launcher_gate: UnixStream,
-    ) -> Result<ExitCode, String> {
-        debug_assert!(self.startup_gate.is_none());
-        self.command.env("TMPDIR", self.temporary_directory.path());
-        supervision::status(
-            self.command,
-            self.temporary_directory,
-            target_gate,
-            launcher_gate,
-        )
+    pub(crate) fn status(self) -> Result<ExitCode, String> {
+        supervision::status(self)
     }
+}
+
+fn fail_unmanaged_startup(
+    mut child: Child,
+    temporary_directory: platform::TemporaryDirectory,
+    error: String,
+) -> String {
+    temporary_directory.preserve();
+    terminate_unmanaged_child(&mut child, error).error
 }
 
 fn finish_failed_startup(
     child: &mut Child,
-    mut error: String,
-    manager_error: Option<String>,
+    mut supervisor: supervision::SandboxManager,
+    error: String,
 ) -> String {
-    let Some(manager_error) = manager_error else {
-        if let Err(wait_error) = child.wait() {
-            error = append_retirement_error(
-                error,
-                format!("failed to reap `{}`: {wait_error}", platform::SANDBOX_EXEC),
-            );
-        }
-        return error;
-    };
-    error = append_retirement_error(error, manager_error);
-    terminate_unmanaged_child(child, error).error
+    if let Err(supervisor_error) = supervisor.retire() {
+        let error = append_retirement_error(error, supervisor_error);
+        return terminate_unmanaged_child(child, error).error;
+    }
+    match child.wait() {
+        Ok(_) => error,
+        Err(wait_error) => append_retirement_error(
+            error,
+            format!("failed to reap `{}`: {wait_error}", platform::SANDBOX_EXEC),
+        ),
+    }
 }

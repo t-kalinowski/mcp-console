@@ -47,31 +47,7 @@ struct ManagerMonitorStartError {
 impl SandboxManager {
     /// Starts supervision for an existing gated root and returns only after
     /// readiness and owner-side manager-failure monitoring are established.
-    pub(crate) fn start(
-        root_pid: u32,
-        temporary_directory: &mut platform::TemporaryDirectory,
-        cleanup_timeout: Duration,
-    ) -> Result<Self, String> {
-        Self::start_with_wakeup(root_pid, temporary_directory, cleanup_timeout, None, None)
-    }
-
-    pub(super) fn start_for_standalone(
-        root_pid: u32,
-        temporary_directory: &mut platform::TemporaryDirectory,
-        cleanup_timeout: Duration,
-        signal_relay: &SignalRelay,
-        root_wakeup: RootExitWakeup,
-    ) -> Result<Self, String> {
-        Self::start_with_wakeup(
-            root_pid,
-            temporary_directory,
-            cleanup_timeout,
-            Some(signal_relay),
-            Some(root_wakeup),
-        )
-    }
-
-    fn start_with_wakeup(
+    pub(in crate::sandbox) fn start(
         root_pid: u32,
         temporary_directory: &mut platform::TemporaryDirectory,
         cleanup_timeout: Duration,
@@ -186,7 +162,7 @@ impl SandboxManager {
     /// Closes the ownership token and waits for the manager to retire the
     /// sandbox lifetime. The manager removes the private directory only after
     /// it has completed process cleanup successfully.
-    pub(crate) fn retire(mut self) -> Result<(), String> {
+    pub(crate) fn retire(&mut self) -> Result<(), String> {
         self.wait_for_exit()
     }
 

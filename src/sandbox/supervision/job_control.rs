@@ -145,7 +145,7 @@ fn set_foreground_process_group(
     Ok(())
 }
 
-pub(super) struct SignalRelay {
+pub(in crate::sandbox) struct SignalRelay {
     wait_set: libc::sigset_t,
     previous_mask: libc::sigset_t,
     restore_pending: bool,
@@ -183,7 +183,7 @@ impl SignalRelay {
         })
     }
 
-    pub(super) fn configure_child(
+    pub(in crate::sandbox) fn configure_child(
         &self,
         command: &mut Command,
         terminal_descriptor: Option<libc::c_int>,

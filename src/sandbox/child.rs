@@ -9,17 +9,17 @@ const DIRECT_CHILD_CLEANUP_TIMEOUT: Duration = Duration::from_secs(1);
 impl SandboxedChild {
     #[allow(dead_code, reason = "used by spawned callers with piped stdin")]
     pub(crate) fn take_stdin(&mut self) -> Option<ChildStdin> {
-        self.child.stdin.take()
+        self.root.child.stdin.take()
     }
 
     #[allow(dead_code, reason = "used by spawned callers with piped stdout")]
     pub(crate) fn take_stdout(&mut self) -> Option<ChildStdout> {
-        self.child.stdout.take()
+        self.root.child.stdout.take()
     }
 
     #[allow(dead_code, reason = "used by spawned callers with piped stderr")]
     pub(crate) fn take_stderr(&mut self) -> Option<ChildStderr> {
-        self.child.stderr.take()
+        self.root.child.stderr.take()
     }
 
     /// Waits at most `timeout` for the direct sandbox process to exit without
@@ -33,12 +33,14 @@ impl SandboxedChild {
             SandboxedChildRetirement::Managed | SandboxedChildRetirement::Unmanaged { .. } => {}
             SandboxedChildRetirement::Retired { .. } => return Ok(true),
         }
-        platform::wait_for_process_exit_without_reaping(self.child.id(), timeout).map_err(|error| {
-            format!(
-                "failed to wait for `{}` to exit without reaping it: {error}",
-                platform::SANDBOX_EXEC
-            )
-        })
+        platform::wait_for_process_exit_without_reaping(self.root.child.id(), timeout).map_err(
+            |error| {
+                format!(
+                    "failed to wait for `{}` to exit without reaping it: {error}",
+                    platform::SANDBOX_EXEC
+                )
+            },
+        )
     }
 
     /// Stops the root and observed descendants through the host-side manager or
@@ -54,18 +56,14 @@ impl SandboxedChild {
             }
         }
 
-        let manager = self
-            .manager
-            .take()
-            .expect("active sandbox child should retain its lifetime manager");
-        match manager.retire() {
+        match self.root.supervisor.retire() {
             Ok(()) => self.reap_managed_child(),
             Err(error) => self.retry_unmanaged_retirement(error),
         }
     }
 
     fn reap_managed_child(&mut self) -> Result<(), String> {
-        match self.child.wait() {
+        match self.root.child.wait() {
             Ok(_) => {
                 self.retirement = SandboxedChildRetirement::Retired { error: None };
                 Ok(())
@@ -91,7 +89,7 @@ impl SandboxedChild {
     }
 
     fn retry_unmanaged_retirement(&mut self, error: String) -> Result<(), String> {
-        let cleanup = terminate_unmanaged_child(&mut self.child, error);
+        let cleanup = terminate_unmanaged_child(&mut self.root.child, error);
         let error = cleanup.error;
         self.retirement = if cleanup.identity_released {
             SandboxedChildRetirement::Retired {

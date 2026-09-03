@@ -5,13 +5,13 @@ use std::time::Duration;
 
 const OWNER_WAKE_IDENT: libc::uintptr_t = 1;
 
-pub(super) struct RootExitWaiter {
+pub(in crate::sandbox) struct RootExitWaiter {
     kqueue: Kqueue,
     root: ProcessIdentity,
     root_exited: bool,
 }
 
-pub(super) struct RootExitWakeup {
+pub(in crate::sandbox) struct RootExitWakeup {
     // Keep the queue alive if the waiter exits before another owner-side
     // component reports failure, so a reused descriptor cannot be triggered.
     kqueue: Kqueue,
@@ -46,7 +46,10 @@ impl Drop for RootExitWakeGuard {
 }
 
 impl RootExitWaiter {
-    pub(super) fn start(root_pid: libc::pid_t, signal_relay: &SignalRelay) -> Result<Self, String> {
+    pub(in crate::sandbox) fn start(
+        root_pid: libc::pid_t,
+        signal_relay: &SignalRelay,
+    ) -> Result<Self, String> {
         let kqueue = Kqueue::new("the sandbox root observer")?;
 
         let info = process_info(root_pid)?
@@ -87,7 +90,7 @@ impl RootExitWaiter {
         })
     }
 
-    pub(super) fn wakeup(&self) -> RootExitWakeup {
+    pub(in crate::sandbox) fn wakeup(&self) -> RootExitWakeup {
         RootExitWakeup {
             kqueue: self.kqueue.clone(),
         }

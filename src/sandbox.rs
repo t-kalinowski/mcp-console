@@ -6,9 +6,7 @@ use std::fs::File;
 #[cfg(target_os = "macos")]
 use std::io::Read as _;
 #[cfg(target_os = "macos")]
-use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
-#[cfg(target_os = "macos")]
-use std::os::unix::net::UnixStream;
+use std::os::fd::{FromRawFd as _, OwnedFd};
 #[cfg(target_os = "macos")]
 use std::os::unix::process::CommandExt as _;
 #[cfg(target_os = "macos")]
@@ -51,22 +49,16 @@ mod platform;
 
 #[cfg(target_os = "macos")]
 pub fn run(command_line: &[OsString]) -> Result<ExitCode, String> {
-    let (target_gate, launcher_gate) = UnixStream::pair()
-        .map_err(|error| format!("failed to create the sandbox target startup gate: {error}"))?;
-    let target_gate_descriptor = target_gate.as_raw_fd();
-    let executable = std::env::current_exe()
-        .map_err(|error| format!("failed to locate the sandbox target gate: {error}"))?;
-    let mut sandboxed = SandboxedCommand::new_direct(executable.as_os_str())?;
+    let (program, arguments) = command_line
+        .split_first()
+        .expect("sandbox command must include a program");
+    let mut sandboxed = SandboxedCommand::new(program)?;
     sandboxed
-        .arg("sandbox-target")
-        .arg("--gate-fd")
-        .arg(target_gate_descriptor.to_string())
-        .arg("--")
-        .args(command_line)
+        .args(arguments)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
-    sandboxed.status(target_gate, launcher_gate)
+    sandboxed.status()
 }
 
 #[cfg(target_os = "macos")]
