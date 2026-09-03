@@ -57,7 +57,10 @@ fn main() -> ExitCode {
                 Err(error) => exit_with_error(error),
             }
         }
-        cli::Command::Sandbox { command } => match sandbox::run(&command) {
+        cli::Command::Sandbox {
+            exit_with_parent,
+            command,
+        } => match sandbox::run(&command, exit_with_parent) {
             Ok(exit_code) => exit_code,
             Err(error) => exit_with_error(error),
         },

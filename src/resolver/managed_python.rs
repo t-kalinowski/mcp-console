@@ -90,7 +90,7 @@ impl Drop for PythonPathOutput {
 }
 
 impl ManagedPython {
-    pub(crate) fn configure_worker(&self, command: &mut crate::sandbox::SandboxedCommand) {
+    pub(crate) fn configure_worker(&self, command: &mut Command) {
         command.env("RETICULATE_PYTHON", "managed");
         command.env(
             "MCP_CONSOLE_MANAGED_PYTHON",
@@ -437,7 +437,7 @@ fn configure_python_resolver(
     managed_r: Option<&super::ManagedR>,
 ) -> Result<(), String> {
     if let Some(managed_r) = managed_r {
-        managed_r.configure_resolver(command)?;
+        managed_r.configure_worker(command)?;
     }
     configuration.configure_direct(command)
 }

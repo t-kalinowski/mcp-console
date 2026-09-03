@@ -115,6 +115,36 @@ def test_preserves_arguments_and_executable_names(binary: Path) -> Transcript:
     return transcript
 
 
+def test_rejects_unrelated_exit_parent(binary: Path) -> Transcript:
+    entry = record(
+        binary,
+        "sandbox",
+        "--exit-with-parent",
+        "1",
+        "--",
+        "python",
+        "-c",
+        "print('target ran')",
+    )
+
+    assert entry == {
+        "command": [
+            "mcp-console",
+            "sandbox",
+            "--exit-with-parent",
+            "1",
+            "--",
+            "python",
+            "-c",
+            "print('target ran')",
+        ],
+        "exit_code": 1,
+        "stdout": "",
+        "stderr": "sandbox owner 1 is not the launcher's current parent\n",
+    }
+    return [entry]
+
+
 def test_forwards_interactive_standard_streams(binary: Path) -> Transcript:
     # fmt: python
     script = code(r"""

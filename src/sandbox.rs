@@ -48,7 +48,10 @@ pub(crate) use command::{SandboxedChild, SandboxedCommand};
 mod platform;
 
 #[cfg(target_os = "macos")]
-pub fn run(command_line: &[OsString]) -> Result<ExitCode, String> {
+pub fn run(command_line: &[OsString], exit_with_parent: Option<u32>) -> Result<ExitCode, String> {
+    let owner = exit_with_parent
+        .map(supervision::SandboxOwner::capture)
+        .transpose()?;
     let (program, arguments) = command_line
         .split_first()
         .expect("sandbox command must include a program");
@@ -58,7 +61,7 @@ pub fn run(command_line: &[OsString]) -> Result<ExitCode, String> {
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
-    sandboxed.status()
+    sandboxed.status(owner)
 }
 
 #[cfg(target_os = "macos")]
@@ -118,7 +121,7 @@ pub(crate) fn run_target(
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn run(command_line: &[OsString]) -> Result<ExitCode, String> {
+pub fn run(command_line: &[OsString], _exit_with_parent: Option<u32>) -> Result<ExitCode, String> {
     platform::run(command_line)
 }
 

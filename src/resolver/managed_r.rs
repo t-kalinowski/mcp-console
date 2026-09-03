@@ -97,7 +97,7 @@ impl ManagedRResolverConfiguration {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        managed_r.configure_resolver(&mut command)?;
+        managed_r.configure_worker(&mut command)?;
         configuration.configure_uv_bootstrap(&mut command);
         let mut child = command.spawn().map_err(|error| {
             format!(
@@ -119,10 +119,7 @@ impl ManagedRResolverConfiguration {
 }
 
 impl ManagedR {
-    pub(crate) fn configure_worker(
-        &self,
-        command: &mut crate::sandbox::SandboxedCommand,
-    ) -> Result<(), String> {
+    pub(crate) fn configure_worker(&self, command: &mut Command) -> Result<(), String> {
         if !self.library.is_dir() {
             return Err(format!(
                 "resolved R library `{}` no longer exists",
@@ -139,17 +136,6 @@ impl ManagedR {
 
     pub(crate) fn library(&self) -> &Path {
         &self.library
-    }
-
-    pub(crate) fn configure_resolver(&self, command: &mut Command) -> Result<(), String> {
-        if !self.library.is_dir() {
-            return Err(format!(
-                "resolved R library `{}` no longer exists",
-                self.library.display()
-            ));
-        }
-        command.env("R_LIBS", &self.r_libs);
-        Ok(())
     }
 
     pub(crate) fn rscript(&self) -> &Path {

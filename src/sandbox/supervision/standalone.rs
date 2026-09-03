@@ -12,15 +12,19 @@ use std::time::Duration;
 
 const ROOT_STOP_TIMEOUT: Duration = Duration::from_secs(1);
 
-pub(in crate::sandbox) fn status(sandboxed: SandboxedCommand) -> Result<ExitCode, String> {
-    let signal_relay = SignalRelay::install()?;
+pub(in crate::sandbox) fn status(
+    sandboxed: SandboxedCommand,
+    owner: Option<super::SandboxOwner>,
+) -> Result<ExitCode, String> {
+    let signal_relay = SignalRelay::install(owner.is_some())?;
     let mut foreground_terminal = ForegroundTerminal::detect()?;
     let (mut root, root_waiter) = match ManagedRoot::start(
         sandboxed,
         StartOptions {
             signal_relay: Some(&signal_relay),
             terminal_descriptor: foreground_terminal.descriptor(),
-            cleanup_timeout: Duration::from_secs(5),
+            cleanup_timeout: crate::sandbox::MANAGER_CLEANUP_TIMEOUT,
+            owner,
         },
     ) {
         Ok(started) => started,
@@ -34,7 +38,12 @@ pub(in crate::sandbox) fn status(sandboxed: SandboxedCommand) -> Result<ExitCode
     };
     let mut root_waiter = root_waiter.expect("standalone root should retain its exit waiter");
 
-    let root_wait = match wait_for_root_exit(&root.child, &signal_relay, &mut root_waiter) {
+    let root_wait = match wait_for_root_exit(
+        &root.child,
+        &signal_relay,
+        &mut root_waiter,
+        owner.is_some(),
+    ) {
         Ok(root_wait) => root_wait,
         Err(mut error) => {
             if let Err(stop_error) = stop_managed_root(&mut root.child, &mut root.supervisor) {
@@ -53,6 +62,14 @@ pub(in crate::sandbox) fn status(sandboxed: SandboxedCommand) -> Result<ExitCode
     drop(root_waiter);
     if root_wait == RootCompletion::ManagerFinished {
         return finish_after_manager_exit(
+            &mut root.child,
+            &mut root.supervisor,
+            &mut foreground_terminal,
+            signal_relay,
+        );
+    }
+    if owner.is_some() {
+        return finish_owned_completion(
             &mut root.child,
             &mut root.supervisor,
             &mut foreground_terminal,
@@ -87,6 +104,7 @@ pub(in crate::sandbox) fn status(sandboxed: SandboxedCommand) -> Result<ExitCode
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum RootCompletion {
+    RetirementRequested,
     RootExited,
     ManagerFinished,
 }
@@ -95,6 +113,7 @@ fn wait_for_root_exit(
     child: &Child,
     signal_relay: &SignalRelay,
     root_waiter: &mut RootExitWaiter,
+    retire_on_sigterm: bool,
 ) -> Result<RootCompletion, String> {
     loop {
         if root_has_exited(child, Duration::ZERO)? {
@@ -102,9 +121,12 @@ fn wait_for_root_exit(
         }
 
         let process_group = child.id() as libc::pid_t;
-        signal_relay.relay_pending(process_group)?;
+        if signal_relay.relay_pending(process_group, retire_on_sigterm)? {
+            return Ok(RootCompletion::RetirementRequested);
+        }
         match root_waiter.wait_for_events(None) {
             Ok(RootWait::RootExited) => return Ok(RootCompletion::RootExited),
+            Ok(RootWait::OwnerExited) => return Ok(RootCompletion::RetirementRequested),
             Ok(RootWait::Wakeup) => {
                 return if root_has_exited(child, Duration::ZERO)? {
                     Ok(RootCompletion::RootExited)
@@ -172,6 +194,21 @@ fn finish_after_manager_exit(
         }
     };
     owner_result.map(|()| platform::exit_code(status))
+}
+
+fn finish_owned_completion(
+    child: &mut Child,
+    manager: &mut SandboxManager,
+    foreground_terminal: &mut ForegroundTerminal,
+    signal_relay: SignalRelay,
+) -> Result<ExitCode, String> {
+    let status_result = stop_managed_root_with_status(child, manager);
+    let owner_result = restore_launcher_state(foreground_terminal, signal_relay);
+    match (status_result, owner_result) {
+        (Ok(status), Ok(())) => Ok(platform::exit_code(status)),
+        (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
+        (Err(error), Err(owner_error)) => Err(additional_error(error, owner_error)),
+    }
 }
 
 fn restore_launcher_state(

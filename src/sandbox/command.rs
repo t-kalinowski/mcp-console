@@ -90,6 +90,14 @@ impl SandboxedCommand {
         })
     }
 
+    /// Returns the command whose configuration is inherited by the sandboxed target.
+    ///
+    /// Callers must not restore host loader injection. `TMPDIR` is reserved and
+    /// reset to the private directory when spawning.
+    pub(crate) fn command_mut(&mut self) -> &mut Command {
+        &mut self.command
+    }
+
     pub(crate) fn arg(&mut self, argument: impl AsRef<OsStr>) -> &mut Self {
         self.command.arg(argument);
         self
@@ -103,21 +111,6 @@ impl SandboxedCommand {
         for argument in arguments {
             self.arg(argument);
         }
-        self
-    }
-
-    /// Adds an environment variable inherited by the sandboxed program.
-    ///
-    /// Host loader injection is removed from the initial `sandbox-exec`
-    /// command. Callers must not restore it inside the sandbox.
-    /// `TMPDIR` is reserved and reset to the private directory when spawning.
-    pub(crate) fn env(&mut self, key: impl AsRef<OsStr>, value: impl AsRef<OsStr>) -> &mut Self {
-        self.command.env(key, value);
-        self
-    }
-
-    pub(crate) fn env_remove(&mut self, key: impl AsRef<OsStr>) -> &mut Self {
-        self.command.env_remove(key);
         self
     }
 

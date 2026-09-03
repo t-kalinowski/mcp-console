@@ -11,6 +11,7 @@ pub(super) struct StartOptions<'a> {
     pub(super) signal_relay: Option<&'a supervision::SignalRelay>,
     pub(super) terminal_descriptor: Option<libc::c_int>,
     pub(super) cleanup_timeout: Duration,
+    pub(super) owner: Option<supervision::SandboxOwner>,
 }
 
 impl ManagedRoot {
@@ -42,10 +43,14 @@ impl ManagedRoot {
         startup_gate.child_spawned();
         let root_waiter = match options.signal_relay {
             Some(signal_relay) => {
-                match supervision::RootExitWaiter::start(child.id() as libc::pid_t, signal_relay) {
+                match supervision::RootExitWaiter::start(
+                    child.id() as libc::pid_t,
+                    signal_relay,
+                    options.owner,
+                ) {
                     Ok(root_waiter) => Some(root_waiter),
                     Err(error) => {
-                        return Err(fail_unmanaged_startup(child, temporary_directory, error));
+                        return Err(fail_before_manager_start(child, temporary_directory, error));
                     }
                 }
             }
@@ -65,6 +70,12 @@ impl ManagedRoot {
                 return Err(fail_unmanaged_startup(child, temporary_directory, error));
             }
         };
+
+        if let Some(root_waiter) = root_waiter.as_ref()
+            && let Err(error) = root_waiter.validate_owner()
+        {
+            return Err(finish_failed_startup(&mut child, supervisor, error));
+        }
 
         if let Err(write_error) = startup_gate.release()
             && !(options.signal_relay.is_some() && write_error.kind() == ErrorKind::BrokenPipe)
@@ -91,6 +102,7 @@ impl SandboxedCommand {
                 signal_relay: None,
                 terminal_descriptor: None,
                 cleanup_timeout: super::MANAGER_CLEANUP_TIMEOUT,
+                owner: None,
             },
         )?;
         debug_assert!(root_waiter.is_none());
@@ -103,9 +115,24 @@ impl SandboxedCommand {
 
     /// Runs a standalone command with launcher-owned job control and the same
     /// primary host-side lifetime manager used for worker relays.
-    pub(crate) fn status(self) -> Result<ExitCode, String> {
-        supervision::status(self)
+    pub(super) fn status(
+        self,
+        owner: Option<supervision::SandboxOwner>,
+    ) -> Result<ExitCode, String> {
+        supervision::status(self, owner)
     }
+}
+
+fn fail_before_manager_start(
+    mut child: Child,
+    temporary_directory: platform::TemporaryDirectory,
+    error: String,
+) -> String {
+    let cleanup = terminate_unmanaged_child(&mut child, error);
+    if !cleanup.identity_released {
+        temporary_directory.preserve();
+    }
+    cleanup.error
 }
 
 fn fail_unmanaged_startup(

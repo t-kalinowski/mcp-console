@@ -3,6 +3,7 @@ from __future__ import annotations
 import fcntl
 import os
 import pty
+import select
 import selectors
 import shutil
 import subprocess
@@ -35,6 +36,52 @@ class _SandboxLifetime:
     descendant: DarwinProcessIdentity
     manager: DarwinProcessIdentity
     temporary_directory: Path
+
+
+def _watch_process_exits(
+    identities: tuple[DarwinProcessIdentity, ...],
+) -> tuple[select.kqueue, list[select.kevent]]:
+    exit_events = select.kqueue()
+    watches = [
+        select.kevent(
+            identity[0],
+            filter=select.KQ_FILTER_PROC,
+            flags=select.KQ_EV_ADD | select.KQ_EV_CLEAR,
+            fflags=select.KQ_NOTE_EXIT,
+        )
+        for identity in identities
+    ]
+    assert exit_events.control(watches, 0, 0) == []
+    return exit_events, watches
+
+
+def _assert_launcher_cleanup_barrier(
+    exit_events: select.kqueue,
+    watches: list[select.kevent],
+    launcher: DarwinProcessIdentity,
+    cleanup: tuple[DarwinProcessIdentity, ...],
+    temporary_directory: Path,
+    action: str,
+) -> set[int]:
+    observed_exits = set()
+    cleanup_processes = {identity[0] for identity in cleanup}
+    for _ in watches:
+        events = exit_events.control(None, 1, TIMEOUT)
+        assert len(events) == 1, "owned sandbox lifetime did not exit"
+        event = events[0]
+        assert event.filter == select.KQ_FILTER_PROC, event
+        assert event.fflags & select.KQ_NOTE_EXIT, event
+        assert event.ident not in observed_exits, event
+        if event.ident == launcher[0]:
+            assert observed_exits == cleanup_processes, (
+                f"owned sandbox launcher exited before {action} cleanup completed: "
+                f"{cleanup_processes - observed_exits}"
+            )
+            assert not temporary_directory.exists(), (
+                f"owned sandbox launcher exited before {action} directory cleanup"
+            )
+        observed_exits.add(event.ident)
+    return observed_exits
 
 
 def _command(*arguments: str) -> list[str]:
@@ -93,7 +140,11 @@ def _manager_pid(launcher_pid: int) -> int:
         time.sleep(0.01)
 
 
-def _start_lifetime(binary: Path) -> _SandboxLifetime:
+def _start_lifetime(
+    binary: Path,
+    exit_with_parent: int | None = None,
+    ignore_sigterm: bool = False,
+) -> _SandboxLifetime:
     # The detached child leaves the root's session, so cleanup must come from
     # exact descendant observation rather than an inherited process group.
     # fmt: python
@@ -117,9 +168,31 @@ def _start_lifetime(binary: Path) -> _SandboxLifetime:
             raise SystemExit(23)
         raise SystemExit(24)
         """)
-    arguments = ("sandbox", "--", "python", "-c", script)
+    arguments = ["sandbox"]
+    if exit_with_parent is not None:
+        arguments.extend(("--exit-with-parent", str(exit_with_parent)))
+    arguments.extend(("--", "python", "-c", script))
+    recorded_arguments = tuple(arguments)
+    launch_arguments: list[str | Path] = [binary, *recorded_arguments]
+    if ignore_sigterm:
+        # fmt: python
+        host_script = code(r"""
+            import os
+            import signal
+            import sys
+
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            os.execv(sys.argv[1], sys.argv[1:])
+            """)
+        launch_arguments = [
+            sys.executable,
+            "-c",
+            host_script,
+            binary,
+            *recorded_arguments,
+        ]
     process = subprocess.Popen(
-        [binary, *arguments],
+        launch_arguments,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -149,7 +222,7 @@ def _start_lifetime(binary: Path) -> _SandboxLifetime:
         identities.append(manager)
         lifetime = _SandboxLifetime(
             process=process,
-            arguments=arguments,
+            arguments=recorded_arguments,
             launcher=launcher,
             root=root,
             descendant=descendant,
