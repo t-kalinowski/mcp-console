@@ -1,0 +1,17 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  r: <100000 multibyte characters on one source line>
+result:
+  content:
+    - type: text
+      text: |
+        [1] 100000
+  isError: false
+transcript_normalization:
+  target: send.r
+  repeated_character: é
+  repeated_character_count: 100000
+  source_utf8_bytes: 200044
+  source_sha256: 117e7bf9a2b6ef29a8cd0e9551145cc157f5145a977b0c49ba9a450dfac6dd54

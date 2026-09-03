@@ -23,4 +23,3 @@ command:
     }
 stdout: |
   sandboxed R
-...

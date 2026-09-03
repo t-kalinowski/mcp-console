@@ -22,4 +22,3 @@ result:
       text: |
         zod: echo
   isError: false
-...

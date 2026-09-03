@@ -6,4 +6,3 @@ command:
   - ./program=fixture
   - /usr/bin/false
 stdout: ""
-...

@@ -45,4 +45,3 @@ worker:
 ---
 worker:
   kind: completed
-...

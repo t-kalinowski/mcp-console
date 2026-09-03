@@ -27,4 +27,3 @@ result:
       text: |
         zod sql: two  spaces
   isError: false
-...

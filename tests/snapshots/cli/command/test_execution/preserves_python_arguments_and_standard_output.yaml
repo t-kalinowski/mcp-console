@@ -13,4 +13,3 @@ command:
   - --child-option
 stdout: |
   hello world|$(not-a-command)|--child-option
-...

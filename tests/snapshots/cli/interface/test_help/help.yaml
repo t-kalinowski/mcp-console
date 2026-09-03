@@ -83,4 +83,3 @@ stdout: |
   Examples:
     mcp-console sandbox -- Rscript analysis.R
     mcp-console sandbox -- python script.py
-...

@@ -58,4 +58,3 @@ result:
     - type: text
       text: "[done]"
   isError: false
-...

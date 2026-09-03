@@ -25,4 +25,3 @@ result:
         during request
         zod stdin: answer
   isError: false
-...

@@ -20,4 +20,3 @@ command:
     print("semaphore shared")
 stdout: |
   semaphore shared
-...

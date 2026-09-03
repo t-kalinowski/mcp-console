@@ -13,4 +13,3 @@ result:
 transcript_normalization:
   target: result.content[0].text
   cross_source_position: omitted
-...

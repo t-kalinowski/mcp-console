@@ -62,4 +62,3 @@ result:
       text: |
         (True, True, True, True, True, True, True)
   isError: false
-...

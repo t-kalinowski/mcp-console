@@ -62,4 +62,3 @@ result:
         requirements: {"python": ["distribution-name"]}
         nested-direct name: mcp_console_available_root.nested_missing
   isError: false
-...

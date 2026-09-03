@@ -1,8 +1,10 @@
 #!/usr/bin/env -S uv run --script
 
 import os
+import pty
 import selectors
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -271,6 +273,144 @@ def test_allows_processx_pty_processes(binary: Path) -> Transcript:
         }
         """)
     return [record(binary, "sandbox", "--", "Rscript", "-e", script)]
+
+
+def test_cannot_open_a_preexisting_pseudo_terminal(binary: Path) -> Transcript:
+    master, slave = pty.openpty()
+    slave_name = os.ttyname(slave)
+    # fmt: python
+    script = code(r"""
+        import errno
+        import os
+        import sys
+
+        for flags in (os.O_RDONLY, os.O_WRONLY):
+            try:
+                descriptor = os.open(sys.argv[1], flags | os.O_NOCTTY)
+            except OSError as error:
+                assert error.errno == errno.EPERM
+            else:
+                os.close(descriptor)
+                raise SystemExit("pre-existing pseudo-terminal was accessible")
+
+        print("blocked")
+        """)
+    try:
+        entry = record(
+            binary,
+            "sandbox",
+            "--",
+            "python",
+            "-c",
+            script,
+            slave_name,
+        )
+    finally:
+        os.close(master)
+        os.close(slave)
+
+    assert "exit_code" not in entry, entry
+    assert entry["stdout"] == "blocked\n", entry
+    command = entry["command"]
+    assert isinstance(command, list)
+    command[-1] = "<pre-existing pseudo-terminal>"
+    entry["transcript_normalization"] = {
+        "target": "command[-1]",
+        "pseudo_terminal_path": "omitted",
+    }
+    return [entry]
+
+
+def test_cannot_hard_link_a_host_file_into_the_writable_directory(
+    binary: Path,
+) -> Transcript:
+    with TemporaryDirectory() as directory:
+        root = Path(directory)
+        host_file = root / "host.txt"
+        host_file.write_text("host data", encoding="utf-8")
+        # fmt: python
+        script = code(r"""
+            import errno
+            import os
+            import pathlib
+            import sys
+
+            destination = pathlib.Path(os.environ["TMPDIR"]) / "host-link"
+            assert os.stat(sys.argv[1]).st_dev == os.stat(destination.parent).st_dev
+            try:
+                os.link(sys.argv[1], destination)
+            except OSError as error:
+                assert error.errno == errno.EPERM
+            else:
+                destination.write_text("escaped")
+                raise SystemExit("host hard-link escape succeeded")
+
+            print("blocked")
+            """)
+        entry = record(
+            binary,
+            "sandbox",
+            "--",
+            "python",
+            "-c",
+            script,
+            "host.txt",
+            environment={"TMPDIR": "."},
+            current_directory=root,
+        )
+
+        assert "exit_code" not in entry, entry
+        assert entry["stdout"] == "blocked\n", entry
+        assert host_file.read_text(encoding="utf-8") == "host data"
+        return [entry]
+
+
+def test_denies_network_access(binary: Path) -> Transcript:
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        port = listener.getsockname()[1]
+        # fmt: python
+        script = code(r"""
+            import errno
+            import socket
+            import sys
+
+            try:
+                socket.create_connection(("127.0.0.1", int(sys.argv[1])))
+            except OSError as error:
+                assert error.errno == errno.EPERM
+                print("blocked")
+            else:
+                raise SystemExit("network access was allowed")
+            """)
+        entry = record(
+            binary,
+            "sandbox",
+            "--",
+            "python",
+            "-c",
+            script,
+            str(port),
+        )
+        listener.setblocking(False)
+        try:
+            listener.accept()
+        except BlockingIOError:
+            pass
+        else:
+            raise AssertionError("sandboxed child reached the host listener")
+
+    assert "exit_code" not in entry, entry
+    assert entry["stdout"] == "blocked\n", entry
+    command = entry["command"]
+    assert isinstance(command, list)
+    command[-1] = "<listener port>"
+    entry["transcript_normalization"] = {
+        "target": "command[-1]",
+        "listener_port": "omitted",
+    }
+    return [entry]
 
 
 if __name__ == "__main__":

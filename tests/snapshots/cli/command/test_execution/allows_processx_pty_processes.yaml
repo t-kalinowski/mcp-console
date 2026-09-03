@@ -15,4 +15,3 @@ command:
       invisible(p$kill())
     }
 stdout: "sandboxed pty\r\n"
-...
