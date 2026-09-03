@@ -58,8 +58,10 @@ They are not MCP, relay, sideband, or worker-stream records.
 MCP Console has four process boundaries:
 
 1. The client and server communicate through MCP JSON-RPC over stdio.
-2. Each host sandbox owner initializes one manager over a private inherited Unix socket and receives its readiness and ownership-commit responses.
-   After commitment, the owner holds that stream open as the live-sandbox ownership token; EOF requests retirement, and successful manager process exit is the primary cleanup barrier.
+2. Each host sandbox owner initializes one manager over a private inherited Unix socket.
+   Before reporting readiness, the manager installs root, descendant, and control-socket observation and adopts the private directory.
+   After receiving readiness, the owner relinquishes its duplicate directory guard, installs manager-failure recovery, and releases the root's startup gate.
+   The owner then holds the control stream open only as the live-sandbox ownership token; EOF requests retirement, and successful manager process exit is the primary cleanup barrier.
    The server starts one manager for each worker generation, which may evaluate multiple cells before restart or replacement.
    The standalone launcher starts one manager for each invocation of `mcp-console sandbox`, which runs one direct child command.
 3. The server and one per-generation relay communicate through the private, ordered JSONL protocol in `docs/RELAY_PROTOCOL.md`.
@@ -71,21 +73,21 @@ Keep these ownership rules intact:
   It owns local worker transports, sideband translation, direct-worker signal delivery, bounded termination, same-process-group cleanup, and direct-worker reaping.
   It preserves each producer's order and supplies serialized observation order; it does not reconstruct chronology across independent sideband, stdout, and stderr transports.
 - The server owns host-side relay lifetime orchestration and retirement, worker-generation state, operation admission, output cuts, pending-output budgets, response assembly, delivery ownership, retained requirements, and host resolvers.
-  It releases each relay root's private startup gate only after manager-failure recovery is installed and manager ownership is committed.
+  It releases each relay root's private startup gate only after the manager reports readiness and manager-failure recovery is installed.
   Do not move these responsibilities into the relay.
 - Treat each relay and its worker process tree, and each standalone command tree, as one sandboxed lifetime.
   A host-side sandbox manager owns primary observed-descendant tracking, bounded force termination, and private-directory cleanup for that lifetime.
   Before readiness, the host owner retains the directory-creation guard.
   After readiness, it relinquishes that guard and the manager becomes the sole directory-cleanup owner.
   The manager's single thread observes descendant and root events plus control-socket readability through one kqueue.
-  After commitment, owner EOF asks the manager to retire the lifetime; the manager decides whether the root must be stopped and whether cleanup succeeded.
+  After readiness, the control socket carries no messages; owner EOF asks the manager to retire the lifetime, and the manager decides whether the root must be stopped and whether cleanup succeeded.
   After natural root-exit cleanup, it still waits for owner EOF before removing the directory and exiting.
   The manager's adopted guard preserves the directory on unexpected unwind and removes it only after successful cleanup proves that it is unused.
   The host owner still takes over bounded process cleanup if the manager exits unsuccessfully while the sandbox root remains live and pinned.
   That fallback can reconstruct only descendants still reachable from the root's current ancestry.
   It has no directory-cleanup state, so the directory remains if the manager exits before completing its own cleanup and removal.
 - The standalone launcher owns the direct command's exit status, foreground-terminal transfer, and signal relaying.
-  It releases the command's private startup gate only after manager ownership is committed, closes the ownership token to request retirement, and retains the direct root waitably through manager exit and any fallback cleanup.
+  It releases the command's private startup gate only after the manager reports readiness and manager-failure recovery is installed, closes the ownership token to request retirement, and retains the direct root waitably through manager exit and any fallback cleanup.
 - The sandbox manager does not own logical generation state, command exit status, relay transport, or terminal semantics.
 - Restart, replacement, evaluation admission, stdin writes, resolver callbacks, and retained-environment commits are scoped to the worker generation that accepted them.
   Work admitted for an old generation must not reach its replacement.

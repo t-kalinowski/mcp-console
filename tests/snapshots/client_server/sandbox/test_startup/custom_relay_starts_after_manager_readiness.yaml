@@ -1,0 +1,15 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  r: echo echo
+result:
+  content:
+    - type: text
+      text: |
+        zod: echo
+  isError: false
+startup_gate:
+  manager: READY delivered with send return held
+  custom_relay: executed without another manager response
+  private_gate: closed before relay exec

@@ -2,6 +2,7 @@
 
 import os
 import re
+import select
 import shutil
 import signal
 import subprocess
@@ -257,7 +258,7 @@ def test_server_crash_after_relay_exit_removes_temporary_directory(
     binary: Path,
 ) -> Transcript:
     # A live but stopped server cannot complete normal relay retirement. The
-    # committed manager must retain directory ownership after the relay exits
+    # ready manager must retain directory ownership after the relay exits
     # so a later server crash still completes cleanup.
     temporary_owner = tempfile.TemporaryDirectory()
     temporary = Path(temporary_owner.name)
@@ -410,7 +411,7 @@ def test_relay_crash_retires_the_worker_generation(binary: Path) -> Transcript:
 
 def test_manager_crash_retires_the_worker_generation(binary: Path) -> Transcript:
     # While the relay root remains live and pinned, the host owner must take
-    # over bounded cleanup if the committed manager exits.
+    # over bounded cleanup if the ready manager exits.
     client = McpClient(binary, ("serve",))
     generation: Generation | None = None
     manager_identity: DarwinProcessIdentity | None = None
@@ -454,7 +455,7 @@ def test_manager_crash_retires_the_worker_generation(binary: Path) -> Transcript
         _close_client_streams(client)
 
 
-def test_manager_crash_before_commit_retires_the_custom_relay_generation(
+def test_manager_crash_before_gate_release_retires_the_custom_relay_generation(
     binary: Path,
 ) -> Transcript:
     fixture_root = Path(__file__).resolve().parents[3] / "fixtures"
@@ -463,17 +464,13 @@ def test_manager_crash_before_commit_retires_the_custom_relay_generation(
     marker_name = "mcp-console-startup-marker"
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
-        committed_ready = FifoCheckpoint(temporary / "committed-ready")
-        committed_release = FifoCheckpoint(temporary / "committed-release")
+        gate_ready = FifoCheckpoint(temporary / "gate-ready")
+        gate_release = FifoCheckpoint(temporary / "gate-release")
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
         environment["MCP_CONSOLE_TEST_BINARY"] = str(binary)
-        environment["MCP_CONSOLE_TEST_MANAGER_COMMITTED_READY"] = str(
-            committed_ready.path
-        )
-        environment["MCP_CONSOLE_TEST_MANAGER_COMMITTED_RELEASE"] = str(
-            committed_release.path
-        )
+        environment["MCP_CONSOLE_TEST_OWNER_GATE_READY"] = str(gate_ready.path)
+        environment["MCP_CONSOLE_TEST_OWNER_GATE_RELEASE"] = str(gate_release.path)
         environment["DYLD_INSERT_LIBRARIES"] = str(build_manager_interposer(temporary))
         client = McpClient(
             binary,
@@ -482,10 +479,12 @@ def test_manager_crash_before_commit_retires_the_custom_relay_generation(
         )
         identities: tuple[DarwinProcessIdentity, ...] = ()
         sandbox_temporary_directory: Path | None = None
+        gate_released = False
+        root_exit = select.kqueue()
         try:
             client._initialize_and_list_tools()
             waiting = client._start_send(r="42")
-            committed_ready.wait("manager COMMITTED write")
+            gate_ready.wait("owner startup-gate release")
 
             manager_identity = capture_darwin_process_identity(
                 _manager_pid(client.process.pid)
@@ -501,7 +500,7 @@ def test_manager_crash_before_commit_retires_the_custom_relay_generation(
             identities = (root_identity, manager_identity)
             _wait_for_private_startup_gate(root_identity)
             assert darwin_child_process_identities(root_identity) == (), (
-                "custom relay root created children before manager ownership committed"
+                "custom relay root created children before manager readiness"
             )
             sandbox_directories = tuple(
                 temporary.glob(f"mcp-console-tmp-{client.process.pid}-*")
@@ -509,47 +508,66 @@ def test_manager_crash_before_commit_retires_the_custom_relay_generation(
             assert len(sandbox_directories) == 1, sandbox_directories
             sandbox_temporary_directory = sandbox_directories[0]
             assert list(temporary.glob(f"**/{marker_name}")) == [], (
-                "custom relay executed before manager ownership committed"
+                "custom relay executed before startup-gate release"
             )
 
-            assert signal_darwin_process(manager_identity, signal.SIGKILL), (
-                "manager exited before pre-commit crash injection"
+            exit_watch = select.kevent(
+                root_identity[0],
+                filter=select.KQ_FILTER_PROC,
+                flags=select.KQ_EV_ADD | select.KQ_EV_CLEAR,
+                fflags=select.KQ_NOTE_EXIT,
             )
-            client.transcript.append({"manager_signal": "SIGKILL before COMMITTED"})
+            assert root_exit.control([exit_watch], 0, 0) == []
+            assert signal_darwin_process(manager_identity, signal.SIGKILL), (
+                "manager exited before gate-release crash injection"
+            )
+            exit_events = root_exit.control(None, 1, TIMEOUT)
+            assert len(exit_events) == 1, (
+                "manager recovery did not stop the gated custom-relay root"
+            )
+            assert exit_events[0].ident == root_identity[0], exit_events[0]
+
+            gate_release.release()
+            gate_released = True
+            client.transcript.append({"manager_signal": "SIGKILL before gate release"})
             client._receive(waiting)
             result = waiting["result"]
             assert result.get("isError") is True, result
+            assert (
+                "failed to release sandbox target startup gate"
+                in (result["content"][0]["text"])
+            ), result
             survivors = _wait_for_process_cleanup(identities, timeout=5)
 
             assert survivors == [], (
-                f"pre-commit manager crash leaked custom-relay processes: {survivors}"
+                f"pre-release manager crash leaked custom-relay processes: {survivors}"
             )
             assert sandbox_temporary_directory.exists(), (
-                "ambiguous manager commit removed sandbox temporary directory: "
+                "manager recovery removed sandbox temporary directory: "
                 f"{sandbox_temporary_directory}"
             )
             assert list(temporary.glob(f"**/{marker_name}")) == [], (
-                "custom relay executed after its manager failed before ownership commit"
+                "custom relay executed after its manager failed before gate release"
             )
             client.transcript.append(
                 {
-                    "verified_startup_gate": (
-                        "custom relay did not execute before COMMITTED"
-                    ),
+                    "verified_startup_gate": "custom relay did not execute",
                     "verified_cleanup": "gated relay root and manager",
                     "verified_preservation": "sandbox temp",
                 }
             )
             return client._finish()
         finally:
-            committed_release.release()
+            if not gate_released:
+                gate_release.release()
             stop_client(client)
             if identities:
                 kill_darwin_processes(identities)
             if sandbox_temporary_directory is not None:
                 shutil.rmtree(sandbox_temporary_directory, ignore_errors=True)
-            committed_ready.close()
-            committed_release.close()
+            root_exit.close()
+            gate_ready.close()
+            gate_release.close()
             _close_client_streams(client)
 
 

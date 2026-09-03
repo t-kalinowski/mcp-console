@@ -13,8 +13,8 @@ The [worker protocol](WORKER_PROTOCOL.md) defines the relay's other interface.
 The server remains outside the sandbox.
 For each worker generation it starts `sandbox-exec` as the direct child.
 That root first runs a hidden wrapper blocked on a private startup gate.
-After the host manager begins observation, the server installs manager-failure recovery and commits manager ownership.
-The server then releases the wrapper; it closes the gate and replaces itself with the configured relay in the same process identity.
+The host manager installs root, descendant, and control-socket observation and adopts the private directory before reporting readiness.
+After receiving readiness, the server relinquishes its duplicate directory guard, installs manager-failure recovery, and releases the wrapper; it closes the gate and replaces itself with the configured relay in the same process identity.
 The relay then starts the configured worker inside the same sandbox:
 
 ```text
@@ -34,8 +34,8 @@ Runtime failures are also represented by a `fatal` event when relay stdout remai
 The framed event is authoritative; stderr diagnostics are best effort because the server's outer fail-safe can terminate a failed relay before its final diagnostic is written.
 The server marks every nonstandard inherited descriptor close-on-exec in the forked child except the private startup gate.
 The hidden wrapper closes that gate before relay exec, so a descriptor opened by another server thread and the private gate itself cannot reach relay code.
-The server releases the gate only after manager-failure monitoring is installed and manager ownership of the observed lifetime and private directory is committed.
-After commitment, the server holds the manager control channel open as the worker lifetime's ownership token and closes it to request retirement.
+The server releases the gate only after the manager reports readiness and manager-failure monitoring is installed.
+After readiness, the server holds the manager control channel open only as the worker lifetime's ownership token and closes it to request retirement.
 The startup gate and manager channel are not part of the JSONL relay protocol, and neither enters relay code.
 
 The relay creates the worker's private full-duplex sideband socket pair and its standard-input, standard-output, and standard-error pipes after entering the sandbox.
@@ -204,9 +204,9 @@ On forced retirement or server loss, it instead closes the group while the root 
 It adopts a private temporary-directory guard and removes the directory only after both cleanup steps succeed; a cleanup failure preserves the directory.
 If the relay exits or crashes, the manager treats root exit as retirement of the remaining observed lifetime.
 The manager receives process events and control readability through one `kqueue`; after clean root-exit cleanup, it waits for owner EOF before removing the directory and exiting.
-After commitment, the manager channel carries no further messages.
+After readiness, the manager channel carries no further messages.
 Whether the server requests retirement or exits, owner-channel EOF asks the manager to decide whether the relay root must be stopped and complete cleanup independently.
-If the manager exits unsuccessfully after readiness while the server still owns a live, waitable relay root, including during the commit acknowledgement, the server reconstructs bounded tracking from that root's current process tree and completes process cleanup before replacement.
+If the manager exits unsuccessfully after readiness while the server still owns a live, waitable relay root, the server reconstructs bounded tracking from that root's current process tree and completes process cleanup before replacement.
 The server does not remove the private directory; it remains if the manager exited before completing its own cleanup and removal.
 That fallback cannot recover a descendant that had already detached from the root's ancestry before the manager failed.
 
@@ -219,7 +219,7 @@ Those manager bounds can extend past the relay allowance when the outer stop beg
 The server does not start the replacement sandbox lifetime until the manager-exit retirement barrier completes.
 Concurrent or repeated retirement reuses the recorded result and never signals a retired PID or process group again.
 Darwin cannot resolve every later fork atomically, so a descendant that becomes orphaned before its fork event is resolved remains outside the guarantee.
-The private startup gate prevents either relay implementation from running during initial manager observation and ownership commitment.
+The private startup gate prevents either relay implementation from running until manager observation is active and manager-failure recovery is installed.
 
 ## Retirement and failure
 

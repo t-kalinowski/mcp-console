@@ -73,35 +73,6 @@ pub(in crate::sandbox) fn status(
     }
 
     manager.monitor_for_standalone(child.id(), temporary_directory, root_waiter.wakeup());
-    if let Err(mut error) = manager.commit() {
-        // A failed acknowledgement is ambiguous: the manager may already have
-        // accepted ownership. Close its ownership token before reaping the root,
-        // and use process-group cleanup only if retirement fails.
-        match manager.retire() {
-            Ok(()) => {
-                if let Err(wait_error) = child.wait() {
-                    error = additional_error(
-                        error,
-                        format!(
-                            "failed to wait for terminated {}: {wait_error}",
-                            platform::SANDBOX_EXEC
-                        ),
-                    );
-                }
-            }
-            Err(mut stop_error) => {
-                if let Err(kill_error) = terminate_standalone_root(&mut child, ROOT_STOP_TIMEOUT) {
-                    stop_error = additional_error(stop_error, kill_error);
-                }
-                error = additional_error(error, stop_error);
-            }
-        }
-        if let Err(owner_error) = restore_launcher_state(&mut foreground_terminal, signal_relay) {
-            error = additional_error(error, owner_error);
-        }
-        return Err(error);
-    }
-
     if let Err(write_error) = launcher_gate.write_all(&[TARGET_GATE_RELEASE])
         && write_error.kind() != ErrorKind::BrokenPipe
     {

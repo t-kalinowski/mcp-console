@@ -34,14 +34,9 @@ impl SandboxedCommand {
             return Err(terminate_unmanaged_child(&mut child, error).error);
         }
         manager.monitor(child.id(), self.temporary_directory);
-        if let Err(error) = manager.commit() {
-            let manager_error = manager.retire().err();
-            drop(startup_gate);
-            return Err(stop_after_manager_failure(&mut child, error, manager_error));
-        }
         if let Err(error) = startup_gate.release() {
             let manager_error = manager.retire().err();
-            return Err(stop_after_manager_failure(&mut child, error, manager_error));
+            return Err(finish_failed_startup(&mut child, error, manager_error));
         }
 
         Ok(SandboxedChild {
@@ -69,7 +64,7 @@ impl SandboxedCommand {
     }
 }
 
-fn stop_after_manager_failure(
+fn finish_failed_startup(
     child: &mut Child,
     mut error: String,
     manager_error: Option<String>,
