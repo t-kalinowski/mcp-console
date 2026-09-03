@@ -35,7 +35,7 @@ impl DescendantTracker {
                 if event.filter == libc::EVFILT_PROC && event_data == libc::ESRCH as libc::intptr_t
                 {
                     self.state.active.remove(&pid);
-                    observed.root_exited |= self.state.root.is_some_and(|root| root.pid == pid);
+                    observed.root_exited |= self.state.root.pid == pid;
                     continue;
                 }
                 return Err(format!(
@@ -52,8 +52,8 @@ impl DescendantTracker {
                 return Err("sandbox process tracker received an unexpected event".to_string());
             }
 
-            observed.root_exited |= event.fflags & libc::NOTE_EXIT != 0
-                && self.state.root.is_some_and(|root| root.pid == pid);
+            observed.root_exited |=
+                event.fflags & libc::NOTE_EXIT != 0 && self.state.root.pid == pid;
             if event.fflags & PROCESS_REAP_EVENT != 0 {
                 // XNU posts NOTE_REAP before removing the PID from its process
                 // table. Drop the identity now only when removal has completed.
@@ -99,14 +99,9 @@ impl DescendantTracker {
                 Ok(exited) => root_exited |= exited,
                 Err(error) => record_first_error(&mut cleanup_error, error),
             }
-            if root_exited
-                && let Some(root) = self.state.root
-                && self.state.active.get(&root.pid) == Some(&root)
-            {
+            let root = self.state.root;
+            if root_exited && self.state.active.get(&root.pid) == Some(&root) {
                 self.state.active.remove(&root.pid);
-            }
-            if let Err(error) = remove_stale_processes(&mut self.state.active) {
-                record_first_error(&mut cleanup_error, error);
             }
 
             // The root command has exited, so its background work has no
@@ -165,9 +160,7 @@ impl DescendantTracker {
     }
 
     pub(super) fn root_has_exited(&self) -> Result<bool, String> {
-        let Some(root) = self.state.root else {
-            return Ok(true);
-        };
+        let root = self.state.root;
         let Some(info) = process_info(root.pid)? else {
             return Ok(true);
         };
