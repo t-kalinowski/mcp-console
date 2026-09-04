@@ -26,7 +26,9 @@ Security and liveness cases may add causal or process assertions for facts a sna
 Do not test exact internal sequencing unless it is itself an observable contract.
 
 The direct CLI sandbox cases own argument and standard-stream fidelity, job control, signal and exit status, security policy, and manager-owned retirement.
-The public MCP sandbox cases are limited to a launch-path descriptor matrix and integration checks for sandbox-dependent runtime workflows, startup gating, worker replacement, supervisor loss, restart, and shutdown.
+The public MCP sandbox cases cover the launch-path descriptor matrix, sandbox-dependent runtime workflows, startup failure and gating, worker replacement, supervisor loss, restart, and shutdown.
+The relay wrapper workflow verifies MCP restart and shutdown when the relay is below the sandbox root and a worker descendant retains its streams.
+The direct relay CLI case compares the complete protocol through ordinary direct launch and the public sandbox command, without requiring the relay to be a process-group leader.
 
 Map each non-generic sandbox allowance to the real workflow that requires it and the test that owns that workflow:
 

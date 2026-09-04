@@ -70,7 +70,8 @@ MCP Console has four process boundaries:
 Keep these ownership rules intact:
 
 - The relay is a thin ordered transport and worker supervisor.
-  It owns local worker transports, sideband translation, direct-worker signal delivery, bounded termination, same-process-group cleanup, and direct-worker reaping.
+  It owns local worker transports, sideband translation, direct-worker signal delivery, bounded termination, and direct-worker reaping.
+  Process-group and observed-descendant cleanup belong to the sandbox launcher; the relay does not require a particular process-group identity or sandbox topology.
   It preserves each producer's order and supplies serialized observation order; it does not reconstruct chronology across independent sideband, stdout, and stderr transports.
 - The server owns logical relay lifetime orchestration and retirement, worker-generation state, operation admission, output cuts, pending-output budgets, response assembly, delivery ownership, retained requirements, and host resolvers.
   It constructs the relay target independently, applies the retained environment to an ordinary launcher command, and owns only the launcher's piped standard input and output plus normal child exit, signaling, and reaping.
@@ -118,9 +119,9 @@ Keep these ownership rules intact:
 
 - `src/worker_protocol.rs`, `src/sideband.rs` — relay-worker message and framing contract.
 - `src/relay_protocol.rs` — server-relay JSONL message and framing contract.
-- `src/worker_relay.rs`, `src/process_group.rs` — sandboxed worker launch, I/O forwarding, signaling, same-group cleanup, and reaping, plus shared exact process-group termination.
+- `src/worker_relay.rs` — worker launch, I/O forwarding, direct-worker signaling, termination, and reaping.
 - `src/worker_client.rs`, `src/worker_client/` — server-owned environment, evaluation, lifecycle, ordinary launcher child ownership, ordered event dispatch, output tape, and macOS relay transport.
-- `src/sandbox.rs`, `src/sandbox/{child,macos}.rs`, `src/sandbox/supervision.rs`, `src/sandbox/supervision/` — launcher-owned sandbox construction and child cleanup, primary host-manager supervision, manager-failure recovery, and standalone job control.
+- `src/sandbox.rs`, `src/sandbox/{child,macos,process_group}.rs`, `src/sandbox/supervision.rs`, `src/sandbox/supervision/` — launcher-owned sandbox construction, child and process-group cleanup, primary host-manager supervision, manager-failure recovery, and standalone job control.
 - `src/worker.rs`, `src/worker/embedded_r.rs`, `src/r_repl.c` — worker-facing facade, current embedded-R backend, cell dispatch, console callbacks, and the C-owned DLL-REPL boundary.
 
 ### Language adapters

@@ -10,49 +10,34 @@ The [worker protocol](WORKER_PROTOCOL.md) defines the relay's other interface.
 
 ## Process boundary
 
-The server remains outside the sandbox.
-For each worker generation it starts the current executable's `mcp-console sandbox` command as its direct child in hidden parent-owned mode, with the configured relay and worker command line as the target.
-The launcher starts `sandbox-exec` and the sandbox manager as its own direct children and is the sole host-side sandbox owner.
-The sandbox root first runs a hidden wrapper blocked on a private startup gate.
-The host manager installs root, descendant, and control-socket observation and adopts the private directory before reporting readiness.
-After receiving readiness, the launcher installs manager-failure recovery, relinquishes its duplicate directory guard, and releases the wrapper; it closes the gate and replaces itself with the configured relay in the same process identity.
-The relay then starts the configured worker inside the same sandbox:
+The server starts the public `mcp-console sandbox` command as its direct child for each worker generation, with the configured relay and worker command line as the target:
 
 ```text
-server <--> sandbox launcher ----> sandbox lifetime manager
-                    \----> (gated root -> worker relay <--> worker)
+server <--> sandbox launcher <--> relay <--> worker
+             lifetime owner      direct-worker owner
 ```
 
-The parentheses mark the sandbox boundary.
-The relay is also the dedicated sandbox process-group leader, and the worker inherits that group.
-The sandbox lifetime manager is a separate host-side process outside the parentheses.
-It observes and retires the relay, worker, and their observed descendants as one sandbox lifetime.
+The launcher passes the server's piped input and output and inherited error stream through to the target without a data proxy.
+The relay receives only standard input, standard output, and standard error from its launcher.
+It need not be the sandbox root or a process-group leader; an ordinary wrapper can launch it as a child with the same streams.
+The internal `worker-relay` command also accepts this protocol when launched directly without a sandbox, with the caller responsible for any descendant cleanup.
 
-The server configures piped launcher input and output and inherited error, closes every unrelated descriptor before launcher exec, and the launcher passes the three documented streams through to the target without a data proxy.
-Once relay code begins, only its standard input, standard output, and standard error cross the server/sandbox boundary.
 Standard input and output carry the framed relay protocol described below.
 Relay standard error is inherited from the server and is not part of the protocol; it is normally empty and is reserved for fatal or infrastructure diagnostics.
 Runtime failures are also represented by a `fatal` event when relay stdout remains usable.
 The framed event is authoritative; stderr diagnostics are best effort because the server's outer fail-safe can terminate a failed relay before its final diagnostic is written.
-The launcher never writes to standard output because it carries relay JSONL.
+The sandbox launcher never writes to standard output because it carries relay JSONL.
 If sandbox setup fails before relay readiness, the detailed infrastructure error goes to inherited standard error and the closed relay transport produces a stable generic startup failure in the server.
-The launcher marks every nonstandard inherited descriptor close-on-exec in the forked sandbox child except the private startup gate.
-The hidden wrapper closes that gate before relay exec, so a descriptor opened by another server thread and the private gate itself cannot reach relay code.
-The launcher releases the gate only after the manager reports readiness and manager-failure monitoring is installed.
-After readiness, the launcher holds the manager control channel open only as the worker lifetime's ownership token and closes it to request retirement.
-The startup gate and manager channel are not part of the JSONL relay protocol, and neither enters relay code.
-The configured parent PID is launcher startup metadata, not another runtime channel.
 
-The relay creates the worker's private full-duplex sideband socket pair and its standard-input, standard-output, and standard-error pipes after entering the sandbox.
-It passes one worker sideband endpoint through `MCP_CONSOLE_SIDEBAND_FD` together with the fd-0/1/2 contract documented in [`WORKER_PROTOCOL.md`](WORKER_PROTOCOL.md).
+The server closes unrelated inherited descriptors before launcher exec.
+The launcher independently enforces its target's descriptor boundary and owns sandbox setup, startup supervision, process-group and observed-descendant cleanup, and private-directory lifetime.
+Its startup gate, manager channel, and parent-exit observation are implementation details documented in [sandbox supervision](SANDBOX_SUPERVISION.md).
+Any future sandbox-specific control plane must terminate at the sandbox process; its bootstrap and transport do not belong in the relay protocol.
 
-The relay owns the direct worker process and its local transports, translation between this protocol and the worker sideband, direct-worker signal delivery, deadline-bounded direct-worker termination, cleanup of remaining members of its worker process group, and direct-worker reaping.
-The host-side manager owns primary tracking and termination of the relay root and observed descendants across process-group and session changes, along with private-directory cleanup.
-The launcher retains the directory-creation guard until manager readiness, then relinquishes it while keeping the manager monitor for process recovery.
-From readiness onward, the manager is the sole directory-cleanup owner.
-Its adopted guard preserves on unexpected unwind and removes the directory only after successful cleanup; launcher fallback has no directory-cleanup state.
-Successful manager process exit is the launcher's primary cleanup barrier before it reaps the direct relay root.
-Successful launcher exit is then the server's cleanup barrier.
+The relay creates the worker's full-duplex sideband socket pair and its standard-input, standard-output, and standard-error pipes.
+It passes one worker sideband endpoint through `MCP_CONSOLE_SIDEBAND_FD` together with the fd-0/1/2 contract documented in [the worker protocol](WORKER_PROTOCOL.md).
+It owns the direct worker, local transports, sideband translation, direct-worker signals, bounded termination, and direct-worker reaping.
+Successful managed launcher exit is the server's sandbox-cleanup barrier.
 The server owns generation state and host-side dependency resolution; see [Requirements and environments](REQUIREMENTS.md) for that trust boundary.
 
 ## Framing and raw bytes
@@ -199,39 +184,24 @@ This keeps the relay reader alive for drained raw output, stream closures, and t
 
 The relay closes worker stdin and sends the unchanged worker-sideband `shutdown` message without waiting for one path before attempting the other.
 If the worker remains live at its deadline, the relay sends `SIGKILL` to that direct child.
-After direct-worker exit or force-stop, the relay stops any remaining member of its worker process group and reaps the direct child.
+After direct-worker exit or force-stop, the relay reaps the direct child and retires its local transports.
+The sandbox launcher owns cleanup of remaining descendants, including those retaining worker descriptors.
 The resulting `worker_exited` or `worker_signaled` event describes only that direct child; it is not a sandbox-lifetime retirement acknowledgment.
 Clean relay-stdin EOF does not emit `shutdown_started`; it performs the same worker shutdown with a new one-second grace period measured from EOF.
 EOF midway through a command frame is a transport failure instead.
 
-The host-side manager tracks the relay root and every descendant identity it observes by PID and start time, retaining those identities across process-group and session changes.
-After a normal relay exit, it waits for observed-tree cleanup and then closes the original relay process group as a backstop for a same-group fork that raced observation; the launcher retains the waitable relay root and the manager revalidates its recorded identity first.
-On forced retirement or parent loss, the launcher requests manager retirement; the manager closes the group while the root identity is still available, signals the exact recorded relay, and then waits for observed-tree cleanup.
-It adopts a private temporary-directory guard and removes the directory only after both cleanup steps succeed; a cleanup failure preserves the directory.
-If the relay exits or crashes, the manager treats root exit as retirement of the remaining observed lifetime.
-The manager receives process events and control readability through one `kqueue`; after clean root-exit cleanup, it waits for owner EOF before removing the directory and exiting.
-After readiness, the manager channel carries no further messages.
-Whether the launcher requests retirement or exits, owner-channel EOF asks the manager to decide whether the relay root must be stopped and complete cleanup independently.
-If the manager exits unsuccessfully after readiness while the launcher still owns a live, waitable relay root, the launcher reconstructs bounded tracking from that root's current process tree and completes process cleanup before it exits.
-The launcher does not remove the private directory; it remains if the manager exited before completing its own cleanup and removal.
-That fallback cannot recover a descendant that had already detached from the root's ancestry before the manager failed.
-
-The launcher leaves an exited relay root waitable until sandbox-lifetime cleanup completes, preserving the relay identity while retirement finishes.
+The sandbox launcher owns retirement of the whole target lifetime after target exit, a managed-retirement request, or parent loss.
+Its cleanup and recovery mechanisms remain behind the sandbox command; see [sandbox supervision](SANDBOX_SUPERVISION.md) for their guarantees and limits.
 The server retains the launcher as its ordinary waitable child.
 It waits through the worker deadline and uses the additional two-second allowance only after timely `shutdown_started` acceptance or a pre-retirement failure.
 If the launcher has not exited by the applicable relay deadline, the server sends it `SIGTERM` to request managed retirement.
-The launcher closes the manager ownership token, waits for manager exit, and reaps the relay root, including when the relay stalls or has already exited.
-A launcher that consumes the owned-retirement request returns status 0 only after that cleanup, using its existing exit status as the acknowledgment.
-The background manager has a separate one-second cleanup timeout, and its owner allows one additional second for manager exit and reaping.
-If the manager misses that allowance, the owner sends exact-identity `SIGKILL`, keeps the relay root waitable while it reaps the manager, and may use one additional one-second cleanup interval to reconstruct and retire the root's current process tree.
-Those manager bounds can extend past the relay allowance when the outer stop begins only at that allowance's deadline.
-After managed cleanup succeeds, the launcher exits after manager cleanup and root reaping, and the server does not start the replacement sandbox lifetime until that launcher-exit barrier completes.
+A launcher that consumes the owned-retirement request returns status 0 only after cleanup, using its existing exit status as the acknowledgment.
+The server allows six seconds for managed retirement before forcing launcher exit, followed by one second to observe that exit.
+The server does not start the replacement sandbox lifetime until the launcher-exit barrier completes.
 A nonzero launcher exit fails the restart instead of admitting a replacement.
 Signal-derived status 137 is redundant only when relay EOF itself established the generation failure, including successful launcher recovery from manager failure; it remains an error after an earlier independent protocol, worker, or transport failure.
-The server uses a hard launcher kill only as the final fail-safe; ownership-token EOF still asks the manager to clean up, but the server can no longer wait synchronously for manager completion.
-Concurrent or repeated retirement reuses the recorded result and never signals a retired PID or process group again.
-Darwin cannot resolve every later fork atomically, so a descendant that becomes orphaned before its fork event is resolved remains outside the guarantee.
-The launcher-private startup gate prevents either relay implementation from running until manager observation is active and manager-failure recovery is installed.
+The server uses a hard launcher kill only as the final fail-safe; the bundled sandbox still requests cleanup on launcher loss, but the server can no longer synchronously observe its completion.
+Concurrent or repeated retirement reuses the recorded result and never signals a retired launcher PID again.
 
 ## Retirement and failure
 

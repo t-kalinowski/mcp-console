@@ -25,6 +25,8 @@ mod child;
 #[path = "sandbox/macos.rs"]
 mod platform;
 #[cfg(target_os = "macos")]
+mod process_group;
+#[cfg(target_os = "macos")]
 #[path = "sandbox/supervision.rs"]
 mod supervision;
 
