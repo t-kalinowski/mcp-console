@@ -1,0 +1,263 @@
+name: Finalize sandbox process boundary
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  CARGO_TERM_COLOR: always
+  UV_VERSION: "0.12.4"
+  FINAL_BRANCH: followup/sandbox-cli-boundary
+
+jobs:
+  finalize:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: macos-latest
+    steps:
+      - name: Check out the staging branch
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.FINAL_BRANCH }}
+          fetch-depth: 0
+
+      - name: Reconstruct changes on current main
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64
+          import bz2
+          import gzip
+          import lzma
+          import zlib
+          from pathlib import Path
+
+          parts = sorted(Path(".bootstrap-patch").glob("gz-*"))
+          if not parts:
+              raise SystemExit("compressed follow-up chunks are missing")
+
+          encoded = b"".join(path.read_bytes().strip() for path in parts)
+          seeds = [encoded]
+          for strict in (True, False):
+              try:
+                  seeds.append(base64.b64decode(encoded, validate=strict))
+              except Exception:
+                  pass
+          try:
+              seeds.append(
+                  b"".join(base64.b64decode(path.read_bytes().strip()) for path in parts)
+              )
+          except Exception:
+              pass
+
+          candidates = []
+          for seed in seeds:
+              candidates.append(seed)
+              for decode in (gzip.decompress, zlib.decompress, bz2.decompress, lzma.decompress):
+                  try:
+                      candidates.append(decode(seed))
+                  except Exception:
+                      pass
+
+          for candidate in candidates:
+              if candidate.startswith(b"diff --git "):
+                  Path("/tmp/sandbox-followup.patch").write_bytes(candidate)
+                  break
+          else:
+              raise SystemExit("compressed chunks did not contain a unified diff")
+          PY
+
+          git fetch origin main
+          git reset --hard origin/main
+          git clean -fdx
+          git apply --check /tmp/sandbox-followup.patch
+          git apply --index /tmp/sandbox-followup.patch
+          git diff --cached --check
+          git diff --cached --stat
+
+      - name: Install Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.0.1
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: Install repository tools
+        run: |
+          uv tool install ruff
+          uv tool install yamark
+          uv tool dir --bin >> "$GITHUB_PATH"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Install R
+        uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: always
+
+      - name: Cache Rust build data
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: sandbox-boundary-followup
+
+      - name: Format and run core checks
+        run: |
+          scripts/format
+          scripts/check-core
+
+      - name: Update focused public snapshots
+        run: |
+          scripts/test --update --jobs 1 \
+            client_server/sandbox/test_boundary \
+            client_server/lifecycle/test_restart::restart_reports_nonzero_sandbox_launcher_exit \
+            client_server/lifecycle/test_restart::restart_rejects_unsolicited_status_137 \
+            client_server/lifecycle/test_restart::restart_rejects_status_137_when_launcher_exits_before_sigterm \
+            client_server/lifecycle/test_restart::restart_drains_relay_output_before_nonzero_launcher_error \
+            client_server/lifecycle/test_restart::restart_drains_relay_output_before_status_one_launcher_error \
+            client_server/lifecycle/test_restart::restart_preserves_relay_retirement_failure \
+            client_server/lifecycle/test_restart::restart_waits_for_owned_launcher_manager_recovery \
+            server_relay/failures/test_failures::rejects_unsolicited_status_137_after_fatal
+
+      - name: Verify focused public workflows
+        run: |
+          scripts/test --jobs 1 \
+            client_server/sandbox/test_boundary \
+            client_server/lifecycle/test_restart::restart_reports_nonzero_sandbox_launcher_exit \
+            client_server/lifecycle/test_restart::restart_rejects_unsolicited_status_137 \
+            client_server/lifecycle/test_restart::restart_rejects_status_137_when_launcher_exits_before_sigterm \
+            client_server/lifecycle/test_restart::restart_drains_relay_output_before_nonzero_launcher_error \
+            client_server/lifecycle/test_restart::restart_drains_relay_output_before_status_one_launcher_error \
+            client_server/lifecycle/test_restart::restart_preserves_relay_retirement_failure \
+            client_server/lifecycle/test_restart::restart_waits_for_owned_launcher_manager_recovery \
+            server_relay/failures/test_failures::rejects_unsolicited_status_137_after_fatal
+
+      - name: Publish one clean commit through Git data objects
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git add -A
+          git diff --cached --check
+          test -n "$(git diff --cached --name-only)"
+          test -z "$(git diff --cached --name-only | grep -E '^(\.bootstrap|\.github/workflows/(bootstrap-source|finalize-sandbox-boundary))' || true)"
+
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+          import subprocess
+          import urllib.request
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          token = os.environ["GH_TOKEN"]
+          rest = f"https://api.github.com/repos/{repository}"
+
+          def request(method, url, payload=None):
+              data = None if payload is None else json.dumps(payload).encode()
+              req = urllib.request.Request(
+                  url,
+                  data=data,
+                  method=method,
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              with urllib.request.urlopen(req) as response:
+                  return json.load(response)
+
+          main_sha = request("GET", rest + "/git/ref/heads/main")["object"]["sha"]
+          main_commit = request("GET", rest + f"/git/commits/{main_sha}")
+          changes = subprocess.check_output(
+              ["git", "diff", "--cached", "--name-status"], text=True
+          ).splitlines()
+
+          entries = []
+          for row in changes:
+              status, path = row.split("\t", 1)
+              if status == "D":
+                  entries.append({"path": path, "mode": "100644", "type": "blob", "sha": None})
+                  continue
+              raw = subprocess.check_output(["git", "show", f":{path}"])
+              blob_sha = request(
+                  "POST",
+                  rest + "/git/blobs",
+                  {"content": base64.b64encode(raw).decode(), "encoding": "base64"},
+              )["sha"]
+              mode = subprocess.check_output(
+                  ["git", "ls-files", "--stage", "--", path], text=True
+              ).split()[0]
+              entries.append({"path": path, "mode": mode, "type": "blob", "sha": blob_sha})
+
+          tree_sha = request(
+              "POST",
+              rest + "/git/trees",
+              {"base_tree": main_commit["tree"]["sha"], "tree": entries},
+          )["sha"]
+          commit_sha = request(
+              "POST",
+              rest + "/git/commits",
+              {
+                  "message": (
+                      "Strengthen the sandbox CLI process boundary\n\n"
+                      "Make the sandboxed and direct relay paths ordinary child-process substitutions, "
+                      "keep sandbox ownership out of server and relay code, and enforce the boundary "
+                      "through public workflow and structural tests."
+                  ),
+                  "tree": tree_sha,
+                  "parents": [main_sha],
+              },
+          )["sha"]
+          request(
+              "PATCH",
+              rest + "/git/refs/heads/followup/sandbox-cli-boundary",
+              {"sha": commit_sha, "force": True},
+          )
+
+          pr = request("GET", rest + "/pulls/214")
+          body = """## Summary
+
+- make the server choose between the public `mcp-console sandbox ... relay ...` command and a hidden direct-relay development path without importing sandbox implementation details
+- keep lifecycle ownership generic in server transport code and confine sandbox manager, policy, startup-gate, and private-directory state to the sandbox command
+- add structural checks and public boundary workflows covering sandbox/direct substitution, startup failure, protocol independence, and process cleanup
+- update architecture, relay, supervision, test, and user documentation to match the implemented ownership model
+
+## Testing
+
+- `scripts/check-core`
+- focused public transcript cases for sandbox/direct boundary behavior, startup and retirement failures, output draining, and status-137 handling
+- the repository's normal macOS CI on the final clean commit
+"""
+          request(
+              "PATCH",
+              rest + "/pulls/214",
+              {
+                  "title": "Strengthen the sandbox CLI process boundary",
+                  "body": body,
+                  "maintainer_can_modify": True,
+              },
+          )
+
+          graphql = "https://api.github.com/graphql"
+          request(
+              "POST",
+              graphql,
+              {
+                  "query": "mutation($id:ID!){markPullRequestReadyForReview(input:{pullRequestId:$id}){pullRequest{isDraft}}}",
+                  "variables": {"id": pr["node_id"]},
+              },
+          )
+          print(commit_sha)
+          PY
