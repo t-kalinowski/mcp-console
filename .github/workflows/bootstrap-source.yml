@@ -26,8 +26,11 @@ jobs:
           import base64
           from pathlib import Path
 
-          encoded = b"".join(path.read_bytes() for path in sorted(Path(".bootstrap-patch").glob("part-*")))
-          Path("/tmp/sandbox-followup.patch").write_bytes(base64.b64decode(encoded, validate=True))
+          decoded = b"".join(
+              base64.b64decode(path.read_bytes(), validate=True)
+              for path in sorted(Path(".bootstrap-patch").glob("part-*"))
+          )
+          Path("/tmp/sandbox-followup.patch").write_bytes(decoded)
           PY
           printf '%s  %s\n' \
             'fe93ba3977425c497aaf403aeb5e4df1b1797dfaa02bc7ddbcd55bec672239b9' \
