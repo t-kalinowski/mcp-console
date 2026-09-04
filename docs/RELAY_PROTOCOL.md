@@ -221,12 +221,13 @@ The server retains the launcher as its ordinary waitable child.
 It waits through the worker deadline and uses the additional two-second allowance only after timely `shutdown_started` acceptance or a pre-retirement failure.
 If the launcher has not exited by the applicable relay deadline, the server sends it `SIGTERM` to request managed retirement.
 The launcher closes the manager ownership token, waits for manager exit, and reaps the relay root, including when the relay stalls or has already exited.
+A launcher that consumes the owned-retirement request returns status 0 only after that cleanup, using its existing exit status as the acknowledgment.
 The background manager has a separate one-second cleanup timeout, and its owner allows one additional second for manager exit and reaping.
 If the manager misses that allowance, the owner sends exact-identity `SIGKILL`, keeps the relay root waitable while it reaps the manager, and may use one additional one-second cleanup interval to reconstruct and retire the root's current process tree.
 Those manager bounds can extend past the relay allowance when the outer stop begins only at that allowance's deadline.
 After managed cleanup succeeds, the launcher exits after manager cleanup and root reaping, and the server does not start the replacement sandbox lifetime until that launcher-exit barrier completes.
 A nonzero launcher exit fails the restart instead of admitting a replacement.
-Signal-derived status 137 is redundant only after a server-requested owned retirement or when relay EOF itself established the generation failure, including successful launcher recovery from manager failure; it remains an error after an earlier independent protocol, worker, or transport failure.
+Signal-derived status 137 is redundant only when relay EOF itself established the generation failure, including successful launcher recovery from manager failure; it remains an error after an earlier independent protocol, worker, or transport failure.
 The server uses a hard launcher kill only as the final fail-safe; ownership-token EOF still asks the manager to clean up, but the server can no longer wait synchronously for manager completion.
 Concurrent or repeated retirement reuses the recorded result and never signals a retired PID or process group again.
 Darwin cannot resolve every later fork atomically, so a descendant that becomes orphaned before its fork event is resolved remains outside the guarantee.

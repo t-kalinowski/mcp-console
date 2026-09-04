@@ -143,8 +143,9 @@ On normal and owned-retirement paths, successful managed launcher exit is the sy
 
 ### Sandbox launcher
 
-The sandbox launcher owns one direct sandbox target's exit status and the complete host-side sandbox lifetime.
-It inherits only the three documented streams from the server, independently closes every unrelated inherited descriptor before target exec, places the target in a dedicated process group, retains the direct root as a waitable child, and returns that root's exit status when cleanup succeeds.
+The sandbox launcher preserves one direct sandbox target's status after natural completion and owns the complete host-side sandbox lifetime.
+It inherits only the three documented streams from the server, independently closes every unrelated inherited descriptor before target exec, places the target in a dedicated process group, and retains the direct root as a waitable child.
+After cleanup succeeds, natural root completion returns that root's exit status; a handled retirement request in hidden parent-owned mode returns success as the cleanup acknowledgment.
 It keeps the root blocked on a private descriptor until the manager reports readiness and failure monitoring is installed, then releases the root into the requested command.
 The root waiter uses one `kqueue` for root exit and launcher-addressed signals.
 In ordinary mode, the launcher relays `SIGHUP`, `SIGINT`, `SIGQUIT`, and `SIGTERM` addressed to it into the target group.
@@ -258,7 +259,8 @@ In owned mode, parent exit and launcher-addressed `SIGTERM` request managed reti
 At root exit, the ordinary launcher restores terminal ownership when it transferred it, drains forwarded signals already pending at that boundary, and restores its inherited signal mask before requesting manager cleanup by closing the ownership token.
 When startup or recovery cleanup stops the root instead, it applies the same drain before returning the error.
 A signal received after that final drain can then follow its inherited disposition; if it terminates the launcher, the manager completes lifetime cleanup.
-The launcher waits for successful manager exit as the cleanup barrier, then reaps the direct root and returns its status.
+The launcher waits for successful manager exit as the cleanup barrier, then reaps the direct root.
+It returns the root status after natural completion and status 0 after successfully handling an owned retirement request.
 Owned mode keeps launcher signals blocked until manager cleanup and root reaping complete, including after natural root exit, so successful launcher exit remains a synchronous cleanup barrier.
 The manager alone decides whether cleanup succeeded and removes the directory; launcher loss after readiness reaches the same EOF retirement path.
 If the manager is killed while the launcher remains live, its monitor reconstructs the root's current ancestry and performs bounded cleanup while that root remains pinned.

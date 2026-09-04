@@ -15,6 +15,10 @@ static kill_function next_kill(void) {
     return kill;
 }
 
+static bool configured(const char *variable) {
+    return getenv(variable) != NULL;
+}
+
 static bool target_process(void) {
     const char *value = getenv("MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_PID");
     if (value == NULL) {
@@ -77,12 +81,18 @@ static int delayed_retirement_signal(pid_t process_id, int signal_number) {
         return kill_next(process_id, signal_number);
     }
 
-    notify("MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_BLOCKED");
-    wait_for_release("MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_RELEASE");
+    if (configured("MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_BLOCKED")) {
+        notify("MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_BLOCKED");
+        wait_for_release("MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_RELEASE");
+    }
     int result = kill_next(process_id, signal_number);
     int saved_errno = errno;
     if (result == 0) {
         notify("MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_RETURNED");
+        if (configured("MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_RETURN_RELEASE")) {
+            wait_for_release(
+                "MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_RETURN_RELEASE");
+        }
     }
     errno = saved_errno;
     return result;

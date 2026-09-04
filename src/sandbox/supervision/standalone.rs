@@ -88,6 +88,7 @@ pub(in crate::sandbox) fn status(
             &mut root.supervisor,
             &mut foreground_terminal,
             signal_relay,
+            root_wait == RootCompletion::RetirementRequested,
         );
     }
     let owner_result = restore_launcher_state(&mut foreground_terminal, signal_relay);
@@ -344,10 +345,12 @@ fn finish_owned_completion(
     manager: &mut SandboxManager,
     foreground_terminal: &mut ForegroundTerminal,
     signal_relay: SignalRelay,
+    retirement_requested: bool,
 ) -> Result<ExitCode, String> {
     let status_result = stop_managed_root_with_status(child, manager);
     let owner_result = restore_launcher_state(foreground_terminal, signal_relay);
     match (status_result, owner_result) {
+        (Ok(_), Ok(())) if retirement_requested => Ok(ExitCode::SUCCESS),
         (Ok(status), Ok(())) => Ok(platform::exit_code(status)),
         (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
         (Err(error), Err(owner_error)) => Err(additional_error(error, owner_error)),

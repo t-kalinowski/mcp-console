@@ -88,10 +88,11 @@ Keep these ownership rules intact:
   The launcher takes over bounded process cleanup if the manager exits unsuccessfully while the sandbox root remains live and pinned.
   That fallback can reconstruct only descendants still reachable from the root's current ancestry.
   It has no directory-cleanup state, so the directory remains if the manager exits before completing its own cleanup and removal.
-- The sandbox launcher owns the direct target's exit status and, in ordinary interactive mode, foreground-terminal transfer and signal relaying.
+- The sandbox launcher preserves the direct target's status after natural completion and, in ordinary interactive mode, owns foreground-terminal transfer and signal relaying.
   In hidden owned mode, it transfers the server input pipe to the sandbox root and replaces its own copy with `/dev/null`; it retains standard output until cleanup completes.
   It releases the target's private startup gate only after the manager reports readiness and manager-failure recovery is installed, closes the ownership token to request retirement, and retains the direct root waitably through manager exit and any fallback cleanup.
-  Its hidden owned mode validates and watches the exact parent identity before target release; parent exit or launcher-addressed `SIGTERM` requests managed retirement, and successful managed retirement keeps the launcher alive through manager cleanup and root reaping.
+  Its hidden owned mode validates and watches the exact parent identity before target release; parent exit or launcher-addressed `SIGTERM` requests managed retirement, and successful managed retirement returns launcher success only after manager cleanup and root reaping.
+  Natural target exit continues to return the target status.
   If the launcher itself is killed, manager EOF still requests cleanup, but the server cannot synchronously observe manager completion.
 - The sandbox manager does not own logical generation state, command exit status, relay transport, or terminal semantics.
 - Restart, replacement, evaluation admission, stdin writes, resolver callbacks, and retained-environment commits are scoped to the worker generation that accepted them.

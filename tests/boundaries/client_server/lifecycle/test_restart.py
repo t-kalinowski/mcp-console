@@ -297,6 +297,137 @@ def test_restart_rejects_status_137_when_launcher_exits_before_sigterm(
             relay_exit.close()
 
 
+def test_restart_accepts_owned_retirement_when_launcher_exits_before_signal_returns(
+    binary: Path,
+) -> Transcript:
+    relay = (
+        Path(__file__).resolve().parents[3]
+        / "fixtures"
+        / "server_relay"
+        / "scripted_relay.py"
+    )
+    # fmt: python
+    server = code(r"""
+        import os
+        import sys
+
+        os.environ["MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_PID"] = str(os.getpid())
+        os.environ["DYLD_INSERT_LIBRARIES"] = os.environ.pop(
+            "MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_DYLIB"
+        )
+        os.execv(sys.argv[1], sys.argv[1:])
+        """)
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        signal_blocked = FifoCheckpoint.create(temporary / "signal-blocked")
+        signal_release = FifoCheckpoint.create(temporary / "signal-release")
+        signal_returned = FifoCheckpoint.create(temporary / "signal-returned")
+        signal_return_release = FifoCheckpoint.create(
+            temporary / "signal-return-release"
+        )
+        relay_exit = FifoCheckpoint.create(temporary / "relay-exit")
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        environment["MCP_CONSOLE_TEST_RELAY_SCENARIO"] = "shutdown_nonzero_after_output"
+        environment["MCP_CONSOLE_TEST_RELAY_EXIT_STATUS"] = "137"
+        environment["MCP_CONSOLE_TEST_RELAY_EXIT_RELEASE"] = str(relay_exit.path)
+        environment["MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_DYLIB"] = str(
+            _build_launcher_retirement_interposer(temporary)
+        )
+        environment["MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_BLOCKED"] = str(
+            signal_blocked.path
+        )
+        environment["MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_RELEASE"] = str(
+            signal_release.path
+        )
+        environment["MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_RETURNED"] = str(
+            signal_returned.path
+        )
+        environment["MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_RETURN_RELEASE"] = str(
+            signal_return_release.path
+        )
+        client = McpClient(
+            Path(sys.executable),
+            (
+                "-c",
+                server,
+                str(binary),
+                "serve",
+                "--worker",
+                str(binary),
+                "--relay",
+                str(relay),
+            ),
+            environment,
+            current_directory=temporary,
+        )
+        launcher_exit = select.kqueue()
+        try:
+            client._initialize_and_list_tools()
+            client.send(control="restart")
+            assert last_tool_text(client) == "[starting new worker]\n[idle]"
+            server_identity = capture_darwin_process_identity(client.process.pid)
+            launchers = darwin_child_process_identities(server_identity)
+            assert len(launchers) == 1, launchers
+            launcher = launchers[0]
+            exit_watch = select.kevent(
+                launcher[0],
+                filter=select.KQ_FILTER_PROC,
+                flags=select.KQ_EV_ADD | select.KQ_EV_CLEAR,
+                fflags=select.KQ_NOTE_EXIT,
+            )
+            assert launcher_exit.control([exit_watch], 0, 0) == []
+
+            restart = client._start_send(control="restart")
+            signal_blocked.wait(
+                "server retirement signal",
+                FIXTURE_CHECKPOINT_TIMEOUT_SECONDS,
+            )
+            assert launcher_exit.control(None, 1, 0) == []
+            signal_release.release()
+            signal_returned.wait(
+                "successful retirement signal",
+                FIXTURE_CHECKPOINT_TIMEOUT_SECONDS,
+            )
+            events = launcher_exit.control(
+                None,
+                1,
+                FIXTURE_CHECKPOINT_TIMEOUT_SECONDS,
+            )
+            assert len(events) == 1, "sandbox launcher did not exit"
+            assert events[0].ident == launcher[0], events[0]
+            assert events[0].filter == select.KQ_FILTER_PROC, events[0]
+            assert events[0].fflags & select.KQ_NOTE_EXIT, events[0]
+            signal_return_release.release()
+            client._receive(restart)
+            assert restart["result"] == {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "old generation retirement output\n"
+                            "[worker stopped: in-memory state lost]\n"
+                            "[starting new worker]\n"
+                            "[idle]"
+                        ),
+                    }
+                ],
+                "isError": False,
+            }, restart["result"]
+            return client.transcript
+        finally:
+            relay_exit.release()
+            signal_release.release()
+            signal_return_release.release()
+            stop_client(client)
+            launcher_exit.close()
+            signal_blocked.close()
+            signal_release.close()
+            signal_returned.close()
+            signal_return_release.close()
+            relay_exit.close()
+
+
 def _build_relay_stdout_read_interposer(directory: Path) -> Path:
     source = (
         Path(__file__).resolve().parents[3]

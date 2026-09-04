@@ -66,7 +66,6 @@ struct RelayProcess {
     exited: bool,
     reaped: bool,
     ready_committed: bool,
-    owned_retirement_requested: bool,
     relay_exit_recovery_expected: bool,
     retirement: Option<Result<(), String>>,
 }
@@ -291,7 +290,6 @@ impl RelayProcess {
             exited: false,
             reaped: false,
             ready_committed: false,
-            owned_retirement_requested: false,
             relay_exit_recovery_expected: false,
             retirement: None,
         })
@@ -322,18 +320,7 @@ impl RelayProcess {
         }
         // SAFETY: the direct child remains unreaped here, so its PID cannot be
         // reused before `kill` returns.
-        if unsafe { libc::kill(self.child.id() as libc::pid_t, libc::SIGTERM) } == 0 {
-            // Darwin accepts signals for zombies. Retain requested-retirement
-            // provenance only while the child is still live after this call;
-            // `try_wait` caches any exit status for the later `wait`.
-            match self.child.try_wait() {
-                Ok(None) => self.owned_retirement_requested = true,
-                Ok(Some(_)) => self.exited = true,
-                Err(error) => errors.push(format!(
-                    "failed to inspect the worker launcher after requesting retirement: {error}"
-                )),
-            }
-        } else {
+        if unsafe { libc::kill(self.child.id() as libc::pid_t, libc::SIGTERM) } != 0 {
             let error = std::io::Error::last_os_error();
             if error.raw_os_error() != Some(libc::ESRCH) {
                 errors.push(format!(
@@ -440,12 +427,11 @@ impl RelayProcess {
     fn finish_reaped_status(&mut self, status: ExitStatus) -> Result<(), String> {
         self.exited = true;
         self.reaped = true;
-        // Status 137 is redundant only after requested owned retirement or when
-        // the relay exit itself established the worker failure.
+        // Owned retirement returns success from the launcher. Status 137 is
+        // redundant only when relay exit itself established the worker failure.
         if !self.ready_committed
             || status.success()
-            || (self.owned_retirement_requested || self.relay_exit_recovery_expected)
-                && status.code() == Some(128 + libc::SIGKILL)
+            || self.relay_exit_recovery_expected && status.code() == Some(128 + libc::SIGKILL)
         {
             Ok(())
         } else if let Some(code) = status.code() {

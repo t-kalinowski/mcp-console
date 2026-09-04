@@ -45,7 +45,7 @@ Its root waiter blocks in `kevent()` for direct-root exit, signals addressed to 
 The ordinary launcher consumes pending `SIGHUP`, `SIGINT`, `SIGQUIT`, and `SIGTERM` and relays them to the target group.
 In owned mode, parent exit or launcher-addressed `SIGTERM` requests managed retirement instead; the other supported signals retain their relay behavior.
 When the launcher exclusively owns its foreground process group, it transfers controlling-terminal ownership to the target group; when a pipeline peer shares that group, it leaves terminal ownership unchanged.
-The manager owns descendant cleanup and the private directory; the launcher owns the direct command's exit status, terminal state, and signal relay.
+The manager owns descendant cleanup and the private directory; the launcher preserves the direct command's status after natural completion and owns terminal state and signal relay.
 Stopped/continued job state and general shell-pipeline job control remain unsupported.
 
 ## Retirement
@@ -62,6 +62,7 @@ Natural root exit first retires observed descendants and then closes the origina
 After clean natural-root cleanup, the manager waits for owner EOF before removing the directory and exiting.
 Successful manager process exit is the primary cleanup barrier before the owner reaps the direct root.
 In owned launcher mode, the launcher keeps its signals blocked until manager cleanup and direct-root reaping finish, so successful launcher exit is the server's cleanup barrier for parent loss, explicit retirement, and natural root exit.
+A handled parent-loss or `SIGTERM` retirement request returns launcher status 0 after that barrier; natural root completion continues to return the root status.
 If the launcher itself is killed or crashes, the manager still receives ownership-token EOF and performs cleanup, but the server can no longer wait synchronously for manager completion.
 
 The manager preserves the private directory on unexpected unwind or any cleanup error because a surviving process may still use it.
