@@ -1114,6 +1114,21 @@ def run_fatal(relay: ScriptedRelay) -> None:
     )
 
 
+def run_fatal_status_137(relay: ScriptedRelay) -> None:
+    relay.ready()
+    command = relay.receive()
+    if command.get("kind") == "shutdown":
+        relay.retire(command)
+        return
+    assert command == EVALUATION, command
+    relay.wait_for_release()
+    relay.send({"kind": "fatal", "message": "scripted relay failure"})
+    command = relay.receive()
+    assert command.get("kind") == "shutdown", command
+    relay.send({"kind": "shutdown_started"})
+    raise SystemExit(137)
+
+
 def run_truncated(relay: ScriptedRelay) -> None:
     relay.wait_for_release()
     raw = b'{"kind":"console_output"'
@@ -1202,6 +1217,7 @@ def main() -> None:
         "completion_before_r_activation": run_completion_before_r_activation,
         "cancelled_waiting_send": run_cancelled_waiting_send,
         "fatal": run_fatal,
+        "fatal_status_137": run_fatal_status_137,
         "truncated": run_truncated,
         "exit_zero": run_exit_zero,
         "exit_nonzero": run_exit_nonzero,

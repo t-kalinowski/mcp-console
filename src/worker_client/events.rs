@@ -35,6 +35,7 @@ pub(super) struct WorkerEventDispatcher {
 struct OperationState {
     operation: Option<Operation>,
     failure: Option<String>,
+    relay_exit_caused_failure: bool,
     idle_input: Option<String>,
     runtime_r_callback: Option<RuntimeRCallbackPhase>,
     environment_preparation_reserved: bool,
@@ -114,6 +115,7 @@ impl WorkerOperationState {
             state: Mutex::new(OperationState {
                 operation: None,
                 failure: None,
+                relay_exit_caused_failure: false,
                 idle_input: None,
                 runtime_r_callback: None,
                 environment_preparation_reserved: false,
@@ -233,12 +235,23 @@ impl WorkerOperationState {
     }
 
     pub(super) fn fail(&self, error: String) {
+        self.fail_with_relay_exit(error, false);
+    }
+
+    fn fail_from_relay_exit(&self, error: String) {
+        self.fail_with_relay_exit(error, true);
+    }
+
+    fn fail_with_relay_exit(&self, error: String, relay_exit: bool) {
         let operation = {
             let Ok(mut state) = self.0.state.lock() else {
                 return;
             };
             if state.failure.is_none() {
                 state.failure = Some(error.clone());
+                // A later relay exit must not turn an earlier protocol or worker
+                // failure into launcher-recovery evidence.
+                state.relay_exit_caused_failure = relay_exit;
             }
             state.runtime_r_callback = None;
             state.environment_preparation_reserved = false;
@@ -271,6 +284,10 @@ impl WorkerOperationState {
 
     pub(super) fn has_failure(&self) -> Result<bool, String> {
         Ok(self.lock()?.failure.is_some())
+    }
+
+    pub(super) fn relay_exit_caused_failure(&self) -> Result<bool, String> {
+        Ok(self.lock()?.relay_exit_caused_failure)
     }
 
     pub(super) fn idle_response_snapshot(
@@ -844,7 +861,7 @@ fn dispatch_worker_events(
                     } else {
                         "worker relay stdout closed before retirement completed"
                     };
-                    fail_dispatch(&operation, &mut startup, &interrupts, error.to_string());
+                    fail_relay_exit(&operation, &mut startup, &interrupts, error.to_string());
                     semantic_failure = true;
                 }
                 if retiring || semantic_failure || !intentional_shutdown {
@@ -899,6 +916,19 @@ fn fail_dispatch(
     }
     interrupts.fail(error.clone());
     operation.fail(error);
+}
+
+fn fail_relay_exit(
+    operation: &WorkerOperationState,
+    startup: &mut Option<mpsc::SyncSender<Result<(), String>>>,
+    interrupts: &super::platform::InterruptRequests,
+    error: String,
+) {
+    if let Some(startup) = startup.take() {
+        let _ = startup.send(Err(error.clone()));
+    }
+    interrupts.fail(error.clone());
+    operation.fail_from_relay_exit(error);
 }
 
 fn startup_semantic_error(event: &RelayEvent) -> String {

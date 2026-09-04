@@ -67,7 +67,7 @@ struct RelayProcess {
     reaped: bool,
     ready_committed: bool,
     owned_retirement_requested: bool,
-    failure_recovery_expected: bool,
+    relay_exit_recovery_expected: bool,
     retirement: Option<Result<(), String>>,
 }
 
@@ -292,7 +292,7 @@ impl RelayProcess {
             reaped: false,
             ready_committed: false,
             owned_retirement_requested: false,
-            failure_recovery_expected: false,
+            relay_exit_recovery_expected: false,
             retirement: None,
         })
     }
@@ -431,9 +431,11 @@ impl RelayProcess {
     fn finish_reaped_status(&mut self, status: ExitStatus) -> Result<(), String> {
         self.exited = true;
         self.reaped = true;
+        // Status 137 is redundant only after requested owned retirement or when
+        // the relay exit itself established the worker failure.
         if !self.ready_committed
             || status.success()
-            || (self.owned_retirement_requested || self.failure_recovery_expected)
+            || (self.owned_retirement_requested || self.relay_exit_recovery_expected)
                 && status.code() == Some(128 + libc::SIGKILL)
         {
             Ok(())
@@ -1077,8 +1079,8 @@ impl WorkerShutdownHandle {
                 Err(error) => errors.push(error),
             }
         }
-        match self.operation.has_failure() {
-            Ok(failed) => child.failure_recovery_expected = failed,
+        match self.operation.relay_exit_caused_failure() {
+            Ok(expected) => child.relay_exit_recovery_expected = expected,
             Err(error) => errors.push(error),
         }
         if exited {
