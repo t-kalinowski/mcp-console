@@ -24,15 +24,18 @@ jobs:
           set -euo pipefail
           python3 - <<'PY'
           import base64
+          import gzip
           from pathlib import Path
 
-          decoded = b"".join(
-              base64.b64decode(path.read_bytes(), validate=True)
-              for path in sorted(Path(".bootstrap-patch").glob("part-*"))
-          )
-          Path("/tmp/sandbox-followup.patch").write_bytes(decoded)
+          encoded = Path(
+              ".validation-patch/sandbox-followup.patch.gz.b64"
+          ).read_bytes()
+          patch = gzip.decompress(base64.b64decode(encoded, validate=True))
+          Path("/tmp/sandbox-followup.patch").write_bytes(patch)
           PY
-          shasum -a 256 /tmp/sandbox-followup.patch
+          printf '%s  %s\n' \
+            '5d63643dd4252ab6a8c6d97da90710feac0a7a59f1473f7ad21d386c1306d640' \
+            /tmp/sandbox-followup.patch | shasum -a 256 -c -
           git apply --check /tmp/sandbox-followup.patch
           git apply --index /tmp/sandbox-followup.patch
 
@@ -77,52 +80,45 @@ jobs:
       - name: Test Rust
         run: cargo test --all-targets --all-features
 
-      - name: Update focused public snapshots
+      - name: Update new public snapshots
         run: |
           scripts/test --update --jobs 1 \
             client_server/sandbox/test_boundary \
-            client_server/lifecycle/test_restart::restart_reports_nonzero_sandbox_launcher_exit \
-            client_server/lifecycle/test_restart::restart_rejects_unsolicited_status_137 \
-            client_server/lifecycle/test_restart::restart_rejects_status_137_when_launcher_exits_before_sigterm \
-            client_server/lifecycle/test_restart::restart_drains_relay_output_before_nonzero_launcher_error \
-            client_server/lifecycle/test_restart::restart_drains_relay_output_before_status_one_launcher_error \
-            client_server/lifecycle/test_restart::restart_preserves_relay_retirement_failure \
-            client_server/lifecycle/test_restart::restart_waits_for_owned_launcher_manager_recovery \
-            server_relay/failures/test_failures::rejects_unsolicited_status_137_after_fatal
+            client_server/sandbox/test_descriptors
 
-      - name: Verify focused public workflows
+      - name: Verify sandbox boundary workflows
         run: |
           scripts/test --jobs 1 \
             client_server/sandbox/test_boundary \
-            client_server/lifecycle/test_restart::restart_reports_nonzero_sandbox_launcher_exit \
-            client_server/lifecycle/test_restart::restart_rejects_unsolicited_status_137 \
-            client_server/lifecycle/test_restart::restart_rejects_status_137_when_launcher_exits_before_sigterm \
-            client_server/lifecycle/test_restart::restart_drains_relay_output_before_nonzero_launcher_error \
-            client_server/lifecycle/test_restart::restart_drains_relay_output_before_status_one_launcher_error \
-            client_server/lifecycle/test_restart::restart_preserves_relay_retirement_failure \
-            client_server/lifecycle/test_restart::restart_waits_for_owned_launcher_manager_recovery \
-            server_relay/failures/test_failures::rejects_unsolicited_status_137_after_fatal
+            client_server/sandbox/test_descriptors \
+            client_server/sandbox/test_startup \
+            client_server/sandbox/test_crashes::server_crash_retires_the_worker_generation \
+            client_server/sandbox/test_crashes::manager_crash_retires_the_worker_generation \
+            client_server/lifecycle/test_restart::restart_outer_force_stops_unresponsive_relay \
+            client_server/lifecycle/test_restart::restart_reports_nonzero_sandbox_launcher_exit
 
       - name: Review generated diff
         shell: bash
         run: |
           set -euo pipefail
-          git diff --check
-          git diff --stat
+          git diff --check HEAD
+          git diff --stat HEAD
 
-      - name: Upload validated worktree
+      - name: Capture validated patch
+        if: always()
+        shell: bash
+        run: |
+          git diff HEAD --binary > /tmp/validated.patch || true
+          git status --short > /tmp/validation-status.txt || true
+          git diff --stat HEAD > /tmp/validation-diff-stat.txt || true
+
+      - name: Upload validated patch
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: sandbox-boundary-validation
           path: |
-            AGENTS.md
-            README.md
-            docs
-            scripts
-            src
-            tests/boundaries
-            tests/snapshots
-            .bootstrap-patch
-          include-hidden-files: true
+            /tmp/validated.patch
+            /tmp/validation-status.txt
+            /tmp/validation-diff-stat.txt
           retention-days: 1
