@@ -28,9 +28,8 @@ jobs:
           from pathlib import Path
 
           encoded = b"".join(
-              Path(
-                  ".validation-patch/sandbox-followup.patch.gz.b64"
-              ).read_bytes().split()
+              part.read_bytes().strip()
+              for part in sorted(Path(".validation-patch").glob("part-*"))
           )
           patch = gzip.decompress(base64.b64decode(encoded, validate=True))
           Path("/tmp/sandbox-followup.patch").write_bytes(patch)
