@@ -27,9 +27,11 @@ jobs:
           import gzip
           from pathlib import Path
 
-          encoded = Path(
-              ".validation-patch/sandbox-followup.patch.gz.b64"
-          ).read_bytes()
+          encoded = b"".join(
+              Path(
+                  ".validation-patch/sandbox-followup.patch.gz.b64"
+              ).read_bytes().split()
+          )
           patch = gzip.decompress(base64.b64decode(encoded, validate=True))
           Path("/tmp/sandbox-followup.patch").write_bytes(patch)
           PY
