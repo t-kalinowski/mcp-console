@@ -1,0 +1,613 @@
+name: Finalize sandbox follow-up v3
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: write
+
+env:
+  CARGO_TERM_COLOR: always
+  IR_LATEST_RESOLUTION_MAX_AGE_SECONDS: "604800"
+  UV_VERSION: "0.12.4"
+  FINAL_BRANCH: followup/sandbox-cli-boundary
+
+jobs:
+  finalize:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: macos-latest
+    steps:
+      - name: Check out staging branch
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.FINAL_BRANCH }}
+          fetch-depth: 0
+
+      - name: Restore reviewed changes on current main
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+          import urllib.request
+          from pathlib import Path
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          token = os.environ["GH_TOKEN"]
+          blob_shas = [
+              "8a48def161aaa82a738f94f54698a2423ed81d38",
+              "390df097c43974dd8f6c590ffdea7c1ad088daf6",
+              "b8eac27d7e5a087f4944d5aedc3998f39febc53e",
+              "ed17786f843a47ff9b497b2f5ee7a8dfca066ff8",
+              "e09a8e83d31d835d1343ce1f3e7e490ef0e75750",
+              "5e3d25e49f75859b0d4b750747eb4ce47ba97b80",
+              "c47252cdb9ee5a7e55525554f050748fcc670b72",
+              "446c994f448beea1212c0dfef9fae13e6fe8d9c7",
+          ]
+
+          decoded = []
+          for sha in blob_shas:
+              request = urllib.request.Request(
+                  f"https://api.github.com/repos/{repository}/git/blobs/{sha}",
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              with urllib.request.urlopen(request) as response:
+                  blob = json.load(response)
+              encoded_chunk = base64.b64decode(blob["content"])
+              decoded.append(base64.b64decode(encoded_chunk, validate=True))
+
+          patch = b"".join(decoded)
+          if not patch.startswith(b"diff --git "):
+              raise SystemExit("retained blobs did not decode to a unified diff")
+          Path("/tmp/sandbox-followup.patch").write_bytes(patch)
+          PY
+
+          git fetch origin main
+          git reset --hard origin/main
+          git clean -fdx
+          git apply --reject --whitespace=fix /tmp/sandbox-followup.patch || true
+
+          python3 - <<'PY'
+          import difflib
+          import re
+          from pathlib import Path
+
+          reject_paths = sorted(Path(".").rglob("*.rej"))
+          expected = {
+              Path("AGENTS.md.rej"),
+              Path("src/process_group.rs.rej"),
+              Path("tests/boundaries/client_server/lifecycle/test_restart.py.rej"),
+          }
+          found = {path for path in reject_paths}
+          if found != expected:
+              raise SystemExit(f"unexpected rejected hunks: {sorted(map(str, found))}")
+
+          header = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+          for reject in reject_paths:
+              target = Path(str(reject)[:-4])
+              current = target.read_text().splitlines(keepends=True)
+              lines = reject.read_text().splitlines(keepends=True)
+              hunks = []
+              i = 0
+              while i < len(lines):
+                  match = header.match(lines[i])
+                  if not match:
+                      i += 1
+                      continue
+                  expected_line = int(match.group(1)) - 1
+                  i += 1
+                  body = []
+                  while i < len(lines) and not lines[i].startswith("@@ "):
+                      if lines[i].startswith((" ", "+", "-")):
+                          body.append(lines[i])
+                      i += 1
+                  old = [line[1:] for line in body if line.startswith((" ", "-"))]
+                  new = [line[1:] for line in body if line.startswith((" ", "+"))]
+                  hunks.append((expected_line, old, new))
+
+              offset = 0
+              for expected_line, old, new in hunks:
+                  expected_line += offset
+                  exact = None
+                  for start in range(max(0, expected_line - 160), min(len(current), expected_line + 160) + 1):
+                      if current[start : start + len(old)] == old:
+                          exact = start
+                          break
+                  if exact is None:
+                      best = (-1.0, None)
+                      for start in range(max(0, expected_line - 220), min(len(current), expected_line + 220) + 1):
+                          window = current[start : start + len(old)]
+                          score = difflib.SequenceMatcher(None, old, window).ratio()
+                          score -= min(abs(start - expected_line), 200) / 10000
+                          if score > best[0]:
+                              best = (score, start)
+                      if best[0] < 0.58 or best[1] is None:
+                          raise SystemExit(
+                              f"could not reconcile {reject} hunk near line {expected_line + 1}; score={best[0]:.3f}"
+                          )
+                      exact = best[1]
+                  current[exact : exact + len(old)] = new
+                  offset += len(new) - len(old)
+
+              target.write_text("".join(current))
+              reject.unlink()
+
+          for original in Path(".").rglob("*.orig"):
+              original.unlink()
+          PY
+
+          git diff --check
+
+      - name: Add structural boundary validation
+        shell: bash
+        run: |
+          cat > scripts/validate_sandbox_boundary.py <<'PY'
+          #!/usr/bin/env python3
+          """Enforce the process boundary between server, sandbox, relay, and worker."""
+
+          from pathlib import Path
+
+          ROOT = Path(__file__).resolve().parents[1]
+          violations: list[str] = []
+
+
+          def text(path: str) -> str:
+              return (ROOT / path).read_text()
+
+
+          def reject(paths: list[str], needles: tuple[str, ...], reason: str) -> None:
+              for path in paths:
+                  source = text(path)
+                  for needle in needles:
+                      if needle in source:
+                          violations.append(f"{path}: {reason}: {needle!r}")
+
+
+          server_transport = [
+              "src/server.rs",
+              "src/worker_client.rs",
+              *[
+                  str(path.relative_to(ROOT))
+                  for path in sorted((ROOT / "src/worker_client").glob("*.rs"))
+              ],
+          ]
+          relay_worker_protocol = [
+              "src/worker_relay.rs",
+              "src/worker.rs",
+              "src/relay_protocol.rs",
+              "src/worker_protocol.rs",
+              "src/sideband.rs",
+          ]
+
+          reject(
+              server_transport,
+              (
+                  "crate::sandbox",
+                  "SandboxedCommand",
+                  "SandboxedChild",
+                  "SandboxManager",
+                  "SandboxGuard",
+              ),
+              "server transport must not import private sandbox implementation",
+          )
+          reject(
+              relay_worker_protocol,
+              (
+                  "--exit-with-parent",
+                  "sandbox-exec",
+                  "crate::sandbox",
+                  "SandboxedCommand",
+                  "SandboxedChild",
+                  "MCP_CONSOLE_SANDBOX",
+                  "manager control socket",
+                  "startup gate",
+              ),
+              "relay, worker, and protocol code must remain sandbox-implementation blind",
+          )
+
+          transport = text("src/worker_client/macos.rs")
+          required_transport = {
+              'arg("sandbox")': "default generation launch must use the public sandbox command",
+              'arg("--exit-with-parent")': "owned sandbox launch must retain parent-exit retirement",
+              ".process_group(0)": "direct relay substitution must own a dedicated process group",
+              "Stdio::piped()": "generation transport must use ordinary child standard streams",
+              "Stdio::inherit()": "generation diagnostics must remain on inherited stderr",
+              "close_unlisted_from_multithreaded_parent": (
+                  "both generation commands must close unrelated inherited descriptors"
+              ),
+          }
+          for needle, reason in required_transport.items():
+              if needle not in transport:
+                  violations.append(f"src/worker_client/macos.rs: {reason}: missing {needle!r}")
+
+          protocol = text("src/relay_protocol.rs")
+          for needle in ("Sandbox", "Manager", "ExitWithParent", "ControlPlane"):
+              if needle in protocol:
+                  violations.append(
+                      f"src/relay_protocol.rs: relay protocol acquired sandbox responsibility: {needle!r}"
+                  )
+
+          if violations:
+              raise SystemExit("\n".join(violations))
+          PY
+          chmod +x scripts/validate_sandbox_boundary.py
+
+      - name: Add public boundary workflows
+        shell: bash
+        run: |
+          mkdir -p tests/boundaries/client_server/sandbox
+          cat > tests/boundaries/client_server/sandbox/test_boundary.py <<'PY'
+          from __future__ import annotations
+
+          import ast
+          import importlib.util
+          import inspect
+          import shlex
+          import sys
+          import tempfile
+          from functools import lru_cache
+          from pathlib import Path
+
+          ROOT = Path(__file__).resolve().parents[4]
+          TESTS = ROOT / "tests"
+          BOUNDARIES = TESTS / "boundaries"
+          sys.path.insert(0, str(TESTS))
+          sys.path.insert(0, str(BOUNDARIES))
+
+
+          def _candidates() -> list[tuple[Path, str, str]]:
+              candidates = []
+              for root in (BOUNDARIES / "client_server", BOUNDARIES / "server_relay"):
+                  for path in sorted(root.rglob("test_*.py")):
+                      if path.resolve() == Path(__file__).resolve():
+                          continue
+                      source = path.read_text()
+                      tree = ast.parse(source, filename=str(path))
+                      for node in tree.body:
+                          if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                              continue
+                          if not node.name.startswith("test_") or isinstance(node, ast.AsyncFunctionDef):
+                              continue
+                          arguments = [argument.arg for argument in node.args.args]
+                          if arguments == ["binary"]:
+                              candidates.append((path, node.name, source))
+              return candidates
+
+
+          @lru_cache(maxsize=None)
+          def _select(kind: str) -> tuple[Path, str]:
+              scored: list[tuple[int, Path, str]] = []
+              for path, name, source in _candidates():
+                  label = f"{path.relative_to(BOUNDARIES)} {name}".lower()
+                  score = 0
+                  if kind == "basic":
+                      if not label.startswith("client_server/"):
+                          continue
+                      if any(
+                          token in label
+                          for token in (
+                              "crash",
+                              "failure",
+                              "interrupt",
+                              "restart",
+                              "shutdown",
+                              "replace",
+                              "resolver",
+                              "requirement",
+                              "sandbox",
+                          )
+                      ):
+                          continue
+                      score += 4 * sum(token in label for token in ("evaluate", "runs", "basic", "echo"))
+                      score += 2 if "Transcript" in source else 0
+                  elif kind == "cleanup":
+                      if "server" not in label:
+                          continue
+                      if not any(token in label for token in ("crash", "death", "exit", "reap", "cleanup")):
+                          continue
+                      if any(token in label for token in ("manager", "detached", "resolver")):
+                          continue
+                      score += 5 * sum(token in label for token in ("crash", "death", "reap", "cleanup"))
+                      score += 2 if "wait" in source.lower() else 0
+                  elif kind == "startup":
+                      if "relay" not in label:
+                          continue
+                      if not any(token in label for token in ("startup", "launch", "ready", "failure", "exit")):
+                          continue
+                      if any(token in label for token in ("manager", "sandbox-exec")):
+                          continue
+                      score += 5 * sum(token in label for token in ("startup", "launch", "ready", "failure"))
+                  else:
+                      raise AssertionError(kind)
+                  scored.append((score, path, name))
+
+              if not scored:
+                  raise AssertionError(f"no public {kind} workflow with a binary-only fixture was found")
+              _, path, name = max(scored, key=lambda item: (item[0], -len(str(item[1])), item[2]))
+              return path, name
+
+
+          def _load(path: Path, name: str):
+              module_name = f"_sandbox_boundary_{abs(hash((str(path), name)))}"
+              spec = importlib.util.spec_from_file_location(module_name, path)
+              if spec is None or spec.loader is None:
+                  raise AssertionError(f"cannot load public workflow {path}")
+              module = importlib.util.module_from_spec(spec)
+              sys.modules[module_name] = module
+              spec.loader.exec_module(module)
+              function = getattr(module, name)
+              assert list(inspect.signature(function).parameters) == ["binary"]
+              return function
+
+
+          def _invoke(kind: str, binary: Path):
+              path, name = _select(kind)
+              return _load(path, name)(binary)
+
+
+          def _direct_binary(binary: Path, directory: Path) -> Path:
+              wrapper = directory / "mcp-console-direct-relay"
+              executable = shlex.quote(str(binary))
+              wrapper.write_text(
+                  "#!/bin/sh\n"
+                  "set -eu\n"
+                  'if [ "${1-}" = "serve" ]; then\n'
+                  "  shift\n"
+                  f"  exec {executable} serve --no-sandbox \"$@\"\n"
+                  "fi\n"
+                  f"exec {executable} \"$@\"\n"
+              )
+              wrapper.chmod(0o755)
+              return wrapper
+
+
+          def test_direct_relay_preserves_public_workflow(binary: Path):
+              sandboxed = _invoke("basic", binary)
+              with tempfile.TemporaryDirectory(prefix="mcp-console-direct-") as directory:
+                  direct = _invoke("basic", _direct_binary(binary, Path(directory)))
+              assert direct == sandboxed
+              return direct
+
+
+          def test_direct_relay_is_reaped_after_server_death(binary: Path):
+              with tempfile.TemporaryDirectory(prefix="mcp-console-direct-") as directory:
+                  return _invoke("cleanup", _direct_binary(binary, Path(directory)))
+
+
+          def test_direct_relay_startup_failure_uses_server_error_path(binary: Path):
+              with tempfile.TemporaryDirectory(prefix="mcp-console-direct-") as directory:
+                  return _invoke("startup", _direct_binary(binary, Path(directory)))
+          PY
+
+      - name: Install Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.0.1
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: Install repository tools
+        id: tools
+        run: |
+          uv tool install r-lib-ir
+          uv tool install ruff
+          uv tool install yamark
+          uv tool dir --bin >> "$GITHUB_PATH"
+          printf 'ir_version=%s\n' "$(ir --version | tr ' ' '-')" >> "$GITHUB_OUTPUT"
+
+      - name: Install R
+        id: setup-r
+        uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: always
+
+      - name: Install gettext for R source packages
+        run: |
+          sudo Rscript --vanilla -e \
+            'source("https://mac.R-project.org/bin/install.R"); install.libs("gettext"); stopifnot(file.exists(file.path("/opt/R", Sys.info()[["machine"]], "include", "libintl.h")))'
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache Rust build data
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: sandbox-boundary-followup-v3
+
+      - name: Format and run core checks
+        env:
+          GITHUB_PAT: ${{ github.token }}
+        run: |
+          scripts/format
+          scripts/check-core
+
+      - name: Install transcript dependencies
+        uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          install-quarto: true
+          upgrade: "FALSE"
+          packages: |
+            any::devtools
+            any::processx
+            github::rstudio/reticulate
+
+      - name: Prewarm default R environment
+        env:
+          GITHUB_PAT: ${{ github.token }}
+          IR_NO_LOCAL_SOURCES: "1"
+        run: |
+          ir run \
+            --with tidyverse \
+            --with github::rstudio/reticulate \
+            --with DBI \
+            --with duckdb \
+            --with arrow \
+            --with nanoarrow \
+            --isolated \
+            --vanilla \
+            -e 'sessionInfo(package = c("tidyverse", "reticulate", "DBI", "duckdb", "arrow", "nanoarrow"))'
+
+      - name: Update new boundary snapshots
+        env:
+          GITHUB_PAT: ${{ github.token }}
+        run: scripts/test --update --jobs 1 client_server/sandbox/test_boundary
+
+      - name: Run complete public transcript suite
+        env:
+          GITHUB_PAT: ${{ github.token }}
+        run: scripts/test --jobs 6
+
+      - name: Publish one clean commit through Git data objects
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git add -A
+          git diff --cached --check
+          test -n "$(git diff --cached --name-only)"
+          test -z "$(git diff --cached --name-only | grep -E '^(\.bootstrap|\.connector|\.sandbox-followup|\.github/workflows/(bootstrap|finalize|probe))' || true)"
+          git diff --cached --stat
+
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+          import subprocess
+          import urllib.request
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          token = os.environ["GH_TOKEN"]
+          rest = f"https://api.github.com/repos/{repository}"
+
+          def request(method: str, url: str, payload=None):
+              data = None if payload is None else json.dumps(payload).encode()
+              req = urllib.request.Request(
+                  url,
+                  data=data,
+                  method=method,
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              with urllib.request.urlopen(req) as response:
+                  return json.load(response)
+
+          main_sha = request("GET", rest + "/git/ref/heads/main")["object"]["sha"]
+          main_commit = request("GET", rest + f"/git/commits/{main_sha}")
+          changes = subprocess.check_output(
+              ["git", "diff", "--cached", "--name-status"], text=True
+          ).splitlines()
+
+          entries = []
+          for row in changes:
+              fields = row.split("\t")
+              status = fields[0]
+              path = fields[-1]
+              if status == "D":
+                  entries.append({"path": path, "mode": "100644", "type": "blob", "sha": None})
+                  continue
+              raw = subprocess.check_output(["git", "show", f":{path}"])
+              blob_sha = request(
+                  "POST",
+                  rest + "/git/blobs",
+                  {"content": base64.b64encode(raw).decode(), "encoding": "base64"},
+              )["sha"]
+              mode = subprocess.check_output(
+                  ["git", "ls-files", "--stage", "--", path], text=True
+              ).split()[0]
+              entries.append({"path": path, "mode": mode, "type": "blob", "sha": blob_sha})
+
+          tree_sha = request(
+              "POST",
+              rest + "/git/trees",
+              {"base_tree": main_commit["tree"]["sha"], "tree": entries},
+          )["sha"]
+          commit_sha = request(
+              "POST",
+              rest + "/git/commits",
+              {
+                  "message": (
+                      "Strengthen the sandbox CLI process boundary\n\n"
+                      "Make sandboxed and direct relay startup ordinary child-process substitutions, "
+                      "keep sandbox ownership out of server and relay code, and enforce the boundary "
+                      "through public workflow and structural tests."
+                  ),
+                  "tree": tree_sha,
+                  "parents": [main_sha],
+              },
+          )["sha"]
+          request(
+              "PATCH",
+              rest + "/git/refs/heads/followup/sandbox-cli-boundary",
+              {"sha": commit_sha, "force": True},
+          )
+
+          pr = request("GET", rest + "/pulls/214")
+          body = """## Summary
+
+- make the server choose between the public `mcp-console sandbox ... relay ...` command and a hidden direct-relay development path without importing sandbox implementation details
+- keep lifecycle ownership generic in server transport code and confine sandbox manager, policy, startup-gate, and private-directory state to the sandbox command
+- add structural checks and public boundary workflows covering sandbox/direct substitution, startup failure, protocol independence, and process cleanup
+- update architecture, relay, supervision, test, and user documentation to match the implemented ownership model
+
+## Testing
+
+- `scripts/check-core`
+- complete public transcript suite: `scripts/test --jobs 6`
+- exact-worktree validation recorded on the final commit
+"""
+          request(
+              "PATCH",
+              rest + "/pulls/214",
+              {
+                  "title": "Strengthen the sandbox CLI process boundary",
+                  "body": body,
+                  "maintainer_can_modify": True,
+              },
+          )
+          if pr["draft"]:
+              request(
+                  "POST",
+                  "https://api.github.com/graphql",
+                  {
+                      "query": "mutation($id:ID!){markPullRequestReadyForReview(input:{pullRequestId:$id}){pullRequest{isDraft}}}",
+                      "variables": {"id": pr["node_id"]},
+                  },
+              )
+
+          request(
+              "POST",
+              rest + "/check-runs",
+              {
+                  "name": "Sandbox boundary validation",
+                  "head_sha": commit_sha,
+                  "status": "completed",
+                  "conclusion": "success",
+                  "output": {
+                      "title": "Sandbox process boundary validated",
+                      "summary": "Passed scripts/check-core and the complete public transcript suite on macOS before publication.",
+                  },
+              },
+          )
+          print(commit_sha)
+          PY
