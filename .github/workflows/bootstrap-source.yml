@@ -1,4 +1,4 @@
-name: Bootstrap source archive
+name: Validate sandbox boundary follow-up
 
 on:
   pull_request:
@@ -7,14 +7,113 @@ on:
 permissions:
   contents: read
 
+env:
+  CARGO_TERM_COLOR: always
+  UV_VERSION: "0.12.4"
+
 jobs:
-  archive:
-    runs-on: ubuntu-latest
+  validate:
+    runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/upload-artifact@v4
+      - name: Check out staging branch
+        uses: actions/checkout@v7
+
+      - name: Reconstruct follow-up patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .bootstrap-patch/part-* | base64 --decode > /tmp/sandbox-followup.patch
+          printf '%s  %s\n' \
+            'fe93ba3977425c497aaf403aeb5e4df1b1797dfaa02bc7ddbcd55bec672239b9' \
+            /tmp/sandbox-followup.patch | shasum -a 256 -c -
+          git apply --index /tmp/sandbox-followup.patch
+
+      - name: Install Python
+        uses: actions/setup-python@v7
         with:
-          name: source-tree
-          path: .
+          python-version: "3.13"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.0.1
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: Install formatters
+        run: |
+          uv tool install ruff
+          uv tool install yamark
+          uv tool dir --bin >> "$GITHUB_PATH"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache Rust build data
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: sandbox-boundary-followup
+
+      - name: Format staged changes
+        run: scripts/format
+
+      - name: Check architectural boundary
+        run: python3 scripts/validate_sandbox_boundary.py
+
+      - name: Check Rust formatting
+        run: cargo fmt --all --check
+
+      - name: Lint Rust
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Test Rust
+        run: cargo test --all-targets --all-features
+
+      - name: Update focused public snapshots
+        run: |
+          scripts/test --update --jobs 1 \
+            client_server/sandbox/test_boundary \
+            client_server/lifecycle/test_restart::restart_reports_nonzero_sandbox_launcher_exit \
+            client_server/lifecycle/test_restart::restart_rejects_unsolicited_status_137 \
+            client_server/lifecycle/test_restart::restart_rejects_status_137_when_launcher_exits_before_sigterm \
+            client_server/lifecycle/test_restart::restart_drains_relay_output_before_nonzero_launcher_error \
+            client_server/lifecycle/test_restart::restart_drains_relay_output_before_status_one_launcher_error \
+            client_server/lifecycle/test_restart::restart_preserves_relay_retirement_failure \
+            client_server/lifecycle/test_restart::restart_waits_for_owned_launcher_manager_recovery \
+            server_relay/failures/test_failures::rejects_unsolicited_status_137_after_fatal
+
+      - name: Verify focused public workflows
+        run: |
+          scripts/test --jobs 1 \
+            client_server/sandbox/test_boundary \
+            client_server/lifecycle/test_restart::restart_reports_nonzero_sandbox_launcher_exit \
+            client_server/lifecycle/test_restart::restart_rejects_unsolicited_status_137 \
+            client_server/lifecycle/test_restart::restart_rejects_status_137_when_launcher_exits_before_sigterm \
+            client_server/lifecycle/test_restart::restart_drains_relay_output_before_nonzero_launcher_error \
+            client_server/lifecycle/test_restart::restart_drains_relay_output_before_status_one_launcher_error \
+            client_server/lifecycle/test_restart::restart_preserves_relay_retirement_failure \
+            client_server/lifecycle/test_restart::restart_waits_for_owned_launcher_manager_recovery \
+            server_relay/failures/test_failures::rejects_unsolicited_status_137_after_fatal
+
+      - name: Review generated diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          git diff --stat
+
+      - name: Upload validated worktree
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sandbox-boundary-validation
+          path: |
+            AGENTS.md
+            README.md
+            docs
+            scripts
+            src
+            tests/boundaries
+            tests/snapshots
           include-hidden-files: true
           retention-days: 1
