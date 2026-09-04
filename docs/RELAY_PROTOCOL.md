@@ -225,7 +225,8 @@ The background manager has a separate one-second cleanup timeout, and its owner 
 If the manager misses that allowance, the owner sends exact-identity `SIGKILL`, keeps the relay root waitable while it reaps the manager, and may use one additional one-second cleanup interval to reconstruct and retire the root's current process tree.
 Those manager bounds can extend past the relay allowance when the outer stop begins only at that allowance's deadline.
 After managed cleanup succeeds, the launcher exits after manager cleanup and root reaping, and the server does not start the replacement sandbox lifetime until that launcher-exit barrier completes.
-A nonzero launcher exit fails the restart instead of admitting a replacement, except for the expected signal-derived status after a server-requested owned retirement or successful launcher recovery from manager failure.
+A nonzero launcher exit fails the restart instead of admitting a replacement.
+Signal-derived status 137 is redundant only after a server-requested owned retirement or when relay EOF itself established the generation failure, including successful launcher recovery from manager failure; it remains an error after an earlier independent protocol, worker, or transport failure.
 The server uses a hard launcher kill only as the final fail-safe; ownership-token EOF still asks the manager to clean up, but the server can no longer wait synchronously for manager completion.
 Concurrent or repeated retirement reuses the recorded result and never signals a retired PID or process group again.
 Darwin cannot resolve every later fork atomically, so a descendant that becomes orphaned before its fork event is resolved remains outside the guarantee.

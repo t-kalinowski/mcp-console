@@ -323,7 +323,16 @@ impl RelayProcess {
         // SAFETY: the direct child remains unreaped here, so its PID cannot be
         // reused before `kill` returns.
         if unsafe { libc::kill(self.child.id() as libc::pid_t, libc::SIGTERM) } == 0 {
-            self.owned_retirement_requested = true;
+            // Darwin accepts signals for zombies. Retain requested-retirement
+            // provenance only while the child is still live after this call;
+            // `try_wait` caches any exit status for the later `wait`.
+            match self.child.try_wait() {
+                Ok(None) => self.owned_retirement_requested = true,
+                Ok(Some(_)) => self.exited = true,
+                Err(error) => errors.push(format!(
+                    "failed to inspect the worker launcher after requesting retirement: {error}"
+                )),
+            }
         } else {
             let error = std::io::Error::last_os_error();
             if error.raw_os_error() != Some(libc::ESRCH) {
