@@ -32,9 +32,8 @@ jobs:
           )
           Path("/tmp/sandbox-followup.patch").write_bytes(decoded)
           PY
-          printf '%s  %s\n' \
-            'fe93ba3977425c497aaf403aeb5e4df1b1797dfaa02bc7ddbcd55bec672239b9' \
-            /tmp/sandbox-followup.patch | shasum -a 256 -c -
+          shasum -a 256 /tmp/sandbox-followup.patch
+          git apply --check /tmp/sandbox-followup.patch
           git apply --index /tmp/sandbox-followup.patch
 
       - name: Install Python
@@ -124,5 +123,6 @@ jobs:
             src
             tests/boundaries
             tests/snapshots
+            .bootstrap-patch
           include-hidden-files: true
           retention-days: 1
