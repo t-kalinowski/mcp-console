@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from support.assertions import tool_text as _tool_text
 from support.capture import read_jsonl, read_jsonl_path
-from support.client import McpClient
+from support.client import McpClient, stop_client
 from support.records import ToolResult, Transcript
 
 SCENARIO_ENV = "MCP_CONSOLE_TEST_RELAY_SCENARIO"
@@ -191,6 +191,23 @@ class ServerRelayClient:
             _tool_error(entry, expected)
             self.client._finish()
             transcript = self._read_open_capture(capture, allow_raw=True)
+        self._temporary.cleanup()
+        return transcript
+
+    def release_terminal_failure(
+        self,
+        entry: dict[str, Any],
+        expected: str,
+    ) -> Transcript:
+        checkpoint = self._wait_for(CHECKPOINT_NAME)
+        capture_path = checkpoint.with_name(CAPTURE_NAME)
+        assert capture_path.is_file(), capture_path
+        with capture_path.open(encoding="utf-8") as capture:
+            checkpoint.with_name(RELEASE_NAME).touch()
+            self.client._receive(entry)
+            _tool_error(entry, expected)
+            stop_client(self.client)
+            transcript = self._read_open_capture(capture)
         self._temporary.cleanup()
         return transcript
 

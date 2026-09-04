@@ -741,7 +741,7 @@ def test_restarts_after_unexpected_sideband_message(binary: Path) -> Transcript:
             failed_call = client._start_send(r="violate protocol")
             client._receive(failed_call)
             assert not process_exists(worker_group), (
-                "server did not reap the failed generation's relay"
+                "sandbox launcher did not reap the failed generation's relay"
             )
             assert not process_group_exists(worker_group), (
                 "failed worker generation survived sandbox manager retirement"

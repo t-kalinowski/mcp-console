@@ -1,6 +1,9 @@
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::io::BufReader;
-use std::process::Stdio;
+use std::os::fd::{AsFd as _, AsRawFd as _, OwnedFd};
+use std::os::unix::process::ExitStatusExt as _;
+use std::process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -17,6 +20,10 @@ use crate::relay_protocol::{JsonlReader, JsonlWriter, RelayCommand, RelayEvent};
 /// Lets the relay finish direct-worker shutdown, stream draining, and protocol
 /// flushing after the worker's deadline before the outer fail-safe stops it.
 const RELAY_RETIREMENT_GRACE: Duration = Duration::from_secs(2);
+/// Lets the owned launcher complete its bounded child cleanup after SIGTERM.
+const LAUNCHER_RETIREMENT_GRACE: Duration = Duration::from_secs(6);
+const LAUNCHER_KILL_GRACE: Duration = Duration::from_secs(1);
+const CHILD_EXIT_FALLBACK_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum RelayRetirementAllowance {
@@ -44,19 +51,30 @@ pub(super) struct WorkerShutdownHandle {
     interrupts: InterruptRequests,
     shutdown_started: ShutdownAcceptance,
     ready_commit: ReadyCommit,
-    child: Arc<Mutex<crate::sandbox::SandboxedChild>>,
+    child: Arc<Mutex<RelayProcess>>,
 }
 
 struct RelayConnection {
-    child: Arc<Mutex<crate::sandbox::SandboxedChild>>,
+    child: Arc<Mutex<RelayProcess>>,
     commands: RelayCommandSender,
     tasks: Option<Box<RelayTasks>>,
+}
+
+struct RelayProcess {
+    child: Child,
+    exit: super::child_exit::ChildExitWaiter,
+    exited: bool,
+    reaped: bool,
+    ready_committed: bool,
+    relay_exit_recovery_expected: bool,
+    retirement: Option<Result<(), String>>,
 }
 
 struct RelayTasks {
     dispatcher: WorkerEventDispatcher,
     command_writer: RelayCommandThread,
     event_reader: thread::JoinHandle<()>,
+    relay_stdout_observer: OwnedFd,
 }
 
 struct RelayCommandThread {
@@ -124,47 +142,49 @@ impl WorkerRuntime {
             callbacks,
         } = spec;
 
-        let use_builtin_relay = relay.is_none();
-        let relay_executable = match relay {
-            Some(relay) => relay.to_path_buf(),
-            None => std::env::current_exe().map_err(|error| {
-                format!("failed to locate the worker relay executable: {error}")
-            })?,
-        };
-        let mut sandboxed = crate::sandbox::SandboxedCommand::new(relay_executable.as_os_str())
-            .map_err(|error| format!("failed to prepare worker sandbox: {error}"))?;
-        let command = sandboxed.command_mut();
+        let current_executable = std::env::current_exe()
+            .map_err(|error| format!("failed to locate the sandbox launcher: {error}"))?;
+        let target = relay_command_line(&current_executable, executable, arguments, relay);
+        let mut command = Command::new(&current_executable);
+        command
+            .arg("sandbox")
+            .arg("--exit-with-parent")
+            .arg(std::process::id().to_string())
+            .arg("--")
+            .args(target);
         if let Some(python) = python {
-            python.configure_worker(command);
+            python.configure_worker(&mut command);
         }
         if let Some(managed_r) = managed_r {
-            managed_r.configure_worker(command)?;
+            managed_r.configure_worker(&mut command)?;
         }
         command.env(
             "MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION",
             if dynamic_resolution { "1" } else { "0" },
         );
-        if use_builtin_relay {
-            command.arg("worker-relay");
-        }
         command
-            .arg(executable.as_os_str())
-            .args(arguments)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit());
+        crate::process_descriptors::close_unlisted_from_multithreaded_parent(&mut command)?;
 
         let (worker_events, worker_event_receiver) = mpsc::channel();
 
-        let mut child = sandboxed
+        let child = command
             .spawn()
             .map_err(|error| format!("failed to launch worker relay: {error}"))?;
+        let mut child = RelayProcess::new(child)
+            .map_err(|error| format!("failed to monitor worker relay: {error}"))?;
         let relay_stdin = child
             .take_stdin()
             .expect("piped worker relay stdin should be available");
         let relay_stdout = child
             .take_stdout()
             .expect("piped worker relay stdout should be available");
+        let relay_stdout_observer = relay_stdout
+            .as_fd()
+            .try_clone_to_owned()
+            .map_err(|error| format!("failed to monitor worker relay stdout: {error}"))?;
         let child = Arc::new(Mutex::new(child));
 
         let operation = WorkerOperationState::new();
@@ -196,6 +216,7 @@ impl WorkerRuntime {
                 dispatcher,
                 command_writer,
                 event_reader,
+                relay_stdout_observer,
             })),
         };
         let mut worker = Worker {
@@ -230,7 +251,314 @@ impl WorkerRuntime {
                 worker.startup_failure("worker stopped before readiness was committed".to_string())
             );
         }
+        if let Err(error) = worker.relay.mark_ready() {
+            return Err(worker.startup_failure(error));
+        }
         Ok(worker)
+    }
+}
+
+fn relay_command_line(
+    current_executable: &std::path::Path,
+    worker_executable: &std::path::Path,
+    worker_arguments: &[OsString],
+    relay: Option<&std::path::Path>,
+) -> Vec<OsString> {
+    let mut target = match relay {
+        Some(relay) => vec![relay.as_os_str().to_os_string()],
+        None => vec![
+            current_executable.as_os_str().to_os_string(),
+            OsString::from("worker-relay"),
+        ],
+    };
+    target.push(worker_executable.as_os_str().to_os_string());
+    target.extend(worker_arguments.iter().cloned());
+    target
+}
+
+impl RelayProcess {
+    fn new(child: Child) -> Result<Self, String> {
+        let exit = match super::child_exit::ChildExitWaiter::start(child.id()) {
+            Ok(exit) => exit,
+            Err(error) => {
+                return Err(retire_after_exit_observer_failure(child, error));
+            }
+        };
+        Ok(Self {
+            child,
+            exit,
+            exited: false,
+            reaped: false,
+            ready_committed: false,
+            relay_exit_recovery_expected: false,
+            retirement: None,
+        })
+    }
+
+    fn take_stdin(&mut self) -> Option<ChildStdin> {
+        self.child.stdin.take()
+    }
+
+    fn take_stdout(&mut self) -> Option<ChildStdout> {
+        self.child.stdout.take()
+    }
+
+    fn wait_timeout_without_reaping(&mut self, timeout: Duration) -> Result<bool, String> {
+        if self.has_exited()? {
+            return Ok(true);
+        }
+        self.exited = self.exit.wait(timeout)?;
+        Ok(self.exited)
+    }
+
+    fn request_retirement(&mut self) -> Result<(), String> {
+        let mut errors = Vec::new();
+        match self.has_exited() {
+            Ok(true) => return Ok(()),
+            Ok(false) => {}
+            Err(error) => errors.push(error),
+        }
+        // SAFETY: the direct child remains unreaped here, so its PID cannot be
+        // reused before `kill` returns.
+        if unsafe { libc::kill(self.child.id() as libc::pid_t, libc::SIGTERM) } != 0 {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() != Some(libc::ESRCH) {
+                errors.push(format!(
+                    "failed to request worker launcher retirement: {error}"
+                ));
+            }
+        }
+        collected_errors(errors)
+    }
+
+    fn force_stop(&mut self) -> Result<(), String> {
+        if self.reaped {
+            return self.retirement.clone().unwrap_or(Ok(()));
+        }
+        let cleanup = self.force_stop_inner();
+        let prior = self.retirement.take();
+        let result = match (prior, cleanup) {
+            (None | Some(Ok(())), cleanup) => cleanup,
+            (Some(Err(error)), Ok(())) => Err(error),
+            (Some(Err(error)), Err(cleanup_error)) => {
+                Err(format!("{error}; additionally {cleanup_error}"))
+            }
+        };
+        self.finish_retirement(result)
+    }
+
+    fn force_stop_inner(&mut self) -> Result<(), String> {
+        let mut errors = Vec::new();
+        match self.has_exited() {
+            Ok(true) => return self.reap(),
+            Ok(false) => {}
+            Err(error) => errors.push(error),
+        }
+        if let Err(error) = self.child.kill()
+            && error.raw_os_error() != Some(libc::ESRCH)
+        {
+            errors.push(format!("failed to stop the worker launcher: {error}"));
+            return collected_errors(errors);
+        }
+        let kill_deadline = Instant::now()
+            .checked_add(LAUNCHER_KILL_GRACE)
+            .unwrap_or_else(Instant::now);
+        let mut recovered_status = None;
+        let exited = match self.exit.wait(LAUNCHER_KILL_GRACE) {
+            Ok(true) => {
+                self.exited = true;
+                true
+            }
+            Ok(false) => false,
+            Err(error) => {
+                errors.push(error);
+                recovered_status = observe_and_reap_child(
+                    &mut self.child,
+                    kill_deadline.saturating_duration_since(Instant::now()),
+                    &mut errors,
+                );
+                recovered_status.is_some()
+            }
+        };
+        if let Some(status) = recovered_status {
+            if let Err(error) = self.finish_reaped_status(status) {
+                errors.push(error);
+            }
+        } else if exited {
+            if let Err(error) = self.reap() {
+                errors.push(error);
+            }
+        } else {
+            errors.push(format!(
+                "worker launcher remained live for {} ms after forced termination",
+                LAUNCHER_KILL_GRACE.as_millis(),
+            ));
+            match self.child.try_wait() {
+                Ok(Some(status)) => {
+                    if let Err(error) = self.finish_reaped_status(status) {
+                        errors.push(error);
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => errors.push(format!(
+                    "failed to inspect the worker launcher after forced termination: {error}"
+                )),
+            }
+        }
+        collected_errors(errors)
+    }
+
+    fn finish_retirement(&mut self, result: Result<(), String>) -> Result<(), String> {
+        self.retirement = Some(result.clone());
+        result
+    }
+
+    fn reap(&mut self) -> Result<(), String> {
+        if self.reaped {
+            return Ok(());
+        }
+        let status = self
+            .child
+            .wait()
+            .map_err(|error| format!("failed to reap the worker launcher: {error}"))?;
+        self.finish_reaped_status(status)
+    }
+
+    fn finish_reaped_status(&mut self, status: ExitStatus) -> Result<(), String> {
+        self.exited = true;
+        self.reaped = true;
+        // Owned retirement returns success from the launcher. Status 137 is
+        // redundant only when relay exit itself established the worker failure.
+        if !self.ready_committed
+            || status.success()
+            || self.relay_exit_recovery_expected && status.code() == Some(128 + libc::SIGKILL)
+        {
+            Ok(())
+        } else if let Some(code) = status.code() {
+            Err(format!("worker launcher exited with status {code}"))
+        } else if let Some(signal) = status.signal() {
+            Err(format!("worker launcher terminated by signal {signal}"))
+        } else {
+            Err("worker launcher exited without a status code or signal".to_string())
+        }
+    }
+
+    fn has_exited(&mut self) -> Result<bool, String> {
+        if self.exited || self.reaped {
+            return Ok(true);
+        }
+        self.exited = self.exit.wait(Duration::ZERO)?;
+        Ok(self.exited)
+    }
+
+    fn is_reaped(&self) -> bool {
+        self.reaped
+    }
+}
+
+impl Drop for RelayProcess {
+    fn drop(&mut self) {
+        if self.reaped {
+            return;
+        }
+        let _ = self.request_retirement();
+        if !self
+            .wait_timeout_without_reaping(LAUNCHER_RETIREMENT_GRACE)
+            .unwrap_or(false)
+        {
+            let _ = self.force_stop_inner();
+        } else {
+            let _ = self.reap();
+        }
+    }
+}
+
+fn retire_after_exit_observer_failure(mut child: Child, error: String) -> String {
+    let mut errors = vec![error];
+    // SAFETY: the direct child remains unreaped, so its PID cannot be reused
+    // before the signal is delivered.
+    if unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) } != 0 {
+        let signal_error = std::io::Error::last_os_error();
+        if signal_error.raw_os_error() != Some(libc::ESRCH) {
+            errors.push(format!(
+                "failed to request worker launcher retirement: {signal_error}"
+            ));
+        }
+    }
+
+    let mut reaped =
+        observe_and_reap_child(&mut child, LAUNCHER_RETIREMENT_GRACE, &mut errors).is_some();
+    if !reaped {
+        if let Err(kill_error) = child.kill()
+            && kill_error.raw_os_error() != Some(libc::ESRCH)
+        {
+            errors.push(format!("failed to stop the worker launcher: {kill_error}"));
+        }
+        reaped = observe_and_reap_child(&mut child, LAUNCHER_KILL_GRACE, &mut errors).is_some();
+    }
+    if !reaped {
+        errors.push(format!(
+            "worker launcher remained live for {} ms after forced termination",
+            LAUNCHER_KILL_GRACE.as_millis(),
+        ));
+    }
+    errors.join("; additionally ")
+}
+
+fn observe_and_reap_child(
+    child: &mut Child,
+    timeout: Duration,
+    errors: &mut Vec<String>,
+) -> Option<ExitStatus> {
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .unwrap_or_else(Instant::now);
+    match super::child_exit::ChildExitWaiter::start(child.id()) {
+        Ok(mut exit) => match exit.wait(timeout) {
+            Ok(true) => {
+                return match child.wait() {
+                    Ok(status) => Some(status),
+                    Err(error) => {
+                        errors.push(format!("failed to reap the worker launcher: {error}"));
+                        None
+                    }
+                };
+            }
+            Ok(false) => {}
+            Err(error) => errors.push(error),
+        },
+        Err(error) => errors.push(error),
+    }
+
+    // Thread creation or exit observation failed. Poll only in this exceptional
+    // path so the launcher still receives a bounded grace period and is reaped.
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Some(status),
+            Ok(None) => {}
+            Err(error) => {
+                errors.push(format!(
+                    "failed to inspect the worker launcher before releasing it: {error}"
+                ));
+                return None;
+            }
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return None;
+        }
+        thread::sleep(remaining.min(CHILD_EXIT_FALLBACK_POLL_INTERVAL));
+    }
+}
+
+fn collected_errors(errors: Vec<String>) -> Result<(), String> {
+    match errors.split_first() {
+        None => Ok(()),
+        Some((first, rest)) => Err(rest.iter().fold(first.clone(), |mut error, additional| {
+            error.push_str("; additionally ");
+            error.push_str(additional);
+            error
+        })),
     }
 }
 
@@ -711,29 +1039,64 @@ impl WorkerShutdownHandle {
             .child
             .lock()
             .map_err(|_| "worker child lock poisoned".to_string())?;
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        let wait = match child.wait_timeout_without_reaping(remaining) {
-            Ok(true) => Ok(()),
-            Ok(false) => match self.should_wait_for_relay_retirement(allowance) {
-                Ok(true) => child
-                    .wait_timeout_without_reaping(
-                        retirement_deadline.saturating_duration_since(Instant::now()),
-                    )
-                    .map(|_| ()),
-                Ok(false) => Ok(()),
-                Err(error) => Err(error),
-            },
-            Err(error) => Err(error),
-        };
-        let stop = child.force_stop();
-        match (wait, stop) {
-            (Ok(()), Ok(())) => Ok(()),
-            (Err(error), Ok(())) => Err(error),
-            (Ok(()), Err(error)) => Err(error),
-            (Err(error), Err(stop_error)) => Err(format!(
-                "{error}; additionally failed to stop the worker relay: {stop_error}"
-            )),
+        if let Some(result) = child.retirement.as_ref() {
+            return result.clone();
         }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let mut errors = Vec::new();
+        let mut exited = match child.wait_timeout_without_reaping(remaining) {
+            Ok(exited) => exited,
+            Err(error) => {
+                errors.push(error);
+                false
+            }
+        };
+        if !exited {
+            match self.should_wait_for_relay_retirement(allowance) {
+                Ok(true) => {
+                    match child.wait_timeout_without_reaping(
+                        retirement_deadline.saturating_duration_since(Instant::now()),
+                    ) {
+                        Ok(observed) => exited = observed,
+                        Err(error) => errors.push(error),
+                    }
+                }
+                Ok(false) => {}
+                Err(error) => errors.push(error),
+            }
+        }
+        if !exited {
+            if let Err(error) = child.request_retirement() {
+                errors.push(error);
+            }
+            match child.wait_timeout_without_reaping(LAUNCHER_RETIREMENT_GRACE) {
+                Ok(observed) => exited = observed,
+                Err(error) => errors.push(error),
+            }
+        }
+        match self.operation.relay_exit_caused_failure() {
+            Ok(expected) => child.relay_exit_recovery_expected = expected,
+            Err(error) => errors.push(error),
+        }
+        if exited {
+            if let Err(error) = child.reap() {
+                errors.push(error);
+            }
+        } else {
+            errors.push(format!(
+                "worker launcher did not retire within {} ms",
+                LAUNCHER_RETIREMENT_GRACE.as_millis()
+            ));
+            if let Err(error) = child.force_stop_inner() {
+                errors.push(error);
+            }
+        }
+        let result = if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors.join("; additionally "))
+        };
+        child.finish_retirement(result)
     }
 
     fn should_wait_for_relay_retirement(
@@ -771,26 +1134,70 @@ fn duration_millis_ceil(duration: Duration) -> u64 {
 }
 
 impl RelayConnection {
+    fn mark_ready(&self) -> Result<(), String> {
+        self.child
+            .lock()
+            .map_err(|_| "worker child lock poisoned".to_string())?
+            .ready_committed = true;
+        Ok(())
+    }
+
     fn commands(&self) -> RelayCommandSender {
         self.commands.clone()
     }
 
     fn finish_tasks(&mut self) -> Result<Option<WorkerProcessOutcome>, String> {
-        let tasks = match self.tasks.take() {
-            Some(tasks) => {
+        // Join only after HUP proves that neither the launcher nor a surviving
+        // sandbox descendant can keep the relay protocol stream open.
+        let cleanup = {
+            let mut child = self
+                .child
+                .lock()
+                .map_err(|_| "worker child lock poisoned".to_string())?;
+            if child.is_reaped() {
+                Ok(())
+            } else {
+                child.force_stop()
+            }
+        };
+        let tasks = self.tasks.take();
+        let output_closed = tasks.as_ref().map_or(Ok(false), |tasks| {
+            relay_stdout_closed(&tasks.relay_stdout_observer)
+        });
+        let tasks = match (tasks, output_closed) {
+            (Some(tasks), Ok(false)) => {
+                let RelayTasks {
+                    dispatcher,
+                    command_writer,
+                    event_reader,
+                    relay_stdout_observer: _,
+                } = *tasks;
+                drop(command_writer.stop());
+                drop(dispatcher);
+                drop(event_reader);
+                Ok(None)
+            }
+            (Some(tasks), Ok(true)) => {
                 let command_writer =
                     join_worker_thread(tasks.command_writer.stop(), "relay command writer");
                 let event_reader = join_worker_thread(tasks.event_reader, "relay event reader");
                 let outcome = tasks.dispatcher.join();
                 command_writer.and(event_reader).and(outcome)
             }
-            None => Ok(None),
+            (Some(tasks), Err(error)) => {
+                let RelayTasks {
+                    dispatcher,
+                    command_writer,
+                    event_reader,
+                    relay_stdout_observer: _,
+                } = *tasks;
+                drop(command_writer.stop());
+                drop(dispatcher);
+                drop(event_reader);
+                Err(error)
+            }
+            (None, _) => Ok(None),
         };
-        let cleanup = self
-            .child
-            .lock()
-            .map_err(|_| "worker child lock poisoned".to_string())?
-            .force_stop();
         match (tasks, cleanup) {
             (Ok(outcome), Ok(())) => Ok(outcome),
             (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
@@ -799,6 +1206,28 @@ impl RelayConnection {
             )),
         }
     }
+}
+
+fn relay_stdout_closed(descriptor: &OwnedFd) -> Result<bool, String> {
+    let mut event = libc::pollfd {
+        fd: descriptor.as_raw_fd(),
+        events: libc::POLLIN | libc::POLLHUP,
+        revents: 0,
+    };
+    let result = loop {
+        let result = unsafe { libc::poll(&mut event, 1, 0) };
+        if result >= 0 {
+            break result;
+        }
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() != Some(libc::EINTR) {
+            return Err(format!("failed to inspect worker relay stdout: {error}"));
+        }
+    };
+    if event.revents & libc::POLLNVAL != 0 {
+        return Err("worker relay stdout descriptor became invalid".to_string());
+    }
+    Ok(result > 0 && event.revents & libc::POLLHUP != 0)
 }
 
 impl RelayCommandThread {

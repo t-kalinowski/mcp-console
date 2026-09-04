@@ -9,6 +9,8 @@ mod lifecycle;
 mod output;
 
 #[cfg(target_os = "macos")]
+mod child_exit;
+#[cfg(target_os = "macos")]
 mod events;
 
 #[cfg(target_os = "macos")]

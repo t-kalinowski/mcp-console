@@ -1,114 +1,9 @@
-use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, ExitStatus};
+use std::process::{Child, ExitStatus};
 use std::time::Duration;
 
-use super::command::{SandboxedChild, SandboxedChildRetirement};
 use super::platform;
 
 const DIRECT_CHILD_CLEANUP_TIMEOUT: Duration = Duration::from_secs(1);
-
-impl SandboxedChild {
-    #[allow(dead_code, reason = "used by spawned callers with piped stdin")]
-    pub(crate) fn take_stdin(&mut self) -> Option<ChildStdin> {
-        self.root.child.stdin.take()
-    }
-
-    #[allow(dead_code, reason = "used by spawned callers with piped stdout")]
-    pub(crate) fn take_stdout(&mut self) -> Option<ChildStdout> {
-        self.root.child.stdout.take()
-    }
-
-    #[allow(dead_code, reason = "used by spawned callers with piped stderr")]
-    pub(crate) fn take_stderr(&mut self) -> Option<ChildStderr> {
-        self.root.child.stderr.take()
-    }
-
-    /// Waits at most `timeout` for the direct sandbox process to exit without
-    /// reaping it.
-    ///
-    /// Retaining the waitable child pins its PID, which is also its process-group
-    /// ID, until sandbox-lifetime cleanup completes and the direct process is
-    /// reaped.
-    pub(crate) fn wait_timeout_without_reaping(&self, timeout: Duration) -> Result<bool, String> {
-        match &self.retirement {
-            SandboxedChildRetirement::Managed | SandboxedChildRetirement::Unmanaged { .. } => {}
-            SandboxedChildRetirement::Retired { .. } => return Ok(true),
-        }
-        platform::wait_for_process_exit_without_reaping(self.root.child.id(), timeout).map_err(
-            |error| {
-                format!(
-                    "failed to wait for `{}` to exit without reaping it: {error}",
-                    platform::SANDBOX_EXEC
-                )
-            },
-        )
-    }
-
-    /// Stops the root and observed descendants through the host-side manager or
-    /// its recovery monitor, then reaps the direct sandbox process.
-    pub(crate) fn force_stop(&mut self) -> Result<(), String> {
-        match &self.retirement {
-            SandboxedChildRetirement::Managed => {}
-            SandboxedChildRetirement::Unmanaged { error } => {
-                return self.retry_unmanaged_retirement(error.clone());
-            }
-            SandboxedChildRetirement::Retired { error } => {
-                return stored_retirement_result(error);
-            }
-        }
-
-        match self.root.supervisor.retire() {
-            Ok(()) => self.reap_managed_child(),
-            Err(error) => self.retry_unmanaged_retirement(error),
-        }
-    }
-
-    fn reap_managed_child(&mut self) -> Result<(), String> {
-        match self.root.child.wait() {
-            Ok(_) => {
-                self.retirement = SandboxedChildRetirement::Retired { error: None };
-                Ok(())
-            }
-            Err(wait_error) => {
-                let identity_released = wait_error.raw_os_error() == Some(libc::ECHILD);
-                let error = format!(
-                    "failed to reap stopped `{}`: {wait_error}",
-                    platform::SANDBOX_EXEC
-                );
-                self.retirement = if identity_released {
-                    SandboxedChildRetirement::Retired {
-                        error: Some(error.clone()),
-                    }
-                } else {
-                    SandboxedChildRetirement::Unmanaged {
-                        error: error.clone(),
-                    }
-                };
-                Err(error)
-            }
-        }
-    }
-
-    fn retry_unmanaged_retirement(&mut self, error: String) -> Result<(), String> {
-        let cleanup = terminate_unmanaged_child(&mut self.root.child, error);
-        let error = cleanup.error;
-        self.retirement = if cleanup.identity_released {
-            SandboxedChildRetirement::Retired {
-                error: Some(error.clone()),
-            }
-        } else {
-            SandboxedChildRetirement::Unmanaged {
-                error: error.clone(),
-            }
-        };
-        Err(error)
-    }
-}
-
-impl Drop for SandboxedChild {
-    fn drop(&mut self) {
-        let _ = self.force_stop();
-    }
-}
 
 pub(super) struct UnmanagedChildCleanup {
     pub(super) error: String,
@@ -269,26 +164,4 @@ fn group_error_suffix(group_error: &Option<std::io::Error>) -> String {
 
 pub(super) fn append_retirement_error(prior: String, error: String) -> String {
     format!("{prior}; additionally {error}")
-}
-
-fn stored_retirement_result(error: &Option<String>) -> Result<(), String> {
-    error.as_ref().map_or(Ok(()), |error| Err(error.clone()))
-}
-
-/// Kills every other live member of the caller's sandbox process group.
-///
-/// The sandbox relay remains alive to reap its direct worker and flush its
-/// protocol output. Fail fast unless the caller is the process-group leader so
-/// this cannot accidentally target an inherited server process group.
-pub(crate) fn force_stop_process_group_members_except_self() -> Result<(), String> {
-    let process_id = std::process::id();
-    // SAFETY: `getpgrp` has no error return and reads the calling process's
-    // current process-group ID.
-    let process_group_id = unsafe { libc::getpgrp() };
-    if process_group_id != process_id as libc::pid_t {
-        return Err("sandbox relay is not its process-group leader".to_string());
-    }
-
-    platform::kill_process_group_members_except(process_id, process_id)
-        .map_err(|error| format!("failed to stop sandbox process-group members: {error}"))
 }

@@ -33,7 +33,7 @@ stdout: |
 ---
 inherited_sigterm: ignored
 launcher_signal: SIGTERM
-launcher_returncode: 137
+launcher_returncode: 0
 verified_cleanup_barrier: >-
   launcher exited after sandbox root, detached descendant, manager, and
   temp

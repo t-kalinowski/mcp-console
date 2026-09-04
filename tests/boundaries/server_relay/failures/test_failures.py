@@ -48,6 +48,16 @@ def test_reports_fatal_failure(binary: Path) -> Transcript:
     return transcript
 
 
+def test_rejects_unsolicited_status_137_after_fatal(binary: Path) -> Transcript:
+    client = ServerRelayClient(binary, "fatal_status_137")
+    failed = client.client._start_send(r="42")
+    transcript = client.release_terminal_failure(failed, "scripted relay failure")
+    output = failed["result"]["content"][0]["text"]
+    assert "worker launcher exited with status 137" in output, output
+    assert "[starting new worker]" not in output, output
+    return transcript
+
+
 def test_rejects_truncated_output(binary: Path) -> Transcript:
     client = ServerRelayClient(binary, "truncated")
     failed = client.client._start_send(r="42")

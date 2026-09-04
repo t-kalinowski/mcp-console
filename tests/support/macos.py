@@ -135,6 +135,42 @@ def darwin_child_process_identities(
     return tuple(capture_darwin_process_identity(pid) for pid in child_pids[:count])
 
 
+def darwin_process_file_descriptors(
+    identity: DarwinProcessIdentity,
+) -> set[int]:
+    assert _LIBPROC is not None
+    assert current_darwin_process_identity(identity[0]) == identity, (
+        "process exited before descriptor inspection"
+    )
+    proc_pidlistfds = 1
+    capacity = 16
+    while True:
+        fd_infos = (_DarwinProcessFdInfo * capacity)()
+        ctypes.set_errno(0)
+        size = _LIBPROC.proc_pidinfo(
+            identity[0],
+            proc_pidlistfds,
+            0,
+            fd_infos,
+            ctypes.sizeof(fd_infos),
+        )
+        error = ctypes.get_errno()
+        if size <= 0:
+            raise OSError(
+                error, f"failed to list descriptors for process {identity[0]}"
+            )
+        assert size % ctypes.sizeof(_DarwinProcessFdInfo) == 0, size
+        count = size // ctypes.sizeof(_DarwinProcessFdInfo)
+        if count < capacity:
+            break
+        capacity *= 2
+
+    assert current_darwin_process_identity(identity[0]) == identity, (
+        "process changed during descriptor inspection"
+    )
+    return {info.fd for info in fd_infos[:count]}
+
+
 def _darwin_process_resources(
     identity: DarwinProcessIdentity,
 ) -> tuple[set[tuple[int, int]], _DarwinThreadInfo] | None:

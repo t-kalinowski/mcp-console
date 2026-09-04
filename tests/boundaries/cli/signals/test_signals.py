@@ -119,7 +119,7 @@ def test_owned_sigterm_retires_the_sandbox_lifetime(binary: Path) -> Transcript:
         command = _command_record(lifetime)
         command["command"][3] = "<parent pid>"
 
-        assert returncode == 128 + signal.SIGKILL, returncode
+        assert returncode == 0, returncode
         assert stderr == "", stderr
         assert survivors == [], f"owned sandbox processes survived SIGTERM: {survivors}"
         assert not lifetime.temporary_directory.exists(), (
@@ -168,7 +168,7 @@ def test_owned_sigterm_retires_when_inherited_ignored(binary: Path) -> Transcrip
         command = _command_record(lifetime)
         command["command"][3] = "<parent pid>"
 
-        assert returncode == 128 + signal.SIGKILL, returncode
+        assert returncode == 0, returncode
         assert stderr == "", stderr
         assert survivors == [], f"owned sandbox processes survived SIGTERM: {survivors}"
         assert not lifetime.temporary_directory.exists(), (

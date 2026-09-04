@@ -11,6 +11,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.client import McpClient, stop_client
+from support.macos import (
+    capture_darwin_process_identity,
+    darwin_child_process_identities,
+    darwin_process_file_descriptors,
+)
 from support.normalization import code
 from support.records import Transcript, TranscriptEntry
 from support.suites import run_this_suite
@@ -69,12 +74,18 @@ def descriptor_entry(
             )
             passed = False
             try:
+                server = capture_darwin_process_identity(client.process.pid)
                 client._initialize_and_list_tools()
                 result = client.send(python=source)
                 assert result == {
                     "content": [{"type": "text", "text": "closed\n"}],
                     "isError": False,
                 }, result
+                launchers = darwin_child_process_identities(server)
+                assert len(launchers) == 1, launchers
+                assert descriptor not in darwin_process_file_descriptors(
+                    launchers[0]
+                ), "unlisted server descriptor remained open in the sandbox launcher"
                 transcript = client._finish()
                 passed = True
             finally:

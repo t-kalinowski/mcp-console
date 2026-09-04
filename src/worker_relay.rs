@@ -121,10 +121,13 @@ mod platform {
 
         collect_error(&mut finish_error, events.send(RelayEvent::StdoutClosed));
         collect_error(&mut finish_error, events.send(RelayEvent::StderrClosed));
-        if let Some(message) = failures.take() {
+        let reported_failure = failures.take();
+        if let Some(message) = reported_failure.as_ref() {
             collect_error(
                 &mut finish_error,
-                events.send(RelayEvent::Fatal { message }),
+                events.send(RelayEvent::Fatal {
+                    message: message.clone(),
+                }),
             );
         }
         collect_error(
@@ -150,7 +153,12 @@ mod platform {
             ),
         }
 
-        collect_error(&mut finish_error, retirement_error.map_or(Ok(()), Err));
+        // Do not repeat an exact retirement failure after publishing it as the
+        // authoritative Fatal event. Preserve a richer cleanup error that the
+        // first-failure reporter could not publish.
+        if retirement_error.as_ref() != reported_failure.as_ref() {
+            collect_error(&mut finish_error, retirement_error.map_or(Ok(()), Err));
+        }
         finish_error.map_or(Ok(()), Err)
     }
 
@@ -377,7 +385,7 @@ mod platform {
                 None
             }
         };
-        if let Err(error) = crate::sandbox::force_stop_process_group_members_except_self() {
+        if let Err(error) = force_stop_process_group_members_except_self() {
             errors.push(format!("failed to stop the worker process group: {error}"));
         }
         let error = (!errors.is_empty()).then(|| errors.join("; "));
@@ -419,7 +427,7 @@ mod platform {
         {
             errors.push(format!("failed to stop the direct worker: {error}"));
         }
-        let group_error = crate::sandbox::force_stop_process_group_members_except_self().err();
+        let group_error = force_stop_process_group_members_except_self().err();
         if let Some(error) = group_error.as_ref() {
             errors.push(format!("failed to stop the worker process group: {error}"));
         }
@@ -433,6 +441,24 @@ mod platform {
         }
         let error = (!errors.is_empty()).then(|| errors.join("; "));
         (status, error)
+    }
+
+    /// Kills every other live member of the relay's process group.
+    ///
+    /// The relay remains alive to reap its direct worker and flush protocol
+    /// output. Fail fast unless it is the process-group leader so this cannot
+    /// target an inherited server process group.
+    fn force_stop_process_group_members_except_self() -> Result<(), String> {
+        let process_id = std::process::id();
+        // SAFETY: `getpgrp` has no error return and reads the calling process's
+        // current process-group ID.
+        let process_group_id = unsafe { libc::getpgrp() };
+        if process_group_id != process_id as libc::pid_t {
+            return Err("worker relay is not its process-group leader".to_string());
+        }
+
+        crate::process_group::kill_members_except(process_id, process_id)
+            .map_err(|error| format!("failed to stop worker process-group members: {error}"))
     }
 
     struct WorkerLifecycle {

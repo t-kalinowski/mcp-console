@@ -347,7 +347,7 @@ impl Client {
             self.0
                 .output
                 .push_failure(SendFailure::from(error).worker_outcome(outcome));
-            response.extend(self.0.output.take());
+            response.extend_logical_region(self.0.output.take());
             return Ok(RestartAttempt {
                 response: self.retain_transition_result(transition, response),
                 generation: None,
