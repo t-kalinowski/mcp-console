@@ -21,7 +21,9 @@ The launcher supports a hidden `--exit-with-parent <PID>` mode, which the server
 It verifies and captures its exact parent identity before creating the sandbox, watches that identity for exit, and revalidates it after watch registration and immediately before releasing the target.
 The server closes unrelated inherited descriptors before launcher exec and then owns only the launcher's piped input and output, inherited error stream, and normal child exit, signaling, and reaping.
 The owned launcher transfers the input pipe to the sandbox root and replaces its own copy with `/dev/null`, while retaining output through manager cleanup so relay input closure and cleanup completion remain observable at the server boundary.
-The relay remains a transport and direct-worker owner, including local same-group cleanup; it does not own observed-descendant cleanup across process groups or sessions, or the private directory.
+The relay owns its direct worker and local transports.
+All process-group and observed-descendant cleanup belongs to the sandbox lifetime, including descendants that retain worker streams after direct-worker exit.
+The configured target may wrap the relay in another process; the relay need not be the sandbox root or process-group leader.
 
 ## Startup
 
@@ -104,5 +106,7 @@ The server invokes the launcher with the relay command line as its target and ha
 The launcher retains the manager-owned process-group race backstop, with launcher fallback after manager failure, and gates the target before any configured code runs.
 The direct path retains inherited standard streams, uses a dedicated target process group, and supplies the foreground-terminal and signal behavior above.
 Hidden owned mode adds exact parent-exit observation and a `SIGTERM` retirement request without another control descriptor.
-It does not support `Ctrl-Z` followed by `fg` or general pipeline job-control semantics.
+The relay receives only its standard streams from the launcher.
+Any future sandbox-specific control channel must terminate at the sandbox process boundary; its transport and bootstrap mechanism are independent of the relay protocol.
+The launcher does not support `Ctrl-Z` followed by `fg` or general pipeline job-control semantics.
 Linux and Windows are not supported.

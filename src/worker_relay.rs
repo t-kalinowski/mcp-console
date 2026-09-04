@@ -377,19 +377,13 @@ mod platform {
     }
 
     fn finish_exited_worker(child: &mut Child) -> (Option<ExitStatus>, Option<String>) {
-        let mut errors = Vec::new();
-        let status = match child.wait() {
-            Ok(status) => Some(status),
-            Err(error) => {
-                errors.push(format!("failed to reap the direct worker: {error}"));
-                None
-            }
-        };
-        if let Err(error) = force_stop_process_group_members_except_self() {
-            errors.push(format!("failed to stop the worker process group: {error}"));
+        match child.wait() {
+            Ok(status) => (Some(status), None),
+            Err(error) => (
+                None,
+                Some(format!("failed to reap the direct worker: {error}")),
+            ),
         }
-        let error = (!errors.is_empty()).then(|| errors.join("; "));
-        (status, error)
     }
 
     fn interrupt_worker(child: &mut Child) -> Result<(), String> {
@@ -427,10 +421,6 @@ mod platform {
         {
             errors.push(format!("failed to stop the direct worker: {error}"));
         }
-        let group_error = force_stop_process_group_members_except_self().err();
-        if let Some(error) = group_error.as_ref() {
-            errors.push(format!("failed to stop the worker process group: {error}"));
-        }
         if status.is_none() {
             match child.wait() {
                 Ok(exit_status) => status = Some(exit_status),
@@ -441,24 +431,6 @@ mod platform {
         }
         let error = (!errors.is_empty()).then(|| errors.join("; "));
         (status, error)
-    }
-
-    /// Kills every other live member of the relay's process group.
-    ///
-    /// The relay remains alive to reap its direct worker and flush protocol
-    /// output. Fail fast unless it is the process-group leader so this cannot
-    /// target an inherited server process group.
-    fn force_stop_process_group_members_except_self() -> Result<(), String> {
-        let process_id = std::process::id();
-        // SAFETY: `getpgrp` has no error return and reads the calling process's
-        // current process-group ID.
-        let process_group_id = unsafe { libc::getpgrp() };
-        if process_group_id != process_id as libc::pid_t {
-            return Err("worker relay is not its process-group leader".to_string());
-        }
-
-        crate::process_group::kill_members_except(process_id, process_id)
-            .map_err(|error| format!("failed to stop worker process-group members: {error}"))
     }
 
     struct WorkerLifecycle {

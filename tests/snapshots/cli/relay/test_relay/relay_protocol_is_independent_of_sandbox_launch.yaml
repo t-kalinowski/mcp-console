@@ -1,0 +1,32 @@
+---
+launch: direct
+events:
+  - kind: ready
+  - kind: console_output
+    data: "zod: "
+  - kind: console_output
+    data: |
+      hello
+  - kind: completed
+  - kind: shutdown_started
+  - kind: stdout_closed
+  - kind: stderr_closed
+  - kind: worker_sideband_closed
+  - kind: worker_exited
+    code: 0
+---
+launch: sandbox
+events:
+  - kind: ready
+  - kind: console_output
+    data: "zod: "
+  - kind: console_output
+    data: |
+      hello
+  - kind: completed
+  - kind: shutdown_started
+  - kind: stdout_closed
+  - kind: stderr_closed
+  - kind: worker_sideband_closed
+  - kind: worker_exited
+    code: 0

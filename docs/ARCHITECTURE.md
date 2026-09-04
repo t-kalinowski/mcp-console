@@ -62,7 +62,8 @@ It retains the `sandbox-exec` root and manager waitably, while the root first ru
 After the manager reports readiness and manager-failure recovery is installed, the launcher releases the wrapper into the relay.
 The server's piped launcher input and output and inherited error stream pass through to that relay without a data proxy.
 After transferring standard input to the sandbox root, the owned launcher replaces its own copy with `/dev/null` so relay closure remains observable to the server's writer.
-The relay is the sandbox process-group leader and starts the configured worker inside the same sandbox and process group.
+By default the relay is the sandbox root and process-group leader, and the worker inherits that group.
+The relay also works below a wrapper process and does not inspect or manage the surrounding process group.
 Submitted R, Python, and SQL cells run in the worker, not in the server or a host resolver.
 
 For a direct `mcp-console sandbox` invocation, the launcher retains its direct `sandbox-exec` child and starts the same primary manager while a root-only waiter supplies exit and signal wakeups.
@@ -184,6 +185,14 @@ That serialization does not reconstruct chronology across the independent sideba
 
 The relay does not own the logical session, retained requirements, evaluation admission, output budgets, response assembly, or MCP delivery.
 It exits with the worker lifetime it supervises.
+Remaining descendants, including those retaining worker streams, are retired by the sandbox launcher after the target exits or retirement is requested.
+Its cancellable local transports let the relay drain available output and finish without waiting for those descendants to close their descriptors.
+
+The internal `worker-relay` command uses the same stream protocol when launched directly without a sandbox or below another process wrapper.
+Such a direct invocation owns only its direct worker; it supplies no sandbox policy or descendant-cleanup guarantee.
+`serve` currently always uses the bundled sandbox launcher and exposes no unsandboxed server mode.
+An alternative launcher must provide the process-lifetime contract described in [sandbox supervision](SANDBOX_SUPERVISION.md), including cleanup before successful owned retirement.
+Any future sandbox-specific control plane ends at that launcher, without reaching the relay or changing its protocol.
 
 ### Worker
 

@@ -151,7 +151,7 @@ fn valid_process_id(process_id: u32, kind: &str) -> io::Result<libc::pid_t> {
 }
 
 pub(super) fn kill_process_group(process_group_id: u32) -> io::Result<()> {
-    crate::process_group::kill(process_group_id)
+    super::process_group::kill(process_group_id)
 }
 
 pub(super) fn sandboxed_command() -> Result<(Command, TemporaryDirectory), String> {
