@@ -1,0 +1,20 @@
+name: Bootstrap source archive
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/upload-artifact@v4
+        with:
+          name: source-tree
+          path: .
+          include-hidden-files: true
+          retention-days: 1
