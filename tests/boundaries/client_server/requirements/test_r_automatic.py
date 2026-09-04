@@ -799,10 +799,10 @@ def test_restart_discards_unactivated_r_candidate(binary: Path) -> Transcript:
 def test_rejects_preparation_while_automatic_r_resolver_is_running(
     binary: Path,
 ) -> Transcript:
-    package = "RcppRoll"
+    package = "mcppreparation"
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
-        environment, record = recording_ir_environment(directory)
+        environment, record = recording_fixture_r_environment(directory, (package,))
         started = FifoCheckpoint.create(directory / "ir-started")
         release = FifoCheckpoint.create(directory / "ir-release")
         environment["MCP_CONSOLE_TEST_IR_BLOCK_REQUIREMENT"] = package

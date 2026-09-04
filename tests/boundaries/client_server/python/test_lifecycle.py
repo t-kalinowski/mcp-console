@@ -11,7 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.assertions import last_result_text
+from support.assertions import last_result_text, wait_for_evaluation_output
 from support.checkpoints import FifoCheckpoint, wait_for_worker_file
 from support.client import McpClient, stop_client
 from support.normalization import code
@@ -83,9 +83,12 @@ def test_rejects_python_preparation_while_evaluation_is_running(
         )
         assert uv_record.read_text(encoding="utf-8") == ""
 
-        client.send(stdin="continue\n")
-        output = last_result_text(client)
-        assert output == "[done]", repr(output)
+        wait_for_evaluation_output(
+            client,
+            "[done]",
+            "Python input completion",
+            stdin="continue\n",
+        )
         client.send(
             python=("runtime_generation_marker, 'combined_cell_ran' not in globals()")
         )
