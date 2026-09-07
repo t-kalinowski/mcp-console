@@ -1,0 +1,31 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  python: |
+    import os
+    from pathlib import Path
+
+    assert Path(os.environ["TMPDIR"]).samefile(Path.cwd())
+    output = Path("host-output")
+    output.write_text("host write succeeded", encoding="utf-8")
+    print(output.read_text(encoding="utf-8"))
+result:
+  content:
+    - type: text
+      text: |
+        host write succeeded
+  isError: false
+---
+send:
+  control: restart
+  python: print("output" in globals())
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        False
+        [done]
+  isError: false

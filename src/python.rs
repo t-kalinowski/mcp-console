@@ -31,8 +31,10 @@ pub(crate) enum SqlProvider {
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-pub(crate) fn configure_worker_environment() -> std::io::Result<()> {
-    platform::configure_worker_environment()?;
+pub(crate) fn configure_worker_environment(
+    temporary_directory: &std::path::Path,
+) -> std::io::Result<()> {
+    platform::configure_worker_environment(temporary_directory)?;
     reticulate::configure_worker_environment()
 }
 
@@ -98,7 +100,7 @@ mod platform {
     static MATPLOTLIB_DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
     static INHERITED_MATPLOTLIB_DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
 
-    pub(crate) fn configure_worker_environment() -> io::Result<()> {
+    pub(crate) fn configure_worker_environment(temporary_directory: &Path) -> io::Result<()> {
         let matplotlib_cache_directory = inherited_matplotlib_directory("XDG_CACHE_HOME", ".cache");
         let matplotlib_config_directory =
             inherited_matplotlib_directory("XDG_CONFIG_HOME", ".config");
@@ -109,7 +111,6 @@ mod platform {
                 .expect("Matplotlib configuration path should not contain NUL");
             set_environment(c"MATPLOTLIBRC", &config, true)?;
         }
-        let temporary_directory = std::env::temp_dir();
         let matplotlib_directory = temporary_directory.join("matplotlib");
         MATPLOTLIB_DIRECTORY
             .set(matplotlib_directory.clone())

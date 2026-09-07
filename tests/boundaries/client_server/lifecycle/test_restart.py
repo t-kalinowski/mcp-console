@@ -469,7 +469,7 @@ def _restart_outer_force_stops_unresponsive_relay(
     *,
     stop_manager: bool,
 ) -> Transcript:
-    zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
+    zod = Path(__file__).resolve().parents[3] / "fixtures" / "wrapped_zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
         environment = os.environ.copy()

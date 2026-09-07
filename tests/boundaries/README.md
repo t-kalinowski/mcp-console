@@ -65,7 +65,9 @@ The initialization, initialized notification, and tool-list exchange appear in f
 When selected, that case runs to completion before the remaining transcript cases start.
 Before compacting another transcript, the runner verifies that its prefix equals every document in the full snapshot.
 An identical prefix becomes a bare `!same-as PATH` document; a different prefix remains in full.
-`PATH` identifies the snapshot used for comparison, and the tag does not load the file.
+`PATH` identifies the initialization snapshot family; the runner compares against its current-platform variant when that file exists, or its shared snapshot otherwise.
+The full platform snapshot preserves mode-dependent tool descriptions, while the same reference tag lets the remaining identical records stay shared.
+The tag itself does not load the file.
 When accepting a handshake change, update the full snapshot before the abbreviated transcripts.
 The `cli/interface/test_help` suite records command lines and stdout in one stream with color disabled.
 It adds the exit code for failures and stderr when nonempty.

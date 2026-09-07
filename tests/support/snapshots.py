@@ -1,5 +1,6 @@
 import difflib
 import json
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -185,10 +186,12 @@ def check_recording(
     else:
         actual = without_request_ids(recorded)
         companions = []
-    if snapshot != root / initialization_reference:
-        reference = without_request_ids(
-            read_yaml(root / initialization_reference, multi=True)
-        )
+    reference_path = root / initialization_reference
+    platform_reference = reference_path.with_suffix(f".{sys.platform}.yaml")
+    if platform_reference.exists():
+        reference_path = platform_reference
+    if snapshot != reference_path:
+        reference = without_request_ids(read_yaml(reference_path, multi=True))
         assert reference, f"{initialization_reference} contains no documents"
         if identical(actual[: len(reference)], reference):
             actual = [

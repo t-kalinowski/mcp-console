@@ -310,7 +310,7 @@ def test_stops_cell_after_boundary_callback_failure(binary: Path) -> Transcript:
               function() {
                 plot(1)
                 Sys.chmod(list.files(
-                  file.path(Sys.getenv("TMPDIR"), "mcp-console-plots"),
+                  file.path(tempdir(), "mcp-console-plots"),
                   full.names = TRUE
                 ), "0000")
                 old_umask <- Sys.umask("0777")
@@ -366,7 +366,7 @@ def test_skips_final_boundary_callbacks_after_cell_failure(binary: Path) -> Tran
             close(writer)
             plot(1)
             Sys.chmod(list.files(
-              file.path(Sys.getenv("TMPDIR"), "mcp-console-plots"),
+              file.path(tempdir(), "mcp-console-plots"),
               full.names = TRUE
             ), "0000")
             old_umask <- Sys.umask("0777")

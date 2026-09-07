@@ -177,11 +177,13 @@ unsafe extern "C-unwind" {
 }
 
 pub(crate) fn run() -> Result<(), Box<dyn Error>> {
-    crate::python::configure_worker_environment()?;
     let (reader, writer) = crate::sideband::connect_from_env()?;
     let r_home = harp::command::r_home_setup()?;
     normalize_interrupt_signal()?;
     initialize_r(&r_home)?;
+    let temporary_directory =
+        std::path::PathBuf::from(String::try_from(harp::parse_eval_base("base::tempdir()")?)?);
+    crate::python::configure_worker_environment(&temporary_directory)?;
     core::initialize(reader, writer.clone())?;
     let graphics = crate::r_graphics::Bridge::initialize()?;
     let r_environment = crate::r_environment::Bridge::initialize()?;

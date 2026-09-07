@@ -62,14 +62,14 @@ The suite covers client-server MCP, server-relay JSONL, relay-worker sideband an
 Keep these invariants intact:
 
 - The server owns logical relay lifetime orchestration and retirement, worker-generation state, operation admission, output cuts, pending-output budgets, response assembly, delivery ownership, retained requirements, and host resolvers.
-  With sandboxing enabled, it starts the relay through an ordinary sandbox launcher child and uses successful managed launcher exit as its synchronous cleanup barrier.
-  With `--no-sandbox`, it owns the direct relay child and its temporary directory; descendant cleanup is not guaranteed.
+  By default, it starts the relay through an ordinary sandbox launcher child and uses successful managed launcher exit as its synchronous cleanup barrier.
+  `serve --no-sandbox` starts the relay directly without sandbox policy or manager-owned descendant cleanup.
   Its sandbox access is limited to the launcher's standard streams and ordinary child lifecycle.
   Do not move these responsibilities into the relay.
 - The relay owns local worker transports, sideband translation, direct-worker signal delivery, bounded termination, and direct-worker reaping.
   It preserves each producer's order without reconstructing chronology across independent transports.
   It does not own process-tree cleanup or depend on a particular process-group identity or sandbox topology.
-- One sandbox launcher owns each relay-worker or standalone command lifetime, including command status, signal relaying, terminal ownership, and manager-failure recovery.
+- One sandbox launcher owns each sandboxed relay-worker or standalone command lifetime, including command status, signal relaying, terminal ownership, and manager-failure recovery.
   Its host-side manager owns observed-descendant retirement and private-directory cleanup; it does not own logical session state or relay transport.
   Preserve waitable child identities through cleanup and keep process retirement distinct from best-effort directory removal.
 - Restart, replacement, evaluation admission, stdin writes, resolver callbacks, and retained-environment commits are scoped to the worker generation that accepted them.
@@ -77,7 +77,7 @@ Keep these invariants intact:
 - R, Python, and DuckDB dependency resolution runs outside the worker sandbox.
   Accept only documented trusted inputs: `ir` package references with `IR_NO_LOCAL_SOURCES`, named PEP 508 registry requirements under the trusted startup resolver configuration, and validated DuckDB extension names.
   Accepted installation or build code may execute with server permissions.
-- Treat submitted R, Python, and SQL as shell-class capability and enforce isolation at the worker-process boundary.
+- Treat submitted R, Python, and SQL as shell-class capability and enforce isolation at the worker-process boundary unless `serve --no-sandbox` is selected.
   Keep complete code cells separate from interactive `stdin`, and keep the MCP adapter independent of interpreter implementation details.
 - Production R and Python programs under `src/` are included in the binary at compile time.
   The worker and resolvers must not load them from the source tree or installation layout at runtime.

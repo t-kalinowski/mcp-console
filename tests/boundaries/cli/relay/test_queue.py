@@ -21,6 +21,7 @@ from support.checkpoints import FifoCheckpoint
 from support.records import Transcript
 from support.suites import run_this_suite
 
+# Its native checkpoint interposes pthread_cond_wait; Linux Rust uses futexes.
 PLATFORMS = {"darwin"}
 MEBIBYTE = 1024 * 1024
 READY = b'{"kind":"ready"}\n'

@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.client import McpClient
 from support.r import r_test_environment
-from support.records import Transcript
+from support.records import Transcript, TranscriptWithCompanions
 from support.suites import run_this_suite
 
 PLATFORMS = {"darwin", "linux"}
@@ -18,7 +18,7 @@ PLATFORMS = {"darwin", "linux"}
 
 def test_probes_ambient_reticulate_before_first_use_bootstrap(
     binary: Path,
-) -> Transcript:
+) -> Transcript | TranscriptWithCompanions:
     environment, rscript = r_test_environment()
     fixture = Path(__file__).resolve().parents[3] / "fixtures" / "ambient_reticulate"
     with tempfile.TemporaryDirectory() as temporary_directory:
@@ -68,7 +68,10 @@ def test_probes_ambient_reticulate_before_first_use_bootstrap(
 
             listed_again = client.request("tools/list")
             assert listed_again["result"]["tools"] == tools, listed_again
-            return client.finish()
+            transcript = client.finish()
+            if sys.platform == "linux":
+                return TranscriptWithCompanions(transcript, {}, platform="linux")
+            return transcript
 
 
 if __name__ == "__main__":

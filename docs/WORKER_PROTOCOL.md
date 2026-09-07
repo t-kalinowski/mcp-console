@@ -35,13 +35,14 @@ The sideband has no protocol negotiation, capability exchange, session name, req
 Interrupt delivery is a process signal managed by the relay.
 Response cuts, output budgets, and MCP response assembly are server state and never appear on this boundary.
 
-The sideband transport implementation is compiled for macOS and Linux.
-The complete protocol execution stack is currently supported only on macOS because the worker relay and sandbox runtime are macOS-only.
+The sideband transport, worker relay, and built-in worker support macOS and Linux.
+Linux requires `serve --no-sandbox`; the sandbox launcher is macOS-only.
 
 ## Launch contract
 
-For every worker generation, the sandboxed relay launches the configured worker with piped standard input, standard output, and standard error.
-The relay is already inside the worker sandbox, and the worker inherits that sandbox and its process group.
+For every worker generation, the relay launches the configured worker with piped standard input, standard output, and standard error.
+By default, the relay is already inside the worker sandbox, and the worker inherits that sandbox and its process group.
+With `serve --no-sandbox`, the server launches the relay directly, and both relay and worker run with server permissions without a sandbox manager or descendant-cleanup guarantee.
 The built-in command is `mcp-console worker`.
 The hidden `serve --worker PATH` option uses `PATH` as one executable name or path, without arguments or shell parsing.
 
@@ -404,8 +405,9 @@ Fd-0 closure and the `shutdown` frame are both generation-retirement signals, no
 A worker must not require both in a particular order.
 If it does not exit within the relay's supplied grace period, the relay forcibly terminates it.
 After direct-worker exit or force-stop, the relay reaps the direct child and retires its local transports.
-The sandbox launcher owns cleanup of remaining descendants, including those retaining worker descriptors or entering another process group or session.
-The server requires successful managed launcher exit as the sandbox-lifetime retirement barrier before replacement.
+In sandboxed mode, the sandbox launcher owns cleanup of remaining descendants, including those retaining worker descriptors or entering another process group or session.
+The server requires successful managed launcher exit as the sandbox-lifetime retirement barrier before replacement in that mode.
+With `--no-sandbox`, the server waits for and reaps the relay directly; no manager cleans up remaining descendants.
 The exact server-relay acceptance and retirement sequence is specified in [`RELAY_PROTOCOL.md`](RELAY_PROTOCOL.md).
 
 During retirement, additional nonblocking reads of worker-sideband, fd 1, and fd 2 share a 100-millisecond allowance.

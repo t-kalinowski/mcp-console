@@ -1,3 +1,7 @@
+#ifdef __linux__
+#define _GNU_SOURCE
+#endif
+
 #include <errno.h>
 #include <fcntl.h>
 #include <stdatomic.h>
@@ -8,12 +12,27 @@
 #include <sys/uio.h>
 #include <unistd.h>
 
+#ifdef __linux__
+#include <dlfcn.h>
+static ssize_t (*native_write)(int descriptor, const void *buffer, size_t length);
+#define write native_write
+static ssize_t (*native_writev)(int descriptor, const struct iovec *buffers, int count);
+#define writev native_writev
+#endif
+
 static int blocked;
 static atomic_bool observed = false;
 static struct stat output_identity;
 
 __attribute__((constructor)) static void initialize_checkpoint(void) {
     unsetenv("DYLD_INSERT_LIBRARIES");
+#ifdef __linux__
+    unsetenv("LD_PRELOAD");
+    native_write = dlsym(RTLD_NEXT, "write");
+    if (native_write == NULL) _exit(90);
+    native_writev = dlsym(RTLD_NEXT, "writev");
+    if (native_writev == NULL) _exit(90);
+#endif
     const char *path = getenv("MCP_CONSOLE_TEST_STDOUT_BLOCKED");
     blocked = path == NULL ? -1 : open(path, O_WRONLY | O_CLOEXEC);
     if (blocked < 0 || fstat(STDOUT_FILENO, &output_identity) < 0) {
@@ -83,6 +102,7 @@ static ssize_t observed_writev(int descriptor, const struct iovec *buffers, int 
     return result;
 }
 
+#ifdef __APPLE__
 #define DYLD_INTERPOSE(replacement, replacee)                                  \
     __attribute__((used)) static struct {                                      \
         const void *replacement;                                              \
@@ -94,3 +114,14 @@ static ssize_t observed_writev(int descriptor, const struct iovec *buffers, int 
 
 DYLD_INTERPOSE(observed_write, write)
 DYLD_INTERPOSE(observed_writev, writev)
+
+#else
+#undef write
+ssize_t write(int descriptor, const void *buffer, size_t length) {
+    return observed_write(descriptor, buffer, length);
+}
+#undef writev
+ssize_t writev(int descriptor, const struct iovec *buffers, int count) {
+    return observed_writev(descriptor, buffers, count);
+}
+#endif

@@ -95,6 +95,7 @@ def test_runs_without_a_resolver_bootstrap(binary: Path) -> TranscriptWithCompan
         quarto = quarto.replace(str(workspace.resolve()), "<workspace>")
         return TranscriptWithCompanions(
             transcript=transcript,
+            platform="linux" if sys.platform == "linux" else None,
             companions={
                 "events.yaml": [
                     {

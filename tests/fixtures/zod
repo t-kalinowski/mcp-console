@@ -11,6 +11,8 @@ import termios
 import time
 from enum import StrEnum
 from pathlib import Path
+import fixture_directory
+
 from typing import Any, TextIO
 
 SIDEBAND_FD_ENV = "MCP_CONSOLE_SIDEBAND_FD"
@@ -334,7 +336,7 @@ def configure_startup(
 def main() -> None:
     """Run the deterministic sideband fixture until the server shuts it down."""
     endpoint, reader, writer = open_sideband()
-    temporary = Path(os.environ["TMPDIR"])
+    temporary = fixture_directory.configure()
     configure_test_fixture_control(temporary)
     if started_marker := os.environ.get("MCP_CONSOLE_TEST_ZOD_STARTED"):
         publish_marker(Path(started_marker))

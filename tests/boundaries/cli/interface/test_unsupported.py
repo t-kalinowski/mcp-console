@@ -42,5 +42,26 @@ def test_reports_that_the_sandbox_is_unsupported(binary: Path) -> Transcript:
     ]
 
 
+def test_serve_requires_explicit_no_sandbox(binary: Path) -> Transcript:
+    result = subprocess.run(
+        [binary, "serve", "--worker", str(binary)],
+        input="",
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 1, result
+    assert result.stdout == "", result
+    assert result.stderr == "Linux requires `mcp-console serve --no-sandbox`\n", result
+    return [
+        {
+            "command": ["mcp-console", "serve", "--worker", "mcp-console"],
+            "exit_code": result.returncode,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+        }
+    ]
+
+
 if __name__ == "__main__":
     run_this_suite(__file__)

@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.client import McpClient
 from support.normalization import code
-from support.records import Transcript
+from support.records import Transcript, TranscriptWithCompanions
 from support.suites import run_this_suite
 
 
@@ -68,7 +68,9 @@ def test_invalid_send_has_no_external_effects(binary: Path) -> Transcript:
             return client.finish()
 
 
-def test_initializes_and_lists_tools(binary: Path) -> Transcript:
+def test_initializes_and_lists_tools(
+    binary: Path,
+) -> Transcript | TranscriptWithCompanions:
     environment = os.environ.copy()
     environment.pop("MCP_CONSOLE_LANGUAGES", None)
     with McpClient(binary, ("serve",), environment) as client:
@@ -98,10 +100,15 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
             assert requirement["items"]["minLength"] == 1, requirement
         assert requirement_properties["duckdb"]["items"]["maxLength"] == 64
         assert not (workspace / ".mcp-console").exists(), workspace
-        return client.finish()
+        transcript = client.finish()
+        if sys.platform == "linux":
+            return TranscriptWithCompanions(transcript, {}, platform="linux")
+        return transcript
 
 
-def test_limits_send_languages_from_environment(binary: Path) -> Transcript:
+def test_limits_send_languages_from_environment(
+    binary: Path,
+) -> Transcript | TranscriptWithCompanions:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     environment = os.environ.copy()
     environment["MCP_CONSOLE_LANGUAGES"] = "r,sql"
@@ -126,7 +133,10 @@ def test_limits_send_languages_from_environment(binary: Path) -> Transcript:
             result = client.send(python="raise AssertionError('disabled cell ran')")
             assert result["isError"] is True, result
             assert not worker_started.exists(), worker_started
-            return client.finish()
+            transcript = client.finish()
+            if sys.platform == "linux":
+                return TranscriptWithCompanions(transcript, {}, platform="linux")
+            return transcript
 
 
 def test_validates_send_arguments(binary: Path) -> Transcript:

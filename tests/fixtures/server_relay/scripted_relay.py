@@ -9,6 +9,9 @@ import time
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import fixture_directory
+
 SCENARIO_ENV = "MCP_CONSOLE_TEST_RELAY_SCENARIO"
 CAPTURE_NAME = "mcp-console-server-relay-wire.jsonl"
 DONE_NAME = "mcp-console-scripted-relay-done"
@@ -110,7 +113,7 @@ class ScriptedRelay:
             f"scripted relay {process_id} is not process-group leader {process_group}"
         )
 
-        self.root = Path(os.environ["TMPDIR"])
+        self.root = fixture_directory.configure()
         self.capture = (self.root / CAPTURE_NAME).open("w", encoding="utf-8")
         self.checkpoints: dict[str, int] = {}
 

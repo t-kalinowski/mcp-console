@@ -1,3 +1,7 @@
+#ifdef __linux__
+#define _GNU_SOURCE
+#endif
+
 #include <errno.h>
 #include <fcntl.h>
 #include <stdatomic.h>
@@ -7,6 +11,14 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#ifdef __linux__
+#include <dlfcn.h>
+static ssize_t (*native_read)(int, void *, size_t);
+static ssize_t (*native_recv)(int, void *, size_t, int);
+#define read native_read
+#define recv native_recv
+#endif
+
 static atomic_int output_descriptor = -1;
 static int refill_request;
 static int refill_done;
@@ -15,6 +27,12 @@ static const char *output_match;
 
 __attribute__((constructor)) static void initialize_refill_checkpoints(void) {
     unsetenv("DYLD_INSERT_LIBRARIES");
+#ifdef __linux__
+    unsetenv("LD_PRELOAD");
+    native_read = dlsym(RTLD_NEXT, "read");
+    native_recv = dlsym(RTLD_NEXT, "recv");
+    if (native_read == NULL || native_recv == NULL) _exit(90);
+#endif
     output_match = getenv("MCP_CONSOLE_TEST_REFILL_MATCH");
     refill_request = open(getenv("MCP_CONSOLE_TEST_REFILL_REQUEST"), O_WRONLY | O_CLOEXEC);
     refill_done = open(getenv("MCP_CONSOLE_TEST_REFILL_DONE"), O_RDONLY | O_CLOEXEC);
@@ -67,6 +85,7 @@ static ssize_t refilling_recv(int descriptor, void *buffer, size_t length, int f
     return refill_after_read(descriptor, buffer, recv(descriptor, buffer, length, flags));
 }
 
+#ifdef __APPLE__
 #define DYLD_INTERPOSE(replacement, replacee)                                  \
     __attribute__((used)) static struct {                                      \
         const void *replacement;                                               \
@@ -78,3 +97,14 @@ static ssize_t refilling_recv(int descriptor, void *buffer, size_t length, int f
 
 DYLD_INTERPOSE(refilling_read, read)
 DYLD_INTERPOSE(refilling_recv, recv)
+
+#else
+#undef read
+ssize_t read(int descriptor, void *buffer, size_t length) {
+    return refilling_read(descriptor, buffer, length);
+}
+#undef recv
+ssize_t recv(int descriptor, void *buffer, size_t length, int flags) {
+    return refilling_recv(descriptor, buffer, length, flags);
+}
+#endif

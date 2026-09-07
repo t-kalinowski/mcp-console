@@ -651,6 +651,34 @@ def test_selected(binary):
         result = self.run_runner("client_server/server/test_tools::selected")
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_platform_initialization_reference_preserves_shared_transcripts(
+        self,
+    ) -> None:
+        reference = "tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml"
+        with self.suite.open("a") as suite:
+            suite.write("""
+from support.records import TranscriptWithCompanions
+import sys
+
+def test_initializes_and_lists_tools(binary):
+    return TranscriptWithCompanions([{"runner": sys.platform}], {}, platform=sys.platform)
+
+def test_selected(binary):
+    return [{"runner": sys.platform}, {"runner": "selected"}]
+""")
+        platform_reference = (
+            self.snapshots / f"initializes_and_lists_tools.{sys.platform}.yaml"
+        )
+        platform_reference.write_text(f"---\nrunner: {sys.platform}\n...\n")
+        shared = self.snapshots / "selected.yaml"
+        shared.write_text(f"--- !same-as {reference}\n---\nrunner: selected\n...\n")
+        result = self.run_runner("client_server/server/test_tools::selected")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        platform_reference.write_text("---\nrunner: different platform metadata\n...\n")
+        result = self.run_runner("client_server/server/test_tools::selected")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("differs from its snapshot", result.stderr)
+
     def test_collection_selectors_and_locate(self) -> None:
         hidden = (
             self.boundaries / "client_server" / "server" / "_private" / "test_hidden.py"

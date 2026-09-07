@@ -48,12 +48,10 @@ result:
         ordering.
 
 
-        With the sandbox enabled, evaluated code can read host files, cannot
-        directly access the network, and can write only in the worker's private
-        temporary directory. With `serve --no-sandbox`, evaluated code has the
-        server's filesystem and network permissions. Dependency resolution, when
-        available, runs outside the sandbox and may execute installation or
-        build code; use only trusted dependencies.
+        Evaluated code can read host files, cannot directly access the network,
+        and can write only in the worker's private temporary directory.
+        Dependency resolution, when available, runs outside the sandbox and may
+        execute installation or build code; use only trusted dependencies.
       inputSchema:
         $schema: https://json-schema.org/draft/2020-12/schema
         additionalProperties: false
@@ -114,11 +112,11 @@ result:
               them through its connection or cursor protocol. The selected driver supplies its own SQL
               dialect and type mappings. Use DBI from an R cell for commands that require the statement
               interface. Managed DuckDB conveniences and extension requirements apply only to the managed
-              backend. When attaching an existing DuckDB database outside the worker's private temporary
-              directory, use `ATTACH 'path' AS name (READ_ONLY)`; the sandbox blocks DuckDB's default writable
-              mode for those paths. Use `SHOW TABLES`, `DESCRIBE`, `SUMMARIZE`, and `EXPLAIN` for DuckDB
-              discovery. DuckDB CLI dot commands are not supported. Omit this field for polling or stdin-only
-              calls.
+              backend. With the sandbox enabled, use `ATTACH 'path' AS name (READ_ONLY)` for existing DuckDB
+              databases outside the worker's private temporary directory; the sandbox blocks DuckDB's
+              default writable mode for those paths. Use `SHOW TABLES`, `DESCRIBE`, `SUMMARIZE`, and `EXPLAIN`
+              for DuckDB discovery. DuckDB CLI dot commands are not supported. Omit this field for polling
+              or stdin-only calls.
             type:
               - string
               - "null"

@@ -1,7 +1,5 @@
 /// The unsupported platform runtime keeps the server boundary portable.
-pub(super) struct WorkerRuntime {
-    pub(super) no_sandbox: bool,
-}
+pub(super) struct WorkerRuntime;
 
 pub(super) struct Worker;
 
@@ -17,6 +15,7 @@ impl WorkerRuntime {
             executable,
             arguments,
             relay,
+            no_sandbox,
             python,
             managed_r,
             dynamic_resolution,
@@ -26,6 +25,7 @@ impl WorkerRuntime {
             executable,
             arguments,
             relay,
+            no_sandbox,
             python,
             managed_r,
             dynamic_resolution,

@@ -13,7 +13,6 @@ from support.suites import run_this_suite
 
 PLATFORMS = {"darwin", "linux"}
 # This case verifies the sandbox launcher's separate cleanup status.
-CASE_PLATFORMS = {"rejects_unsolicited_status_137_after_fatal": {"darwin"}}
 
 
 def _reports_worker_outcome(

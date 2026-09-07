@@ -3,7 +3,7 @@ base::local(
     active <- FALSE
     devices <- list()
     device_counter <- 0L
-    directory <- file.path(Sys.getenv("TMPDIR"), "mcp-console-plots")
+    directory <- file.path(tempdir(), "mcp-console-plots")
 
     positive_option <- function(name, default) {
       value <- getOption(name)

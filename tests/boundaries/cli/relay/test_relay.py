@@ -12,15 +12,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.capture import read_lines
 from support.checkpoints import FifoCheckpoint
-from support.macos import (
-    capture_darwin_process_identity,
-    kill_darwin_processes,
-    live_darwin_processes,
+from support.processes import (
+    capture_process_identity,
+    kill_processes,
+    live_processes,
 )
 from support.records import Transcript
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
+CASE_PLATFORMS = {"relay_protocol_is_independent_of_sandbox_launch": {"darwin"}}
 
 
 def test_retires_while_descendant_keeps_refilling_output(binary: Path) -> Transcript:
@@ -32,7 +33,8 @@ def test_retires_while_descendant_keeps_refilling_output(binary: Path) -> Transc
         subprocess.run(
             [
                 "cc",
-                "-dynamiclib",
+                "-dynamiclib" if sys.platform == "darwin" else "-shared",
+                "-fPIC",
                 "-std=c11",
                 "-Wall",
                 "-Wextra",
@@ -59,7 +61,9 @@ def test_retires_while_descendant_keeps_refilling_output(binary: Path) -> Transc
             }
             environment = os.environ.copy()
             environment["TMPDIR"] = str(root)
-            environment["DYLD_INSERT_LIBRARIES"] = str(interposer)
+            environment[
+                "DYLD_INSERT_LIBRARIES" if sys.platform == "darwin" else "LD_PRELOAD"
+            ] = str(interposer)
             environment["MCP_CONSOLE_TEST_REFILL_MATCH"] = (
                 '{"kind":"console_output","data":"descendant output\\n"}\n'
                 if stream == "sideband"
@@ -96,7 +100,7 @@ def test_retires_while_descendant_keeps_refilling_output(binary: Path) -> Transc
                 checkpoints["refill-observed"].wait(
                     "descendant output was read and refilled"
                 )
-                descendant = capture_darwin_process_identity(
+                descendant = capture_process_identity(
                     int((root / "descendant-pid").read_text())
                 )
                 checkpoints["worker-exit"].release()
@@ -128,7 +132,7 @@ def test_retires_while_descendant_keeps_refilling_output(binary: Path) -> Transc
                     {"kind": "worker_exited", "code": 0},
                 ], terminal_events
                 assert events == outputs + terminal_events, events
-                assert live_darwin_processes([descendant]) == [descendant[0]]
+                assert live_processes([descendant]) == [descendant[0]]
                 # The deadline makes the repetition count incidental. Retain
                 # its exact payload and the complete terminal protocol suffix.
                 transcript.append(
@@ -147,7 +151,7 @@ def test_retires_while_descendant_keeps_refilling_output(binary: Path) -> Transc
                     except ProcessLookupError:
                         pass
                 if descendant is not None:
-                    kill_darwin_processes([descendant])
+                    kill_processes([descendant])
                 process.communicate(timeout=10)
                 for checkpoint in checkpoints.values():
                     checkpoint.close()

@@ -834,7 +834,7 @@ def test_reports_unexpected_worker_exit_zero(binary: Path) -> Transcript:
 
 
 def test_replaces_worker_after_relay_exit(binary: Path) -> Transcript:
-    zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
+    zod = Path(__file__).resolve().parents[3] / "fixtures" / "wrapped_zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
         environment = os.environ.copy()

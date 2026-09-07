@@ -10,7 +10,7 @@ send:
       function() {
         plot(1)
         Sys.chmod(list.files(
-          file.path(Sys.getenv("TMPDIR"), "mcp-console-plots"),
+          file.path(tempdir(), "mcp-console-plots"),
           full.names = TRUE
         ), "0000")
         old_umask <- Sys.umask("0777")

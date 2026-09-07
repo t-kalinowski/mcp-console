@@ -580,12 +580,21 @@ def wait_for_stopped_worker(
             worker = (process_id, process_group)
             if worker not in recorded_workers:
                 recorded_workers.append(worker)
-            assert parent_id == process_group, (
-                "stopped worker is not the relay's direct child"
+            relay_status = read_process_status(parent_id)
+            assert relay_status is not None, (
+                "stopped worker lost its direct relay parent"
             )
-            assert process_id != process_group, (
-                "stopped worker unexpectedly leads the relay process group"
-            )
+            if sys.platform == "darwin":
+                assert parent_id == process_group, (
+                    "relay no longer leads its process group"
+                )
+            else:
+                assert process_id == process_group, (
+                    "fixture no longer leads its process group"
+                )
+                assert relay_status[0] == client.process.pid, (
+                    "relay is not a direct server child"
+                )
             assert process_group != os.getpgrp(), (
                 "stopped worker shares the test process group"
             )

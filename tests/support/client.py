@@ -92,6 +92,11 @@ class McpClient:
             and "--no-sandbox" not in arguments
         ):
             arguments = (*arguments, "--no-sandbox")
+            environment = (
+                os.environ.copy() if environment is None else environment.copy()
+            )
+            environment.setdefault("TMPDIR", str(current_directory))
+            environment["MCP_CONSOLE_TEST_FIXTURE_DIRECTORY"] = "1"
         process = subprocess.Popen(
             [binary, *arguments],
             env=environment,

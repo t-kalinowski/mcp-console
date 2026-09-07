@@ -120,11 +120,13 @@ See [Recording and artifacts](https://github.com/t-kalinowski/mcp-console/blob/m
 ## Security boundary
 
 Submitted R, Python, and SQL have shell-class capability.
-With the macOS sandbox enabled, the worker can read host files, but direct network access and regular-file writes outside its private temporary directory are denied.
+On macOS, the worker sandbox is enabled by default.
+The worker can read host files, but direct network access and regular-file writes outside its private temporary directory are denied.
 This is a process boundary, not a safe evaluator for untrusted code with access to sensitive readable files.
 
-`serve --no-sandbox` runs evaluated code with the server's filesystem and network permissions.
-It supervises the direct relay and worker but does not guarantee cleanup of their descendants after restart, shutdown, or process failure.
+`mcp-console serve --no-sandbox` launches the relay directly with host permissions.
+The worker inherits the host temporary-directory environment, and no sandbox manager tracks or cleans up descendants.
+The relay still shuts down and reaps its direct worker normally.
 
 The server installs automatically inferred or explicitly declared R and Python packages and DuckDB extensions outside the worker sandbox with server permissions.
 Those operations may access the network and execute installation or build code, so only trusted requirements should be supplied.

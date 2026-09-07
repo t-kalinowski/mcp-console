@@ -108,6 +108,7 @@ struct ClientInner {
     program: PathBuf,
     arguments: Vec<OsString>,
     relay: Option<PathBuf>,
+    no_sandbox: bool,
     worker: Mutex<WorkerState>,
     /// The one evaluation occupying this session, independently of who is polling it.
     evaluation: Mutex<Option<ActiveEvaluation>>,
@@ -140,6 +141,7 @@ struct WorkerSpec<'a> {
     executable: &'a std::path::Path,
     arguments: &'a [OsString],
     relay: Option<&'a std::path::Path>,
+    no_sandbox: bool,
     python: Option<&'a PythonEnvironment>,
     managed_r: Option<&'a crate::resolver::ManagedR>,
     dynamic_resolution: bool,
@@ -353,14 +355,14 @@ impl Client {
 
     pub(crate) fn builtin(no_sandbox: bool) -> Result<Self, String> {
         #[cfg(any(target_os = "macos", target_os = "linux"))]
-        return startup::with_input_owner(|on_started| Self::builtin_with(on_started, no_sandbox));
+        return startup::with_input_owner(|on_started| Self::builtin_with(no_sandbox, on_started));
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-        Self::builtin_with(&|_| Ok(()), no_sandbox)
+        Self::builtin_with(no_sandbox, &|_| Ok(()))
     }
 
     fn builtin_with(
-        on_started: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
         no_sandbox: bool,
+        on_started: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
     ) -> Result<Self, String> {
         let mut python_resolver = crate::resolver::ManagedPythonResolverConfiguration::capture();
         let configured_python = std::env::var_os("RETICULATE_PYTHON");
@@ -426,10 +428,11 @@ impl Client {
             .as_ref()
             .is_some_and(|environment| !matches!(environment.r_resolver, RResolver::Disabled));
         Self(Arc::new(ClientInner {
-            runtime: platform::WorkerRuntime { no_sandbox },
+            runtime: platform::WorkerRuntime,
             program,
             arguments,
             relay,
+            no_sandbox,
             worker: Mutex::new(WorkerState::Initial),
             evaluation: Mutex::new(None),
             admission: tokio::sync::RwLock::new(()),
@@ -1482,6 +1485,7 @@ impl Client {
                 executable: &self.0.program,
                 arguments: &self.0.arguments,
                 relay: self.0.relay.as_deref(),
+                no_sandbox: self.0.no_sandbox,
                 python,
                 managed_r,
                 dynamic_resolution: self.dynamic_resolution(),
