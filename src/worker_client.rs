@@ -12,6 +12,8 @@ mod output;
 mod child_exit;
 #[cfg(target_os = "macos")]
 mod events;
+#[cfg(target_os = "macos")]
+mod startup;
 
 #[cfg(target_os = "macos")]
 #[path = "worker_client/macos.rs"]
@@ -307,6 +309,15 @@ impl Client {
     }
 
     pub(crate) fn builtin() -> Result<Self, String> {
+        #[cfg(target_os = "macos")]
+        return startup::with_input_owner(Self::builtin_with);
+        #[cfg(not(target_os = "macos"))]
+        Self::builtin_with(&|_| Ok(()))
+    }
+
+    fn builtin_with(
+        on_started: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
+    ) -> Result<Self, String> {
         let mut python_resolver = crate::resolver::ManagedPythonResolverConfiguration::capture();
         let configured_python = std::env::var_os("RETICULATE_PYTHON");
         let program = std::env::current_exe()
@@ -314,7 +325,7 @@ impl Client {
         #[cfg(target_os = "macos")]
         let (r, duckdb_extensions, python, r_resolver) = {
             let r_resolver =
-                crate::resolver::discover_r_resolver(&mut python_resolver, |_| Ok(()))?;
+                crate::resolver::discover_r_resolver(&mut python_resolver, on_started)?;
             match r_resolver {
                 Some(r_resolver) => {
                     let r = crate::resolver::resolve_r_with(
@@ -323,21 +334,25 @@ impl Client {
                             .iter()
                             .map(|requirement| (*requirement).to_string())
                             .collect(),
-                        |_| Ok(()),
+                        on_started,
                     )?;
                     if PythonEnvironment::uses_managed(configured_python.as_deref())
                         && !python_resolver.has_uv()
                     {
-                        let uv = r_resolver.resolve_uv(&r, &python_resolver, |_| Ok(()))?;
+                        let uv = r_resolver.resolve_uv(&r, &python_resolver, on_started)?;
                         python_resolver.set_resolved_uv(uv);
                     }
                     let duckdb_extensions = DEFAULT_DUCKDB_EXTENSIONS
                         .iter()
                         .map(|extension| (*extension).to_string())
                         .collect::<Vec<_>>();
-                    crate::resolver::resolve_duckdb_extensions(&r, &duckdb_extensions, |_| Ok(()))?;
-                    let python =
-                        PythonEnvironment::builtin(configured_python, python_resolver, Some(&r))?;
+                    crate::resolver::resolve_duckdb_extensions(&r, &duckdb_extensions, on_started)?;
+                    let python = PythonEnvironment::builtin(
+                        configured_python,
+                        python_resolver,
+                        Some(&r),
+                        on_started,
+                    )?;
                     (
                         Some(r),
                         duckdb_extensions.into_iter().collect(),
@@ -357,7 +372,7 @@ impl Client {
         let (r, duckdb_extensions, python, r_resolver) = (
             Option::<crate::resolver::ManagedR>::None,
             Default::default(),
-            PythonEnvironment::builtin(configured_python, python_resolver, None)?,
+            PythonEnvironment::builtin(configured_python, python_resolver, None, on_started)?,
             RResolver::Discover,
         );
         Ok(Self::with_arguments(

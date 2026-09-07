@@ -1,0 +1,14 @@
+---
+input:
+  method: initialize
+  params:
+    protocolVersion: 2025-11-25
+    capabilities: {}
+    clientInfo:
+      name: acceptance-test
+      version: 1.0.0
+---
+exit_code: 1
+stdout: ""
+stderr: |
+  server startup cancelled because MCP input closed
