@@ -72,15 +72,8 @@ mod platform {
         };
         drop(child_endpoint);
 
-        let mut worker = WorkerLifecycle::new(child);
-        let setup = worker.start_io(
-            sideband_reader,
-            sideband_writer,
-            &events,
-            &failures,
-            &controls,
-            &stopping,
-        );
+        let mut worker = WorkerLifecycle::new(child, sideband_reader);
+        let setup = worker.start_io(sideband_writer, &events, &failures, &controls, &stopping);
         let (status, retirement_error) = match setup {
             Ok(()) => {
                 worker.start_exit_watcher(controls.clone());
@@ -434,25 +427,53 @@ mod platform {
         (status, error)
     }
 
+    enum ReaderState<Raw, Task> {
+        Unstarted(Raw),
+        Running(Task),
+        Retired,
+    }
+
+    impl<Raw, Task> ReaderState<Raw, Task> {
+        fn start(
+            &mut self,
+            start: impl FnOnce(Raw) -> Result<Task, (Raw, String)>,
+        ) -> Result<(), String> {
+            let Self::Unstarted(raw) = self.take() else {
+                panic!("worker reader should start only once");
+            };
+            match start(raw) {
+                Ok(task) => {
+                    *self = Self::Running(task);
+                    Ok(())
+                }
+                Err((raw, error)) => {
+                    *self = Self::Unstarted(raw);
+                    Err(error)
+                }
+            }
+        }
+
+        fn take(&mut self) -> Self {
+            std::mem::replace(self, Self::Retired)
+        }
+    }
+
     struct WorkerLifecycle {
         child: Child,
         retired: bool,
         drain_deadline: Arc<OnceLock<Instant>>,
         raw_stdin: Option<ChildStdin>,
-        raw_stdout: Option<ChildStdout>,
-        raw_stderr: Option<ChildStderr>,
-        raw_sideband_reader: Option<crate::sideband::Reader>,
         stdin: Option<StdinWriter>,
         sideband_writer: Option<SidebandWriter>,
-        stdout: Option<OutputReader>,
-        stderr: Option<OutputReader>,
-        sideband_reader: Option<SidebandReader>,
+        stdout: ReaderState<ChildStdout, OutputReader>,
+        stderr: ReaderState<ChildStderr, OutputReader>,
+        sideband_reader: ReaderState<crate::sideband::Reader, SidebandReader>,
         command_reader: Option<CommandReader>,
         exit_watcher: Option<thread::JoinHandle<()>>,
     }
 
     impl WorkerLifecycle {
-        fn new(mut child: Child) -> Self {
+        fn new(mut child: Child, sideband_reader: crate::sideband::Reader) -> Self {
             let raw_stdin = child
                 .stdin
                 .take()
@@ -470,30 +491,24 @@ mod platform {
                 retired: false,
                 drain_deadline: Arc::new(OnceLock::new()),
                 raw_stdin: Some(raw_stdin),
-                raw_stdout: Some(raw_stdout),
-                raw_stderr: Some(raw_stderr),
-                raw_sideband_reader: None,
                 stdin: None,
                 sideband_writer: None,
-                stdout: None,
-                stderr: None,
-                sideband_reader: None,
+                stdout: ReaderState::Unstarted(raw_stdout),
+                stderr: ReaderState::Unstarted(raw_stderr),
+                sideband_reader: ReaderState::Unstarted(sideband_reader),
                 command_reader: None,
                 exit_watcher: None,
             }
         }
 
-        #[allow(clippy::too_many_arguments)]
         fn start_io(
             &mut self,
-            sideband_reader: crate::sideband::Reader,
             sideband_writer: crate::sideband::Writer,
             events: &EventSender,
             failures: &FailureReporter,
             controls: &mpsc::Sender<Control>,
             stopping: &Arc<AtomicBool>,
         ) -> Result<(), String> {
-            self.raw_sideband_reader = Some(sideband_reader);
             let stdin = self
                 .raw_stdin
                 .take()
@@ -509,41 +524,24 @@ mod platform {
                 stopping.clone(),
             ));
 
-            let stdout = self
-                .raw_stdout
-                .take()
-                .expect("raw worker stdout should be available");
-            match OutputReader::start(
-                stdout,
-                OutputStream::Stdout,
-                events.clone(),
-                failures.clone(),
-                self.drain_deadline.clone(),
-            ) {
-                Ok(stdout) => self.stdout = Some(stdout),
-                Err((stdout, error)) => {
-                    self.raw_stdout = Some(stdout);
-                    return Err(error);
-                }
-            }
-
-            let stderr = self
-                .raw_stderr
-                .take()
-                .expect("raw worker stderr should be available");
-            match OutputReader::start(
-                stderr,
-                OutputStream::Stderr,
-                events.clone(),
-                failures.clone(),
-                self.drain_deadline.clone(),
-            ) {
-                Ok(stderr) => self.stderr = Some(stderr),
-                Err((stderr, error)) => {
-                    self.raw_stderr = Some(stderr);
-                    return Err(error);
-                }
-            }
+            self.stdout.start(|stdout| {
+                OutputReader::start(
+                    stdout,
+                    OutputStream::Stdout,
+                    events.clone(),
+                    failures.clone(),
+                    self.drain_deadline.clone(),
+                )
+            })?;
+            self.stderr.start(|stderr| {
+                OutputReader::start(
+                    stderr,
+                    OutputStream::Stderr,
+                    events.clone(),
+                    failures.clone(),
+                    self.drain_deadline.clone(),
+                )
+            })?;
 
             self.command_reader = Some(CommandReader::start(
                 self.sideband_writer
@@ -558,24 +556,15 @@ mod platform {
                 failures.clone(),
             )?);
 
-            let sideband_reader = self
-                .raw_sideband_reader
-                .take()
-                .expect("raw worker sideband reader should be available");
-            match SidebandReader::start(
-                sideband_reader,
-                events.clone(),
-                failures.clone(),
-                controls.clone(),
-                self.drain_deadline.clone(),
-            ) {
-                Ok(sideband_reader) => self.sideband_reader = Some(sideband_reader),
-                Err((sideband_reader, error)) => {
-                    self.raw_sideband_reader = Some(sideband_reader);
-                    return Err(error);
-                }
-            }
-            Ok(())
+            self.sideband_reader.start(|sideband_reader| {
+                SidebandReader::start(
+                    sideband_reader,
+                    events.clone(),
+                    failures.clone(),
+                    controls.clone(),
+                    self.drain_deadline.clone(),
+                )
+            })
         }
 
         fn start_exit_watcher(&mut self, controls: mpsc::Sender<Control>) {
@@ -590,10 +579,13 @@ mod platform {
                 .expect("worker transports should retire only once");
             // Wake every reader before joining any of them: a continuously
             // readable stream must not extend the other readers' allowance.
-            if let Some(reader) = &self.sideband_reader {
+            if let ReaderState::Running(reader) = &self.sideband_reader {
                 reader.cancel.cancel();
             }
-            for reader in [&self.stdout, &self.stderr].into_iter().flatten() {
+            if let ReaderState::Running(reader) = &self.stdout {
+                reader.cancel.cancel();
+            }
+            if let ReaderState::Running(reader) = &self.stderr {
                 reader.cancel.cancel();
             }
             drop(self.raw_stdin.take());
@@ -606,28 +598,24 @@ mod platform {
             if let Some(sideband_writer) = self.sideband_writer.take() {
                 collect_error(&mut error, sideband_writer.cancel_and_join());
             }
-            match (self.sideband_reader.take(), self.raw_sideband_reader.take()) {
-                (Some(sideband_reader), None) => {
-                    collect_error(&mut error, sideband_reader.cancel_and_join())
-                }
-                (None, Some(_)) => {}
-                _ => unreachable!("worker sideband reader must have exactly one owner"),
+            if let ReaderState::Running(sideband_reader) = self.sideband_reader.take() {
+                collect_error(&mut error, sideband_reader.cancel_and_join());
             }
-            match (self.stdout.take(), self.raw_stdout.take()) {
-                (Some(stdout), None) => collect_error(&mut error, stdout.cancel_and_join()),
-                (None, Some(stdout)) => collect_error(
+            match self.stdout.take() {
+                ReaderState::Running(stdout) => collect_error(&mut error, stdout.cancel_and_join()),
+                ReaderState::Unstarted(stdout) => collect_error(
                     &mut error,
                     drain_unstarted_output(stdout, OutputStream::Stdout, events, deadline),
                 ),
-                _ => unreachable!("worker stdout must have exactly one owner"),
+                ReaderState::Retired => {}
             }
-            match (self.stderr.take(), self.raw_stderr.take()) {
-                (Some(stderr), None) => collect_error(&mut error, stderr.cancel_and_join()),
-                (None, Some(stderr)) => collect_error(
+            match self.stderr.take() {
+                ReaderState::Running(stderr) => collect_error(&mut error, stderr.cancel_and_join()),
+                ReaderState::Unstarted(stderr) => collect_error(
                     &mut error,
                     drain_unstarted_output(stderr, OutputStream::Stderr, events, deadline),
                 ),
-                _ => unreachable!("worker stderr must have exactly one owner"),
+                ReaderState::Retired => {}
             }
             if self
                 .exit_watcher
