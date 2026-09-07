@@ -9,7 +9,7 @@ The material under `design-sketches/` is future or exploratory design, not evide
 
 ## Process layout
 
-MCP Console has three runtime communication boundaries, one launcher-private manager channel for startup and lifetime ownership of each sandbox, and one host-only resolver path:
+By default, MCP Console has three runtime communication boundaries, one launcher-private manager channel for startup and lifetime ownership of each sandbox, and one host-only resolver path:
 
 ```text
 MCP client
@@ -43,6 +43,9 @@ worker                                     same sandbox and process group
     └── built-in R, Python, and DuckDB runtime
 ```
 
+With `serve --no-sandbox`, the server launches the relay directly, omitting the sandbox launcher, manager, and hidden wrapper.
+The relay and worker run with host permissions and inherit the host temporary-directory environment; no sandbox-owned private directory is created.
+
 The direct development command uses the same launcher implementation without a relay or worker protocol:
 
 ```text
@@ -56,7 +59,7 @@ sandbox-exec root                          macOS sandbox
 ```
 
 The server is the MCP stdio process.
-For each worker lifetime, it constructs either the built-in relay command line or a configured custom relay command line, then starts the current executable as `mcp-console sandbox` in hidden parent-owned mode with that relay as the target.
+For each sandboxed worker lifetime, it constructs either the built-in relay command line or a configured custom relay command line, then starts the current executable as `mcp-console sandbox` in hidden parent-owned mode with that relay as the target.
 The launcher is the server's direct child and the sole host-side sandbox owner.
 It retains the `sandbox-exec` root and manager waitably, while the root first runs a hidden wrapper blocked on a private release channel.
 After the manager reports readiness and manager-failure recovery is installed, the launcher releases the wrapper into the relay.
@@ -91,7 +94,7 @@ The client does not communicate directly with a relay, worker, or resolver.
 ### Sandbox launcher and sandbox manager
 
 The launcher starts one manager per invocation of `mcp-console sandbox` and is the sole host-side owner of that sandbox lifetime.
-One parent-owned invocation runs each worker generation, which may evaluate multiple cells before restart or replacement; an ordinary invocation runs one direct command.
+One parent-owned invocation runs each sandboxed worker generation, which may evaluate multiple cells before restart or replacement; an ordinary invocation runs one direct command.
 The manager reports readiness over a private inherited Unix socket before configured sandbox code may run.
 Readiness confirms process observation and adoption of the private-directory guard.
 The launcher relinquishes its duplicate guard after installing manager-failure recovery.
@@ -106,7 +109,7 @@ The [supervision guide](SANDBOX_SUPERVISION.md) owns startup sequencing, retirem
 
 The server sends commands to the relay's standard input and receives JSONL events from the relay's standard output.
 Relay standard error is inherited separately and is not part of that protocol.
-The transport is private and currently exists to keep worker connections and direct-worker supervision inside the sandbox.
+The transport is private and keeps worker connections and direct-worker supervision in the relay, inside the sandbox by default.
 [`RELAY_PROTOCOL.md`](RELAY_PROTOCOL.md) defines its commands, events, framing, and retirement behavior.
 
 ### Relay and worker
@@ -134,10 +137,11 @@ The server owns the logical console session and all state that must survive a wo
 
 These responsibilities remain on the host side of the sandbox boundary.
 The server does not execute submitted cells or ask the relay to interpret MCP calls.
-It configures the launcher's piped standard input and output and inherited standard error, closes unrelated inherited descriptors before launcher exec, and knows normal child exit and signaling, but no private directory, startup gate, sandbox root, manager, or manager monitor.
+It configures the child's piped standard input and output and inherited standard error, closes unrelated inherited descriptors before exec, and knows normal child exit and signaling, but no private directory, startup gate, sandbox root, manager, or manager monitor.
 At generation retirement, it first requests graceful shutdown through the relay protocol and waits through the applicable relay deadline.
-It then sends `SIGTERM` to the launcher to request managed retirement and uses a hard launcher kill only as the final fail-safe.
+In sandboxed mode, it then sends `SIGTERM` to the launcher to request managed retirement and uses a hard launcher kill only as the final fail-safe.
 On normal and owned-retirement paths, successful managed launcher exit is the synchronous cleanup barrier before the server reaps it.
+With `--no-sandbox`, the server owns and reaps the relay directly; no manager supplies descendant cleanup.
 
 ### Sandbox launcher
 
@@ -174,7 +178,7 @@ This preserves each producer's order without reconstructing chronology across th
 
 The relay does not own the logical session, retained requirements, evaluation admission, server pending-output budgets, response assembly, or MCP delivery.
 It exits with the worker lifetime it supervises.
-Remaining descendants, including those retaining worker streams, are retired by the sandbox launcher after the target exits or retirement is requested.
+In sandboxed mode, remaining descendants, including those retaining worker streams, are retired by the sandbox launcher after the target exits or retirement is requested.
 Its cancellable local transports share a 100-millisecond allowance for additional nonblocking reads during retirement.
 They attempt to queue complete buffered sideband frames but may abandon incomplete frames and further descendant output, so draining does not depend on those descendants becoming quiet or closing their descriptors.
 After direct-worker retirement, the relay gives pipe and socket output one shared second to flush, starting before local I/O joins.
@@ -183,8 +187,8 @@ Blocked downstream pipe or socket output can therefore fail retirement without d
 
 The internal `worker-relay` command uses the same stream protocol when launched directly without a sandbox or below another process wrapper.
 Such a direct invocation owns only its direct worker; it supplies no sandbox policy or descendant-cleanup guarantee.
-`serve` currently always uses the bundled sandbox launcher and exposes no unsandboxed server mode.
-An alternative launcher must provide the process-lifetime contract described in [sandbox supervision](SANDBOX_SUPERVISION.md), including cleanup before successful owned retirement.
+`serve --no-sandbox` selects this direct launch while retaining the relay protocol and direct-worker shutdown behavior.
+A replacement sandbox launcher must provide the process-lifetime contract described in [sandbox supervision](SANDBOX_SUPERVISION.md), including cleanup before successful owned retirement.
 Any future sandbox-specific control plane ends at that launcher, without reaching the relay or changing its protocol.
 
 ### Worker
@@ -240,8 +244,9 @@ An explicit restart starts its replacement eagerly, including when the session h
 
 For each worker start, the server first constructs the relay target independently of sandboxing.
 The built-in target is the current executable's `worker-relay` command followed by the worker command line; a configured relay is followed directly by the same worker command line.
-The server then constructs an ordinary current-executable command for `sandbox --exit-with-parent <server-pid> -- <relay-target>`, applies the retained environment to it, and configures piped input and output plus inherited error.
-The launcher inherits that environment and those streams and releases the configured relay only after sandbox observation and failure recovery are installed.
+By default, the server then constructs an ordinary current-executable command for `sandbox --exit-with-parent <server-pid> -- <relay-target>`; with `--no-sandbox`, it uses the relay target directly.
+It applies the retained environment and configures piped input and output plus inherited error in either mode.
+In sandboxed mode, the launcher inherits that environment and those streams and releases the configured relay only after sandbox observation and failure recovery are installed.
 The relay creates the worker sideband and standard streams, launches the worker, and forwards its startup events.
 The server admits the worker only after the required readiness exchange succeeds.
 If sandbox setup fails before relay readiness, the launcher writes the detailed infrastructure error to inherited standard error and exits; the server reports a stable relay-startup failure from the closed transport.

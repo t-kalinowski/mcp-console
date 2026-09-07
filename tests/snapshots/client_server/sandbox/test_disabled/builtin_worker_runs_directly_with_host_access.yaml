@@ -48,10 +48,10 @@ result:
         ordering.
 
 
-        Evaluated code can read host files, cannot directly access the network,
-        and can write only in the worker's private temporary directory.
-        Dependency resolution, when available, runs outside the sandbox and may
-        execute installation or build code; use only trusted dependencies.
+        Evaluated code runs without a sandbox, with the server's permissions,
+        including filesystem and network access. Dependency resolution, when
+        available, may execute installation or build code; use only trusted
+        dependencies.
       inputSchema:
         $schema: https://json-schema.org/draft/2020-12/schema
         additionalProperties: false
@@ -133,6 +133,78 @@ result:
             enum:
               - interrupt
               - restart
+          requirements:
+            description: |-
+              Additive R packages, Python packages, or DuckDB extensions to retain for later calls.
+              Requirements alone perform standalone preparation. With one cell, they are preconditions of
+              that cell. With `control = "restart"`, they are part of the restart transaction, with or
+              without a cell. Requirements are not accepted with interrupt unless a cell follows.
+              Preparation does not import, attach, or load dependencies. On a code-bearing call without
+              control, preparation completes before same-call nonempty stdin is queued. Standalone
+              preparation cannot queue nonempty stdin. With restart, failure leaves the current worker
+              unchanged and sends neither stdin nor code. With interrupt and a following cell, signal
+              delivery and stdin enqueue happen before requirements are validated or prepared and are not
+              rolled back if that later work fails. Ordinary CRAN packages used by the built-in R worker need
+              not be declared here; use `requirements.r` to stage packages ahead of evaluation or provide
+              explicit `ir` references. In the built-in managed Python environment, missing imports normally
+              resolve at runtime. Use `requirements.python` to stage a distribution before the cell, provide
+              a version, extra, or marker, or correct automatic inference. Python source is not pre-scanned,
+              and SQL does not trigger package discovery. A cell is not run if explicit preparation fails or
+              further changes require restart. Resolution runs with server permissions and may download
+              packages or extensions or execute installation or build code. Use only trusted requirements.
+            type:
+              - object
+              - "null"
+            properties:
+              duckdb:
+                description: |-
+                  Additive DuckDB extension names for the managed DuckDB backend, for standalone preparation,
+                  preparation before a cell, or a restart transaction, for example `fts`, `spatial`, or `excel`.
+                  JSON and ICU are included in built-in defaults. Names must start with a lowercase ASCII
+                  letter and contain only lowercase ASCII letters, digits, and underscores. The host resolver
+                  uses DuckDB's own `INSTALL`, with DuckDB's default extension repository and
+                  native cache. Preparation does not load extension code; `LOAD` and automatic loading happen
+                  later inside the worker.
+                type: array
+                items:
+                  type: string
+                  minLength: 1
+                  maxLength: 64
+                maxItems: 64
+                default: []
+              r:
+                description: |-
+                  Additive, single-line `ir` package references for standalone preparation, preparation before a
+                  cell, or a restart transaction, for example `data.table`, `sf`, or `yaml12`. Use this field
+                  to stage packages ahead of evaluation or supply an explicit supported remote `ir` reference.
+                  Automatic R discovery accepts only plain package names. An idle worker that implements R
+                  preparation can add requirements without losing live state. Local package sources are
+                  rejected because resolution runs with server permissions.
+                type: array
+                items:
+                  type: string
+                  minLength: 1
+                maxItems: 64
+                default: []
+              python:
+                description: |-
+                  Additive, named PEP 508 registry requirements for standalone preparation, preparation before a
+                  cell, or a restart transaction, for example `polars>=1`, `scikit-learn`, or
+                  `matplotlib; python_version >= '3.10'`. Use explicit requirements when automatic import
+                  inference needs a different distribution, a version, an extra, or an environment marker, or
+                  when the distribution should be prepared before the cell. Automatic imports infer bare
+                  distribution names only. Paths, file URLs, editable requirements, direct references, local
+                  archives, and local projects are rejected. Preparation does not import the package. An idle
+                  server-managed worker may activate compatible additions without losing state. A nonempty
+                  user-selected `RETICULATE_PYTHON` disables automatic resolution and managed Python
+                  requirements.
+                type: array
+                items:
+                  type: string
+                  minLength: 1
+                maxItems: 64
+                default: []
+            additionalProperties: false
           stdin:
             description: |-
               Input for an active read, prompt, or debugger. When responding to active input, omit R, Python,
@@ -165,35 +237,30 @@ result:
             default: 60000
 ---
 send:
-  r: 1 + 1
+  python: |
+    import os
+    from pathlib import Path
+
+    assert Path(os.environ["TMPDIR"]).samefile(Path.cwd())
+    output = Path("host-output")
+    output.write_text("host write succeeded", encoding="utf-8")
+    print(output.read_text(encoding="utf-8"))
 result:
   content:
     - type: text
       text: |
-        [1] 2
+        host write succeeded
   isError: false
 ---
 send:
-  r: |
-    conditionMessage(tryCatch(
-      library(mcpConsoleDefinitelyMissingPackage),
-      error = identity
-    ))
+  control: restart
+  python: print("output" in globals())
 result:
   content:
     - type: text
-      text: |
-        [1] "there is no package called ‘mcpConsoleDefinitelyMissingPackage’"
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        False
+        [done]
   isError: false
----
-send:
-  requirements:
-    r:
-      - praise
-result:
-  content:
-    - type: text
-      text: >-
-        dynamic environment resolution is unavailable; install `ir` or `uv` and
-        restart MCP Console
-  isError: true

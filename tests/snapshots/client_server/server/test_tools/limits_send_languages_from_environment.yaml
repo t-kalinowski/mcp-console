@@ -90,11 +90,11 @@ result:
               them through its connection or cursor protocol. The selected driver supplies its own SQL
               dialect and type mappings. Use DBI from an R cell for commands that require the statement
               interface. Managed DuckDB conveniences and extension requirements apply only to the managed
-              backend. When attaching an existing DuckDB database outside the worker's private temporary
-              directory, use `ATTACH 'path' AS name (READ_ONLY)`; the sandbox blocks DuckDB's default writable
-              mode for those paths. Use `SHOW TABLES`, `DESCRIBE`, `SUMMARIZE`, and `EXPLAIN` for DuckDB
-              discovery. DuckDB CLI dot commands are not supported. Omit this field for polling or stdin-only
-              calls.
+              backend. With the sandbox enabled, use `ATTACH 'path' AS name (READ_ONLY)` for existing DuckDB
+              databases outside the worker's private temporary directory; the sandbox blocks DuckDB's
+              default writable mode for those paths. Use `SHOW TABLES`, `DESCRIBE`, `SUMMARIZE`, and `EXPLAIN`
+              for DuckDB discovery. DuckDB CLI dot commands are not supported. Omit this field for polling
+              or stdin-only calls.
             type:
               - string
               - "null"
@@ -128,9 +128,8 @@ result:
               resolve at runtime. Use `requirements.python` to stage a distribution before the cell, provide
               a version, extra, or marker, or correct automatic inference. Python source is not pre-scanned,
               and SQL does not trigger package discovery. A cell is not run if explicit preparation fails or
-              further changes require restart. Resolution runs outside the worker sandbox and may download
-              packages or extensions or execute installation or build code on the host. Use only trusted
-              requirements.
+              further changes require restart. Resolution runs with server permissions and may download
+              packages or extensions or execute installation or build code. Use only trusted requirements.
             type:
               - object
               - "null"
@@ -141,9 +140,9 @@ result:
                   preparation before a cell, or a restart transaction, for example `fts`, `spatial`, or `excel`.
                   JSON and ICU are included in built-in defaults. Names must start with a lowercase ASCII
                   letter and contain only lowercase ASCII letters, digits, and underscores. The host resolver
-                  uses DuckDB's own `INSTALL` outside the sandbox, with DuckDB's default extension repository and
+                  uses DuckDB's own `INSTALL`, with DuckDB's default extension repository and
                   native cache. Preparation does not load extension code; `LOAD` and automatic loading happen
-                  later inside the sandbox.
+                  later inside the worker.
                 type: array
                 items:
                   type: string

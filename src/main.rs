@@ -35,7 +35,11 @@ mod worker_relay;
 
 fn main() -> ExitCode {
     match cli::Cli::parse().command {
-        cli::Command::Serve { worker, relay } => match run_server(worker, relay) {
+        cli::Command::Serve {
+            worker,
+            relay,
+            no_sandbox,
+        } => match run_server(worker, relay, no_sandbox) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
@@ -74,11 +78,12 @@ fn main() -> ExitCode {
 fn run_server(
     worker: Option<std::path::PathBuf>,
     relay: Option<std::path::PathBuf>,
+    no_sandbox: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    let result = runtime.block_on(server::run(worker, relay));
+    let result = runtime.block_on(server::run(worker, relay, no_sandbox));
     // `server::run` has already joined service and worker shutdown. Tokio's
     // stdout uses a blocking task that cannot be cancelled while the client
     // leaves its output pipe full, so runtime teardown must not wait for it.

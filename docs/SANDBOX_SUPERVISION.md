@@ -3,6 +3,7 @@
 **Status:** Current implementation
 
 This document describes the `mcp-console sandbox` launcher's host-side lifetime ownership for sandboxed worker generations and direct commands.
+`mcp-console serve --no-sandbox` bypasses this launcher and its manager; it supplies no sandbox policy, sandbox-owned private temporary directory, or descendant-cleanup guarantee.
 The broader process and responsibility model remains in [implemented architecture](ARCHITECTURE.md).
 
 ## Lifetime ownership
@@ -102,7 +103,7 @@ The launcher closes the ownership token, waits for manager cleanup, reaps the di
 
 ## Scope
 
-One launcher-owned implementation now serves built-in and custom worker relay generations and direct `mcp-console sandbox` invocations.
+One launcher-owned implementation serves sandboxed built-in and custom worker relay generations and direct `mcp-console sandbox` invocations.
 The server invokes the launcher with the relay command line as its target and has no in-process sandbox construction, manager handle, startup gate, root identity, temporary-directory guard, or manager-recovery state.
 The launcher retains the manager-owned process-group race backstop, with launcher fallback after manager failure, and gates the target before any configured code runs.
 The direct path retains inherited standard streams, uses a dedicated target process group, and supplies the foreground-terminal and signal behavior above.
