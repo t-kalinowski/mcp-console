@@ -35,6 +35,7 @@ impl PythonEnvironment {
         configured: Option<OsString>,
         resolver: crate::resolver::ManagedPythonResolverConfiguration,
         managed_r: Option<&crate::resolver::ManagedR>,
+        on_started: impl FnOnce(crate::resolver::ResolverStopHandle) -> Result<(), String>,
     ) -> Result<Self, String> {
         if let Some(configured) = configured
             && !configured.is_empty()
@@ -42,7 +43,7 @@ impl PythonEnvironment {
         {
             return Ok(Self::UserSelected(configured));
         }
-        let selected = crate::resolver::resolve_python(&[], &resolver, managed_r, |_| Ok(()))?;
+        let selected = crate::resolver::resolve_python(&[], &resolver, managed_r, on_started)?;
         Ok(Self::Managed { selected, resolver })
     }
 
