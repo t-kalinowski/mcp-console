@@ -18,8 +18,11 @@ R plots made with the default device and open Matplotlib figures are returned as
 
 ## Install
 
-MCP Console is currently distributed as native wheels for Apple Silicon and Intel macOS.
-Linux and Windows are not supported yet.
+MCP Console runs on macOS and Linux.
+Linux currently requires `serve --no-sandbox`; Windows is not supported.
+The release workflow builds native wheels for Apple Silicon and Intel macOS and for ARM64 and x86-64 Linux.
+Linux wheels require glibc 2.39 or later; building from source uses the host glibc.
+Linux execution requires kernel 5.11 or later.
 
 A working R installation is required.
 Set `R_HOME` or make `R` discoverable on `PATH`.
@@ -42,6 +45,19 @@ uv tool install mcp-console
 
 mcp-console --help
 mcp-console serve
+```
+
+On Linux, add `--no-sandbox` to the `serve` command:
+
+```sh
+mcp-console serve --no-sandbox
+```
+
+To build and run the current source:
+
+```sh
+cargo build --release
+target/release/mcp-console serve --no-sandbox
 ```
 
 `mcp-console serve` communicates with its MCP client over standard input and output.
@@ -103,9 +119,12 @@ See [Recording and artifacts](https://github.com/t-kalinowski/mcp-console/blob/m
 
 ## Security boundary
 
-Submitted R, Python, and SQL have shell-class capability inside the worker sandbox.
-The worker can read host files, but direct network access and regular-file writes outside its private temporary directory are denied.
+Submitted R, Python, and SQL have shell-class capability.
+With the macOS sandbox enabled, the worker can read host files, but direct network access and regular-file writes outside its private temporary directory are denied.
 This is a process boundary, not a safe evaluator for untrusted code with access to sensitive readable files.
+
+`serve --no-sandbox` runs evaluated code with the server's filesystem and network permissions.
+It supervises the direct relay and worker but does not guarantee cleanup of their descendants after restart, shutdown, or process failure.
 
 The server installs automatically inferred or explicitly declared R and Python packages and DuckDB extensions outside the worker sandbox with server permissions.
 Those operations may access the network and execute installation or build code, so only trusted requirements should be supplied.
@@ -128,7 +147,7 @@ scripts/test --update BOUNDARY/SUITE[::CASE]
 ```
 
 See [AGENTS.md](https://github.com/t-kalinowski/mcp-console/blob/main/AGENTS.md) for development rules and the repository map, and the [boundary test guide](https://github.com/t-kalinowski/mcp-console/blob/main/tests/boundaries/README.md) for test selection and snapshot updates.
-The standalone `mcp-console sandbox -- COMMAND [ARG]...` command is also available for development; [macOS sandbox supervision](https://github.com/t-kalinowski/mcp-console/blob/main/docs/SANDBOX_SUPERVISION.md) defines its lifecycle, terminal behavior, and limitations.
+The standalone `mcp-console sandbox -- COMMAND [ARG]...` command is also available for development on macOS; [macOS sandbox supervision](https://github.com/t-kalinowski/mcp-console/blob/main/docs/SANDBOX_SUPERVISION.md) defines its lifecycle, terminal behavior, and limitations.
 
 ## Documentation
 

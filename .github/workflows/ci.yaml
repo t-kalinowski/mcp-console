@@ -19,9 +19,13 @@ env:
   UV_VERSION: "0.12.4"
 
 jobs:
-  macos:
-    name: macOS (macos-latest)
-    runs-on: macos-latest
+  check:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-24.04]
 
     steps:
       - name: Check out repository
@@ -57,6 +61,7 @@ jobs:
       # The managed R environment can build data.table from source. Its NLS
       # code needs libintl.h in R's /opt/R/<arch> build prefix.
       - name: Install gettext for R source packages
+        if: runner.os == 'macOS'
         run: |
           sudo Rscript --vanilla -e \
             'source("https://mac.R-project.org/bin/install.R"); install.libs("gettext"); stopifnot(file.exists(file.path("/opt/R", Sys.info()[["machine"]], "include", "libintl.h")))'

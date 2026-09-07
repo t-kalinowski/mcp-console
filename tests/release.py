@@ -173,13 +173,17 @@ class ReleaseScriptTests(unittest.TestCase):
             import sys
             import time
 
+            if record := os.environ.get("FAKE_MCP_ARGUMENTS"):
+                with open(record, "a") as stream:
+                    stream.write(json.dumps(sys.argv[1:]) + "\\n")
+
             if sys.argv[1:] == ["--version"]:
                 print("mcp-console 0.0.2")
             elif sys.argv[1:] == ["--help"]:
                 print("mcp-console help")
             elif sys.argv[1:3] == ["sandbox", "--"]:
                 pass
-            elif sys.argv[1:] == ["serve"]:
+            elif sys.argv[1:] in (["serve"], ["serve", "--no-sandbox"]):
                 initialize = json.loads(sys.stdin.readline())
                 print(json.dumps({
                     "jsonrpc": "2.0",
@@ -257,6 +261,30 @@ class ReleaseScriptTests(unittest.TestCase):
         )
         return environment, wheel, cargo_bin
 
+    def test_smoke_linux_wheel_uses_no_sandbox(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            environment, wheel, cargo_bin = self.smoke_environment(directory)
+            linux_wheel = wheel.with_name(
+                "mcp_console-0.0.2-py3-none-manylinux_2_34_x86_64.whl"
+            )
+            wheel.rename(linux_wheel)
+            record = directory / "arguments.jsonl"
+            environment["FAKE_MCP_ARGUMENTS"] = str(record)
+            result = self.run_script(
+                "smoke-wheel",
+                str(linux_wheel),
+                str(cargo_bin),
+                "--target",
+                "x86_64-unknown-linux-gnu",
+                cwd=directory,
+                env=environment,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            arguments = [json.loads(line) for line in record.read_text().splitlines()]
+            self.assertIn(["serve", "--no-sandbox"], arguments)
+            self.assertFalse(any(command[:1] == ["sandbox"] for command in arguments))
+
     def test_smoke_wheel_evaluates_r_and_bounds_response_waits(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)
@@ -315,13 +343,18 @@ class ReleaseScriptTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("MCP response timed out", result.stderr)
 
-    def test_verify_wheel_set_requires_both_macos_architectures(self) -> None:
+    def test_verify_wheel_set_requires_macos_and_linux_architectures(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)
             arm64 = directory / "mcp_console-0.0.2-py3-none-macosx_11_0_arm64.whl"
             x86_64 = directory / "mcp_console-0.0.2-py3-none-macosx_11_0_x86_64.whl"
             arm64.touch()
             x86_64.touch()
+            for architecture in ["aarch64", "x86_64"]:
+                (
+                    directory
+                    / f"mcp_console-0.0.2-py3-none-manylinux_2_39_{architecture}.whl"
+                ).touch()
 
             result = self.run_script("verify-wheel-set", str(directory), cwd=ROOT)
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -329,7 +362,7 @@ class ReleaseScriptTests(unittest.TestCase):
             x86_64.unlink()
             result = self.run_script("verify-wheel-set", str(directory), cwd=ROOT)
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("expected exactly two wheels", result.stderr)
+            self.assertIn("expected exactly four wheels", result.stderr)
 
 
 if __name__ == "__main__":

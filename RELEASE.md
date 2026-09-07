@@ -1,8 +1,9 @@
 # Releasing MCP Console
 
 MCP Console releases are built from tags and published as binary-only PyPI wheels.
-The initial release publishes native Apple Silicon and Intel macOS wheels.
-It does not publish a source distribution, Linux or Windows wheels, or GitHub release archives.
+The release workflow publishes native Apple Silicon and Intel macOS wheels and ARM64 and x86-64 Linux wheels.
+Linux wheels are built on Ubuntu 24.04 and require glibc 2.39 or later.
+It does not publish a source distribution, Windows wheels, or GitHub release archives.
 
 `Cargo.toml` is the package-version source of truth.
 Keep the root `mcp-console` entry in `Cargo.lock` synchronized with it.
@@ -25,7 +26,7 @@ The publication job is the only job granted an OpenID Connect token.
 
 Merge the release metadata with `Cargo.toml` and `Cargo.lock` both at `0.0.2`, then confirm CI passes on `main`.
 
-A manual run of the Release workflow builds and smoke-tests both wheels for inspection but does not publish them.
+A manual run of the Release workflow builds and smoke-tests all four wheels for inspection but does not publish them.
 
 Create the release from a clean, current `main` checkout:
 
@@ -39,7 +40,7 @@ git tag -a v0.0.2 -m "Release v0.0.2"
 git push origin v0.0.2
 ```
 
-The tag-triggered Release workflow verifies that the tag matches `Cargo.toml`, builds both native wheels, install-tests them with `uv`, and publishes them through PyPI Trusted Publishing.
+The tag-triggered Release workflow verifies that the tag matches `Cargo.toml`, builds all four native wheels, install-tests them with `uv`, and publishes them through PyPI Trusted Publishing.
 
 ## Verify the publication
 
@@ -71,6 +72,7 @@ UV_TOOL_BIN_DIR="$bin_dir" \
 ```
 
 Verify these commands on both Apple Silicon and Intel macOS.
+On ARM64 and x86-64 Linux, omit the `sandbox` invocation and add `--no-sandbox` when starting `serve` through an MCP client.
 Also start
 
 ```sh

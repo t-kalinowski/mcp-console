@@ -419,7 +419,9 @@ It must also apply its first managed R library before loading DuckDB; a DuckDB n
 
 ## Host resolution and trust
 
-The worker sandbox denies direct network access and regular writes outside its private temporary directory.
+When enabled on macOS, the worker sandbox denies direct network access and regular writes outside its private temporary directory.
+With `serve --no-sandbox` (required on Linux), evaluated code has the server's filesystem and network permissions.
+The accepted requirement inputs and retained host resolver configuration are the same in both modes.
 Dependency resolution is a deliberate exception to that boundary: the server launches R, Python, and DuckDB resolvers on the host, outside the sandbox.
 
 Host resolvers may access the network and their normal caches.
@@ -462,7 +464,7 @@ Managed-environment creation passes each validated requirement as its own argume
 It removes `UV_NO_CACHE` after restoring the trusted startup snapshot because `uv tool run` deletes a no-cache tool environment when that command exits; Python version inventory and the other resolver calls retain the setting.
 Ordinary Matplotlib cache-warm failures remain best effort, but an interrupt during cache warming fails the preparation before its candidate environment can be committed.
 
-The built-in worker has the opposite network policy: it forces `UV_OFFLINE=1` before user code runs inside the network-denied sandbox.
+The built-in worker has the opposite network policy: it forces `UV_OFFLINE=1` before user code runs, including in `--no-sandbox` mode.
 
 ## Failure atomicity and cache effects
 

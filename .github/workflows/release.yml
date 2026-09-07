@@ -1,6 +1,6 @@
 name: Release
 
-# Build native macOS wheels and publish them to PyPI.
+# Build native macOS and Linux wheels and publish them to PyPI.
 #
 # Releases are tag-driven. A manual workflow run builds artifacts for
 # inspection but does not publish.
@@ -38,6 +38,10 @@ jobs:
             target: aarch64-apple-darwin
           - os: macos-15-intel
             target: x86_64-apple-darwin
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
 
     steps:
       - name: Check out repository
@@ -54,6 +58,7 @@ jobs:
       # The default R environment may build data.table from source. Its NLS code
       # needs libintl.h in R's /opt/R/<arch> build prefix.
       - name: Install gettext for R source packages
+        if: runner.os == 'macOS'
         run: |
           sudo Rscript --vanilla -e \
             'source("https://mac.R-project.org/bin/install.R"); install.libs("gettext"); stopifnot(file.exists(file.path("/opt/R", Sys.info()[["machine"]], "include", "libintl.h")))'

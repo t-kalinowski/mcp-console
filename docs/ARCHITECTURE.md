@@ -9,7 +9,7 @@ The material under `design-sketches/` is future or exploratory design, not evide
 
 ## Process layout
 
-MCP Console has three runtime communication boundaries, one launcher-private manager channel for startup and lifetime ownership of each sandbox, and one host-only resolver path:
+With the macOS sandbox enabled, MCP Console has three runtime communication boundaries, one launcher-private manager channel for startup and lifetime ownership of each sandbox, and one host-only resolver path:
 
 ```text
 MCP client
@@ -43,6 +43,11 @@ worker                                     same sandbox and process group
     └── built-in R, Python, and DuckDB runtime
 ```
 
+`serve --no-sandbox` (required on Linux) connects the server directly to the relay, skipping the launcher, manager, and sandbox root.
+The server creates and owns a temporary directory for each direct relay lifetime and sets `TMPDIR` for the relay and worker.
+The relay still supervises its direct worker; this mode does not isolate filesystem or network access or guarantee descendant cleanup.
+The MCP, relay, and worker protocols and retained environments are unchanged.
+
 The direct development command uses the same launcher implementation without a relay or worker protocol:
 
 ```text
@@ -56,7 +61,7 @@ sandbox-exec root                          macOS sandbox
 ```
 
 The server is the MCP stdio process.
-For each worker lifetime, it constructs either the built-in relay command line or a configured custom relay command line, then starts the current executable as `mcp-console sandbox` in hidden parent-owned mode with that relay as the target.
+For each sandboxed worker lifetime, it constructs either the built-in relay command line or a configured custom relay command line, then starts the current executable as `mcp-console sandbox` in hidden parent-owned mode with that relay as the target.
 The launcher is the server's direct child and the sole host-side sandbox owner.
 It retains the `sandbox-exec` root and manager waitably, while the root first runs a hidden wrapper blocked on a private release channel.
 After the manager reports readiness and manager-failure recovery is installed, the launcher releases the wrapper into the relay.
@@ -134,7 +139,7 @@ The server owns the logical console session and all state that must survive a wo
 
 These responsibilities remain on the host side of the sandbox boundary.
 The server does not execute submitted cells or ask the relay to interpret MCP calls.
-It configures the launcher's piped standard input and output and inherited standard error, closes unrelated inherited descriptors before launcher exec, and knows normal child exit and signaling, but no private directory, startup gate, sandbox root, manager, or manager monitor.
+With sandboxing enabled, it configures the launcher's piped standard input and output and inherited standard error, closes unrelated inherited descriptors before launcher exec, and knows normal child exit and signaling, but no private directory, startup gate, sandbox root, manager, or manager monitor.
 At generation retirement, it first requests graceful shutdown through the relay protocol and waits through the applicable relay deadline.
 It then sends `SIGTERM` to the launcher to request managed retirement and uses a hard launcher kill only as the final fail-safe.
 On normal and owned-retirement paths, successful managed launcher exit is the synchronous cleanup barrier before the server reaps it.
@@ -178,7 +183,8 @@ They forward complete buffered sideband frames but may abandon incomplete frames
 
 The internal `worker-relay` command uses the same stream protocol when launched directly without a sandbox or below another process wrapper.
 Such a direct invocation owns only its direct worker; it supplies no sandbox policy or descendant-cleanup guarantee.
-`serve` currently always uses the bundled sandbox launcher and exposes no unsandboxed server mode.
+`serve --no-sandbox` uses this direct relay ownership model, with the server supervising the relay child and owning its temporary directory.
+Transport failures still retire the generation; direct relay exit is not a sandbox cleanup acknowledgment.
 An alternative launcher must provide the process-lifetime contract described in [sandbox supervision](SANDBOX_SUPERVISION.md), including cleanup before successful owned retirement.
 Any future sandbox-specific control plane ends at that launcher, without reaching the relay or changing its protocol.
 
@@ -232,7 +238,9 @@ An explicit restart starts its replacement eagerly, including when the session h
 
 For each worker start, the server first constructs the relay target independently of sandboxing.
 The built-in target is the current executable's `worker-relay` command followed by the worker command line; a configured relay is followed directly by the same worker command line.
-The server then constructs an ordinary current-executable command for `sandbox --exit-with-parent <server-pid> -- <relay-target>`, applies the retained environment to it, and configures piped input and output plus inherited error.
+With sandboxing enabled, the server constructs an ordinary current-executable command for `sandbox --exit-with-parent <server-pid> -- <relay-target>`.
+With `--no-sandbox`, it launches the relay target directly in a new process group.
+Both modes apply the retained environment and configure piped input and output plus inherited error.
 The launcher inherits that environment and those streams and releases the configured relay only after sandbox observation and failure recovery are installed.
 The relay creates the worker sideband and standard streams, launches the worker, and forwards its startup events.
 The server admits the worker only after the required readiness exchange succeeds.
@@ -398,6 +406,8 @@ This includes a server working directory that cannot be represented as UTF-8 bec
 
 ## Platform support
 
-The implemented sandbox command, relay, built-in worker, and managed resolvers are supported only on macOS.
-The complete CI check runs on macOS.
-Linux and Windows have unsupported-platform paths but no working execution stack yet.
+The relay, built-in worker, and managed resolvers support macOS and Linux.
+Linux requires `serve --no-sandbox` and kernel 5.11 or later for `close_range(CLOSE_RANGE_CLOEXEC)`.
+The server uses blocking `poll` on Linux and `kqueue` on macOS for startup input-closure observation.
+CI runs core checks and the applicable transcript cases on both platforms.
+The sandbox command remains macOS-only, and Windows has no working execution stack.
