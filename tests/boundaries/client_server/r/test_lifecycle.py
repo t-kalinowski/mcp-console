@@ -66,24 +66,31 @@ def test_restarts_after_r_worker_segfault(binary: Path) -> Transcript:
     client.initialize_and_list_tools()
     client.send(r="r_worker_marker <- TRUE")
 
-    # Ask R's fatal-signal handler to abort after reporting the crash.
+    # Observe R's fatal-signal menu before choosing to abort.
     # fmt: r
     r = code(r"""
         tools::pskill(Sys.getpid(), signal = 11L)
         """)
-    client.send(r=r, stdin="1\n")
-    result = client.transcript[-1]["result"]
-    assert result["isError"] is True
-    fatal_output = result["content"][0]["text"]
+    client.send(r=r)
+    fatal_output = last_tool_text(client)
     assert "Possible actions:\n1: abort (with core dump, if enabled)\n" in fatal_output
     assert fatal_output.endswith(
-        '[input requested: "Selection: "]\nR is aborting now ...\n'
+        '[input requested: "Selection: "]\n[waiting for stdin]'
+    ), repr(fatal_output)
+
+    wait_for_evaluation_output(
+        client,
+        "R is aborting now ...\n"
         "[worker sideband read failed: worker sideband closed]\n"
         "[worker terminated by signal 11]\n"
         "[worker stopped: in-memory state lost]\n"
         "[starting new worker]\n"
-        "[idle]"
-    ), repr(fatal_output)
+        "[idle]",
+        "R fatal-signal abort and replacement",
+        expected_error=True,
+        completion_timeout_seconds=60,
+        stdin="1\n",
+    )
 
     client.send(r='exists("r_worker_marker", inherits = FALSE)')
     assert last_tool_text(client) == "[1] FALSE\n"
