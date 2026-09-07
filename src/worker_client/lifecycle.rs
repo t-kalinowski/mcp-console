@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use super::environment::{Environment, RequirementDelta, ResolvedEnvironment};
+use super::environment::{Environment, RequirementDelta};
 use super::evaluation::{EvaluationReservation, RestartDelivery};
 use super::output::{Response, ResponseAcknowledgment, SendFailure};
 use super::{Client, WorkerRetirement, WorkerRetirementFailure, WorkerState, platform};
@@ -434,7 +434,7 @@ impl Client {
         expected: &WorkerGeneration,
         grace: Duration,
         environment: &mut Environment,
-        resolved: ResolvedEnvironment,
+        resolved: Environment,
         control: Option<&ControlledSendAdmission>,
     ) -> Result<RestartContext, String> {
         let mut evaluation = self.evaluation()?;
@@ -467,15 +467,7 @@ impl Client {
             .take()
             .map(|active| active.evaluation.reserve_for_restart())
             .transpose()?;
-        if let Some(managed_python) = resolved.managed_python {
-            environment
-                .python
-                .as_mut()
-                .ok_or_else(|| "managed Python environment is unavailable".to_string())?
-                .replace_managed(managed_python)?;
-        }
-        environment.r = resolved.managed_r;
-        environment.duckdb_extensions = resolved.duckdb_extensions;
+        *environment = resolved;
         let (processes, deadline, generation) =
             lifecycle.start_restart(grace, OldGenerationCommitDisposition::DiscardForReplacement);
         Ok(RestartContext {
@@ -824,8 +816,12 @@ impl Client {
             }
             LifecycleState::Ready
                 if lifecycle.processes.worker.is_none()
-                    && lifecycle.processes.resolver.is_some() =>
+                    && lifecycle.processes.resolver.is_some()
+                    && self.0.preparation.try_read().is_err() =>
             {
+                // Explicit preconditions own preparation admission. A resolver
+                // preparing lazy worker startup belongs to the operation that
+                // restart is retiring, even before a worker process exists.
                 return Err("requirement preparation is still running".to_string());
             }
             LifecycleState::Ready => {}
@@ -1014,7 +1010,9 @@ impl Client {
                 .lock()
                 .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
             match lifecycle.state {
-                LifecycleState::Ready if lifecycle.generation.is(expected) => {
+                LifecycleState::Ready | LifecycleState::Restarting { .. }
+                    if lifecycle.generation.is(expected) =>
+                {
                     lifecycle.processes.resolver = Some(handle.clone());
                     return Ok(());
                 }
@@ -1036,7 +1034,10 @@ impl Client {
             .lifecycle
             .lock()
             .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
-        if (lifecycle.state == LifecycleState::Ready && lifecycle.generation.is(expected))
+        if (matches!(
+            lifecycle.state,
+            LifecycleState::Ready | LifecycleState::Restarting { .. }
+        ) && lifecycle.generation.is(expected))
             || matches!(lifecycle.state, LifecycleState::ShuttingDown { .. })
         {
             lifecycle.processes.resolver = None;
@@ -1082,7 +1083,6 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::worker_client::RResolver;
     use crate::worker_client::evaluation::EvaluationWait;
     use crate::worker_client::output::{Content, SendResponse, render_response};
     use crate::worker_protocol::ConsoleChannel;
@@ -1094,7 +1094,6 @@ mod tests {
             Vec::new(),
             None,
             None,
-            RResolver::Discover,
         );
         let evaluation = Arc::new(super::super::Evaluation::new(
             crate::transcript::Transcript::new(true),
@@ -1143,7 +1142,6 @@ mod tests {
             Vec::new(),
             None,
             None,
-            RResolver::Discover,
         );
         let evaluation = Arc::new(super::super::Evaluation::new(
             crate::transcript::Transcript::new(true),

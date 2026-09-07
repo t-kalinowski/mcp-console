@@ -1,0 +1,32 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  r: startup_cell_ran <- TRUE
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running; poll with an empty send]
+  isError: false
+---
+send:
+  control: interrupt
+  timeout_ms: 30000
+result:
+  content:
+    - type: text
+      text: "[R package resolution failed with exit status: 130: ]"
+  isError: true
+---
+send:
+  r: exists("startup_cell_ran", inherits = FALSE)
+  timeout_ms: 600000
+result:
+  content:
+    - type: text
+      text: |
+        [1] FALSE
+  isError: false

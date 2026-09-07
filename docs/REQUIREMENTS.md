@@ -23,7 +23,7 @@ The sets are additive.
 Repeating an accepted requirement is idempotent, and a restart reuses everything retained so far, including R packages and Python distributions resolved automatically during earlier cells.
 The current API has no operation to remove a requirement, replace a manifest, select a named environment, or persist the retained configuration across server processes.
 
-The built-in server prepares these defaults before accepting MCP input:
+The built-in server prepares these defaults when an operation first needs an environment:
 
 | Environment | Defaults                                                                             |
 | ----------- | ------------------------------------------------------------------------------------ |
@@ -31,16 +31,22 @@ The built-in server prepares these defaults before accepting MCP input:
 | Python      | NumPy and pandas when Python is server-managed                                       |
 | DuckDB      | ICU and JSON extensions                                                              |
 
-These defaults apply when startup establishes an `ir` resolver from `ir` on `PATH`, `uv` on `PATH`, an explicit `uv` selection, or ambient reticulate.
+These defaults apply when startup finds a resolver bootstrap from `ir` on `PATH`, `uv` on `PATH`, an explicit `uv` selection, or ambient reticulate.
 Server-managed Python additionally needs `uv`; when only `ir` is on `PATH`, the resolved reticulate installation supplies it.
 If no resolver bootstrap is available, the built-in server retains no managed environment, exposes no `requirements` field, and starts a bare runtime from the packages already available to R, reticulate, and DuckDB.
 R, Python, and SQL cells remain available, with ordinary R missing-package errors and explicit unavailable-adapter diagnostics where appropriate.
 
-MCP Console applies no deadline to startup discovery or these preflights, which run before the MCP transport starts.
-When MCP standard input is a pipe or socket, closing its write end requests startup cancellation; the server stops the active resolver process group and waits for its direct resolver child to exit.
-The startup watcher does not consume buffered MCP input.
-File and device EOF is handled by the normal transport after startup.
-MCP control requests, including `send(control = "interrupt")`, are unavailable until startup finishes.
+Before starting the MCP transport, the server locates R and detects resolver capability without installing packages or invoking `ir`.
+When ambient reticulate supplies the bootstrap, this probe loads its namespace and checks that its `uv_binary` function exists; it does not call that function.
+These probes have no deadline.
+Closing a pipe or socket used for MCP standard input cancels an active probe and retires its resolver process group without consuming buffered MCP input.
+
+`initialize`, `tools/list`, empty polls, and control-only interrupts do not prepare the defaults.
+An ordinary first cell prepares them after evaluation admission, so `timeout_ms` can return a running response while installation continues.
+Explicit requirements prepare the defaults and additions together before the cell's evaluation wait; standalone preparation does not start a worker.
+Restart and idle nonempty stdin also prepare the defaults when they start the first worker.
+The MCP transport remains available during this preparation: interrupt targets the active resolver, and closing MCP input cancels it during server shutdown.
+A failed or cancelled preparation leaves the initial environment pending for a later attempt; resolver cache effects may remain.
 
 Host resolution for changed requirements submitted through `send` also has no deadline.
 The call remains pending until the resolver exits; while MCP input is open, `send(control = "interrupt")` sends `SIGINT` to the active resolver, and closing MCP input cancels it during server shutdown.
@@ -48,7 +54,7 @@ The call remains pending until the resolver exits; while MCP input is open, `sen
 Packages supplied by these environments are available but are not attached or imported automatically.
 The default DuckDB extensions are installed in DuckDB's native cache but are loaded only when DuckDB needs them inside the sandbox.
 
-A custom worker skips all three default preflights.
+A custom worker skips all three default preparations.
 Its more limited requirements contract is described under [Custom workers](#custom-workers).
 
 ## Requirements for a cell
@@ -334,10 +340,11 @@ The `uv` path may download `r-lib-ir`; remote package installation and build cod
 
 When `ir` is the only command on `PATH` and managed Python is selected, the server first resolves the default R library, then runs a fixed `reticulate:::uv_binary()` program through that library's exact `Rscript`.
 The resulting `uv` executable becomes the session's managed-Python resolver.
-When neither command is on `PATH`, the server runs the same fixed program directly through the selected ambient R installation.
+When neither command is on `PATH`, the server checks the selected ambient R installation for this capability before accepting MCP input and invokes it during first-use preparation.
 A usable ambient reticulate can bootstrap `uv`, which then supplies `ir`.
 If reticulate or that capability is absent, the server enters bare mode.
-An installed reticulate namespace or bootstrap that fails unexpectedly is a startup error rather than permission to mask the broken installation.
+An installed reticulate namespace that fails to load is a startup error.
+A selected bootstrap that later fails reports an operation error; it does not change the advertised requirements capability to bare mode.
 
 ### Python
 
@@ -376,7 +383,7 @@ The built-in server reads inherited `RETICULATE_PYTHON` when it starts:
 - any other nonempty value selects that existing Python environment.
 
 A user-selected environment is preserved for the worker.
-The server skips its managed-Python preflight and rejects Python additions from every `send` call shape, automatic imports, or other worker-originated managed-resolution requests.
+The server skips managed-Python preparation and rejects Python additions from every `send` call shape, automatic imports, or other worker-originated managed-resolution requests.
 R requirements and DuckDB extensions remain available.
 The selected interpreter must still satisfy the [built-in runtime](BUILTIN_RUNTIME.md) requirement for Python 3.10 or later and must initialize under the worker's offline policy.
 Imports already available in the selected environment work normally.
@@ -388,7 +395,7 @@ A custom worker always rejects managed Python requirements, regardless of `RETIC
 ## Bare runtime
 
 Bare mode is selected only when no resolver bootstrap is available from `ir` on `PATH`, `uv` on `PATH`, an explicit `uv` selection, or ambient reticulate.
-The server skips the default R, Python, and DuckDB preflights.
+The server skips default R, Python, and DuckDB preparation.
 The `send` schema retains R, Python, and SQL cells but omits `requirements`; a manually supplied requirements payload is also rejected.
 Automatic R wrappers and the Python import resolver callback are disabled.
 Installed packages and ambient language adapters continue to work.
@@ -441,7 +448,7 @@ An explicit `RETICULATE_UV` startup value is retained.
 Otherwise the server selects `uv` from `PATH`, from the managed R library's reticulate installation, or from ambient reticulate.
 Direct Python version inventory and managed-environment creation receive that stable selection.
 When `RETICULATE_UV=managed`, the server resolves reticulate's managed executable and uses that same executable, cache directory, and Python installation directory for direct version inventory.
-The reticulate bootstrap probe receives `RETICULATE_UV=managed`, so reticulate validates or installs its managed `uv` rather than recursively selecting an absent `PATH` command.
+The reticulate bootstrap invocation receives `RETICULATE_UV=managed`, so reticulate validates or installs its managed `uv` rather than recursively selecting an absent `PATH` command.
 When the server starts, it captures inherited `UV_*` variables except `UV_OFFLINE`.
 Before each managed-Python or bootstrap resolver starts, it removes the current `UV_*` environment, restores that startup snapshot, and removes `UV_OFFLINE`.
 Changes made later by evaluated R or Python code therefore cannot configure host resolution.

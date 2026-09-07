@@ -84,8 +84,23 @@ impl RequirementDelta {
         environment: &Environment,
         requirements: Requirements,
     ) -> Result<Self, String> {
-        let Requirements { duckdb, python, r } = requirements;
+        let Requirements {
+            mut duckdb,
+            python,
+            r,
+        } = requirements;
         ensure_python_additions_available(environment, &python)?;
+        let pending = match &environment.r_resolver {
+            super::super::RResolver::Pending(setup) => Some(setup),
+            _ => None,
+        };
+        if pending.is_some() {
+            duckdb.extend(
+                super::super::DEFAULT_DUCKDB_EXTENSIONS
+                    .iter()
+                    .map(|name| (*name).to_string()),
+            );
+        }
 
         let duckdb_additions = duckdb.into_iter().collect::<BTreeSet<_>>();
         let duckdb_changed = !duckdb_additions.is_subset(&environment.duckdb_extensions);
@@ -96,13 +111,20 @@ impl RequirementDelta {
             .collect();
 
         let python_additions = python.into_iter().collect::<BTreeSet<_>>();
-        let python_candidate = merge_python_requirements(
+        let mut python_candidate = merge_python_requirements(
             environment
                 .python
                 .as_ref()
                 .and_then(PythonEnvironment::managed),
             python_additions.iter().cloned().collect(),
         );
+        if python_candidate.is_none()
+            && pending.is_some_and(|setup| {
+                PythonEnvironment::uses_managed(setup.configured_python.as_deref())
+            })
+        {
+            python_candidate = Some(crate::worker_protocol::default_python_requirement_manifest());
+        }
 
         let (r_requirements, r_changed) = merge_r_requirements(environment, r);
 
@@ -126,6 +148,13 @@ pub(super) fn merge_r_requirements(
     additions: Vec<String>,
 ) -> (Vec<String>, bool) {
     let mut additions = additions.into_iter().collect::<BTreeSet<_>>();
+    if matches!(environment.r_resolver, super::super::RResolver::Pending(_)) {
+        additions.extend(
+            super::super::DEFAULT_R_REQUIREMENTS
+                .iter()
+                .map(|requirement| (*requirement).to_string()),
+        );
+    }
     if environment.custom_worker {
         additions.extend(
             super::super::CUSTOM_DUCKDB_R_REQUIREMENTS
