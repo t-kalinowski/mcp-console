@@ -71,6 +71,12 @@ jobs:
         with:
           components: clippy, rustfmt
 
+      - name: Install Linux resolver build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libcurl4-openssl-dev
+
       - name: Select R cache epoch
         id: cache-epoch
         run: printf 'value=%s\n' "$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
