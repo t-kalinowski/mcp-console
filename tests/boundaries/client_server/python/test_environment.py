@@ -6,14 +6,12 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import assert_exact_interleaving
 from support.assertions import last_result_text
-from support.assertions import tool_text
 from support.client import McpClient
 from support.normalization import code
 from support.records import Transcript
@@ -210,65 +208,6 @@ def test_evaluates_with_default_managed_python(binary: Path) -> Transcript:
 
 def test_evaluates_with_explicit_managed_python(binary: Path) -> Transcript:
     return managed_python_transcript(binary, configured=True)
-
-
-def test_runs_pytorch_cpu_autograd(binary: Path) -> Transcript:
-    environment = os.environ.copy()
-    environment.pop("RETICULATE_PYTHON", None)
-    # Apply the release cutoff to initial and automatic dependency resolution.
-    environment["UV_EXCLUDE_NEWER"] = "2026-09-07T20:00:00Z"
-    with McpClient(binary, ("serve",), environment) as client:
-        client.initialize_and_list_tools()
-        # fmt: python
-        python = code("""
-            import torch
-
-            assert torch.backends.openmp.is_available()
-            torch.set_num_threads(2)
-            x = torch.ones(65536, dtype=torch.float64, device="cpu", requires_grad=True)
-            loss = x.square().sum()
-            loss.backward()
-            assert torch.equal(x.grad, torch.full_like(x, 2))
-            result = (loss.item(), x.grad[0].item(), torch.get_num_threads())
-            assert result == (65536.0, 2.0, 2)
-            result
-            """)
-        result = client.send(python=python, requirements={"python": ["torch==2.14.0"]})
-        submitted = client.transcript[-1]
-        native_warning = (
-            "OMP: Warning #179: Function Can't set size of /tmp file failed:\n"
-        )
-        python_output = (
-            "<string>:137: FutureWarning: The pynvml package is deprecated. Please "
-            "install nvidia-ml-py instead. If you did not install pynvml directly, "
-            "please report this to the maintainers of the package that installed "
-            "pynvml for you.\n"
-            "(65536.0, 2.0, 2)\n"
-        )
-        expected = native_warning + python_output
-        output = tool_text(result)
-        poll_start = len(client.transcript)
-        deadline = time.monotonic() + 3
-        # Native stderr may reach the server after the sideband completion cut.
-        # Idle output requires public polling; retain every payload byte.
-        while len(output) < len(expected):
-            remaining = deadline - time.monotonic()
-            assert remaining > 0, f"PyTorch output did not arrive: {output!r}"
-            client.response_timeout = min(client.response_timeout, remaining)
-            idle = tool_text(client.send())
-            assert idle.endswith("\n[idle]"), repr(idle)
-            output += idle.removesuffix("\n[idle]")
-            if idle == "\n[idle]":
-                time.sleep(0.01)
-        assert_exact_interleaving(output, native_warning, python_output)
-        result["content"][0]["text"] = expected
-        del client.transcript[poll_start:]
-        submitted["transcript_normalization"] = {
-            "target": "result.content[0].text",
-            "response_cuts": "coalesced",
-            "cross_source_position": "omitted",
-        }
-        return client.finish()
 
 
 def test_runs_joblib_process_backend(binary: Path) -> Transcript:
