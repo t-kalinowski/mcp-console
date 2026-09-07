@@ -4,6 +4,11 @@
 #' an [ellmer::ToolDef]. The server process and its persistent R, Python, and
 #' DuckDB state live as long as the returned tool remains reachable.
 #'
+#' When the tool is garbage collected, it closes the server's input to request
+#' shutdown and waits up to 15 seconds before forcibly stopping the server.
+#' The sandbox manager owns cleanup of worker descendants; the R wrapper's
+#' fallback targets only the server process.
+#'
 #' @section Executable resolution:
 #'
 #' * If `path` is supplied, `console_tool()` uses that executable directly.
@@ -214,8 +219,8 @@ new_mcp_client <- function(binary) {
     stdin = "|",
     stdout = "|",
     stderr = client$errors,
-    cleanup = TRUE,
-    cleanup_tree = TRUE,
+    cleanup = FALSE,
+    cleanup_tree = FALSE,
     encoding = "UTF-8"
   )
   client$id <- 1L
@@ -227,13 +232,23 @@ new_mcp_client <- function(binary) {
 
 close_mcp_client <- function(client) {
   process <- client$process
+  on.exit(suspendInterrupts({
+    if (!is.null(process)) {
+      try(
+        if (process$is_alive()) {
+          ps::ps_send_signal(process$as_ps_handle(), 9L)
+        },
+        silent = TRUE
+      )
+      try(process$wait(1000), silent = TRUE)
+    }
+    unlink(client$errors)
+  }))
   client$process <- NULL
   if (!is.null(process)) {
     try(close(process$get_input_connection()), silent = TRUE)
-    try(process$wait(1000), silent = TRUE)
-    try(if (process$is_alive()) process$kill_tree(), silent = TRUE)
+    try(process$wait(15000), silent = TRUE)
   }
-  unlink(client$errors)
   invisible()
 }
 
