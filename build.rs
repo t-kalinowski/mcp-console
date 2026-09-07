@@ -39,6 +39,12 @@ fn bind_private_runner() {
         Some(revision),
         "private sandbox runner source pin changed; run scripts/stage-sandbox-runner"
     );
+    let target = std::env::var("TARGET").expect("Cargo did not provide its build target");
+    assert_eq!(
+        build["target"].as_str(),
+        Some(target.as_str()),
+        "private sandbox runner target does not match Cargo TARGET; run scripts/stage-sandbox-runner --target {target}"
+    );
     let bytes = std::fs::read(&runner_path)
         .expect("private sandbox runner is unavailable; run scripts/stage-sandbox-runner");
     let digest = Sha256::digest(bytes);

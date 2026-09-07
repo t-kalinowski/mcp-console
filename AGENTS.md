@@ -31,7 +31,7 @@ The sandbox command, worker relay, and built-in worker are supported on macOS.
 Linux and Windows are not supported yet.
 CI runs the complete check on macOS.
 
-Build the pinned private sandbox executable with `scripts/stage-sandbox-runner` before the first macOS Cargo build or after changing `sandbox-runner.json`; see `RELEASE.md` for the source checkout and toolchain.
+Build the pinned private sandbox executable with `scripts/stage-sandbox-runner` before the first macOS Cargo build or after changing `sandbox-runner.json` or the Cargo target; see `RELEASE.md` for the source checkout and toolchain.
 Run commands from the repository root:
 
 ```text

@@ -16,10 +16,12 @@ Build and stage it from a clean checkout at that commit before building MCP Cons
 scripts/stage-sandbox-runner ~/github/t-kalinowski/codex
 ```
 
-The script builds with the pinned toolchain and lockfile, stages the executable at `target/private-wheel-data/data/libexec/mcp-console-sandbox`, and records its source revision and SHA-256 in `target/sandbox-runner-build.json`.
-Use `--target aarch64-apple-darwin` or `--target x86_64-apple-darwin` when building for an explicit target.
+The script builds with the pinned toolchain and lockfile, stages the executable at `target/private-wheel-data/data/libexec/mcp-console-sandbox`, and records its source revision, target triple, and SHA-256 in `target/sandbox-runner-build.json`.
+By default it builds for the pinned compiler's native target, passing that target explicitly to Cargo.
+Use `--target aarch64-apple-darwin` or `--target x86_64-apple-darwin` when building for an explicit target; inherited Cargo default-target settings do not change this selection.
 The source checkout remains unchanged.
-MCP Console's build verifies the staged revision and digest and binds the runner's digest and protocol version into the executable.
+MCP Console's build verifies the staged revision, target, and digest and binds the runner's digest and protocol version into the executable.
+Stage the runner again for the intended target before changing MCP Console's build target.
 Cargo builds also copy the verified executable into the target prefix's `libexec` directory, so binaries in `debug`, `release`, and custom profile directories use the same relative lookup as installed wheels.
 Sandbox launches reject a missing or mismatched private runner.
 

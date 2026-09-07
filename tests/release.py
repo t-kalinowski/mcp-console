@@ -541,6 +541,16 @@ class ReleaseScriptTests(unittest.TestCase):
                 """,
             )
             write_executable(
+                commands / "rustc",
+                """
+                #!/usr/bin/env python3
+                import sys
+
+                assert sys.argv[1:] == ["+1.95.0", "--print", "host-tuple"]
+                print("aarch64-apple-darwin")
+                """,
+            )
+            write_executable(
                 commands / "cargo",
                 """
                 #!/usr/bin/env python3
@@ -550,8 +560,9 @@ class ReleaseScriptTests(unittest.TestCase):
                 from pathlib import Path
 
                 Path(os.environ["FAKE_CARGO_ARGUMENTS"]).write_text(json.dumps(sys.argv[1:]))
-                output = Path(os.environ["CARGO_TARGET_DIR"]) / "aarch64-apple-darwin" / "release"
-                output.mkdir(parents=True)
+                target = sys.argv[sys.argv.index("--target") + 1] if "--target" in sys.argv else os.environ["CARGO_BUILD_TARGET"]
+                output = Path(os.environ["CARGO_TARGET_DIR"]) / target / "release"
+                output.mkdir(parents=True, exist_ok=True)
                 (output / "mcp-console-sandbox").write_bytes(b"runner bytes")
                 """,
             )
@@ -561,34 +572,51 @@ class ReleaseScriptTests(unittest.TestCase):
                     "PATH": f"{commands}{os.pathsep}{environment['PATH']}",
                     "FAKE_SOURCE_REVISION": pin["commit"],
                     "FAKE_CARGO_ARGUMENTS": str(directory / "cargo.json"),
+                    "CARGO_BUILD_TARGET": "x86_64-apple-darwin",
                 }
             )
             command = [
                 sys.executable,
                 str(scripts / STAGE_SCRIPT.name),
                 str(checkout),
-                "--target",
-                "aarch64-apple-darwin",
             ]
-            result = subprocess.run(
-                command, env=environment, capture_output=True, text=True
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(
-                json.loads((directory / "cargo.json").read_text()),
-                [
-                    "+1.95.0",
-                    "build",
-                    "--locked",
-                    "--release",
-                    "-p",
-                    "codex-mcp-console-sandbox",
-                    "--bin",
-                    "mcp-console-sandbox",
-                    "--target",
-                    "aarch64-apple-darwin",
-                ],
-            )
+            for arguments, target in (
+                ([], "aarch64-apple-darwin"),
+                (["--target", "x86_64-apple-darwin"], "x86_64-apple-darwin"),
+            ):
+                with self.subTest(target=target):
+                    result = subprocess.run(
+                        command + arguments,
+                        env=environment,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(
+                        json.loads((directory / "cargo.json").read_text()),
+                        [
+                            "+1.95.0",
+                            "build",
+                            "--locked",
+                            "--release",
+                            "-p",
+                            "codex-mcp-console-sandbox",
+                            "--bin",
+                            "mcp-console-sandbox",
+                            "--target",
+                            target,
+                        ],
+                    )
+                    self.assertEqual(
+                        json.loads(
+                            (root / "target/sandbox-runner-build.json").read_text()
+                        ),
+                        {
+                            "source_revision": pin["commit"],
+                            "target": target,
+                            "sha256": hashlib.sha256(b"runner bytes").hexdigest(),
+                        },
+                    )
             data = root / "target" / "private-wheel-data" / "data"
             runner = data / "libexec" / "mcp-console-sandbox"
             self.assertEqual(runner.read_bytes(), b"runner bytes")
@@ -596,13 +624,6 @@ class ReleaseScriptTests(unittest.TestCase):
             self.assertEqual(
                 (data / "share/licenses/mcp-console/Codex-LICENSE").read_text(),
                 "license\n",
-            )
-            self.assertEqual(
-                json.loads((root / "target/sandbox-runner-build.json").read_text()),
-                {
-                    "source_revision": pin["commit"],
-                    "sha256": hashlib.sha256(b"runner bytes").hexdigest(),
-                },
             )
             (directory / "cargo.json").unlink()
             for changes in (
