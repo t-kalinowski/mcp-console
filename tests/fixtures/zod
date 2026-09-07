@@ -865,7 +865,7 @@ def main() -> None:
                 assert stream.read(1) == b"x"
             writer.write('{"kind":"console_output"')
             writer.flush()
-            publish_marker(temporary / "zod-sideband-partial-tail-written")
+            emit_test_event(0, "partial_sideband_written")
             os._exit(86)
 
         if source == "wait after readable frame and partial tail":
