@@ -58,6 +58,16 @@ def test_rejects_unsolicited_status_137_after_fatal(binary: Path) -> Transcript:
     return transcript
 
 
+def test_rejects_unsolicited_sigterm_without_sandbox(binary: Path) -> Transcript:
+    client = ServerRelayClient(binary, "fatal_sigterm", no_sandbox=True)
+    failed = client.client.start_send(r="42")
+    transcript = client.release_terminal_failure(failed, "scripted relay failure")
+    output = failed["result"]["content"][0]["text"]
+    assert "worker launcher terminated by signal 15" in output, output
+    assert "[starting new worker]" not in output, output
+    return transcript
+
+
 def test_rejects_truncated_output(binary: Path) -> Transcript:
     client = ServerRelayClient(binary, "truncated")
     failed = client.client.start_send(r="42")

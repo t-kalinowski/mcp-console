@@ -165,7 +165,19 @@ def test_send_timeout_starts_after_blocked_requirements_resolver(
 def test_stdin_forwarding_failure_does_not_execute_cell(
     binary: Path,
 ) -> Transcript:
-    client = ServerRelayClient(binary, "stdin_forwarding_failure")
+    return _stdin_forwarding_failure(binary, no_sandbox=False)
+
+
+def test_recovers_from_stdin_forwarding_failure_without_sandbox(
+    binary: Path,
+) -> Transcript:
+    return _stdin_forwarding_failure(binary, no_sandbox=True)
+
+
+def _stdin_forwarding_failure(binary: Path, *, no_sandbox: bool) -> Transcript:
+    client = ServerRelayClient(
+        binary, "stdin_forwarding_failure", no_sandbox=no_sandbox
+    )
     client.start_worker()
     relay_root = client.relay_root()
     capture_path = relay_root / CAPTURE_NAME

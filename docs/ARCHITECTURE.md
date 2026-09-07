@@ -142,6 +142,7 @@ At generation retirement, it first requests graceful shutdown through the relay 
 In sandboxed mode, it then sends `SIGTERM` to the launcher to request managed retirement and uses a hard launcher kill only as the final fail-safe.
 On normal and owned-retirement paths, successful managed launcher exit is the synchronous cleanup barrier before the server reaps it.
 With `--no-sandbox`, the server owns and reaps the relay directly; no manager supplies descendant cleanup.
+After the relay deadline, the server accepts termination from its own successful `SIGTERM` request as completed direct retirement.
 
 ### Sandbox launcher
 

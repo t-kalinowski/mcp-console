@@ -4,6 +4,7 @@ import base64
 import json
 import os
 import select
+import signal
 import sys
 import time
 from pathlib import Path
@@ -1117,7 +1118,7 @@ def run_fatal(relay: ScriptedRelay) -> None:
     )
 
 
-def run_fatal_status_137(relay: ScriptedRelay) -> None:
+def run_fatal_exit(relay: ScriptedRelay) -> None:
     relay.ready()
     command = relay.receive()
     if command.get("kind") == "shutdown":
@@ -1129,6 +1130,8 @@ def run_fatal_status_137(relay: ScriptedRelay) -> None:
     command = relay.receive()
     assert command.get("kind") == "shutdown", command
     relay.send({"kind": "shutdown_started"})
+    if os.environ[SCENARIO_ENV] == "fatal_sigterm":
+        os.kill(os.getpid(), signal.SIGTERM)
     raise SystemExit(137)
 
 
@@ -1220,7 +1223,8 @@ def main() -> None:
         "completion_before_r_activation": run_completion_before_r_activation,
         "cancelled_waiting_send": run_cancelled_waiting_send,
         "fatal": run_fatal,
-        "fatal_status_137": run_fatal_status_137,
+        "fatal_status_137": run_fatal_exit,
+        "fatal_sigterm": run_fatal_exit,
         "truncated": run_truncated,
         "exit_zero": run_exit_zero,
         "exit_nonzero": run_exit_nonzero,

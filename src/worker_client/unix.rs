@@ -68,6 +68,7 @@ struct RelayProcess {
     reaped: bool,
     ready_committed: bool,
     relay_exit_recovery_expected: bool,
+    retirement_requested: bool,
     retirement: Option<Result<(), String>>,
 }
 
@@ -301,6 +302,7 @@ impl RelayProcess {
             reaped: false,
             ready_committed: false,
             relay_exit_recovery_expected: false,
+            retirement_requested: false,
             retirement: None,
         })
     }
@@ -337,6 +339,8 @@ impl RelayProcess {
                     "failed to request worker launcher retirement: {error}"
                 ));
             }
+        } else {
+            self.retirement_requested = true;
         }
         collected_errors(errors)
     }
@@ -440,8 +444,12 @@ impl RelayProcess {
         // A direct relay's exit is redundant when its EOF established the
         // worker failure. A launcher still owes cleanup; only its documented
         // status 137 recovery is redundant after that same relay failure.
+        // A direct relay also terminates normally under our own SIGTERM request.
         if !self.ready_committed
             || status.success()
+            || self.no_sandbox
+                && self.retirement_requested
+                && status.signal() == Some(libc::SIGTERM)
             || self.relay_exit_recovery_expected
                 && (self.no_sandbox || status.code() == Some(128 + libc::SIGKILL))
         {

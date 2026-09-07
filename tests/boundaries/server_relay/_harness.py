@@ -119,12 +119,16 @@ class ServerRelayClient:
         binary: Path,
         scenario: str,
         environment: dict[str, str] | None = None,
+        *,
+        no_sandbox: bool = False,
     ) -> None:
         self._temporary = tempfile.TemporaryDirectory()
         self.root = Path(self._temporary.name)
         environment = os.environ.copy() if environment is None else environment.copy()
         environment["TMPDIR"] = str(self.root)
         environment[SCENARIO_ENV] = scenario
+        if no_sandbox:
+            environment["MCP_CONSOLE_TEST_FIXTURE_DIRECTORY"] = "1"
         if scenario == "stdin_forwarding_failure":
             environment[STDIN_FAILURE_RELEASED_ENV] = str(
                 self.root / STDIN_FAILURE_RELEASED_NAME
@@ -139,6 +143,7 @@ class ServerRelayClient:
             binary,
             (
                 "serve",
+                *(("--no-sandbox",) if no_sandbox else ()),
                 "--worker",
                 str(binary),
                 "--relay",
