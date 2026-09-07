@@ -220,9 +220,12 @@ The server reports the failed operation and does not replay its cell or stdin ag
 
 ### Server and worker startup
 
-The built-in server first selects a stable host resolver configuration.
-It prefers `ir` on `PATH`, otherwise uses `uv` on `PATH` to run `ir`, and can obtain `uv` from reticulate when only `ir` or an ambient R installation is available.
-With that configuration, it constructs its retained environment before accepting MCP input, resolving the default R and DuckDB environment and managed Python when selected.
+The built-in server first captures a stable host resolver configuration and detects its capability without installing an environment.
+It prefers `ir` on `PATH`, otherwise selects `uv` on `PATH` or an explicit `uv` path, and can obtain `uv` from reticulate when only `ir` or an ambient R installation is available.
+It retains the selected bootstrap as pending setup and accepts MCP input before invoking it or resolving the default R, DuckDB, and managed Python environments.
+An operation that first needs an environment resolves the defaults through the normal generation-owned resolver lifecycle and commits the complete candidate only after all preparation succeeds.
+For an ordinary cell, this happens after evaluation admission, so the client can poll or interrupt preparation.
+Explicit requirements remain preconditions of evaluation and combine their additions with the pending defaults.
 If no resolver bootstrap is available, it accepts MCP input with an empty retained environment and a fixed bare capability that disables later dynamic resolution.
 The worker itself starts lazily when an operation first needs it; preparing retained requirements can happen without launching a worker.
 An explicit restart starts its replacement eagerly, including when the session had not started a worker before.

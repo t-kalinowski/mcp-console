@@ -5,6 +5,7 @@ use std::process::Command;
 
 use super::requirements::push_duckdb_r_target;
 
+#[derive(Clone)]
 pub(in crate::worker_client) struct Environment {
     pub(in crate::worker_client) custom_worker: bool,
     pub(in crate::worker_client) duckdb_extensions: BTreeSet<String>,
@@ -12,6 +13,7 @@ pub(in crate::worker_client) struct Environment {
     pub(in crate::worker_client) duckdb_r_targets: Vec<crate::resolver::ManagedR>,
     pub(in crate::worker_client) python: Option<PythonEnvironment>,
     pub(in crate::worker_client) r: Option<crate::resolver::ManagedR>,
+    pub(in crate::worker_client) r_resolver: super::super::RResolver,
 }
 
 const USER_SELECTED_PYTHON_ERROR: &str = "managed Python requirements are disabled because the session uses a user-selected Python environment";
@@ -31,6 +33,7 @@ impl PythonEnvironment {
         !configured.is_some_and(|configured| !configured.is_empty() && configured != "managed")
     }
 
+    #[cfg(not(target_os = "macos"))]
     pub(in crate::worker_client) fn builtin(
         configured: Option<OsString>,
         resolver: crate::resolver::ManagedPythonResolverConfiguration,
@@ -122,6 +125,13 @@ pub(super) fn ensure_python_additions_available(
     }
     if environment.custom_worker {
         return Err("Python requirements are unavailable with a custom worker".to_string());
+    }
+    if let super::super::RResolver::Pending(setup) = &environment.r_resolver {
+        return if PythonEnvironment::uses_managed(setup.configured_python.as_deref()) {
+            Ok(())
+        } else {
+            Err(USER_SELECTED_PYTHON_ERROR.to_string())
+        };
     }
     match environment.python.as_ref() {
         Some(PythonEnvironment::Managed { .. }) => Ok(()),

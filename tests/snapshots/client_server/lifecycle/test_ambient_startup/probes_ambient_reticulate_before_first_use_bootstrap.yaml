@@ -1,22 +1,15 @@
 ---
-input:
-  method: initialize
-  params:
-    protocolVersion: 2025-11-25
-    capabilities: {}
-    clientInfo:
-      name: acceptance-test
-      version: 1.0.0
-result:
-  protocolVersion: 2025-11-25
-  capabilities:
-    tools: {}
-  serverInfo:
-    name: mcp-console
-    version: 0.0.2
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
 ---
-input:
-  method: notifications/initialized
+send:
+  r: stop("cell must not run")
+result:
+  content:
+    - type: text
+      text: |-
+        [reticulate `uv` resolution failed with exit status: 1: Error: fixture ambient reticulate bootstrap failed
+        Execution halted]
+  isError: true
 ---
 input:
   method: tools/list

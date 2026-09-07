@@ -116,16 +116,6 @@ impl ManagedPython {
     }
 }
 
-pub(crate) fn resolve_python(
-    requirements: &[String],
-    configuration: &super::ManagedPythonResolverConfiguration,
-    managed_r: Option<&super::ManagedR>,
-    on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
-) -> Result<ManagedPython, String> {
-    let requirements = manifest_from_packages(requirements);
-    resolve_python_host(requirements, configuration, managed_r, on_started)
-}
-
 pub(crate) fn resolve_python_manifest(
     requirements: crate::worker_protocol::PythonRequirementManifest,
     configuration: &super::ManagedPythonResolverConfiguration,
@@ -477,12 +467,4 @@ where
     }
     resolver.watch_exit(child.id());
     resolver.wait(&mut child, completed_write(), stdout, stderr, program, kind)
-}
-
-fn manifest_from_packages(
-    requirements: &[String],
-) -> crate::worker_protocol::PythonRequirementManifest {
-    let mut manifest = crate::worker_protocol::default_python_requirement_manifest();
-    manifest.packages.extend(requirements.iter().cloned());
-    manifest.normalized()
 }

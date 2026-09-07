@@ -209,7 +209,7 @@ enum SendControl {
 struct Requirements {
     /// Additive DuckDB extension names for the managed DuckDB backend, for standalone preparation,
     /// preparation before a cell, or a restart transaction, for example `fts`, `spatial`, or `excel`.
-    /// JSON and ICU are already prepared for built-in workers. Names must start with a lowercase ASCII
+    /// JSON and ICU are included in built-in defaults. Names must start with a lowercase ASCII
     /// letter and contain only lowercase ASCII letters, digits, and underscores. The host resolver
     /// uses DuckDB's own `INSTALL` outside the sandbox, with DuckDB's default extension repository and
     /// native cache. Preparation does not load extension code; `LOAD` and automatic loading happen
