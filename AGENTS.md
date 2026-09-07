@@ -16,7 +16,7 @@ The documents under `design-sketches/` describe intended behavior, not the curre
 - `docs/REQUIREMENTS.md` describes dependency and environment behavior and its trust boundary.
 - `docs/WORKER_PROTOCOL.md` defines the exact relay-worker and custom-worker contract.
 - `docs/RELAY_PROTOCOL.md` defines the exact private server-relay transport.
-- `docs/TOOL_DESCRIPTIONS.md` is a human-readable mirror of registered MCP tool and property prose.
+- `docs/TOOL_DESCRIPTIONS.md` gives editorial guidance for registered MCP tool and property prose and links to the canonical handshake snapshot.
   The actual `tools/list` result and the registered strings and Rust doc comments in `src/server.rs` are authoritative.
 - `tests/boundaries/README.md` describes process boundaries, selectors, normalization, and snapshot updates.
 - `design-sketches/` contains intended or exploratory future design only.

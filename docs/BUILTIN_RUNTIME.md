@@ -5,7 +5,7 @@
 This document describes the console behavior visible to users of the built-in worker.
 It covers R, Python, SQL, input, output, plots, and interoperability.
 The [worker protocol](WORKER_PROTOCOL.md) defines the lower-level contract for built-in and custom workers, while [requirements and environments](REQUIREMENTS.md) owns dependency preparation.
-The [registered tool descriptions](TOOL_DESCRIPTIONS.md) mirror the current agent-facing MCP text.
+The [canonical handshake snapshot](../tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml) records the agent-facing MCP text; [tool description guidance](TOOL_DESCRIPTIONS.md) covers editorial rules.
 
 ## Session model
 
