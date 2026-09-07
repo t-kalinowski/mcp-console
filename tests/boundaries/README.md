@@ -96,7 +96,7 @@ The suite also verifies both documents with Yamark, and the optional Quarto suit
 Shared helpers under `tests/support/` are grouped by responsibility:
 
 - `client.py` owns the public stdio MCP client.
-- `cases.py` runs individual cases with deadlines and captures their diagnostic output.
+- `cases.py` runs individual cases and their snapshot checks with deadlines and captures their diagnostic output.
 - `snapshots.py` formats and compares primary and companion snapshots.
 - `normalization.py` contains source-text and diagnostic normalization.
 - `checkpoints.py`, `capture.py`, and `processes.py` contain reusable synchronization, stream-reading, and cleanup mechanics.
@@ -126,6 +126,7 @@ scripts/test --update client_server/server/test_tools::initializes_and_lists_too
 With no selectors, `scripts/test` runs every suite and case in parallel, using at least two worker processes and otherwise one per available CPU by default.
 Pass `--jobs N` to set the maximum concurrency or `--jobs 1` to run serially.
 Each case has a 600-second deadline that starts when its supervisor launches.
+The deadline includes snapshot formatting, comparison, and updates, which run in the supervised case process so the coordinator can keep handling signals and sibling failures.
 Use `--timeout SECONDS` to allow longer runs, such as slow resolver workflows.
 On timeout, the runner names the case and requests cleanup from its supervisor process.
 The supervisor sends the case `SIGINT`, allowing 15 seconds for `finally` blocks and fixture cleanup before forcibly killing that process by PID.
@@ -153,7 +154,10 @@ A suite may set `REQUIRED_COMMANDS = {"ir"}` to skip when a required executable 
 
 Server cases create an `McpClient`, call `initialize_and_list_tools()`, perform their `send()` interactions, and return `client.finish()`.
 Use `with McpClient(...) as client:` so an assertion also closes the input and reaps the server.
-Response reads have a 600-second deadline and shutdown has a 15-second deadline; constructor arguments `response_timeout` and `shutdown_timeout` can override them.
+Response reads have a 600-second ceiling, shortened to leave 14 seconds before the runner's case deadline for cleanup and diagnostics.
+This uses the remaining case time even for requests made later in a case.
+Client shutdown allows 11 seconds for server retirement and reserves two more seconds for a server-only kill and reap, within the supervisor's 15-second cleanup window.
+Constructor arguments `response_timeout` and `shutdown_timeout` can override these waits; under the runner, the case deadline and 11-second shutdown cap still apply.
 Deadline errors include the server's stderr tail.
 To make interleavings explicit, `start_send()` returns a pending transcript entry; `receive(entry)` fills in its response, and `receive_many(entries)` matches responses by request ID regardless of arrival order.
 Protocol cases can use `request()`, `start_request()`, `notify()`, and `send_message()` directly.
