@@ -61,7 +61,7 @@ During launcher-controlled retirement, the launcher retains the waitable root th
 The launcher closes its control endpoint to request retirement; abrupt launcher loss produces the same EOF.
 The manager's single thread receives root, descendant, and control-readiness events from one `kqueue`.
 Natural root exit first retires observed descendants and then closes the original process group; owner EOF with a live root closes the group and stops the root before draining observed descendants.
-After clean natural-root cleanup, the manager waits for owner EOF before removing the directory and exiting.
+After clean natural-root cleanup, the manager waits for owner EOF before attempting directory removal and exiting.
 Successful manager process exit is the primary cleanup barrier before the owner reaps the direct root.
 In owned launcher mode, the launcher keeps its signals blocked until manager cleanup and direct-root reaping finish, so successful launcher exit is the server's cleanup barrier for parent loss, explicit retirement, and natural root exit.
 A handled parent-loss or `SIGTERM` retirement request returns launcher status 0 after that barrier; natural root completion continues to return the root status.
@@ -69,7 +69,8 @@ If the launcher itself is killed or crashes, the manager still receives ownershi
 
 The manager preserves the private directory on unexpected unwind or any cleanup error because a surviving process may still use it.
 It arms the adopted guard for removal only after successful cleanup proves that the directory is unused.
-With no surviving owner to receive a filesystem error, directory removal itself is best effort and can leave the directory behind.
+Directory removal is best effort.
+Removal errors do not change the process exit status, so the directory can remain after successful process retirement.
 
 ## Manager failure
 
@@ -77,7 +78,7 @@ Each launcher retains a blocking monitor for the manager process.
 If the manager exits unsuccessfully while the launcher still retains a live, waitable root, the monitor reconstructs the root's current process tree and performs bounded process cleanup before the launcher continues.
 The fallback revalidates process identities immediately before signaling and closes the still-pinned process group as a race backstop.
 The fallback has no directory-cleanup state.
-If the manager exits before completing its own cleanup and removal, the directory remains because a detached descendant observed only by the failed manager may still be live.
+If the manager exits before completing its own cleanup and removal attempt, the directory remains because a detached descendant observed only by the failed manager may still be live.
 If manager exit times out, the owner requests forced exit and allows one more bounded recovery interval.
 If the manager still does not exit, the owner disables fallback recovery before releasing the root's PID pin and returns an error without joining the live monitor thread.
 If bounded fallback recovery has already started, the owner retains the pin until it finishes instead.
