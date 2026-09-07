@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{self, Write};
 use std::os::fd::{AsFd, AsRawFd};
+use std::os::unix::fs::FileTypeExt;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -146,6 +147,7 @@ impl EventQueue {
 
 pub(super) struct EventWriter {
     queue: Arc<EventQueue>,
+    bounded_output: bool,
     wake: Option<io::PipeWriter>,
     thread: thread::JoinHandle<Result<(), String>>,
 }
@@ -167,6 +169,7 @@ pub(super) fn start(
     });
     let output = EventOutput::new(reader, queue.clone())
         .map_err(|error| format!("failed to configure relay stdout: {error}"))?;
+    let bounded_output = output.original_flags.is_some();
     let writer_queue = queue.clone();
     let thread = thread::spawn(move || {
         let result = writer_queue.write(output);
@@ -179,6 +182,7 @@ pub(super) fn start(
         EventSender(queue.clone()),
         EventWriter {
             queue,
+            bounded_output,
             wake: Some(wake),
             thread,
         },
@@ -247,7 +251,7 @@ impl EventSender {
 
 impl EventWriter {
     pub(super) fn begin_retirement(&mut self) {
-        {
+        if self.bounded_output {
             // Publish under the capacity mutex so no waiter can miss the
             // transition from an untimed wait to the retirement deadline.
             let _state = self.queue.lock();
@@ -269,7 +273,7 @@ impl EventWriter {
 
 struct EventOutput {
     file: File,
-    original_flags: libc::c_int,
+    original_flags: Option<libc::c_int>,
     wake: io::PipeReader,
     queue: Arc<EventQueue>,
 }
@@ -277,11 +281,17 @@ struct EventOutput {
 impl EventOutput {
     fn new(wake: io::PipeReader, queue: Arc<EventQueue>) -> io::Result<Self> {
         let file = File::from(io::stdout().as_fd().try_clone_to_owned()?);
-        // SAFETY: the owned duplicate remains open throughout configuration.
-        let original_flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
-        if original_flags < 0 {
-            return Err(io::Error::last_os_error());
-        }
+        let kind = file.metadata()?.file_type();
+        let original_flags = if kind.is_fifo() || kind.is_socket() {
+            // SAFETY: the owned duplicate remains open throughout configuration.
+            let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
+            if flags < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Some(flags)
+        } else {
+            None
+        };
         let output = Self {
             file,
             original_flags,
@@ -291,13 +301,14 @@ impl EventOutput {
         // Duplicates share file status flags. The relay is the sole protocol
         // writer; restore the original flags when its output task finishes.
         // SAFETY: this preserves existing flags on the live output descriptor.
-        if unsafe {
-            libc::fcntl(
-                output.file.as_raw_fd(),
-                libc::F_SETFL,
-                original_flags | libc::O_NONBLOCK,
-            )
-        } < 0
+        if let Some(flags) = original_flags
+            && unsafe {
+                libc::fcntl(
+                    output.file.as_raw_fd(),
+                    libc::F_SETFL,
+                    flags | libc::O_NONBLOCK,
+                )
+            } < 0
         {
             return Err(io::Error::last_os_error());
         }
@@ -381,7 +392,9 @@ impl Write for EventOutput {
 
 impl Drop for EventOutput {
     fn drop(&mut self) {
-        // SAFETY: the owned descriptor is still open during Drop.
-        let _ = unsafe { libc::fcntl(self.file.as_raw_fd(), libc::F_SETFL, self.original_flags) };
+        if let Some(flags) = self.original_flags {
+            // SAFETY: the owned descriptor is still open during Drop.
+            let _ = unsafe { libc::fcntl(self.file.as_raw_fd(), libc::F_SETFL, flags) };
+        }
     }
 }
