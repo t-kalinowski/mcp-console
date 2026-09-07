@@ -17,7 +17,7 @@ mod platform {
     use std::os::unix::process::ExitStatusExt as _;
     use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{Arc, Mutex, mpsc};
+    use std::sync::{Arc, Mutex, OnceLock, mpsc};
     use std::thread;
     use std::time::{Duration, Instant};
 
@@ -26,6 +26,7 @@ mod platform {
 
     const READ_CHUNK_SIZE: usize = 8 * 1024;
     const WORKER_SHUTDOWN_GRACE: Duration = Duration::from_secs(1);
+    const RETIREMENT_DRAIN_TIMEOUT: Duration = Duration::from_millis(100);
     const CHILD_EXITED: libc::c_int = 1;
     const CHILD_KILLED: libc::c_int = 2;
     const CHILD_DUMPED: libc::c_int = 3;
@@ -436,6 +437,7 @@ mod platform {
     struct WorkerLifecycle {
         child: Child,
         retired: bool,
+        drain_deadline: Arc<OnceLock<Instant>>,
         raw_stdin: Option<ChildStdin>,
         raw_stdout: Option<ChildStdout>,
         raw_stderr: Option<ChildStderr>,
@@ -466,6 +468,7 @@ mod platform {
             Self {
                 child,
                 retired: false,
+                drain_deadline: Arc::new(OnceLock::new()),
                 raw_stdin: Some(raw_stdin),
                 raw_stdout: Some(raw_stdout),
                 raw_stderr: Some(raw_stderr),
@@ -515,6 +518,7 @@ mod platform {
                 OutputStream::Stdout,
                 events.clone(),
                 failures.clone(),
+                self.drain_deadline.clone(),
             ) {
                 Ok(stdout) => self.stdout = Some(stdout),
                 Err((stdout, error)) => {
@@ -532,6 +536,7 @@ mod platform {
                 OutputStream::Stderr,
                 events.clone(),
                 failures.clone(),
+                self.drain_deadline.clone(),
             ) {
                 Ok(stderr) => self.stderr = Some(stderr),
                 Err((stderr, error)) => {
@@ -562,6 +567,7 @@ mod platform {
                 events.clone(),
                 failures.clone(),
                 controls.clone(),
+                self.drain_deadline.clone(),
             ) {
                 Ok(sideband_reader) => self.sideband_reader = Some(sideband_reader),
                 Err((sideband_reader, error)) => {
@@ -578,6 +584,18 @@ mod platform {
 
         fn cancel_and_join(&mut self, events: &EventSender) -> Option<String> {
             let mut error = None;
+            let deadline = Instant::now() + RETIREMENT_DRAIN_TIMEOUT;
+            self.drain_deadline
+                .set(deadline)
+                .expect("worker transports should retire only once");
+            // Wake every reader before joining any of them: a continuously
+            // readable stream must not extend the other readers' allowance.
+            if let Some(reader) = &self.sideband_reader {
+                reader.cancel.cancel();
+            }
+            for reader in [&self.stdout, &self.stderr].into_iter().flatten() {
+                reader.cancel.cancel();
+            }
             drop(self.raw_stdin.take());
             if let Some(command_reader) = self.command_reader.take() {
                 collect_error(&mut error, command_reader.cancel_and_join());
@@ -592,16 +610,14 @@ mod platform {
                 (Some(sideband_reader), None) => {
                     collect_error(&mut error, sideband_reader.cancel_and_join())
                 }
-                (None, Some(mut sideband_reader)) => {
-                    collect_error(&mut error, discard_retiring_sideband(&mut sideband_reader));
-                }
+                (None, Some(_)) => {}
                 _ => unreachable!("worker sideband reader must have exactly one owner"),
             }
             match (self.stdout.take(), self.raw_stdout.take()) {
                 (Some(stdout), None) => collect_error(&mut error, stdout.cancel_and_join()),
                 (None, Some(stdout)) => collect_error(
                     &mut error,
-                    drain_unstarted_output(stdout, OutputStream::Stdout, events),
+                    drain_unstarted_output(stdout, OutputStream::Stdout, events, deadline),
                 ),
                 _ => unreachable!("worker stdout must have exactly one owner"),
             }
@@ -609,7 +625,7 @@ mod platform {
                 (Some(stderr), None) => collect_error(&mut error, stderr.cancel_and_join()),
                 (None, Some(stderr)) => collect_error(
                     &mut error,
-                    drain_unstarted_output(stderr, OutputStream::Stderr, events),
+                    drain_unstarted_output(stderr, OutputStream::Stderr, events, deadline),
                 ),
                 _ => unreachable!("worker stderr must have exactly one owner"),
             }
@@ -1036,8 +1052,8 @@ mod platform {
 
     // Keep this blocking reader cancellable through retirement. A worker
     // descendant can retain the socket after writing only part of a frame, so
-    // cancellation forwards complete buffered or immediately readable frames
-    // with per-call nonblocking reads, then abandons any incomplete tail.
+    // cancellation bounds additional reads, forwards complete buffered frames,
+    // and abandons any incomplete tail.
     struct SidebandReader {
         cancel: Cancellation,
         thread: thread::JoinHandle<()>,
@@ -1049,6 +1065,7 @@ mod platform {
             events: EventSender,
             failures: FailureReporter,
             controls: mpsc::Sender<Control>,
+            drain_deadline: Arc<OnceLock<Instant>>,
         ) -> Result<Self, (crate::sideband::Reader, String)> {
             let (cancelled, cancel) = match cancellation_pipe("worker sideband") {
                 Ok(pipe) => pipe,
@@ -1072,7 +1089,13 @@ mod platform {
                         }
                     };
                     if ready.cancelled {
-                        if let Err(error) = drain_retiring_sideband(&mut reader, &events) {
+                        if let Err(error) = drain_retiring_sideband(
+                            &mut reader,
+                            &events,
+                            *drain_deadline
+                                .get()
+                                .expect("retirement deadline should be set"),
+                        ) {
                             sideband_failure = Some(error);
                         }
                         break;
@@ -1132,29 +1155,13 @@ mod platform {
     fn drain_retiring_sideband(
         reader: &mut crate::sideband::Reader,
         events: &EventSender,
+        deadline: Instant,
     ) -> Result<(), String> {
         loop {
             forward_buffered_sideband(reader, events)?;
-            match reader.read_chunk_nonblocking() {
-                Ok(()) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(error)
-                    if matches!(
-                        error.kind(),
-                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::UnexpectedEof
-                    ) =>
-                {
-                    return Ok(());
-                }
-                Err(error) => {
-                    return Err(format!("worker sideband read failed: {error}"));
-                }
+            if Instant::now() >= deadline {
+                return Ok(());
             }
-        }
-    }
-
-    fn discard_retiring_sideband(reader: &mut crate::sideband::Reader) -> Result<(), String> {
-        loop {
             match reader.read_chunk_nonblocking() {
                 Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
@@ -1289,6 +1296,7 @@ mod platform {
             kind: OutputStream,
             events: EventSender,
             failures: FailureReporter,
+            drain_deadline: Arc<OnceLock<Instant>>,
         ) -> Result<Self, (Stream, String)>
         where
             Stream: Read + AsRawFd + Send + 'static,
@@ -1310,6 +1318,20 @@ mod platform {
                             break;
                         }
                     };
+                    if ready.cancelled {
+                        if let Err(error) = drain_buffered_output(
+                            &mut stream,
+                            kind,
+                            &events,
+                            &mut buffer,
+                            *drain_deadline
+                                .get()
+                                .expect("retirement deadline should be set"),
+                        ) {
+                            failures.report(error);
+                        }
+                        break;
+                    }
                     if ready.stream {
                         match stream.read(&mut buffer) {
                             Ok(0) => break,
@@ -1330,14 +1352,6 @@ mod platform {
                             }
                         }
                     }
-                    if ready.cancelled {
-                        if let Err(error) =
-                            drain_buffered_output(&mut stream, kind, &events, &mut buffer)
-                        {
-                            failures.report(error);
-                        }
-                        break;
-                    }
                 }
             });
             Ok(Self { cancel, thread })
@@ -1355,9 +1369,11 @@ mod platform {
         mut stream: impl Read + AsRawFd,
         kind: OutputStream,
         events: &EventSender,
+        deadline: Instant,
     ) -> Result<(), String> {
+        set_nonblocking(&stream)?;
         let mut buffer = [0_u8; READ_CHUNK_SIZE];
-        drain_buffered_output(&mut stream, kind, events, &mut buffer)
+        drain_buffered_output(&mut stream, kind, events, &mut buffer, deadline)
     }
 
     fn output_event(stream: OutputStream, bytes: &[u8]) -> RelayEvent {
@@ -1382,8 +1398,9 @@ mod platform {
         kind: OutputStream,
         events: &EventSender,
         buffer: &mut [u8],
+        deadline: Instant,
     ) -> Result<(), String> {
-        loop {
+        while Instant::now() < deadline {
             match stream.read(buffer) {
                 Ok(0) => break,
                 Ok(length) => {

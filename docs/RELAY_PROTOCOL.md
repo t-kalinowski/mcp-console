@@ -205,14 +205,17 @@ Concurrent or repeated retirement reuses the recorded result and never signals a
 
 ## Retirement and failure
 
-On worker exit or relay failure, the relay first stops the worker transports and drains and joins the stdout and stderr reader threads.
+On worker exit or relay failure, the relay first stops the worker transports and cancels its readers before joining them.
 Before joining the worker-sideband writer, it shuts down only its local write half, interrupting an in-flight command even when a detached worker descendant retains the peer endpoint without reading.
 The relay read half remains available for retirement draining.
-Cancellation of an already-started worker-sideband reader drains every complete buffered or immediately readable frame with per-call nonblocking receives, then abandons an incomplete frame rather than waiting on a descendant that retained the endpoint.
-If transport setup fails before that reader starts, the relay discards pending sideband frames so `fatal` remains the first semantic event; raw stdout and stderr are still drained.
+The worker-sideband, stdout, and stderr readers share a 100-millisecond allowance for additional nonblocking reads, measured from the start of local transport retirement.
+Each reader stops reading at EOF, when no bytes are immediately available, or when that deadline expires.
+An already-started worker-sideband reader forwards every complete frame assembled from its reads, including frames still buffered when the deadline expires.
+It may abandon an incomplete frame and further descendant output so a continuously writing descendant cannot prolong local draining indefinitely.
+If transport setup fails before the sideband reader starts, the relay drops it without forwarding pending frames so `fatal` remains the first semantic event; raw stdout and stderr are drained within the same allowance.
 It then emits `stdout_closed` and `stderr_closed`, the retained `fatal` event when present, `worker_sideband_closed`, and the structured worker process outcome when one is available.
 No raw output can follow its stream-closure event, and no event can follow `worker_exited` or `worker_signaled`.
-This preserves exact bytes and per-stream order through retirement.
+The forwarded output preserves exact bytes and per-stream order through retirement.
 
 Relay stdout EOF is a clean retirement only after the expected stream closures and final worker process outcome.
 `worker_exited` distinguishes ordinary exit, including status zero, from `worker_signaled` signal termination.

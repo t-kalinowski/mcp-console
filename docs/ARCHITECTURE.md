@@ -186,7 +186,8 @@ That serialization does not reconstruct chronology across the independent sideba
 The relay does not own the logical session, retained requirements, evaluation admission, output budgets, response assembly, or MCP delivery.
 It exits with the worker lifetime it supervises.
 Remaining descendants, including those retaining worker streams, are retired by the sandbox launcher after the target exits or retirement is requested.
-Its cancellable local transports let the relay drain available output and finish without waiting for those descendants to close their descriptors.
+Its cancellable local transports share a 100-millisecond allowance for additional nonblocking reads during retirement.
+They forward complete buffered sideband frames but may abandon incomplete frames and further descendant output, so draining does not depend on those descendants becoming quiet or closing their descriptors.
 
 The internal `worker-relay` command uses the same stream protocol when launched directly without a sandbox or below another process wrapper.
 Such a direct invocation owns only its direct worker; it supplies no sandbox policy or descendant-cleanup guarantee.

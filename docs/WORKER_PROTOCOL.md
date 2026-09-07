@@ -407,9 +407,10 @@ The sandbox launcher owns cleanup of remaining descendants, including those reta
 The server requires successful managed launcher exit as the sandbox-lifetime retirement barrier before replacement.
 The exact server-relay acceptance and retirement sequence is specified in [`RELAY_PROTOCOL.md`](RELAY_PROTOCOL.md).
 
-During retirement, the relay forwards every complete worker-sideband frame already buffered or immediately readable.
-It may abandon an incomplete frame held open by a descendant that retained the endpoint.
-It drains fd 1 and fd 2 before reporting their outer stream closures and the direct worker process outcome.
+During retirement, additional nonblocking reads of worker-sideband, fd 1, and fd 2 share a 100-millisecond allowance.
+The relay forwards every complete worker-sideband frame assembled from its reads, including frames still buffered when the deadline expires.
+It may abandon an incomplete frame and further descendant output when draining ends.
+It finishes draining before reporting the outer stream closures and the direct worker process outcome.
 
 Outside intentional retirement, worker-sideband EOF is a worker failure.
 A worker must flush complete frames before exit; closure midway through a frame is a protocol failure.
