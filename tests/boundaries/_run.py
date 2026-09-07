@@ -443,6 +443,16 @@ def run_cases(
         executor.shutdown(cancel_futures=True)
         signal.signal(signal.SIGINT, previous_sigint)
 
+    # SIGINT can arrive while checking the final snapshot. All controllers have
+    # joined, so any remaining event is an interrupt queued by our handler.
+    while True:
+        try:
+            index, _, _ = events.get_nowait()
+        except Empty:
+            break
+        assert index == -1, index
+        errors.append(KeyboardInterrupt())
+
     if len(errors) > 1:
         raise BaseExceptionGroup("multiple transcript cases failed", errors) from None
     if errors:

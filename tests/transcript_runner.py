@@ -107,6 +107,34 @@ if __name__ == "__main__":
     signal.pause()
 """.lstrip()
 
+# fmt: python
+GATED_SNAPSHOT_CHECK = """
+import signal
+
+
+ungated_check_recording = check_recording
+
+
+def check_recording(*arguments: object, **keywords: object) -> object:
+    root = Path(__file__).resolve().parents[2]
+    previous = signal.getsignal(signal.SIGINT)
+
+    def acknowledge_interrupt(number: int, frame: object) -> None:
+        previous(number, frame)
+        with (root / "interrupt-received").open("wb", buffering=0) as received:
+            assert received.write(b"1") == 1
+
+    signal.signal(signal.SIGINT, acknowledge_interrupt)
+    try:
+        with (root / "snapshot-started").open("wb", buffering=0) as started:
+            assert started.write(b"1") == 1
+        with (root / "snapshot-release").open("rb", buffering=0) as release:
+            assert release.read(1) == b"1"
+        return ungated_check_recording(*arguments, **keywords)
+    finally:
+        signal.signal(signal.SIGINT, previous)
+""".lstrip()
+
 
 @unittest.skipUnless(os.name == "posix", "requires POSIX process and FIFO APIs")
 class TranscriptRunnerTests(unittest.TestCase):
@@ -270,6 +298,39 @@ class TranscriptRunnerTests(unittest.TestCase):
             self.assertTrue((self.root / "child-cleaned").is_file())
             with self.assertRaises(ProcessLookupError):
                 os.killpg(process.pid, 0)
+
+    def test_interrupt_during_final_snapshot_check_is_reported(self) -> None:
+        snapshots = self.root / "tests" / "support" / "snapshots.py"
+        with snapshots.open("a", encoding="utf-8") as source:
+            source.write("\n" + GATED_SNAPSHOT_CHECK)
+        checkpoints = []
+        for name in ("snapshot-started", "interrupt-received", "snapshot-release"):
+            os.mkfifo(self.root / name)
+            checkpoints.append(os.open(self.root / name, os.O_RDWR | os.O_NONBLOCK))
+        started, received, release = checkpoints
+        process = self.start_runner("client_server/server/test_tools::selected")
+        try:
+            ready, _, _ = select.select([started], [], [], 10)
+            self.assertTrue(ready, "final snapshot check did not start")
+            self.assertEqual(os.read(started, 1), b"1")
+            process.send_signal(signal.SIGINT)
+            ready, _, _ = select.select([received], [], [], 10)
+            self.assertTrue(ready, "runner did not handle the interrupt")
+            self.assertEqual(os.read(received, 1), b"1")
+            self.assertEqual(os.write(release, b"1"), 1)
+            stdout, stderr = process.communicate(timeout=10)
+            self.assertNotEqual(process.returncode, 0, stdout)
+            self.assertIn("KeyboardInterrupt", stderr)
+        finally:
+            os.write(release, b"1")
+            try:
+                process.communicate(timeout=10)
+            except subprocess.TimeoutExpired:
+                with suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
+                process.communicate(timeout=10)
+            for checkpoint in checkpoints:
+                os.close(checkpoint)
 
     def test_collection_selectors_and_locate(self) -> None:
         hidden = (
