@@ -76,6 +76,7 @@ def test_second_failure(binary: Path) -> list[dict[str, str]]:
 
 # fmt: python
 HANGING_SUITE = """
+import os
 import signal
 import subprocess
 import sys
@@ -94,6 +95,9 @@ def test_hangs(binary: Path) -> list[dict[str, str]]:
         child.kill()
         child.wait(timeout=5)
         (root / "child-cleaned").touch()
+        cleaned = os.open(root / "child-cleanup-complete", os.O_WRONLY | os.O_NONBLOCK)
+        os.write(cleaned, b"1")
+        os.close(cleaned)
     return [{"runner": "released"}]
 
 
@@ -203,7 +207,12 @@ class TranscriptRunnerTests(unittest.TestCase):
                 "---\nrunner: released\n...\n", encoding="utf-8"
             )
         checkpoints = []
-        for name in ("hang-started", "hang-release", "failure-release"):
+        for name in (
+            "hang-started",
+            "hang-release",
+            "failure-release",
+            "child-cleanup-complete",
+        ):
             os.mkfifo(self.root / name)
             checkpoints.append(os.open(self.root / name, os.O_RDWR | os.O_NONBLOCK))
         process = self.start_runner(*arguments)
@@ -212,16 +221,21 @@ class TranscriptRunnerTests(unittest.TestCase):
         finally:
             # Cases have their own sessions. Release their fixture waits even
             # when the runner itself fails before it can interrupt them.
-            for checkpoint in checkpoints[1:]:
-                os.write(checkpoint, b"1")
             try:
-                process.communicate(timeout=10)
-            except subprocess.TimeoutExpired:
-                with suppress(ProcessLookupError):
-                    os.killpg(process.pid, signal.SIGKILL)
-                process.communicate(timeout=10)
-            for checkpoint in checkpoints:
-                os.close(checkpoint)
+                for checkpoint in checkpoints[1:3]:
+                    os.write(checkpoint, b"1")
+                try:
+                    process.communicate(timeout=10)
+                except subprocess.TimeoutExpired:
+                    with suppress(ProcessLookupError):
+                        os.killpg(process.pid, signal.SIGKILL)
+                    process.communicate(timeout=10)
+                ready, _, _ = select.select([checkpoints[3]], [], [], 5)
+                self.assertTrue(ready, "released case did not finish child cleanup")
+                self.assertEqual(os.read(checkpoints[3], 1), b"1")
+            finally:
+                for checkpoint in checkpoints:
+                    os.close(checkpoint)
 
     def test_case_deadline_stops_a_hanging_case(self) -> None:
         selector = "client_server/server/test_tools::hangs"
@@ -280,7 +294,7 @@ class TranscriptRunnerTests(unittest.TestCase):
             with self.assertRaises(ProcessLookupError):
                 os.killpg(process.pid, 0)
 
-    def test_interrupt_stops_hanging_case_and_runs_cleanup(self) -> None:
+    def assert_signal_retires_case(self, number: signal.Signals) -> None:
         selector = "client_server/server/test_tools::hangs"
         with self.hanging_runner("--timeout", "60", "--jobs", "1", selector) as (
             process,
@@ -290,14 +304,25 @@ class TranscriptRunnerTests(unittest.TestCase):
             ready, _, _ = select.select([started], [], [], 10)
             self.assertTrue(ready, "hanging case did not start")
             self.assertEqual(os.read(started, 1), b"1")
-            process.send_signal(signal.SIGINT)
+            process.send_signal(number)
             stdout, stderr = process.communicate(timeout=10)
             self.assertNotEqual(process.returncode, 0, stdout)
             self.assertIn(selector, stderr)
             self.assertIn("KeyboardInterrupt", stderr)
+            if number != signal.SIGINT:
+                self.assertIn(f"transcript runner received {number.name}", stderr)
             self.assertTrue((self.root / "child-cleaned").is_file())
             with self.assertRaises(ProcessLookupError):
                 os.killpg(process.pid, 0)
+
+    def test_interrupt_stops_hanging_case_and_runs_cleanup(self) -> None:
+        self.assert_signal_retires_case(signal.SIGINT)
+
+    def test_termination_stops_hanging_case_and_runs_cleanup(self) -> None:
+        self.assert_signal_retires_case(signal.SIGTERM)
+
+    def test_hangup_stops_hanging_case_and_runs_cleanup(self) -> None:
+        self.assert_signal_retires_case(signal.SIGHUP)
 
     def test_interrupt_during_final_snapshot_check_is_reported(self) -> None:
         snapshots = self.root / "tests" / "support" / "snapshots.py"
@@ -331,6 +356,30 @@ class TranscriptRunnerTests(unittest.TestCase):
                 process.communicate(timeout=10)
             for checkpoint in checkpoints:
                 os.close(checkpoint)
+
+    def test_runner_loss_retires_its_detached_case(self) -> None:
+        selector = "client_server/server/test_tools::hangs"
+        with self.hanging_runner("--timeout", "60", "--jobs", "1", selector) as (
+            process,
+            started,
+            _,
+        ):
+            cleaned = os.open(
+                self.root / "child-cleanup-complete", os.O_RDONLY | os.O_NONBLOCK
+            )
+            try:
+                ready, _, _ = select.select([started], [], [], 10)
+                self.assertTrue(ready, "hanging case did not start")
+                self.assertEqual(os.read(started, 1), b"1")
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait(timeout=5)
+                ready, _, _ = select.select([cleaned], [], [], 5)
+                self.assertTrue(
+                    ready, "detached case outlived its runner without cleanup"
+                )
+                self.assertTrue((self.root / "child-cleaned").is_file())
+            finally:
+                os.close(cleaned)
 
     def test_collection_selectors_and_locate(self) -> None:
         hidden = (
