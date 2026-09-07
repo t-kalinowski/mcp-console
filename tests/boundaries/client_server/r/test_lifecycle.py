@@ -496,7 +496,6 @@ def test_interrupts_managed_console_input(binary: Path) -> Transcript:
             client,
             '[input requested: "R replay> "]\n[1] "R partial!"\n',
             "interrupted R input replay",
-            provisional='[input requested: "R replay> "]\n[waiting for stdin]',
             r='readline("R replay> ")',
             stdin="!\n",
         )
@@ -543,7 +542,6 @@ def test_interrupts_managed_console_input(binary: Path) -> Transcript:
             client,
             "[input requested: \"Python replay> \"]\n'Python partial!'\n",
             "interrupted Python input replay",
-            provisional=('[input requested: "Python replay> "]\n[waiting for stdin]'),
             python='input("Python replay> ")',
             stdin="!\n",
         )
@@ -641,7 +639,6 @@ def test_replays_console_prefix_after_operation_boundary_interrupt(
             client,
             "caught between-callback interrupt\n",
             "between-callback interrupt",
-            provisional="\n[running; poll with an empty send]",
             control="interrupt",
             timeout_ms=0,
         )
