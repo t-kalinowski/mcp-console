@@ -1,0 +1,50 @@
+import json
+import os
+import signal
+import socket
+import sys
+import threading
+from pathlib import Path
+
+
+root = Path(os.environ["TMPDIR"])
+endpoint = socket.socket(fileno=int(os.environ["MCP_CONSOLE_SIDEBAND_FD"]))
+interrupted = os.open(root / "worker-interrupted", os.O_WRONLY)
+shutdown = os.open(root / "worker-shutdown", os.O_WRONLY)
+signal.signal(signal.SIGINT, lambda _signal, _frame: os.write(interrupted, b"1"))
+(root / "worker-pid").write_text(str(os.getpid()))
+endpoint.sendall(b'{"kind":"ready"}\n')
+reader = endpoint.makefile("rb")
+assert json.loads(reader.readline())["kind"] == "evaluate"
+first_size, frame_size, frame_count = map(int, sys.argv[1:4])
+
+
+def produce_output() -> None:
+    empty = b'{"kind":"console_output","data":""}\n'
+    for index in range(frame_count):
+        size = first_size if index == 0 else frame_size
+        prefix = f"{index:04d}:"
+        data = prefix + "x" * (size - len(empty) - len(prefix))
+        frame = (
+            json.dumps(
+                {"kind": "console_output", "data": data}, separators=(",", ":")
+            ).encode()
+            + b"\n"
+        )
+        assert len(frame) == size
+        endpoint.sendall(frame)
+        if index == 0:
+            with (root / "continue-output").open("rb", buffering=0) as release:
+                assert release.read(1) == b"1"
+
+
+producer = threading.Thread(target=produce_output, daemon=True)
+producer.start()
+if sys.argv[4] == "natural":
+    producer.join()
+    with (root / "worker-exit").open("rb", buffering=0) as release:
+        assert release.read(1) == b"1"
+else:
+    assert json.loads(reader.readline()) == {"kind": "shutdown"}
+    assert os.write(shutdown, b"1") == 1
+os._exit(0)

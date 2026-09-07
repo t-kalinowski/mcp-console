@@ -409,7 +409,8 @@ The server requires successful managed launcher exit as the sandbox-lifetime ret
 The exact server-relay acceptance and retirement sequence is specified in [`RELAY_PROTOCOL.md`](RELAY_PROTOCOL.md).
 
 During retirement, additional nonblocking reads of worker-sideband, fd 1, and fd 2 share a 100-millisecond allowance.
-The relay queues every complete worker-sideband frame assembled from its reads, including frames still buffered when the read deadline expires.
+The relay attempts to queue every complete worker-sideband frame assembled from its reads, including frames still buffered when the read deadline expires.
+Queue admission and downstream delivery share the output deadline.
 It may abandon an incomplete frame and further descendant output when draining ends.
 It finishes draining before queuing the outer stream closures and the direct worker process outcome.
 Delivery to the server remains subject to the shared one-second output allowance in [relay retirement](RELAY_PROTOCOL.md#retirement-and-failure); expiry with pending output is a transport failure.

@@ -24,9 +24,9 @@ PLATFORMS = {"darwin"}
 
 
 @contextmanager
-def stdout_backpressure_environment() -> Iterator[
-    tuple[Path, dict[str, str], FifoCheckpoint]
-]:
+def stdout_backpressure_environment(
+    interposer_source: str = "relay_stdout_backpressure.c",
+) -> Iterator[tuple[Path, dict[str, str], FifoCheckpoint]]:
     fixtures = Path(__file__).resolve().parents[3] / "fixtures"
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
@@ -41,7 +41,7 @@ def stdout_backpressure_environment() -> Iterator[
                 "-Werror",
                 "-o",
                 interposer,
-                fixtures / "native" / "relay_stdout_backpressure.c",
+                fixtures / "native" / interposer_source,
             ],
             check=True,
             capture_output=True,
@@ -169,6 +169,40 @@ def test_finishes_natural_worker_exit_while_relay_stdout_is_backpressured(
     with backpressured_relay(binary, "natural") as (process, checkpoints, worker_exit):
         checkpoints["worker-exit"].release()
         return retirement_result(process, worker_exit)
+
+
+def test_retires_when_backpressure_exhausts_supervisor_event_reserve(
+    binary: Path,
+) -> Transcript:
+    with backpressured_relay(binary, "shutdown") as (
+        process,
+        checkpoints,
+        worker_exit,
+    ):
+        for request_id in range(1, 17):
+            send(process, {"kind": "interrupt", "request_id": request_id})
+            checkpoints["worker-interrupted"].wait(
+                f"worker accepted SIGINT {request_id}"
+            )
+        send(process, {"kind": "interrupt", "request_id": 17})
+        observed = worker_exit.control(None, 1, 5)
+        assert len(observed) == 1 and observed[0].fflags & select.KQ_NOTE_EXIT, observed
+        assert process.wait(timeout=5) == 1
+        stdout, stderr = process.communicate(timeout=5)
+        assert stderr == "relay supervisor event queue capacity exceeded\n", stderr
+        output = {"kind": "console_output", "data": "blocked output\n"}
+        frame = json.dumps(output, separators=(",", ":")) + "\n"
+        assert stdout
+        assert stdout == (frame * (len(stdout) // len(frame) + 1))[: len(stdout)]
+        return [
+            {
+                "submitted_interrupts": 17,
+                "acknowledged_interrupts": 16,
+                "stdout_prefix": {"repeated_event": output},
+                "exit_code": process.returncode,
+                "stderr": stderr,
+            }
+        ]
 
 
 def test_resumes_relay_output_after_downstream_backpressure(

@@ -121,21 +121,15 @@ mod platform {
         event_writer.begin_retirement();
         let mut finish_error = worker.cancel_and_join(&events);
 
-        collect_error(&mut finish_error, events.send(RelayEvent::StdoutClosed));
-        collect_error(&mut finish_error, events.send(RelayEvent::StderrClosed));
+        events.send_supervisor(RelayEvent::StdoutClosed);
+        events.send_supervisor(RelayEvent::StderrClosed);
         let reported_failure = failures.take();
         if let Some(message) = reported_failure.as_ref() {
-            collect_error(
-                &mut finish_error,
-                events.send(RelayEvent::Fatal {
-                    message: message.clone(),
-                }),
-            );
+            events.send_supervisor(RelayEvent::Fatal {
+                message: message.clone(),
+            });
         }
-        collect_error(
-            &mut finish_error,
-            events.send(RelayEvent::WorkerSidebandClosed),
-        );
+        events.send_supervisor(RelayEvent::WorkerSidebandClosed);
         if let Some(status) = status {
             let outcome = match (status.code(), status.signal()) {
                 (Some(code), _) => RelayEvent::WorkerExited { code },
@@ -144,9 +138,9 @@ mod platform {
                     message: "worker exited without an exit code or signal".to_string(),
                 },
             };
-            collect_error(&mut finish_error, events.send(outcome));
+            events.send_supervisor(outcome);
         }
-        collect_error(&mut finish_error, events.finish());
+        events.finish();
         collect_error(&mut finish_error, event_writer.join());
 
         // Do not repeat an exact retirement failure after publishing it as the
@@ -174,10 +168,10 @@ mod platform {
         error: String,
     ) -> Result<(), String> {
         event_writer.begin_retirement();
-        let _ = events.send(RelayEvent::Fatal {
+        events.send_supervisor(RelayEvent::Fatal {
             message: error.clone(),
         });
-        let _ = events.finish();
+        events.finish();
         let mut error = Some(error);
         collect_error(&mut error, event_writer.join());
         Err(error.expect("startup failure should be retained"))
@@ -222,19 +216,16 @@ mod platform {
             match control {
                 Control::Interrupt { request_id } => {
                     let error = interrupt_worker(child).err();
-                    if events
-                        .send(RelayEvent::InterruptResult { request_id, error })
-                        .is_err()
-                    {
-                        return force_stop_worker(child, "relay event writer stopped".to_string());
+                    if !events.send_supervisor(RelayEvent::InterruptResult { request_id, error }) {
+                        return force_stop_worker(child, String::new());
                     }
                 }
                 Control::Shutdown {
                     deadline,
                     report_acceptance,
                 } => {
-                    if report_acceptance && events.send(RelayEvent::ShutdownStarted).is_err() {
-                        return force_stop_worker(child, "relay event writer stopped".to_string());
+                    if report_acceptance && !events.send_supervisor(RelayEvent::ShutdownStarted) {
+                        return force_stop_worker(child, String::new());
                     }
                     stopping.store(true, Ordering::SeqCst);
                     let _ = stdin.send(StdinWrite::Close);
@@ -987,9 +978,13 @@ mod platform {
                 let mut ordinary_close = false;
                 let mut sideband_failure = None;
                 loop {
-                    if let Err(error) = forward_buffered_sideband(&mut reader, &events) {
-                        sideband_failure = Some(error);
-                        break;
+                    match forward_buffered_sideband(&mut reader, &events) {
+                        Ok(true) => {}
+                        Ok(false) => break,
+                        Err(error) => {
+                            sideband_failure = Some(error);
+                            break;
+                        }
                     }
 
                     let ready = match wait_for_io(reader.as_raw_fd(), libc::POLLIN, &cancelled) {
@@ -1054,14 +1049,16 @@ mod platform {
     fn forward_buffered_sideband(
         reader: &mut crate::sideband::Reader,
         events: &EventSender,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         while let Some(message) = reader
             .receive_buffered::<WorkerMessage>()
             .map_err(|error| format!("worker sideband read failed: {error}"))?
         {
-            events.send(message.into())?;
+            if !events.send(message.into()) {
+                return Ok(false);
+            }
         }
-        Ok(())
+        Ok(true)
     }
 
     fn drain_retiring_sideband(
@@ -1070,8 +1067,7 @@ mod platform {
         deadline: Instant,
     ) -> Result<(), String> {
         loop {
-            forward_buffered_sideband(reader, events)?;
-            if Instant::now() >= deadline {
+            if !forward_buffered_sideband(reader, events)? || Instant::now() >= deadline {
                 return Ok(());
             }
             match reader.read_chunk_nonblocking() {
@@ -1248,7 +1244,7 @@ mod platform {
                         match stream.read(&mut buffer) {
                             Ok(0) => break,
                             Ok(length) => {
-                                if events.send(output_event(kind, &buffer[..length])).is_err() {
+                                if !events.send(output_event(kind, &buffer[..length])) {
                                     break;
                                 }
                             }
@@ -1316,7 +1312,7 @@ mod platform {
             match stream.read(buffer) {
                 Ok(0) => break,
                 Ok(length) => {
-                    if events.send(output_event(kind, &buffer[..length])).is_err() {
+                    if !events.send(output_event(kind, &buffer[..length])) {
                         break;
                     }
                 }
