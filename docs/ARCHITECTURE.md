@@ -90,20 +90,14 @@ The client does not communicate directly with a relay, worker, or resolver.
 
 The launcher starts one manager per invocation of `mcp-console sandbox` and is the sole host-side owner of that sandbox lifetime.
 One parent-owned invocation runs each worker generation, which may evaluate multiple cells before restart or replacement; an ordinary invocation runs one direct command.
-The launcher first creates the gated root, then starts the manager with the root PID, cleanup timeout, and private temporary-directory path as native command arguments.
-The manager derives the owner PID from its parent and uses a private inherited Unix socket to report one-byte readiness and retain lifetime ownership.
-Before reporting readiness, the manager validates the root's exact identity and direct-child relationship, installs root and descendant tracking plus control-socket observation, and adopts the directory.
-The launcher retains its directory-creation guard until readiness and preserves it if manager adoption is ambiguous.
-After receiving readiness, the launcher installs manager-failure recovery, relinquishes that guard, and then releases the root's startup gate.
-The manager becomes the sole directory-cleanup owner when the duplicate guard is relinquished.
-The adopted guard preserves on unexpected unwind and is armed for removal only after the manager proves cleanup.
-If the manager later fails while the root remains live, launcher-side fallback handles process cleanup only and does not remove the directory.
-After readiness, the private stream carries no further messages.
-The launcher holds it open only as the live-sandbox ownership token, and EOF requests retirement whether the launcher closes it deliberately or exits.
-The manager decides whether the root must be stopped, completes observed-descendant and process-group cleanup, and removes the directory only after complete success.
-Successful manager process exit is the primary cleanup barrier; the launcher retains the direct root waitably through manager exit and any fallback cleanup, then reaps it.
+The manager reports readiness over a private inherited Unix socket before configured sandbox code may run.
+Readiness establishes process observation and transfers private-directory cleanup ownership to the manager.
+The socket then carries no messages: the launcher holds it open as the lifetime ownership token, and EOF requests retirement.
+Successful manager process exit is the primary process-cleanup barrier; the launcher retains the direct root waitably through manager exit and any fallback cleanup, then reaps it.
+Directory removal is best effort, so successful process retirement does not prove that the directory was deleted.
 
 This is a private lifetime-management boundary rather than part of the relay protocol or public interface.
+The [supervision guide](SANDBOX_SUPERVISION.md) owns startup sequencing, retirement, manager failure, and directory-removal semantics.
 
 ### Server and relay
 
@@ -147,13 +141,7 @@ On normal and owned-retirement paths, successful managed launcher exit is the sy
 The sandbox launcher preserves one direct sandbox target's status after natural completion and owns the complete host-side sandbox lifetime.
 It inherits only the three documented streams from the server, independently closes every unrelated inherited descriptor before target exec, places the target in a dedicated process group, and retains the direct root as a waitable child.
 After cleanup succeeds, natural root completion returns that root's exit status; a handled retirement request in hidden parent-owned mode returns success as the cleanup acknowledgment.
-It keeps the root blocked on a private descriptor until the manager reports readiness and failure monitoring is installed, then releases the root into the requested command.
-The root waiter uses one `kqueue` for root exit and launcher-addressed signals.
-In ordinary mode, the launcher relays `SIGHUP`, `SIGINT`, `SIGQUIT`, and `SIGTERM` addressed to it into the target group.
-In hidden parent-owned mode, it validates and watches the exact parent identity before target release; parent exit or launcher-addressed `SIGTERM` requests managed retirement instead.
-When its foreground process group has no peer, it transfers controlling-terminal ownership to the target group; when a pipeline peer shares the group, it leaves terminal ownership unchanged.
-In ordinary mode, after root exit it restores terminal ownership when it transferred it, drains forwarded signals already pending at that boundary, restores its inherited signal mask, closes the ownership token, waits for manager exit, and reaps the root last.
-Startup and recovery failures likewise drain pending forwarded signals after stopping the root and before restoring the inherited mask, so those signals cannot replace the reported error.
+It owns the target startup gate, exact parent-exit observation in owned mode, manager-failure recovery, and ordinary-mode terminal and signal handling.
 It does not own descendant tracking, console state, dependency resolution, recording, relay transport, or worker protocol behavior.
 It does not implement stopped/continued job state or general shell-pipeline job control.
 The launcher itself never writes to standard output because that stream carries relay JSONL in a worker generation.
@@ -164,16 +152,12 @@ If the launcher is killed or crashes, manager-control EOF still requests cleanup
 
 The sandbox manager owns primary observed-descendant cleanup for one sandbox lifetime.
 It records descendants by PID and process start time, validates the exact root identity, and adopts the private temporary-directory path.
-It retires only identities its tracker observed, uses the still-pinned root process group as a race backstop, and removes the directory only after successful cleanup.
+It retires only identities its tracker observed, uses the still-pinned root process group as a race backstop, and attempts directory removal only after successful process cleanup and owner EOF.
 Its single thread uses one `kqueue` for descendant and root events plus control-socket readability.
 It does not own session state, operation admission, relay transport, command exit status, or terminal semantics.
 
-After readiness, owner EOF requests retirement.
-Natural root exit first retires the observed lifetime and then applies the process-group backstop; owner EOF with a live root applies the backstop and stops the root before draining observed descendants.
-After clean natural-root cleanup, the manager waits for owner EOF before removing the directory and exiting.
-A successful manager exit is the primary cleanup barrier for the launcher.
 If the manager itself fails while the launcher retains a live, waitable root, the launcher monitor reconstructs the root's current ancestry and performs bounded process cleanup.
-That fallback has no directory-cleanup state, so the directory remains if the manager exits before completing its own cleanup and removal.
+That fallback has no directory-cleanup state, so the directory remains if the manager exits before completing its own cleanup and removal attempt.
 That fallback cannot recover a descendant that had already detached from the root's ancestry.
 
 ### Relay
@@ -243,37 +227,10 @@ An explicit restart starts its replacement eagerly, including when the session h
 For each worker start, the server first constructs the relay target independently of sandboxing.
 The built-in target is the current executable's `worker-relay` command followed by the worker command line; a configured relay is followed directly by the same worker command line.
 The server then constructs an ordinary current-executable command for `sandbox --exit-with-parent <server-pid> -- <relay-target>`, applies the retained environment to it, and configures piped input and output plus inherited error.
-The launcher inherits that environment and those streams, creates the gated root, and starts the sandbox manager while retaining both children waitably.
-After receiving readiness, the launcher installs manager-failure recovery, relinquishes its duplicate directory guard, and releases the same root process into the configured relay.
-Neither built-in nor configured relay code can run before manager observation is active and failure recovery is installed.
-Darwin can still miss a later descendant that becomes orphaned before the manager resolves its fork event.
+The launcher inherits that environment and those streams and releases the configured relay only after sandbox observation and failure recovery are installed.
 The relay creates the worker sideband and standard streams, launches the worker, and forwards its startup events.
 The server admits the worker only after the required readiness exchange succeeds.
 If sandbox setup fails before relay readiness, the launcher writes the detailed infrastructure error to inherited standard error and exits; the server reports a stable relay-startup failure from the closed transport.
-
-### Sandbox launcher startup and retirement
-
-The sandbox launcher creates a private temporary directory, configures `sandbox-exec`, closes unrelated nonstandard inherited descriptors, and asks it to run a hidden wrapper with inherited standard streams plus one private release descriptor.
-The wrapper blocks on that descriptor before requested command code executes.
-The launcher starts that gated root before the manager and retains both children waitably while the manager installs root, descendant, and control-socket observation and adopts the directory.
-After receiving readiness, the launcher installs recovery monitoring, relinquishes its duplicate directory guard, and writes one release byte; the same root closes the descriptor and replaces itself with the requested command.
-A descendant that later escapes before the manager sees its fork remains outside cleanup.
-
-The hidden `--exit-with-parent <PID>` mode binds the launcher to an owning parent process.
-Before creating the sandbox, the launcher verifies that PID is its current parent and captures the parent's PID and start time.
-It registers a `kqueue` exit watch, revalidates the identity after registration, and checks it again after manager readiness immediately before releasing the target.
-
-The launcher blocks in the root waiter's `kqueue` until root exit, configured-parent exit, or a supported signal is addressed to the launcher.
-Ordinary mode consumes pending launcher signals synchronously and relays them to the target process group.
-In owned mode, parent exit and launcher-addressed `SIGTERM` request managed retirement; other supported signals retain their relay behavior.
-At root exit, the ordinary launcher restores terminal ownership when it transferred it, drains forwarded signals already pending at that boundary, and restores its inherited signal mask before requesting manager cleanup by closing the ownership token.
-When startup or recovery cleanup stops the root instead, it applies the same drain before returning the error.
-A signal received after that final drain can then follow its inherited disposition; if it terminates the launcher, the manager completes lifetime cleanup.
-The launcher waits for successful manager exit as the cleanup barrier, then reaps the direct root.
-It returns the root status after natural completion and status 0 after successfully handling an owned retirement request.
-Owned mode keeps launcher signals blocked until manager cleanup and root reaping complete, including after natural root exit, so successful launcher exit remains a synchronous cleanup barrier.
-The manager alone decides whether cleanup succeeded and removes the directory; launcher loss after readiness reaches the same EOF retirement path.
-If the manager is killed while the launcher remains live, its monitor reconstructs the root's current ancestry and performs bounded cleanup while that root remains pinned.
 
 ### Evaluation
 
@@ -286,25 +243,15 @@ One exclusive environment transition covers requirement-delta calculation, host 
 No other send or environment-changing operation can enter that boundary, and a failed or superseded transition cannot dispatch the cell.
 The server releases the environment transition after launch; the active evaluation continues to own stdin, waiting, output cuts, response delivery, and restart handoff.
 
-Without inline control, the externally observable order is requirement preparation, nonempty stdin enqueue, then evaluation.
-The wait timeout begins only after the cell is dispatched.
+The [send operation-order reference](SEND_OPERATIONS.md) defines user-visible ordering, validation, and wait timing for all call combinations.
 
 ### Controlled send
 
 Control, stdin, interrupt grace, requirement preparation, and reservation of the optional new cell form one lifecycle operation.
 
-For interrupt, the server first uses the existing resolver-first, otherwise-worker routing and waits for delivery acknowledgement.
-It then enqueues nonempty stdin immediately, waits the full 100-millisecond grace period, and settles the previous evaluation's response ownership.
-Only after the previous evaluation has stopped does it validate and prepare requirements and reserve the new cell against the still-current generation.
-If delivery fails, no later step runs; if the evaluation remains active after the grace, a supplied cell is not dispatched.
-A validation or explicit preparation failure also prevents the cell from running, but does not undo the completed interrupt or stdin enqueue.
-
-For restart, declared requirements enter the existing restart transaction.
-The server resolves and retains them before it closes the old generation; a failure leaves the worker in place and sends neither stdin nor code.
-After successful replacement startup, the server queues nonempty same-call stdin and reserves the cell against that exact replacement before it releases admission.
-The old generation's unread stdin is discarded and cannot consume the new bytes.
-
-Control delivery, interrupt grace, restart, and explicit requirement preparation happen before dispatch and do not consume the new cell's wait timeout.
+Interrupt routes to an active resolver first, otherwise to the worker, and preserves ownership of the interrupted evaluation's response through handoff.
+Restart resolves and commits declared requirements before retirement; a resolution failure leaves the old worker in place, while later replacement failure does not roll back the retained commit.
+After successful replacement startup, admission remains reserved through same-call stdin and cell dispatch, so another generation cannot receive them.
 
 ### Worker-originated R resolution
 
@@ -362,9 +309,6 @@ These checks keep R callbacks on the embedded-R thread and prevent nested resolv
 
 An interrupt targets the active host resolver when one is registered; otherwise it targets the live worker through its relay.
 It stays associated with that resolver or worker and is not retried against a replacement.
-A control-only `send(control = "interrupt")` uses the same routing as an interrupt followed by a cell, then applies its stdin enqueue and 100-millisecond settling grace before it returns the current state.
-A control-only call that attaches to an evaluation after the grace uses its requested wait timeout; a call whose supplied cell was rejected observes the active evaluation without another wait.
-With `timeout_ms = 0`, the call returns the state and output visible immediately after the grace.
 Resolver interruption and lifecycle cancellation are tracked as typed outcomes for the affected operation.
 
 ### Explicit restart
@@ -422,14 +366,14 @@ The Markdown document presents R, Python, and SQL source as syntax-highlighted c
 Fences expand when literal content contains backticks.
 It is a chronological call ledger: a timed-out cell, later polls, and eventual results remain separate calls because the journal does not infer evaluation-level grouping.
 The executable Quarto document contains the source from calls with exactly one submitted R, Python, or SQL field in call order; it omits stdin, options, results, errors, polls, and artifacts.
-It retains source even when another argument later makes the call fail, so it is source material rather than an execution ledger.
+It includes qualifying source from rejected calls and failed evaluations.
 Its `ir` front matter declares the managed built-in R and Python requirements followed by cumulative explicit declarations from recorded calls.
 Bare sessions omit both managed defaults and rejected requirement payloads.
 It does not declare a Python version, so `ir render transcript.qmd` uses reticulate's default managed Python selection.
 The declarations are submitted inputs, not a lockfile or an exact record of successful retained and automatically inferred requirements.
 Rendering executes the captured client-authored cells in order in a fresh Quarto/knitr runtime outside the MCP Console worker sandbox and exports their new output.
-This is intended to reproduce the analysis represented by the Markdown ledger, but it does not replay recorded output or artifacts.
-It does not yet reconstruct every MCP Console runtime detail; in particular, SQL chunks require a DBI connection supplied by the document user.
+Rendering does not reconstruct session control, stdin, recorded results, or artifacts.
+SQL chunks require a DBI connection supplied by the document user.
 
 Images remain ordinary MCP image content for the client.
 For recording, the server decodes retained image data into files under the run's `artifacts/` directory and records artifact identifiers and relative paths in the JSONL result instead of duplicating the encoded payload there.
