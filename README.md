@@ -103,9 +103,13 @@ See [Recording and artifacts](https://github.com/t-kalinowski/mcp-console/blob/m
 
 ## Security boundary
 
-Submitted R, Python, and SQL have shell-class capability inside the worker sandbox.
+By default, submitted R, Python, and SQL have shell-class capability inside the worker sandbox.
 The worker can read host files, but direct network access and regular-file writes outside its private temporary directory are denied.
 This is a process boundary, not a safe evaluator for untrusted code with access to sensitive readable files.
+
+`mcp-console serve --no-sandbox` launches the relay directly with host permissions.
+The worker inherits the host temporary-directory environment, and no sandbox manager tracks or cleans up descendants.
+The relay still shuts down and reaps its direct worker normally.
 
 The server installs automatically inferred or explicitly declared R and Python packages and DuckDB extensions outside the worker sandbox with server permissions.
 Those operations may access the network and execute installation or build code, so only trusted requirements should be supplied.

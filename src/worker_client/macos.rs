@@ -124,7 +124,7 @@ struct ReadyCommit(Arc<Mutex<Option<ReadyCommitSender>>>);
 type ReadyCommitSender = mpsc::Sender<ReadyCommitOutcome>;
 
 impl WorkerRuntime {
-    /// Starts a relay in the sandbox and waits for its worker's ready message.
+    /// Starts a relay and waits for its worker's ready message.
     pub(super) fn spawn(
         &self,
         spec: super::WorkerSpec<'_>,
@@ -136,6 +136,7 @@ impl WorkerRuntime {
             executable,
             arguments,
             relay,
+            no_sandbox,
             python,
             managed_r,
             dynamic_resolution,
@@ -143,15 +144,22 @@ impl WorkerRuntime {
         } = spec;
 
         let current_executable = std::env::current_exe()
-            .map_err(|error| format!("failed to locate the sandbox launcher: {error}"))?;
+            .map_err(|error| format!("failed to locate the current executable: {error}"))?;
         let target = relay_command_line(&current_executable, executable, arguments, relay);
-        let mut command = Command::new(&current_executable);
-        command
-            .arg("sandbox")
-            .arg("--exit-with-parent")
-            .arg(std::process::id().to_string())
-            .arg("--")
-            .args(target);
+        let mut command = if no_sandbox {
+            let mut command = Command::new(&target[0]);
+            command.args(&target[1..]);
+            command
+        } else {
+            let mut command = Command::new(&current_executable);
+            command
+                .arg("sandbox")
+                .arg("--exit-with-parent")
+                .arg(std::process::id().to_string())
+                .arg("--")
+                .args(target);
+            command
+        };
         if let Some(python) = python {
             python.configure_worker(&mut command);
         }
