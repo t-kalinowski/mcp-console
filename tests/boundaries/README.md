@@ -154,7 +154,10 @@ A suite may set `REQUIRED_COMMANDS = {"ir"}` to skip when a required executable 
 
 Server cases create an `McpClient`, call `initialize_and_list_tools()`, perform their `send()` interactions, and return `client.finish()`.
 Use `with McpClient(...) as client:` so an assertion also closes the input and reaps the server.
-Response reads have a 600-second deadline and shutdown has a 15-second deadline; constructor arguments `response_timeout` and `shutdown_timeout` can override them.
+Response reads have a 600-second ceiling, shortened to leave 14 seconds before the runner's case deadline for cleanup and diagnostics.
+This uses the remaining case time even for requests made later in a case.
+Client shutdown allows 11 seconds for server retirement and reserves two more seconds for a server-only kill and reap, within the supervisor's 15-second cleanup window.
+Constructor arguments `response_timeout` and `shutdown_timeout` can override these waits; under the runner, the case deadline and 11-second shutdown cap still apply.
 Deadline errors include the server's stderr tail.
 To make interleavings explicit, `start_send()` returns a pending transcript entry; `receive(entry)` fills in its response, and `receive_many(entries)` matches responses by request ID regardless of arrival order.
 Protocol cases can use `request()`, `start_request()`, `notify()`, and `send_message()` directly.
