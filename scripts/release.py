@@ -170,7 +170,7 @@ def smoke_mcp(
                 "content": [{"type": "text", "text": "[1] 42\n"}],
                 "isError": False,
             },
-            "unexpected R evaluation response",
+            f"unexpected R evaluation response: {json.dumps(evaluation, ensure_ascii=False)}",
         )
     except Exception as error:
         standard_error = terminate(process)

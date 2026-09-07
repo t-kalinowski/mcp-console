@@ -201,12 +201,13 @@ class ReleaseScriptTests(unittest.TestCase):
                 evaluation = json.loads(sys.stdin.readline())
                 if os.environ.get("FAKE_MCP_EVALUATION_HANG"):
                     time.sleep(60)
+                error = os.environ.get("FAKE_MCP_EVALUATION_ERROR")
                 print(json.dumps({
                     "jsonrpc": "2.0",
                     "id": evaluation["id"],
                     "result": {
-                        "content": [{"type": "text", "text": "[1] 42\\n"}],
-                        "isError": False,
+                        "content": [{"type": "text", "text": error or "[1] 42\\n"}],
+                        "isError": error is not None,
                     },
                 }), flush=True)
             else:
@@ -342,6 +343,21 @@ class ReleaseScriptTests(unittest.TestCase):
 
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("MCP response timed out", result.stderr)
+
+    def test_smoke_wheel_preserves_evaluation_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            environment, wheel, cargo_bin = self.smoke_environment(directory)
+            environment["FAKE_MCP_EVALUATION_ERROR"] = "fixture dependency unavailable"
+            result = self.run_script(
+                "smoke-wheel",
+                str(wheel),
+                str(cargo_bin),
+                cwd=directory,
+                env=environment,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("fixture dependency unavailable", result.stderr)
 
     def test_verify_wheel_set_requires_macos_and_linux_architectures(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
