@@ -174,7 +174,9 @@ The relay does not own the logical session, retained requirements, evaluation ad
 It exits with the worker lifetime it supervises.
 Remaining descendants, including those retaining worker streams, are retired by the sandbox launcher after the target exits or retirement is requested.
 Its cancellable local transports share a 100-millisecond allowance for additional nonblocking reads during retirement.
-They forward complete buffered sideband frames but may abandon incomplete frames and further descendant output, so draining does not depend on those descendants becoming quiet or closing their descriptors.
+They queue complete buffered sideband frames but may abandon incomplete frames and further descendant output, so draining does not depend on those descendants becoming quiet or closing their descriptors.
+After direct-worker retirement, the relay gives output one shared second to flush, starting before local I/O joins.
+Blocked downstream pipe or socket output can therefore fail retirement without delaying worker shutdown; [the relay protocol](RELAY_PROTOCOL.md#retirement-and-failure) defines delivery and descriptor limits.
 
 The internal `worker-relay` command uses the same stream protocol when launched directly without a sandbox or below another process wrapper.
 Such a direct invocation owns only its direct worker; it supplies no sandbox policy or descendant-cleanup guarantee.
