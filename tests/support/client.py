@@ -10,6 +10,10 @@ from typing import Any, Self, TextIO
 
 from support.records import ToolResult, Transcript, TranscriptEntry
 
+SERVER_SHUTDOWN_SECONDS = 11
+SERVER_REAP_SECONDS = 2
+CASE_RESPONSE_RESERVE_SECONDS = SERVER_SHUTDOWN_SECONDS + SERVER_REAP_SECONDS + 1
+
 
 class TextReader:
     """Descriptor-backed text with an explicit buffer and bounded reads."""
@@ -60,7 +64,7 @@ class McpClient:
     """A synchronous, recording MCP client; use a context to own its lifetime."""
 
     response_timeout: float = 600
-    shutdown_timeout: float = 15
+    shutdown_timeout: float = SERVER_SHUTDOWN_SECONDS
 
     def __init__(
         self,
@@ -71,7 +75,7 @@ class McpClient:
         umask: int = -1,
         pass_fds: tuple[int, ...] = (),
         response_timeout: float = 600,
-        shutdown_timeout: float = 15,
+        shutdown_timeout: float = SERVER_SHUTDOWN_SECONDS,
     ) -> None:
         self.response_timeout = response_timeout
         self.shutdown_timeout = shutdown_timeout
@@ -149,6 +153,12 @@ class McpClient:
 
     def _read_response_line(self) -> str:
         deadline = time.monotonic() + self.response_timeout
+        if (
+            case_deadline := os.environ.get("MCP_CONSOLE_TEST_CASE_DEADLINE")
+        ) is not None:
+            deadline = min(
+                deadline, float(case_deadline) - CASE_RESPONSE_RESERVE_SECONDS
+            )
         while b"\n" not in self.stdout.buffer and not self.stdout.eof:
             self._wait_for_output(deadline, "response")
         if self.stdout.buffer:
@@ -259,20 +269,28 @@ class McpClient:
         return transcript
 
     def finish_with_standard_error(self) -> tuple[Transcript, str]:
+        deadline = self._cleanup_deadline()
         try:
-            self._shutdown()
+            self._shutdown(deadline - SERVER_REAP_SECONDS)
             extra_output = self.stdout.read()
             standard_error = self.stderr.read()
             assert self.process.returncode == 0, standard_error
             assert extra_output == "", f"unexpected extra output: {extra_output}"
             return self.transcript, standard_error
         finally:
-            self._dispose()
+            self._dispose(deadline)
 
-    def _shutdown(self) -> None:
+    def _cleanup_deadline(self) -> float:
+        timeout = self.shutdown_timeout
+        if "MCP_CONSOLE_TEST_CASE_DEADLINE" in os.environ:
+            timeout = min(timeout, SERVER_SHUTDOWN_SECONDS)
+        # Normal server retirement has up to ten seconds of staged deadlines.
+        # Reserve PID kill/reap time inside the supervisor's fifteen seconds.
+        return time.monotonic() + timeout + SERVER_REAP_SECONDS
+
+    def _shutdown(self, deadline: float) -> None:
         if not self.stdin.closed:
             self.stdin.close()
-        deadline = time.monotonic() + self.shutdown_timeout
         while not (self.stdout.eof and self.stderr.eof):
             self._wait_for_output(deadline, "shutdown")
         try:
@@ -282,10 +300,12 @@ class McpClient:
                 f"mcp-console timed out waiting for shutdown: {self._diagnostics()}"
             ) from None
 
-    def _dispose(self) -> None:
+    def _dispose(self, deadline: float) -> None:
         if self.process.poll() is None:
             self.process.kill()
-        self.process.wait(timeout=5)
+        self.process.wait(
+            timeout=min(SERVER_REAP_SECONDS, max(0, deadline - time.monotonic()))
+        )
         for stream in (self.stdin, self.stdout, self.stderr):
             stream.close()
         if self.temporary_directory is not None:
@@ -299,12 +319,13 @@ class McpClient:
             and self.process.poll() is not None
         ):
             return
+        deadline = self._cleanup_deadline()
         try:
-            self._shutdown()
+            self._shutdown(deadline - SERVER_REAP_SECONDS)
         except TimeoutError:
             pass
         finally:
-            self._dispose()
+            self._dispose(deadline)
 
 
 def stop_client(client: McpClient) -> None:

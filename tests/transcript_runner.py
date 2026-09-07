@@ -158,22 +158,11 @@ def test_forks(binary: Path) -> list[dict[str, object]]:
 
 # fmt: python
 GATED_SNAPSHOT_CHECK = """
-import signal
-
-
 ungated_check_recording = check_recording
 
 
 def check_recording(*arguments: object, **keywords: object) -> object:
     root = Path(__file__).resolve().parents[2]
-    previous = signal.getsignal(signal.SIGINT)
-
-    def acknowledge_interrupt(number: int, frame: object) -> None:
-        previous(number, frame)
-        with (root / "interrupt-received").open("wb", buffering=0) as received:
-            assert received.write(b"1") == 1
-
-    signal.signal(signal.SIGINT, acknowledge_interrupt)
     try:
         with (root / "snapshot-started").open("wb", buffering=0) as started:
             assert started.write(b"1") == 1
@@ -181,7 +170,7 @@ def check_recording(*arguments: object, **keywords: object) -> object:
             assert release.read(1) == b"1"
         return ungated_check_recording(*arguments, **keywords)
     finally:
-        signal.signal(signal.SIGINT, previous)
+        (root / "snapshot-check-cleaned").touch()
 """.lstrip()
 
 
@@ -374,23 +363,20 @@ class TranscriptRunnerTests(unittest.TestCase):
         with snapshots.open("a", encoding="utf-8") as source:
             source.write("\n" + GATED_SNAPSHOT_CHECK)
         checkpoints = []
-        for name in ("snapshot-started", "interrupt-received", "snapshot-release"):
+        for name in ("snapshot-started", "snapshot-release"):
             os.mkfifo(self.root / name)
             checkpoints.append(os.open(self.root / name, os.O_RDWR | os.O_NONBLOCK))
-        started, received, release = checkpoints
+        started, release = checkpoints
         process = self.start_runner("client_server/server/test_tools::selected")
         try:
             ready, _, _ = select.select([started], [], [], 10)
             self.assertTrue(ready, "final snapshot check did not start")
             self.assertEqual(os.read(started, 1), b"1")
             process.send_signal(signal.SIGINT)
-            ready, _, _ = select.select([received], [], [], 10)
-            self.assertTrue(ready, "runner did not handle the interrupt")
-            self.assertEqual(os.read(received, 1), b"1")
-            self.assertEqual(os.write(release, b"1"), 1)
             stdout, stderr = process.communicate(timeout=10)
             self.assertNotEqual(process.returncode, 0, stdout)
             self.assertIn("KeyboardInterrupt", stderr)
+            self.assertTrue((self.root / "snapshot-check-cleaned").is_file())
         finally:
             os.write(release, b"1")
             try:
@@ -401,6 +387,64 @@ class TranscriptRunnerTests(unittest.TestCase):
                 process.communicate(timeout=10)
             for checkpoint in checkpoints:
                 os.close(checkpoint)
+
+    def assert_signal_stops_blocked_snapshot_check(
+        self, number: signal.Signals
+    ) -> None:
+        snapshots = self.root / "tests" / "support" / "snapshots.py"
+        with snapshots.open("a", encoding="utf-8") as source:
+            source.write("\n" + GATED_SNAPSHOT_CHECK)
+        checkpoints = []
+        for name in ("snapshot-started", "snapshot-release"):
+            os.mkfifo(self.root / name)
+            checkpoints.append(os.open(self.root / name, os.O_RDWR | os.O_NONBLOCK))
+        checking, release = checkpoints
+        try:
+            with self.hanging_runner(
+                "--timeout",
+                "60",
+                "--jobs",
+                "2",
+                "client_server/server/test_tools::selected",
+                "client_server/server/test_tools::hangs",
+            ) as (process, sibling_started, _):
+                try:
+                    for checkpoint in (checking, sibling_started):
+                        ready, _, _ = select.select([checkpoint], [], [], 10)
+                        self.assertTrue(
+                            ready, "snapshot check and sibling did not start"
+                        )
+                        self.assertEqual(os.read(checkpoint, 1), b"1")
+                    process.send_signal(number)
+                    try:
+                        stdout, stderr = process.communicate(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        self.fail(
+                            "signal did not stop the blocked snapshot check and sibling"
+                        )
+                    self.assertNotEqual(process.returncode, 0, stdout)
+                    self.assertIn("KeyboardInterrupt", stderr)
+                    if number != signal.SIGINT:
+                        self.assertIn(
+                            f"transcript runner received {number.name}", stderr
+                        )
+                    self.assertTrue((self.root / "snapshot-check-cleaned").is_file())
+                    self.assertTrue((self.root / "child-cleaned").is_file())
+                finally:
+                    # Either case can reach its snapshot check during cleanup.
+                    os.write(release, b"11")
+        finally:
+            for checkpoint in checkpoints:
+                os.close(checkpoint)
+
+    def test_interrupt_during_snapshot_check_stops_siblings(self) -> None:
+        self.assert_signal_stops_blocked_snapshot_check(signal.SIGINT)
+
+    def test_termination_during_snapshot_check_stops_siblings(self) -> None:
+        self.assert_signal_stops_blocked_snapshot_check(signal.SIGTERM)
+
+    def test_hangup_during_snapshot_check_stops_siblings(self) -> None:
+        self.assert_signal_stops_blocked_snapshot_check(signal.SIGHUP)
 
     def test_runner_loss_retires_its_detached_case(self) -> None:
         selector = "client_server/server/test_tools::hangs"
