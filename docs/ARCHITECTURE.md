@@ -152,7 +152,7 @@ If the launcher is killed or crashes, manager-control EOF still requests cleanup
 
 The sandbox manager owns primary observed-descendant cleanup for one sandbox lifetime.
 It records descendants by PID and process start time, validates the exact root identity, and adopts the private temporary-directory path.
-It retires only identities its tracker observed, uses the still-pinned root process group as a race backstop, and attempts directory removal only after successful process cleanup and owner EOF.
+It retires only identities its tracker observed, uses the still-pinned root process group as a race backstop, and attempts directory removal only after successful process cleanup.
 Its single thread uses one `kqueue` for descendant and root events plus control-socket readability.
 It does not own session state, operation admission, relay transport, command exit status, or terminal semantics.
 
@@ -374,6 +374,14 @@ The declarations are submitted inputs, not a lockfile or an exact record of succ
 Rendering executes the captured client-authored cells in order in a fresh Quarto/knitr runtime outside the MCP Console worker sandbox and exports their new output.
 Rendering does not reconstruct session control, stdin, recorded results, or artifacts.
 SQL chunks require a DBI connection supplied by the document user.
+
+From the recording directory, render the source projection with:
+
+```sh
+uv tool run --from r-lib-ir ir render transcript.qmd
+```
+
+When `ir` is installed on `PATH`, `ir render transcript.qmd` is equivalent.
 
 Images remain ordinary MCP image content for the client.
 For recording, the server decodes retained image data into files under the run's `artifacts/` directory and records artifact identifiers and relative paths in the JSONL result instead of duplicating the encoded payload there.
