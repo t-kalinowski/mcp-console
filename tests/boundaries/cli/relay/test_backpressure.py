@@ -246,5 +246,58 @@ def test_finishes_startup_failure_while_relay_stdout_is_backpressured(
                 process.communicate(timeout=10)
 
 
+def test_succeeds_when_deadline_passes_after_final_output(binary: Path) -> Transcript:
+    fixtures = Path(__file__).resolve().parents[3] / "fixtures"
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        interposer = root / "completed-output.dylib"
+        subprocess.run(
+            [
+                "cc",
+                "-dynamiclib",
+                "-std=c11",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                "-o",
+                interposer,
+                fixtures / "native" / "relay_completed_output.c",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        marker = root / "output-complete"
+        environment = os.environ.copy()
+        environment["DYLD_INSERT_LIBRARIES"] = str(interposer)
+        environment["MCP_CONSOLE_TEST_OUTPUT_COMPLETE"] = str(marker)
+        worker = r"""
+import os
+os.write(int(os.environ["MCP_CONSOLE_SIDEBAND_FD"]), b'{"kind":"ready"}\n')
+"""
+        result = subprocess.run(
+            [binary, "worker-relay", sys.executable, "-c", worker],
+            input="",
+            capture_output=True,
+            text=True,
+            env=environment,
+            timeout=10,
+        )
+        assert marker.read_text() == "1"
+        events = [json.loads(line) for line in result.stdout.splitlines()]
+        assert events == [
+            {"kind": "ready"},
+            {"kind": "stdout_closed"},
+            {"kind": "stderr_closed"},
+            {"kind": "worker_sideband_closed"},
+            {"kind": "worker_exited", "code": 0},
+        ], events
+        assert result.returncode == 0, result.stderr
+        assert result.stderr == "", result.stderr
+        return [
+            {"events": events, "exit_code": result.returncode, "stderr": result.stderr}
+        ]
+
+
 if __name__ == "__main__":
     run_this_suite(__file__)
