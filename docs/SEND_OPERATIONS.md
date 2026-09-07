@@ -21,7 +21,8 @@ Requirement compatibility and resolver errors can arise later during preparation
 ## Operations
 
 `timeout_ms` defaults to 60,000 milliseconds and limits observation of an evaluation, not the duration of the whole call.
-It starts when the call starts or attaches to an evaluation, after the preceding work shown below.
+It starts when evaluation observation begins after admission, or when a poll attaches to an evaluation.
+Explicit preparation and control finish before this wait, as shown below.
 It does not cancel evaluation, worker startup, or resolution.
 An automatic replacement attempt after worker failure shares the same evaluation wait.
 The table assumes the session admits the operation; a conflicting operation or generation change can reject it before the remaining steps.
