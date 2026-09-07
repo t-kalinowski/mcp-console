@@ -1,7 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
 import sys
-import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -86,39 +85,13 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
         """)
     # Same-call stdin is transport-ordered, but fd 0 consumption can lag the
     # input-exposure response. Accumulate exact public output cuts in order.
-    expected = (
-        '[input requested: "first> "]\n[input requested: "second> "]\nAda|Lovelace\n'
+    wait_for_evaluation_output(
+        client,
+        '[input requested: "first> "]\n[input requested: "second> "]\nAda|Lovelace\n',
+        "combined same-call stdin",
+        r=r,
+        stdin="Ada\nLovelace\n",
     )
-    waiting = "[waiting for stdin]"
-    deadline = time.monotonic() + 3
-    call_start = len(client.transcript)
-    result = client.send(r=r, stdin="Ada\nLovelace\n")
-    collected = ""
-    while True:
-        assert result.get("isError") is not True, result
-        content = result["content"]
-        assert len(content) == 1 and content[0]["type"] == "text", content
-        output = content[0]["text"]
-        is_waiting = output.endswith(waiting)
-        if is_waiting:
-            delta = "" if output == "\n" + waiting else output.removesuffix(waiting)
-        else:
-            delta = output
-        collected += delta
-        assert expected.startswith(collected), repr(collected)
-        if not is_waiting:
-            assert collected == expected, repr(collected)
-            break
-        assert collected, "the first input request was not reported"
-        assert time.monotonic() < deadline, "combined same-call stdin did not complete"
-        result = client.send(timeout_ms=3_000)
-
-    calls = client.transcript[call_start:]
-    submitted = calls[0]
-    final_result = calls[-1]["result"]
-    final_result["content"][0]["text"] = collected
-    submitted["result"] = final_result
-    client.transcript[call_start:] = [submitted]
 
     # fmt: r
     r = code(r"""
@@ -130,11 +103,20 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
         prompted <- readline("after> ")
         cat(paste(direct, prompted, sep = "|"), "\n", sep = "")
         """)
-    client.send(r=r, stdin="direct\n", timeout_ms=1_000)
-    output = last_tool_text(client)
-    assert output == '[input requested: "after> "]\n[waiting for stdin]', output
-    client.send(stdin="callback\n")
-    assert last_tool_text(client) == "direct|callback\n"
+    wait_for_evaluation_output(
+        client,
+        '[input requested: "after> "]\n[waiting for stdin]',
+        "console read after direct stdin",
+        r=r,
+        stdin="direct\n",
+        timeout_ms=1_000,
+    )
+    wait_for_evaluation_output(
+        client,
+        "direct|callback\n",
+        "follow-up console stdin",
+        stdin="callback\n",
+    )
 
     # fmt: r
     r = code(r"""
@@ -144,18 +126,25 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
     assert last_tool_text(client) == '[input requested: "color> "]\n[waiting for stdin]'
     client.send(stdin="bl", timeout_ms=50)
     assert last_tool_text(client) == "\n[waiting for stdin]"
-    client.send(stdin="ue\n")
-    assert last_tool_text(client) == '[1] "color blue"\n'
+    wait_for_evaluation_output(
+        client,
+        '[1] "color blue"\n',
+        "partial console stdin completion",
+        stdin="ue\n",
+    )
 
     # fmt: r
     r = code(r"""
         prompt <- paste0('quoted "prompt"', "\n", "> ")
         invisible(readline(prompt))
         """)
-    client.send(r=r, stdin="accepted\n")
-    output = last_tool_text(client)
-    assert output == '[input requested: "quoted \\"prompt\\"\\n> "]\n', output
-    assert "accepted" not in output
+    wait_for_evaluation_output(
+        client,
+        '[input requested: "quoted \\"prompt\\"\\n> "]\n',
+        "quoted console prompt",
+        r=r,
+        stdin="accepted\n",
+    )
     return client.finish()
 
 
