@@ -10,7 +10,7 @@ The [worker protocol](WORKER_PROTOCOL.md) defines the relay's other interface.
 
 ## Process boundary
 
-The server starts the public `mcp-console sandbox` command as its direct child for each worker generation, with the configured relay and worker command line as the target:
+By default, the server starts the public `mcp-console sandbox` command as its direct child for each worker generation, with the configured relay and worker command line as the target:
 
 ```text
 server <--> sandbox launcher <--> relay <--> worker
@@ -18,7 +18,16 @@ server <--> sandbox launcher <--> relay <--> worker
 ```
 
 The launcher passes the server's piped input and output and inherited error stream through to the target without a data proxy.
-The relay receives only standard input, standard output, and standard error from its launcher.
+
+With `serve --no-sandbox`, the server starts the configured relay directly:
+
+```text
+server <--> relay <--> worker
+            direct-worker owner
+```
+
+This mode supplies no sandbox policy, sandbox-owned private temporary directory, or manager-owned descendant cleanup.
+The relay receives only standard input, standard output, and standard error from its parent in either mode.
 It need not be the sandbox root or a process-group leader; an ordinary wrapper can launch it as a child with the same streams.
 The internal `worker-relay` command also accepts this protocol when launched directly without a sandbox, with the caller responsible for any descendant cleanup.
 
@@ -29,7 +38,7 @@ The framed event is authoritative; stderr diagnostics are best effort because th
 The sandbox launcher never writes to standard output because it carries relay JSONL.
 If sandbox setup fails before relay readiness, the detailed infrastructure error goes to inherited standard error and the closed relay transport produces a stable generic startup failure in the server.
 
-The server closes unrelated inherited descriptors before launcher exec.
+The server closes unrelated inherited descriptors before executing the launcher or direct relay.
 The launcher independently enforces its target's descriptor boundary and owns sandbox setup, startup supervision, process-group and observed-descendant cleanup, and private-directory lifetime.
 Its startup gate, manager channel, and parent-exit observation are implementation details documented in [sandbox supervision](SANDBOX_SUPERVISION.md).
 Any future sandbox-specific control plane must terminate at the sandbox process; its bootstrap and transport do not belong in the relay protocol.
@@ -37,7 +46,8 @@ Any future sandbox-specific control plane must terminate at the sandbox process;
 The relay creates the worker's full-duplex sideband socket pair and its standard-input, standard-output, and standard-error pipes.
 It passes one worker sideband endpoint through `MCP_CONSOLE_SIDEBAND_FD` together with the fd-0/1/2 contract documented in [the worker protocol](WORKER_PROTOCOL.md).
 It owns the direct worker, local transports, sideband translation, direct-worker signals, bounded termination, and direct-worker reaping.
-Successful managed launcher exit is the server's sandbox-cleanup barrier.
+In sandboxed mode, successful managed launcher exit is the server's sandbox-cleanup barrier.
+In direct mode, the server waits for and reaps the relay; its exit supplies no descendant-cleanup guarantee.
 The server owns generation state and host-side dependency resolution; see [Requirements and environments](REQUIREMENTS.md) for that trust boundary.
 
 ## Framing and raw bytes
@@ -185,12 +195,12 @@ This keeps the relay reader alive for drained raw output, stream closures, and t
 The relay closes worker stdin and sends the unchanged worker-sideband `shutdown` message without waiting for one path before attempting the other.
 If the worker remains live at its deadline, the relay sends `SIGKILL` to that direct child.
 After direct-worker exit or force-stop, the relay reaps the direct child and retires its local transports.
-The sandbox launcher owns cleanup of remaining descendants, including those retaining worker descriptors.
+In sandboxed mode, the sandbox launcher owns cleanup of remaining descendants, including those retaining worker descriptors.
 The resulting `worker_exited` or `worker_signaled` event describes only that direct child; it is not a sandbox-lifetime retirement acknowledgment.
 Clean relay-stdin EOF does not emit `shutdown_started`; it performs the same worker shutdown with a new one-second grace period measured from EOF.
 EOF midway through a command frame is a transport failure instead.
 
-The sandbox launcher owns retirement of the whole target lifetime after target exit, a managed-retirement request, or parent loss.
+In sandboxed mode, the sandbox launcher owns retirement of the whole target lifetime after target exit, a managed-retirement request, or parent loss.
 Its cleanup and recovery mechanisms remain behind the sandbox command; see [sandbox supervision](SANDBOX_SUPERVISION.md) for their guarantees and limits.
 The server retains the launcher as its ordinary waitable child.
 It waits through the worker deadline and uses the additional two-second allowance only after timely `shutdown_started` acceptance or a pre-retirement failure.
@@ -201,7 +211,12 @@ The server does not start the replacement sandbox lifetime until the launcher-ex
 A nonzero launcher exit fails the restart instead of admitting a replacement.
 Signal-derived status 137 is redundant only when relay EOF itself established the generation failure, including successful launcher recovery from manager failure; it remains an error after an earlier independent protocol, worker, or transport failure.
 The server uses a hard launcher kill only as the final fail-safe; the bundled sandbox still requests cleanup on launcher loss, but the server can no longer synchronously observe its completion.
-Concurrent or repeated retirement reuses the recorded result and never signals a retired launcher PID again.
+
+With `--no-sandbox`, the server retains the relay itself as its waitable child and applies the same worker and relay deadlines.
+If the relay has not exited by the applicable deadline, the server sends `SIGTERM` directly to it, allows six seconds before `SIGKILL`, and then allows one second to observe exit.
+The server reaps the relay before admitting a replacement and applies the same child-exit validation.
+Normal relay shutdown reaps its direct worker, but no sandbox manager retires remaining descendants or recovers the worker after forced relay termination.
+Concurrent or repeated retirement reuses the recorded result and never signals a retired child PID again in either mode.
 
 ## Retirement and failure
 
@@ -225,4 +240,5 @@ Public rendering of these outcomes belongs to the server and is described at the
 Malformed relay JSON, invalid byte-form base64, an unexpected command, a fatal event, or unexpected relay EOF fails the worker transport.
 Worker-sideband EOF has its own relay event; other worker-sideband read failures become fatal relay events.
 For a relay-owned protocol or I/O failure, the relay requests direct-worker termination immediately but retains the failure until the worker transports have stopped and the raw-output readers have drained and joined.
-The server preserves that failure, processes the remaining closure and process-outcome events in order, and then waits for host-side sandbox-lifetime retirement before replacing the generation.
+The server preserves that failure, processes the remaining closure and process-outcome events in order, and then waits for its direct child's retirement before replacing the generation.
+In sandboxed mode, that wait includes host-side sandbox-lifetime retirement; in direct mode, it covers only the relay.

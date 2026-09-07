@@ -52,7 +52,7 @@ Host resolution for changed requirements submitted through `send` also has no de
 The call remains pending until the resolver exits; while MCP input is open, `send(control = "interrupt")` sends `SIGINT` to the active resolver, and closing MCP input cancels it during server shutdown.
 
 Packages supplied by these environments are available but are not attached or imported automatically.
-The default DuckDB extensions are installed in DuckDB's native cache but are loaded only when DuckDB needs them inside the sandbox.
+The default DuckDB extensions are installed in DuckDB's native cache but are loaded only when DuckDB needs them inside the worker.
 
 A custom worker skips all three default preparations.
 Its more limited requirements contract is described under [Custom workers](#custom-workers).
@@ -274,7 +274,8 @@ The server installs the complete retained extension set for each relevant resolv
 It then retains the extension names without changing the worker's R, Python, SQL, or catalog state.
 
 Preparation does not load extension code.
-A later `LOAD` or DuckDB automatic load occurs inside the worker sandbox.
+A later `LOAD` or DuckDB automatic load occurs inside the worker, which is sandboxed by default.
+With `serve --no-sandbox`, extension code runs with the server's filesystem, process, and network permissions.
 DuckDB chooses its compiled default extension repository and version-and-platform native cache; MCP Console does not accept a repository, URL, path, or version selector.
 
 When a DuckDB request also needs a new R library, the worker still uses live R preparation for that library.
@@ -419,8 +420,10 @@ It must also apply its first managed R library before loading DuckDB; a DuckDB n
 
 ## Host resolution and trust
 
-The worker sandbox denies direct network access and regular writes outside its private temporary directory.
+By default, the worker sandbox denies direct network access and regular writes outside its private temporary directory.
 Dependency resolution is a deliberate exception to that boundary: the server launches R, Python, and DuckDB resolvers on the host, outside the sandbox.
+With `serve --no-sandbox`, the worker and the package or extension code it loads also run with the server's filesystem, process, and network permissions.
+The requirement validation and trusted-resolver rules apply in both modes.
 
 Host resolvers may access the network and their normal caches.
 R and Python package installation can execute package installation or build code with the server's filesystem and process permissions.
@@ -462,7 +465,8 @@ Managed-environment creation passes each validated requirement as its own argume
 It removes `UV_NO_CACHE` after restoring the trusted startup snapshot because `uv tool run` deletes a no-cache tool environment when that command exits; Python version inventory and the other resolver calls retain the setting.
 Ordinary Matplotlib cache-warm failures remain best effort, but an interrupt during cache warming fails the preparation before its candidate environment can be committed.
 
-The built-in worker has the opposite network policy: it forces `UV_OFFLINE=1` before user code runs inside the network-denied sandbox.
+The built-in worker forces `UV_OFFLINE=1` before user code runs, including with `serve --no-sandbox`.
+This setting configures `uv`; only the default sandbox supplies a process-level network restriction.
 
 ## Failure atomicity and cache effects
 
