@@ -14,6 +14,7 @@ Imports:
     ellmer (>= 0.4.2),
     jsonlite,
     processx,
+    ps,
     reticulate (>= 1.41.0),
     utils
 Suggests:
