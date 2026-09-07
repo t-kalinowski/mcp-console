@@ -5,12 +5,18 @@ import select
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from pathlib import Path
+
+from support.macos import (
+    capture_darwin_process_identity,
+    signal_darwin_process,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 RUNNER = ROOT / "tests" / "boundaries" / "_run.py"
@@ -109,6 +115,45 @@ def test_failure_beside_hang(binary: Path) -> list[dict[str, str]]:
 
 if __name__ == "__main__":
     signal.pause()
+""".lstrip()
+
+# fmt: python
+GIL_HOLDING_SUITE = """
+import ctypes
+import os
+from pathlib import Path
+
+
+def test_holds_gil(binary: Path) -> list[dict[str, str]]:
+    root = binary.parents[2]
+    (root / "gil-case-pid").write_text(str(os.getpid()), encoding="utf-8")
+    library = ctypes.PyDLL(str(root / "gil-checkpoint.dylib"))
+    wait_for_release = library.wait_for_probe_release
+    wait_for_release.argtypes = (ctypes.c_int, ctypes.c_int)
+    wait_for_release.restype = ctypes.c_int
+    with (
+        (root / "gil-started").open("wb", buffering=0) as started,
+        (root / "gil-release").open("rb", buffering=0) as release,
+    ):
+        assert wait_for_release(started.fileno(), release.fileno()) == 0
+    return [{"runner": "released"}]
+""".lstrip()
+
+# fmt: python
+FORKING_SUITE = """
+import os
+import warnings
+from pathlib import Path
+
+
+def test_forks(binary: Path) -> list[dict[str, object]]:
+    with warnings.catch_warnings(record=True) as recorded:
+        warnings.simplefilter("always", DeprecationWarning)
+        child = os.fork()
+        if child == 0:
+            os._exit(0)
+        assert os.waitpid(child, 0) == (child, 0)
+    return [{"runner": "forked", "warnings": [str(item.message) for item in recorded]}]
 """.lstrip()
 
 # fmt: python
@@ -380,6 +425,85 @@ class TranscriptRunnerTests(unittest.TestCase):
                 self.assertTrue((self.root / "child-cleaned").is_file())
             finally:
                 os.close(cleaned)
+
+    @unittest.skipUnless(sys.platform == "darwin", "requires macOS process exit events")
+    def test_runner_loss_retires_case_holding_the_gil(self) -> None:
+        self.suite.write_text(PUBLIC_SUITE + GIL_HOLDING_SUITE, encoding="utf-8")
+        (self.snapshots / "holds_gil.yaml").write_text(
+            "---\nrunner: released\n...\n", encoding="utf-8"
+        )
+        subprocess.run(
+            [
+                "cc",
+                "-dynamiclib",
+                "-std=c11",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                "-o",
+                self.root / "gil-checkpoint.dylib",
+                ROOT / "tests" / "fixtures" / "native" / "python_probe_checkpoint.c",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        checkpoints = []
+        for name in ("gil-started", "gil-release"):
+            os.mkfifo(self.root / name)
+            checkpoints.append(os.open(self.root / name, os.O_RDWR | os.O_NONBLOCK))
+        started, release = checkpoints
+        process = self.start_runner(
+            "--timeout",
+            "60",
+            "--jobs",
+            "1",
+            "client_server/server/test_tools::holds_gil",
+        )
+        identity = None
+        exits = select.kqueue()
+        try:
+            ready, _, _ = select.select([started], [], [], 10)
+            self.assertTrue(ready, "case did not enter its native GIL-holding call")
+            self.assertEqual(os.read(started, 1), b"1")
+            pid = int((self.root / "gil-case-pid").read_text(encoding="utf-8"))
+            identity = capture_darwin_process_identity(pid)
+            watch = select.kevent(
+                pid,
+                filter=select.KQ_FILTER_PROC,
+                flags=select.KQ_EV_ADD | select.KQ_EV_ONESHOT,
+                fflags=select.KQ_NOTE_EXIT,
+            )
+            self.assertEqual(exits.control([watch], 0, 0), [])
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=5)
+            observed = exits.control(None, 1, 20)
+            self.assertTrue(
+                observed, "GIL-holding case outlived its runner's cleanup deadline"
+            )
+            self.assertEqual(observed[0].ident, pid)
+            self.assertTrue(observed[0].fflags & select.KQ_NOTE_EXIT)
+        finally:
+            os.write(release, b"1")
+            if identity is not None:
+                signal_darwin_process(identity, signal.SIGKILL)
+            with suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGKILL)
+            process.communicate(timeout=5)
+            exits.close()
+            for checkpoint in checkpoints:
+                os.close(checkpoint)
+
+    @unittest.skipUnless(
+        sys.version_info >= (3, 12), "requires Python fork diagnostics"
+    )
+    def test_case_can_fork_without_thread_safety_warnings(self) -> None:
+        self.suite.write_text(PUBLIC_SUITE + FORKING_SUITE, encoding="utf-8")
+        (self.snapshots / "forks.yaml").write_text(
+            "---\nrunner: forked\nwarnings: []\n...\n", encoding="utf-8"
+        )
+        result = self.run_runner("client_server/server/test_tools::forks")
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_collection_selectors_and_locate(self) -> None:
         hidden = (

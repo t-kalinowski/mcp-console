@@ -11,7 +11,6 @@ import runpy
 import shutil
 import signal
 import sys
-import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -23,7 +22,7 @@ directory = Path(__file__).resolve().parent
 root = directory.parents[1]
 sys.path.insert(0, str(root / "tests"))
 
-from support.cases import CASE_CLEANUP_SECONDS, CaseProcess, record_case_subprocess
+from support.cases import CaseProcess, record_case_subprocess, supervise_case
 from support.records import Transcript, TranscriptWithCompanions
 from support.snapshots import (
     check_recording,
@@ -57,7 +56,8 @@ parser.add_argument(
     default=600.0,
     help="case deadline in seconds; increase for slow resolver workflows (default: 600)",
 )
-parser.add_argument("--record-case", nargs=4, help=argparse.SUPPRESS)
+parser.add_argument("--record-case", nargs=3, help=argparse.SUPPRESS)
+parser.add_argument("--supervise-case", nargs=4, help=argparse.SUPPRESS)
 parser.add_argument(
     "-j",
     "--jobs",
@@ -147,23 +147,6 @@ def record_case(
 ) -> RecordedTranscript:
     cases, _, _ = load_suite(suite_path)
     return cases[case_name](binary)
-
-
-def watch_case_owner(descriptor: int) -> None:
-    """Owner EOF requests cleanup even if the runner was killed outright."""
-    os.set_inheritable(descriptor, False)
-
-    def wait_for_owner() -> None:
-        assert os.read(descriptor, 1) == b""
-        os.close(descriptor)
-        deadline = threading.Timer(
-            CASE_CLEANUP_SECONDS, os.kill, (os.getpid(), signal.SIGKILL)
-        )
-        deadline.daemon = True
-        deadline.start()
-        os.kill(os.getpid(), signal.SIGINT)
-
-    threading.Thread(target=wait_for_owner, daemon=True).start()
 
 
 def format_duration(elapsed: float) -> str:
@@ -353,9 +336,7 @@ def run_cases(
     active: dict[int, CaseProcess] = {}
     errors: list[BaseException] = []
     abort_deadline: float | None = None
-    kill_deadline: float | None = None
     interrupted = False
-    killed = False
     # SimpleQueue.put is reentrant: SIGINT can wake the loop without
     # interrupting submission or completion bookkeeping.
     previous_signals = {
@@ -401,25 +382,16 @@ def run_cases(
                 if abort_deadline is not None and now >= abort_deadline:
                     interrupted = True
                     abort_deadline = None
-                    kill_deadline = now + CASE_CLEANUP_SECONDS
                     for case in active.values():
                         case.interrupt()
-                if kill_deadline is not None and now >= kill_deadline:
-                    killed = True
-                    kill_deadline = None
-                    for case in active.values():
-                        case.process.kill()
 
                 reporter.report_due()
                 deadlines = [
                     running.started_at + running.next_status_at
                     for running in reporter.running.values()
                 ]
-                deadlines.extend(
-                    deadline
-                    for deadline in (abort_deadline, kill_deadline)
-                    if deadline is not None
-                )
+                if abort_deadline is not None:
+                    deadlines.append(abort_deadline)
                 wait_seconds = (
                     max(0.0, min(deadlines) - time.monotonic()) if deadlines else None
                 )
@@ -432,9 +404,7 @@ def run_cases(
                     assert case is not None
                     active[index] = case
                     reporter.start(index, f"{suite_name}::{case_name}", started_at)
-                    if killed:
-                        case.process.kill()
-                    elif interrupted:
+                    if interrupted:
                         case.interrupt()
                     continue
 
@@ -488,9 +458,19 @@ def run_cases(
 
 def main() -> None:
     options = parser.parse_args()
+    if options.supervise_case is not None:
+        suite_path, case_name, output_path, owner = options.supervise_case
+        status = supervise_case(
+            Path(suite_path), case_name, Path(output_path), int(owner)
+        )
+        if status < 0:
+            number = -status
+            if number != signal.SIGKILL:
+                signal.signal(number, signal.SIG_DFL)
+            os.kill(os.getpid(), number)
+        raise SystemExit(status)
     if options.record_case is not None:
-        suite_path, case_name, output_path, owner = options.record_case
-        watch_case_owner(int(owner))
+        suite_path, case_name, output_path = options.record_case
         recorded = record_case(Path(suite_path), case_name)
         with Path(output_path).open("wb") as output:
             pickle.dump(recorded, output)

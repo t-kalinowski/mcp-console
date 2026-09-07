@@ -1,12 +1,13 @@
 import os
 import pickle
+import signal
 import subprocess
 import sys
 import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from queue import SimpleQueue
+from queue import Empty, SimpleQueue
 from threading import Event, Lock, Thread
 from typing import BinaryIO
 
@@ -38,6 +39,58 @@ def _captured_output(stream: BinaryIO) -> str:
     return os.pread(stream.fileno(), length, 0).decode("utf-8", errors="replace")
 
 
+def supervise_case(
+    suite_path: Path, case_name: str, result: Path, ownership: int
+) -> int:
+    """Keep owner loss and forced cleanup independent of the case interpreter."""
+    os.set_inheritable(ownership, False)
+    runner = Path(__file__).resolve().parents[1] / "boundaries" / "_run.py"
+    process = subprocess.Popen(
+        [sys.executable, runner, "--record-case", suite_path, case_name, result]
+    )
+    events: SimpleQueue[int | BaseException | None] = SimpleQueue()
+
+    def reap() -> None:
+        try:
+            events.put(process.wait())
+        except BaseException as error:
+            events.put(error)
+
+    def watch_owner() -> None:
+        try:
+            assert os.read(ownership, 1) == b""
+        except BaseException as error:
+            events.put(error)
+        else:
+            events.put(None)
+        finally:
+            os.close(ownership)
+
+    # These threads belong to the supervisor, never to the interpreter that
+    # runs fixtures with fork/preexec_fn or may block in native code with the GIL.
+    reaper = Thread(target=reap, daemon=True)
+    reaper.start()
+    Thread(target=watch_owner, daemon=True).start()
+    event = events.get()
+    if event is None:
+        process.send_signal(signal.SIGINT)
+        try:
+            event = events.get(timeout=CASE_CLEANUP_SECONDS)
+        except Empty:
+            process.kill()
+            try:
+                event = events.get(timeout=5)
+            except Empty:
+                raise TimeoutError(f"{case_name} did not exit after SIGKILL") from None
+    if isinstance(event, BaseException):
+        process.kill()
+        reaper.join(timeout=5)
+        raise event
+    assert event is not None
+    reaper.join()
+    return event
+
+
 def record_case_subprocess(
     suite_path: Path,
     case_name: str,
@@ -60,7 +113,7 @@ def record_case_subprocess(
                 [
                     sys.executable,
                     runner,
-                    "--record-case",
+                    "--supervise-case",
                     suite_path,
                     case_name,
                     result,
@@ -91,8 +144,8 @@ def record_case_subprocess(
                 finally:
                     completed.set()
 
-            # POSIX Popen.wait(timeout=...) polls. One blocking reaper wakes each
-            # deadline wait, and cannot hold the runner open if SIGKILL also fails.
+            # POSIX Popen.wait(timeout=...) polls. One blocking reaper wakes the
+            # case deadline while its supervisor owns cleanup and escalation.
             reaper = Thread(target=reap, daemon=True)
             reaper.start()
             timed_out = not completed.wait(
@@ -100,10 +153,8 @@ def record_case_subprocess(
             )
             if timed_out:
                 case.interrupt()
-                if not completed.wait(CASE_CLEANUP_SECONDS):
-                    process.kill()
-                    if not completed.wait(5):
-                        raise TimeoutError(f"{selector} did not exit after SIGKILL")
+                # The external supervisor owns the case's bounded escalation.
+                completed.wait()
             reaper.join()
             if reap_error is not None:
                 raise reap_error
