@@ -56,6 +56,8 @@ def test_matches_unsandboxed_autograd(binary: Path) -> Transcript:
         )
         captures.append((completed.stdout, completed.stderr))
         assert completed.returncode == 0, captures
+        # Rolling releases may change warnings and other incidental output.
+        # Compare only the fixture-owned result; keep captures for diagnostics.
         records = [
             line.removeprefix("PYTORCH_RESULT=")
             for line in completed.stdout.splitlines()
