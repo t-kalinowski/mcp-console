@@ -11,6 +11,7 @@ import runpy
 import shutil
 import signal
 import sys
+import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -56,7 +57,7 @@ parser.add_argument(
     default=600.0,
     help="case deadline in seconds; increase for slow resolver workflows (default: 600)",
 )
-parser.add_argument("--record-case", nargs=3, help=argparse.SUPPRESS)
+parser.add_argument("--record-case", nargs=4, help=argparse.SUPPRESS)
 parser.add_argument(
     "-j",
     "--jobs",
@@ -146,6 +147,23 @@ def record_case(
 ) -> RecordedTranscript:
     cases, _, _ = load_suite(suite_path)
     return cases[case_name](binary)
+
+
+def watch_case_owner(descriptor: int) -> None:
+    """Owner EOF requests cleanup even if the runner was killed outright."""
+    os.set_inheritable(descriptor, False)
+
+    def wait_for_owner() -> None:
+        assert os.read(descriptor, 1) == b""
+        os.close(descriptor)
+        deadline = threading.Timer(
+            CASE_CLEANUP_SECONDS, os.kill, (os.getpid(), signal.SIGKILL)
+        )
+        deadline.daemon = True
+        deadline.start()
+        os.kill(os.getpid(), signal.SIGINT)
+
+    threading.Thread(target=wait_for_owner, daemon=True).start()
 
 
 def format_duration(elapsed: float) -> str:
@@ -340,10 +358,18 @@ def run_cases(
     killed = False
     # SimpleQueue.put is reentrant: SIGINT can wake the loop without
     # interrupting submission or completion bookkeeping.
-    previous_sigint = signal.signal(
-        signal.SIGINT,
-        lambda _signal, _frame: events.put((-1, None, None)),
-    )
+    previous_signals = {
+        number: signal.signal(
+            number, lambda received, _frame: events.put((-received, None, None))
+        )
+        for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+    }
+
+    def interruption(index: int) -> BaseException:
+        number = signal.Signals(-index)
+        if number == signal.SIGINT:
+            return KeyboardInterrupt()
+        return RuntimeError(f"transcript runner received {number.name}")
 
     def fail(error: BaseException) -> None:
         nonlocal abort_deadline
@@ -398,8 +424,8 @@ def run_cases(
                     max(0.0, min(deadlines) - time.monotonic()) if deadlines else None
                 )
                 index, started_at, case = events.get(timeout=wait_seconds)
-                if index == -1:
-                    fail(KeyboardInterrupt())
+                if index < 0:
+                    fail(interruption(index))
                     continue
                 suite_name, case_name, _ = selected[index]
                 if started_at is not None:
@@ -441,7 +467,8 @@ def run_cases(
                 continue
     finally:
         executor.shutdown(cancel_futures=True)
-        signal.signal(signal.SIGINT, previous_sigint)
+        for number, handler in previous_signals.items():
+            signal.signal(number, handler)
 
     # SIGINT can arrive while checking the final snapshot. All controllers have
     # joined, so any remaining event is an interrupt queued by our handler.
@@ -450,8 +477,8 @@ def run_cases(
             index, _, _ = events.get_nowait()
         except Empty:
             break
-        assert index == -1, index
-        errors.append(KeyboardInterrupt())
+        assert index < 0, index
+        errors.append(interruption(index))
 
     if len(errors) > 1:
         raise BaseExceptionGroup("multiple transcript cases failed", errors) from None
@@ -462,7 +489,8 @@ def run_cases(
 def main() -> None:
     options = parser.parse_args()
     if options.record_case is not None:
-        suite_path, case_name, output_path = options.record_case
+        suite_path, case_name, output_path, owner = options.record_case
+        watch_case_owner(int(owner))
         recorded = record_case(Path(suite_path), case_name)
         with Path(output_path).open("wb") as output:
             pickle.dump(recorded, output)

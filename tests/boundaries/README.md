@@ -129,8 +129,9 @@ Each case has a 600-second deadline that starts when its process launches.
 Use `--timeout SECONDS` to allow longer runs, such as slow resolver workflows.
 On timeout, the runner names the case and sends its process `SIGINT`, allowing 15 seconds for `finally` blocks and fixture cleanup before forcibly killing that process by PID.
 Fixtures remain responsible for their subprocesses; forcibly killing a case cannot guarantee that all its descendants have exited.
-After a failure or Ctrl-C, the runner cancels queued cases and gives running cases two seconds to finish before requesting the same bounded cleanup.
+After a failure, Ctrl-C, SIGTERM, or SIGHUP, the runner cancels queued cases and gives running cases two seconds to finish before requesting the same bounded cleanup.
 It includes their further failures and captured standard error in its report.
+Each case watches an ownership pipe, so loss of the runner also requests cleanup, including when the runner is killed with SIGKILL.
 Normal runs emit one flushed `.` for every passing case and end the progress line with a newline.
 A case that runs for one minute is named with its current status.
 The runner reports it again at two-minute elapsed intervals through ten minutes, then once every five minutes, and names it when it finishes.
