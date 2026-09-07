@@ -3,6 +3,16 @@
 ---
 send:
   requirements:
+    r:
+      - DBI
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+send:
+  requirements:
     python:
       - py-yaml12
 result:

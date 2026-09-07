@@ -404,10 +404,11 @@ def test_recovers_from_python_version_resolution_failure(binary: Path) -> Transc
 
         client = McpClient(binary, ("serve",), environment)
         client.initialize_and_list_tools()
+        client.send(r="worker_pid <- Sys.getpid()")
+        assert last_result_text(client) == "[done]"
         failure_marker.touch()
         # fmt: r
         r = code(r"""
-            worker_pid <- Sys.getpid()
             print(reticulate::py_require())
             """)
         client.send(r=r)
@@ -678,6 +679,8 @@ def test_uses_reticulate_managed_uv_for_python_resolution(
             current_directory=temporary,
         )
         client.initialize_and_list_tools()
+        client.send(requirements={"r": ["DBI"]})
+        assert last_result_text(client) == "[prepared]"
         uv_record.write_text("", encoding="utf-8")
         resolver_record.write_text("", encoding="utf-8")
         write_uv_python_inventories(

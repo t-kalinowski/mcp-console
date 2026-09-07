@@ -2,8 +2,15 @@
 !same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
 ---
 send:
+  r: worker_pid <- Sys.getpid()
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
   r: |
-    worker_pid <- Sys.getpid()
     print(reticulate::py_require())
 result:
   content:
