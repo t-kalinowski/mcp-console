@@ -96,6 +96,7 @@ The suite also verifies both documents with Yamark, and the optional Quarto suit
 Shared helpers under `tests/support/` are grouped by responsibility:
 
 - `client.py` owns the public stdio MCP client.
+- `cases.py` runs individual cases with deadlines and captures their diagnostic output.
 - `snapshots.py` formats and compares primary and companion snapshots.
 - `normalization.py` contains source-text and diagnostic normalization.
 - `checkpoints.py`, `capture.py`, and `processes.py` contain reusable synchronization, stream-reading, and cleanup mechanics.
@@ -118,11 +119,18 @@ scripts/test --list
 scripts/test --locate client_server/server/test_tools
 scripts/test --locate client_server/server/test_tools::initializes_and_lists_tools
 scripts/test --jobs 1 client_server/python/test_runtime
+scripts/test --timeout 1800 client_server/requirements/test_r
 scripts/test --update client_server/server/test_tools::initializes_and_lists_tools
 ```
 
 With no selectors, `scripts/test` runs every suite and case in parallel, using at least two worker processes and otherwise one per available CPU by default.
 Pass `--jobs N` to set the maximum concurrency or `--jobs 1` to run serially.
+Each case has a 600-second deadline that starts when its process launches.
+Use `--timeout SECONDS` to allow longer runs, such as slow resolver workflows.
+On timeout, the runner names the case and sends its process `SIGINT`, allowing 15 seconds for `finally` blocks and fixture cleanup before forcibly killing that process by PID.
+Fixtures remain responsible for their subprocesses; forcibly killing a case cannot guarantee that all its descendants have exited.
+After a failure or Ctrl-C, the runner cancels queued cases and gives running cases two seconds to finish before requesting the same bounded cleanup.
+It includes their further failures and captured standard error in its report.
 Normal runs emit one flushed `.` for every passing case and end the progress line with a newline.
 A case that runs for one minute is named with its current status.
 The runner reports it again at two-minute elapsed intervals through ten minutes, then once every five minutes, and names it when it finishes.
