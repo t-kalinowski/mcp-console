@@ -1,22 +1,15 @@
 ---
-input:
-  method: initialize
-  params:
-    protocolVersion: 2025-11-25
-    capabilities: {}
-    clientInfo:
-      name: acceptance-test
-      version: 1.0.0
-result:
-  protocolVersion: 2025-11-25
-  capabilities:
-    tools: {}
-  serverInfo:
-    name: mcp-console
-    version: 0.0.2
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
 ---
-input:
-  method: notifications/initialized
+send:
+  r: stop("cell must not run")
+result:
+  content:
+    - type: text
+      text: |-
+        [reticulate `uv` resolution failed with exit status: 1: Error: fixture ambient reticulate bootstrap failed
+        Execution halted]
+  isError: true
 ---
 input:
   method: tools/list
@@ -77,6 +70,28 @@ result:
               all drawing operations for one plot in the same cell. Set persistent dimensions with
               `options(console.plot.width = ..., console.plot.height = ..., console.plot.dpi = ...)`;
               width and height are in inches. Omit this field for polling or stdin-only calls.
+            type:
+              - string
+              - "null"
+          python:
+            description: |-
+              One complete Python cell evaluated in persistent `__main__` state. Its final visible expression
+              autoprints through Python's normal display hook. Leave the primary result last and print only
+              when additional output is needed. When dynamic resolution is available and an import is
+              missing, the built-in managed worker resolves a PyPI distribution on demand, using a curated mapping for well-known
+              import/distribution differences and otherwise assuming the distribution matches the top-level
+              module. Python source is not scanned; resolution starts only when execution reaches the import.
+              Use `requirements.python` when the distribution differs from the inferred name, exact registry
+              metadata is needed, or the package should be prepared before the cell. A user-selected Python
+              environment or bare runtime disables both automatic resolution and managed requirements;
+              import packages already installed there directly. Read R globals and call R functions through
+              `r.name`. Select a user-owned DB-API connection for later SQL cells with
+              `console_sql_connection(connection)` and restore managed DuckDB with
+              `console_sql_connection(None)`. Python data frames are not automatically visible to managed
+              DuckDB SQL; bind them to an R name before querying them there. At cell end, including after a
+              Python error, every open `matplotlib.pyplot` figure returns once as a PNG image and is closed.
+              `show()` is optional. R plots called through `r` follow the R plot rules. Omit this field for
+              polling or stdin-only calls.
             type:
               - string
               - "null"
@@ -214,11 +229,3 @@ result:
             format: uint64
             minimum: 0
             default: 60000
----
-send:
-  python: raise AssertionError('disabled cell ran')
-result:
-  content:
-    - type: text
-      text: "`python` cells are disabled by `MCP_CONSOLE_LANGUAGES`"
-  isError: true

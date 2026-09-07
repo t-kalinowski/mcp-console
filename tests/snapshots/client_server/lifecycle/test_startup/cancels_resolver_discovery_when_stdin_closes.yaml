@@ -1,14 +1,17 @@
 ---
-input:
-  method: initialize
-  params:
-    protocolVersion: 2025-11-25
-    capabilities: {}
-    clientInfo:
-      name: acceptance-test
-      version: 1.0.0
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
 ---
-exit_code: 1
+send:
+  r: 42L
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running; poll with an empty send]
+  isError: false
+---
+exit_code: 0
 stdout: ""
-stderr: |
-  server startup cancelled because MCP input closed
+stderr: ""

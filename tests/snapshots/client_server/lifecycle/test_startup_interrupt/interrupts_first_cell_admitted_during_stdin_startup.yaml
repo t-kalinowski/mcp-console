@@ -2,21 +2,17 @@
 !same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
 ---
 send:
-  requirements:
-    r:
-      - DBI
+  stdin: |
+    old input
+  timeout_ms: 0
 result:
   content:
     - type: text
-      text: "[prepared]"
-  isError: false
+      text: "[worker startup interrupted]"
+  isError: true
 ---
 send:
-  r: |
-    cat("before\n")
-    value <- readline("partial> ")
-    value
-  stdin: without newline
+  r: startup_cell_ran <- TRUE
   timeout_ms: 0
 result:
   content:
@@ -27,34 +23,30 @@ result:
   isError: false
 ---
 send:
-  timeout_ms: 3000
+  control: interrupt
+  timeout_ms: 0
 result:
   content:
     - type: text
       text: |-
-        before
-        [input requested: "partial> "]
-        [waiting for stdin]
+
+        [running; poll with an empty send]
   isError: false
 ---
 send:
-  stdin: "\n"
+  timeout_ms: 600000
+result:
+  content:
+    - type: text
+      text: "[worker startup interrupted]"
+  isError: true
+---
+send:
+  r: exists("startup_cell_ran", inherits = FALSE)
+  timeout_ms: 600000
 result:
   content:
     - type: text
       text: |
-        [1] "without newline"
-  isError: false
----
-send:
-  r: |
-    readline("next> ")
-  stdin: |
-    next
-result:
-  content:
-    - type: text
-      text: |
-        [input requested: "next> "]
-        [1] "next"
+        [1] FALSE
   isError: false

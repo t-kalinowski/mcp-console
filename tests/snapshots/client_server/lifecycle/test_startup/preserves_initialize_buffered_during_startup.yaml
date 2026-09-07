@@ -1,2 +1,22 @@
 ---
 !same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send: {}
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false
+---
+send:
+  r: must not run
+  requirements:
+    r:
+      - ""
+result:
+  content:
+    - type: text
+      text: R requirement strings must not be empty
+  isError: true

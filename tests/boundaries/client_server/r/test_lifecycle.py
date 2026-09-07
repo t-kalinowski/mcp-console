@@ -382,6 +382,8 @@ def test_interrupts_running_r_evaluation(binary: Path) -> Transcript:
         passed = False
         try:
             client.initialize_and_list_tools()
+            client.send(requirements={"r": ["DBI"]})
+            assert last_tool_text(client) == "[prepared]"
             # fmt: r
             r = code(r"""
                 interrupt_state <- 41L

@@ -5,18 +5,22 @@ send:
   requirements:
     r:
       - DBI
+  timeout_ms: 0
 result:
   content:
     - type: text
       text: "[prepared]"
   isError: false
 ---
+input:
+  method: ping
+result: {}
+---
 send:
-  requirements:
-    python:
-      - py-yaml12
+  r: 42L
 result:
   content:
     - type: text
-      text: "[prepared]"
+      text: |
+        [1] 42
   isError: false

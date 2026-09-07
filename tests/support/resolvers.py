@@ -262,6 +262,8 @@ def python_inventory_client(
         current_directory=directory,
     )
     client.initialize_and_list_tools()
+    client.send(requirements={"r": ["DBI"]})
+    assert last_result_text(client) == "[prepared]"
     arguments.write_text("", encoding="utf-8")
     if resolver_record is not None:
         resolver_record.write_text("", encoding="utf-8")
