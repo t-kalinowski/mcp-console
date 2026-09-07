@@ -159,23 +159,27 @@ def wait_for_evaluation_output(
     client: McpClient,
     expected: str,
     description: str,
+    *,
+    expected_error: bool = False,
+    completion_timeout_seconds: float = 3,
     **send_arguments: Any,
 ) -> None:
     """Accumulate exact output until the expected state; retain the submitted call."""
-    deadline = time.monotonic() + 3
+    deadline = time.monotonic() + completion_timeout_seconds
     poll_start = len(client.transcript)
     running = "\n[running; poll with an empty send]"
     waiting = "[waiting for stdin]"
     collected = ""
     result = client.send(**send_arguments)
     while True:
-        assert result.get("isError") is not True, result
         content = result["content"]
         assert len(content) == 1 and content[0]["type"] == "text", content
         output = content[0]["text"]
         if output.endswith(running):
+            assert result.get("isError") is not True, result
             collected += output.removesuffix(running)
         elif output.endswith(waiting):
+            assert result.get("isError") is not True, result
             # Empty input requests add a separator; prompt notices already
             # contain their own newline, which belongs to the output.
             if output != "\n" + waiting:
@@ -190,9 +194,11 @@ def wait_for_evaluation_output(
             assert collected == expected, repr(collected)
             break
         assert expected.startswith(collected), repr(collected)
-        assert time.monotonic() < deadline, f"{description} did not complete"
-        result = client.send(timeout_ms=3_000)
+        remaining = deadline - time.monotonic()
+        assert remaining > 0, f"{description} did not complete"
+        result = client.send(timeout_ms=max(1, int(remaining * 1_000)))
 
+    assert result.get("isError", False) is expected_error, result
     content[0]["text"] = collected
     calls = client.transcript[poll_start:]
     submitted = calls[0]
