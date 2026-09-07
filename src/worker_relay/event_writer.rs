@@ -13,7 +13,7 @@ const RETIREMENT_FLUSH_TIMEOUT: Duration = Duration::from_secs(1);
 pub(super) struct EventSender(mpsc::Sender<EventRequest>);
 
 enum EventRequest {
-    Send(Box<RelayEvent>),
+    Send(Vec<u8>),
     Finish,
 }
 
@@ -36,13 +36,7 @@ pub(super) fn start(
         let mut writer = output;
         for request in receiver {
             match request {
-                EventRequest::Send(event) => {
-                    // Give the deadline-aware writer a complete frame rather
-                    // than making a syscall for each JSON punctuation fragment.
-                    let mut frame = serde_json::to_vec(&event)
-                        .expect("relay event serialization should succeed");
-                    frame.push(b'\n');
-                    drop(event);
+                EventRequest::Send(frame) => {
                     if let Err(error) = writer.write_all(&frame) {
                         let error = format!("relay stdout write failed: {error}");
                         on_error(error.clone());
@@ -66,8 +60,13 @@ pub(super) fn start(
 
 impl EventSender {
     pub(super) fn send(&self, event: RelayEvent) -> Result<(), String> {
+        // Encode before enqueueing so retirement leaves only pending writes,
+        // rather than a backlog of JSON encoding inside the flush deadline.
+        let mut frame =
+            serde_json::to_vec(&event).expect("relay event serialization should succeed");
+        frame.push(b'\n');
         self.0
-            .send(EventRequest::Send(Box::new(event)))
+            .send(EventRequest::Send(frame))
             .map_err(|_| "relay event writer stopped".to_string())
     }
 
