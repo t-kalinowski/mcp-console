@@ -201,6 +201,8 @@ The built-in worker's `worker::core` owns shared sideband state, deferred operat
 The `worker::embedded_r` backend owns interpreter initialization, event handling, interactive input, interrupts, and language dispatch, including suppression of R resolution during SQL callbacks.
 
 The built-in worker embeds R on its main thread.
+On Linux, it re-executes before R initialization with the selected `R_HOME/lib` first in `LD_LIBRARY_PATH`, preserving inherited library paths and its sideband endpoint.
+This lets native R packages resolve R's shared libraries even when that R installation is absent from the system linker cache.
 Its language adapters provide persistent Python and SQL within that worker process.
 The SQL router uses a DBI provider in embedded R or a DB-API provider in CPython.
 The R provider owns a managed DuckDB connection by default and can retain a user-selected DBI connection; the Python provider retains a user-selected DB-API connection without converting it or its result rows through reticulate.

@@ -74,6 +74,14 @@ impl Reader {
         !self.buffer.is_empty()
     }
 
+    /// Preserves the worker endpoint across an exec before runtime initialization.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn configure_exec(&self, command: &mut std::process::Command) -> io::Result<()> {
+        make_inheritable(self.as_raw_fd())?;
+        command.env(SIDEBAND_FD_ENV, self.as_raw_fd().to_string());
+        Ok(())
+    }
+
     /// Receives one newline-delimited JSON message from the worker.
     pub(crate) fn receive<T: DeserializeOwned>(&mut self) -> io::Result<T> {
         loop {
