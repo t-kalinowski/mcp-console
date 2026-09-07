@@ -215,6 +215,8 @@ def test_evaluates_with_explicit_managed_python(binary: Path) -> Transcript:
 def test_runs_pytorch_cpu_autograd(binary: Path) -> Transcript:
     environment = os.environ.copy()
     environment.pop("RETICULATE_PYTHON", None)
+    # Apply the release cutoff to initial and automatic dependency resolution.
+    environment["UV_EXCLUDE_NEWER"] = "2026-09-07T20:00:00Z"
     with McpClient(binary, ("serve",), environment) as client:
         client.initialize_and_list_tools()
         # fmt: python
@@ -231,7 +233,7 @@ def test_runs_pytorch_cpu_autograd(binary: Path) -> Transcript:
             assert result == (65536.0, 2.0, 2)
             result
             """)
-        result = client.send(python=python, requirements={"python": ["torch"]})
+        result = client.send(python=python, requirements={"python": ["torch==2.14.0"]})
         submitted = client.transcript[-1]
         native_warning = (
             "OMP: Warning #179: Function Can't set size of /tmp file failed:\n"

@@ -16,7 +16,7 @@ send:
     result
   requirements:
     python:
-      - torch
+      - torch==2.14.0
 result:
   content:
     - type: text
