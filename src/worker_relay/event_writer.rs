@@ -369,8 +369,9 @@ impl Write for EventOutput {
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        // File writes are unbuffered; no drop or flush can bypass the deadline.
-        self.check_deadline()
+        // File writes are unbuffered. Once write_all succeeds, no pending
+        // bytes remain for a deadline to expire during this no-op.
+        Ok(())
     }
 }
 
