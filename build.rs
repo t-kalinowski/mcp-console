@@ -39,7 +39,7 @@ fn bind_private_runner() {
         Some(revision),
         "private sandbox runner source pin changed; run scripts/stage-sandbox-runner"
     );
-    let bytes = std::fs::read(runner_path)
+    let bytes = std::fs::read(&runner_path)
         .expect("private sandbox runner is unavailable; run scripts/stage-sandbox-runner");
     let digest = Sha256::digest(bytes);
     let actual_digest: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
@@ -55,6 +55,17 @@ fn bind_private_runner() {
     )
     .expect("sandbox runner protocol version exceeds u32");
     let output = PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
+    // Cargo places OUT_DIR under <prefix>/<profile>/build/<package>/out.
+    // Match the installed bin/../libexec layout for every Cargo profile.
+    let prefix = output
+        .ancestors()
+        .nth(4)
+        .expect("Cargo OUT_DIR is missing its target prefix");
+    let private_directory = prefix.join("libexec");
+    std::fs::create_dir_all(&private_directory)
+        .expect("failed to create the private sandbox runner directory");
+    std::fs::copy(&runner_path, private_directory.join("mcp-console-sandbox"))
+        .expect("failed to install the private sandbox runner beside the Cargo output");
     std::fs::write(
         output.join("sandbox_runner_installation.rs"),
         format!(

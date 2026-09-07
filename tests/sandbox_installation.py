@@ -46,6 +46,11 @@ class SandboxInstallationTests(unittest.TestCase):
             check=False,
         )
 
+    def test_runs_original_binary(self) -> None:
+        result = self.run_sandbox(self.binary_source)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((result.stdout, result.stderr), (b"", b""))
+
     def test_resolves_private_runner_through_public_symlink(self) -> None:
         link = self.root / "mcp-console"
         link.symlink_to(self.binary)

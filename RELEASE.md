@@ -20,11 +20,12 @@ The script builds with the pinned toolchain and lockfile, stages the executable 
 Use `--target aarch64-apple-darwin` or `--target x86_64-apple-darwin` when building for an explicit target.
 The source checkout remains unchanged.
 MCP Console's build verifies the staged revision and digest and binds the runner's digest and protocol version into the executable.
+Cargo builds also copy the verified executable into the target prefix's `libexec` directory, so binaries in `debug`, `release`, and custom profile directories use the same relative lookup as installed wheels.
 Sandbox launches reject a missing or mismatched private runner.
 
 Maturin includes the staged executable under the installation's private `libexec` directory, with the upstream license and notice under `share/licenses/mcp-console/`.
 Only `mcp-console` is installed as a public command.
-CI and the release workflow build the pinned source before packaging and verify the private layout, executable permissions, and a native sandbox launch from the installed runner with an empty `PATH`.
+CI and the release workflow build the pinned source before packaging and verify the private layout, executable permissions, and sandbox launches from both the Cargo binary and installed command with an empty `PATH`.
 
 ## One-time PyPI setup
 

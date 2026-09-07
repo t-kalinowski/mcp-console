@@ -337,6 +337,7 @@ def smoke_wheel(args: argparse.Namespace) -> None:
         sandbox_env = os.environ.copy()
         sandbox_env["PATH"] = directory
         smoke_private_runner(private_runner, sandbox_env, args.startup_timeout_seconds)
+        run_command([str(cargo_bin), "sandbox", "--", "/usr/bin/true"], env=sandbox_env)
         run_command([str(installed), "sandbox", "--", "/usr/bin/true"], env=sandbox_env)
     run_command(
         [

@@ -96,8 +96,8 @@ The client does not communicate directly with a relay, worker, or resolver.
 
 The private `mcp-console-sandbox` executable contains the extracted native sandbox implementation and is pinned by source revision in `sandbox-runner.json`.
 macOS wheels install it under the installation prefix's `libexec` directory; only `mcp-console` is exposed on PATH.
-Release builds resolve that private path relative to the canonical public executable and verify the artifact digest embedded at build time.
-Development builds use the staged artifact under `target/private-wheel-data`.
+MCP Console resolves that private path relative to the canonical public executable and verifies the artifact digest embedded at build time.
+Cargo builds copy the verified staged artifact into the target prefix's `libexec` directory and use the same executable-relative lookup as installed wheels.
 A missing or mismatched artifact is an installation error.
 
 The executable consumes a length-prefixed JSON bootstrap on stdin, launches one sandboxed command, and returns its status.

@@ -253,7 +253,14 @@ class ReleaseScriptTests(unittest.TestCase):
         executable_source = executable_source.replace(
             "#!/usr/bin/env python3", f"#!{sys.executable}"
         )
-        cargo_bin = directory / "cargo-mcp-console"
+        cargo_directory = directory / "cargo-target"
+        (cargo_directory / "release").mkdir(parents=True)
+        cargo_libexec = cargo_directory / "libexec"
+        cargo_libexec.mkdir()
+        shutil.copy2(
+            libexec / "mcp-console-sandbox", cargo_libexec / "mcp-console-sandbox"
+        )
+        cargo_bin = cargo_directory / "release" / "mcp-console"
         write_executable(cargo_bin, executable_source)
         installed = tool_directory / "mcp-console"
         write_executable(installed, executable_source)
@@ -361,6 +368,23 @@ class ReleaseScriptTests(unittest.TestCase):
 
                 self.assertNotEqual(result.returncode, 0, result.stdout)
                 self.assertIn("private sandbox runner", result.stderr)
+
+    def test_smoke_wheel_requires_runnable_cargo_binary(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            environment, wheel, cargo_bin = self.smoke_environment(directory)
+            (cargo_bin.parent.parent / "libexec" / "mcp-console-sandbox").unlink()
+
+            result = self.run_script(
+                "smoke-wheel",
+                str(wheel),
+                str(cargo_bin),
+                cwd=directory,
+                env=environment,
+            )
+
+            self.assertNotEqual(result.returncode, 0, result.stdout)
+            self.assertIn("private sandbox runner is unavailable", result.stderr)
 
     def test_smoke_wheel_evaluates_r_and_bounds_response_waits(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
