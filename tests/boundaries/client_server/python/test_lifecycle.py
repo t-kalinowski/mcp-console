@@ -141,6 +141,8 @@ def test_interrupts_running_python_evaluation(binary: Path) -> Transcript:
                   MCP_CONSOLE_PYTHON_INTERRUPT_STARTED = python_interrupt_started,
                   MCP_CONSOLE_PYTHON_INTERRUPT_RELEASE = python_interrupt_release
                 )
+                # Complete Python initialization before arming the dispatch checkpoint.
+                invisible(reticulate::py_config())
                 invisible(suppressMessages(base::trace(
                   "py_eval",
                   tracer = quote({

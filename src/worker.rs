@@ -1,14 +1,18 @@
 #[cfg(any(target_os = "macos", target_os = "linux"))]
+mod core;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod embedded_r;
 
-// Keep the rest of the crate dependent on the worker facade rather than the
-// current runtime host. The embedded-R backend continues to own all worker
-// lifecycle, protocol, console, and language-dispatch behavior.
+// Keep the rest of the crate dependent on the worker facade. The core owns
+// runtime-neutral sideband state and host callbacks, while the embedded-R
+// backend owns R initialization, event handling, and language dispatch.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-pub(crate) use embedded_r::{
+pub(crate) use core::{
     publish_plot, publish_python_activation, publish_r_activation, publish_r_activation_failure,
-    resolve_python, resolve_python_version, resolve_r, run,
+    resolve_python, resolve_python_version,
 };
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+pub(crate) use embedded_r::{resolve_r, run};
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub(crate) fn run() -> Result<(), Box<dyn std::error::Error>> {
