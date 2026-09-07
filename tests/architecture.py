@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 
-"""Static guards for the sandbox process-boundary dependency direction."""
+"""Static guards for the sandbox process-boundary dependency direction.
+
+Inspect explicit paths, use trees, and literal control arguments without Rust
+name resolution or macro expansion.
+"""
 
 from __future__ import annotations
 
@@ -14,10 +18,40 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_ROOT = ROOT / "src"
+RUST_TEXT = re.compile(
+    r"(?P<line>//[^\n]*)|(?P<block>/\*)"
+    r'|(?P<string>(?:[bc]?r(?P<hashes>#*)".*?"(?P=hashes))'
+    r'|(?:[bc]?"(?:\\.|[^"\\])*"))'
+    r"|(?:b?'(?:\\(?:x[\da-fA-F]{2}|u\{[\da-fA-F_]+\}|.)|[^'\\\n])')",
+    re.DOTALL,
+)
 
 
 def rust_sources(root: Path) -> list[Path]:
     return sorted(root.rglob("*.rs"))
+
+
+def rust_code_and_strings(source: str) -> tuple[str, list[tuple[int, str]]]:
+    """Mask comments and literals, preserving positions for code diagnostics."""
+    code: list[str] = []
+    strings: list[tuple[int, str]] = []
+    offset = 0
+    while token := RUST_TEXT.search(source, offset):
+        start, end = token.span()
+        if token.group("block"):
+            depth = 1
+            for delimiter in re.finditer(r"/\*|\*/", source[end:]):
+                depth += 1 if delimiter.group() == "/*" else -1
+                if depth == 0:
+                    end += delimiter.end()
+                    break
+            assert depth == 0, "unterminated Rust block comment"
+        elif token.group("string"):
+            strings.append((source.count("\n", 0, start) + 1, source[start:end]))
+        code.extend((source[offset:start], re.sub(r"[^\n]", " ", source[start:end])))
+        offset = end
+    code.append(source[offset:])
+    return "".join(code), strings
 
 
 def flatten_use(statement: str) -> str:
@@ -33,18 +67,25 @@ def flatten_use(statement: str) -> str:
     return " ".join(statement.split())
 
 
-def matching_lines(paths: list[Path], needles: tuple[str, ...]) -> list[str]:
+def matching_lines(
+    paths: list[Path], needles: tuple[str, ...], *, strings: bool = False
+) -> list[str]:
     matches: list[str] = []
     for path in paths:
-        source = path.read_text(encoding="utf-8")
-        candidates = list(enumerate(source.splitlines(), 1))
-        candidates.extend(
-            (
-                source.count("\n", 0, statement.start()) + 1,
-                flatten_use(statement.group()),
-            )
-            for statement in re.finditer(r"\buse\s+[^;]+;", source)
-        )
+        source, literals = rust_code_and_strings(path.read_text(encoding="utf-8"))
+        if strings:
+            candidates = literals
+        else:
+            candidates = [
+                (
+                    source.count("\n", 0, statement.start()) + 1,
+                    flatten_use(statement.group()),
+                )
+                for statement in re.finditer(
+                    r"\buse\s+[^;]+;|\b(?:crate|super|sandbox)(?:\s*::\s*\w+)+",
+                    source,
+                )
+            ]
         for line_number, line in candidates:
             if any(needle in line for needle in needles):
                 matches.append(
@@ -56,19 +97,13 @@ def matching_lines(paths: list[Path], needles: tuple[str, ...]) -> list[str]:
 class SandboxProcessBoundaryTests(unittest.TestCase):
     def test_server_relay_and_worker_do_not_import_sandbox_internals(self) -> None:
         host_sources = [
-            SOURCE_ROOT / "server.rs",
-            SOURCE_ROOT / "server_transport.rs",
-            SOURCE_ROOT / "worker_client.rs",
-            SOURCE_ROOT / "worker_relay.rs",
-            SOURCE_ROOT / "relay_protocol.rs",
-            SOURCE_ROOT / "worker.rs",
-            SOURCE_ROOT / "worker_protocol.rs",
-            *rust_sources(SOURCE_ROOT / "worker_client"),
-            *rust_sources(SOURCE_ROOT / "worker_relay"),
-            *rust_sources(SOURCE_ROOT / "worker"),
+            path
+            for path in rust_sources(SOURCE_ROOT)
+            # Only CLI dispatch and the sandbox implementation may depend on it.
+            if path.relative_to(SOURCE_ROOT).parts[0]
+            not in {"main.rs", "cli.rs", "sandbox.rs", "sandbox"}
         ]
-        missing = [path for path in host_sources if not path.is_file()]
-        self.assertEqual(missing, [], f"missing source files: {missing}")
+        self.assertTrue(host_sources, "no Rust source files found")
         violations = matching_lines(
             host_sources,
             ("crate::sandbox", "super::sandbox", "sandbox::platform"),
@@ -113,6 +148,7 @@ class SandboxProcessBoundaryTests(unittest.TestCase):
         violations = matching_lines(
             relay_sources,
             ("--exit-with-parent", "sandbox-manager", "sandbox-target"),
+            strings=True,
         )
         self.assertEqual(
             violations,
@@ -123,10 +159,55 @@ class SandboxProcessBoundaryTests(unittest.TestCase):
 
 
 class ArchitectureCheckTests(unittest.TestCase):
-    def test_grouped_imports_preserve_dependency_checks(self) -> None:
+    def test_checker_preserves_rust_boundaries(self) -> None:
         cases = (
-            ("server.rs", "use crate::{sandbox, server};", False),
-            ("worker_client/macos.rs", "use super::{sandbox as private};", False),
+            ("sideband.rs", "use crate::sandbox::platform;", "depends on"),
+            ("python.rs", "use crate::sandbox::platform;", "depends on"),
+            ("server.rs", "// Explain why crate::sandbox is private.\n", None),
+            ("sandbox.rs", 'const NOTE: &str = "crate::server is separate";', None),
+            (
+                "server.rs",
+                """
+                /* Document crate::sandbox.
+                   /* Nested documentation with a " quote. */
+                   use crate::{sandbox};
+                */
+                const NOTE: &str = r##"a " quote, crate::sandbox, and "# text"##;
+                const BYTE_NOTE: &[u8] = br#"crate::sandbox"#;
+                const QUOTE: char = '"';
+                """,
+                None,
+            ),
+            (
+                "server.rs",
+                """
+                const QUOTE: char = '"';
+                use crate::{/* a comment */ sandbox};
+                """,
+                "depends on",
+            ),
+            (
+                "server.rs",
+                "fn forbidden() { crate /* a comment */ :: sandbox::run(); }",
+                "depends on",
+            ),
+            ("worker_relay.rs", "// The launcher owns --exit-with-parent.\n", None),
+            (
+                "worker_relay.rs",
+                'const CONTROL: &str = "--exit-with-parent";',
+                "knows sandbox control-plane arguments",
+            ),
+            (
+                "worker_relay.rs",
+                'const CONTROL: &str = r#"sandbox-manager"#;',
+                "knows sandbox control-plane arguments",
+            ),
+            ("server.rs", "use crate::{sandbox, server};", "depends on"),
+            (
+                "worker_client/macos.rs",
+                "use super::{sandbox as private};",
+                "depends on",
+            ),
             (
                 "server.rs",
                 """
@@ -135,11 +216,11 @@ class ArchitectureCheckTests(unittest.TestCase):
                     sandbox :: {self, child::Cleanup as Cleanup},
                 };
                 """,
-                False,
+                "depends on",
             ),
-            ("sandbox/macos.rs", "use crate::{worker, relay_protocol};", False),
-            ("sandbox/macos.rs", "use crate::{server::{self, Server}};", False),
-            ("server.rs", "use crate::{process_exit, cli};", True),
+            ("sandbox/macos.rs", "use crate::{worker, relay_protocol};", "depends on"),
+            ("sandbox/macos.rs", "use crate::{server::{self, Server}};", "depends on"),
+            ("server.rs", "use crate::{process_exit, cli};", None),
         )
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -147,7 +228,7 @@ class ArchitectureCheckTests(unittest.TestCase):
             checker = root / "tests" / "architecture.py"
             shutil.copy2(__file__, checker)
             shutil.copytree(SOURCE_ROOT, root / "src")
-            for relative, statement, allowed in cases:
+            for relative, statement, diagnostic in cases:
                 with self.subTest(path=relative, statement=statement):
                     path = root / "src" / relative
                     original = path.read_text(encoding="utf-8")
@@ -161,11 +242,11 @@ class ArchitectureCheckTests(unittest.TestCase):
                         )
                     finally:
                         path.write_text(original, encoding="utf-8")
-                    if allowed:
+                    if diagnostic is None:
                         self.assertEqual(result.returncode, 0, result.stderr)
                     else:
                         self.assertEqual(result.returncode, 1, result.stderr)
-                        self.assertIn("depends on", result.stderr)
+                        self.assertIn(diagnostic, result.stderr)
                         self.assertIn(f"src/{relative}:", result.stderr)
 
 
