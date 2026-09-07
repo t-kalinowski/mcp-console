@@ -4,6 +4,7 @@ import os
 import select
 import shutil
 import signal
+import subprocess
 import sys
 import tempfile
 import threading
@@ -99,14 +100,46 @@ def test_rejects_python_preparation_while_evaluation_is_running(
 def test_interrupts_running_python_evaluation(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
+        library = temporary_path / "python-interrupt-checkpoint.dylib"
+        source = (
+            Path(__file__).resolve().parents[3]
+            / "fixtures"
+            / "native"
+            / "python_probe_checkpoint.c"
+        )
+        subprocess.run(
+            [
+                "cc",
+                "-dynamiclib",
+                "-std=c11",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                "-o",
+                library,
+                source,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
+        environment["MCP_CONSOLE_PYTHON_INTERRUPT_LIBRARY"] = str(library)
         client = McpClient(binary, ("serve",), environment)
+        checkpoints: list[FifoCheckpoint] = []
+        release = None
         passed = False
         try:
             client.initialize_and_list_tools()
             # fmt: r
             r = code(r"""
+                python_interrupt_started <- tempfile("python-interrupt-started-")
+                python_interrupt_release <- tempfile("python-interrupt-release-")
+                Sys.setenv(
+                  MCP_CONSOLE_PYTHON_INTERRUPT_STARTED = python_interrupt_started,
+                  MCP_CONSOLE_PYTHON_INTERRUPT_RELEASE = python_interrupt_release
+                )
                 invisible(suppressMessages(base::trace(
                   "py_eval",
                   tracer = quote({
@@ -121,10 +154,15 @@ def test_interrupts_running_python_evaluation(binary: Path) -> Transcript:
                   print = FALSE,
                   where = asNamespace("reticulate")
                 )))
+                cat(python_interrupt_started, python_interrupt_release, sep = "\n")
                 """)
             client.send(r=r)
-            output = last_result_text(client)
-            assert output == "[done]", repr(output)
+            setup = client.transcript[-1]["result"]
+            paths = last_result_text(client).splitlines()
+            assert len(paths) == 2, setup
+            setup["content"][0]["text"] = "<interrupt started>\n<interrupt release>"
+            started, release = [FifoCheckpoint.create(Path(path)) for path in paths]
+            checkpoints.extend((started, release))
 
             client.send(python="42", timeout_ms=0)
             assert last_result_text(client) == "\n[running; poll with an empty send]"
@@ -169,28 +207,62 @@ def test_interrupts_running_python_evaluation(binary: Path) -> Transcript:
             # fmt: python
             python = code("""
                 import inspect
-                import os
-                import time
-                from pathlib import Path
 
                 inspect.getmro.__code__ = inspect._mcp_original_getmro_code
+
+                import ctypes
+                import os
+                import signal
+
+                checkpoint_library = ctypes.PyDLL(os.environ["MCP_CONSOLE_PYTHON_INTERRUPT_LIBRARY"])
+                wait_for_interrupt = checkpoint_library.wait_for_probe_interrupt
+                wait_for_interrupt.argtypes = (
+                    ctypes.c_int,
+                    ctypes.c_int,
+                    ctypes.c_int,
+                    ctypes.c_void_p,
+                )
+                wait_for_interrupt.restype = ctypes.c_int
                 python_interrupt_state = 41
-                Path(
-                    os.environ["TMPDIR"],
-                    "python-interrupt-started",
-                ).touch()
-                while True:
-                    time.sleep(60)
+                wakeup_read, wakeup_write = os.pipe()
+                os.set_blocking(wakeup_write, False)
+                previous_wakeup = signal.set_wakeup_fd(wakeup_write)
+                try:
+                    with (
+                        open(
+                            os.environ["MCP_CONSOLE_PYTHON_INTERRUPT_STARTED"],
+                            "wb",
+                            buffering=0,
+                        ) as started,
+                        open(
+                            os.environ["MCP_CONSOLE_PYTHON_INTERRUPT_RELEASE"],
+                            "rb",
+                            buffering=0,
+                        ) as release,
+                    ):
+                        assert (
+                            wait_for_interrupt(
+                                started.fileno(),
+                                release.fileno(),
+                                wakeup_read,
+                                ctypes.pythonapi.PyErr_CheckSignals,
+                            )
+                            == 0
+                        )
+                finally:
+                    signal.set_wakeup_fd(previous_wakeup)
+                    os.close(wakeup_read)
+                    os.close(wakeup_write)
                 """)
             client.send(python=python, timeout_ms=0)
             assert last_result_text(client) == "\n[running; poll with an empty send]"
-            wait_for_worker_file(
-                temporary_path,
-                "python-interrupt-started",
-                client,
-            )
+            started.wait("Python evaluation entered native interrupt checkpoint")
 
             client.send(control="interrupt", timeout_ms=0)
+            assert last_result_text(client) == "\n[running; poll with an empty send]"
+            release.release()
+            release = None
+            client.send()
             assert "KeyboardInterrupt" in last_result_text(client)
 
             client.send(python="python_interrupt_state + 1")
@@ -199,6 +271,10 @@ def test_interrupts_running_python_evaluation(binary: Path) -> Transcript:
             passed = True
             return transcript
         finally:
+            if release is not None:
+                release.release()
+            for checkpoint in checkpoints:
+                checkpoint.close()
             if not passed:
                 stop_client(client)
 
