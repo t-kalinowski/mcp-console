@@ -689,15 +689,21 @@ def test_interrupts_python_dbapi_provider_probe(binary: Path) -> Transcript:
             python = code("""
                 import ctypes
                 import os
+                import signal
                 import sys
 
 
-                # PyDLL holds the GIL, deferring Python's normal interrupt handler
-                # until the native checkpoint returns at one stable source line.
+                # The native checkpoint accepts Python's pending signal while
+                # PyDLL still holds the GIL and owns the Python call frame.
                 checkpoint_library = ctypes.PyDLL(os.environ["MCP_CONSOLE_SQL_PROBE_LIBRARY"])
-                wait_for_probe_release = checkpoint_library.wait_for_probe_release
-                wait_for_probe_release.argtypes = (ctypes.c_int, ctypes.c_int)
-                wait_for_probe_release.restype = ctypes.c_int
+                wait_for_probe_interrupt = checkpoint_library.wait_for_probe_interrupt
+                wait_for_probe_interrupt.argtypes = (
+                    ctypes.c_int,
+                    ctypes.c_int,
+                    ctypes.c_int,
+                    ctypes.c_void_p,
+                )
+                wait_for_probe_interrupt.restype = ctypes.c_int
 
 
                 class ProbeConnection:
@@ -716,15 +722,31 @@ def test_interrupts_python_dbapi_provider_probe(binary: Path) -> Transcript:
                 def pause_provider_probe(frame, event, argument):
                     if event == "call" and frame.f_globals.get("__name__") == "_mcp_console_sql":
                         sys.settrace(None)
-                        with (
-                            open(
-                                os.environ["MCP_CONSOLE_SQL_PROBE_STARTED"], "wb", buffering=0
-                            ) as started,
-                            open(
-                                os.environ["MCP_CONSOLE_SQL_PROBE_RELEASE"], "rb", buffering=0
-                            ) as release,
-                        ):
-                            assert wait_for_probe_release(started.fileno(), release.fileno()) == 0
+                        wakeup_read, wakeup_write = os.pipe()
+                        os.set_blocking(wakeup_write, False)
+                        previous_wakeup = signal.set_wakeup_fd(wakeup_write)
+                        try:
+                            with (
+                                open(
+                                    os.environ["MCP_CONSOLE_SQL_PROBE_STARTED"], "wb", buffering=0
+                                ) as started,
+                                open(
+                                    os.environ["MCP_CONSOLE_SQL_PROBE_RELEASE"], "rb", buffering=0
+                                ) as release,
+                            ):
+                                assert (
+                                    wait_for_probe_interrupt(
+                                        started.fileno(),
+                                        release.fileno(),
+                                        wakeup_read,
+                                        ctypes.pythonapi.PyErr_CheckSignals,
+                                    )
+                                    == 0
+                                )
+                        finally:
+                            signal.set_wakeup_fd(previous_wakeup)
+                            os.close(wakeup_read)
+                            os.close(wakeup_write)
                     return pause_provider_probe
 
 
