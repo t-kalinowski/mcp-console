@@ -50,7 +50,14 @@ impl StartupGate {
         let mut environment = std::env::vars_os()
             .map(|(name, value)| Ok((utf8(&name)?, utf8(&value)?)))
             .collect::<Result<BTreeMap<_, _>, String>>()?;
-        environment.remove("DYLD_INSERT_LIBRARIES");
+        for (name, value) in command.get_envs() {
+            let name = utf8(name)?;
+            if let Some(value) = value {
+                environment.insert(name, utf8(value)?);
+            } else {
+                environment.remove(&name);
+            }
+        }
         environment.insert("TMPDIR".to_string(), utf8(temporary.path().as_os_str())?);
         // This directory is disposable data, not a native writable workspace
         // anchor: its metadata directories and the root itself may be replaced.

@@ -138,11 +138,11 @@ struct SendArguments {
     /// them through its connection or cursor protocol. The selected driver supplies its own SQL
     /// dialect and type mappings. Use DBI from an R cell for commands that require the statement
     /// interface. Managed DuckDB conveniences and extension requirements apply only to the managed
-    /// backend. When attaching an existing DuckDB database outside the worker's private temporary
-    /// directory, use `ATTACH 'path' AS name (READ_ONLY)`; the sandbox blocks DuckDB's default writable
-    /// mode for those paths. Use `SHOW TABLES`, `DESCRIBE`, `SUMMARIZE`, and `EXPLAIN` for DuckDB
-    /// discovery. DuckDB CLI dot commands are not supported. Omit this field for polling or stdin-only
-    /// calls.
+    /// backend. With the sandbox enabled, use `ATTACH 'path' AS name (READ_ONLY)` for existing DuckDB
+    /// databases outside the worker's private temporary directory; the sandbox blocks DuckDB's
+    /// default writable mode for those paths. Use `SHOW TABLES`, `DESCRIBE`, `SUMMARIZE`, and `EXPLAIN`
+    /// for DuckDB discovery. DuckDB CLI dot commands are not supported. Omit this field for polling
+    /// or stdin-only calls.
     sql: Option<String>,
     /// Applies lifecycle control alone or before compatible same-call fields. `interrupt` requests
     /// SIGINT from the active host resolver or live worker and preserves in-memory state. After
@@ -167,9 +167,8 @@ struct SendArguments {
     /// resolve at runtime. Use `requirements.python` to stage a distribution before the cell, provide
     /// a version, extra, or marker, or correct automatic inference. Python source is not pre-scanned,
     /// and SQL does not trigger package discovery. A cell is not run if explicit preparation fails or
-    /// further changes require restart. Resolution runs outside the worker sandbox and may download
-    /// packages or extensions or execute installation or build code on the host. Use only trusted
-    /// requirements.
+    /// further changes require restart. Resolution runs with server permissions and may download
+    /// packages or extensions or execute installation or build code. Use only trusted requirements.
     requirements: Option<Requirements>,
     /// Input for an active read, prompt, or debugger. When responding to active input, omit R, Python,
     /// and SQL code and send stdin on its own. Its UTF-8 encoding is queued exactly; no newline is added.
@@ -211,9 +210,9 @@ struct Requirements {
     /// preparation before a cell, or a restart transaction, for example `fts`, `spatial`, or `excel`.
     /// JSON and ICU are included in built-in defaults. Names must start with a lowercase ASCII
     /// letter and contain only lowercase ASCII letters, digits, and underscores. The host resolver
-    /// uses DuckDB's own `INSTALL` outside the sandbox, with DuckDB's default extension repository and
+    /// uses DuckDB's own `INSTALL`, with DuckDB's default extension repository and
     /// native cache. Preparation does not load extension code; `LOAD` and automatic loading happen
-    /// later inside the sandbox.
+    /// later inside the worker.
     #[serde(default)]
     #[schemars(length(max = 64), inner(length(min = 1, max = 64)))]
     duckdb: Vec<String>,
@@ -246,16 +245,22 @@ fn default_timeout_ms() -> u64 {
 }
 
 impl ConsoleServer {
-    fn new(worker: Option<PathBuf>, relay: Option<PathBuf>) -> Result<Self, String> {
+    fn new(
+        worker: Option<PathBuf>,
+        relay: Option<PathBuf>,
+        no_sandbox: bool,
+    ) -> Result<Self, String> {
         let languages = Languages::from_environment()?;
         let worker = match (worker, relay) {
-            (Some(program), relay) => crate::worker_client::Client::new(program, relay)?,
-            (None, None) => crate::worker_client::Client::builtin()?,
+            (Some(program), relay) => {
+                crate::worker_client::Client::new(program, relay, no_sandbox)?
+            }
+            (None, None) => crate::worker_client::Client::builtin(no_sandbox)?,
             (None, Some(_)) => return Err("a custom relay requires a custom worker".to_string()),
         };
         let dynamic_resolution = worker.dynamic_resolution();
         let transcript = crate::transcript::Transcript::new(dynamic_resolution);
-        let tool_router = Self::configured_tool_router(languages, dynamic_resolution);
+        let tool_router = Self::configured_tool_router(languages, dynamic_resolution, no_sandbox);
         Ok(Self {
             worker,
             transcript,
@@ -265,12 +270,29 @@ impl ConsoleServer {
         })
     }
 
-    fn configured_tool_router(languages: Languages, dynamic_resolution: bool) -> ToolRouter<Self> {
+    fn configured_tool_router(
+        languages: Languages,
+        dynamic_resolution: bool,
+        no_sandbox: bool,
+    ) -> ToolRouter<Self> {
         let mut router = Self::tool_router();
         let send = router
             .map
             .get_mut("send")
             .expect("send tool must be registered");
+        let description = send
+            .attr
+            .description
+            .as_mut()
+            .expect("send tool must have a description")
+            .to_mut();
+        description.push_str("\n\n");
+        let security = if no_sandbox {
+            "Evaluated code runs without a sandbox, with the server's permissions, including filesystem and network access. Dependency resolution, when available, may execute installation or build code; use only trusted dependencies."
+        } else {
+            "Evaluated code can read host files, cannot directly access the network, and can write only in the worker's private temporary directory. Dependency resolution, when available, runs outside the sandbox and may execute installation or build code; use only trusted dependencies."
+        };
+        description.push_str(security);
         let schema = Arc::make_mut(&mut send.attr.input_schema);
         let properties = schema
             .get_mut("properties")
@@ -315,9 +337,7 @@ impl ConsoleServer {
 
 Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls must be sequential; a control-only interrupt may overlap a pending `send`. Inspect intermediate results before submitting dependent cells. Cells are not transactional; changes made before an error may remain.
 
-Omit code to poll, supply stdin, control the session, or prepare requirements when available. If a response ends in `[running; poll with an empty send]`, call `send` again without code or stdin; do not resubmit the cell. Send `stdin` alone to answer an active prompt or debugger. Field descriptions specify preparation, control, and timeout ordering.
-
-Evaluated code can read host files, cannot directly access the network, and can write only in the worker's private temporary directory. Dependency resolution, when available, runs outside the sandbox and may execute installation or build code; use only trusted dependencies."#
+Omit code to poll, supply stdin, control the session, or prepare requirements when available. If a response ends in `[running; poll with an empty send]`, call `send` again without code or stdin; do not resubmit the cell. Send `stdin` alone to answer an active prompt or debugger. Field descriptions specify preparation, control, and timeout ordering."#
     )]
     async fn send(
         &self,
@@ -516,8 +536,12 @@ impl ServerHandler for ConsoleServer {
 /// Runs the MCP stdio server and owns the selected worker.
 ///
 /// Closing MCP input also stops a worker whose evaluation is still running.
-pub async fn run(worker: Option<PathBuf>, relay: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
-    let server = ConsoleServer::new(worker, relay).map_err(std::io::Error::other)?;
+pub async fn run(
+    worker: Option<PathBuf>,
+    relay: Option<PathBuf>,
+    no_sandbox: bool,
+) -> Result<(), Box<dyn Error>> {
+    let server = ConsoleServer::new(worker, relay, no_sandbox).map_err(std::io::Error::other)?;
     let worker = server.worker.clone();
     let (input_closed, wait_for_input_close) = oneshot::channel();
     let input = ShutdownReader::new(tokio::io::stdin(), input_closed);

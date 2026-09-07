@@ -22,7 +22,9 @@ pub(super) fn sandboxed_command() -> Result<(Command, TemporaryDirectory), Strin
     let temporary_directory = TemporaryDirectory::new()?;
     let mut launcher = Command::new(super::installation::private_runner()?);
     // Keep host interposers out of the private executable and sandbox target.
-    launcher.env_remove("DYLD_INSERT_LIBRARIES");
+    launcher
+        .env_remove("DYLD_INSERT_LIBRARIES")
+        .env("MCP_CONSOLE_SANDBOX", "1");
 
     Ok((launcher, temporary_directory))
 }

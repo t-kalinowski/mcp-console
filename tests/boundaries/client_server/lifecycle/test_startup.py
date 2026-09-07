@@ -90,6 +90,10 @@ def startup_fixture(
         fake_bin.mkdir()
         fixtures = Path(__file__).resolve().parents[3] / "fixtures"
         (fake_bin / bootstrap).symlink_to(fixtures / "startup_ir")
+        if bootstrap == "ir":
+            # Gate ir while keeping Python preparation on the available uv.
+            # Concurrent cases must not bootstrap uv into reticulate's shared cache.
+            (fake_bin / "uv").symlink_to(fixtures / "startup_ir")
         (fake_bin / "python3").symlink_to(sys.executable)
         started = FifoCheckpoint.create(temporary / "started")
         release = FifoCheckpoint.create(temporary / "release")
@@ -242,6 +246,9 @@ def test_first_cell_prepares_defaults_after_running_response(
             )
             == 1
         ), fixture.invocations()
+        assert any(
+            invocation["program"] == "uv" for invocation in fixture.invocations()
+        ), "Python preparation bypassed the fixture's uv executable"
         return client.finish()
 
 

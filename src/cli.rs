@@ -29,11 +29,15 @@ pub struct Cli {
 pub enum Command {
     /// Run the MCP server over standard input and output
     Serve {
+        /// Run evaluated code with server permissions, without sandbox isolation or descendant cleanup
+        #[arg(long)]
+        no_sandbox: bool,
+
         /// Replace the runtime worker during development
         #[arg(long, hide = true, value_name = "PATH")]
         worker: Option<PathBuf>,
 
-        /// Replace the sandboxed worker relay during development
+        /// Replace the worker relay during development
         #[arg(long, hide = true, value_name = "PATH", requires = "worker")]
         relay: Option<PathBuf>,
     },
@@ -45,7 +49,7 @@ pub enum Command {
     /// Run the internal worker relay
     #[command(hide = true)]
     WorkerRelay {
-        /// Worker command to launch inside the relay sandbox
+        /// Worker command to launch through the relay
         #[arg(
             value_name = "COMMAND",
             required = true,
