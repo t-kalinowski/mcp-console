@@ -68,6 +68,44 @@ impl IrCommand {
     }
 }
 
+/// Captures the chosen bootstrap without invoking installation or version checks.
+#[derive(Clone)]
+pub(crate) struct ManagedRBootstrap {
+    ir: Option<IrCommand>,
+    rscript: PathBuf,
+}
+
+impl ManagedRBootstrap {
+    pub(crate) fn prepare(
+        &self,
+        python: &mut super::ManagedPythonResolverConfiguration,
+        on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
+    ) -> Result<ManagedRResolverConfiguration, String> {
+        let resolver = ResolverProcess::new();
+        let mut on_started = Some(on_started);
+        let ir = match &self.ir {
+            Some(ir) => ir.clone(),
+            None => {
+                let uv = resolve_uv_with_rscript(
+                    &resolver,
+                    &mut on_started,
+                    &self.rscript,
+                    python,
+                    false,
+                )?
+                .expect("selected reticulate bootstrap must resolve uv or fail");
+                python.set_resolved_uv(uv.clone());
+                IrCommand::through_uv(uv)
+            }
+        };
+        validate_ir_version(&resolver, &mut on_started, &ir)?;
+        Ok(ManagedRResolverConfiguration {
+            ir,
+            rscript: self.rscript.clone(),
+        })
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct ManagedRResolverConfiguration {
     ir: IrCommand,
@@ -97,7 +135,7 @@ impl ManagedRResolverConfiguration {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        managed_r.configure_resolver(&mut command)?;
+        managed_r.configure_worker(&mut command)?;
         configuration.configure_uv_bootstrap(&mut command);
         let mut child = command.spawn().map_err(|error| {
             format!(
@@ -119,10 +157,7 @@ impl ManagedRResolverConfiguration {
 }
 
 impl ManagedR {
-    pub(crate) fn configure_worker(
-        &self,
-        command: &mut crate::sandbox::SandboxedCommand,
-    ) -> Result<(), String> {
+    pub(crate) fn configure_worker(&self, command: &mut Command) -> Result<(), String> {
         if !self.library.is_dir() {
             return Err(format!(
                 "resolved R library `{}` no longer exists",
@@ -141,29 +176,23 @@ impl ManagedR {
         &self.library
     }
 
-    pub(crate) fn configure_resolver(&self, command: &mut Command) -> Result<(), String> {
-        if !self.library.is_dir() {
-            return Err(format!(
-                "resolved R library `{}` no longer exists",
-                self.library.display()
-            ));
-        }
-        command.env("R_LIBS", &self.r_libs);
-        Ok(())
-    }
-
     pub(crate) fn rscript(&self) -> &Path {
         &self.rscript
     }
 }
 
-pub(crate) fn discover_r_resolver(
+pub(crate) fn detect_r_bootstrap(
     python: &mut super::ManagedPythonResolverConfiguration,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
-) -> Result<Option<ManagedRResolverConfiguration>, String> {
+) -> Result<Option<ManagedRBootstrap>, String> {
     let resolver = ResolverProcess::new();
     let mut on_started = Some(on_started);
-    discover_r_resolver_with(&resolver, &mut on_started, python)
+    let rscript = discover_rscript(&resolver, &mut on_started)?;
+    let ir = select_ir_command(python);
+    if ir.is_none() && !probe_ambient_uv(&resolver, &mut on_started, &rscript, python)? {
+        return Ok(None);
+    }
+    Ok(Some(ManagedRBootstrap { ir, rscript }))
 }
 
 pub(crate) fn resolve_r(
@@ -194,32 +223,38 @@ fn discover_r_resolver_with(
     python: &mut super::ManagedPythonResolverConfiguration,
 ) -> Result<Option<ManagedRResolverConfiguration>, String> {
     let rscript = discover_rscript(resolver, on_started)?;
-    let path_ir = find_path_entry("ir");
-    let path_uv = find_path_entry("uv");
-    let ir = if let Some(ir) = path_ir {
-        if let Some(uv) = path_uv.as_ref() {
-            python.set_default_uv(uv.as_os_str().to_os_string());
+    let ir = match select_ir_command(python) {
+        Some(ir) => ir,
+        None => {
+            let Some(uv) = resolve_uv_with_rscript(resolver, on_started, &rscript, python, true)?
+            else {
+                return Ok(None);
+            };
+            python.set_resolved_uv(uv.clone());
+            IrCommand::through_uv(uv)
         }
-        IrCommand::direct(ir)
-    } else if let Some(uv) = path_uv {
-        python.set_default_uv(uv.as_os_str().to_os_string());
-        IrCommand::through_path_uv(uv)
-    } else if let Some(uv) = python
-        .explicit_uv()
-        .filter(|uv| *uv != OsStr::new("managed"))
-        .map(OsStr::to_os_string)
-    {
-        IrCommand::through_uv(uv)
-    } else {
-        let Some(uv) = resolve_uv_with_rscript(resolver, on_started, &rscript, python, true)?
-        else {
-            return Ok(None);
-        };
-        python.set_resolved_uv(uv.clone());
-        IrCommand::through_uv(uv)
     };
     validate_ir_version(resolver, on_started, &ir)?;
     Ok(Some(ManagedRResolverConfiguration { ir, rscript }))
+}
+
+fn select_ir_command(python: &mut super::ManagedPythonResolverConfiguration) -> Option<IrCommand> {
+    let path_ir = find_path_entry("ir");
+    let path_uv = find_path_entry("uv");
+    if let Some(ir) = path_ir {
+        if let Some(uv) = path_uv.as_ref() {
+            python.set_default_uv(uv.as_os_str().to_os_string());
+        }
+        Some(IrCommand::direct(ir))
+    } else if let Some(uv) = path_uv {
+        python.set_default_uv(uv.as_os_str().to_os_string());
+        Some(IrCommand::through_path_uv(uv))
+    } else {
+        python
+            .explicit_uv()
+            .filter(|uv| *uv != OsStr::new("managed"))
+            .map(|uv| IrCommand::through_uv(uv.to_os_string()))
+    }
 }
 
 fn discover_rscript(
@@ -268,12 +303,42 @@ fn resolve_uv_with_rscript(
     configuration: &super::ManagedPythonResolverConfiguration,
     unavailable_is_bare: bool,
 ) -> Result<Option<OsString>, String> {
+    let output = run_uv_program(resolver, on_started, rscript, configuration, false)?;
+    finish_uv_resolution(output, unavailable_is_bare)
+}
+
+fn probe_ambient_uv(
+    resolver: &ResolverProcess,
+    on_started: &mut Option<impl FnOnce(ResolverStopHandle) -> Result<(), String>>,
+    rscript: &Path,
+    configuration: &super::ManagedPythonResolverConfiguration,
+) -> Result<bool, String> {
+    let output = run_uv_program(resolver, on_started, rscript, configuration, true)?;
+    if output.status.success() {
+        Ok(true)
+    } else if matches!(output.status.code(), Some(42 | 43)) {
+        Ok(false)
+    } else {
+        Err(uv_resolution_error(&output))
+    }
+}
+
+fn run_uv_program(
+    resolver: &ResolverProcess,
+    on_started: &mut Option<impl FnOnce(ResolverStopHandle) -> Result<(), String>>,
+    rscript: &Path,
+    configuration: &super::ManagedPythonResolverConfiguration,
+    probe_only: bool,
+) -> Result<ResolverOutput, String> {
     let mut command = resolver_command(rscript);
     command
         .args(["--vanilla", "-e", UV_BINARY_RESOLVER_SOURCE])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if probe_only {
+        command.arg("--probe");
+    }
     configuration.configure_uv_bootstrap(&mut command);
     let mut child = command.spawn().map_err(|error| {
         format!(
@@ -281,14 +346,27 @@ fn resolve_uv_with_rscript(
             rscript.display()
         )
     })?;
-    let output = collect_resolver_output(
+    collect_resolver_output(
         resolver,
         &mut child,
         on_started,
         rscript,
         "ambient reticulate `uv`",
-    )?;
-    finish_uv_resolution(output, unavailable_is_bare)
+    )
+}
+
+fn uv_resolution_error(output: &ResolverOutput) -> String {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let detail = if stderr.trim().is_empty() {
+        stdout.trim()
+    } else {
+        stderr.trim()
+    };
+    format!(
+        "reticulate `uv` resolution failed with {}: {detail}",
+        output.status
+    )
 }
 
 fn finish_uv_resolution(
@@ -304,17 +382,7 @@ fn finish_uv_resolution(
         {
             return Ok(None);
         }
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let detail = if stderr.trim().is_empty() {
-            stdout.trim()
-        } else {
-            stderr.trim()
-        };
-        return Err(format!(
-            "reticulate `uv` resolution failed with {}: {detail}",
-            output.status
-        ));
+        return Err(uv_resolution_error(&output));
     }
     let output = String::from_utf8(output.stdout)
         .map_err(|_| "reticulate `uv` resolver returned a non-UTF-8 path".to_string())?;

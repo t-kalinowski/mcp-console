@@ -1,0 +1,23 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  r: echo echo
+result:
+  content:
+    - type: text
+      text: "[worker relay exited before readiness]"
+  isError: true
+---
+send:
+  r: echo echo
+result:
+  content:
+    - type: text
+      text: |
+        zod: echo
+  isError: false
+---
+stderr: >
+  failed to create temporary directory `<sandbox temp>`: Not a directory
+  (os error 20)

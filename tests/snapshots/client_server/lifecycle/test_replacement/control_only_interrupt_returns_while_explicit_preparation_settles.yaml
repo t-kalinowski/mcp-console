@@ -1,0 +1,63 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  requirements:
+    r:
+      - blocked-standalone-resolver
+result:
+  content:
+    - type: text
+      text: "R package resolution failed with exit status: 130: "
+  isError: true
+---
+send:
+  control: interrupt
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running; poll with an empty send]
+  isError: false
+---
+send:
+  r: echo worker ready
+result:
+  content:
+    - type: text
+      text: |
+        zod: worker ready
+  isError: false
+---
+send:
+  r: echo interrupted preparation cell ran
+  requirements:
+    r:
+      - blocked-cell-resolver
+result:
+  content:
+    - type: text
+      text: "R package resolution failed with exit status: 130: "
+  isError: true
+---
+send:
+  control: interrupt
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running; poll with an empty send]
+  isError: false
+---
+send:
+  r: echo worker remains usable
+result:
+  content:
+    - type: text
+      text: |
+        zod: worker remains usable
+  isError: false

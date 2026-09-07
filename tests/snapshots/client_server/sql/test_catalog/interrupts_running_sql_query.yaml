@@ -1,0 +1,59 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  r: |
+    invisible(DBI::dbExecute(
+      sql_connection(),
+      "SET VARIABLE sql_interrupt_marker = ?",
+      params = list(file.path(tempdir(), "sql-interrupt-started"))
+    ))
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  sql: |
+    CREATE TABLE interrupt_state AS
+    SELECT CAST(42 AS INTEGER) AS answer
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  sql: |
+    COPY (SELECT 1) TO (getvariable('sql_interrupt_marker'));
+    SELECT sleep_ms(60000) AS waited
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running; poll with an empty send]
+  isError: false
+---
+send:
+  control: interrupt
+  timeout_ms: 30000
+result:
+  content:
+    - type: text
+      text: "\n"
+  isError: false
+---
+send:
+  sql: SELECT answer FROM interrupt_state
+result:
+  content:
+    - type: text
+      text: |
+        # A tibble: 1 × 1
+           answer
+          <int32>
+        1      42
+  isError: false

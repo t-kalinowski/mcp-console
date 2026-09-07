@@ -1,39 +1,13 @@
+use super::kqueue::Kqueue;
 use super::process::{process_identity, process_info};
 use super::process_tree::{TrackerState, add_process_tree};
 use std::collections::HashMap;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-use std::sync::Arc;
 use std::time::Duration;
 
-pub(super) const OBSERVER_WAKE_IDENT: libc::uintptr_t = 1;
-
 pub(super) struct DescendantTracker {
-    pub(super) kqueue: Arc<OwnedFd>,
+    pub(super) kqueue: Kqueue,
     pub(super) state: TrackerState,
-}
-
-pub(super) struct ObserverWakeup {
-    // Keep the queue alive if the observer exits before its owner requests
-    // stop, so a reused descriptor cannot receive the wakeup.
-    kqueue: Arc<OwnedFd>,
-}
-
-impl ObserverWakeup {
-    pub(super) fn wake(self) -> Result<(), String> {
-        let event = libc::kevent {
-            ident: OBSERVER_WAKE_IDENT,
-            filter: libc::EVFILT_USER,
-            flags: 0,
-            fflags: libc::NOTE_TRIGGER,
-            data: 0,
-            udata: std::ptr::null_mut(),
-        };
-        submit_observer_event(
-            self.kqueue.as_raw_fd(),
-            &event,
-            "failed to wake sandbox process observer",
-        )
-    }
+    pub(super) control_descriptor: Option<libc::c_int>,
 }
 
 pub(super) struct StartFailure {
@@ -69,23 +43,20 @@ impl StartFailure {
     }
 }
 
+#[derive(Default)]
+pub(super) struct TrackerEvents {
+    pub(super) control_readable: bool,
+    pub(super) root_exited: bool,
+}
+
 pub(super) enum EventWait {
-    Events,
-    RootExited,
-    Wakeup,
+    Events(TrackerEvents),
     TimedOut,
 }
 
 impl DescendantTracker {
     pub(super) fn start(root_pid: libc::pid_t) -> Result<Self, StartFailure> {
-        let kqueue_descriptor = unsafe { libc::kqueue() };
-        if kqueue_descriptor < 0 {
-            return Err(StartFailure::new(format!(
-                "failed to create the sandbox process tracker: {}",
-                std::io::Error::last_os_error()
-            )));
-        }
-        let kqueue = Arc::new(unsafe { OwnedFd::from_raw_fd(kqueue_descriptor) });
+        let kqueue = Kqueue::new("the sandbox process tracker").map_err(StartFailure::new)?;
 
         // Darwin provides neither child subreapers nor PID namespaces, and its
         // kqueue NOTE_TRACK facility is unsupported. Supported callers prevent
@@ -102,16 +73,15 @@ impl DescendantTracker {
                 ))
             })?;
         let state = TrackerState {
-            root: Some(root),
+            root,
             active: HashMap::new(),
         };
-        let mut tracker = Self { kqueue, state };
-        if let Err(error) = add_process_tree(
-            tracker.kqueue.as_raw_fd(),
-            root_pid,
-            None,
-            &mut tracker.state,
-        ) {
+        let mut tracker = Self {
+            kqueue,
+            state,
+            control_descriptor: None,
+        };
+        if let Err(error) = add_process_tree(&tracker.kqueue, root_pid, None, &mut tracker.state) {
             return Err(StartFailure::with_tracker(error, tracker));
         }
         if tracker.state.active.get(&root_pid) != Some(&root) {
@@ -136,40 +106,42 @@ impl DescendantTracker {
         Ok(tracker)
     }
 
-    pub(super) fn register_observer_wakeup(&self) -> Result<ObserverWakeup, String> {
-        let event = libc::kevent {
-            ident: OBSERVER_WAKE_IDENT,
-            filter: libc::EVFILT_USER,
-            flags: libc::EV_ADD | libc::EV_CLEAR,
-            fflags: 0,
-            data: 0,
-            udata: std::ptr::null_mut(),
-        };
-        submit_observer_event(
-            self.kqueue.as_raw_fd(),
-            &event,
-            "failed to register sandbox process observer wakeup",
-        )?;
-        Ok(ObserverWakeup {
-            kqueue: Arc::clone(&self.kqueue),
-        })
+    pub(super) fn watch_control(&mut self, descriptor: libc::c_int) -> Result<(), String> {
+        assert!(
+            self.control_descriptor.is_none(),
+            "sandbox manager control can be watched only once"
+        );
+        self.kqueue
+            .watch_read(descriptor, "failed to watch sandbox manager control")?;
+        self.control_descriptor = Some(descriptor);
+        Ok(())
     }
-}
 
-fn submit_observer_event(
-    kqueue: libc::c_int,
-    event: &libc::kevent,
-    description: &str,
-) -> Result<(), String> {
-    loop {
-        let result =
-            unsafe { libc::kevent(kqueue, event, 1, std::ptr::null_mut(), 0, std::ptr::null()) };
-        if result >= 0 {
-            return Ok(());
+    pub(super) fn remove_control_watch(&mut self) {
+        if let Some(descriptor) = self.control_descriptor.take() {
+            self.kqueue.remove_read_watch(descriptor);
         }
-        let error = std::io::Error::last_os_error();
-        if error.kind() != std::io::ErrorKind::Interrupted {
-            return Err(format!("{description}: {error}"));
+    }
+
+    pub(super) fn supervise(mut self, retirement_grace: Duration) -> Result<(), String> {
+        let observation = match self.root_has_exited() {
+            Ok(true) => Ok(()),
+            Ok(false) => loop {
+                match self.wait_for_events(None) {
+                    Ok(EventWait::Events(events)) if events.root_exited => break Ok(()),
+                    Ok(EventWait::Events(_) | EventWait::TimedOut) => {}
+                    Err(error) => break Err(error),
+                }
+            },
+            Err(error) => Err(error),
+        };
+
+        match observation {
+            Ok(()) => self.terminate(true, retirement_grace),
+            Err(error) => match self.terminate(false, retirement_grace) {
+                Ok(()) => Err(error),
+                Err(cleanup_error) => Err(format!("{error}; additionally, {cleanup_error}")),
+            },
         }
     }
 }

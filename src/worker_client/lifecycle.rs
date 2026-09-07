@@ -1,7 +1,7 @@
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
-use super::environment::{Environment, RequirementDelta, ResolvedEnvironment};
+use super::environment::{Environment, RequirementDelta};
 use super::evaluation::{EvaluationReservation, RestartDelivery};
 use super::output::{Response, ResponseAcknowledgment, SendFailure};
 use super::{Client, WorkerRetirement, WorkerRetirementFailure, WorkerState, platform};
@@ -28,6 +28,18 @@ pub(super) struct LifecycleControl {
     retiring_generation: Option<RetiringGeneration>,
     pub(super) requirement_changes: RequirementChangeState,
     pub(super) processes: ProcessStopHandles,
+    startup: Option<WorkerStartup>,
+}
+
+struct WorkerStartup {
+    owner: Weak<WorkerStartupAdmission>,
+    interrupted: bool,
+}
+
+/// Keeps startup interruptible before and between its resolver processes.
+pub(super) struct WorkerStartupAdmission {
+    client: Client,
+    generation: WorkerGeneration,
 }
 
 struct RetiringGeneration {
@@ -50,6 +62,7 @@ impl LifecycleControl {
             retiring_generation: None,
             requirement_changes: RequirementChangeState::Available,
             processes: ProcessStopHandles::default(),
+            startup: None,
         }
     }
 
@@ -67,7 +80,38 @@ impl LifecycleControl {
         self.state = LifecycleState::Restarting { deadline };
         self.generation = WorkerGeneration::new();
         self.processes.resolver = None;
+        self.startup = None;
         (stop_handles, deadline, self.generation.clone())
+    }
+
+    pub(super) fn ensure_startup(&self, expected: &WorkerGeneration) -> Result<(), String> {
+        if !self.generation.is(expected) {
+            return Err("session restarted before the operation began".to_string());
+        }
+        if matches!(self.state, LifecycleState::ShuttingDown { .. }) {
+            return Err("worker is shutting down".to_string());
+        }
+        if self.startup_interrupted() {
+            return Err("worker startup interrupted".to_string());
+        }
+        Ok(())
+    }
+
+    fn startup_interrupted(&self) -> bool {
+        self.startup
+            .as_ref()
+            .is_some_and(|startup| startup.interrupted && startup.owner.strong_count() != 0)
+    }
+
+    fn interrupt_startup(&mut self) -> bool {
+        let Some(startup) = self.startup.as_mut() else {
+            return false;
+        };
+        if startup.owner.strong_count() == 0 {
+            return false;
+        }
+        startup.interrupted = true;
+        true
     }
 
     pub(super) fn old_generation_commit_disposition(
@@ -222,25 +266,86 @@ impl Drop for ControlledSendAdmission {
     }
 }
 
+impl Drop for WorkerStartupAdmission {
+    fn drop(&mut self) {
+        let Ok(mut lifecycle) = self.client.0.lifecycle.lock() else {
+            return;
+        };
+        if lifecycle.generation.is(&self.generation)
+            && lifecycle
+                .startup
+                .as_ref()
+                .is_some_and(|startup| std::ptr::eq(startup.owner.as_ptr(), self))
+        {
+            lifecycle.startup = None;
+        }
+    }
+}
+
 impl Client {
+    pub(super) fn reserve_worker_startup(
+        &self,
+        generation: &WorkerGeneration,
+    ) -> Result<Option<Arc<WorkerStartupAdmission>>, String> {
+        let mut lifecycle = self
+            .0
+            .lifecycle
+            .lock()
+            .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
+        lifecycle.ensure_startup(generation)?;
+        if lifecycle.processes.worker.is_some() {
+            return Ok(None);
+        }
+        if let Some(owner) = lifecycle
+            .startup
+            .as_ref()
+            .and_then(|startup| startup.owner.upgrade())
+        {
+            return Ok(Some(owner));
+        }
+        let owner = Arc::new(WorkerStartupAdmission {
+            client: self.clone(),
+            generation: generation.clone(),
+        });
+        lifecycle.startup = Some(WorkerStartup {
+            owner: Arc::downgrade(&owner),
+            interrupted: false,
+        });
+        Ok(Some(owner))
+    }
+
+    pub(super) fn ensure_startup(&self, generation: &WorkerGeneration) -> Result<(), String> {
+        self.0
+            .lifecycle
+            .lock()
+            .map_err(|_| "worker lifecycle lock poisoned".to_string())?
+            .ensure_startup(generation)
+    }
+
     pub(super) fn interrupt_standalone_blocking(&self) -> Result<(), String> {
-        let resolver = {
-            let lifecycle = self
+        let (resolver, startup) = {
+            let mut lifecycle = self
                 .0
                 .lifecycle
                 .lock()
                 .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
-            lifecycle.processes.resolver.clone()
+            (
+                lifecycle.processes.resolver.clone(),
+                lifecycle.interrupt_startup(),
+            )
         };
         if let Some(resolver) = resolver
             && resolver.interrupt()?
         {
             return Ok(());
         }
+        if startup {
+            return Ok(());
+        }
 
         let active = self.evaluation()?;
-        let (processes, worker_allowed) = {
-            let lifecycle = self
+        let (processes, worker_allowed, startup) = {
+            let mut lifecycle = self
                 .0
                 .lifecycle
                 .lock()
@@ -256,11 +361,18 @@ impl Client {
                     && active
                         .as_ref()
                         .is_some_and(|active| active.generation.is(&lifecycle.generation)));
-            (lifecycle.processes.clone(), worker_allowed)
+            (
+                lifecycle.processes.clone(),
+                worker_allowed,
+                lifecycle.interrupt_startup(),
+            )
         };
         if let Some(resolver) = processes.resolver
             && resolver.interrupt()?
         {
+            return Ok(());
+        }
+        if startup {
             return Ok(());
         }
         if worker_allowed {
@@ -273,21 +385,24 @@ impl Client {
     }
 
     pub(super) fn interrupt_blocking(&self) -> Result<(), String> {
-        let processes = {
-            let lifecycle = self
+        let (processes, startup) = {
+            let mut lifecycle = self
                 .0
                 .lifecycle
                 .lock()
                 .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
-            lifecycle.processes.clone()
+            (lifecycle.processes.clone(), lifecycle.interrupt_startup())
         };
-        Self::interrupt_processes(processes)
+        Self::interrupt_processes(processes, startup)
     }
 
-    fn interrupt_processes(processes: ProcessStopHandles) -> Result<(), String> {
+    fn interrupt_processes(processes: ProcessStopHandles, startup: bool) -> Result<(), String> {
         if let Some(resolver) = processes.resolver
             && resolver.interrupt()?
         {
+            return Ok(());
+        }
+        if startup {
             return Ok(());
         }
         processes
@@ -347,7 +462,7 @@ impl Client {
             self.0
                 .output
                 .push_failure(SendFailure::from(error).worker_outcome(outcome));
-            response.extend(self.0.output.take());
+            response.extend_logical_region(self.0.output.take());
             return Ok(RestartAttempt {
                 response: self.retain_transition_result(transition, response),
                 generation: None,
@@ -434,7 +549,7 @@ impl Client {
         expected: &WorkerGeneration,
         grace: Duration,
         environment: &mut Environment,
-        resolved: ResolvedEnvironment,
+        resolved: Environment,
         control: Option<&ControlledSendAdmission>,
     ) -> Result<RestartContext, String> {
         let mut evaluation = self.evaluation()?;
@@ -467,15 +582,7 @@ impl Client {
             .take()
             .map(|active| active.evaluation.reserve_for_restart())
             .transpose()?;
-        if let Some(managed_python) = resolved.managed_python {
-            environment
-                .python
-                .as_mut()
-                .ok_or_else(|| "managed Python environment is unavailable".to_string())?
-                .replace_managed(managed_python)?;
-        }
-        environment.r = resolved.managed_r;
-        environment.duckdb_extensions = resolved.duckdb_extensions;
+        *environment = resolved;
         let (processes, deadline, generation) =
             lifecycle.start_restart(grace, OldGenerationCommitDisposition::DiscardForReplacement);
         Ok(RestartContext {
@@ -504,6 +611,8 @@ impl Client {
             .map_err(|_| RestartFailure::new("worker lock poisoned".to_string()))?;
         self.ensure_restarting().map_err(RestartFailure::new)?;
         let retirement = worker.finish_retirement().map_err(RestartFailure::new)?;
+        self.clear_restart_stop_handle()
+            .map_err(RestartFailure::new)?;
         if matches!(retirement, WorkerRetirement::NeverStarted) {
             *worker = WorkerState::Stopped;
         }
@@ -824,8 +933,12 @@ impl Client {
             }
             LifecycleState::Ready
                 if lifecycle.processes.worker.is_none()
-                    && lifecycle.processes.resolver.is_some() =>
+                    && lifecycle.processes.resolver.is_some()
+                    && self.0.preparation.try_read().is_err() =>
             {
+                // Explicit preconditions own preparation admission. A resolver
+                // preparing lazy worker startup belongs to the operation that
+                // restart is retiring, even before a worker process exists.
                 return Err("requirement preparation is still running".to_string());
             }
             LifecycleState::Ready => {}
@@ -937,8 +1050,13 @@ impl Client {
                 .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
             match lifecycle.state {
                 LifecycleState::Ready if lifecycle.generation.is(expected) => {
-                    lifecycle.processes.worker = Some(handle.clone());
-                    return Ok(());
+                    if lifecycle.startup_interrupted() {
+                        (Instant::now(), "worker startup interrupted")
+                    } else {
+                        lifecycle.processes.worker = Some(handle.clone());
+                        lifecycle.startup = None;
+                        return Ok(());
+                    }
                 }
                 LifecycleState::Ready => (
                     Instant::now(),
@@ -979,8 +1097,13 @@ impl Client {
                 .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
             match lifecycle.state {
                 LifecycleState::Restarting { .. } => {
-                    lifecycle.processes.worker = Some(handle.clone());
-                    return Ok(());
+                    if lifecycle.startup_interrupted() {
+                        (Instant::now(), "worker startup interrupted")
+                    } else {
+                        lifecycle.processes.worker = Some(handle.clone());
+                        lifecycle.startup = None;
+                        return Ok(());
+                    }
                 }
                 LifecycleState::ShuttingDown { deadline } => (deadline, "worker is shutting down"),
                 LifecycleState::Ready => (Instant::now(), "worker restart state changed"),
@@ -1014,9 +1137,15 @@ impl Client {
                 .lock()
                 .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
             match lifecycle.state {
-                LifecycleState::Ready if lifecycle.generation.is(expected) => {
-                    lifecycle.processes.resolver = Some(handle.clone());
-                    return Ok(());
+                LifecycleState::Ready | LifecycleState::Restarting { .. }
+                    if lifecycle.generation.is(expected) =>
+                {
+                    if lifecycle.startup_interrupted() {
+                        "worker startup interrupted"
+                    } else {
+                        lifecycle.processes.resolver = Some(handle.clone());
+                        return Ok(());
+                    }
                 }
                 LifecycleState::Ready => "session restarted before the operation began",
                 LifecycleState::Restarting { .. } => "worker is restarting",
@@ -1036,7 +1165,10 @@ impl Client {
             .lifecycle
             .lock()
             .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
-        if (lifecycle.state == LifecycleState::Ready && lifecycle.generation.is(expected))
+        if (matches!(
+            lifecycle.state,
+            LifecycleState::Ready | LifecycleState::Restarting { .. }
+        ) && lifecycle.generation.is(expected))
             || matches!(lifecycle.state, LifecycleState::ShuttingDown { .. })
         {
             lifecycle.processes.resolver = None;
@@ -1054,7 +1186,10 @@ impl Client {
             lifecycle.state = LifecycleState::ShuttingDown { deadline };
         }
         let handles = std::mem::take(&mut lifecycle.processes);
-        Ok((handles.worker.is_some() || handles.resolver.is_some()).then_some(handles))
+        Ok(
+            (handles.worker.is_some() || handles.resolver.is_some() || lifecycle.startup.is_some())
+                .then_some(handles),
+        )
     }
 
     /// Stops and reaps active worker and resolver process groups.
@@ -1082,7 +1217,6 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::worker_client::RResolver;
     use crate::worker_client::evaluation::EvaluationWait;
     use crate::worker_client::output::{Content, SendResponse, render_response};
     use crate::worker_protocol::ConsoleChannel;
@@ -1094,7 +1228,6 @@ mod tests {
             Vec::new(),
             None,
             None,
-            RResolver::Discover,
         );
         let evaluation = Arc::new(super::super::Evaluation::new(
             crate::transcript::Transcript::new(true),
@@ -1143,7 +1276,6 @@ mod tests {
             Vec::new(),
             None,
             None,
-            RResolver::Discover,
         );
         let evaluation = Arc::new(super::super::Evaluation::new(
             crate::transcript::Transcript::new(true),

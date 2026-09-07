@@ -12,8 +12,9 @@ Its sources of truth are:
 The relay forwards the semantic messages in this document between the server and worker without changing their JSON shapes.
 The separate server-relay JSONL protocol is specified in [`RELAY_PROTOCOL.md`](RELAY_PROTOCOL.md).
 
-Outside this wire contract, [`ARCHITECTURE.md`](ARCHITECTURE.md) owns process placement and lifecycle, [`BUILTIN_RUNTIME.md`](BUILTIN_RUNTIME.md) owns console behavior, [`REQUIREMENTS.md`](REQUIREMENTS.md) owns dependency preparation, and [`TOOL_DESCRIPTIONS.md`](TOOL_DESCRIPTIONS.md) mirrors the registered MCP descriptions.
-Process-boundary test guidance lives in [`../tests/transcripts/README.md`](../tests/transcripts/README.md).
+Outside this wire contract, [`ARCHITECTURE.md`](ARCHITECTURE.md) owns process placement and lifecycle, [`BUILTIN_RUNTIME.md`](BUILTIN_RUNTIME.md) owns console behavior, [`REQUIREMENTS.md`](REQUIREMENTS.md) owns dependency preparation, and [`TOOL_DESCRIPTIONS.md`](TOOL_DESCRIPTIONS.md) gives editorial guidance for tool descriptions.
+The [canonical handshake snapshot](../tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml) records the registered MCP descriptions.
+Process-boundary test guidance lives in [`../tests/boundaries/README.md`](../tests/boundaries/README.md).
 
 Direction labels below use the logical `server` and `worker` endpoints.
 The relay translates matching server-relay commands and events at the transport boundary.
@@ -382,7 +383,7 @@ Console, image, and permitted nested resolver frames do not by themselves change
 `python_activated` may occur while idle, evaluating, or preparing, but only for a matching managed environment.
 An input request during preparation is an error, as described above.
 
-The relay has independent producers for sideband, stdout, stderr, and process supervision.
+The relay has independent producers for sideband, stdout, stderr, and direct-worker lifecycle.
 It serializes their outer events without interleaving frames and preserves each producer's order.
 That serialized observation order does not reconstruct chronology between the worker's independent transports.
 
@@ -401,12 +402,16 @@ The shutdown frame may arrive while the worker is waiting for a nested resolver 
 
 Fd-0 closure and the `shutdown` frame are both generation-retirement signals, not evaluation or stdin-payload delimiters.
 A worker must not require both in a particular order.
-If it does not exit within the relay's supplied grace period, the relay forcibly terminates it and its supported process-group descendants.
+If it does not exit within the relay's supplied grace period, the relay forcibly terminates it.
+After direct-worker exit or force-stop, the relay reaps the direct child and retires its local transports.
+The sandbox launcher owns cleanup of remaining descendants, including those retaining worker descriptors or entering another process group or session.
+The server requires successful managed launcher exit as the sandbox-lifetime retirement barrier before replacement.
 The exact server-relay acceptance and retirement sequence is specified in [`RELAY_PROTOCOL.md`](RELAY_PROTOCOL.md).
 
-During retirement, the relay forwards every complete worker-sideband frame already buffered or immediately readable.
-It may abandon an incomplete frame held open by a descendant that retained the endpoint.
-It drains fd 1 and fd 2 before reporting their outer stream closures and the direct worker process outcome.
+During retirement, additional nonblocking reads of worker-sideband, fd 1, and fd 2 share a 100-millisecond allowance.
+The relay forwards every complete worker-sideband frame assembled from its reads, including frames still buffered when the deadline expires.
+It may abandon an incomplete frame and further descendant output when draining ends.
+It finishes draining before reporting the outer stream closures and the direct worker process outcome.
 
 Outside intentional retirement, worker-sideband EOF is a worker failure.
 A worker must flush complete frames before exit; closure midway through a frame is a protocol failure.
@@ -451,4 +456,4 @@ A conforming custom worker:
 
 The executable fixture under `tests/fixtures/zod` exercises successful evaluation, exact text and image frames, stdin, R preparation, interruption, protocol violations, standard streams, and bounded shutdown.
 Its individual commands are fixture behavior, not additions to this protocol.
-See [`../tests/transcripts/README.md`](../tests/transcripts/README.md) for the corresponding public process-boundary suites.
+See [`../tests/boundaries/README.md`](../tests/boundaries/README.md) for the corresponding public process-boundary suites.

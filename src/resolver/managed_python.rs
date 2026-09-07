@@ -90,7 +90,7 @@ impl Drop for PythonPathOutput {
 }
 
 impl ManagedPython {
-    pub(crate) fn configure_worker(&self, command: &mut crate::sandbox::SandboxedCommand) {
+    pub(crate) fn configure_worker(&self, command: &mut Command) {
         command.env("RETICULATE_PYTHON", "managed");
         command.env(
             "MCP_CONSOLE_MANAGED_PYTHON",
@@ -114,16 +114,6 @@ impl ManagedPython {
         self.requirements = requirements;
         self
     }
-}
-
-pub(crate) fn resolve_python(
-    requirements: &[String],
-    configuration: &super::ManagedPythonResolverConfiguration,
-    managed_r: Option<&super::ManagedR>,
-    on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
-) -> Result<ManagedPython, String> {
-    let requirements = manifest_from_packages(requirements);
-    resolve_python_host(requirements, configuration, managed_r, on_started)
 }
 
 pub(crate) fn resolve_python_manifest(
@@ -437,7 +427,7 @@ fn configure_python_resolver(
     managed_r: Option<&super::ManagedR>,
 ) -> Result<(), String> {
     if let Some(managed_r) = managed_r {
-        managed_r.configure_resolver(command)?;
+        managed_r.configure_worker(command)?;
     }
     configuration.configure_direct(command)
 }
@@ -477,12 +467,4 @@ where
     }
     resolver.watch_exit(child.id());
     resolver.wait(&mut child, completed_write(), stdout, stderr, program, kind)
-}
-
-fn manifest_from_packages(
-    requirements: &[String],
-) -> crate::worker_protocol::PythonRequirementManifest {
-    let mut manifest = crate::worker_protocol::default_python_requirement_manifest();
-    manifest.packages.extend(requirements.iter().cloned());
-    manifest.normalized()
 }

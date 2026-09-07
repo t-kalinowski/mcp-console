@@ -145,13 +145,15 @@ fn set_foreground_process_group(
     Ok(())
 }
 
-pub(super) struct SignalRelay {
+pub(in crate::sandbox) struct SignalRelay {
     wait_set: libc::sigset_t,
     previous_mask: libc::sigset_t,
+    previous_sigterm_action: Option<libc::sigaction>,
+    restore_pending: bool,
 }
 
 impl SignalRelay {
-    pub(super) fn install() -> Result<Self, String> {
+    pub(super) fn install(retire_on_sigterm: bool) -> Result<Self, String> {
         let signal_set = forwarded_signal_set();
         let mut previous_mask: libc::sigset_t = unsafe { std::mem::zeroed() };
         let mask_result =
@@ -163,14 +165,33 @@ impl SignalRelay {
             ));
         }
 
-        // Preserve inherited masks and ignored dispositions. Previously blocked
-        // signals remain pending, while Darwin discards ignored signals. This
-        // one-shot launcher keeps its new mask until it exits; the child restores
-        // the inherited mask before exec.
+        let previous_sigterm_action = if retire_on_sigterm {
+            match reset_ignored_sigterm() {
+                Ok(action) => action,
+                Err(error) => {
+                    return Err(match restore_signal_mask(&previous_mask) {
+                        Ok(()) => error,
+                        Err(restore_error) => format!(
+                            "{error}; additionally, failed to restore the launcher signal mask: \
+                             {restore_error}"
+                        ),
+                    });
+                }
+            }
+        } else {
+            None
+        };
+
+        // Preserve inherited masks and dispositions. Owned mode temporarily
+        // resets an ignored SIGTERM so Darwin will retain the blocked retirement
+        // request. Spawned children restore the inherited state before exec, and
+        // the launcher restores it after the sandbox root exits.
         let mut wait_set: libc::sigset_t = unsafe { std::mem::zeroed() };
         unsafe { libc::sigemptyset(&mut wait_set) };
         for signal in FORWARDED_SIGNALS {
-            if unsafe { libc::sigismember(&previous_mask, signal) } == 0 {
+            if retire_on_sigterm && signal == libc::SIGTERM
+                || unsafe { libc::sigismember(&previous_mask, signal) } == 0
+            {
                 unsafe { libc::sigaddset(&mut wait_set, signal) };
             }
         }
@@ -178,15 +199,21 @@ impl SignalRelay {
         Ok(Self {
             wait_set,
             previous_mask,
+            previous_sigterm_action,
+            restore_pending: true,
         })
     }
 
-    pub(super) fn configure_child(
+    pub(in crate::sandbox) fn configure_child(
         &self,
         command: &mut Command,
         terminal_descriptor: Option<libc::c_int>,
     ) {
         let previous_mask = unsafe { std::ptr::read(&self.previous_mask) };
+        let previous_sigterm_action = self
+            .previous_sigterm_action
+            .as_ref()
+            .map(|action| unsafe { std::ptr::read(action) });
 
         unsafe {
             command.pre_exec(move || {
@@ -202,14 +229,59 @@ impl SignalRelay {
                 if let Some(descriptor) = terminal_descriptor {
                     set_foreground_process_group(descriptor, libc::getpid())?;
                 }
-                let mask_result =
-                    libc::pthread_sigmask(libc::SIG_SETMASK, &previous_mask, std::ptr::null_mut());
-                if mask_result != 0 {
-                    return Err(std::io::Error::from_raw_os_error(mask_result));
-                }
-                Ok(())
+                restore_signal_action(libc::SIGTERM, previous_sigterm_action.as_ref())?;
+                restore_signal_mask(&previous_mask)
             });
         }
+    }
+
+    pub(super) fn configure_manager(&self, command: &mut Command) {
+        let previous_mask = unsafe { std::ptr::read(&self.previous_mask) };
+        let previous_sigterm_action = self
+            .previous_sigterm_action
+            .as_ref()
+            .map(|action| unsafe { std::ptr::read(action) });
+
+        unsafe {
+            command.pre_exec(move || {
+                restore_signal_action(libc::SIGTERM, previous_sigterm_action.as_ref())?;
+                restore_signal_mask(&previous_mask)
+            });
+        }
+    }
+
+    pub(super) fn drain_pending_and_restore(mut self) -> Result<(), String> {
+        self.drain_pending()?;
+        self.restore_sigterm_action()?;
+        self.restore_mask()
+    }
+
+    fn restore_sigterm_action(&mut self) -> Result<(), String> {
+        let Some(action) = self.previous_sigterm_action.as_ref() else {
+            return Ok(());
+        };
+        restore_signal_action(libc::SIGTERM, Some(action)).map_err(|error| {
+            format!("failed to restore the launcher SIGTERM disposition: {error}")
+        })?;
+        self.previous_sigterm_action = None;
+        Ok(())
+    }
+
+    fn restore_mask(&mut self) -> Result<(), String> {
+        if !self.restore_pending {
+            return Ok(());
+        }
+        let mask_result = unsafe {
+            libc::pthread_sigmask(libc::SIG_SETMASK, &self.previous_mask, std::ptr::null_mut())
+        };
+        if mask_result != 0 {
+            return Err(format!(
+                "failed to restore the launcher signal mask: {}",
+                std::io::Error::from_raw_os_error(mask_result)
+            ));
+        }
+        self.restore_pending = false;
+        Ok(())
     }
 
     pub(super) fn relayed_signals(&self) -> impl Iterator<Item = libc::c_int> + '_ {
@@ -218,29 +290,14 @@ impl SignalRelay {
             .filter(|signal| unsafe { libc::sigismember(&self.wait_set, *signal) } == 1)
     }
 
-    pub(super) fn relay_pending(&self, process_group: libc::pid_t) -> Result<(), String> {
-        loop {
-            let mut pending: libc::sigset_t = unsafe { std::mem::zeroed() };
-            if unsafe { libc::sigpending(&mut pending) } != 0 {
-                return Err(format!(
-                    "failed to inspect pending launcher signals: {}",
-                    std::io::Error::last_os_error()
-                ));
-            }
-            if !FORWARDED_SIGNALS.iter().any(|signal| {
-                (unsafe { libc::sigismember(&self.wait_set, *signal) } == 1)
-                    && (unsafe { libc::sigismember(&pending, *signal) } == 1)
-            }) {
-                return Ok(());
-            }
-
-            let mut signal = 0;
-            let wait_result = unsafe { libc::sigwait(&self.wait_set, &mut signal) };
-            if wait_result != 0 {
-                return Err(format!(
-                    "failed to consume a pending launcher signal: {}",
-                    std::io::Error::from_raw_os_error(wait_result)
-                ));
+    pub(super) fn relay_pending(
+        &self,
+        process_group: libc::pid_t,
+        retire_on_sigterm: bool,
+    ) -> Result<bool, String> {
+        while let Some(signal) = self.take_pending()? {
+            if retire_on_sigterm && signal == libc::SIGTERM {
+                return Ok(true);
             }
             let result = unsafe { libc::kill(-process_group, signal) };
             if result != 0 {
@@ -251,6 +308,90 @@ impl SignalRelay {
                     ));
                 }
             }
+        }
+        Ok(false)
+    }
+
+    fn drain_pending(&self) -> Result<(), String> {
+        while self.take_pending()?.is_some() {}
+        Ok(())
+    }
+
+    fn take_pending(&self) -> Result<Option<libc::c_int>, String> {
+        let mut pending: libc::sigset_t = unsafe { std::mem::zeroed() };
+        if unsafe { libc::sigpending(&mut pending) } != 0 {
+            return Err(format!(
+                "failed to inspect pending launcher signals: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        if !FORWARDED_SIGNALS.iter().any(|signal| {
+            (unsafe { libc::sigismember(&self.wait_set, *signal) } == 1)
+                && (unsafe { libc::sigismember(&pending, *signal) } == 1)
+        }) {
+            return Ok(None);
+        }
+
+        let mut signal = 0;
+        let wait_result = unsafe { libc::sigwait(&self.wait_set, &mut signal) };
+        if wait_result != 0 {
+            return Err(format!(
+                "failed to consume a pending launcher signal: {}",
+                std::io::Error::from_raw_os_error(wait_result)
+            ));
+        }
+        Ok(Some(signal))
+    }
+}
+
+fn restore_signal_mask(mask: &libc::sigset_t) -> std::io::Result<()> {
+    let result = unsafe { libc::pthread_sigmask(libc::SIG_SETMASK, mask, std::ptr::null_mut()) };
+    if result != 0 {
+        return Err(std::io::Error::from_raw_os_error(result));
+    }
+    Ok(())
+}
+
+fn reset_ignored_sigterm() -> Result<Option<libc::sigaction>, String> {
+    let mut inherited: libc::sigaction = unsafe { std::mem::zeroed() };
+    if unsafe { libc::sigaction(libc::SIGTERM, std::ptr::null(), &mut inherited) } != 0 {
+        return Err(format!(
+            "failed to inspect the launcher SIGTERM disposition: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    if inherited.sa_sigaction != libc::SIG_IGN {
+        return Ok(None);
+    }
+
+    let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
+    unsafe { libc::sigemptyset(&mut action.sa_mask) };
+    action.sa_sigaction = libc::SIG_DFL;
+    restore_signal_action(libc::SIGTERM, Some(&action))
+        .map_err(|error| format!("failed to reset the launcher SIGTERM disposition: {error}"))?;
+    Ok(Some(inherited))
+}
+
+fn restore_signal_action(
+    signal: libc::c_int,
+    action: Option<&libc::sigaction>,
+) -> std::io::Result<()> {
+    let Some(action) = action else {
+        return Ok(());
+    };
+    if unsafe { libc::sigaction(signal, action, std::ptr::null_mut()) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+impl Drop for SignalRelay {
+    fn drop(&mut self) {
+        if self.restore_pending
+            && self.drain_pending().is_ok()
+            && self.restore_sigterm_action().is_ok()
+        {
+            let _ = self.restore_mask();
         }
     }
 }

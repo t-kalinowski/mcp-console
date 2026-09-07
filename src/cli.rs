@@ -58,7 +58,19 @@ pub enum Command {
 
     /// Run the internal sandbox lifetime manager
     #[command(hide = true)]
-    SandboxManager,
+    SandboxManager {
+        /// Direct sandbox root to supervise
+        #[arg(long, value_name = "PID")]
+        root_pid: u32,
+
+        /// Maximum process-cleanup interval
+        #[arg(long, value_name = "MILLISECONDS")]
+        cleanup_timeout_millis: u64,
+
+        /// Private directory owned by the sandbox lifetime
+        #[arg(long, value_name = "PATH")]
+        temporary_directory: PathBuf,
+    },
 
     /// Hold a sandbox target until host supervision is ready
     #[command(hide = true)]
@@ -81,6 +93,10 @@ pub enum Command {
     /// Run a command with the MCP Console sandbox policy
     #[command(after_help = SANDBOX_EXAMPLES)]
     Sandbox {
+        /// Retire the sandbox when this parent process exits
+        #[arg(long, hide = true, value_name = "PID")]
+        exit_with_parent: Option<u32>,
+
         /// Command and arguments to run
         #[arg(
             value_name = "COMMAND",

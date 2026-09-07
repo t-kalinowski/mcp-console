@@ -1,0 +1,52 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  r: resolver_interrupt_state <- 41L
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  r: resolver_interrupt_cell_ran <- TRUE
+  requirements:
+    python:
+      - mcp-console-blocked-live-preparation
+result:
+  content:
+    - type: text
+      text: managed Python resolution cancelled by interrupt
+  isError: true
+---
+send:
+  control: interrupt
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running; poll with an empty send]
+  isError: false
+---
+send: {}
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false
+---
+send:
+  r: >-
+    resolver_interrupt_state +
+    as.integer(!exists('resolver_interrupt_cell_ran'))
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false

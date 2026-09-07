@@ -1,0 +1,35 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  stdin: |
+    stale
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false
+---
+send:
+  control: restart
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: false
+---
+send:
+  r: input without request
+  stdin: |
+    fresh
+result:
+  content:
+    - type: text
+      text: |
+        zod stdin: fresh
+  isError: false

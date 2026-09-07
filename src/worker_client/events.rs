@@ -29,12 +29,13 @@ pub(super) enum ReadyCommitOutcome {
 }
 
 pub(super) struct WorkerEventDispatcher {
-    thread: thread::JoinHandle<Option<WorkerProcessOutcome>>,
+    thread: thread::JoinHandle<Result<Option<WorkerProcessOutcome>, String>>,
 }
 
 struct OperationState {
     operation: Option<Operation>,
     failure: Option<String>,
+    relay_exit_caused_failure: bool,
     idle_input: Option<String>,
     runtime_r_callback: Option<RuntimeRCallbackPhase>,
     environment_preparation_reserved: bool,
@@ -114,6 +115,7 @@ impl WorkerOperationState {
             state: Mutex::new(OperationState {
                 operation: None,
                 failure: None,
+                relay_exit_caused_failure: false,
                 idle_input: None,
                 runtime_r_callback: None,
                 environment_preparation_reserved: false,
@@ -233,12 +235,23 @@ impl WorkerOperationState {
     }
 
     pub(super) fn fail(&self, error: String) {
+        self.fail_with_relay_exit(error, false);
+    }
+
+    fn fail_from_relay_exit(&self, error: String) {
+        self.fail_with_relay_exit(error, true);
+    }
+
+    fn fail_with_relay_exit(&self, error: String, relay_exit: bool) {
         let operation = {
             let Ok(mut state) = self.0.state.lock() else {
                 return;
             };
             if state.failure.is_none() {
                 state.failure = Some(error.clone());
+                // A later relay exit must not turn an earlier protocol or worker
+                // failure into launcher-recovery evidence.
+                state.relay_exit_caused_failure = relay_exit;
             }
             state.runtime_r_callback = None;
             state.environment_preparation_reserved = false;
@@ -271,6 +284,10 @@ impl WorkerOperationState {
 
     pub(super) fn has_failure(&self) -> Result<bool, String> {
         Ok(self.lock()?.failure.is_some())
+    }
+
+    pub(super) fn relay_exit_caused_failure(&self) -> Result<bool, String> {
+        Ok(self.lock()?.relay_exit_caused_failure)
     }
 
     pub(super) fn idle_response_snapshot(
@@ -616,7 +633,7 @@ impl WorkerEventDispatcher {
     pub(super) fn join(self) -> Result<Option<WorkerProcessOutcome>, String> {
         self.thread
             .join()
-            .map_err(|_| "worker event dispatcher task failed".to_string())
+            .map_err(|_| "worker event dispatcher task failed".to_string())?
     }
 }
 
@@ -631,7 +648,7 @@ fn dispatch_worker_events(
     ready_commit: mpsc::Receiver<ReadyCommitOutcome>,
     interrupts: super::platform::InterruptRequests,
     shutdown_started: super::platform::ShutdownAcceptance,
-) -> Option<WorkerProcessOutcome> {
+) -> Result<Option<WorkerProcessOutcome>, String> {
     let mut startup = Some(startup);
     let stdout = output.direct_stdout();
     let stderr = output.direct_stderr();
@@ -642,6 +659,7 @@ fn dispatch_worker_events(
     let mut stderr_closed = false;
     let mut sideband_closed = false;
     let mut relay_fatal = false;
+    let mut retirement_failure = None;
     let mut intentional_shutdown = false;
     let mut retiring = false;
     let mut process_outcome = None;
@@ -751,7 +769,9 @@ fn dispatch_worker_events(
                             Err("worker relay reported two fatal failures".to_string())
                         } else {
                             relay_fatal = true;
-                            if !retiring {
+                            if retiring {
+                                retirement_failure.get_or_insert(message);
+                            } else {
                                 fail_dispatch(&operation, &mut startup, &interrupts, message);
                                 semantic_failure = true;
                             }
@@ -836,12 +856,12 @@ fn dispatch_worker_events(
                         && sideband_closed
                         && process_outcome.is_some())
                 {
-                    fail_dispatch(
-                        &operation,
-                        &mut startup,
-                        &interrupts,
-                        "worker relay stdout closed before retirement completed".to_string(),
-                    );
+                    let error = if startup.is_some() {
+                        "worker relay exited before readiness"
+                    } else {
+                        "worker relay stdout closed before retirement completed"
+                    };
+                    fail_relay_exit(&operation, &mut startup, &interrupts, error.to_string());
                     semantic_failure = true;
                 }
                 if retiring || semantic_failure || !intentional_shutdown {
@@ -866,7 +886,7 @@ fn dispatch_worker_events(
         );
     }
     interrupts.fail("worker stopped before interrupt completed".to_string());
-    process_outcome
+    retirement_failure.map_or(Ok(process_outcome), Err)
 }
 
 fn ignored_during_retirement(event: &RelayEvent) -> bool {
@@ -896,6 +916,19 @@ fn fail_dispatch(
     }
     interrupts.fail(error.clone());
     operation.fail(error);
+}
+
+fn fail_relay_exit(
+    operation: &WorkerOperationState,
+    startup: &mut Option<mpsc::SyncSender<Result<(), String>>>,
+    interrupts: &super::platform::InterruptRequests,
+    error: String,
+) {
+    if let Some(startup) = startup.take() {
+        let _ = startup.send(Err(error.clone()));
+    }
+    interrupts.fail(error.clone());
+    operation.fail_from_relay_exit(error);
 }
 
 fn startup_semantic_error(event: &RelayEvent) -> String {

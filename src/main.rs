@@ -4,6 +4,10 @@ use clap::Parser;
 
 mod cell;
 mod cli;
+#[cfg(target_os = "macos")]
+mod process_descriptors;
+#[cfg(target_os = "macos")]
+mod process_exit;
 mod python;
 mod python_requirement;
 #[cfg(target_os = "macos")]
@@ -43,7 +47,11 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
-        cli::Command::SandboxManager => match sandbox::run_manager() {
+        cli::Command::SandboxManager {
+            root_pid,
+            cleanup_timeout_millis,
+            temporary_directory,
+        } => match sandbox::run_manager(root_pid, cleanup_timeout_millis, temporary_directory) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
@@ -53,7 +61,10 @@ fn main() -> ExitCode {
                 Err(error) => exit_with_error(error),
             }
         }
-        cli::Command::Sandbox { command } => match sandbox::run(&command) {
+        cli::Command::Sandbox {
+            exit_with_parent,
+            command,
+        } => match sandbox::run(&command, exit_with_parent) {
             Ok(exit_code) => exit_code,
             Err(error) => exit_with_error(error),
         },

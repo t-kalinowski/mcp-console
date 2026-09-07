@@ -1,0 +1,44 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  r: |
+    stopifnot(
+      identical(dirname(find.package("tidyverse")), .libPaths()[[1L]]),
+      identical(dirname(find.package("reticulate")), .libPaths()[[1L]]),
+      identical(dirname(find.package("DBI")), .libPaths()[[1L]]),
+      identical(dirname(find.package("duckdb")), .libPaths()[[1L]]),
+      identical(dirname(find.package("arrow")), .libPaths()[[1L]]),
+      identical(dirname(find.package("nanoarrow")), .libPaths()[[1L]]),
+      identical(packageDescription("reticulate")$RemoteType, "github"),
+      nzchar(packageDescription("reticulate")$RemoteSha),
+      vapply(
+        c("ggplot2", "dplyr", "readr", "jsonlite"),
+        requireNamespace,
+        logical(1L),
+        quietly = TRUE
+      )
+    )
+    csv <- readr::read_csv(I("value\n40\n2\n"), show_col_types = FALSE)
+    json <- jsonlite::fromJSON('[{"value": 40}, {"value": 2}]')
+    stopifnot(identical(as.integer(csv$value), json$value))
+    dplyr::summarise(csv, answer = sum(.data$value))$answer
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false
+---
+send:
+  requirements:
+    r:
+      - DBI
+      - duckdb
+      - arrow
+      - nanoarrow
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false

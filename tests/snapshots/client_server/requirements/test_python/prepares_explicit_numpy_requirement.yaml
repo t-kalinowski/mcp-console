@@ -1,0 +1,21 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  requirements:
+    python:
+      - numpy
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+send:
+  r: |
+    stopifnot(Sys.getenv("RETICULATE_PYTHON") == "managed")
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false

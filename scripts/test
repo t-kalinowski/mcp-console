@@ -6,4 +6,4 @@ cd "$(dirname "$0")/.."
 
 cargo build --target-dir target
 
-uv run --script tests/transcripts/_run.py "$@"
+uv run --script tests/boundaries/_run.py "$@"

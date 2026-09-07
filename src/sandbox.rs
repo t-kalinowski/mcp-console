@@ -6,9 +6,7 @@ use std::fs::File;
 #[cfg(target_os = "macos")]
 use std::io::Read as _;
 #[cfg(target_os = "macos")]
-use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
-#[cfg(target_os = "macos")]
-use std::os::unix::net::UnixStream;
+use std::os::fd::{FromRawFd as _, OwnedFd};
 #[cfg(target_os = "macos")]
 use std::os::unix::process::CommandExt as _;
 #[cfg(target_os = "macos")]
@@ -17,61 +15,48 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 #[cfg(target_os = "macos")]
-const CRASH_MANAGER_CLEANUP_TIMEOUT: Duration = Duration::from_secs(1);
+const MANAGER_CLEANUP_TIMEOUT: Duration = Duration::from_secs(1);
 #[cfg(target_os = "macos")]
 const TARGET_GATE_RELEASE: u8 = 1;
 
 #[cfg(target_os = "macos")]
 #[path = "sandbox/child.rs"]
 mod child;
-#[cfg(target_os = "macos")]
-#[path = "sandbox/command.rs"]
-mod command;
-#[cfg(target_os = "macos")]
-#[path = "sandbox/file_descriptors.rs"]
-mod file_descriptors;
-#[cfg(target_os = "macos")]
 #[path = "sandbox/macos.rs"]
 mod platform;
 #[cfg(target_os = "macos")]
-#[path = "sandbox/spawn.rs"]
-mod spawn;
+mod process_group;
 #[cfg(target_os = "macos")]
 #[path = "sandbox/supervision.rs"]
 mod supervision;
-
-#[cfg(target_os = "macos")]
-pub(crate) use child::force_stop_process_group_members_except_self;
-#[cfg(target_os = "macos")]
-pub(crate) use command::{SandboxedChild, SandboxedCommand};
 
 #[cfg(not(target_os = "macos"))]
 #[path = "sandbox/unsupported.rs"]
 mod platform;
 
 #[cfg(target_os = "macos")]
-pub fn run(command_line: &[OsString]) -> Result<ExitCode, String> {
-    let (target_gate, launcher_gate) = UnixStream::pair()
-        .map_err(|error| format!("failed to create the sandbox target startup gate: {error}"))?;
-    let target_gate_descriptor = target_gate.as_raw_fd();
-    let executable = std::env::current_exe()
-        .map_err(|error| format!("failed to locate the sandbox target gate: {error}"))?;
-    let mut sandboxed = SandboxedCommand::new_direct(executable.as_os_str())?;
+pub fn run(command_line: &[OsString], exit_with_parent: Option<u32>) -> Result<ExitCode, String> {
+    let owner = exit_with_parent
+        .map(supervision::SandboxOwner::capture)
+        .transpose()?;
+    let (program, arguments) = command_line
+        .split_first()
+        .expect("sandbox command must include a program");
+    let (mut sandboxed, temporary_directory) = platform::sandboxed_command()?;
     sandboxed
-        .arg("sandbox-target")
-        .arg("--gate-fd")
-        .arg(target_gate_descriptor.to_string())
-        .arg("--")
-        .args(command_line)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
-    sandboxed.status(target_gate, launcher_gate)
+    supervision::status(sandboxed, temporary_directory, program, arguments, owner)
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) fn run_manager() -> Result<(), String> {
-    supervision::run_manager()
+pub(crate) fn run_manager(
+    root_pid: u32,
+    cleanup_timeout_millis: u64,
+    temporary_directory: std::path::PathBuf,
+) -> Result<(), String> {
+    supervision::run_manager(root_pid, cleanup_timeout_millis, temporary_directory)
 }
 
 #[cfg(target_os = "macos")]
@@ -101,8 +86,14 @@ pub(crate) fn run_target(
     let gate = unsafe { OwnedFd::from_raw_fd(gate_descriptor) };
     let mut gate = File::from(gate);
     let mut release = [0];
-    gate.read_exact(&mut release)
-        .map_err(|error| format!("failed to await sandbox target startup: {error}"))?;
+    if let Err(error) = gate.read_exact(&mut release) {
+        // Closing the owner endpoint before release cancels private startup.
+        // The owner reports the startup failure through its public boundary.
+        if error.kind() == std::io::ErrorKind::UnexpectedEof {
+            return Ok(ExitCode::FAILURE);
+        }
+        return Err(format!("failed to await sandbox target startup: {error}"));
+    }
     if release != [TARGET_GATE_RELEASE] {
         return Err("sandbox target received an invalid startup release".to_string());
     }
@@ -116,12 +107,16 @@ pub(crate) fn run_target(
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn run(command_line: &[OsString]) -> Result<ExitCode, String> {
+pub fn run(command_line: &[OsString], _exit_with_parent: Option<u32>) -> Result<ExitCode, String> {
     platform::run(command_line)
 }
 
 #[cfg(not(target_os = "macos"))]
-pub(crate) fn run_manager() -> Result<(), String> {
+pub(crate) fn run_manager(
+    _root_pid: u32,
+    _cleanup_timeout_millis: u64,
+    _temporary_directory: std::path::PathBuf,
+) -> Result<(), String> {
     Err("the sandbox manager is currently supported only on macOS".to_string())
 }
 

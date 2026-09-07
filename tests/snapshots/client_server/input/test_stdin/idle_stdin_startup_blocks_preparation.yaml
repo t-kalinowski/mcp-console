@@ -1,0 +1,32 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  stdin: |
+    queued
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false
+---
+send:
+  requirements:
+    python:
+      - py-yaml12
+result:
+  content:
+    - type: text
+      text: "[requirements not prepared: worker is starting]"
+  isError: true
+---
+send:
+  r: input without request
+result:
+  content:
+    - type: text
+      text: |
+        zod stdin: queued
+  isError: false
