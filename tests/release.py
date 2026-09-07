@@ -199,9 +199,24 @@ class ReleaseScriptTests(unittest.TestCase):
                 }), flush=True)
                 json.loads(sys.stdin.readline())
                 evaluation = json.loads(sys.stdin.readline())
+                prepared = evaluation["params"]["arguments"] == {
+                    "requirements": {"r": ["DBI"]}
+                }
+                if prepared:
+                    print(json.dumps({
+                        "jsonrpc": "2.0",
+                        "id": evaluation["id"],
+                        "result": {
+                            "content": [{"type": "text", "text": "[prepared]"}],
+                            "isError": False,
+                        },
+                    }), flush=True)
+                    evaluation = json.loads(sys.stdin.readline())
                 if os.environ.get("FAKE_MCP_EVALUATION_HANG"):
                     time.sleep(60)
                 error = os.environ.get("FAKE_MCP_EVALUATION_ERROR")
+                if os.environ.get("FAKE_MCP_REQUIRE_PREPARATION") and not prepared:
+                    error = "fixture dependencies were not prepared"
                 print(json.dumps({
                     "jsonrpc": "2.0",
                     "id": evaluation["id"],
@@ -358,6 +373,20 @@ class ReleaseScriptTests(unittest.TestCase):
             )
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("fixture dependency unavailable", result.stderr)
+
+    def test_smoke_wheel_prepares_requirements_before_evaluation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            environment, wheel, cargo_bin = self.smoke_environment(directory)
+            environment["FAKE_MCP_REQUIRE_PREPARATION"] = "1"
+            result = self.run_script(
+                "smoke-wheel",
+                str(wheel),
+                str(cargo_bin),
+                cwd=directory,
+                env=environment,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_verify_wheel_set_requires_macos_and_linux_architectures(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

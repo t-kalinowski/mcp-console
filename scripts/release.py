@@ -120,6 +120,7 @@ def smoke_mcp(
     )
     assert process.stdin is not None
     buffer = bytearray()
+    startup_deadline = time.monotonic() + startup_timeout
 
     def send(message: dict[str, Any]) -> None:
         assert process.stdin is not None
@@ -151,10 +152,35 @@ def smoke_mcp(
         )
 
         send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        # Default dependencies are prepared lazily. Keep their installation in
+        # the startup budget so the response budget measures a ready runtime.
         send(
             {
                 "jsonrpc": "2.0",
                 "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": "send",
+                    "arguments": {"requirements": {"r": ["DBI"]}},
+                },
+            }
+        )
+        preparation = receive(
+            process, buffer, max(0, startup_deadline - time.monotonic())
+        )
+        require(
+            preparation.get("id") == 2
+            and preparation.get("result")
+            == {
+                "content": [{"type": "text", "text": "[prepared]"}],
+                "isError": False,
+            },
+            f"unexpected preparation response: {json.dumps(preparation, ensure_ascii=False)}",
+        )
+        send(
+            {
+                "jsonrpc": "2.0",
+                "id": 3,
                 "method": "tools/call",
                 "params": {
                     "name": "send",
@@ -163,7 +189,7 @@ def smoke_mcp(
             }
         )
         evaluation = receive(process, buffer, response_timeout)
-        require(evaluation.get("id") == 2, "unexpected evaluation response ID")
+        require(evaluation.get("id") == 3, "unexpected evaluation response ID")
         require(
             evaluation.get("result")
             == {
