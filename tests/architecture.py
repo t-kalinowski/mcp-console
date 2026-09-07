@@ -25,6 +25,7 @@ RUST_TEXT = re.compile(
     r"|(?:b?'(?:\\(?:x[\da-fA-F]{2}|u\{[\da-fA-F_]+\}|.)|[^'\\\n])')",
     re.DOTALL,
 )
+RUST_PATH_ROOT = r"\b(?:crate|super(?:::super)*)::"
 
 
 def rust_sources(root: Path) -> list[Path]:
@@ -68,9 +69,10 @@ def flatten_use(statement: str) -> str:
 
 
 def matching_lines(
-    paths: list[Path], needles: tuple[str, ...], *, strings: bool = False
+    paths: list[Path], pattern: str, *, strings: bool = False
 ) -> list[str]:
     matches: list[str] = []
+    forbidden = re.compile(pattern)
     for path in paths:
         source, literals = rust_code_and_strings(path.read_text(encoding="utf-8"))
         if strings:
@@ -87,7 +89,7 @@ def matching_lines(
                 )
             ]
         for line_number, line in candidates:
-            if any(needle in line for needle in needles):
+            if forbidden.search(line):
                 matches.append(
                     f"{path.relative_to(ROOT)}:{line_number}: {line.strip()}"
                 )
@@ -106,7 +108,7 @@ class SandboxProcessBoundaryTests(unittest.TestCase):
         self.assertTrue(host_sources, "no Rust source files found")
         violations = matching_lines(
             host_sources,
-            ("crate::sandbox", "super::sandbox", "sandbox::platform"),
+            RUST_PATH_ROOT + r"sandbox\b|\bsandbox::platform\b",
         )
         self.assertEqual(
             violations,
@@ -119,16 +121,16 @@ class SandboxProcessBoundaryTests(unittest.TestCase):
         sandbox_sources = [
             SOURCE_ROOT / "sandbox.rs",
             *rust_sources(SOURCE_ROOT / "sandbox"),
+            # Shared process primitives must stay independent of runtime owners.
+            SOURCE_ROOT / "process_exit.rs",
+            SOURCE_ROOT / "process_descriptors.rs",
         ]
         missing = [path for path in sandbox_sources if not path.is_file()]
         self.assertEqual(missing, [], f"missing source files: {missing}")
         violations = matching_lines(
             sandbox_sources,
-            (
-                "crate::worker",
-                "crate::relay_protocol",
-                "crate::server",
-            ),
+            RUST_PATH_ROOT
+            + r"(?:worker(?:_client|_protocol|_relay)?|relay_protocol|server(?:_transport)?)\b",
         )
         self.assertEqual(
             violations,
@@ -147,7 +149,7 @@ class SandboxProcessBoundaryTests(unittest.TestCase):
         self.assertEqual(missing, [], f"missing source files: {missing}")
         violations = matching_lines(
             relay_sources,
-            ("--exit-with-parent", "sandbox-manager", "sandbox-target"),
+            r"--exit-with-parent|sandbox-manager|sandbox-target",
             strings=True,
         )
         self.assertEqual(
@@ -161,6 +163,25 @@ class SandboxProcessBoundaryTests(unittest.TestCase):
 class ArchitectureCheckTests(unittest.TestCase):
     def test_checker_preserves_rust_boundaries(self) -> None:
         cases = (
+            ("sandbox/child.rs", "use super::super::server;", "depends on"),
+            (
+                "sandbox/supervision/manager.rs",
+                "use super::{super::{super::{worker_relay as relay}}};",
+                "depends on",
+            ),
+            ("process_exit.rs", "use crate::server;", "depends on"),
+            ("process_exit.rs", "use super::worker_client;", "depends on"),
+            ("process_descriptors.rs", "use crate::worker;", "depends on"),
+            (
+                "sandbox/supervision/manager.rs",
+                "use super::{process, process_tree};",
+                None,
+            ),
+            (
+                "sandbox/child.rs",
+                "use crate::{process_descriptors, process_exit};",
+                None,
+            ),
             ("sideband.rs", "use crate::sandbox::platform;", "depends on"),
             ("python.rs", "use crate::sandbox::platform;", "depends on"),
             ("server.rs", "// Explain why crate::sandbox is private.\n", None),
