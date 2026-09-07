@@ -6,6 +6,7 @@ python3 scripts/validate_runtime_sources.py
 python3 tests/release.py
 python3 tests/transcript_runner.py
 python3 tests/mcp_client.py
+python3 tests/architecture.py
 cargo fmt --all --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-targets --all-features

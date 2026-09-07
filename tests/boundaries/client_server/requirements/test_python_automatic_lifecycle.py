@@ -3,7 +3,6 @@
 import signal
 import sys
 import tempfile
-import threading
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -12,6 +11,11 @@ from support.assertions import entry_result_text
 from support.assertions import last_result_text
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient, stop_client
+from support.macos import (
+    capture_darwin_process_identity,
+    darwin_child_process_identities,
+    live_darwin_processes,
+)
 from support.normalization import code, normalize_python_resolution_error
 from support.records import Transcript
 from support.resolvers import (
@@ -218,6 +222,8 @@ def test_interrupts_automatic_python_resolver_and_preserves_worker(
             client.initialize_and_list_tools()
             client.send(python="None")
             assert last_result_text(client) == "[done]"
+            server = capture_darwin_process_identity(client.process.pid)
+            existing_children = darwin_child_process_identities(server)
             # fmt: python
             python = code(f"""
                 import importlib
@@ -231,23 +237,17 @@ def test_interrupts_automatic_python_resolver_and_preserves_worker(
             client.send(python=python, timeout_ms=0)
             assert last_result_text(client) == "\n[running; poll with an empty send]"
             started.wait("automatic Python resolver")
-
+            resolver = [
+                child
+                for child in darwin_child_process_identities(server)
+                if child not in existing_children
+            ]
+            assert len(resolver) == 1, resolver
             interrupt = client.start_send(control="interrupt", timeout_ms=30_000)
-            interrupt_returned = threading.Event()
-            forced_release = threading.Event()
-
-            def release_if_interrupt_blocks() -> None:
-                if not interrupt_returned.wait(2):
-                    forced_release.set()
-                    release.release()
-
-            watchdog = threading.Thread(target=release_if_interrupt_blocks)
-            watchdog.start()
             client.receive(interrupt)
-            interrupt_returned.set()
-            watchdog.join()
-            assert not forced_release.is_set(), (
-                "interrupt did not stop the automatic Python resolver"
+            # Keep the FIFO blocked until interruption has reaped this resolver.
+            assert live_darwin_processes(resolver) == [], (
+                "interrupt did not reap the automatic Python resolver"
             )
             error = entry_result_text(interrupt)
             for expected in (

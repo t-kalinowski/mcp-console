@@ -6,6 +6,8 @@ mod cell;
 mod cli;
 #[cfg(target_os = "macos")]
 mod process_descriptors;
+#[cfg(target_os = "macos")]
+mod process_exit;
 mod python;
 mod python_requirement;
 #[cfg(target_os = "macos")]
