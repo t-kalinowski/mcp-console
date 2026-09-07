@@ -18,7 +18,7 @@ from support.r import r_test_environment, reference_plots
 from support.records import Transcript
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
 
 
 def test_routes_input_to_idle_later_callback(

@@ -17,7 +17,11 @@ send:
     import signal
 
     read_descriptor, write_descriptor = os.pipe()
-    child = os.fork()
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        child = os.fork()
     if child == 0:
         os.close(read_descriptor)
         try:

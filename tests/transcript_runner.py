@@ -621,6 +621,36 @@ class TranscriptRunnerTests(unittest.TestCase):
         result = self.run_runner("client_server/server/test_tools::forks")
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_case_platform_selection(self) -> None:
+        with self.suite.open("a") as suite:
+            suite.write('\nCASE_PLATFORMS = {"selected": {"unsupported"}}\n')
+        result = self.run_runner("client_server/server/test_tools")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("selected: skipped on", result.stdout)
+        self.assertFalse((self.root / "selected.marker").exists())
+        self.assertTrue((self.root / "unselected.marker").exists())
+
+    def test_platform_recording_preserves_other_platform_snapshots(self) -> None:
+        with self.suite.open("a") as suite:
+            suite.write("""
+import sys
+from support.records import TranscriptWithCompanions
+
+def test_selected(binary):
+    return TranscriptWithCompanions([{"runner": sys.platform}], {}, platform=sys.platform)
+""")
+        other = "linux" if sys.platform == "darwin" else "darwin"
+        peer = self.snapshots / f"selected.{other}.yaml"
+        peer.write_text(f"---\nrunner: {other}\n...\n")
+        result = self.run_runner("--update")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(peer.is_file())
+        self.assertTrue((self.snapshots / "selected.yaml").is_file())
+        actual = self.snapshots / f"selected.{sys.platform}.yaml"
+        self.assertIn(sys.platform, actual.read_text())
+        result = self.run_runner("client_server/server/test_tools::selected")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_collection_selectors_and_locate(self) -> None:
         hidden = (
             self.boundaries / "client_server" / "server" / "_private" / "test_hidden.py"

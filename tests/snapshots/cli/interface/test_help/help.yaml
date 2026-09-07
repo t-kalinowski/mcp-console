@@ -43,10 +43,11 @@ command: mcp-console serve --help
 stdout: |
   Run the MCP server over standard input and output
 
-  Usage: mcp-console serve
+  Usage: mcp-console serve [OPTIONS]
 
   Options:
-    -h, --help  Print help
+        --no-sandbox  Run evaluated code with the server's filesystem and network permissions
+    -h, --help        Print help
 ---
 command: mcp-console worker --help
 stdout: |

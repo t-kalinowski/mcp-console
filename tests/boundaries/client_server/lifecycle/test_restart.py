@@ -34,7 +34,24 @@ from support.processes import (
 from support.records import Transcript
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
+# These cases require launcher status or cleanup after relay transport stalls.
+CASE_PLATFORMS = {
+    "restart_rejects_unsolicited_status_137": {"darwin"},
+    "restart_allows_accepted_relay_shutdown_to_finish": {"darwin"},
+    "restart_reports_nonzero_sandbox_launcher_exit": {"darwin"},
+    "restart_rejects_status_137_when_launcher_exits_before_sigterm": {"darwin"},
+    "restart_accepts_owned_retirement_when_launcher_exits_before_signal_returns": {
+        "darwin"
+    },
+    "restart_drains_relay_output_before_nonzero_launcher_error": {"darwin"},
+    "restart_drains_relay_output_before_status_one_launcher_error": {"darwin"},
+    "restart_outer_force_stops_unresponsive_relay": {"darwin"},
+    "restart_waits_for_owned_launcher_manager_recovery": {"darwin"},
+    "restart_does_not_report_never_ready_worker_as_stopped": {"darwin"},
+    "runs_worker_inside_sandbox": {"darwin"},
+    "shutdown_is_bounded_with_detached_stdin_descendant": {"darwin"},
+}
 LARGE_OUTPUT_SIZE = 2 * 1024 * 1024
 PENDING_TEXT_BUDGET = 8 * 1024 * 1024
 FIXTURE_CHECKPOINT_TIMEOUT_SECONDS = 15

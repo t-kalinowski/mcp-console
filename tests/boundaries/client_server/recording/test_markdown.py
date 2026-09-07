@@ -16,7 +16,7 @@ from support.records import Transcript, TranscriptWithCompanions
 from support.suites import run_this_suite
 
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
 REQUIRED_COMMANDS = {"yamark"}
 
 

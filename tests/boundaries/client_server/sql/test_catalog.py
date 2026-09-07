@@ -16,7 +16,9 @@ from support.r import r_test_environment
 from support.records import Transcript
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
+# This walkthrough asserts filesystem and network denials from the sandbox.
+CASE_PLATFORMS = {"uses_ragnar_like_the_guide_and_adapts_to_the_console": {"darwin"}}
 
 
 def test_uses_default_duckdb_extensions(binary: Path) -> Transcript:

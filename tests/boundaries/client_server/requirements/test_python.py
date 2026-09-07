@@ -1,7 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
 import os
-import select
 import shutil
 import subprocess
 import sys
@@ -16,6 +15,7 @@ from support.assertions import (
     release_worker_callback_gate,
     wait_for_idle_output,
 )
+from support.events import Events
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient, stop_client
 from support.normalization import code
@@ -29,7 +29,7 @@ from support.resolvers import (
 )
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
 
 
 def test_prepares_initial_python_requirements(binary: Path) -> Transcript:
@@ -154,7 +154,7 @@ def test_retires_python_resolver_descendant_after_leader_exit(
 
         client = McpClient(binary, ("serve",), environment)
         resolver_group = None
-        exit_events = select.kqueue()
+        exit_events = Events()
         try:
             client.initialize_and_list_tools()
             client.send(requirements={"r": ["DBI"]})
@@ -169,21 +169,11 @@ def test_retires_python_resolver_descendant_after_leader_exit(
             )
             assert descendant != resolver_group
             assert resolver_group != os.getpgrp()
-            watch = select.kevent(
-                descendant,
-                filter=select.KQ_FILTER_PROC,
-                flags=select.KQ_EV_ADD | select.KQ_EV_ONESHOT,
-                fflags=select.KQ_NOTE_EXIT,
-            )
-            assert exit_events.control([watch], 0, 0) == []
-
+            exit_events.watch_process(descendant)
             leader_release.release()
-            observed = exit_events.control(None, 1, 10)
-            assert len(observed) == 1, "resolver descendant did not exit"
-            event = observed[0]
-            assert event.ident == descendant, event
-            assert event.filter == select.KQ_FILTER_PROC, event
-            assert event.fflags & select.KQ_NOTE_EXIT, event
+            assert exit_events.wait(10) == {descendant}, (
+                "resolver descendant did not exit"
+            )
 
             client.receive(preparation)
             assert preparation["result"] == {

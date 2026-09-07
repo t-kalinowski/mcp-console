@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io::BufReader;
 use std::os::fd::{AsFd as _, AsRawFd as _, OwnedFd};
-use std::os::unix::process::ExitStatusExt as _;
+use std::os::unix::process::{CommandExt as _, ExitStatusExt as _};
 use std::process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
@@ -32,7 +32,9 @@ pub(super) enum RelayRetirementAllowance {
 }
 
 /// Spawns workers through the platform's runtime boundary.
-pub(super) struct WorkerRuntime;
+pub(super) struct WorkerRuntime {
+    pub(super) no_sandbox: bool,
+}
 
 pub(super) struct Worker {
     stdin: StdinSender,
@@ -61,6 +63,7 @@ struct RelayConnection {
 }
 
 struct RelayProcess {
+    temporary_directory: Option<tempfile::TempDir>,
     child: Child,
     exit: super::child_exit::ChildExitWaiter,
     exited: bool,
@@ -145,13 +148,27 @@ impl WorkerRuntime {
         let current_executable = std::env::current_exe()
             .map_err(|error| format!("failed to locate the sandbox launcher: {error}"))?;
         let target = relay_command_line(&current_executable, executable, arguments, relay);
-        let mut command = Command::new(&current_executable);
-        command
-            .arg("sandbox")
-            .arg("--exit-with-parent")
-            .arg(std::process::id().to_string())
-            .arg("--")
-            .args(target);
+        let (mut command, temporary_directory) = if self.no_sandbox {
+            let directory = tempfile::Builder::new()
+                .prefix("mcp-console-tmp-")
+                .tempdir()
+                .map_err(|error| format!("failed to create worker temporary directory: {error}"))?;
+            let mut command = Command::new(&target[0]);
+            command
+                .args(&target[1..])
+                .env("TMPDIR", directory.path())
+                .process_group(0);
+            (command, Some(directory))
+        } else {
+            let mut command = Command::new(&current_executable);
+            command
+                .arg("sandbox")
+                .arg("--exit-with-parent")
+                .arg(std::process::id().to_string())
+                .arg("--")
+                .args(target);
+            (command, None)
+        };
         if let Some(python) = python {
             python.configure_worker(&mut command);
         }
@@ -173,7 +190,7 @@ impl WorkerRuntime {
         let child = command
             .spawn()
             .map_err(|error| format!("failed to launch worker relay: {error}"))?;
-        let mut child = RelayProcess::new(child)
+        let mut child = RelayProcess::new(child, temporary_directory)
             .map_err(|error| format!("failed to monitor worker relay: {error}"))?;
         let relay_stdin = child
             .take_stdin()
@@ -277,7 +294,7 @@ fn relay_command_line(
 }
 
 impl RelayProcess {
-    fn new(child: Child) -> Result<Self, String> {
+    fn new(child: Child, temporary_directory: Option<tempfile::TempDir>) -> Result<Self, String> {
         let exit = match super::child_exit::ChildExitWaiter::start(child.id()) {
             Ok(exit) => exit,
             Err(error) => {
@@ -285,6 +302,7 @@ impl RelayProcess {
             }
         };
         Ok(Self {
+            temporary_directory,
             child,
             exit,
             exited: false,
@@ -429,7 +447,10 @@ impl RelayProcess {
         self.reaped = true;
         // Owned retirement returns success from the launcher. Status 137 is
         // redundant only when relay exit itself established the worker failure.
-        if !self.ready_committed
+        // With no launcher, transport events carry relay failures. There is
+        // no separate sandbox cleanup status to validate after reaping.
+        if self.temporary_directory.is_some()
+            || !self.ready_committed
             || status.success()
             || self.relay_exit_recovery_expected && status.code() == Some(128 + libc::SIGKILL)
         {

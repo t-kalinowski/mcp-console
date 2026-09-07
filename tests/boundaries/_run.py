@@ -98,6 +98,11 @@ def load_suite(
     assert platforms is None or isinstance(platforms, set), (
         f"{suite_path.relative_to(root)} PLATFORMS must be a set"
     )
+    case_platforms = namespace.get("CASE_PLATFORMS", {})
+    assert isinstance(case_platforms, dict) and case_platforms.keys() <= cases.keys()
+    for name, supported in case_platforms.items():
+        assert isinstance(supported, set)
+        cases[name].platforms = supported
     required_commands = namespace.get("REQUIRED_COMMANDS", set())
     assert isinstance(required_commands, set) and all(
         isinstance(command, str) and command for command in required_commands
@@ -300,24 +305,43 @@ def selected_cases(
             )
             continue
 
-        selected.extend((suite_name, case_name, suite_path) for case_name in case_names)
+        for case_name in case_names:
+            supported = getattr(cases[case_name], "platforms", None)
+            if supported is not None and sys.platform not in supported:
+                print(f"{suite_name}::{case_name}: skipped on {sys.platform}")
+                continue
+            selected.append((suite_name, case_name, suite_path))
     return selected
 
 
 def prune_stale_snapshots(checked_snapshots: set[Path], orphans: list[Path]) -> None:
     snapshot_root = snapshot_directory
-    checked_suites = {
-        snapshot.parent.relative_to(snapshot_root).as_posix()
-        for snapshot in checked_snapshots
+    checked_cases = {
+        (path.parent, path.name.split(".")[0]) for path in checked_snapshots
     }
     orphans = set(orphans)
 
     for snapshot in snapshot_root.rglob("*"):
         if not snapshot.is_file() or snapshot.suffix not in {".yaml", ".md", ".qmd"}:
             continue
-        suite_name = snapshot.parent.relative_to(snapshot_root).as_posix()
+        name = snapshot.name.split(".")[0]
+        parts = snapshot.name.split(".")
+        peer_platform = (
+            len(parts) > 2
+            and parts[1] in {"darwin", "linux"}
+            and parts[1] != sys.platform
+        )
+        platform_variant = (
+            snapshot.with_name(f"{name}.{sys.platform}.yaml") in checked_snapshots
+        )
+        default_for_peer = platform_variant and (
+            len(parts) == 2 or parts[1] not in {"darwin", "linux"}
+        )
         stale = snapshot in orphans or (
-            suite_name in checked_suites and snapshot not in checked_snapshots
+            (snapshot.parent, name) in checked_cases
+            and snapshot not in checked_snapshots
+            and not peer_platform
+            and not default_for_peer
         )
 
         if stale:

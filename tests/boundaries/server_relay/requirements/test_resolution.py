@@ -38,7 +38,7 @@ from support.resolvers import fake_ir_environment as _fake_ir_environment
 from support.suites import run_this_suite
 
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
 
 
 def test_prepares_initial_requirements_before_stdin_and_skips_retained_resolution(

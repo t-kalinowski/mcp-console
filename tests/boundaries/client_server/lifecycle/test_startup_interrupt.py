@@ -22,7 +22,7 @@ from support.r import r_test_environment
 from support.records import Transcript
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
 REQUIRED_COMMANDS = {"ir", "uv"}
 RUNNING = "\n[running; poll with an empty send]"
 
@@ -37,7 +37,9 @@ def before_resolver_spawn(
         import sys
 
         os.environ["MCP_CONSOLE_TEST_SPAWN_SERVER"] = str(os.getpid())
-        os.environ["DYLD_INSERT_LIBRARIES"] = os.environ.pop("MCP_CONSOLE_TEST_SPAWN_LIBRARY")
+        os.environ["DYLD_INSERT_LIBRARIES" if sys.platform == "darwin" else "LD_PRELOAD"] = (
+            os.environ.pop("MCP_CONSOLE_TEST_SPAWN_LIBRARY")
+        )
         os.execv(sys.argv[1], sys.argv[1:])
         """)
     with ExitStack() as resources:
@@ -73,7 +75,13 @@ def before_resolver_spawn(
         client = resources.enter_context(
             McpClient(
                 Path(sys.executable),
-                ("-c", server, str(binary), "serve"),
+                (
+                    "-c",
+                    server,
+                    str(binary),
+                    "serve",
+                    *(("--no-sandbox",) if sys.platform == "linux" else ()),
+                ),
                 environment,
                 response_timeout=5,
             )

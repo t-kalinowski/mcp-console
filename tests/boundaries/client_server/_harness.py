@@ -23,6 +23,7 @@ from typing import Self
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from support.events import Events
 from support.assertions import last_result_text
 from support.checkpoints import release_fixture_checkpoint
 from support.client import McpClient, TextReader
@@ -396,6 +397,8 @@ class SocketGateMcpClient(McpClient):
             output_reader.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF),
         )
         assert max(self.output_buffer_sizes) < TEST_GATED_RESPONSE_SIZE
+        if sys.platform == "linux":
+            arguments = (*arguments, "--no-sandbox")
         process = subprocess.Popen(
             [binary, *arguments],
             env=environment,
@@ -526,55 +529,24 @@ def expose_idle_sideband_output(
 
 def wait_for_marker(root: Path, name: str, client: McpClient) -> Path:
     deadline = time.monotonic() + FIXTURE_CHECKPOINT_TIMEOUT_SECONDS
-    events = select.kqueue()
-    directories: dict[Path, int] = {}
-    try:
-        events.control(
-            [
-                select.kevent(
-                    client.process.pid,
-                    filter=select.KQ_FILTER_PROC,
-                    flags=select.KQ_EV_ADD | select.KQ_EV_CLEAR,
-                    fflags=select.KQ_NOTE_EXIT,
-                )
-            ],
-            0,
-            0,
-        )
+    with Events() as events:
+        events.watch_process(client.process.pid)
+        events.watch_file(root)
         while True:
-            marker = find_marker(root, name)
-            if marker is not None:
-                return marker
-
-            watch_marker_directories(root, events, directories)
+            for directory in root.glob("mcp-console-tmp-*"):
+                if directory.is_dir():
+                    events.watch_file(directory)
             marker = find_marker(root, name)
             if marker is not None:
                 return marker
             assert client.process.poll() is None, (
                 f"mcp-console stopped before Zod reported its {name!r} checkpoint"
             )
-
             remaining = deadline - time.monotonic()
-            assert remaining > 0, (
+            assert remaining > 0 and events.wait(remaining), (
                 f"Zod did not report its {name!r} checkpoint within "
                 f"{FIXTURE_CHECKPOINT_TIMEOUT_SECONDS} seconds"
             )
-            try:
-                observed = events.control(
-                    None,
-                    max(1, len(directories) + 1),
-                    remaining,
-                )
-            except InterruptedError:
-                continue
-            assert observed, (
-                f"Zod did not report its {name!r} checkpoint within "
-                f"{FIXTURE_CHECKPOINT_TIMEOUT_SECONDS} seconds"
-            )
-    finally:
-        for descriptor in directories.values():
-            os.close(descriptor)
-        events.close()
 
 
 def find_marker(root: Path, name: str) -> Path | None:
@@ -582,45 +554,6 @@ def find_marker(root: Path, name: str) -> Path | None:
     markers.extend(root.glob(f"mcp-console-tmp-*/{name}"))
     assert len(markers) <= 1, f"found multiple {name} markers"
     return markers[0] if markers else None
-
-
-def watch_marker_directories(
-    root: Path,
-    events: select.kqueue,
-    directories: dict[Path, int],
-) -> None:
-    def watch(directory: Path) -> None:
-        if directory in directories:
-            return
-        try:
-            descriptor = os.open(directory, os.O_EVTONLY | os.O_CLOEXEC)
-        except FileNotFoundError:
-            return
-        events.control(
-            [
-                select.kevent(
-                    descriptor,
-                    filter=select.KQ_FILTER_VNODE,
-                    flags=select.KQ_EV_ADD | select.KQ_EV_CLEAR,
-                    fflags=(
-                        select.KQ_NOTE_WRITE
-                        | select.KQ_NOTE_RENAME
-                        | select.KQ_NOTE_DELETE
-                        | select.KQ_NOTE_REVOKE
-                    ),
-                )
-            ],
-            0,
-            0,
-        )
-        directories[directory] = descriptor
-
-    # Watch the root before discovering private temporary directories. This
-    # makes creation of a directory after the glob snapshot observable.
-    watch(root)
-    for directory in root.glob("mcp-console-tmp-*"):
-        if directory.is_dir():
-            watch(directory)
 
 
 def wait_for_stopped_worker(

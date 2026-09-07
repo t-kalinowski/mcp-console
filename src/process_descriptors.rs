@@ -1,8 +1,13 @@
+#[cfg(target_os = "macos")]
 use std::fs::File;
+#[cfg(target_os = "macos")]
 use std::os::fd::{AsRawFd as _, BorrowedFd, RawFd};
 use std::os::unix::process::CommandExt as _;
-use std::process::{Command, Stdio};
+use std::process::Command;
+#[cfg(target_os = "macos")]
+use std::process::Stdio;
 
+#[cfg(target_os = "macos")]
 pub(crate) fn transfer_stdin_to_child(command: &mut Command) -> Result<(), String> {
     let input = unsafe { BorrowedFd::borrow_raw(libc::STDIN_FILENO) }
         .try_clone_to_owned()
@@ -23,6 +28,7 @@ pub(crate) fn transfer_stdin_to_child(command: &mut Command) -> Result<(), Strin
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 pub(crate) fn close_unlisted_except(
     command: &mut Command,
     inherited_descriptor: RawFd,
@@ -51,6 +57,7 @@ pub(crate) fn close_unlisted_except(
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 pub(crate) fn close_unlisted_from_multithreaded_parent(
     command: &mut Command,
 ) -> Result<(), String> {
@@ -70,6 +77,7 @@ pub(crate) fn close_unlisted_from_multithreaded_parent(
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 fn descriptor_limit() -> Result<RawFd, String> {
     let table_size = unsafe { libc::getdtablesize() };
     if table_size <= 0 {
@@ -86,6 +94,7 @@ fn descriptor_limit() -> Result<RawFd, String> {
         }))
 }
 
+#[cfg(target_os = "macos")]
 fn open_descriptors() -> Result<Vec<RawFd>, String> {
     let mut capacity = 16;
     loop {
@@ -133,14 +142,17 @@ fn open_descriptors() -> Result<Vec<RawFd>, String> {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn set_close_on_exec(descriptor: RawFd) -> std::io::Result<()> {
     update_close_on_exec(descriptor, true, true)
 }
 
+#[cfg(target_os = "macos")]
 fn clear_close_on_exec(descriptor: RawFd) -> std::io::Result<()> {
     update_close_on_exec(descriptor, false, false)
 }
 
+#[cfg(target_os = "macos")]
 fn update_close_on_exec(
     descriptor: RawFd,
     close_on_exec: bool,
@@ -178,4 +190,27 @@ fn update_close_on_exec(
             _ => return Err(error),
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn close_unlisted_from_multithreaded_parent(
+    command: &mut Command,
+) -> Result<(), String> {
+    unsafe {
+        command.pre_exec(|| {
+            // Retain Rust's exec-error pipe until exec, and close every other
+            // inherited descriptor atomically without scanning the fd limit.
+            if libc::syscall(
+                libc::SYS_close_range,
+                3u32,
+                u32::MAX,
+                libc::CLOSE_RANGE_CLOEXEC,
+            ) < 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    Ok(())
 }

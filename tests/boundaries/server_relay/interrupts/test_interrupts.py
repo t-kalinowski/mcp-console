@@ -30,7 +30,7 @@ from support.resolvers import fake_ir_environment as _fake_ir_environment
 from support.suites import run_this_suite
 
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
 
 
 def test_interrupts_and_reports_result(binary: Path) -> Transcript:

@@ -20,7 +20,7 @@ from support.records import Transcript
 from support.resolvers import checkpoint_uv_environment
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
 REQUIRED_COMMANDS = {"ir"}
 
 

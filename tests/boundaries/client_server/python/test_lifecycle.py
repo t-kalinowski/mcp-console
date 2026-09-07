@@ -20,7 +20,7 @@ from support.records import Transcript
 from support.resolvers import checkpoint_uv_environment, named_requirement_error
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
 
 
 def test_rejects_python_preparation_while_evaluation_is_running(
@@ -110,7 +110,8 @@ def test_interrupts_running_python_evaluation(binary: Path) -> Transcript:
         subprocess.run(
             [
                 "cc",
-                "-dynamiclib",
+                "-dynamiclib" if sys.platform == "darwin" else "-shared",
+                "-fPIC",
                 "-std=c11",
                 "-Wall",
                 "-Wextra",

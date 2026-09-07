@@ -511,7 +511,7 @@ def _mcp_console_apply_psutil_process_group(
     if psutil is None:
         psutil = _import_module("psutil")
     platform = _getattr(psutil, "_psplatform", None)
-    pids = _getattr(platform, "pids", None)
+    pids = _getattr(platform, "pids", None) if _sys.platform == "darwin" else None
     if not _callable(pids) or _getattr(pids, "_mcp_console_sandbox", False):
         return None
 

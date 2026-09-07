@@ -32,7 +32,7 @@ from support.resolvers import (
 )
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
 
 
 def test_uses_current_r_library_for_managed_python_resolution(
@@ -362,9 +362,7 @@ def test_validates_registry_only_python_requirements(binary: Path) -> Transcript
         uv_record.write_text("", encoding="utf-8")
         # fmt: r
         r = code(rf"""
-            reticulate::py_require({
-              json.dumps(runtime_rejected)
-            })
+            reticulate::py_require({json.dumps(runtime_rejected)})
             invisible(reticulate::py_config())
             """)
         client.send(r=r)

@@ -28,7 +28,7 @@ from support.resolvers import fake_ir_environment as _fake_ir_environment
 from support.suites import run_this_suite
 
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
 
 
 def test_gracefully_shuts_down(binary: Path) -> Transcript:

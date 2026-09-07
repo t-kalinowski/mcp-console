@@ -14,7 +14,7 @@ from support.records import Transcript
 from support.resolvers import ir_cache_directory
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
 REQUIRED_COMMANDS = {"ir", "quarto"}
 
 
@@ -113,11 +113,12 @@ cd "$TMPDIR"
 export HOME="$TMPDIR"
 exec ir render transcript.qmd --to html --output - --quiet
 """.lstrip()
+        render_directory = workspace / "render"
+        render_directory.mkdir()
+        render_environment["TMPDIR"] = str(render_directory)
         rendering = subprocess.run(
             [
-                binary,
-                "sandbox",
-                "--",
+                *([binary, "sandbox", "--"] if sys.platform == "darwin" else []),
                 "/bin/sh",
                 "-c",
                 render_script,
@@ -149,7 +150,7 @@ exec ir render transcript.qmd --to html --output - --quiet
         transcript.append(
             {
                 "quarto document": {
-                    "executed client-authored R and Python cells through `ir` inside the sandbox": True,
+                    "executed client-authored R and Python cells through `ir`": True,
                     "selected Python through reticulate defaults": True,
                     "omitted recorded runtime results": True,
                     "kept Markdown-looking source inside a code block": True,

@@ -4,6 +4,12 @@ import json
 import os
 import sys
 
+# This fixture observes host resolution. Reticulate also invokes uv for
+# offline worker probes, which use the worker's mutable environment.
+uv = os.environ["MCP_CONSOLE_TEST_REAL_UV"]
+if os.environ.get("UV_OFFLINE") == "1":
+    os.execv(uv, [uv, *sys.argv[1:]])
+
 record = {
     name: os.environ.get(name)
     for name in ("UV_CACHE_DIR", "UV_DEFAULT_INDEX", "UV_OFFLINE")
@@ -75,7 +81,6 @@ if intercept and arguments[:2] == ["tool", "run"] and "--" in arguments:
         if python := os.environ.get("MCP_CONSOLE_TEST_UV_PYTHON"):
             os.execv(python, [python, *command[1:]])
 
-uv = os.environ["MCP_CONSOLE_TEST_REAL_UV"]
 substitute = os.environ.get("MCP_CONSOLE_TEST_UV_SUBSTITUTE_REQUIREMENT")
 replacement = os.environ.get("MCP_CONSOLE_TEST_UV_REPLACEMENT_REQUIREMENT")
 assert (substitute is None) == (replacement is None)

@@ -24,7 +24,7 @@ from support.resolvers import (
 )
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
 PENDING_TEXT_BUDGET = 8 * 1024 * 1024
 
 

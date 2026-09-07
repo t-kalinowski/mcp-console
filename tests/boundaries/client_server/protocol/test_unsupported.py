@@ -10,7 +10,7 @@ from support.client import McpClient
 from support.records import Transcript
 from support.suites import run_this_suite
 
-PLATFORMS = {"linux"}
+PLATFORMS = {"win32"}
 
 
 def test_keeps_the_public_interface_without_starting_workers(

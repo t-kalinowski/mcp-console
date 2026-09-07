@@ -13,7 +13,7 @@ from support.r import r_test_environment
 from support.records import Transcript
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
 
 
 def test_probes_ambient_reticulate_before_first_use_bootstrap(

@@ -10,26 +10,27 @@ import sys
 import tempfile
 import time
 from collections.abc import Iterator
-from contextlib import closing, contextmanager
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import collect_running_output, last_tool_text
+from support.events import Events
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
-from support.macos import (
-    DarwinProcessIdentity,
-    capture_darwin_process_identity,
-    kill_darwin_processes,
+from support.processes import (
+    ProcessIdentity,
+    capture_process_identity,
+    kill_processes,
 )
 from support.normalization import code
 from support.r import r_test_environment
 from support.records import Transcript
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
 REQUIRED_COMMANDS = {"ir", "uv"}
 RUNNING = "\n[running; poll with an empty send]"
 
@@ -40,25 +41,17 @@ class StartupFixture:
     root: Path
     started: FifoCheckpoint
     release: FifoCheckpoint
-    exits: select.kqueue
-    identities: list[DarwinProcessIdentity] = field(default_factory=list)
+    exits: Events
+    identities: list[ProcessIdentity] = field(default_factory=list)
 
     def wait_for_resolver(self) -> None:
         self.started.wait("first-use resolver")
         identity = self.root / "identity"
         pids = set(map(int, identity.read_text(encoding="utf-8").split()))
         assert len(pids) == 2, pids
-        self.identities = [capture_darwin_process_identity(pid) for pid in pids]
-        watches = [
-            select.kevent(
-                pid,
-                filter=select.KQ_FILTER_PROC,
-                flags=select.KQ_EV_ADD | select.KQ_EV_ONESHOT,
-                fflags=select.KQ_NOTE_EXIT,
-            )
-            for pid in pids
-        ]
-        assert self.exits.control(watches, 0, 0) == []
+        self.identities = [capture_process_identity(pid) for pid in pids]
+        for pid in pids:
+            self.exits.watch_process(pid)
 
     def wait_for_resolver_exit(self) -> None:
         pending = {identity[0] for identity in self.identities}
@@ -66,12 +59,9 @@ class StartupFixture:
         while pending:
             remaining = deadline - time.monotonic()
             assert remaining > 0, f"resolver processes did not exit: {pending}"
-            observed = self.exits.control(None, len(pending), remaining)
+            observed = self.exits.wait(remaining)
             assert observed, f"resolver processes did not exit: {pending}"
-            for event in observed:
-                assert event.filter == select.KQ_FILTER_PROC, event
-                assert event.fflags & select.KQ_NOTE_EXIT, event
-                pending.remove(event.ident)
+            pending.difference_update(observed)
 
     def invocations(self) -> list[dict[str, object]]:
         record = self.root / "resolver.jsonl"
@@ -84,7 +74,7 @@ class StartupFixture:
 def startup_fixture(
     binary: Path, *, bootstrap: str = "ir", phase: str = "all"
 ) -> Iterator[StartupFixture]:
-    with tempfile.TemporaryDirectory() as directory, closing(select.kqueue()) as exits:
+    with tempfile.TemporaryDirectory() as directory, Events() as exits:
         temporary = Path(directory)
         fake_bin = temporary / "bin"
         fake_bin.mkdir()
@@ -142,7 +132,7 @@ def startup_fixture(
             try:
                 client.close()
             finally:
-                kill_darwin_processes(fixture.identities)
+                kill_processes(fixture.identities)
                 started.close()
                 release.close()
 

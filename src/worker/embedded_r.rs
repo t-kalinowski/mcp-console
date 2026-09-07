@@ -179,10 +179,6 @@ unsafe extern "C-unwind" {
 }
 
 pub(crate) fn run() -> Result<(), Box<dyn Error>> {
-    // SAFETY: pthread_main_np has no preconditions.
-    if unsafe { libc::pthread_main_np() } != 1 {
-        return Err(io::Error::other("R worker must run on the process main thread").into());
-    }
     crate::python::configure_worker_environment()?;
     let (reader, writer) = crate::sideband::connect_from_env()?;
     let r_home = harp::command::r_home_setup()?;

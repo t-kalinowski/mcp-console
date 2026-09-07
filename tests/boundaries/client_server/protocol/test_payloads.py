@@ -11,7 +11,7 @@ from support.client import McpClient
 from support.records import Transcript
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
 
 
 def test_accepts_long_multibyte_source_lines(binary: Path) -> Transcript:

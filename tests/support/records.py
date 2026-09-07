@@ -12,3 +12,4 @@ YamlStream = list[Any]
 class TranscriptWithCompanions:
     transcript: Transcript
     companions: dict[str, YamlStream | str]
+    platform: str | None = None

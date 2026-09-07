@@ -28,7 +28,8 @@ def build_interposer(directory: Path, name: str) -> Path:
     subprocess.run(
         [
             "cc",
-            "-dynamiclib",
+            "-dynamiclib" if sys.platform == "darwin" else "-shared",
+            "-fPIC",
             "-std=c11",
             "-Wall",
             "-Wextra",

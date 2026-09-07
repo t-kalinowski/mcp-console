@@ -23,6 +23,8 @@
 #' @param path `NULL`, or a path to an `mcp-console` executable.
 #' @param version `NULL`, or one published `mcp-console` version, such as
 #'   `"0.0.2"`.
+#' @param no_sandbox Run evaluated code with the server's filesystem and
+#'   network permissions. Required on Linux until sandbox support is available.
 #' @return An [ellmer::ToolDef] to pass to an ellmer chat's
 #'   `$register_tool()` method.
 #' @examples
@@ -37,7 +39,12 @@
 #' console_tool(version = "0.0.2")
 #' }
 #' @export
-console_tool <- function(..., path = NULL, version = NULL) {
+console_tool <- function(..., path = NULL, version = NULL, no_sandbox = FALSE) {
+  stopifnot(
+    is.logical(no_sandbox),
+    length(no_sandbox) == 1L,
+    !is.na(no_sandbox)
+  )
   if (...length() != 0L) {
     stop("`...` must be empty.", call. = FALSE)
   }
@@ -45,7 +52,7 @@ console_tool <- function(..., path = NULL, version = NULL) {
     stop("Only one of `path` and `version` may be supplied.", call. = FALSE)
   }
 
-  client <- new_mcp_client(resolve_mcp_console(path, version))
+  client <- new_mcp_client(resolve_mcp_console(path, version), no_sandbox)
   ready <- FALSE
   on.exit(if (!ready) close_mcp_client(client), add = TRUE)
 
@@ -210,12 +217,12 @@ resolve_mcp_console_uv <- function(from) {
   normalizePath(utils::tail(output, 1L), mustWork = TRUE)
 }
 
-new_mcp_client <- function(binary) {
+new_mcp_client <- function(binary, no_sandbox) {
   client <- new.env(parent = emptyenv())
   client$errors <- tempfile("mcp-console-", fileext = ".log")
   client$process <- processx::process$new(
     binary,
-    "serve",
+    c("serve", if (no_sandbox) "--no-sandbox"),
     stdin = "|",
     stdout = "|",
     stderr = client$errors,

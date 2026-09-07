@@ -11,7 +11,7 @@ from support.records import Transcript
 from support.suites import run_this_suite
 
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
 
 
 def test_starts_and_reports_ready(binary: Path) -> Transcript:

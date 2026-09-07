@@ -19,7 +19,7 @@ from support.records import Transcript
 from support.suites import run_this_suite
 
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
 
 
 def test_tolerates_enotconn_during_directional_shutdown(binary: Path) -> Transcript:
@@ -52,7 +52,8 @@ def test_tolerates_connection_reset_with_unread_shutdown(
         subprocess.run(
             [
                 "cc",
-                "-dynamiclib",
+                "-dynamiclib" if sys.platform == "darwin" else "-shared",
+                "-fPIC",
                 "-std=c11",
                 "-Wall",
                 "-Wextra",

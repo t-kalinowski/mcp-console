@@ -19,7 +19,7 @@ from support.records import Transcript
 from support.resolvers import record_resolved_r_library
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
 PNG_1X1 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42Y"
     "AAAAASUVORK5CYII="

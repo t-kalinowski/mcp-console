@@ -12,7 +12,7 @@ from support.records import Transcript
 from support.suites import run_this_suite
 
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
 
 
 def test_restarts_session(binary: Path) -> Transcript:

@@ -2,12 +2,12 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use crate::cell::Language;
 
 pub(crate) const DEFAULT_PYTHON_PACKAGES: &[&str] = &["numpy", "pandas"];
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) fn deserialize_payload_free<'de, D>(deserializer: D) -> Result<(), D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -19,7 +19,7 @@ where
     PayloadFree::deserialize(deserializer).map(drop)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum RResolutionFailureKind {
@@ -28,7 +28,7 @@ pub(crate) enum RResolutionFailureKind {
     Operation,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum ServerMessage {
@@ -132,7 +132,7 @@ pub(crate) enum ConsoleChannel {
     Diagnostic,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum WorkerMessage {
@@ -189,7 +189,7 @@ pub(crate) enum WorkerMessage {
     Completed,
 }
 
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
 mod tests {
     use super::{
         PythonImportResolution, PythonResolveRequest, RResolutionFailureKind, ServerMessage,

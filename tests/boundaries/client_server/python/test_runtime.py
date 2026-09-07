@@ -20,11 +20,12 @@ from support.checkpoints import wait_for_worker_file
 from support.client import McpClient, stop_client
 from support.normalization import code
 from support.r import r_test_environment, reference_plots
-from support.records import Transcript
+from support.records import Transcript, TranscriptWithCompanions
 from support.resolvers import matplotlib_test_environment
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
+CASE_PLATFORMS = {"inherits_xdg_matplotlib_config": {"linux"}}
 
 
 def test_evaluates_cells_in_persistent_reticulate_state(binary: Path) -> Transcript:
@@ -193,14 +194,17 @@ def test_returns_r_plots_from_python_bridge(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_returns_matplotlib_plots(binary: Path) -> Transcript:
+def test_returns_matplotlib_plots(binary: Path) -> TranscriptWithCompanions:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
         workspace = temporary / "workspace-one"
         workspace.mkdir()
+        font_root = Path(
+            "/System/Library/Fonts" if sys.platform == "darwin" else "/usr/share/fonts"
+        )
         system_fonts = sorted(
             path
-            for path in Path("/System/Library/Fonts").iterdir()
+            for path in font_root.rglob("*")
             if path.is_file() and path.suffix.lower() in {".otf", ".ttc", ".ttf"}
         )
         assert system_fonts, "test system font is required"
@@ -211,7 +215,11 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
         )
         path = os.environ.get("PATH")
         assert path is not None, "PATH is required"
-        probe = temporary / "bin" / "system_profiler"
+        probe = (
+            temporary
+            / "bin"
+            / ("system_profiler" if sys.platform == "darwin" else "fc-list")
+        )
         probe.parent.mkdir()
         probe.write_text(
             code(r"""
@@ -225,6 +233,19 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
                 """),
             encoding="utf-8",
         )
+        if sys.platform == "linux":
+            probe.write_text(
+                code(r"""
+                #!/bin/sh
+                set -eu
+                if [ "$1" = "--help" ]; then
+                  printf '%s\n' --format
+                else
+                  : > "$TMPDIR/mcp-console-font-discovery"
+                  printf '%s\n' "$MCP_CONSOLE_TEST_FONT"
+                fi
+                """)
+            )
         probe.chmod(0o755)
         fontconfig = temporary / "fonts.conf"
         fontconfig.write_text(
@@ -244,6 +265,7 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
         environment = matplotlib_test_environment(temporary / "host-cache")
         environment["TMPDIR"] = temporary_directory
         environment["FONTCONFIG_FILE"] = str(fontconfig)
+        environment["MCP_CONSOLE_TEST_FONT"] = str(system_font)
         environment["MPLCONFIGDIR"] = str(host_matplotlib)
         environment["MCP_CONSOLE_TEST_MATPLOTLIBRC"] = str(host_matplotlibrc)
         environment["MCP_CONSOLE_TEST_SYSTEM_PROFILER_OUTPUT"] = str(profiler_output)
@@ -519,7 +541,10 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
             """)
         client.send(python=python)
         output = last_result_text(client)
-        assert output == "(True, 7.25, True, True, True, True, False, False)\n", repr(
+        permissions = (
+            "True, True, True" if sys.platform == "darwin" else "False, False, False"
+        )
+        assert output == f"(True, 7.25, {permissions}, True, False, False)\n", repr(
             output
         )
         assert not list(temporary.rglob("mcp-console-font-discovery"))
@@ -527,7 +552,9 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
         assert (
             host_matplotlibrc.read_text(encoding="utf-8") == "lines.linewidth: 7.25\n"
         )
-        assert not (host_matplotlib / "worker-payload").exists()
+        assert (host_matplotlib / "worker-payload").exists() == (
+            sys.platform == "linux"
+        )
         assert len(persistent_caches) == 1, persistent_caches
         assert persistent_caches[0].read_bytes() == persistent_cache_bytes
         assert not (persistent_caches[0].parent / "fontlist-v999.json").exists()
@@ -536,10 +563,12 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
                 "fontlist-v*.json"
             )
         )
-        return transcript
+        return TranscriptWithCompanions(
+            transcript, {}, platform="linux" if sys.platform == "linux" else None
+        )
 
 
-def test_inherits_explicit_matplotlib_config(binary: Path) -> Transcript:
+def test_inherits_explicit_matplotlib_config(binary: Path) -> TranscriptWithCompanions:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
         explicit = temporary / "explicit"
@@ -592,7 +621,9 @@ def test_inherits_explicit_matplotlib_config(binary: Path) -> Transcript:
             """)
         client.send(python=python)
         output = last_result_text(client)
-        assert output == "(True, 8.25, True, True)\n", repr(output)
+        assert output == f"(True, 8.25, {sys.platform == 'darwin'}, True)\n", repr(
+            output
+        )
         transcript = client.finish()
         assert explicit_rc.read_text(encoding="utf-8") == "lines.linewidth: 8.25\n"
         assert not list(explicit.glob("fontlist-v*.json"))
@@ -603,14 +634,32 @@ def test_inherits_explicit_matplotlib_config(binary: Path) -> Transcript:
                 "fontlist-v*.json"
             )
         )
-        return transcript
+        return TranscriptWithCompanions(
+            transcript, {}, platform="linux" if sys.platform == "linux" else None
+        )
 
 
 def test_inherits_default_matplotlib_config(binary: Path) -> Transcript:
+    return inherits_matplotlib_config(binary, xdg=False)
+
+
+def test_inherits_xdg_matplotlib_config(binary: Path) -> Transcript:
+    return inherits_matplotlib_config(binary, xdg=True)
+
+
+def inherits_matplotlib_config(binary: Path, *, xdg: bool) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
         home = temporary / "home"
-        matplotlib = home / ".matplotlib"
+        home.mkdir()
+        if sys.platform == "linux":
+            config_root = temporary / "xdg-config" if xdg else home / ".config"
+            cache_root = temporary / "xdg-cache" if xdg else home / ".cache"
+            matplotlib = config_root / "matplotlib"
+            font_cache = cache_root / "matplotlib"
+        else:
+            matplotlib = home / ".matplotlib"
+            font_cache = matplotlib
         matplotlib.mkdir(parents=True)
         matplotlibrc = matplotlib / "matplotlibrc"
         matplotlibrc.write_text("lines.linewidth: 9.25\n", encoding="utf-8")
@@ -642,6 +691,11 @@ def test_inherits_default_matplotlib_config(binary: Path) -> Transcript:
         ).stdout.strip()
         environment = matplotlib_test_environment(temporary / "host-cache")
         environment["HOME"] = str(home)
+        environment.pop("XDG_CONFIG_HOME", None)
+        environment.pop("XDG_CACHE_HOME", None)
+        if xdg:
+            environment["XDG_CONFIG_HOME"] = str(config_root)
+            environment["XDG_CACHE_HOME"] = str(cache_root)
         environment["TMPDIR"] = temporary_directory
         environment["R_LIBS_USER"] = os.pathsep.join(r_libraries)
         environment["RETICULATE_UV"] = uv
@@ -656,7 +710,7 @@ def test_inherits_default_matplotlib_config(binary: Path) -> Transcript:
         client.send(
             requirements={"python": ["matplotlib"]},
         )
-        assert last_result_text(client) == "[prepared]"
+        assert last_result_text(client) == "[prepared]", client.transcript[-1]
         # fmt: python
         python = code("""
             import os
@@ -675,7 +729,7 @@ def test_inherits_default_matplotlib_config(binary: Path) -> Transcript:
         assert output == "(True, 9.25)\n", repr(output)
         transcript = client.finish()
         assert matplotlibrc.read_text(encoding="utf-8") == "lines.linewidth: 9.25\n"
-        caches = list(matplotlib.glob("fontlist-v*.json"))
+        caches = list(font_cache.glob("fontlist-v*.json"))
         assert len(caches) == 1, caches
         assert not list(
             (temporary / "host-cache" / "mcp-console" / "matplotlib").glob(

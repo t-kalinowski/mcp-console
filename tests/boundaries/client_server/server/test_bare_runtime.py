@@ -15,7 +15,7 @@ from support.r import r_test_environment
 from support.records import TranscriptWithCompanions
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
 
 
 def test_runs_without_a_resolver_bootstrap(binary: Path) -> TranscriptWithCompanions:

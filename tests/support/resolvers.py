@@ -3,6 +3,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 from support.assertions import last_result_text
@@ -67,7 +68,14 @@ def build_killpg_denial_interposer(directory: Path) -> Path:
     fixture = FIXTURES / "native" / "killpg_denial_interposer.c"
     shutil.copyfile(fixture, source)
     subprocess.run(
-        ["cc", "-dynamiclib", "-o", library, source],
+        [
+            "cc",
+            "-dynamiclib" if sys.platform == "darwin" else "-shared",
+            "-fPIC",
+            "-o",
+            library,
+            source,
+        ],
         check=True,
         capture_output=True,
         text=True,
@@ -149,9 +157,9 @@ def resolver_interrupt_permission_environment(
     environment["MCP_CONSOLE_TEST_RESOLVER_LIFETIME"] = str(resolver_lifetime.path)
     # The interposer removes its loader variable after reaching the server, so
     # the resolver and Zod do not inherit it.
-    environment["DYLD_INSERT_LIBRARIES"] = str(
-        build_killpg_denial_interposer(temporary_path)
-    )
+    environment[
+        "DYLD_INSERT_LIBRARIES" if sys.platform == "darwin" else "LD_PRELOAD"
+    ] = str(build_killpg_denial_interposer(temporary_path))
     return (
         environment,
         resolver_started,
@@ -335,9 +343,7 @@ def resolve_public_python_version(
     # fmt: r
     r = code(rf"""
         reticulate::py_require(
-          python_version = {
-            constraints_r
-          },
+          python_version = {constraints_r},
           action = "set"
         )
         result <- tryCatch(

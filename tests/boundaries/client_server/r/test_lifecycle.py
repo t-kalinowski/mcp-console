@@ -1,5 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
+import re
 import sys
 import tempfile
 import time
@@ -12,10 +13,10 @@ from support.checkpoints import wait_for_worker_file
 from support.client import McpClient, stop_client
 from support.normalization import code
 from support.r import build_r_input_handler, r_input_handler_client, r_test_environment
-from support.records import Transcript
+from support.records import Transcript, TranscriptWithCompanions
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
 
 
 def test_evaluates_source_without_final_newline(binary: Path) -> Transcript:
@@ -61,7 +62,7 @@ def test_recoverable_language_errors(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_restarts_after_r_worker_segfault(binary: Path) -> Transcript:
+def test_restarts_after_r_worker_segfault(binary: Path) -> TranscriptWithCompanions:
     client = McpClient(binary, ("serve",))
     client.initialize_and_list_tools()
     client.send(r="r_worker_marker <- TRUE")
@@ -78,6 +79,11 @@ def test_restarts_after_r_worker_segfault(binary: Path) -> Transcript:
         '[input requested: "Selection: "]\n[waiting for stdin]'
     ), repr(fatal_output)
 
+    if sys.platform == "linux":
+        # SI_USER carries a sender identity, not a fault address.
+        client.transcript[-1]["result"]["content"][0]["text"] = re.sub(
+            r"(?m)^address 0x[0-9a-f]+,", "address <signal sender>,", fatal_output
+        )
     wait_for_evaluation_output(
         client,
         "R is aborting now ...\n"
@@ -96,7 +102,9 @@ def test_restarts_after_r_worker_segfault(binary: Path) -> Transcript:
     assert last_tool_text(client) == "[1] FALSE\n"
     client.send(r="1 + 1")
     assert last_tool_text(client) == "[1] 2\n"
-    return client.finish()
+    return TranscriptWithCompanions(
+        client.finish(), {}, platform="linux" if sys.platform == "linux" else None
+    )
 
 
 def test_reports_r_worker_exit_status(binary: Path) -> Transcript:
@@ -375,7 +383,13 @@ def test_interrupts_running_r_evaluation(binary: Path) -> Transcript:
             """)
         client = McpClient(
             Path(sys.executable),
-            ("-c", launcher, str(binary), "serve"),
+            (
+                "-c",
+                launcher,
+                str(binary),
+                "serve",
+                *(("--no-sandbox",) if sys.platform == "linux" else ()),
+            ),
             environment,
             current_directory=temporary_path,
         )

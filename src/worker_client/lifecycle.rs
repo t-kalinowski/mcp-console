@@ -1227,6 +1227,7 @@ mod tests {
             std::path::PathBuf::from("unused-worker"),
             Vec::new(),
             None,
+            false,
             None,
         );
         let evaluation = Arc::new(super::super::Evaluation::new(
@@ -1275,6 +1276,7 @@ mod tests {
             std::path::PathBuf::from("unused-worker"),
             Vec::new(),
             None,
+            false,
             None,
         );
         let evaluation = Arc::new(super::super::Evaluation::new(

@@ -17,7 +17,7 @@ from support.r import r_input_handler_client
 from support.records import Transcript
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
 
 
 def test_routes_idle_and_timed_out_stdin(binary: Path) -> Transcript:

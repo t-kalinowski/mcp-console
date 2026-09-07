@@ -29,6 +29,10 @@ pub struct Cli {
 pub enum Command {
     /// Run the MCP server over standard input and output
     Serve {
+        /// Run evaluated code with the server's filesystem and network permissions
+        #[arg(long)]
+        no_sandbox: bool,
+
         /// Replace the runtime worker during development
         #[arg(long, hide = true, value_name = "PATH")]
         worker: Option<PathBuf>,

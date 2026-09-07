@@ -12,7 +12,7 @@ from support.records import Transcript
 from support.suites import run_this_suite
 
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
 
 
 def test_routes_python_output(binary: Path) -> Transcript:
@@ -111,7 +111,11 @@ def test_preserves_python_output_from_fork_children(binary: Path) -> Transcript:
         import sys
 
         assert fork_ready
-        child = os.fork()
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            child = os.fork()
         if child == 0:
             print("fork child stdout", flush=True)
             sys.stderr.write("fork child stderr\n")

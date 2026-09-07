@@ -246,11 +246,17 @@ fn default_timeout_ms() -> u64 {
 }
 
 impl ConsoleServer {
-    fn new(worker: Option<PathBuf>, relay: Option<PathBuf>) -> Result<Self, String> {
+    fn new(
+        worker: Option<PathBuf>,
+        relay: Option<PathBuf>,
+        no_sandbox: bool,
+    ) -> Result<Self, String> {
         let languages = Languages::from_environment()?;
         let worker = match (worker, relay) {
-            (Some(program), relay) => crate::worker_client::Client::new(program, relay)?,
-            (None, None) => crate::worker_client::Client::builtin()?,
+            (Some(program), relay) => {
+                crate::worker_client::Client::new(program, relay, no_sandbox)?
+            }
+            (None, None) => crate::worker_client::Client::builtin(no_sandbox)?,
             (None, Some(_)) => return Err("a custom relay requires a custom worker".to_string()),
         };
         let dynamic_resolution = worker.dynamic_resolution();
@@ -317,7 +323,7 @@ Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls must
 
 Omit code to poll, supply stdin, control the session, or prepare requirements when available. If a response ends in `[running; poll with an empty send]`, call `send` again without code or stdin; do not resubmit the cell. Send `stdin` alone to answer an active prompt or debugger. Field descriptions specify preparation, control, and timeout ordering.
 
-Evaluated code can read host files, cannot directly access the network, and can write only in the worker's private temporary directory. Dependency resolution, when available, runs outside the sandbox and may execute installation or build code; use only trusted dependencies."#
+With the sandbox enabled, evaluated code can read host files, cannot directly access the network, and can write only in the worker's private temporary directory. With `serve --no-sandbox`, evaluated code has the server's filesystem and network permissions. Dependency resolution, when available, runs outside the sandbox and may execute installation or build code; use only trusted dependencies."#
     )]
     async fn send(
         &self,
@@ -516,8 +522,12 @@ impl ServerHandler for ConsoleServer {
 /// Runs the MCP stdio server and owns the selected worker.
 ///
 /// Closing MCP input also stops a worker whose evaluation is still running.
-pub async fn run(worker: Option<PathBuf>, relay: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
-    let server = ConsoleServer::new(worker, relay).map_err(std::io::Error::other)?;
+pub async fn run(
+    worker: Option<PathBuf>,
+    relay: Option<PathBuf>,
+    no_sandbox: bool,
+) -> Result<(), Box<dyn Error>> {
+    let server = ConsoleServer::new(worker, relay, no_sandbox).map_err(std::io::Error::other)?;
     let worker = server.worker.clone();
     let (input_closed, wait_for_input_close) = oneshot::channel();
     let input = ShutdownReader::new(tokio::io::stdin(), input_closed);

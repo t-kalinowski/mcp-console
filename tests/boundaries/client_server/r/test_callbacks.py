@@ -20,7 +20,7 @@ from support.r import r_input_handler_client, r_test_environment, reference_plot
 from support.records import Transcript
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
 
 
 def test_evaluates_a_complete_cell(binary: Path) -> Transcript:
@@ -309,6 +309,10 @@ def test_stops_cell_after_boundary_callback_failure(binary: Path) -> Transcript:
               file.path(tempdir(), "failing-handler-fifo"),
               function() {
                 plot(1)
+                Sys.chmod(list.files(
+                  file.path(Sys.getenv("TMPDIR"), "mcp-console-plots"),
+                  full.names = TRUE
+                ), "0000")
                 old_umask <- Sys.umask("0777")
                 on.exit(Sys.umask(old_umask), add = TRUE)
                 grDevices::dev.off()
@@ -361,6 +365,10 @@ def test_skips_final_boundary_callbacks_after_cell_failure(binary: Path) -> Tran
             writeBin(as.raw(1), writer)
             close(writer)
             plot(1)
+            Sys.chmod(list.files(
+              file.path(Sys.getenv("TMPDIR"), "mcp-console-plots"),
+              full.names = TRUE
+            ), "0000")
             old_umask <- Sys.umask("0777")
             on.exit(Sys.umask(old_umask), add = TRUE)
             grDevices::dev.off()

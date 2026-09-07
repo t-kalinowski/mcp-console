@@ -4,17 +4,17 @@ use clap::Parser;
 
 mod cell;
 mod cli;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod process_descriptors;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod process_exit;
 mod python;
 mod python_requirement;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod r_bridge;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod r_environment;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod r_graphics;
 mod r_package_name;
 mod relay_protocol;
@@ -23,9 +23,8 @@ mod sandbox;
 mod server;
 mod server_transport;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-#[cfg_attr(target_os = "linux", allow(dead_code))]
 mod sideband;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod sql;
 mod transcript;
 mod worker;
@@ -35,7 +34,11 @@ mod worker_relay;
 
 fn main() -> ExitCode {
     match cli::Cli::parse().command {
-        cli::Command::Serve { worker, relay } => match run_server(worker, relay) {
+        cli::Command::Serve {
+            worker,
+            relay,
+            no_sandbox,
+        } => match run_server(worker, relay, no_sandbox) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
@@ -74,11 +77,12 @@ fn main() -> ExitCode {
 fn run_server(
     worker: Option<std::path::PathBuf>,
     relay: Option<std::path::PathBuf>,
+    no_sandbox: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    let result = runtime.block_on(server::run(worker, relay));
+    let result = runtime.block_on(server::run(worker, relay, no_sandbox));
     // `server::run` has already joined service and worker shutdown. Tokio's
     // stdout uses a blocking task that cannot be cancelled while the client
     // leaves its output pipe full, so runtime teardown must not wait for it.

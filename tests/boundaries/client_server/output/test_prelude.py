@@ -14,7 +14,7 @@ from support.processes import stop_process
 from support.records import Transcript
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
 
 from boundaries.client_server._harness import (
     expose_idle_sideband_output,

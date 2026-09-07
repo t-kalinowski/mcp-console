@@ -17,7 +17,12 @@ from support.normalization import code
 from support.records import Transcript
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
+# These cases exercise the macOS psutil process-group adapter.
+CASE_PLATFORMS = {
+    "retains_environment_when_optional_psutil_setup_fails": {"darwin"},
+    "inspects_sandbox_child_processes_with_psutil": {"darwin"},
+}
 
 
 def test_preserves_configured_python_environment(binary: Path) -> Transcript:
@@ -117,7 +122,15 @@ def test_preserves_empty_python_environment(binary: Path) -> Transcript:
 
 
 def test_rejects_python_older_than_3_10(binary: Path) -> Transcript:
-    interpreter = Path("/usr/bin/python3")
+    subprocess.run(["uv", "python", "install", "3.9"], check=True, capture_output=True)
+    interpreter = Path(
+        subprocess.run(
+            ["uv", "python", "find", "--managed-python", "3.9"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    )
     version = subprocess.run(
         (interpreter, "-c", "import sys; print(sys.version_info[:2])"),
         check=True,
@@ -687,7 +700,10 @@ def test_prints_requirements_with_host_uv_cache(binary: Path) -> Transcript:
             "UV_OFFLINE": None,
         }
         assert all(record == expected for record in records), records
-        assert not worker_cache.exists(), worker_cache
+        # Offline worker probes may cache interpreter metadata without a
+        # sandbox. The macOS sandbox denies those writes outside TMPDIR.
+        if sys.platform == "darwin":
+            assert not worker_cache.exists(), worker_cache
         return client.finish()
 
 

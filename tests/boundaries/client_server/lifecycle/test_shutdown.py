@@ -23,6 +23,7 @@ from support.processes import (
 from support.records import Transcript
 from support.suites import run_this_suite
 
+# These cases require sandbox cleanup of detached descendants.
 PLATFORMS = {"darwin"}
 FIXTURE_CHECKPOINT_TIMEOUT_SECONDS = 15
 

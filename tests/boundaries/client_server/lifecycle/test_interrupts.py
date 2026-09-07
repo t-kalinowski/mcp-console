@@ -17,7 +17,7 @@ from support.records import Transcript
 from support.resolvers import resolver_interrupt_permission_environment
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
 FIXTURE_CHECKPOINT_TIMEOUT_SECONDS = 15
 
 from boundaries.client_server._harness import (

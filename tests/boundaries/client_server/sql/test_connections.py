@@ -17,7 +17,7 @@ from support.r import r_test_environment
 from support.records import Transcript
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
 
 
 def test_routes_sql_cells_to_a_selected_dbi_connection(
@@ -643,7 +643,8 @@ def test_interrupts_python_dbapi_provider_probe(binary: Path) -> Transcript:
         subprocess.run(
             [
                 "cc",
-                "-dynamiclib",
+                "-dynamiclib" if sys.platform == "darwin" else "-shared",
+                "-fPIC",
                 "-std=c11",
                 "-Wall",
                 "-Wextra",

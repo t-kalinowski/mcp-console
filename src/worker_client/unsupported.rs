@@ -1,5 +1,7 @@
 /// The unsupported platform runtime keeps the server boundary portable.
-pub(super) struct WorkerRuntime;
+pub(super) struct WorkerRuntime {
+    pub(super) no_sandbox: bool,
+}
 
 pub(super) struct Worker;
 

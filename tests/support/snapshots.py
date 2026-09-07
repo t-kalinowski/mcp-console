@@ -172,6 +172,9 @@ def check_recording(
 ) -> set[Path]:
     snapshot = snapshot_path(suite_name, case_name)
     case = f"{suite_name}::{case_name}"
+    if isinstance(recorded, TranscriptWithCompanions) and recorded.platform is not None:
+        assert recorded.platform in {"darwin", "linux"}, recorded.platform
+        snapshot = snapshot.with_suffix(f".{recorded.platform}.yaml")
     if isinstance(recorded, TranscriptWithCompanions):
         actual = without_request_ids(recorded.transcript)
         companions = []

@@ -17,7 +17,7 @@ from support.records import Transcript
 from support.suites import run_this_suite
 
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
 
 
 def test_forwards_raw_stdout_and_stderr(binary: Path) -> Transcript:

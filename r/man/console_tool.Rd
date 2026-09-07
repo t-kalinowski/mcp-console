@@ -4,7 +4,7 @@
 \alias{console_tool}
 \title{Use MCP Console as an ellmer tool}
 \usage{
-console_tool(..., path = NULL, version = NULL)
+console_tool(..., path = NULL, version = NULL, no_sandbox = FALSE)
 }
 \arguments{
 \item{...}{Must be empty. Reserved for future use.}
@@ -13,6 +13,9 @@ console_tool(..., path = NULL, version = NULL)
 
 \item{version}{\code{NULL}, or one published \code{mcp-console} version, such as
 \code{"0.0.2"}.}
+
+\item{no_sandbox}{Run evaluated code with the server's filesystem and
+network permissions. Required on Linux until sandbox support is available.}
 }
 \value{
 An \link[ellmer:ToolDef]{ellmer::ToolDef} to pass to an ellmer chat's

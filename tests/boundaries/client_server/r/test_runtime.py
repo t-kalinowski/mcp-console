@@ -10,7 +10,7 @@ from support.normalization import code
 from support.records import Transcript
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
 
 
 def test_default_sandbox_supports_r_core_detection(binary: Path) -> Transcript:

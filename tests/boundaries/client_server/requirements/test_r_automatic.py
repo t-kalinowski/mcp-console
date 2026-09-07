@@ -15,17 +15,17 @@ from support.assertions import entry_result_text
 from support.assertions import last_result_text
 from support.checkpoints import FifoCheckpoint, wait_for_worker_file
 from support.client import McpClient, stop_client
-from support.macos import (
-    capture_darwin_process_identity,
-    darwin_child_process_identities,
-    live_darwin_processes,
+from support.processes import (
+    capture_process_identity,
+    child_process_identities,
+    live_processes,
 )
 from support.normalization import code
 from support.r import r_test_environment
 from support.records import Transcript
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
 REQUIRED_COMMANDS = {"ir"}
 
 
@@ -902,8 +902,8 @@ def test_interrupts_automatic_r_resolver_and_preserves_worker(
             )
             assert last_result_text(client) == "[done]"
             baseline = len(ir_run_records(record))
-            server = capture_darwin_process_identity(client.process.pid)
-            existing_children = darwin_child_process_identities(server)
+            server = capture_process_identity(client.process.pid)
+            existing_children = child_process_identities(server)
 
             # fmt: r
             r = code(r"""
@@ -915,14 +915,14 @@ def test_interrupts_automatic_r_resolver_and_preserves_worker(
             started.wait("automatic R resolver")
             resolver = [
                 child
-                for child in darwin_child_process_identities(server)
+                for child in child_process_identities(server)
                 if child not in existing_children
             ]
             assert len(resolver) == 1, resolver
             interrupt = client.start_send(control="interrupt")
             client.receive_many([evaluation, interrupt])
             # Keep the FIFO blocked until interruption has reaped this resolver.
-            assert live_darwin_processes(resolver) == [], (
+            assert live_processes(resolver) == [], (
                 "interrupt did not reap the R resolver"
             )
             assert entry_result_text(interrupt) == "\n[idle]"

@@ -8,18 +8,18 @@ mod evaluation;
 mod lifecycle;
 mod output;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod child_exit;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod events;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod startup;
 
-#[cfg(target_os = "macos")]
-#[path = "worker_client/macos.rs"]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[path = "worker_client/unix.rs"]
 mod platform;
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 #[path = "worker_client/unsupported.rs"]
 mod platform;
 
@@ -330,11 +330,16 @@ fn interrupted_cell_not_run_response(wait: EvaluationWait) -> Response {
 }
 
 impl Client {
-    pub(crate) fn new(program: PathBuf, relay: Option<PathBuf>) -> Result<Self, String> {
+    pub(crate) fn new(
+        program: PathBuf,
+        relay: Option<PathBuf>,
+        no_sandbox: bool,
+    ) -> Result<Self, String> {
         Ok(Self::with_arguments(
             program,
             Vec::new(),
             relay,
+            no_sandbox,
             Some(Environment {
                 custom_worker: true,
                 duckdb_extensions: Default::default(),
@@ -346,21 +351,22 @@ impl Client {
         ))
     }
 
-    pub(crate) fn builtin() -> Result<Self, String> {
-        #[cfg(target_os = "macos")]
-        return startup::with_input_owner(Self::builtin_with);
-        #[cfg(not(target_os = "macos"))]
-        Self::builtin_with(&|_| Ok(()))
+    pub(crate) fn builtin(no_sandbox: bool) -> Result<Self, String> {
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        return startup::with_input_owner(|on_started| Self::builtin_with(on_started, no_sandbox));
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        Self::builtin_with(&|_| Ok(()), no_sandbox)
     }
 
     fn builtin_with(
         on_started: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
+        no_sandbox: bool,
     ) -> Result<Self, String> {
         let mut python_resolver = crate::resolver::ManagedPythonResolverConfiguration::capture();
         let configured_python = std::env::var_os("RETICULATE_PYTHON");
         let program = std::env::current_exe()
             .map_err(|error| format!("failed to locate the R worker executable: {error}"))?;
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         let (r, duckdb_extensions, python, r_resolver) = {
             match crate::resolver::detect_r_bootstrap(&mut python_resolver, on_started)? {
                 Some(bootstrap) => (
@@ -381,7 +387,7 @@ impl Client {
                 ),
             }
         };
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         let (r, duckdb_extensions, python, r_resolver) = (
             Option::<crate::resolver::ManagedR>::None,
             Default::default(),
@@ -397,6 +403,7 @@ impl Client {
             program,
             vec![OsString::from("worker")],
             None,
+            no_sandbox,
             Some(Environment {
                 custom_worker: false,
                 duckdb_extensions,
@@ -412,13 +419,14 @@ impl Client {
         program: PathBuf,
         arguments: Vec<OsString>,
         relay: Option<PathBuf>,
+        no_sandbox: bool,
         environment: Option<Environment>,
     ) -> Self {
         let dynamic_resolution = environment
             .as_ref()
             .is_some_and(|environment| !matches!(environment.r_resolver, RResolver::Disabled));
         Self(Arc::new(ClientInner {
-            runtime: platform::WorkerRuntime,
+            runtime: platform::WorkerRuntime { no_sandbox },
             program,
             arguments,
             relay,
