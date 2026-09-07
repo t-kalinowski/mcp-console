@@ -1,6 +1,7 @@
 use std::fs::File;
 use std::io::{self, Write};
 use std::os::fd::{AsFd, AsRawFd};
+use std::os::unix::fs::FileTypeExt;
 use std::sync::{Arc, OnceLock, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -19,6 +20,7 @@ enum EventRequest {
 
 pub(super) struct EventWriter {
     deadline: Arc<OnceLock<Instant>>,
+    bounded_output: bool,
     wake: Option<io::PipeWriter>,
     thread: thread::JoinHandle<Result<(), String>>,
 }
@@ -31,6 +33,7 @@ pub(super) fn start(
     let deadline = Arc::new(OnceLock::new());
     let output = EventOutput::new(reader, deadline.clone())
         .map_err(|error| format!("failed to configure relay stdout: {error}"))?;
+    let bounded_output = output.original_flags.is_some();
     let (sender, receiver) = mpsc::channel();
     let thread = thread::spawn(move || {
         let mut writer = output;
@@ -52,6 +55,7 @@ pub(super) fn start(
         EventSender(sender),
         EventWriter {
             deadline,
+            bounded_output,
             wake: Some(wake),
             thread,
         },
@@ -79,9 +83,11 @@ impl EventSender {
 
 impl EventWriter {
     pub(super) fn begin_retirement(&mut self) {
-        self.deadline
-            .set(Instant::now() + RETIREMENT_FLUSH_TIMEOUT)
-            .expect("relay stdout should retire only once");
+        if self.bounded_output {
+            self.deadline
+                .set(Instant::now() + RETIREMENT_FLUSH_TIMEOUT)
+                .expect("relay stdout should retire only once");
+        }
         // Wake a writer already waiting without a deadline. Every subsequent
         // write and wait shares the deadline, including during reader joins.
         drop(self.wake.take());
@@ -96,7 +102,7 @@ impl EventWriter {
 
 struct EventOutput {
     file: File,
-    original_flags: libc::c_int,
+    original_flags: Option<libc::c_int>,
     wake: io::PipeReader,
     deadline: Arc<OnceLock<Instant>>,
 }
@@ -104,11 +110,17 @@ struct EventOutput {
 impl EventOutput {
     fn new(wake: io::PipeReader, deadline: Arc<OnceLock<Instant>>) -> io::Result<Self> {
         let file = File::from(io::stdout().as_fd().try_clone_to_owned()?);
-        // SAFETY: the owned duplicate remains open throughout configuration.
-        let original_flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
-        if original_flags < 0 {
-            return Err(io::Error::last_os_error());
-        }
+        let kind = file.metadata()?.file_type();
+        let original_flags = if kind.is_fifo() || kind.is_socket() {
+            // SAFETY: the owned duplicate remains open throughout configuration.
+            let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
+            if flags < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Some(flags)
+        } else {
+            None
+        };
         let output = Self {
             file,
             original_flags,
@@ -118,13 +130,14 @@ impl EventOutput {
         // Duplicates share file status flags. The relay is the sole protocol
         // writer; restore the original flags when its output task finishes.
         // SAFETY: this preserves existing flags on the live output descriptor.
-        if unsafe {
-            libc::fcntl(
-                output.file.as_raw_fd(),
-                libc::F_SETFL,
-                original_flags | libc::O_NONBLOCK,
-            )
-        } < 0
+        if let Some(flags) = original_flags
+            && unsafe {
+                libc::fcntl(
+                    output.file.as_raw_fd(),
+                    libc::F_SETFL,
+                    flags | libc::O_NONBLOCK,
+                )
+            } < 0
         {
             return Err(io::Error::last_os_error());
         }
@@ -207,7 +220,9 @@ impl Write for EventOutput {
 
 impl Drop for EventOutput {
     fn drop(&mut self) {
-        // SAFETY: the owned descriptor is still open during Drop.
-        let _ = unsafe { libc::fcntl(self.file.as_raw_fd(), libc::F_SETFL, self.original_flags) };
+        if let Some(flags) = self.original_flags {
+            // SAFETY: the owned descriptor is still open during Drop.
+            let _ = unsafe { libc::fcntl(self.file.as_raw_fd(), libc::F_SETFL, flags) };
+        }
     }
 }

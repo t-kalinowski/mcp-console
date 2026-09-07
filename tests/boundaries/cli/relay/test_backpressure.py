@@ -246,7 +246,10 @@ def test_finishes_startup_failure_while_relay_stdout_is_backpressured(
                 process.communicate(timeout=10)
 
 
-def test_succeeds_when_deadline_passes_after_final_output(binary: Path) -> Transcript:
+@contextmanager
+def retirement_clock_environment(
+    after_frame: dict[str, object],
+) -> Iterator[tuple[Path, dict[str, str]]]:
     fixtures = Path(__file__).resolve().parents[3] / "fixtures"
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
@@ -271,6 +274,17 @@ def test_succeeds_when_deadline_passes_after_final_output(binary: Path) -> Trans
         environment = os.environ.copy()
         environment["DYLD_INSERT_LIBRARIES"] = str(interposer)
         environment["MCP_CONSOLE_TEST_OUTPUT_COMPLETE"] = str(marker)
+        environment["MCP_CONSOLE_TEST_CLOCK_AFTER_FRAME"] = (
+            json.dumps(after_frame, separators=(",", ":")) + "\n"
+        )
+        yield root, environment
+
+
+def test_succeeds_when_deadline_passes_after_final_output(binary: Path) -> Transcript:
+    with retirement_clock_environment({"kind": "worker_exited", "code": 0}) as (
+        root,
+        environment,
+    ):
         worker = r"""
 import os
 os.write(int(os.environ["MCP_CONSOLE_SIDEBAND_FD"]), b'{"kind":"ready"}\n')
@@ -283,7 +297,7 @@ os.write(int(os.environ["MCP_CONSOLE_SIDEBAND_FD"]), b'{"kind":"ready"}\n')
             env=environment,
             timeout=10,
         )
-        assert marker.read_text() == "1"
+        assert (root / "output-complete").read_text() == "1"
         events = [json.loads(line) for line in result.stdout.splitlines()]
         assert events == [
             {"kind": "ready"},
@@ -294,6 +308,42 @@ os.write(int(os.environ["MCP_CONSOLE_SIDEBAND_FD"]), b'{"kind":"ready"}\n')
         ], events
         assert result.returncode == 0, result.stderr
         assert result.stderr == "", result.stderr
+        return [
+            {"events": events, "exit_code": result.returncode, "stderr": result.stderr}
+        ]
+
+
+def test_writes_regular_file_after_retirement_deadline(binary: Path) -> Transcript:
+    with retirement_clock_environment({"kind": "stdout_closed"}) as (
+        root,
+        environment,
+    ):
+        worker = r"""
+import os
+os.write(int(os.environ["MCP_CONSOLE_SIDEBAND_FD"]), b'{"kind":"ready"}\n')
+"""
+        destination = root / "relay.jsonl"
+        with destination.open("w") as output:
+            result = subprocess.run(
+                [binary, "worker-relay", sys.executable, "-c", worker],
+                input="",
+                stdout=output,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=environment,
+                timeout=10,
+            )
+        assert (root / "output-complete").read_text() == "1"
+        assert result.returncode == 0, result.stderr
+        assert result.stderr == "", result.stderr
+        events = [json.loads(line) for line in destination.read_text().splitlines()]
+        assert events == [
+            {"kind": "ready"},
+            {"kind": "stdout_closed"},
+            {"kind": "stderr_closed"},
+            {"kind": "worker_sideband_closed"},
+            {"kind": "worker_exited", "code": 0},
+        ], events
         return [
             {"events": events, "exit_code": result.returncode, "stderr": result.stderr}
         ]
