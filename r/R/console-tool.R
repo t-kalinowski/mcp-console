@@ -232,19 +232,23 @@ new_mcp_client <- function(binary) {
 
 close_mcp_client <- function(client) {
   process <- client$process
+  on.exit(suspendInterrupts({
+    if (!is.null(process)) {
+      try(
+        if (process$is_alive()) {
+          ps::ps_send_signal(process$as_ps_handle(), 9L)
+        },
+        silent = TRUE
+      )
+      try(process$wait(1000), silent = TRUE)
+    }
+    unlink(client$errors)
+  }))
   client$process <- NULL
   if (!is.null(process)) {
     try(close(process$get_input_connection()), silent = TRUE)
     try(process$wait(15000), silent = TRUE)
-    try(
-      if (process$is_alive()) {
-        ps::ps_send_signal(process$as_ps_handle(), 9L)
-      },
-      silent = TRUE
-    )
-    try(process$wait(1000), silent = TRUE)
   }
-  unlink(client$errors)
   invisible()
 }
 
