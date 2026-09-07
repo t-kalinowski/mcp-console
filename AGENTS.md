@@ -94,7 +94,7 @@ Keep these invariants intact:
 - `src/worker_protocol.rs`, `src/sideband.rs` — relay-worker message and framing contract.
 - `src/relay_protocol.rs` — server-relay JSONL message and framing contract.
 - `src/worker_relay.rs` — worker launch, I/O forwarding, direct-worker signaling, termination, and reaping.
-- `src/worker_client.rs`, `src/worker_client/` — server-owned environment, evaluation, lifecycle, ordinary launcher child ownership, ordered event dispatch, output tape, and macOS relay transport.
+- `src/worker_client.rs`, `src/worker_client/` — session coordination and send planning, server-owned environment, evaluation, lifecycle, ordinary launcher child ownership, ordered event dispatch, output tape, and macOS relay transport.
 - `src/process_exit.rs` — shared direct-child exit observation without reaping, used by launcher ownership and sandbox cleanup.
 - `src/sandbox.rs`, `src/sandbox/{child,macos,process_group}.rs`, `src/sandbox/supervision.rs`, `src/sandbox/supervision/` — launcher-owned sandbox construction, child and process-group cleanup, primary host-manager supervision, manager-failure recovery, and standalone job control.
 - `src/worker.rs`, `src/worker/embedded_r.rs`, `src/r_repl.c` — worker-facing facade, current embedded-R backend, cell dispatch, console callbacks, and the C-owned DLL-REPL boundary.

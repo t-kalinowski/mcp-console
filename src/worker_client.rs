@@ -23,8 +23,10 @@ mod platform;
 #[path = "worker_client/unsupported.rs"]
 mod platform;
 
-use environment::{Environment, PreparationIntent, PythonEnvironment, RuntimeRResolutionFailure};
-pub(crate) use environment::{PrepareResult, Requirements};
+pub(crate) use environment::Requirements;
+use environment::{
+    Environment, PreparationIntent, PrepareResult, PythonEnvironment, RuntimeRResolutionFailure,
+};
 use evaluation::{Evaluation, EvaluationWait};
 use lifecycle::{
     ControlledSendAdmission, LifecycleControl, OldGenerationCommitDisposition, WorkerGeneration,
@@ -54,19 +56,48 @@ pub(crate) enum SendControl {
     Restart,
 }
 
-pub(crate) enum RequirementSubmission {
-    Valid(Requirements),
-    Invalid(String),
-}
-
 pub(crate) struct SendRequest {
     pub(crate) cell: Option<crate::cell::Cell>,
     pub(crate) stdin: Option<String>,
-    pub(crate) requirements: Option<RequirementSubmission>,
+    pub(crate) requirements: Option<Requirements>,
     pub(crate) control: Option<SendControl>,
     pub(crate) timeout: Duration,
     pub(crate) transcript: crate::transcript::Transcript,
     pub(crate) call_id: Option<u64>,
+}
+
+impl SendRequest {
+    fn validate(&self, dynamic_resolution: bool) -> Result<(), String> {
+        let Some(requirements) = &self.requirements else {
+            return Ok(());
+        };
+        if !dynamic_resolution {
+            return Err(
+                "dynamic environment resolution is unavailable; install `ir` or `uv` and restart MCP Console"
+                    .to_string(),
+            );
+        }
+        if self.cell.is_none()
+            && self.control.is_none()
+            && self.stdin.as_ref().is_some_and(|stdin| !stdin.is_empty())
+        {
+            return Err(
+                "requirements-only `send` performs standalone preparation and cannot also queue stdin"
+                    .to_string(),
+            );
+        }
+        if self.cell.is_none() && matches!(self.control, Some(SendControl::Interrupt)) {
+            return Err(
+                "`requirements` with `control = \"interrupt\"` requires a code cell".to_string(),
+            );
+        }
+        // An interrupt and its stdin precede requirement-content errors. Validate
+        // those only after the previous evaluation settles, before the new cell.
+        if !matches!(self.control, Some(SendControl::Interrupt)) {
+            requirements.validate()?;
+        }
+        Ok(())
+    }
 }
 
 /// A cloneable handle to one lazily started worker.
@@ -417,8 +448,9 @@ impl Client {
         !matches!(self.0.r_resolver, RResolver::Disabled)
     }
 
-    /// Starts one cell, supplies stdin, or collects an idle response.
+    /// Interprets preparation, control, evaluation, stdin, and polling for the session.
     pub(crate) async fn send(&self, request: SendRequest) -> Result<Response, String> {
+        request.validate(self.dynamic_resolution())?;
         if let Some(control) = request.control {
             return self.send_controlled(control, request).await;
         }
@@ -432,20 +464,21 @@ impl Client {
             call_id,
         } = request;
         if let Some(requirements) = requirements {
-            let Some(cell) = cell else {
-                return Ok(output::direct_failure(
-                    "`requirements` requires a code cell",
-                ));
-            };
-            let requirements = match requirements {
-                RequirementSubmission::Valid(requirements) => requirements,
-                RequirementSubmission::Invalid(error) => {
-                    return Ok(output::direct_failure(error));
+            if let Some(cell) = cell {
+                return Ok(self
+                    .send_with_requirements(cell, stdin, requirements, timeout, transcript, call_id)
+                    .await);
+            }
+            let notice = match self.prepare(requirements).await? {
+                PrepareResult::Prepared => "prepared",
+                PrepareResult::RestartRequired => "restart required",
+                PrepareResult::Failed(response) | PrepareResult::WorkerStopped(response) => {
+                    return Ok(response);
                 }
             };
-            return Ok(self
-                .send_with_requirements(cell, stdin, requirements, timeout, transcript, call_id)
-                .await);
+            let mut response = Response::default();
+            response.push_notice(notice);
+            return Ok(response);
         }
         Ok(
             match self
@@ -471,14 +504,6 @@ impl Client {
         let direct_restart_error = matches!(control, SendControl::Restart)
             && request.requirements.is_some()
             && request.cell.is_none();
-        if matches!(control, SendControl::Interrupt)
-            && request.requirements.is_some()
-            && request.cell.is_none()
-        {
-            return Ok(output::direct_failure(
-                "`requirements` with `control = \"interrupt\"` requires a code cell",
-            ));
-        }
         let client = self.clone();
         let admission = tokio::task::spawn_blocking(move || {
             client.control_and_start_evaluation(control, request)
@@ -635,7 +660,7 @@ impl Client {
         control: &ControlledSendAdmission,
         cell: Option<crate::cell::Cell>,
         stdin: Option<String>,
-        requirements: Option<RequirementSubmission>,
+        requirements: Option<Requirements>,
         transcript: crate::transcript::Transcript,
         call_id: Option<u64>,
     ) -> Result<ControlledEvaluation, String> {
@@ -658,7 +683,7 @@ impl Client {
         control: &ControlledSendAdmission,
         generation: WorkerGeneration,
         cell: Option<crate::cell::Cell>,
-        requirements: Option<RequirementSubmission>,
+        requirements: Option<Requirements>,
         transcript: crate::transcript::Transcript,
         call_id: Option<u64>,
     ) -> Result<ControlledEvaluation, String> {
@@ -713,13 +738,10 @@ impl Client {
             }
         };
         if let Some(requirements) = requirements {
-            let requirements = match requirements {
-                RequirementSubmission::Valid(requirements) => requirements,
-                RequirementSubmission::Invalid(error) => {
-                    control_prelude.push_tool_error(error);
-                    return Ok(self.return_controlled_response(control_prelude));
-                }
-            };
+            if let Err(error) = requirements.validate() {
+                control_prelude.push_tool_error(error);
+                return Ok(self.return_controlled_response(control_prelude));
+            }
             let preparation = match self.admit_preparation() {
                 Ok(preparation) => preparation,
                 Err(error) => {
@@ -777,19 +799,15 @@ impl Client {
         control: &ControlledSendAdmission,
         cell: Option<crate::cell::Cell>,
         stdin: Option<String>,
-        requirements: Option<RequirementSubmission>,
+        requirements: Option<Requirements>,
         transcript: crate::transcript::Transcript,
         call_id: Option<u64>,
     ) -> Result<ControlledEvaluation, String> {
-        let requirements = match requirements {
-            Some(RequirementSubmission::Valid(requirements)) => requirements,
-            Some(RequirementSubmission::Invalid(error)) => return Err(error),
-            None => Requirements {
-                duckdb: Vec::new(),
-                python: Vec::new(),
-                r: Vec::new(),
-            },
-        };
+        let requirements = requirements.unwrap_or(Requirements {
+            duckdb: Vec::new(),
+            python: Vec::new(),
+            r: Vec::new(),
+        });
         let stdin_follows = stdin.as_ref().is_some_and(|stdin| !stdin.is_empty());
         let restart = self.restart_blocking(
             requirements,

@@ -11,7 +11,7 @@ use super::requirements::{RequirementDelta, Requirements, push_duckdb_r_target};
 use super::resolution::EnvironmentResolutionFailure;
 use super::state::{Environment, commit_managed_r};
 
-pub(crate) enum PrepareResult {
+pub(in crate::worker_client) enum PrepareResult {
     Prepared,
     RestartRequired,
     Failed(Response),
@@ -26,7 +26,7 @@ pub(in crate::worker_client) enum PreparationIntent {
 
 impl Client {
     /// Adds requirements to the managed environment.
-    pub(crate) async fn prepare(
+    pub(in crate::worker_client) async fn prepare(
         &self,
         requirements: Requirements,
     ) -> Result<PrepareResult, String> {
