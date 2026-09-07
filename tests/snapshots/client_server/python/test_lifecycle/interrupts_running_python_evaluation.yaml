@@ -3,6 +3,12 @@
 ---
 send:
   r: |
+    python_interrupt_started <- tempfile("python-interrupt-started-")
+    python_interrupt_release <- tempfile("python-interrupt-release-")
+    Sys.setenv(
+      MCP_CONSOLE_PYTHON_INTERRUPT_STARTED = python_interrupt_started,
+      MCP_CONSOLE_PYTHON_INTERRUPT_RELEASE = python_interrupt_release
+    )
     invisible(suppressMessages(base::trace(
       "py_eval",
       tracer = quote({
@@ -17,10 +23,13 @@ send:
       print = FALSE,
       where = asNamespace("reticulate")
     )))
+    cat(python_interrupt_started, python_interrupt_release, sep = "\n")
 result:
   content:
     - type: text
-      text: "[done]"
+      text: |-
+        <interrupt started>
+        <interrupt release>
   isError: false
 ---
 send:
@@ -74,18 +83,52 @@ result:
 send:
   python: |
     import inspect
-    import os
-    import time
-    from pathlib import Path
 
     inspect.getmro.__code__ = inspect._mcp_original_getmro_code
+
+    import ctypes
+    import os
+    import signal
+
+    checkpoint_library = ctypes.PyDLL(os.environ["MCP_CONSOLE_PYTHON_INTERRUPT_LIBRARY"])
+    wait_for_interrupt = checkpoint_library.wait_for_probe_interrupt
+    wait_for_interrupt.argtypes = (
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_void_p,
+    )
+    wait_for_interrupt.restype = ctypes.c_int
     python_interrupt_state = 41
-    Path(
-        os.environ["TMPDIR"],
-        "python-interrupt-started",
-    ).touch()
-    while True:
-        time.sleep(60)
+    wakeup_read, wakeup_write = os.pipe()
+    os.set_blocking(wakeup_write, False)
+    previous_wakeup = signal.set_wakeup_fd(wakeup_write)
+    try:
+        with (
+            open(
+                os.environ["MCP_CONSOLE_PYTHON_INTERRUPT_STARTED"],
+                "wb",
+                buffering=0,
+            ) as started,
+            open(
+                os.environ["MCP_CONSOLE_PYTHON_INTERRUPT_RELEASE"],
+                "rb",
+                buffering=0,
+            ) as release,
+        ):
+            assert (
+                wait_for_interrupt(
+                    started.fileno(),
+                    release.fileno(),
+                    wakeup_read,
+                    ctypes.pythonapi.PyErr_CheckSignals,
+                )
+                == 0
+            )
+    finally:
+        signal.set_wakeup_fd(previous_wakeup)
+        os.close(wakeup_read)
+        os.close(wakeup_write)
   timeout_ms: 0
 result:
   content:
@@ -101,10 +144,19 @@ send:
 result:
   content:
     - type: text
+      text: |-
+
+        [running; poll with an empty send]
+  isError: false
+---
+send: {}
+result:
+  content:
+    - type: text
       text: |
         Traceback (most recent call last):
           File "<string>", line 467, in _mcp_console_eval_cell
-          File "<mcp-console:python:e2>", line 13, in <module>
+          File "<mcp-console:python:e2>", line 36, in <module>
         KeyboardInterrupt
   isError: false
 ---
