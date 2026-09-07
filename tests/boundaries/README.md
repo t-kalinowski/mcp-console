@@ -26,7 +26,9 @@ Security and liveness cases may add causal or process assertions for facts a sna
 Do not test exact internal sequencing unless it is itself an observable contract.
 
 The direct CLI sandbox cases own argument and standard-stream fidelity, job control, signal and exit status, security policy, and manager-owned retirement.
-The public MCP sandbox cases are limited to a launch-path descriptor matrix and integration checks for sandbox-dependent runtime workflows, startup gating, worker replacement, supervisor loss, restart, and shutdown.
+The public MCP sandbox cases cover the launch-path descriptor matrix, sandbox-dependent runtime workflows, startup failure and gating, worker replacement, supervisor loss, restart, and shutdown.
+The relay wrapper workflow verifies MCP restart and shutdown when the relay is below the sandbox root and a worker descendant retains its streams.
+The direct relay CLI case compares the complete protocol through ordinary direct launch and the public sandbox command, without requiring the relay to be a process-group leader.
 
 Map each non-generic sandbox allowance to the real workflow that requires it and the test that owns that workflow:
 
@@ -94,6 +96,7 @@ The suite also verifies both documents with Yamark, and the optional Quarto suit
 Shared helpers under `tests/support/` are grouped by responsibility:
 
 - `client.py` owns the public stdio MCP client.
+- `cases.py` runs individual cases and their snapshot checks with deadlines and captures their diagnostic output.
 - `snapshots.py` formats and compares primary and companion snapshots.
 - `normalization.py` contains source-text and diagnostic normalization.
 - `checkpoints.py`, `capture.py`, and `processes.py` contain reusable synchronization, stream-reading, and cleanup mechanics.
@@ -116,11 +119,22 @@ scripts/test --list
 scripts/test --locate client_server/server/test_tools
 scripts/test --locate client_server/server/test_tools::initializes_and_lists_tools
 scripts/test --jobs 1 client_server/python/test_runtime
+scripts/test --timeout 1800 client_server/requirements/test_r
 scripts/test --update client_server/server/test_tools::initializes_and_lists_tools
 ```
 
 With no selectors, `scripts/test` runs every suite and case in parallel, using at least two worker processes and otherwise one per available CPU by default.
 Pass `--jobs N` to set the maximum concurrency or `--jobs 1` to run serially.
+Each case has a 600-second deadline that starts when its supervisor launches.
+The deadline includes snapshot formatting, comparison, and updates, which run in the supervised case process so the coordinator can keep handling signals and sibling failures.
+Use `--timeout SECONDS` to allow longer runs, such as slow resolver workflows.
+On timeout, the runner names the case and requests cleanup from its supervisor process.
+The supervisor sends the case `SIGINT`, allowing 15 seconds for `finally` blocks and fixture cleanup before forcibly killing that process by PID.
+Fixtures remain responsible for their subprocesses; forcibly killing a case cannot guarantee that all its descendants have exited.
+After a failure, Ctrl-C, SIGTERM, or SIGHUP, the runner cancels queued cases and gives running cases two seconds to finish before requesting the same bounded cleanup.
+It includes their further failures and captured standard error in its report.
+Each supervisor watches an ownership pipe, so loss of the runner also requests cleanup, including when the runner is killed with SIGKILL.
+The case interpreter has no monitoring thread: fixtures can use `fork` and `preexec_fn`, and forced cleanup still works if native code holds the case's GIL.
 Normal runs emit one flushed `.` for every passing case and end the progress line with a newline.
 A case that runs for one minute is named with its current status.
 The runner reports it again at two-minute elapsed intervals through ten minutes, then once every five minutes, and names it when it finishes.

@@ -34,10 +34,13 @@ from boundaries.client_server._harness import (
 
 def test_restart_cancels_partial_sideband_frame(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
-    with tempfile.TemporaryDirectory() as temporary_directory:
+    with (
+        tempfile.TemporaryDirectory() as temporary_directory,
+        ZodFixtureControl(Path(temporary_directory)) as control,
+    ):
         temporary_path = Path(temporary_directory)
         environment = os.environ.copy()
-        environment["TMPDIR"] = temporary_directory
+        control.configure(environment)
         client = McpClient(
             binary,
             ("serve", "--worker", str(zod)),
@@ -55,12 +58,11 @@ def test_restart_cancels_partial_sideband_frame(binary: Path) -> Transcript:
                 client,
             )
             descendant_group = int(marker.read_text(encoding="utf-8"))
+            # Attach before releasing the worker: its exit may remove the
+            # directory before the host observes the flushed partial frame.
+            control.connect(client)
             release_partial_sideband(marker)
-            wait_for_marker(
-                temporary_path,
-                "zod-sideband-partial-tail-written",
-                client,
-            )
+            control.wait_for(0, "partial_sideband_written")
 
             restarted = client._start_send(control="restart")
             received = threading.Event()
@@ -301,10 +303,13 @@ def test_restart_drains_readable_frame_before_abandoning_partial_tail(
 
 def test_shutdown_cancels_partial_sideband_frame(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
-    with tempfile.TemporaryDirectory() as temporary_directory:
+    with (
+        tempfile.TemporaryDirectory() as temporary_directory,
+        ZodFixtureControl(Path(temporary_directory)) as control,
+    ):
         temporary_path = Path(temporary_directory)
         environment = os.environ.copy()
-        environment["TMPDIR"] = temporary_directory
+        control.configure(environment)
         client = McpClient(
             binary,
             ("serve", "--worker", str(zod)),
@@ -322,12 +327,11 @@ def test_shutdown_cancels_partial_sideband_frame(binary: Path) -> Transcript:
                 client,
             )
             descendant_group = int(marker.read_text(encoding="utf-8"))
+            # Attach before releasing the worker: its exit may remove the
+            # directory before the host observes the flushed partial frame.
+            control.connect(client)
             release_partial_sideband(marker)
-            wait_for_marker(
-                temporary_path,
-                "zod-sideband-partial-tail-written",
-                client,
-            )
+            control.wait_for(0, "partial_sideband_written")
 
             shutdown_started = time.monotonic()
             client.stdin.close()

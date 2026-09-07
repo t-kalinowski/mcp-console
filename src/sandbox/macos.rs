@@ -17,7 +17,7 @@ pub(super) fn wait_for_process_exit_without_reaping(
 }
 
 pub(super) fn kill_process_group(process_group_id: u32) -> io::Result<()> {
-    crate::process_group::kill(process_group_id)
+    super::process_group::kill(process_group_id)
 }
 
 pub(super) fn sandboxed_command() -> Result<(Command, TemporaryDirectory), String> {

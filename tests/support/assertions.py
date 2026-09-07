@@ -159,25 +159,41 @@ def wait_for_evaluation_output(
     client: McpClient,
     expected: str,
     description: str,
-    *,
-    provisional: str = "\n[waiting for stdin]",
     **send_arguments: Any,
 ) -> None:
-    """Poll past one exact provisional state and retain the submitted call."""
+    """Accumulate exact output until the expected state; retain the submitted call."""
     deadline = time.monotonic() + 3
     poll_start = len(client.transcript)
+    running = "\n[running; poll with an empty send]"
+    waiting = "[waiting for stdin]"
+    collected = ""
     result = client.send(**send_arguments)
     while True:
         assert result.get("isError") is not True, result
         content = result["content"]
         assert len(content) == 1 and content[0]["type"] == "text", content
         output = content[0]["text"]
-        if output == expected:
+        if output.endswith(running):
+            collected += output.removesuffix(running)
+        elif output.endswith(waiting):
+            # Empty input requests add a separator; prompt notices already
+            # contain their own newline, which belongs to the output.
+            if output != "\n" + waiting:
+                collected += output.removesuffix(waiting)
+            waiting_output = collected + ("" if collected.endswith("\n") else "\n")
+            if waiting_output + waiting == expected:
+                collected = waiting_output + waiting
+                break
+        else:
+            if output != "[done]" or not collected:
+                collected += output
+            assert collected == expected, repr(collected)
             break
-        assert output == provisional, repr(output)
+        assert expected.startswith(collected), repr(collected)
         assert time.monotonic() < deadline, f"{description} did not complete"
         result = client.send(timeout_ms=3_000)
 
+    content[0]["text"] = collected
     calls = client.transcript[poll_start:]
     submitted = calls[0]
     submitted["result"] = calls[-1]["result"]

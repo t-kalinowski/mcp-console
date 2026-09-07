@@ -269,9 +269,11 @@ def test_preserves_utf8_across_console_reads(binary: Path) -> Transcript:
         client.send(stdin="xx")
         assert last_tool_text(client) == "\n[waiting for stdin]"
 
-        client.send(stdin="é")
-        assert last_tool_text(client) == (
-            '[input requested: "short> "]\n[waiting for stdin]'
+        wait_for_evaluation_output(
+            client,
+            '[input requested: "short> "]\n[waiting for stdin]',
+            "second UTF-8 console read",
+            stdin="é",
         )
 
         wait_for_evaluation_output(
@@ -321,7 +323,6 @@ def test_keeps_stdin_open_after_partial_payload(binary: Path) -> Transcript:
         client,
         '[input requested: "next> "]\n[1] "next"\n',
         "same-call stdin completion",
-        provisional='[input requested: "next> "]\n[waiting for stdin]',
         r=r,
         stdin="next\n",
     )

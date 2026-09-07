@@ -1,6 +1,7 @@
 #!/usr/bin/env -S uv run --script
 
 import os
+import subprocess
 import sys
 import tempfile
 import unicodedata
@@ -632,33 +633,77 @@ def test_interrupts_selected_python_dbapi_connection(
 
 def test_interrupts_python_dbapi_provider_probe(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
+        library = Path(temporary_directory) / "python-probe-checkpoint.dylib"
+        source = (
+            Path(__file__).resolve().parents[3]
+            / "fixtures"
+            / "native"
+            / "python_probe_checkpoint.c"
+        )
+        subprocess.run(
+            [
+                "cc",
+                "-dynamiclib",
+                "-std=c11",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                "-o",
+                library,
+                source,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
+        environment["MCP_CONSOLE_SQL_PROBE_LIBRARY"] = str(library)
         client = McpClient(binary, ("serve",), environment)
         checkpoints: list[FifoCheckpoint] = []
+        release = None
         passed = False
         try:
             client._initialize_and_list_tools()
 
-            # Create the checkpoint inside the worker's writable directory.
+            # Create the checkpoints inside the worker's writable directory.
             # fmt: r
             r = code(r"""
                 probe_started <- tempfile("mcp-console-sql-probe-started-")
-                Sys.setenv(MCP_CONSOLE_SQL_PROBE_STARTED = probe_started)
-                cat(probe_started)
+                probe_release <- tempfile("mcp-console-sql-probe-release-")
+                Sys.setenv(
+                  MCP_CONSOLE_SQL_PROBE_STARTED = probe_started,
+                  MCP_CONSOLE_SQL_PROBE_RELEASE = probe_release
+                )
+                cat(probe_started, probe_release, sep = "\n")
                 """)
             client.send(r=r)
             setup = client.transcript[-1]["result"]
-            path = Path(setup["content"][0]["text"])
-            setup["content"][0]["text"] = "<probe started>"
-            started = FifoCheckpoint.create(path)
-            checkpoints.append(started)
+            paths = setup["content"][0]["text"].splitlines()
+            assert len(paths) == 2, setup
+            setup["content"][0]["text"] = "<probe started>\n<probe release>"
+            started, release = [FifoCheckpoint.create(Path(path)) for path in paths]
+            checkpoints.extend((started, release))
 
             # fmt: python
             python = code("""
+                import ctypes
                 import os
                 import signal
                 import sys
+
+
+                # The native checkpoint accepts Python's pending signal while
+                # PyDLL still holds the GIL and owns the Python call frame.
+                checkpoint_library = ctypes.PyDLL(os.environ["MCP_CONSOLE_SQL_PROBE_LIBRARY"])
+                wait_for_probe_interrupt = checkpoint_library.wait_for_probe_interrupt
+                wait_for_probe_interrupt.argtypes = (
+                    ctypes.c_int,
+                    ctypes.c_int,
+                    ctypes.c_int,
+                    ctypes.c_void_p,
+                )
+                wait_for_probe_interrupt.restype = ctypes.c_int
 
 
                 class ProbeConnection:
@@ -677,13 +722,31 @@ def test_interrupts_python_dbapi_provider_probe(binary: Path) -> Transcript:
                 def pause_provider_probe(frame, event, argument):
                     if event == "call" and frame.f_globals.get("__name__") == "_mcp_console_sql":
                         sys.settrace(None)
-                        with open(
-                            os.environ["MCP_CONSOLE_SQL_PROBE_STARTED"],
-                            "wb",
-                            buffering=0,
-                        ) as checkpoint:
-                            checkpoint.write(b"1")
-                        signal.pause()
+                        wakeup_read, wakeup_write = os.pipe()
+                        os.set_blocking(wakeup_write, False)
+                        previous_wakeup = signal.set_wakeup_fd(wakeup_write)
+                        try:
+                            with (
+                                open(
+                                    os.environ["MCP_CONSOLE_SQL_PROBE_STARTED"], "wb", buffering=0
+                                ) as started,
+                                open(
+                                    os.environ["MCP_CONSOLE_SQL_PROBE_RELEASE"], "rb", buffering=0
+                                ) as release,
+                            ):
+                                assert (
+                                    wait_for_probe_interrupt(
+                                        started.fileno(),
+                                        release.fileno(),
+                                        wakeup_read,
+                                        ctypes.pythonapi.PyErr_CheckSignals,
+                                    )
+                                    == 0
+                                )
+                        finally:
+                            signal.set_wakeup_fd(previous_wakeup)
+                            os.close(wakeup_read)
+                            os.close(wakeup_write)
                     return pause_provider_probe
 
 
@@ -700,7 +763,11 @@ def test_interrupts_python_dbapi_provider_probe(binary: Path) -> Transcript:
                 "\n[running; poll with an empty send]"
             )
 
-            client.send(control="interrupt", timeout_ms=30_000)
+            client.send(control="interrupt", timeout_ms=0)
+            assert last_tool_text(client) == "\n[running; poll with an empty send]"
+            release.release()
+            release = None
+            client.send(timeout_ms=30_000)
             assert "KeyboardInterrupt" in last_tool_text(client)
 
             client.send(sql="ANSWER")
@@ -710,6 +777,8 @@ def test_interrupts_python_dbapi_provider_probe(binary: Path) -> Transcript:
             passed = True
             return transcript
         finally:
+            if release is not None:
+                release.release()
             for checkpoint in checkpoints:
                 checkpoint.close()
             if not passed:
