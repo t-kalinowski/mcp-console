@@ -2,6 +2,16 @@
 !same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
 ---
 send:
+  requirements:
+    r:
+      - DBI
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+send:
   r: |
     stopifnot(is.function(fortunes::fortune))
     stop("after activation")

@@ -306,6 +306,8 @@ def test_resolves_reached_r_packages_at_runtime(binary: Path) -> Transcript:
         environment["PKG_SUBPROCESS_TIMEOUT"] = "0"
         client = McpClient(binary, ("serve",), environment)
         client.initialize_and_list_tools()
+        client.send(requirements={"r": ["DBI"]})
+        assert last_result_text(client) == "[prepared]"
         baseline = len(ir_run_records(record))
 
         # fmt: r
@@ -385,6 +387,8 @@ def test_retains_automatic_r_package_after_error_and_restart(
         environment, record = recording_ir_environment(Path(temporary))
         client = McpClient(binary, ("serve",), environment)
         client.initialize_and_list_tools()
+        client.send(requirements={"r": ["DBI"]})
+        assert last_result_text(client) == "[prepared]"
         baseline = len(ir_run_records(record))
 
         # fmt: r
@@ -419,6 +423,8 @@ def test_does_not_resolve_unreached_package_loads(binary: Path) -> Transcript:
         )
         client = McpClient(binary, ("serve",), environment)
         client.initialize_and_list_tools()
+        client.send(requirements={"r": ["DBI"]})
+        assert last_result_text(client) == "[prepared]"
         baseline = len(ir_run_records(record))
 
         client.send(r=f"if (FALSE) library({missing}); 42L")
@@ -443,6 +449,8 @@ def test_rejects_non_package_runtime_names_before_ir(binary: Path) -> Transcript
         environment, record = recording_ir_environment(Path(temporary))
         client = McpClient(binary, ("serve",), environment)
         client.initialize_and_list_tools()
+        client.send(requirements={"r": ["DBI"]})
+        assert last_result_text(client) == "[prepared]"
         baseline = len(ir_run_records(record))
 
         # fmt: r
@@ -483,6 +491,8 @@ def test_preserves_base_r_loading_semantics_without_resolution(
         environment, record = recording_ir_environment(Path(temporary))
         client = McpClient(binary, ("serve",), environment)
         client.initialize_and_list_tools()
+        client.send(requirements={"r": ["DBI"]})
+        assert last_result_text(client) == "[prepared]"
         baseline = len(ir_run_records(record))
 
         # fmt: r
@@ -610,6 +620,8 @@ def test_loads_package_with_devtools(binary: Path) -> Transcript:
             current_directory=package,
         )
         client.initialize_and_list_tools()
+        client.send(requirements={"r": ["DBI"]})
+        assert last_result_text(client) == "[prepared]"
         baseline = len(ir_run_records(record))
 
         # fmt: r
@@ -813,6 +825,8 @@ def test_rejects_preparation_while_automatic_r_resolver_is_running(
         finished = False
         try:
             client.initialize_and_list_tools()
+            client.send(requirements={"r": ["DBI"]})
+            assert last_result_text(client) == "[prepared]"
             baseline = len(ir_run_records(record))
 
             evaluation = client.start_send(
