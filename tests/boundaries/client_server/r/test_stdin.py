@@ -76,6 +76,8 @@ def test_routes_idle_and_timed_out_stdin(binary: Path) -> Transcript:
 def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client.initialize_and_list_tools()
+    client.send(requirements={"r": ["DBI"]})
+    assert last_tool_text(client) == "[prepared]"
 
     # fmt: r
     r = code(r"""
@@ -278,6 +280,8 @@ def test_preserves_utf8_across_console_reads(binary: Path) -> Transcript:
 def test_keeps_stdin_open_after_partial_payload(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     client.initialize_and_list_tools()
+    client.send(requirements={"r": ["DBI"]})
+    assert last_tool_text(client) == "[prepared]"
 
     # fmt: r
     r = code(r"""
