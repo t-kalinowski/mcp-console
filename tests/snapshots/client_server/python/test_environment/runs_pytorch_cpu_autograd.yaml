@@ -25,3 +25,7 @@ result:
         <string>:137: FutureWarning: The pynvml package is deprecated. Please install nvidia-ml-py instead. If you did not install pynvml directly, please report this to the maintainers of the package that installed pynvml for you.
         (65536.0, 2.0, 2)
   isError: false
+transcript_normalization:
+  target: result.content[0].text
+  response_cuts: coalesced
+  cross_source_position: omitted

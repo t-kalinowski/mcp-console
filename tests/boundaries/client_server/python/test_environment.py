@@ -6,12 +6,14 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import assert_exact_interleaving
 from support.assertions import last_result_text
+from support.assertions import tool_text
 from support.client import McpClient
 from support.normalization import code
 from support.records import Transcript
@@ -229,10 +231,41 @@ def test_runs_pytorch_cpu_autograd(binary: Path) -> Transcript:
             assert result == (65536.0, 2.0, 2)
             result
             """)
-        client.send(python=python, requirements={"python": ["torch"]})
-        assert client.transcript[-1]["result"].get("isError") is not True, (
-            client.transcript[-1]
+        result = client.send(python=python, requirements={"python": ["torch"]})
+        submitted = client.transcript[-1]
+        native_warning = (
+            "OMP: Warning #179: Function Can't set size of /tmp file failed:\n"
         )
+        python_output = (
+            "<string>:137: FutureWarning: The pynvml package is deprecated. Please "
+            "install nvidia-ml-py instead. If you did not install pynvml directly, "
+            "please report this to the maintainers of the package that installed "
+            "pynvml for you.\n"
+            "(65536.0, 2.0, 2)\n"
+        )
+        expected = native_warning + python_output
+        output = tool_text(result)
+        poll_start = len(client.transcript)
+        deadline = time.monotonic() + 3
+        # Native stderr may reach the server after the sideband completion cut.
+        # Idle output requires public polling; retain every payload byte.
+        while len(output) < len(expected):
+            remaining = deadline - time.monotonic()
+            assert remaining > 0, f"PyTorch output did not arrive: {output!r}"
+            client.response_timeout = min(client.response_timeout, remaining)
+            idle = tool_text(client.send())
+            assert idle.endswith("\n[idle]"), repr(idle)
+            output += idle.removesuffix("\n[idle]")
+            if idle == "\n[idle]":
+                time.sleep(0.01)
+        assert_exact_interleaving(output, native_warning, python_output)
+        result["content"][0]["text"] = expected
+        del client.transcript[poll_start:]
+        submitted["transcript_normalization"] = {
+            "target": "result.content[0].text",
+            "response_cuts": "coalesced",
+            "cross_source_position": "omitted",
+        }
         return client.finish()
 
 
