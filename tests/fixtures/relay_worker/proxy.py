@@ -10,8 +10,12 @@ import os
 import select
 import socket
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any, BinaryIO, TextIO
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import fixture_directory
 
 
 SIDEBAND_FD_ENV = "MCP_CONSOLE_SIDEBAND_FD"
@@ -196,6 +200,7 @@ def proxy(
 
 
 def main() -> None:
+    temporary = fixture_directory.configure()
     relay = take_sideband()
     proxy_endpoint, worker_endpoint = socket.socketpair()
     environment = os.environ.copy()
@@ -217,7 +222,7 @@ def main() -> None:
     assert process.stdout is not None
     assert process.stderr is not None
 
-    capture_path = Path(os.environ["TMPDIR"], CAPTURE_NAME)
+    capture_path = temporary / CAPTURE_NAME
     with capture_path.open("w", encoding="utf-8") as capture:
         proxy(
             relay,

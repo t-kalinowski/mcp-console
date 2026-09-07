@@ -107,13 +107,13 @@ PNG_1X1 = (
 
 class ScriptedRelay:
     def __init__(self) -> None:
+        self.root = fixture_directory.configure()
         process_id = os.getpid()
         process_group = os.getpgrp()
         assert process_id == process_group, (
             f"scripted relay {process_id} is not process-group leader {process_group}"
         )
 
-        self.root = fixture_directory.configure()
         self.capture = (self.root / CAPTURE_NAME).open("w", encoding="utf-8")
         self.checkpoints: dict[str, int] = {}
 

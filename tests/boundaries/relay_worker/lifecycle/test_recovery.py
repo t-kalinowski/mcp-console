@@ -66,7 +66,7 @@ def test_tolerates_connection_reset_with_unread_shutdown(
             capture_output=True,
             text=True,
         )
-        reset_marker = temporary / "reset-sideband-eof-injected"
+        reset_marker = temporary / "reset-sideband-eof-observed"
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
         environment["MCP_CONSOLE_TEST_RELAY_BINARY"] = str(binary)

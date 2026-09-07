@@ -126,7 +126,9 @@ static int delayed_poll(struct pollfd *descriptors, nfds_t count, int timeout) {
 }
 
 static bool reset_sideband_eof(int descriptor, ssize_t result) {
-  if (result != 0 || !target_process() ||
+  // Linux can already report ECONNRESET when the peer closes with unread data.
+  // Acknowledge that result through the same checkpoint as an injected reset.
+  if ((result != 0 && !(result == -1 && errno == ECONNRESET)) || !target_process() ||
       descriptor != atomic_load(&sideband_descriptor) ||
       getenv("MCP_CONSOLE_TEST_RESET_SIDEBAND_EOF") == NULL ||
       atomic_exchange(&reset_claimed, true)) {

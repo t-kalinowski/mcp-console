@@ -11,16 +11,16 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.client import McpClient, stop_client
-from support.macos import (
-    capture_darwin_process_identity,
-    darwin_child_process_identities,
-    darwin_process_file_descriptors,
+from support.processes import (
+    capture_process_identity,
+    child_process_identities,
+    process_file_descriptors,
 )
 from support.normalization import code
 from support.records import Transcript, TranscriptEntry
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
+PLATFORMS = {"darwin", "linux"}
 
 
 def descriptor_entry(
@@ -55,6 +55,8 @@ def descriptor_entry(
         print("closed")
         """)
 
+    if sys.platform == "linux":
+        serve_arguments = (*serve_arguments, "--no-sandbox")
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
         host_path = temporary / "host.txt"
@@ -74,18 +76,18 @@ def descriptor_entry(
             )
             passed = False
             try:
-                server = capture_darwin_process_identity(client.process.pid)
+                server = capture_process_identity(client.process.pid)
                 client.initialize_and_list_tools()
                 result = client.send(python=source)
                 assert result == {
                     "content": [{"type": "text", "text": "closed\n"}],
                     "isError": False,
                 }, result
-                launchers = darwin_child_process_identities(server)
+                launchers = child_process_identities(server)
                 assert len(launchers) == 1, launchers
-                assert descriptor not in darwin_process_file_descriptors(
-                    launchers[0]
-                ), "unlisted server descriptor remained open in the sandbox launcher"
+                assert descriptor not in process_file_descriptors(launchers[0]), (
+                    "unlisted server descriptor remained open in the launched child"
+                )
                 transcript = client.finish()
                 passed = True
             finally:

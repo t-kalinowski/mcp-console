@@ -59,6 +59,7 @@ if sys.platform == "darwin":
         current_darwin_process_identity as current_process_identity,
         capture_darwin_process_identity as capture_process_identity,
         darwin_child_process_identities as child_process_identities,
+        darwin_process_file_descriptors as process_file_descriptors,
         live_darwin_processes as live_processes,
         signal_darwin_process as signal_process,
         kill_darwin_processes as kill_processes,
@@ -86,6 +87,14 @@ else:
             children.update(map(int, (task / "children").read_text().split()))
         assert current_process_identity(parent[0]) == parent
         return tuple(capture_process_identity(pid) for pid in sorted(children))
+
+    def process_file_descriptors(identity: ProcessIdentity) -> set[int]:
+        assert current_process_identity(identity[0]) == identity
+        descriptors = {
+            int(path.name) for path in Path(f"/proc/{identity[0]}/fd").iterdir()
+        }
+        assert current_process_identity(identity[0]) == identity
+        return descriptors
 
     def live_processes(identities: Sequence[ProcessIdentity]) -> list[int]:
         return [

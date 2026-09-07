@@ -12,7 +12,6 @@ from support.suites import run_this_suite
 
 
 PLATFORMS = {"darwin", "linux"}
-# This case verifies the sandbox launcher's separate cleanup status.
 
 
 def _reports_worker_outcome(
