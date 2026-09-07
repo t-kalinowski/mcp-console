@@ -25,6 +25,8 @@ impl StartupGate {
         program: &OsStr,
         arguments: &[OsString],
     ) -> Result<Self, String> {
+        // Rust startup reopens missing standard descriptors with /dev/null
+        // before main, including when the caller starts with stdin closed.
         let input = unsafe { BorrowedFd::borrow_raw(libc::STDIN_FILENO) }
             .try_clone_to_owned()
             .map_err(|error| format!("failed to retain target standard input: {error}"))?;

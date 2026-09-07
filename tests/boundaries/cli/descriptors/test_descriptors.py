@@ -18,6 +18,37 @@ PLATFORMS = {"darwin"}
 TIMEOUT = 10
 
 
+def test_accepts_closed_standard_input(binary: Path) -> Transcript:
+    # fmt: python
+    launcher_script = code(r"""
+        import os
+        import sys
+
+        os.close(0)
+        os.execv(sys.argv[1], sys.argv[1:])
+        """)
+    arguments = ("sandbox", "--", "/bin/cat")
+    result = subprocess.run(
+        [sys.executable, "-c", launcher_script, binary, *arguments],
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=TIMEOUT,
+    )
+
+    assert result.returncode == 0, result
+    assert result.stdout == "", result.stdout
+    assert result.stderr == "", result.stderr
+    return [
+        {
+            "scenario": "standard input closed before launcher exec",
+            "command": ["mcp-console", *arguments],
+            "stdout": result.stdout,
+            "exit_code": result.returncode,
+        }
+    ]
+
+
 def test_closes_unlisted_inherited_descriptors(binary: Path) -> Transcript:
     # fmt: python
     launcher_script = code(r"""
