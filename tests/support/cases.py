@@ -14,6 +14,10 @@ from typing import BinaryIO
 CASE_CLEANUP_SECONDS = 15
 
 
+class CaseCancelled(Exception):
+    """A runner-requested interrupt stopped a case before it completed."""
+
+
 @dataclass
 class CaseProcess:
     process: subprocess.Popen
@@ -173,6 +177,8 @@ def run_case_subprocess(
                 raise TimeoutError(
                     f"{selector} timed out after {timeout:g} seconds\n{output}{errors}"
                 )
+            if case._interrupted and process.returncode == -signal.SIGINT:
+                raise CaseCancelled(f"{output}{errors}")
             if process.returncode != 0:
                 raise RuntimeError(
                     f"{selector} exited with status {process.returncode}\n{output}{errors}"

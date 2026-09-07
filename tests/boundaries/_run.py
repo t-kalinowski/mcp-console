@@ -22,7 +22,12 @@ directory = Path(__file__).resolve().parent
 root = directory.parents[1]
 sys.path.insert(0, str(root / "tests"))
 
-from support.cases import CaseProcess, run_case_subprocess, supervise_case
+from support.cases import (
+    CaseCancelled,
+    CaseProcess,
+    run_case_subprocess,
+    supervise_case,
+)
 from support.records import Transcript, TranscriptWithCompanions
 from support.snapshots import (
     check_recording,
@@ -227,6 +232,12 @@ class ProgressReporter:
         else:
             self._line(f"{running.selector}: failed", error=True)
 
+    def cancel(self, index: int, diagnostics: str) -> None:
+        running = self.running.pop(index)
+        self._line(f"{running.selector}: cancelled", error=True)
+        if diagnostics:
+            print(diagnostics, end="", file=sys.stderr, flush=True)
+
     def close(self) -> None:
         if self.progress_line_open:
             print(flush=True)
@@ -420,6 +431,8 @@ def run_cases(
                     )
                 try:
                     checked = future.result()
+                except CaseCancelled as cancelled:
+                    reporter.cancel(index, str(cancelled))
                 except BaseException as error:
                     reporter.finish(index, succeeded=False)
                     fail(error)

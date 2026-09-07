@@ -123,7 +123,7 @@ scripts/test --timeout 1800 client_server/requirements/test_r
 scripts/test --update client_server/server/test_tools::initializes_and_lists_tools
 ```
 
-With no selectors, `scripts/test` runs every suite and case in parallel, using at least two worker processes and otherwise one per available CPU by default.
+With no selectors, `scripts/test` runs every suite and case in separate processes, with at least two concurrent cases and otherwise one per available CPU by default.
 Pass `--jobs N` to set the maximum concurrency or `--jobs 1` to run serially.
 Each case has a 600-second deadline that starts when its supervisor launches.
 The deadline includes snapshot formatting, comparison, and updates, which run in the supervised case process so the coordinator can keep handling signals and sibling failures.
@@ -132,7 +132,8 @@ On timeout, the runner names the case and requests cleanup from its supervisor p
 The supervisor sends the case `SIGINT`, allowing 15 seconds for `finally` blocks and fixture cleanup before forcibly killing that process by PID.
 Fixtures remain responsible for their subprocesses; forcibly killing a case cannot guarantee that all its descendants have exited.
 After a failure, Ctrl-C, SIGTERM, or SIGHUP, the runner cancels queued cases and gives running cases two seconds to finish before requesting the same bounded cleanup.
-It includes their further failures and captured standard error in its report.
+Cases ending with the requested `SIGINT` are labelled `cancelled`; their captured output is still printed, including errors interrupted during cleanup.
+Deadlines and other unsuccessful exits remain failures.
 Each supervisor watches an ownership pipe, so loss of the runner also requests cleanup, including when the runner is killed with SIGKILL.
 The case interpreter has no monitoring thread: fixtures can use `fork` and `preexec_fn`, and forced cleanup still works if native code holds the case's GIL.
 Normal runs emit one flushed `.` for every passing case and end the progress line with a newline.
