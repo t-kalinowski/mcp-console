@@ -24,7 +24,11 @@ def produce_output() -> None:
         endpoint.sendall(frame)
 
 
+# The Python handler runs on the main thread. Keep SIGINT from waking only
+# the producer while the main thread is blocked reading a sideband command.
+signal_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
 threading.Thread(target=produce_output, daemon=True).start()
+signal.pthread_sigmask(signal.SIG_SETMASK, signal_mask)
 if sys.argv[1] == "natural":
     with (root / "worker-exit").open("rb", buffering=0) as release:
         assert release.read(1) == b"1"
