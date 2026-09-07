@@ -573,7 +573,7 @@ def main() -> None:
             return
 
         if source == "stall accepted relay shutdown":
-            relay_pid = os.getpgrp()
+            relay_pid = int(os.environ["ZOD_RELAY_PID"])
             stop_observed = temporary / "zod-accepted-relay-stop-observed"
             os.mkfifo(stop_observed)
             helper = os.fork()
@@ -590,9 +590,7 @@ def main() -> None:
                     pass
                 os.close(0)
                 os.kill(relay_pid, signal.SIGSTOP)
-                resume_at = (
-                    time.monotonic() + WORKER_SHUTDOWN_GRACE_SECONDS
-                )
+                resume_at = time.monotonic() + WORKER_SHUTDOWN_GRACE_SECONDS
                 publish_marker(temporary / "zod-relay-stopped-after-shutdown")
                 with stop_observed.open("rb", buffering=0) as checkpoint:
                     assert checkpoint.read(1) == b"1"
@@ -612,10 +610,10 @@ def main() -> None:
                 time.sleep(60)
 
         if source == "stall with stopped relay":
-            relay_pid = os.getpgrp()
+            relay_pid = int(os.environ["ZOD_RELAY_PID"])
             launcher_pid = os.getppid()
             assert relay_pid != launcher_pid
-            assert os.getpgid(launcher_pid) == relay_pid
+            assert os.getpgid(launcher_pid) == os.getpgid(relay_pid) == os.getpgrp()
             helper = os.fork()
             if helper == 0:
                 os.setsid()
@@ -704,15 +702,16 @@ def main() -> None:
                 assert checkpoint.read(1) == b"1"
             worker_pid = os.getpid()
             launcher_pid = os.getppid()
-            relay_pid = os.getpgrp()
-            assert len({worker_pid, launcher_pid, relay_pid}) == 3
-            assert os.getpgid(launcher_pid) == relay_pid
+            relay_pid = int(os.environ["ZOD_RELAY_PID"])
+            relay_group = os.getpgrp()
+            assert len({worker_pid, launcher_pid, relay_pid, relay_group}) == 4
+            assert os.getpgid(launcher_pid) == os.getpgid(relay_pid) == relay_group
             send_output(
                 writer,
                 (
                     f"zod worker pid: {worker_pid}; "
                     f"launcher pid: {launcher_pid}; "
-                    f"relay process group: {relay_pid}\n"
+                    f"relay process group: {relay_group}\n"
                 ),
             )
             wait_for_server_to_process_sideband(reader, writer)
@@ -833,14 +832,10 @@ def main() -> None:
                 else:
                     send_output(writer, "zod background sideband\n")
                 wait_for_server_to_process_sideband(reader, writer)
-                publish_marker(
-                    temporary / f"zod-background-sideband-emitted{suffix}"
-                )
+                publish_marker(temporary / f"zod-background-sideband-emitted{suffix}")
                 os._exit(0)
             send(writer, {"kind": "completed"})
-            publish_marker(
-                temporary / f"zod-background-sideband-started{suffix}"
-            )
+            publish_marker(temporary / f"zod-background-sideband-started{suffix}")
             child_pid, status = os.waitpid(child, 0)
             assert child_pid == child
             assert os.waitstatus_to_exitcode(status) == 0
@@ -1157,9 +1152,7 @@ def main() -> None:
                 assert checkpoint.read(1) == b"1"
             send(writer, {"kind": "input_requested", "prompt": "idle> "})
             wait_for_server_to_process_sideband(reader, writer)
-            publish_marker(
-                temporary / "zod-idle-input-request-processed"
-            )
+            publish_marker(temporary / "zod-idle-input-request-processed")
             try:
                 value = input()
             except EOFError:

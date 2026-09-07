@@ -2,12 +2,6 @@ use std::ffi::OsString;
 use std::process::ExitCode;
 
 #[cfg(target_os = "macos")]
-use std::fs::File;
-#[cfg(target_os = "macos")]
-use std::io::Read as _;
-#[cfg(target_os = "macos")]
-use std::os::fd::{FromRawFd as _, OwnedFd};
-#[cfg(target_os = "macos")]
 use std::os::unix::process::CommandExt as _;
 #[cfg(target_os = "macos")]
 use std::process::{Command, Stdio};
@@ -17,15 +11,16 @@ use std::time::Duration;
 #[cfg(target_os = "macos")]
 const MANAGER_CLEANUP_TIMEOUT: Duration = Duration::from_secs(1);
 #[cfg(target_os = "macos")]
-const TARGET_GATE_RELEASE: u8 = 1;
-
-#[cfg(target_os = "macos")]
 #[path = "sandbox/child.rs"]
 mod child;
+#[cfg(target_os = "macos")]
+mod installation;
 #[path = "sandbox/macos.rs"]
 mod platform;
 #[cfg(target_os = "macos")]
 mod process_group;
+#[cfg(target_os = "macos")]
+mod runner;
 #[cfg(target_os = "macos")]
 #[path = "sandbox/supervision.rs"]
 mod supervision;
@@ -67,37 +62,12 @@ pub(crate) fn run_target(
     let (program, arguments) = command_line
         .split_first()
         .expect("sandbox target must include a program");
-    if gate_descriptor <= libc::STDERR_FILENO {
+    if gate_descriptor != libc::STDIN_FILENO {
         return Err("sandbox target startup gate descriptor is invalid".to_string());
     }
-    loop {
-        if unsafe { libc::fcntl(gate_descriptor, libc::F_GETFD) } >= 0 {
-            break;
-        }
-        let error = std::io::Error::last_os_error();
-        if error.kind() != std::io::ErrorKind::Interrupted {
-            return Err(format!(
-                "sandbox target startup gate descriptor is invalid: {error}"
-            ));
-        }
+    if !runner::restore_target_input()? {
+        return Ok(ExitCode::FAILURE);
     }
-    // SAFETY: the host owner transfers this inherited descriptor to the hidden
-    // target process and retains no owner for the child-side copy.
-    let gate = unsafe { OwnedFd::from_raw_fd(gate_descriptor) };
-    let mut gate = File::from(gate);
-    let mut release = [0];
-    if let Err(error) = gate.read_exact(&mut release) {
-        // Closing the owner endpoint before release cancels private startup.
-        // The owner reports the startup failure through its public boundary.
-        if error.kind() == std::io::ErrorKind::UnexpectedEof {
-            return Ok(ExitCode::FAILURE);
-        }
-        return Err(format!("failed to await sandbox target startup: {error}"));
-    }
-    if release != [TARGET_GATE_RELEASE] {
-        return Err("sandbox target received an invalid startup release".to_string());
-    }
-    drop(gate);
 
     let error = Command::new(program).args(arguments).exec();
     Err(format!(

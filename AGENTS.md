@@ -31,6 +31,7 @@ The sandbox command, worker relay, and built-in worker are supported on macOS.
 Linux and Windows are not supported yet.
 CI runs the complete check on macOS.
 
+Build the pinned private sandbox executable with `scripts/stage-sandbox-runner` before the first macOS Cargo build or after changing `sandbox-runner.json`; see `RELEASE.md` for the source checkout and toolchain.
 Run commands from the repository root:
 
 ```text
@@ -96,7 +97,7 @@ Keep these invariants intact:
 - `src/worker_relay.rs` — worker launch, I/O forwarding, direct-worker signaling, termination, and reaping.
 - `src/worker_client.rs`, `src/worker_client/` — session coordination and send planning, server-owned environment, evaluation, lifecycle, ordinary launcher child ownership, ordered event dispatch, output tape, and macOS relay transport.
 - `src/process_exit.rs` — shared direct-child exit observation without reaping, used by launcher ownership and sandbox cleanup.
-- `src/sandbox.rs`, `src/sandbox/{child,macos,process_group}.rs`, `src/sandbox/supervision.rs`, `src/sandbox/supervision/` — launcher-owned sandbox construction, child and process-group cleanup, primary host-manager supervision, manager-failure recovery, and standalone job control.
+- `src/sandbox.rs`, `src/sandbox/{child,installation,macos,process_group,runner}.rs`, `src/sandbox/supervision.rs`, `src/sandbox/supervision/` — launcher-owned sandbox construction, child and process-group cleanup, primary host-manager supervision, manager-failure recovery, and standalone job control.
 - `src/worker.rs`, `src/worker/embedded_r.rs`, `src/r_repl.c` — worker-facing facade, current embedded-R backend, cell dispatch, console callbacks, and the C-owned DLL-REPL boundary.
 
 ### Language adapters
@@ -111,7 +112,8 @@ Keep these invariants intact:
 
 - `src/resolver.rs`, `src/resolver/` — retained host environments, direct Python-version selection, validation, platform implementations, and resolver process-group lifecycle.
 - `src/resolver/programs/` — compile-time R programs for DuckDB extension preparation, R-library resolution, and `uv` discovery.
-- `src/sandbox/macos.rs`, `src/process_descriptors.rs` — macOS Seatbelt policy and inherited-descriptor boundary shared by the server and sandbox launcher.
+- `src/sandbox/runner.rs`, `src/sandbox/policy_extensions.sbpl`, `src/process_descriptors.rs` — private executable bootstrap, macOS policy additions, and inherited-descriptor boundary.
+- `sandbox-runner.json`, `scripts/stage-sandbox-runner`, `src/sandbox/installation.rs` — pinned source, private artifact staging, and installed artifact verification.
 
 ### Tests and development scripts
 

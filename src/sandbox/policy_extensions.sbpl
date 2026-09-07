@@ -1,0 +1,30 @@
+; MCP Console additions to the native macOS sandbox policy.
+; SPDX-License-Identifier: MIT
+
+; A host-wide read grant must not expose terminals created outside this sandbox.
+; Retain the native extension for terminals created by the sandboxed command.
+(deny file-read*
+  (literal "/dev/tty")
+  (regex #"^/dev/ttys[0-9]+$"))
+(allow file-read*
+  (require-all
+    (regex #"^/dev/ttys[0-9]+$")
+    (extension "com.apple.sandbox.pty")))
+
+; Runtime probes used by processx, uv, and Quarto.
+(allow sysctl-read
+  (sysctl-name "machdep.ptrauth_enabled")
+  (sysctl-name "kern.boottime")
+  (sysctl-name "kern.ngroups")
+  (sysctl-name-prefix "sysctl.oidfmt.")
+  (sysctl-name-prefix "sysctl.name.")
+  (sysctl-name "security.mac.lockdown_mode_state")
+  (sysctl-name "kern.bootargs"))
+(allow file-write-data file-ioctl
+  (require-all
+    (path "/dev/dtracehelper")
+    (vnode-type CHARACTER-DEVICE)))
+(allow mach-lookup
+  (global-name "com.apple.SystemConfiguration.configd")
+  (global-name "com.apple.logd")
+  (global-name "com.apple.system.notification_center"))

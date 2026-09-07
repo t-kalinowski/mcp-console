@@ -1,0 +1,110 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+STAGE_ROOT = ROOT / "target" / "private-wheel-data"
+
+
+def fail(message: str) -> None:
+    raise SystemExit(f"stage-sandbox-runner: {message}")
+
+
+def git_output(checkout: Path, *arguments: str) -> str:
+    result = subprocess.run(
+        ["git", *arguments], cwd=checkout, capture_output=True, text=True, check=False
+    )
+    if result.returncode != 0:
+        fail(result.stderr.strip() or result.stdout.strip())
+    return result.stdout.strip()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Build and stage the pinned private sandbox runner"
+    )
+    parser.add_argument(
+        "checkout",
+        nargs="?",
+        type=Path,
+        default=Path.home() / "github" / "t-kalinowski" / "codex",
+    )
+    parser.add_argument(
+        "--target", choices=("aarch64-apple-darwin", "x86_64-apple-darwin")
+    )
+    parser.add_argument("--github-output", type=Path)
+    args = parser.parse_args()
+    pin = json.loads((ROOT / "sandbox-runner.json").read_text(encoding="utf-8"))
+    if not re.fullmatch(r"[0-9a-f]{40}", pin["commit"]):
+        fail("sandbox-runner.json must pin a full source commit")
+    if args.github_output is not None:
+        with args.github_output.open("a", encoding="utf-8") as output:
+            for key in ("repository", "commit", "rust_toolchain"):
+                output.write(f"{key}={pin[key]}\n")
+        return
+    if sys.platform != "darwin":
+        fail(f"building private runner artifacts is unsupported on {sys.platform}")
+
+    checkout = args.checkout.resolve()
+    workspace = checkout / "codex-rs"
+    if not (workspace / "mcp-console-sandbox" / "Cargo.toml").is_file():
+        fail(f"not a sandbox-runner source checkout: {checkout}")
+    head = git_output(checkout, "rev-parse", "HEAD")
+    if head != pin["commit"]:
+        fail(f"source checkout is at {head}, expected {pin['commit']}")
+    if git_output(checkout, "status", "--porcelain", "--untracked-files=all"):
+        fail("source checkout is not clean")
+
+    environment = os.environ.copy()
+    environment["CARGO_TARGET_DIR"] = str(workspace / "target")
+    command = [
+        "cargo",
+        f"+{pin['rust_toolchain']}",
+        "build",
+        "--locked",
+        "--release",
+        "-p",
+        "codex-mcp-console-sandbox",
+        "--bin",
+        "mcp-console-sandbox",
+    ]
+    build_directory = workspace / "target"
+    if args.target:
+        command.extend(["--target", args.target])
+        build_directory /= args.target
+    result = subprocess.run(command, cwd=workspace, env=environment, check=False)
+    if result.returncode != 0:
+        fail(f"runner build failed with status {result.returncode}")
+    runner = build_directory / "release" / "mcp-console-sandbox"
+    digest = hashlib.sha256(runner.read_bytes()).hexdigest()
+
+    if STAGE_ROOT.exists():
+        shutil.rmtree(STAGE_ROOT)
+    libexec = STAGE_ROOT / "data" / "libexec"
+    licenses = STAGE_ROOT / "data" / "share" / "licenses" / "mcp-console"
+    libexec.mkdir(parents=True)
+    licenses.mkdir(parents=True)
+    staged_runner = libexec / "mcp-console-sandbox"
+    shutil.copyfile(runner, staged_runner)
+    staged_runner.chmod(0o755)
+    for name in ("LICENSE", "NOTICE"):
+        destination = licenses / f"Codex-{name}"
+        shutil.copyfile(checkout / name, destination)
+        destination.chmod(0o644)
+    (ROOT / "target" / "sandbox-runner-build.json").write_text(
+        json.dumps({"source_revision": head, "sha256": digest}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+if __name__ == "__main__":
+    main()

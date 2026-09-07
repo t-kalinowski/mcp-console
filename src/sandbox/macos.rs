@@ -1,4 +1,3 @@
-use std::ffi::OsString;
 use std::fs::{self, DirBuilder};
 use std::io;
 use std::os::unix::fs::DirBuilderExt;
@@ -7,8 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, ExitStatus};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-pub(super) const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
-const POLICY: &str = include_str!("read_only_policy.sbpl");
+pub(super) const RUNNER_NAME: &str = "private sandbox runner";
 pub(super) fn wait_for_process_exit_without_reaping(
     process_id: u32,
     timeout: Duration,
@@ -22,18 +20,9 @@ pub(super) fn kill_process_group(process_group_id: u32) -> io::Result<()> {
 
 pub(super) fn sandboxed_command() -> Result<(Command, TemporaryDirectory), String> {
     let temporary_directory = TemporaryDirectory::new()?;
-    let mut launcher = Command::new(SANDBOX_EXEC);
-    // Do not rely on SIP to keep host interposers out of the Apple sandbox
-    // intermediary and the sandbox target.
-    launcher
-        .env_remove("DYLD_INSERT_LIBRARIES")
-        .arg("-p")
-        .arg(POLICY)
-        .arg(parameter_definition(
-            "TEMP_DIRECTORY",
-            temporary_directory.path(),
-        ))
-        .arg("--");
+    let mut launcher = Command::new(super::installation::private_runner()?);
+    // Keep host interposers out of the private executable and sandbox target.
+    launcher.env_remove("DYLD_INSERT_LIBRARIES");
 
     Ok((launcher, temporary_directory))
 }
@@ -138,15 +127,6 @@ impl Drop for TemporaryDirectory {
             let _ = fs::remove_dir_all(&self.path);
         }
     }
-}
-
-// `sandbox-exec -DNAME=VALUE` supplies values for `(param "NAME")` in the SBPL.
-fn parameter_definition(name: &str, path: &Path) -> OsString {
-    let mut argument = OsString::from("-D");
-    argument.push(name);
-    argument.push("=");
-    argument.push(path);
-    argument
 }
 
 pub(super) fn exit_code(status: ExitStatus) -> ExitCode {

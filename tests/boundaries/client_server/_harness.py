@@ -647,8 +647,10 @@ def wait_for_stopped_worker(
             worker = (process_id, process_group)
             if worker not in recorded_workers:
                 recorded_workers.append(worker)
-            assert parent_id == process_group, (
-                "stopped worker is not the relay's direct child"
+            relay_status = read_process_status(parent_id)
+            assert relay_status is not None, "stopped worker's relay exited"
+            assert relay_status[:2] == (process_group, process_group), (
+                "stopped worker's relay is not the sandbox runner's direct child"
             )
             assert process_id != process_group, (
                 "stopped worker unexpectedly leads the relay process group"

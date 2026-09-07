@@ -7,6 +7,25 @@ It does not publish a source distribution, Linux or Windows wheels, or GitHub re
 `Cargo.toml` is the package-version source of truth.
 Keep the root `mcp-console` entry in `Cargo.lock` synchronized with it.
 
+## Private sandbox executable
+
+`sandbox-runner.json` pins the runner source repository, release, commit, protocol, and Rust toolchain.
+Build and stage it from a clean checkout at that commit before building MCP Console:
+
+```sh
+scripts/stage-sandbox-runner ~/github/t-kalinowski/codex
+```
+
+The script builds with the pinned toolchain and lockfile, stages the executable at `target/private-wheel-data/data/libexec/mcp-console-sandbox`, and records its source revision and SHA-256 in `target/sandbox-runner-build.json`.
+Use `--target aarch64-apple-darwin` or `--target x86_64-apple-darwin` when building for an explicit target.
+The source checkout remains unchanged.
+MCP Console's build verifies the staged revision and digest and binds the runner's digest and protocol version into the executable.
+Sandbox launches reject a missing or mismatched private runner.
+
+Maturin includes the staged executable under the installation's private `libexec` directory, with the upstream license and notice under `share/licenses/mcp-console/`.
+Only `mcp-console` is installed as a public command.
+CI and the release workflow build the pinned source before packaging and verify the private layout, executable permissions, and a native sandbox launch from the installed runner with an empty `PATH`.
+
 ## One-time PyPI setup
 
 Before the first release:

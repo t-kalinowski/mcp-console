@@ -19,6 +19,7 @@ from support.capture import read_lines as _read_lines
 from support.macos import (
     DarwinProcessIdentity,
     capture_darwin_process_identity,
+    darwin_child_process_identities,
     kill_darwin_processes,
     live_darwin_processes,
 )
@@ -33,6 +34,7 @@ class _SandboxLifetime:
     arguments: tuple[str, ...]
     launcher: DarwinProcessIdentity
     root: DarwinProcessIdentity
+    target: DarwinProcessIdentity
     descendant: DarwinProcessIdentity
     manager: DarwinProcessIdentity
     temporary_directory: Path
@@ -112,6 +114,27 @@ def _start_with_controlling_terminal(
     assert process.stdout is not None
     assert process.stderr is not None
     return process, master, slave_name
+
+
+def _sandbox_root_pid(launcher_pid: int) -> int:
+    processes = subprocess.run(
+        ["/bin/ps", "-axo", "pid=,ppid=,comm="],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=TIMEOUT,
+    ).stdout
+    roots = []
+    for process in processes.splitlines():
+        fields = process.strip().split(maxsplit=2)
+        if (
+            len(fields) == 3
+            and int(fields[1]) == launcher_pid
+            and Path(fields[2]).name == "mcp-console-sandbox"
+        ):
+            roots.append(int(fields[0]))
+    assert len(roots) == 1, roots
+    return roots[0]
 
 
 def _manager_pid(launcher_pid: int) -> int:
@@ -210,8 +233,12 @@ def _start_lifetime(
             "the sandbox root, descendant, and temporary directory",
         )
         temporary_directory = Path(temporary_directory_text)
-        root = capture_darwin_process_identity(int(root_pid))
+        target = capture_darwin_process_identity(int(root_pid))
+        identities.append(target)
+        root = capture_darwin_process_identity(_sandbox_root_pid(process.pid))
         identities.append(root)
+        assert darwin_child_process_identities(root) == (target,)
+        assert os.getpgid(target[0]) == root[0]
         descendant = capture_darwin_process_identity(int(descendant_pid))
         identities.append(descendant)
         launcher = capture_darwin_process_identity(process.pid)
@@ -225,6 +252,7 @@ def _start_lifetime(
             arguments=recorded_arguments,
             launcher=launcher,
             root=root,
+            target=target,
             descendant=descendant,
             manager=manager,
             temporary_directory=temporary_directory,
@@ -255,7 +283,7 @@ def _start_lifetime(
 
 
 def _wait_for_cleanup(lifetime: _SandboxLifetime, timeout: float = 5) -> list[int]:
-    identities = (lifetime.root, lifetime.descendant, lifetime.manager)
+    identities = (lifetime.root, lifetime.target, lifetime.descendant, lifetime.manager)
     deadline = time.monotonic() + timeout
     survivors = live_darwin_processes(identities)
     while (
@@ -284,7 +312,7 @@ def _cleanup(lifetime: _SandboxLifetime) -> None:
     if lifetime.process.poll() is None:
         lifetime.process.kill()
         lifetime.process.wait(timeout=TIMEOUT)
-    identities = (lifetime.root, lifetime.descendant, lifetime.manager)
+    identities = (lifetime.root, lifetime.target, lifetime.descendant, lifetime.manager)
     kill_darwin_processes(identities)
     _wait_for_process_exit(identities, "sandbox cleanup did not stop all processes")
     shutil.rmtree(lifetime.temporary_directory, ignore_errors=True)

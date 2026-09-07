@@ -381,9 +381,16 @@ def test_restart_allows_accepted_relay_shutdown_to_finish(
         temporary_path = Path(temporary_directory)
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
+        environment["MCP_CONSOLE_TEST_BINARY"] = str(binary)
         client = McpClient(
             binary,
-            ("serve", "--worker", str(zod)),
+            (
+                "serve",
+                "--worker",
+                str(zod),
+                "--relay",
+                str(zod.with_name("identified_relay")),
+            ),
             environment,
         )
         helper_pid = None
@@ -401,6 +408,8 @@ def test_restart_allows_accepted_relay_shutdown_to_finish(
                 int,
                 helper_marker.read_text(encoding="utf-8").split(),
             )
+            relay_group = os.getpgid(relay_target)
+            assert relay_group != relay_target
 
             restarted = client.start_send(control="restart")
             stopped_marker = wait_for_marker(
@@ -410,7 +419,7 @@ def test_restart_allows_accepted_relay_shutdown_to_finish(
             )
             wait_for_stopped_process(
                 relay_target,
-                relay_target,
+                relay_group,
                 client,
                 "accepted worker relay shutdown",
             )
@@ -427,6 +436,8 @@ def test_restart_allows_accepted_relay_shutdown_to_finish(
             assert not process_exists(helper_pid), (
                 "detached relay-resume helper outlived sandbox retirement"
             )
+            assert not process_exists(relay_target), "retired relay survived restart"
+            assert not process_exists(relay_group), "sandbox runner survived restart"
             restart_output = last_tool_text(client)
             assert restart_output == (
                 "zod output during relay retirement\n"
@@ -458,9 +469,16 @@ def _restart_outer_force_stops_unresponsive_relay(
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
         environment["ZOD_REPORT_PROCESS_GROUP"] = "1"
+        environment["MCP_CONSOLE_TEST_BINARY"] = str(binary)
         client = McpClient(
             binary,
-            ("serve", "--worker", str(zod)),
+            (
+                "serve",
+                "--worker",
+                str(zod),
+                "--relay",
+                str(zod.with_name("identified_relay")),
+            ),
             environment,
         )
         helper_pid = None
@@ -490,13 +508,12 @@ def _restart_outer_force_stops_unresponsive_relay(
             worker_group = read_worker_group(
                 wait_for_marker(temporary_path, "zod-process-group", client)
             )
-            assert relay_target == worker_group, (
-                "helper did not stop the sandbox process-group leader"
-            )
+            assert os.getpgid(relay_target) == worker_group
+            assert relay_target != worker_group, "helper targeted the sandbox runner"
             assert launcher_pid != relay_target, (
                 "Zod launcher unexpectedly identified the relay"
             )
-            assert os.getpgid(launcher_pid) == relay_target, (
+            assert os.getpgid(launcher_pid) == worker_group, (
                 "Zod launcher did not inherit the relay process group"
             )
             assert os.getpgid(helper_pid) == helper_pid, (
@@ -517,7 +534,9 @@ def _restart_outer_force_stops_unresponsive_relay(
                 )
 
             relay = capture_darwin_process_identity(relay_target)
-            descendants = [relay]
+            root = capture_darwin_process_identity(worker_group)
+            assert darwin_child_process_identities(root) == (relay,)
+            descendants = [root]
             for process in descendants:
                 descendants.extend(darwin_child_process_identities(process))
             retiring = {identity[0] for identity in descendants}
@@ -556,8 +575,8 @@ def _restart_outer_force_stops_unresponsive_relay(
                         assert event.fflags & select.KQ_NOTE_EXIT, event
                         retiring.remove(event.ident)
             client.receive(restarted)
-            assert live_darwin_processes((relay,)) == [], (
-                "sandbox launcher did not reap the relay"
+            assert live_darwin_processes((root, relay)) == [], (
+                "sandbox launcher did not retire its runner and relay"
             )
             if manager is not None:
                 assert live_darwin_processes((manager,)) == [], (

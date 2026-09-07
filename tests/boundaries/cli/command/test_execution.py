@@ -291,6 +291,50 @@ def test_enforces_host_read_only_and_temporary_writes(binary: Path) -> Transcrip
     return [entry]
 
 
+def test_allows_replacing_temporary_directories(binary: Path) -> Transcript:
+    # fmt: python
+    script = code(r"""
+        import os
+        from pathlib import Path
+
+        temporary = Path(os.environ["TMPDIR"])
+        nested = temporary / "nested"
+        nested.mkdir()
+        for parent in (temporary, nested):
+            for name in (".git", ".agents", ".codex"):
+                directory = parent / name
+                directory.mkdir()
+                (directory / "payload").write_text("temporary data", encoding="utf-8")
+                renamed = directory.with_name(name + "-renamed")
+                directory.rename(renamed)
+                assert (renamed / "payload").read_text(encoding="utf-8") == "temporary data"
+                (renamed / "payload").unlink()
+                renamed.rmdir()
+                directory.mkdir()
+                directory.rmdir()
+                print(f"{parent.relative_to(temporary)}: {name} created, renamed, removed")
+
+        nested.rmdir()
+        temporary.rmdir()
+        assert not temporary.exists()
+        temporary.mkdir()
+        print("temporary directory recreated")
+        """)
+    entry = record(binary, "sandbox", "--", "python", "-c", script)
+    assert "exit_code" not in entry, entry
+    assert "stderr" not in entry, entry
+    assert entry["stdout"] == (
+        ".: .git created, renamed, removed\n"
+        ".: .agents created, renamed, removed\n"
+        ".: .codex created, renamed, removed\n"
+        "nested: .git created, renamed, removed\n"
+        "nested: .agents created, renamed, removed\n"
+        "nested: .codex created, renamed, removed\n"
+        "temporary directory recreated\n"
+    ), entry
+    return [entry]
+
+
 def test_allows_processx_pty_processes(binary: Path) -> Transcript:
     # fmt: r
     script = code(r"""

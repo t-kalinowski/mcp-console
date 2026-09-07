@@ -16,6 +16,7 @@ from support.client import McpClient, stop_client
 from support.macos import (
     DarwinProcessIdentity,
     capture_darwin_process_identity,
+    darwin_child_process_identities,
     kill_darwin_processes,
     live_darwin_processes,
     signal_darwin_process,
@@ -29,6 +30,7 @@ TIMEOUT = 10
 # Python's select module omits Darwin's deprecated process-reaping flag.
 _KQ_NOTE_REAP = 0x10000000
 Generation = tuple[
+    DarwinProcessIdentity,
     DarwinProcessIdentity,
     DarwinProcessIdentity,
     DarwinProcessIdentity,
@@ -92,9 +94,17 @@ def _spawn_detached_generation(client: McpClient) -> Generation:
         "sandbox_temporary_directory": "omitted",
     }
     relay_identity = capture_darwin_process_identity(relay_pid)
+    runner_identity = capture_darwin_process_identity(os.getpgid(relay_pid))
+    assert darwin_child_process_identities(runner_identity) == (relay_identity,)
     worker_identity = capture_darwin_process_identity(worker_pid)
     child_identity = capture_darwin_process_identity(child_pid)
-    return relay_identity, worker_identity, child_identity, temporary_directory
+    return (
+        runner_identity,
+        relay_identity,
+        worker_identity,
+        child_identity,
+        temporary_directory,
+    )
 
 
 def _wait_for_process_cleanup(
@@ -214,11 +224,11 @@ def test_server_crash_retires_the_worker_generation(binary: Path) -> Transcript:
                 flags=select.KQ_EV_ADD | select.KQ_EV_CLEAR,
                 fflags=select.KQ_NOTE_EXIT | _KQ_NOTE_REAP,
             )
-            for identity in generation[:3]
+            for identity in generation[:4]
         ]
         assert generation_reaping.control(reap_watches, 0, 0) == []
-        assert live_darwin_processes(generation[:3]) == [
-            identity[0] for identity in generation[:3]
+        assert live_darwin_processes(generation[:4]) == [
+            identity[0] for identity in generation[:4]
         ], "worker generation changed while registering reap watches"
 
         client.process.kill()
@@ -232,11 +242,11 @@ def test_server_crash_retires_the_worker_generation(binary: Path) -> Transcript:
         # The manager treats zombies as stopped, but their new parent may reap
         # them just after manager exit. The pre-registered process watches make
         # that final transition observable without racing a libproc sample.
-        _wait_for_process_reaping(generation_reaping, generation[:3], TIMEOUT)
+        _wait_for_process_reaping(generation_reaping, generation[:4], TIMEOUT)
 
         assert returncode == -signal.SIGKILL, returncode
-        assert not generation[3].exists(), (
-            f"worker temporary directory survived server crash: {generation[3]}"
+        assert not generation[4].exists(), (
+            f"worker temporary directory survived server crash: {generation[4]}"
         )
         client.transcript.append(
             {
@@ -248,8 +258,8 @@ def test_server_crash_retires_the_worker_generation(binary: Path) -> Transcript:
     finally:
         stop_client(client)
         if generation is not None:
-            kill_darwin_processes(generation[:3])
-            shutil.rmtree(generation[3], ignore_errors=True)
+            kill_darwin_processes(generation[:4])
+            shutil.rmtree(generation[4], ignore_errors=True)
         if manager_identity is not None:
             kill_darwin_processes((manager_identity,))
         _close_client_streams(client)
@@ -274,11 +284,11 @@ def test_manager_crash_retires_the_worker_generation(binary: Path) -> Transcript
         )
         client.transcript.append({"manager_signal": "SIGKILL"})
         _wait_for_generation_failure(client)
-        survivors = _wait_for_process_cleanup(generation[:3], timeout=5)
+        survivors = _wait_for_process_cleanup(generation[:4], timeout=5)
         survivor_names = [
             name
             for name, identity in zip(
-                ("relay", "worker", "detached child"), generation[:3]
+                ("runner", "relay", "worker", "detached child"), generation[:4]
             )
             if identity[0] in survivors
         ]
@@ -290,13 +300,13 @@ def test_manager_crash_retires_the_worker_generation(binary: Path) -> Transcript
         assert replacement == "[starting new worker]\nreplacement ready\n", repr(
             replacement
         )
-        assert generation[3].exists(), "manager recovery removed worker temp"
+        assert generation[4].exists(), "manager recovery removed worker temp"
         return client.transcript
     finally:
         stop_client(client)
         if generation is not None:
-            kill_darwin_processes(generation[:3])
-            shutil.rmtree(generation[3], ignore_errors=True)
+            kill_darwin_processes(generation[:4])
+            shutil.rmtree(generation[4], ignore_errors=True)
         if manager_identity is not None:
             kill_darwin_processes((manager_identity,))
         _close_client_streams(client)

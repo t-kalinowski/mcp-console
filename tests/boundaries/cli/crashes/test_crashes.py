@@ -18,6 +18,7 @@ from boundaries.cli._harness import (
     _command_record,
     _manager_pid,
     _read_lines,
+    _sandbox_root_pid,
     _start_lifetime,
     _wait_for_cleanup,
     _wait_for_process_exit,
@@ -70,27 +71,6 @@ def _build_startup_interposer(
         text=True,
     )
     return library
-
-
-def _sandbox_root_pid(launcher_pid: int) -> int:
-    processes = subprocess.run(
-        ["/bin/ps", "-axo", "pid=,ppid=,command="],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=TIMEOUT,
-    ).stdout
-    roots = []
-    for process in processes.splitlines():
-        fields = process.strip().split(maxsplit=2)
-        if (
-            len(fields) == 3
-            and int(fields[1]) == launcher_pid
-            and "sandbox-target" in fields[2].split()
-        ):
-            roots.append(int(fields[0]))
-    assert len(roots) == 1, roots
-    return roots[0]
 
 
 def _start_owned_echo_owner(
@@ -413,16 +393,17 @@ def test_owner_loss_retires_the_sandbox_lifetime(binary: Path) -> Transcript:
         )
         owner_identity = capture_darwin_process_identity(owner.pid)
         launcher = capture_darwin_process_identity(int(launcher_pid))
-        root = capture_darwin_process_identity(int(root_pid))
+        target = capture_darwin_process_identity(int(root_pid))
+        root = capture_darwin_process_identity(_sandbox_root_pid(launcher[0]))
         descendant = capture_darwin_process_identity(int(descendant_pid))
         manager = capture_darwin_process_identity(_manager_pid(launcher[0]))
-        identities = [launcher, root, descendant, manager]
+        identities = [launcher, root, target, descendant, manager]
         temporary_directory = Path(temporary_directory_text)
         assert os.getsid(descendant[0]) != os.getsid(root[0]), (
             "sandbox descendant did not leave the target session"
         )
         exit_events.close()
-        cleanup = (root, descendant, manager)
+        cleanup = (root, target, descendant, manager)
         exit_events, watches = _watch_process_exits((*cleanup, launcher))
 
         assert signal_darwin_process(owner_identity, signal.SIGKILL), (
@@ -527,7 +508,7 @@ def test_manager_crash_retires_the_sandbox_lifetime(binary: Path) -> Transcript:
         returncode = lifetime.process.wait(timeout=TIMEOUT)
         stderr = lifetime.process.stderr.read().decode("utf-8")
         _wait_for_process_exit(
-            (lifetime.root, lifetime.descendant, lifetime.manager),
+            (lifetime.root, lifetime.target, lifetime.descendant, lifetime.manager),
             "manager crash leaked sandbox processes",
         )
 

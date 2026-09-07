@@ -106,8 +106,8 @@ class ScriptedRelay:
     def __init__(self) -> None:
         process_id = os.getpid()
         process_group = os.getpgrp()
-        assert process_id == process_group, (
-            f"scripted relay {process_id} is not process-group leader {process_group}"
+        assert process_id != process_group and os.getppid() == process_group, (
+            f"scripted relay {process_id} is not a child of sandbox root {process_group}"
         )
 
         self.root = Path(os.environ["TMPDIR"])

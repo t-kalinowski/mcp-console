@@ -7,8 +7,9 @@ The broader process and responsibility model remains in [implemented architectur
 
 ## Lifetime ownership
 
-Each sandbox lifetime has one host-side manager outside Seatbelt and one direct sandbox root in its own process group.
-The direct root initially runs a hidden wrapper blocked on a private inherited release channel before executing the built-in relay, a configured relay, or the standalone command.
+Each sandbox lifetime has one host-side manager outside Seatbelt and one private sandbox executable as its direct root and process-group leader.
+The executable initially blocks on its bootstrap socket before applying Seatbelt to a hidden target wrapper, which executes the built-in relay, a configured relay, or the standalone command.
+The executable remains outside Seatbelt and waits for that direct child to exit.
 The manager records the root and every descendant identity it observes by PID and process start time.
 Once observed, a descendant remains a cleanup target after changing process group or session.
 The manager also adopts the private temporary-directory guard for the lifetime.
@@ -20,7 +21,7 @@ After readiness, the launcher holds the control socket open only as the live-san
 The launcher supports a hidden `--exit-with-parent <PID>` mode, which the server uses for one launcher subprocess per worker generation.
 It verifies and captures its exact parent identity before creating the sandbox, watches that identity for exit, and revalidates it after watch registration and immediately before releasing the target.
 The server closes unrelated inherited descriptors before launcher exec and then owns only the launcher's piped input and output, inherited error stream, and normal child exit, signaling, and reaping.
-The owned launcher transfers the input pipe to the sandbox root and replaces its own copy with `/dev/null`, while retaining output through manager cleanup so relay input closure and cleanup completion remain observable at the server boundary.
+The owned launcher transfers the input pipe to the sandboxed target and replaces its own copy with `/dev/null`, while retaining output through manager cleanup so relay input closure and cleanup completion remain observable at the server boundary.
 The relay owns its direct worker and local transports.
 All process-group and observed-descendant cleanup belongs to the sandbox lifetime, including descendants that retain worker streams after direct-worker exit.
 The configured target may wrap the relay in another process; the relay need not be the sandbox root or process-group leader.
@@ -30,8 +31,11 @@ The configured target may wrap the relay in another process; the relay need not 
 The launcher starts the sandbox root behind its private gate, then launches the manager with the root PID, cleanup timeout, and private-directory path as native command arguments.
 The manager derives the owner PID from its parent, while the private inherited Unix socket carries readiness and then remains open as the ownership token.
 The manager validates the direct-child relationship and exact root identity, installs root and descendant tracking plus control-socket observation, adopts the directory guard, and reports readiness.
-After receiving readiness, the launcher installs manager-failure recovery while the direct root remains live and waitable, relinquishes its duplicate guard, and writes one release byte.
-The hidden wrapper closes the channel and replaces itself with the configured relay or requested command in the same process identity.
+After receiving readiness, the launcher installs manager-failure recovery while the direct root remains live and waitable, relinquishes its duplicate guard, and sends the complete native bootstrap frame.
+The private executable consumes exactly that frame and passes the same socket to the hidden wrapper as fd 0.
+The launcher then transfers the original stdin descriptor with `SCM_RIGHTS`, together with the inherited signal mask.
+The wrapper closes the socket, installs the original stdin as fd 0, restores the mask, and replaces itself with the configured relay or requested command.
+Application input never passes through a data proxy or shares the bootstrap framing.
 Configured sandbox code therefore cannot run before manager observation is active and failure recovery is installed.
 The manager control socket carries no messages after readiness; it remains open only as an ownership token, and owner EOF requests retirement.
 Abrupt owner loss before readiness closes the control socket and startup gate before configured code runs, but private-directory cleanup is not guaranteed.
@@ -45,6 +49,7 @@ A descendant that becomes orphaned before the manager resolves its fork event re
 The requested target runs in a dedicated process group.
 Its root waiter blocks in `kevent()` for direct-root exit, signals addressed to the launcher, and the configured parent identity in owned mode.
 The ordinary launcher consumes pending `SIGHUP`, `SIGINT`, `SIGQUIT`, and `SIGTERM` and relays them to the target group.
+The private executable keeps these signals blocked while waiting; the target restores the original mask before exec, so each signal reaches the command once and the executable retains the waitable group identity through cleanup.
 In owned mode, parent exit or launcher-addressed `SIGTERM` requests managed retirement instead; the other supported signals retain their relay behavior.
 When the launcher exclusively owns its foreground process group, it transfers controlling-terminal ownership to the target group; when a pipeline peer shares that group, it leaves terminal ownership unchanged.
 The manager owns descendant cleanup and the private directory; the launcher preserves the direct command's status after natural completion and owns terminal state and signal relay.
@@ -108,6 +113,8 @@ The launcher retains the manager-owned process-group race backstop, with launche
 The direct path retains inherited standard streams, uses a dedicated target process group, and supplies the foreground-terminal and signal behavior above.
 Hidden owned mode adds exact parent-exit observation and a `SIGTERM` retirement request without another control descriptor.
 The relay receives only its standard streams from the launcher.
+The private executable's JSON bootstrap requires UTF-8 command arguments, paths, and environment values; the launcher rejects unsupported values before spawning it.
+Standard-stream contents remain arbitrary bytes.
 Any future sandbox-specific control channel must terminate at the sandbox process boundary; its transport and bootstrap mechanism are independent of the relay protocol.
 The launcher does not support `Ctrl-Z` followed by `fg` or general pipeline job-control semantics.
 Linux and Windows are not supported.

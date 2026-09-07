@@ -3,14 +3,12 @@ use super::manager::SandboxManager;
 use super::root_exit_waiter::{RootExitWaiter, RootWait};
 use crate::process_descriptors;
 use crate::sandbox::{
-    TARGET_GATE_RELEASE,
     child::{append_retirement_error, terminate_standalone_root, terminate_unmanaged_child},
     platform,
+    runner::StartupGate,
 };
 use std::ffi::{OsStr, OsString};
-use std::io::{self, ErrorKind, Write as _};
-use std::os::fd::{AsRawFd as _, RawFd};
-use std::os::unix::net::UnixStream;
+use std::io::ErrorKind;
 use std::process::{Child, Command, ExitCode, ExitStatus};
 use std::time::Duration;
 
@@ -23,18 +21,8 @@ pub(in crate::sandbox) fn status(
     arguments: &[OsString],
     owner: Option<super::SandboxOwner>,
 ) -> Result<ExitCode, String> {
-    let mut startup_gate = StartupGate::new()?;
-    let target_gate_descriptor = startup_gate.inherited_descriptor();
-    let executable = std::env::current_exe()
-        .map_err(|error| format!("failed to locate the sandbox target gate: {error}"))?;
-    command
-        .arg(executable)
-        .arg("sandbox-target")
-        .arg("--gate-fd")
-        .arg(target_gate_descriptor.to_string())
-        .arg("--")
-        .arg(program)
-        .args(arguments);
+    let mut startup_gate =
+        StartupGate::new(&mut command, &temporary_directory, program, arguments)?;
 
     let signal_relay = SignalRelay::install(owner.is_some())?;
     let mut foreground_terminal = ForegroundTerminal::detect()?;
@@ -99,7 +87,7 @@ pub(in crate::sandbox) fn status(
         Err(wait_error) => {
             let mut error = format!(
                 "failed to wait for `{}`: {wait_error}",
-                platform::SANDBOX_EXEC
+                platform::RUNNER_NAME
             );
             if let Err(owner_error) = owner_result {
                 error = additional_error(error, owner_error);
@@ -117,41 +105,9 @@ pub(in crate::sandbox) fn status(
     }
 }
 
-struct StartupGate {
-    target: Option<UnixStream>,
-    owner: UnixStream,
-}
-
 struct ManagedRoot {
     child: Child,
     supervisor: SandboxManager,
-}
-
-impl StartupGate {
-    fn new() -> Result<Self, String> {
-        let (target, owner) = UnixStream::pair()
-            .map_err(|error| format!("failed to create the sandbox startup gate: {error}"))?;
-        Ok(Self {
-            target: Some(target),
-            owner,
-        })
-    }
-
-    fn inherited_descriptor(&self) -> RawFd {
-        self.target
-            .as_ref()
-            .expect("unspawned startup gate should retain its target endpoint")
-            .as_raw_fd()
-    }
-
-    fn child_spawned(&mut self) {
-        drop(self.target.take());
-    }
-
-    fn release(&mut self) -> io::Result<()> {
-        debug_assert!(self.target.is_none());
-        self.owner.write_all(&[TARGET_GATE_RELEASE])
-    }
 }
 
 fn start_managed_root(
@@ -162,19 +118,26 @@ fn start_managed_root(
     terminal_descriptor: Option<libc::c_int>,
     owner: Option<super::SandboxOwner>,
 ) -> Result<(ManagedRoot, RootExitWaiter), String> {
-    let gate_descriptor = startup_gate.inherited_descriptor();
     if owner.is_some() && terminal_descriptor != Some(libc::STDIN_FILENO) {
-        process_descriptors::transfer_stdin_to_child(&mut command)?;
+        process_descriptors::detach_stdin()?;
     }
     command.env("TMPDIR", temporary_directory.path());
-    signal_relay.configure_child(&mut command, terminal_descriptor);
-    process_descriptors::close_unlisted_except(&mut command, gate_descriptor)?;
+    // fd 0 becomes the private bootstrap socket before pre_exec. Keep the
+    // original terminal descriptor available for foreground assignment.
+    let child_terminal = terminal_descriptor.map(|descriptor| {
+        if descriptor == libc::STDIN_FILENO {
+            startup_gate.input_descriptor()
+        } else {
+            descriptor
+        }
+    });
+    signal_relay.configure_child(&mut command, child_terminal);
+    process_descriptors::close_unlisted(&mut command)?;
 
     let mut child = command
         .spawn()
-        .map_err(|error| format!("failed to launch `{}`: {error}", platform::SANDBOX_EXEC))?;
+        .map_err(|error| format!("failed to launch `{}`: {error}", platform::RUNNER_NAME))?;
     drop(command);
-    startup_gate.child_spawned();
     let root_waiter = match RootExitWaiter::start(child.id() as libc::pid_t, signal_relay, owner) {
         Ok(root_waiter) => root_waiter,
         Err(error) => {
@@ -197,7 +160,7 @@ fn start_managed_root(
     if let Err(error) = root_waiter.validate_owner() {
         return Err(finish_failed_startup(&mut child, supervisor, error));
     }
-    if let Err(write_error) = startup_gate.release()
+    if let Err(write_error) = startup_gate.release(signal_relay.target_signal_mask())
         && write_error.kind() != ErrorKind::BrokenPipe
     {
         let error = format!("failed to release sandbox target startup gate: {write_error}");
@@ -241,7 +204,7 @@ fn finish_failed_startup(
         Ok(_) => error,
         Err(wait_error) => append_retirement_error(
             error,
-            format!("failed to reap `{}`: {wait_error}", platform::SANDBOX_EXEC),
+            format!("failed to reap `{}`: {wait_error}", platform::RUNNER_NAME),
         ),
     }
 }
@@ -298,7 +261,7 @@ fn finish_after_manager_exit(
             Err(wait_error) => {
                 let wait_error = format!(
                     "failed to wait for terminated {}: {wait_error}",
-                    platform::SANDBOX_EXEC
+                    platform::RUNNER_NAME
                 );
                 Err(match manager_result {
                     Ok(()) => wait_error,
@@ -374,7 +337,7 @@ fn root_has_exited(child: &Child, timeout: Duration) -> Result<bool, String> {
     platform::wait_for_process_exit_without_reaping(child.id(), timeout).map_err(|error| {
         format!(
             "failed to inspect `{}` exit status: {error}",
-            platform::SANDBOX_EXEC
+            platform::RUNNER_NAME
         )
     })
 }
@@ -395,7 +358,7 @@ fn stop_managed_root_with_status(
         Ok(()) => child.wait().map_err(|wait_error| {
             format!(
                 "failed to wait for terminated {}: {wait_error}",
-                platform::SANDBOX_EXEC
+                platform::RUNNER_NAME
             )
         }),
         Err(mut error) => {

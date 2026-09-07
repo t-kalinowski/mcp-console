@@ -835,14 +835,22 @@ def test_replaces_worker_after_relay_exit(binary: Path) -> Transcript:
         temporary_path = Path(temporary_directory)
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
+        environment["MCP_CONSOLE_TEST_BINARY"] = str(binary)
         client = McpClient(
             binary,
-            ("serve", "--worker", str(zod)),
+            (
+                "serve",
+                "--worker",
+                str(zod),
+                "--relay",
+                str(zod.with_name("identified_relay")),
+            ),
             environment,
         )
         worker_pid = None
         launcher_pid = None
         relay_pid = None
+        relay_group = None
         passed = False
         try:
             client.initialize_and_list_tools()
@@ -852,6 +860,11 @@ def test_replaces_worker_after_relay_exit(binary: Path) -> Transcript:
                 temporary_path,
                 "zod-relay-exit-evaluation-started",
                 client,
+            )
+            relay_pid = int((started.parent / "zod-relay-pid").read_text())
+            relay_group = os.getpgid(relay_pid)
+            assert relay_pid != relay_group, (
+                "relay unexpectedly leads the sandbox group"
             )
             release_fixture_checkpoint(started.parent / "zod-release-relay-exit")
             client.send()
@@ -864,8 +877,10 @@ def test_replaces_worker_after_relay_exit(binary: Path) -> Transcript:
             worker, launcher, relay = topology.split("; ")
             worker_pid = int(worker.removeprefix("zod worker pid: "))
             launcher_pid = int(launcher.removeprefix("launcher pid: "))
-            relay_pid = int(relay.removeprefix("relay process group: "))
-            assert len({worker_pid, launcher_pid, relay_pid}) == 3, topology
+            assert int(relay.removeprefix("relay process group: ")) == relay_group
+            assert len({worker_pid, launcher_pid, relay_pid, relay_group}) == 4, (
+                topology
+            )
             assert failure == (
                 "[worker relay stdout closed before retirement completed]\n"
                 "[worker stopped: in-memory state lost]\n"
@@ -882,7 +897,8 @@ def test_replaces_worker_after_relay_exit(binary: Path) -> Transcript:
                 "worker launcher outlived its relay"
             )
             assert not process_exists(relay_pid), "server did not reap the relay"
-            assert not process_group_exists(relay_pid), (
+            assert not process_exists(relay_group), "sandbox runner outlived its relay"
+            assert not process_group_exists(relay_group), (
                 "relay process group outlived sandbox manager retirement"
             )
 
@@ -893,7 +909,7 @@ def test_replaces_worker_after_relay_exit(binary: Path) -> Transcript:
             return transcript
         finally:
             if not passed:
-                stop_process_group(relay_pid)
+                stop_process_group(relay_group)
                 stop_process_id(launcher_pid)
                 stop_process_id(worker_pid)
                 stop_process(client.process)

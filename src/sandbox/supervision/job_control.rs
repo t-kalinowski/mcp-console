@@ -210,6 +210,7 @@ impl SignalRelay {
         terminal_descriptor: Option<libc::c_int>,
     ) {
         let previous_mask = unsafe { std::ptr::read(&self.previous_mask) };
+        let forwarded = forwarded_signal_set();
         let previous_sigterm_action = self
             .previous_sigterm_action
             .as_ref()
@@ -230,9 +231,22 @@ impl SignalRelay {
                     set_foreground_process_group(descriptor, libc::getpid())?;
                 }
                 restore_signal_action(libc::SIGTERM, previous_sigterm_action.as_ref())?;
-                restore_signal_mask(&previous_mask)
+                restore_signal_mask(&previous_mask)?;
+                // The private runner waits in the target's process group. Keep
+                // forwarded signals blocked in that intermediary; the target
+                // restores the original mask after receiving its startup gate.
+                let result =
+                    libc::pthread_sigmask(libc::SIG_BLOCK, &forwarded, std::ptr::null_mut());
+                if result != 0 {
+                    return Err(std::io::Error::from_raw_os_error(result));
+                }
+                Ok(())
             });
         }
+    }
+
+    pub(in crate::sandbox) fn target_signal_mask(&self) -> libc::sigset_t {
+        self.previous_mask
     }
 
     pub(super) fn configure_manager(&self, command: &mut Command) {

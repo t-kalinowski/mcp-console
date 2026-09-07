@@ -32,11 +32,11 @@ mcp-console sandbox launcher               host, outside the sandbox
     │
     │ private startup gate
     ▼
-sandbox-exec root / hidden wrapper         macOS sandbox
-    │ closes the gate and execs after manager readiness
-    │ private JSONL over inherited fd 0 and 1
+private sandbox executable                 host, process-group leader
+    │ one bootstrap frame after manager readiness
     ▼
-worker relay                               macOS sandbox
+hidden target wrapper → worker relay        macOS sandbox
+    │ original fd 0 received through the startup socket
     │ worker sideband plus fd 0, 1, and 2
     ▼
 worker                                     same sandbox and process group
@@ -51,23 +51,24 @@ mcp-console sandbox launcher               host, outside the sandbox
     ├──── sandbox manager                  host, outside the sandbox
     │     primary lifetime observer for this command
     ▼
-sandbox-exec root                          macOS sandbox
-    └── command and observed descendants
+private sandbox executable                 host, process-group leader
+    └── command and observed descendants    macOS sandbox
 ```
 
 The server is the MCP stdio process.
 For each worker lifetime, it constructs either the built-in relay command line or a configured custom relay command line, then starts the current executable as `mcp-console sandbox` in hidden parent-owned mode with that relay as the target.
 The launcher is the server's direct child and the sole host-side sandbox owner.
-It retains the `sandbox-exec` root and manager waitably, while the root first runs a hidden wrapper blocked on a private release channel.
-After the manager reports readiness and manager-failure recovery is installed, the launcher releases the wrapper into the relay.
+It retains the private sandbox executable and manager as waitable children.
+After the manager reports readiness and manager-failure recovery is installed, the launcher sends the executable one bootstrap frame specifying the command, environment, filesystem permissions, network policy, and macOS policy additions.
+The executable applies the native sandbox to a hidden target wrapper, which receives the original stdin descriptor and signal mask through the same socket and replaces itself with the relay.
 The server's piped launcher input and output and inherited error stream pass through to that relay without a data proxy.
-After transferring standard input to the sandbox root, the owned launcher replaces its own copy with `/dev/null` so relay closure remains observable to the server's writer.
-By default the relay is the sandbox root and process-group leader, and the worker inherits that group.
+After transferring standard input to the sandboxed target, the owned launcher replaces its own copy with `/dev/null` so relay closure remains observable to the server's writer.
+The private executable leads the process group and waits for its direct child; the relay and worker inherit that group.
 The relay also works below a wrapper process and does not inspect or manage the surrounding process group.
 Submitted R, Python, and SQL cells run in the worker, not in the server or a host resolver.
 
-For a direct `mcp-console sandbox` invocation, the launcher retains its direct `sandbox-exec` child and starts the same primary manager while a root-only waiter supplies exit and signal wakeups.
-The sandboxed child first runs a hidden wrapper blocked on a private release channel; the launcher releases it into the requested command only after the manager reports readiness and failure monitoring is installed.
+For a direct `mcp-console sandbox` invocation, the launcher retains the same private executable as its direct child and starts the same primary manager while a root-only waiter supplies exit and signal wakeups.
+It releases the requested command through the same bootstrap and descriptor handoff after manager readiness and failure monitoring.
 It has no MCP, relay, worker, resolver, recording, or retained-session responsibilities.
 
 R, Python, and DuckDB dependency resolution follows a separate path.
@@ -87,6 +88,20 @@ One `send` can poll, provide stdin, prepare requirements, evaluate a cell, inter
 
 This is the only public protocol boundary.
 The client does not communicate directly with a relay, worker, or resolver.
+
+### Sandbox launcher and private executable
+
+The private `mcp-console-sandbox` executable contains the extracted native sandbox implementation and is pinned by source revision in `sandbox-runner.json`.
+macOS wheels install it under the installation prefix's `libexec` directory; only `mcp-console` is exposed on PATH.
+Release builds resolve that private path relative to the canonical public executable and verify the artifact digest embedded at build time.
+Development builds use the staged artifact under `target/private-wheel-data`.
+A missing or mismatched artifact is an installation error.
+
+The executable consumes a length-prefixed JSON bootstrap on stdin, launches one sandboxed command, and returns its status.
+It has no console, relay, descendant-retirement, or private-directory-cleanup responsibilities.
+The launcher supplies a small macOS policy extension that preserves host-terminal restrictions, runtime allowances, and full mutability of its private temporary directory.
+The native implementation owns the base policy.
+The [supervision guide](SANDBOX_SUPERVISION.md) describes startup and signal handling across this boundary.
 
 ### Sandbox launcher and sandbox manager
 
@@ -141,7 +156,7 @@ On normal and owned-retirement paths, successful managed launcher exit is the sy
 
 ### Sandbox launcher
 
-The sandbox launcher preserves one direct sandbox target's status after natural completion and owns the complete host-side sandbox lifetime.
+The sandbox launcher preserves the requested command's status after natural completion and owns the complete host-side sandbox lifetime.
 It inherits only the three documented streams from the server, independently closes every unrelated inherited descriptor before target exec, places the target in a dedicated process group, and retains the direct root as a waitable child.
 After cleanup succeeds, natural root completion returns that root's exit status; a handled retirement request in hidden parent-owned mode returns success as the cleanup acknowledgment.
 It owns the target startup gate, exact parent-exit observation in owned mode, manager-failure recovery, and ordinary-mode terminal and signal handling.

@@ -68,7 +68,7 @@ When accepting a handshake change, update the full snapshot before the abbreviat
 The `cli/interface/test_help` suite records command lines and stdout in one stream with color disabled.
 It adds the exit code for failures and stderr when nonempty.
 The `server_relay` suites launch a deterministic scripted relay through an internal development seam.
-That relay is the sandbox root and process-group leader behind the server's owned launcher child, and it communicates only through the same fd 0/1/2 boundary as the production relay.
+That relay runs in the private sandbox executable's process group behind the server's owned launcher child, and it communicates only through the same fd 0/1/2 boundary as the production relay.
 The suite records complete parsed JSONL frames under `server` and `relay` direction labels.
 The truncated-frame case instead records the exact incomplete bytes as base64 under `relay_raw`.
 Its snapshots show flat commands and semantic events, operation results without acknowledgments, readable UTF-8 raw chunks and base64 byte fallbacks, interrupt results, structured worker outcomes, and complete stream drainage.
