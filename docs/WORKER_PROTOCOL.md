@@ -12,7 +12,8 @@ Its sources of truth are:
 The relay forwards the semantic messages in this document between the server and worker without changing their JSON shapes.
 The separate server-relay JSONL protocol is specified in [`RELAY_PROTOCOL.md`](RELAY_PROTOCOL.md).
 
-Outside this wire contract, [`ARCHITECTURE.md`](ARCHITECTURE.md) owns process placement and lifecycle, [`BUILTIN_RUNTIME.md`](BUILTIN_RUNTIME.md) owns console behavior, [`REQUIREMENTS.md`](REQUIREMENTS.md) owns dependency preparation, and [`TOOL_DESCRIPTIONS.md`](TOOL_DESCRIPTIONS.md) mirrors the registered MCP descriptions.
+Outside this wire contract, [`ARCHITECTURE.md`](ARCHITECTURE.md) owns process placement and lifecycle, [`BUILTIN_RUNTIME.md`](BUILTIN_RUNTIME.md) owns console behavior, [`REQUIREMENTS.md`](REQUIREMENTS.md) owns dependency preparation, and [`TOOL_DESCRIPTIONS.md`](TOOL_DESCRIPTIONS.md) gives editorial guidance for tool descriptions.
+The [canonical handshake snapshot](../tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml) records the registered MCP descriptions.
 Process-boundary test guidance lives in [`../tests/boundaries/README.md`](../tests/boundaries/README.md).
 
 Direction labels below use the logical `server` and `worker` endpoints.

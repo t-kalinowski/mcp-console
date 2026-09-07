@@ -81,7 +81,7 @@ Resolver inputs are restricted and may execute trusted installation or build cod
 The client and server exchange MCP JSON-RPC over the server's standard input and output.
 The server registers only the `send` tool, validates calls, and turns server-owned responses into MCP text and image content.
 One `send` can poll, provide stdin, prepare requirements, evaluate a cell, interrupt, restart, or combine compatible parts under one ordered operation.
-[`TOOL_DESCRIPTIONS.md`](TOOL_DESCRIPTIONS.md) is a human-readable mirror of the registered descriptions; `src/server.rs` and the actual `tools/list` result are authoritative.
+[`TOOL_DESCRIPTIONS.md`](TOOL_DESCRIPTIONS.md) gives editorial guidance, and the [canonical handshake snapshot](../tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml) records the registered descriptions; `src/server.rs` and the actual `tools/list` result are authoritative.
 
 This is the only public protocol boundary.
 The client does not communicate directly with a relay, worker, or resolver.
