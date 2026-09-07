@@ -21,13 +21,13 @@ def test_keeps_the_public_interface_without_starting_workers(
     client = McpClient(binary, ("serve",), environment)
     assert client.temporary_directory is not None
     workspace = Path(client.temporary_directory.name)
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
 
     tools = client.transcript[-1]["result"]["tools"]
     assert [tool["name"] for tool in tools] == ["send"], tools
     assert not (workspace / ".mcp-console").exists()
 
-    removed = client._request(
+    removed = client.request(
         "tools/call",
         name="session",
         arguments={"action": "restart"},
@@ -52,7 +52,7 @@ def test_keeps_the_public_interface_without_starting_workers(
         ],
         "isError": True,
     }, restart
-    return client._finish()
+    return client.finish()
 
 
 if __name__ == "__main__":

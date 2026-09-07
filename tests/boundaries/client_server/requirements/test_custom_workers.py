@@ -42,7 +42,7 @@ def test_custom_worker_skips_managed_python_preflight(binary: Path) -> Transcrip
         ("serve", "--worker", str(zod)),
         environment,
     )
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     # fmt: python
     python = code(r"""
         echo echo
@@ -73,7 +73,7 @@ def test_custom_worker_skips_managed_python_preflight(binary: Path) -> Transcrip
     assert last_tool_text(client) == "zod: echo\n"
     client.send()
     assert last_tool_text(client) == "\n[idle]"
-    return client._finish()
+    return client.finish()
 
 
 def test_standalone_preparation_before_worker_startup_is_causal_and_idempotent(
@@ -123,8 +123,8 @@ def test_standalone_preparation_before_worker_startup_is_causal_and_idempotent(
         finished = False
         released = False
         try:
-            client._initialize_and_list_tools()
-            invalid = client._start_send(
+            client.initialize_and_list_tools()
+            invalid = client.start_send(
                 requirements={"r": ["must-not-resolve"]},
                 stdin="must not queue\n",
             )
@@ -140,7 +140,7 @@ def test_standalone_preparation_before_worker_startup_is_causal_and_idempotent(
             assert resolver_started.descriptor not in readable, (
                 "requirements with standalone stdin started a resolver"
             )
-            client._receive(invalid)
+            client.receive(invalid)
             assert invalid["result"] == {
                 "content": [
                     {
@@ -159,7 +159,7 @@ def test_standalone_preparation_before_worker_startup_is_causal_and_idempotent(
                 temporary.glob("mcp-console-tmp-*/mcp-console-server-relay-wire.jsonl")
             )
 
-            preparation = client._start_send(
+            preparation = client.start_send(
                 requirements={"r": ["standalone-requirement"]},
                 timeout_ms=0,
             )
@@ -173,7 +173,7 @@ def test_standalone_preparation_before_worker_startup_is_causal_and_idempotent(
 
             resolver_release.release()
             released = True
-            client._receive(preparation)
+            client.receive(preparation)
             assert preparation["result"] == {
                 "content": [{"type": "text", "text": "[prepared]"}],
                 "isError": False,
@@ -197,7 +197,7 @@ def test_standalone_preparation_before_worker_startup_is_causal_and_idempotent(
             assert not list(
                 temporary.glob("mcp-console-tmp-*/mcp-console-server-relay-wire.jsonl")
             )
-            transcript = client._finish()
+            transcript = client.finish()
             finished = True
             return transcript
         finally:
@@ -218,14 +218,14 @@ def test_custom_worker_starts_without_home(binary: Path) -> Transcript:
         ("serve", "--worker", str(zod)),
         environment,
     )
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
 
     client.send(sql="echo echo")
     assert last_tool_text(client) == "zod sql: echo\n"
 
     client.send(r="echo echo")
     assert last_tool_text(client) == "zod: echo\n"
-    return client._finish()
+    return client.finish()
 
 
 def test_custom_worker_prepares_r_and_duckdb_requirements(binary: Path) -> Transcript:
@@ -246,7 +246,7 @@ def test_custom_worker_prepares_r_and_duckdb_requirements(binary: Path) -> Trans
             ("serve", "--worker", str(zod)),
             environment,
         )
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         client.send(r="echo echo")
 
         client.send(requirements={"r": ["praise"]})
@@ -363,7 +363,7 @@ def test_custom_worker_prepares_r_and_duckdb_requirements(binary: Path) -> Trans
         assert result["isError"] is True, result
         failure = result["content"][0]["text"]
         assert "custom worker reported a managed Python activation" in failure, failure
-        return client._finish()
+        return client.finish()
 
 
 def test_custom_worker_reports_idle_input_before_preparation_failure(
@@ -386,7 +386,7 @@ def test_custom_worker_reports_idle_input_before_preparation_failure(
             ("serve", "--worker", str(zod)),
             environment,
         )
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         expose_idle_input_request(client, temporary_path)
 
         result = client.send(requirements={"r": ["praise"]})
@@ -402,7 +402,7 @@ def test_custom_worker_reports_idle_input_before_preparation_failure(
             "content": [{"type": "text", "text": "[restart required]"}],
             "isError": False,
         }, result
-        return client._finish()
+        return client.finish()
 
 
 def test_custom_worker_resolves_idle_activity_before_preparation(
@@ -424,7 +424,7 @@ def test_custom_worker_resolves_idle_activity_before_preparation(
             ("serve", "--worker", str(zod)),
             environment,
         )
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         client.send(r="resolve python while idle")
         assert last_tool_text(client) == "[done]"
 
@@ -432,7 +432,7 @@ def test_custom_worker_resolves_idle_activity_before_preparation(
         assert last_tool_text(client) == "[prepared]"
         client.send(r="report managed R requirement")
         assert last_tool_text(client) == "zod R requirement: prepared=true\n"
-        return client._finish()
+        return client.finish()
 
 
 def test_combined_requirements_keep_idle_output_as_one_prelude(
@@ -452,7 +452,7 @@ def test_combined_requirements_keep_idle_output_as_one_prelude(
             ("serve", "--worker", str(zod)),
             environment,
         )
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         expose_idle_sideband_output(client, temporary_path, "combined-requirements")
 
         client.send(
@@ -496,7 +496,7 @@ def test_combined_requirements_keep_idle_output_as_one_prelude(
         failure.unlink()
         client.send(r="echo worker still usable")
         assert last_tool_text(client) == "zod: worker still usable\n"
-        return client._finish()
+        return client.finish()
 
 
 def test_custom_worker_resolves_idle_activity_before_evaluation(
@@ -513,7 +513,7 @@ def test_custom_worker_resolves_idle_activity_before_evaluation(
             ("serve", "--worker", str(zod)),
             environment,
         )
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         client.send(r="resolve python while idle")
         assert last_tool_text(client) == "[done]", repr(last_tool_text(client))
 
@@ -522,13 +522,13 @@ def test_custom_worker_resolves_idle_activity_before_evaluation(
 
         expose_idle_input_request(client, temporary_path)
         poll_start = len(client.transcript)
-        submitted = client._start_send(r="echo echo", stdin="continue\n")
+        submitted = client.start_send(r="echo echo", stdin="continue\n")
         wait_for_marker(
             temporary_path,
             "zod-idle-input-received",
             client,
         )
-        client._receive(submitted)
+        client.receive(submitted)
         output = last_tool_text(client)
         if output != "zod: echo\n":
             assert output == "\n[waiting for stdin]", repr(output)
@@ -538,7 +538,7 @@ def test_custom_worker_resolves_idle_activity_before_evaluation(
         calls = client.transcript[poll_start:]
         submitted["result"] = calls[-1]["result"]
         client.transcript[poll_start:] = [submitted]
-        return client._finish()
+        return client.finish()
 
 
 def test_custom_worker_restart_prepares_r_and_duckdb_requirements(
@@ -560,7 +560,7 @@ def test_custom_worker_restart_prepares_r_and_duckdb_requirements(
             ("serve", "--worker", str(zod)),
             environment,
         )
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
 
         client.send(
             control="restart",
@@ -570,7 +570,7 @@ def test_custom_worker_restart_prepares_r_and_duckdb_requirements(
 
         client.send(r="report managed R requirement")
         assert last_tool_text(client) == "zod R requirement: prepared=true\n"
-        return client._finish()
+        return client.finish()
 
 
 if __name__ == "__main__":

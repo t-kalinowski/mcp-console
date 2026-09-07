@@ -195,7 +195,7 @@ def test_server_crash_retires_the_worker_generation(binary: Path) -> Transcript:
     manager_exit = select.kqueue()
     generation_reaping = select.kqueue()
     try:
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         generation = _spawn_detached_generation(client)
         manager_identity = capture_darwin_process_identity(
             _manager_pid(client.process.pid)
@@ -264,7 +264,7 @@ def test_manager_crash_retires_the_worker_generation(binary: Path) -> Transcript
     generation: Generation | None = None
     manager_identity: DarwinProcessIdentity | None = None
     try:
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         generation = _spawn_detached_generation(client)
         manager_pid = _manager_pid(client.process.pid)
         manager_identity = capture_darwin_process_identity(manager_pid)

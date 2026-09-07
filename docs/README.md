@@ -2,13 +2,14 @@
 
 The documents under `docs/` describe the system implemented in this repository.
 Explanatory documents cover current behavior and ownership, and protocol documents define exact transport interfaces.
-The tool description document is a human-readable mirror.
+The tool description guide links to the canonical snapshot of the registered tools and schemas.
 Source and public acceptance tests remain the final authority when prose disagrees with the implementation.
 
 ## Project and console users
 
 - The [project README](../README.md) is the short product overview and current project-status page.
 - The [ellmer R package](../r/README.md) explains how to install and register MCP Console as an ellmer tool.
+- [`send` operation order](SEND_OPERATIONS.md) owns request validation, preparation and control ordering, stdin generation, failure effects, and wait-timeout semantics.
 - [Built-in runtime](BUILTIN_RUNTIME.md) is the source of truth for user-visible R, Python, DuckDB SQL, input, output, graphics, and interoperability behavior.
 - [Requirements and environments](REQUIREMENTS.md) is the source of truth for dependency preparation, retained environments, accepted requirement syntax, and the host-resolution trust boundary.
 
@@ -18,7 +19,7 @@ Source and public acceptance tests remain the final authority when prose disagre
 - [macOS sandbox supervision](SANDBOX_SUPERVISION.md) describes primary host-side lifetime ownership, standalone terminal and signal ownership, manager failure recovery, and the remaining post-spawn boundary.
 - [Worker protocol](WORKER_PROTOCOL.md) is the exact relay-worker wire protocol and custom-worker contract.
 - [Relay protocol](RELAY_PROTOCOL.md) is the exact private server-relay JSONL protocol.
-- [Registered MCP tool descriptions](TOOL_DESCRIPTIONS.md) mirrors the current descriptions for the MCP tools and their properties.
+- [MCP tool description guidance](TOOL_DESCRIPTIONS.md) covers editorial rules and links to the canonical `tools/list` snapshot.
 
 ## Test contributors
 

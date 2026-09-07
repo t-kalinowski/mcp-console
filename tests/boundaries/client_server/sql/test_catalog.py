@@ -30,7 +30,7 @@ def test_uses_default_duckdb_extensions(binary: Path) -> Transcript:
             environment,
             current_directory=workspace,
         )
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
 
         sql = code(r"""
             SELECT
@@ -57,7 +57,7 @@ def test_uses_default_duckdb_extensions(binary: Path) -> Transcript:
         client.send(sql=sql)
         preview = last_tool_text(client)
         assert preview.splitlines()[-1].split() == ["1", "1234567"]
-        return client._finish()
+        return client.finish()
 
 
 def test_restart_adds_r_and_duckdb_requirements(binary: Path) -> Transcript:
@@ -76,7 +76,7 @@ def test_restart_adds_r_and_duckdb_requirements(binary: Path) -> Transcript:
             environment,
             current_directory=workspace,
         )
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         client.send(r="restart_marker <- 42L")
         assert last_tool_text(client) == "[done]"
 
@@ -130,7 +130,7 @@ def test_restart_adds_r_and_duckdb_requirements(binary: Path) -> Transcript:
         client.send(sql=sql)
         preview = last_tool_text(client)
         assert preview.splitlines()[-1].split() == ["1", "1"]
-        return client._finish()
+        return client.finish()
 
 
 def test_prepares_and_loads_duckdb_extensions(binary: Path) -> Transcript:
@@ -144,7 +144,7 @@ def test_prepares_and_loads_duckdb_extensions(binary: Path) -> Transcript:
             environment,
             current_directory=workspace,
         )
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
 
         sql = code(r"""
             CREATE TABLE retained_state AS
@@ -251,14 +251,14 @@ def test_prepares_and_loads_duckdb_extensions(binary: Path) -> Transcript:
         client.send(sql=sql)
         preview = last_tool_text(client)
         assert preview.splitlines()[-1].split() == ["1", '"loaded"']
-        return client._finish()
+        return client.finish()
 
 
 def test_sends_sql_cell_with_initial_requirements(binary: Path) -> Transcript:
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
     client = McpClient(binary, ("serve",), environment)
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
 
     sql = code(r"""
         LOAD fts;
@@ -268,7 +268,7 @@ def test_sends_sql_cell_with_initial_requirements(binary: Path) -> Transcript:
         """)
     client.send(sql=sql, requirements={"duckdb": ["fts"]})
     assert last_tool_text(client).splitlines()[-1].split() == ["1", "1"]
-    return client._finish()
+    return client.finish()
 
 
 def test_queries_a_ragnar_store_created_in_r(binary: Path) -> Transcript:
@@ -282,7 +282,7 @@ def test_queries_a_ragnar_store_created_in_r(binary: Path) -> Transcript:
         environment,
         current_directory=workspace,
     )
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
 
     sql = code(r"""
         CREATE TEMP TABLE before_prepare AS
@@ -392,7 +392,7 @@ def test_queries_a_ragnar_store_created_in_r(binary: Path) -> Transcript:
         "42",
     ]
     assert '"alpha.md"' not in preview
-    transcript = client._finish()
+    transcript = client.finish()
     temporary.cleanup()
     return transcript
 
@@ -410,7 +410,7 @@ def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
         environment,
         current_directory=workspace,
     )
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
 
     sql = code(r"""
         CREATE TABLE agent_notes AS
@@ -613,7 +613,7 @@ def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
         'catalog"',
     ]
 
-    transcript = client._finish()
+    transcript = client.finish()
     temporary.cleanup()
     return transcript
 
@@ -634,7 +634,7 @@ def test_evaluates_queries_in_a_persistent_catalog(binary: Path) -> Transcript:
             environment,
             current_directory=workspace,
         )
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         sql = code(r"""
             CREATE TABLE answers AS SELECT CAST(42 AS INTEGER) AS answer
             """)
@@ -654,7 +654,7 @@ def test_evaluates_queries_in_a_persistent_catalog(binary: Path) -> Transcript:
             ORDER BY answer DESC
             """)
         client.send(sql=sql)
-        return client._finish()
+        return client.finish()
 
 
 def test_interrupts_running_sql_query(binary: Path) -> Transcript:
@@ -670,7 +670,7 @@ def test_interrupts_running_sql_query(binary: Path) -> Transcript:
         )
         passed = False
         try:
-            client._initialize_and_list_tools()
+            client.initialize_and_list_tools()
             # fmt: r
             r = code(r"""
                 invisible(DBI::dbExecute(
@@ -713,7 +713,7 @@ def test_interrupts_running_sql_query(binary: Path) -> Transcript:
 
             client.send(sql="SELECT answer FROM interrupt_state")
             assert "42" in last_tool_text(client)
-            transcript = client._finish()
+            transcript = client.finish()
             passed = True
             return transcript
         finally:
@@ -723,7 +723,7 @@ def test_interrupts_running_sql_query(binary: Path) -> Transcript:
 
 def test_queries_r_data_frames(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     r = code(r"""
         measurements <- data.frame(
           label = c("a", "b"),
@@ -742,12 +742,12 @@ def test_queries_r_data_frames(binary: Path) -> Transcript:
     preview = last_tool_text(client)
     assert '"a"' in preview and "20" in preview
     assert '"b"' in preview and "50" in preview
-    return client._finish()
+    return client.finish()
 
 
 def test_sql_views_follow_rebound_r_data_frames(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     r = code(r"""
         measurements <- data.frame(value = 2L)
         """)
@@ -773,12 +773,12 @@ def test_sql_views_follow_rebound_r_data_frames(binary: Path) -> Transcript:
     client.send(sql=sql)
     preview = last_tool_text(client)
     assert preview.splitlines()[-1].split() == ["1", "7"]
-    return client._finish()
+    return client.finish()
 
 
 def test_prefers_catalog_relations_over_r_data_frames(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     r = code(r"""
         values <- data.frame(origin = "r")
         """)
@@ -793,12 +793,12 @@ def test_prefers_catalog_relations_over_r_data_frames(binary: Path) -> Transcrip
     preview = last_tool_text(client)
     assert '"sql"' in preview
     assert '"r"' not in preview
-    return client._finish()
+    return client.finish()
 
 
 def test_scans_r_bindings_named_like_bridge_state(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     r = code(r"""
         connection <- data.frame(name = "connection")
         source <- data.frame(name = "source")
@@ -816,12 +816,12 @@ def test_scans_r_bindings_named_like_bridge_state(binary: Path) -> Transcript:
     preview = last_tool_text(client)
     assert '"connection"' in preview
     assert '"source"' in preview
-    return client._finish()
+    return client.finish()
 
 
 def test_exposes_catalog_as_lazy_r_relations(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     sql = code(r"""
         CREATE TABLE sql_values AS
         SELECT * FROM (VALUES ('a', 2), ('b', 5)) AS values(label, value);
@@ -861,14 +861,14 @@ def test_exposes_catalog_as_lazy_r_relations(binary: Path) -> Transcript:
         """)
     client.send(r=r)
     assert last_tool_text(client) == "a:2:4\nb:5:10\nc:11:22\n"
-    return client._finish()
+    return client.finish()
 
 
 def test_keeps_connection_helper_after_clearing_r_workspace(
     binary: Path,
 ) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     sql = code(r"""
         CREATE TABLE retained_values AS
         SELECT * FROM (VALUES ('a', 2), ('b', 5)) AS values(label, value)
@@ -886,12 +886,12 @@ def test_keeps_connection_helper_after_clearing_r_workspace(
         """)
     client.send(r=r)
     assert last_tool_text(client) == "a:2\nb:5\n"
-    return client._finish()
+    return client.finish()
 
 
 def test_recovers_from_sql_errors(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     sql = code(r"""
         SELECT * FROM table_that_does_not_exist
         """)
@@ -907,12 +907,12 @@ def test_recovers_from_sql_errors(binary: Path) -> Transcript:
         SELECT CAST(42 AS INTEGER) AS answer
         """)
     client.send(sql=sql)
-    return client._finish()
+    return client.finish()
 
 
 def test_avoids_private_preview_name_collisions(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     sql = code(r"""
         CREATE TABLE __mcp_console_preview_e2 AS
         SELECT CAST(999 AS INTEGER) AS column_01
@@ -934,12 +934,12 @@ def test_avoids_private_preview_name_collisions(binary: Path) -> Transcript:
         """)
     client.send(sql=sql)
     assert "999" in last_tool_text(client)
-    return client._finish()
+    return client.finish()
 
 
 def test_previews_schema_and_exact_values(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     r = code(r"""
         invisible(options(
           width = 20L,
@@ -1004,7 +1004,7 @@ def test_previews_schema_and_exact_values(binary: Path) -> Transcript:
         """)
     client.send(sql=sql)
     empty = last_tool_text(client)
-    transcript = client._finish()
+    transcript = client.finish()
 
     assert "missing" in values
     assert "<int64>" in values
@@ -1026,7 +1026,7 @@ def test_previews_schema_and_exact_values(binary: Path) -> Transcript:
 
 def test_uses_200_column_default(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     sql = code(r"""
         SELECT
           1 AS column_name_01_abcdefghijkl,
@@ -1045,14 +1045,14 @@ def test_uses_200_column_default(binary: Path) -> Transcript:
         line for line in output.splitlines() if line.startswith("  column_name_01")
     )
     assert 160 < len(header) <= 200, repr(header)
-    return client._finish()
+    return client.finish()
 
 
 def test_bounds_query_previews_without_materializing_results(
     binary: Path,
 ) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     sql = code(r"""
         SELECT
           repeat('a', 1000) AS c01,
@@ -1087,7 +1087,7 @@ def test_bounds_query_previews_without_materializing_results(
         """)
     client.send(sql=sql, timeout_ms=1000)
     large = last_tool_text(client)
-    transcript = client._finish()
+    transcript = client.finish()
 
     assert len(wide.encode("utf-8")) <= 12 * 1024
     assert "[additional rows omitted]" in wide
@@ -1104,7 +1104,7 @@ def test_bounds_query_previews_without_materializing_results(
 
 def test_keeps_repeated_previews_deterministic(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     sql = code(r"""
         CREATE VIEW wide_values AS SELECT
           repeat('😀漢é', 2000) AS c01,
@@ -1132,7 +1132,7 @@ def test_keeps_repeated_previews_deterministic(binary: Path) -> Transcript:
     for _ in range(3):
         client.send(sql=sql)
         outputs.append(last_tool_text(client))
-    transcript = client._finish()
+    transcript = client.finish()
 
     assert outputs[0] == outputs[1] == outputs[2]
     assert len(outputs[0].encode("utf-8")) <= 12 * 1024

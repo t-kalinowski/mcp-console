@@ -34,7 +34,7 @@ def test_resolves_missing_python_import_without_replaying_cell(
     environment = os.environ.copy()
     environment.pop("RETICULATE_PYTHON", None)
     client = McpClient(binary, ("serve",), environment)
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
 
     client.send(r="automatic_python_r_state <- 42L")
     assert last_result_text(client) == "[done]"
@@ -79,7 +79,7 @@ def test_resolves_missing_python_import_without_replaying_cell(
     assert last_result_text(client) == "[1] 42\n"
     client.send(sql="SELECT answer FROM automatic_python_state")
     assert last_result_text(client).splitlines()[-1].split() == ["1", "42"]
-    return client._finish()
+    return client.finish()
 
 
 def test_keeps_mapped_resolution_notice_atomic_at_output_limit(
@@ -88,7 +88,7 @@ def test_keeps_mapped_resolution_notice_atomic_at_output_limit(
     environment = os.environ.copy()
     environment.pop("RETICULATE_PYTHON", None)
     client = McpClient(binary, ("serve",), environment)
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
 
     retained = PENDING_TEXT_BUDGET - 8
     # fmt: python
@@ -108,7 +108,7 @@ def test_keeps_mapped_resolution_notice_atomic_at_output_limit(
     client.transcript[-1]["result"]["content"][0]["text"] = (
         f"<retained {retained} text bytes>{remainder}"
     )
-    return client._finish()
+    return client.finish()
 
 
 def test_retries_new_meta_path_finders_after_automatic_resolution(
@@ -122,7 +122,7 @@ def test_retries_new_meta_path_finders_after_automatic_resolution(
             substitute_requirement=(module, "pydash"),
         )
         client = McpClient(binary, ("serve",), environment)
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
         # fmt: python
@@ -191,7 +191,7 @@ def test_retries_new_meta_path_finders_after_automatic_resolution(
         assert output == "42\n", repr(output)
         runs = uv_tool_run_requirements(record)[baseline:]
         assert len(runs) == 1 and module in runs[0], runs
-        return client._finish()
+        return client.finish()
 
 
 def test_infers_python_distributions_for_normal_import_forms(
@@ -201,7 +201,7 @@ def test_infers_python_distributions_for_normal_import_forms(
         directory = Path(temporary)
         environment, record = recording_uv_environment(directory)
         client = McpClient(binary, ("serve",), environment)
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
         # fmt: python
@@ -237,7 +237,7 @@ def test_infers_python_distributions_for_normal_import_forms(
             for retained in inferred[: index + 1]:
                 assert run.count(retained) == 1, run
             assert all(later not in run for later in inferred[index + 1 :]), run
-        return client._finish()
+        return client.finish()
 
 
 def test_does_not_resolve_unreached_or_available_python_imports(
@@ -260,7 +260,7 @@ def test_does_not_resolve_unreached_or_available_python_imports(
             environment,
             current_directory=directory,
         )
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
         # fmt: python
@@ -317,7 +317,7 @@ def test_does_not_resolve_unreached_or_available_python_imports(
         client.send(python="import yaml12; yaml12.__name__")
         assert last_result_text(client) == "'yaml12'\n"
         assert len(uv_tool_run_requirements(record)) == resolved
-        return client._finish()
+        return client.finish()
 
 
 def test_does_not_resolve_missing_python_imports_from_sql(
@@ -331,7 +331,7 @@ def test_does_not_resolve_missing_python_imports_from_sql(
             fail_requirement=prefix,
         )
         client = McpClient(binary, ("serve",), environment)
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
         client.send(sql="CREATE TABLE managed_restore_value AS SELECT 42 AS answer")
         assert last_result_text(client) == "[done]"
@@ -454,7 +454,7 @@ def test_does_not_resolve_missing_python_imports_from_sql(
         assert "Traceback" not in output, output
         runs = uv_tool_run_requirements(record)[baseline:]
         assert len(runs) == 1 and module in runs[0], runs
-        return client._finish()
+        return client.finish()
 
 
 def test_does_not_reenter_automatic_python_resolution(binary: Path) -> Transcript:
@@ -463,7 +463,7 @@ def test_does_not_reenter_automatic_python_resolution(binary: Path) -> Transcrip
         directory = Path(temporary)
         environment, record = recording_uv_environment(directory)
         client = McpClient(binary, ("serve",), environment)
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
         # Wrap the public reticulate requirement transition reached by the
@@ -526,7 +526,7 @@ def test_does_not_reenter_automatic_python_resolution(binary: Path) -> Transcrip
         assert last_result_text(client) == "1\nTRUE\n", repr(last_result_text(client))
         client.send(python="6 * 7")
         assert last_result_text(client) == "42\n"
-        return client._finish()
+        return client.finish()
 
 
 def test_retains_automatic_python_requirement_after_error_and_restart(
@@ -536,7 +536,7 @@ def test_retains_automatic_python_requirement_after_error_and_restart(
         directory = Path(temporary)
         environment, record = recording_uv_environment(directory)
         client = McpClient(binary, ("serve",), environment)
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
         # fmt: python
@@ -561,7 +561,7 @@ def test_retains_automatic_python_requirement_after_error_and_restart(
         client.send(python="import yaml12; yaml12.__name__")
         assert last_result_text(client) == "'yaml12'\n"
         assert len(uv_tool_run_requirements(record)) == resolved
-        return client._finish()
+        return client.finish()
 
 
 def test_reports_automatic_python_resolution_failure(binary: Path) -> Transcript:
@@ -573,7 +573,7 @@ def test_reports_automatic_python_resolution_failure(binary: Path) -> Transcript
             fail_requirement=requirement,
         )
         client = McpClient(binary, ("serve",), environment)
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
         output = send_and_collect_runtime_python_resolution(
@@ -601,7 +601,7 @@ def test_reports_automatic_python_resolution_failure(binary: Path) -> Transcript
         assert last_result_text(client) == "[1] FALSE\n"
         client.send(python="6 * 7")
         assert last_result_text(client) == "42\n"
-        return client._finish()
+        return client.finish()
 
 
 def test_retains_inferred_distribution_that_does_not_provide_import(
@@ -615,7 +615,7 @@ def test_retains_inferred_distribution_that_does_not_provide_import(
             substitute_requirement=(inferred, "py-yaml12"),
         )
         client = McpClient(binary, ("serve",), environment)
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
         client.send(python=f"import {inferred}")
@@ -649,7 +649,7 @@ def test_retains_inferred_distribution_that_does_not_provide_import(
         client.send(r=f'"{inferred}" %in% reticulate::py_require()$packages')
         assert last_result_text(client) == "[1] TRUE\n"
         assert len(uv_tool_run_requirements(record)) == resolved
-        return client._finish()
+        return client.finish()
 
 
 def test_explicit_python_requirements_preempt_automatic_resolution(
@@ -659,7 +659,7 @@ def test_explicit_python_requirements_preempt_automatic_resolution(
         directory = Path(temporary)
         environment, record = recording_uv_environment(directory)
         client = McpClient(binary, ("serve",), environment)
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
         client.send(
@@ -670,7 +670,7 @@ def test_explicit_python_requirements_preempt_automatic_resolution(
         runs = uv_tool_run_requirements(record)[baseline:]
         assert len(runs) == 1, runs
         assert runs[0].count("py-yaml12") == 1, runs
-        return client._finish()
+        return client.finish()
 
 
 def test_requires_explicit_python_requirements_for_ambiguous_or_installed_roots(
@@ -700,7 +700,7 @@ except ModuleNotFoundError as error:
             environment,
             current_directory=directory,
         )
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
         # fmt: python
@@ -744,7 +744,7 @@ except ModuleNotFoundError as error:
             assert expected in output, (expected, output)
         assert output.count("requirements.python") >= 3, output
         assert len(uv_tool_run_requirements(record)) == baseline
-        return client._finish()
+        return client.finish()
 
 
 def test_reports_unavailable_standard_library_module_without_resolution(
@@ -754,7 +754,7 @@ def test_reports_unavailable_standard_library_module_without_resolution(
         directory = Path(temporary)
         environment, record = recording_uv_environment(directory)
         client = McpClient(binary, ("serve",), environment)
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
         # fmt: python
@@ -776,7 +776,7 @@ def test_reports_unavailable_standard_library_module_without_resolution(
 
         client.send(python="6 * 7")
         assert last_result_text(client) == "42\n"
-        return client._finish()
+        return client.finish()
 
 
 def test_disables_automatic_resolution_for_user_selected_python(
@@ -790,7 +790,7 @@ def test_disables_automatic_resolution_for_user_selected_python(
         environment["RETICULATE_PYTHON"] = str(managed_python)
         environment["PYTHONNODEBUGRANGES"] = "1"
         client = McpClient(binary, ("serve",), environment)
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
         client.send(python=f"import {missing}")
@@ -813,7 +813,7 @@ def test_disables_automatic_resolution_for_user_selected_python(
 
         client.send(python="6 * 7")
         assert last_result_text(client) == "42\n"
-        return client._finish()
+        return client.finish()
 
 
 if __name__ == "__main__":

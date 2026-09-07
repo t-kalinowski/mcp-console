@@ -15,7 +15,7 @@ PLATFORMS = {"darwin"}
 
 def test_default_sandbox_supports_r_core_detection(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
         cores <- parallel::detectCores()
@@ -27,14 +27,14 @@ def test_default_sandbox_supports_r_core_detection(binary: Path) -> Transcript:
         writeLines("R core detection available")
         """)
     client.send(r=r)
-    return client._finish()
+    return client.finish()
 
 
 def test_applies_complete_expressions_before_incomplete_source(
     binary: Path,
 ) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
         answer <- 42
@@ -49,12 +49,12 @@ def test_applies_complete_expressions_before_incomplete_source(
         """)
     client.send(r=r)
     client.send(r="answer")
-    return client._finish()
+    return client.finish()
 
 
 def test_runs_native_top_level_bookkeeping(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
         invisible(addTaskCallback(
@@ -81,12 +81,12 @@ def test_runs_native_top_level_bookkeeping(binary: Path) -> Transcript:
         cat("last value: ", identical(base::.Last.value, 42), "\n", sep = "")
         """)
     client.send(r=r)
-    return client._finish()
+    return client.finish()
 
 
 def test_preserves_native_stack_and_last_value_binding(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
         user_calls <- function() {
@@ -108,7 +108,7 @@ def test_preserves_native_stack_and_last_value_binding(binary: Path) -> Transcri
         )
         """)
     client.send(r=r)
-    return client._finish()
+    return client.finish()
 
 
 if __name__ == "__main__":

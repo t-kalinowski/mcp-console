@@ -99,18 +99,18 @@ def test_control_only_interrupt_targets_blocked_controlled_restart_resolver(
         resolver_interrupt_released = False
         finished = False
         try:
-            controlled = client.client._start_send(
+            controlled = client.client.start_send(
                 control="restart",
                 r="cell must not run after resolver interrupt",
                 requirements={"r": ["blocked-controlled-restart"]},
             )
             resolver_started.wait()
-            interrupt = client.client._start_send(
+            interrupt = client.client.start_send(
                 control="interrupt",
                 timeout_ms=0,
             )
             resolver_interrupted.wait()
-            client.client._notify(
+            client.client.notify(
                 "notifications/cancelled",
                 requestId=interrupt["id"],
                 reason="acceptance test cancelled the interrupt",
@@ -130,7 +130,7 @@ def test_control_only_interrupt_targets_blocked_controlled_restart_resolver(
 
             resolver_interrupt_release.release()
             resolver_interrupt_released = True
-            client.client._receive(controlled)
+            client.client.receive(controlled)
 
             result = controlled["result"]
             assert result.get("isError") is True, result
@@ -548,7 +548,7 @@ def test_control_only_interrupt_honors_timeout_after_attachment(
     finished = False
     released = False
     try:
-        controlled = client.client._start_send(
+        controlled = client.client.start_send(
             control="interrupt",
             timeout_ms=5_000,
         )
@@ -556,7 +556,7 @@ def test_control_only_interrupt_honors_timeout_after_attachment(
 
         release.release()
         released = True
-        client.client._receive(controlled)
+        client.client.receive(controlled)
         assert _tool_text(controlled["result"]) == (
             "old evaluation remains active\nold evaluation eventually finished\n"
         )
@@ -604,7 +604,7 @@ def test_controlled_interrupt_does_not_wait_for_an_existing_poll(
     evaluation_released = False
     finished = False
     try:
-        waiting = client.client._start_send(timeout_ms=5_000)
+        waiting = client.client.start_send(timeout_ms=5_000)
         ownership = client.send(timeout_ms=0)
         assert ownership == {
             "content": [
@@ -615,7 +615,7 @@ def test_controlled_interrupt_does_not_wait_for_an_existing_poll(
             ],
             "isError": True,
         }, ownership
-        controlled = client.client._start_send(
+        controlled = client.client.start_send(
             control="interrupt",
             r="new evaluation must not run",
         )
@@ -623,7 +623,7 @@ def test_controlled_interrupt_does_not_wait_for_an_existing_poll(
 
         interrupt_ack_release.release()
         interrupt_ack_released = True
-        client.client._receive(controlled)
+        client.client.receive(controlled)
         assert controlled["result"] == {
             "content": [
                 {
@@ -639,7 +639,7 @@ def test_controlled_interrupt_does_not_wait_for_an_existing_poll(
 
         evaluation_release.release()
         evaluation_released = True
-        client.client._receive(waiting)
+        client.client.receive(waiting)
         assert _tool_text(waiting["result"]) == (
             "output owned by original waiter\noriginal waiter evaluation finished\n"
         )
@@ -701,17 +701,17 @@ def test_cancelled_interrupt_during_live_preparation_does_not_recover_running(
         interrupt_ack_released = False
         finished = False
         try:
-            preparation = client.client._start_send(
+            preparation = client.client.start_send(
                 requirements={"r": ["cancelled-interrupt"]},
             )
             preparation_received.wait()
 
-            interrupt = client.client._start_send(
+            interrupt = client.client.start_send(
                 control="interrupt",
                 timeout_ms=0,
             )
             interrupt_received.wait()
-            client.client._notify(
+            client.client.notify(
                 "notifications/cancelled",
                 requestId=interrupt["id"],
                 reason="acceptance test cancelled the interrupt",
@@ -739,7 +739,7 @@ def test_cancelled_interrupt_during_live_preparation_does_not_recover_running(
             preparation_release.release()
             preparation_released = True
             preparation_sent.wait()
-            client.client._receive(preparation)
+            client.client.receive(preparation)
             assert _tool_text(preparation["result"]) == "[prepared]"
             assert _tool_text(client.send()) == "\n[idle]"
             transcript = client.finish_active()

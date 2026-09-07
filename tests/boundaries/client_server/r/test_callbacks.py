@@ -25,7 +25,7 @@ PLATFORMS = {"darwin"}
 
 def test_evaluates_a_complete_cell(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
         answer <- 40
@@ -50,12 +50,12 @@ def test_evaluates_a_complete_cell(binary: Path) -> Transcript:
     client.send(r='stop("boom")')
     client.send(r="answer")
     client.send(r="silent <- 1")
-    return client._finish()
+    return client.finish()
 
 
 def test_services_r_input_handlers_at_cell_boundaries(binary: Path) -> Transcript:
     with r_input_handler_client(binary) as (client, directory):
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
 
         # Make the handler ready before the worker's final boundary turn.
         # fmt: r
@@ -99,12 +99,12 @@ def test_services_r_input_handlers_at_cell_boundaries(binary: Path) -> Transcrip
         fifo.write_bytes(b"x")
         client.send(r='cat(cell_start_callback_ran, "\\ncell body\\n", sep = "")')
         assert last_tool_text(client) == "TRUE\ncell body\n"
-        return client._finish()
+        return client.finish()
 
 
 def test_services_later_callbacks_while_idle(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     client.send(requirements={"r": ["later"]})
 
     # fmt: r
@@ -129,12 +129,12 @@ def test_services_later_callbacks_while_idle(binary: Path) -> Transcript:
     assert last_tool_text(client) == (
         "idle callback\n[output produced while idle]\n[1] 42\n"
     )
-    return client._finish()
+    return client.finish()
 
 
 def test_collects_idle_later_callbacks_with_empty_send(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     client.send(requirements={"r": ["later"]})
     client.send()
     assert last_tool_text(client) == "\n[idle]"
@@ -164,12 +164,12 @@ def test_collects_idle_later_callbacks_with_empty_send(binary: Path) -> Transcri
     )
     client.send(r="collected_value")
     assert last_tool_text(client) == "[1] 84\n"
-    return client._finish()
+    return client.finish()
 
 
 def test_snapshots_output_while_idle_later_callback_runs(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     client.send(requirements={"r": ["later"]})
 
     # fmt: r
@@ -212,12 +212,12 @@ def test_snapshots_output_while_idle_later_callback_runs(binary: Path) -> Transc
     polls = client.transcript[poll_start:]
     final_poll = polls[-1]
     client.transcript[poll_start:] = [final_poll]
-    return client._finish()
+    return client.finish()
 
 
 def test_restarts_while_idle_callback_runs(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     client.send(requirements={"r": ["later"]})
 
     # fmt: r
@@ -250,13 +250,13 @@ def test_restarts_while_idle_callback_runs(binary: Path) -> Transcript:
     assert last_tool_text(client) == (
         "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
     )
-    return client._finish()
+    return client.finish()
 
 
 def test_returns_plots_from_idle_later_callbacks(binary: Path) -> Transcript:
     environment, rscript = r_test_environment()
     client = McpClient(binary, ("serve",), environment)
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     client.send(requirements={"r": ["later"]})
 
     # fmt: r
@@ -291,12 +291,12 @@ def test_returns_plots_from_idle_later_callbacks(binary: Path) -> Transcript:
         client,
         ["idle plot\n", expected_plot[0], "\n[idle]"],
     )
-    return client._finish()
+    return client.finish()
 
 
 def test_stops_cell_after_boundary_callback_failure(binary: Path) -> Transcript:
     with r_input_handler_client(binary) as (client, directory):
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
 
         # Create the finalized page without read permissions. The PNG device
         # can write through its open descriptor, but publication cannot reopen
@@ -337,12 +337,12 @@ def test_stops_cell_after_boundary_callback_failure(binary: Path) -> Transcript:
             "[starting new worker]\n"
             "[idle]"
         )
-        return client._finish()
+        return client.finish()
 
 
 def test_skips_final_boundary_callbacks_after_cell_failure(binary: Path) -> Transcript:
     with r_input_handler_client(binary) as (client, _directory):
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
 
         # Record a plot publication failure during the cell after making an
         # input handler ready for the final boundary turn. The handler writes
@@ -383,12 +383,12 @@ def test_skips_final_boundary_callbacks_after_cell_failure(binary: Path) -> Tran
             "[starting new worker]\n"
             "[idle]"
         )
-        return client._finish()
+        return client.finish()
 
 
 def test_routes_input_to_idle_later_callbacks_before_a_cell(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     client.send(requirements={"r": ["later"]})
 
     # fmt: r
@@ -420,7 +420,7 @@ def test_routes_input_to_idle_later_callbacks_before_a_cell(binary: Path) -> Tra
         r='cat("cell: ", idle_answer, "\\n", sep = "")',
         stdin="yes\n",
     )
-    return client._finish()
+    return client.finish()
 
 
 if __name__ == "__main__":

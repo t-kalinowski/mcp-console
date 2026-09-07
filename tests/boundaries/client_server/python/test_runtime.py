@@ -29,7 +29,7 @@ PLATFORMS = {"darwin"}
 
 def test_evaluates_cells_in_persistent_reticulate_state(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
         from_r <- 40L
@@ -153,13 +153,13 @@ def test_evaluates_cells_in_persistent_reticulate_state(binary: Path) -> Transcr
         """)
     client.send(python=python)
     assert last_result_text(client) == "43\n"
-    return client._finish()
+    return client.finish()
 
 
 def test_returns_r_plots_from_python_bridge(binary: Path) -> Transcript:
     environment, rscript = r_test_environment()
     client = McpClient(binary, ("serve",), environment)
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
         bridge_plot <- function() {
@@ -190,7 +190,7 @@ def test_returns_r_plots_from_python_bridge(binary: Path) -> Transcript:
         client,
         ["before plot\nafter plot\n", expected_plot[0]],
     )
-    return client._finish()
+    return client.finish()
 
 
 def test_returns_matplotlib_plots(binary: Path) -> Transcript:
@@ -256,7 +256,7 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
             environment,
             current_directory=workspace,
         )
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         # fmt: r
         r = code(r"""
             reticulate::py_require("matplotlib")
@@ -523,7 +523,7 @@ def test_returns_matplotlib_plots(binary: Path) -> Transcript:
             output
         )
         assert not list(temporary.rglob("mcp-console-font-discovery"))
-        transcript = client._finish()
+        transcript = client.finish()
         assert (
             host_matplotlibrc.read_text(encoding="utf-8") == "lines.linewidth: 7.25\n"
         )
@@ -559,7 +559,7 @@ def test_inherits_explicit_matplotlib_config(binary: Path) -> Transcript:
         environment["MPL_IGNORE_SYSTEM_FONTS"] = "1"
         environment["MCP_CONSOLE_TEST_MATPLOTLIBRC"] = str(explicit_rc)
         client = McpClient(binary, ("serve",), environment)
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         client.send(
             requirements={"python": ["matplotlib"]},
         )
@@ -593,7 +593,7 @@ def test_inherits_explicit_matplotlib_config(binary: Path) -> Transcript:
         client.send(python=python)
         output = last_result_text(client)
         assert output == "(True, 8.25, True, True)\n", repr(output)
-        transcript = client._finish()
+        transcript = client.finish()
         assert explicit_rc.read_text(encoding="utf-8") == "lines.linewidth: 8.25\n"
         assert not list(explicit.glob("fontlist-v*.json"))
         caches = list(inherited.glob("fontlist-v*.json"))
@@ -652,7 +652,7 @@ def test_inherits_default_matplotlib_config(binary: Path) -> Transcript:
         environment.pop("MATPLOTLIBRC", None)
         environment.pop("MPLCONFIGDIR", None)
         client = McpClient(binary, ("serve",), environment)
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         client.send(
             requirements={"python": ["matplotlib"]},
         )
@@ -673,7 +673,7 @@ def test_inherits_default_matplotlib_config(binary: Path) -> Transcript:
         client.send(python=python)
         output = last_result_text(client)
         assert output == "(True, 9.25)\n", repr(output)
-        transcript = client._finish()
+        transcript = client.finish()
         assert matplotlibrc.read_text(encoding="utf-8") == "lines.linewidth: 9.25\n"
         caches = list(matplotlib.glob("fontlist-v*.json"))
         assert len(caches) == 1, caches
@@ -687,7 +687,7 @@ def test_inherits_default_matplotlib_config(binary: Path) -> Transcript:
 
 def test_runs_async_python_explicitly(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     # fmt: python
     python = code("""
         import asyncio
@@ -701,12 +701,12 @@ def test_runs_async_python_explicitly(binary: Path) -> Transcript:
     assert last_result_text(client) == "[done]"
     client.send(python="asyncio.run(answer())")
     assert last_result_text(client) == "42\n"
-    return client._finish()
+    return client.finish()
 
 
 def test_recovers_from_python_errors(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     # fmt: python
     python = code("""
         answer = 41
@@ -745,7 +745,7 @@ def test_recovers_from_python_errors(binary: Path) -> Transcript:
     assert "null bytes" in output
     client.send(python="answer")
     assert last_result_text(client) == "41\n"
-    return client._finish()
+    return client.finish()
 
 
 def test_releases_python_threads_before_running_init_hooks(
@@ -757,7 +757,7 @@ def test_releases_python_threads_before_running_init_hooks(
         client = McpClient(binary, ("serve",), environment)
         release: Path | None = None
         try:
-            client._initialize_and_list_tools()
+            client.initialize_and_list_tools()
             # fmt: r
             r = code(r"""
                 invisible(loadNamespace("reticulate"))
@@ -838,7 +838,7 @@ def test_releases_python_threads_before_running_init_hooks(
             assert last_result_text(client) == (
                 "[input requested: \"hook> \"]\n'after hook'\n"
             )
-            return client._finish()
+            return client.finish()
         finally:
             if release is not None and release.parent.exists():
                 release.touch(exist_ok=True)
@@ -847,7 +847,7 @@ def test_releases_python_threads_before_running_init_hooks(
 
 def test_routes_python_input(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
 
     # fmt: python
     python = code("""
@@ -883,12 +883,12 @@ def test_routes_python_input(binary: Path) -> Transcript:
         """)
     client.send(python=python, stdin="fd 0\n")
     assert last_result_text(client) == "'fd 0\\n'\n"
-    return client._finish()
+    return client.finish()
 
 
 def test_python_debugger_input(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
 
     # fmt: python
     python = code("""
@@ -914,12 +914,12 @@ def test_python_debugger_input(binary: Path) -> Transcript:
     )
     client.send(python="debug_value")
     assert last_result_text(client) == "42\n"
-    return client._finish()
+    return client.finish()
 
 
 def test_restarts_after_python_bridge_failure(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
         python_worker_marker <- TRUE
@@ -963,7 +963,7 @@ def test_restarts_after_python_bridge_failure(binary: Path) -> Transcript:
     assert last_result_text(client) == "[1] FALSE\n"
     client.send(python="6 * 7")
     assert last_result_text(client) == "42\n"
-    return client._finish()
+    return client.finish()
 
 
 if __name__ == "__main__":

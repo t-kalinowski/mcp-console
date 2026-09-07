@@ -33,7 +33,7 @@ def test_records_real_mixed_language_session(
             environment,
             current_directory=workspace,
         )
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
 
         # fmt: r
         r = code(r"""
@@ -78,7 +78,7 @@ def test_records_real_mixed_language_session(
         sql_output = client.transcript[-1]["result"]["content"][0]["text"]
         assert '"a"' in sql_output and "20" in sql_output, sql_output
         assert '"b"' in sql_output and "50" in sql_output, sql_output
-        transcript = client._finish()
+        transcript = client.finish()
 
         session = next((workspace / ".mcp-console" / "sessions").iterdir())
         events = [
@@ -133,16 +133,16 @@ def test_emits_yamark_formatted_documents(binary: Path) -> Transcript:
             ("serve", "--worker", str(zod)),
             current_directory=workspace,
         )
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         client.send(r="emit image")
         source = "echo before\n````\n<div>not markdown</div>\nafter"
         client.send(python=source)
-        client._request(
+        client.request(
             "tools/call",
             name="send",
             arguments={"sql": "  --| eval: false\necho SELECT 42", "typo": True},
         )
-        client._request(
+        client.request(
             "tools/call",
             name="send",
             arguments={
@@ -164,7 +164,7 @@ def test_emits_yamark_formatted_documents(binary: Path) -> Transcript:
                 },
             },
         )
-        transcript = client._finish()
+        transcript = client.finish()
 
         session = next((workspace / ".mcp-console" / "sessions").iterdir())
         markdown = (session / "transcript.md").read_text(encoding="utf-8")

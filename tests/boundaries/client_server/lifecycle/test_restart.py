@@ -1,7 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
 import os
-import select
 import signal
 import subprocess
 import sys
@@ -18,7 +17,6 @@ from support.client import McpClient, stop_client
 from support.macos import (
     DarwinProcessIdentity,
     capture_darwin_process_identity,
-    darwin_child_process_identities,
     live_darwin_processes,
     signal_darwin_process,
 )
@@ -44,6 +42,11 @@ from boundaries.client_server._harness import (
     wait_for_marker,
     wait_for_process_group_exit,
     wait_for_stopped_process,
+)
+
+from boundaries.client_server.lifecycle._fixtures import (
+    build_interposer,
+    launcher_retirement,
 )
 
 
@@ -88,24 +91,11 @@ def test_restart_reports_nonzero_sandbox_launcher_exit(binary: Path) -> Transcri
         environment,
     )
     try:
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         client.send(control="restart")
         assert last_tool_text(client) == "[starting new worker]\n[idle]"
 
         client.send(control="restart")
-        result = client.transcript[-1]["result"]
-        assert result == {
-            "content": [
-                {
-                    "type": "text",
-                    "text": (
-                        "[worker stopped: in-memory state lost]\n"
-                        "[worker launcher exited with status 73]"
-                    ),
-                }
-            ],
-            "isError": True,
-        }, result
         return client.transcript
     finally:
         stop_client(client)
@@ -126,333 +116,54 @@ def test_restart_rejects_unsolicited_status_137(binary: Path) -> Transcript:
         environment,
     )
     try:
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         client.send(control="restart")
         assert last_tool_text(client) == "[starting new worker]\n[idle]"
 
         client.send(control="restart")
-        result = client.transcript[-1]["result"]
-        assert result == {
-            "content": [
-                {
-                    "type": "text",
-                    "text": (
-                        "[worker stopped: in-memory state lost]\n"
-                        "[worker launcher exited with status 137]"
-                    ),
-                }
-            ],
-            "isError": True,
-        }, result
         return client.transcript
     finally:
         stop_client(client)
 
 
-def _build_launcher_retirement_interposer(directory: Path) -> Path:
-    source = (
-        Path(__file__).resolve().parents[3]
-        / "fixtures"
-        / "native"
-        / "launcher_retirement_interposer.c"
-    )
-    library = directory / "launcher-retirement-interposer.dylib"
-    subprocess.run(
-        [
-            "cc",
-            "-dynamiclib",
-            "-std=c11",
-            "-Wall",
-            "-Wextra",
-            "-Werror",
-            "-o",
-            library,
-            source,
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return library
-
-
 def test_restart_rejects_status_137_when_launcher_exits_before_sigterm(
     binary: Path,
 ) -> Transcript:
-    relay = (
-        Path(__file__).resolve().parents[3]
-        / "fixtures"
-        / "server_relay"
-        / "scripted_relay.py"
-    )
-    # fmt: python
-    server = code(r"""
-        import os
-        import sys
-
-        os.environ["MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_PID"] = str(os.getpid())
-        os.environ["DYLD_INSERT_LIBRARIES"] = os.environ.pop(
-            "MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_DYLIB"
+    with launcher_retirement(binary) as retirement:
+        client = retirement.client
+        retirement.signal_return_release.release()
+        restart = client.start_send(control="restart")
+        retirement.signal_blocked.wait(
+            "server retirement signal", FIXTURE_CHECKPOINT_TIMEOUT_SECONDS
         )
-        os.execv(sys.argv[1], sys.argv[1:])
-        """)
-    with tempfile.TemporaryDirectory() as temporary_directory:
-        temporary = Path(temporary_directory)
-        signal_blocked = FifoCheckpoint.create(temporary / "signal-blocked")
-        signal_release = FifoCheckpoint.create(temporary / "signal-release")
-        signal_returned = FifoCheckpoint.create(temporary / "signal-returned")
-        relay_exit = FifoCheckpoint.create(temporary / "relay-exit")
-        environment = os.environ.copy()
-        environment["TMPDIR"] = temporary_directory
-        environment["MCP_CONSOLE_TEST_RELAY_SCENARIO"] = "shutdown_nonzero_after_output"
-        environment["MCP_CONSOLE_TEST_RELAY_EXIT_STATUS"] = "137"
-        environment["MCP_CONSOLE_TEST_RELAY_EXIT_RELEASE"] = str(relay_exit.path)
-        environment["MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_DYLIB"] = str(
-            _build_launcher_retirement_interposer(temporary)
+        retirement.relay_exit.release()
+        retirement.wait_for_launcher_exit()
+        retirement.signal_release.release()
+        retirement.signal_returned.wait(
+            "successful signal to exited launcher", FIXTURE_CHECKPOINT_TIMEOUT_SECONDS
         )
-        environment["MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_BLOCKED"] = str(
-            signal_blocked.path
-        )
-        environment["MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_RELEASE"] = str(
-            signal_release.path
-        )
-        environment["MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_RETURNED"] = str(
-            signal_returned.path
-        )
-        client = McpClient(
-            Path(sys.executable),
-            (
-                "-c",
-                server,
-                str(binary),
-                "serve",
-                "--worker",
-                str(binary),
-                "--relay",
-                str(relay),
-            ),
-            environment,
-            current_directory=temporary,
-        )
-        launcher_exit = select.kqueue()
-        try:
-            client._initialize_and_list_tools()
-            client.send(control="restart")
-            assert last_tool_text(client) == "[starting new worker]\n[idle]"
-            server_identity = capture_darwin_process_identity(client.process.pid)
-            launchers = darwin_child_process_identities(server_identity)
-            assert len(launchers) == 1, launchers
-            launcher = launchers[0]
-            exit_watch = select.kevent(
-                launcher[0],
-                filter=select.KQ_FILTER_PROC,
-                flags=select.KQ_EV_ADD | select.KQ_EV_CLEAR,
-                fflags=select.KQ_NOTE_EXIT,
-            )
-            assert launcher_exit.control([exit_watch], 0, 0) == []
-
-            restart = client._start_send(control="restart")
-            signal_blocked.wait(
-                "server retirement signal",
-                FIXTURE_CHECKPOINT_TIMEOUT_SECONDS,
-            )
-            relay_exit.release()
-            events = launcher_exit.control(
-                None,
-                1,
-                FIXTURE_CHECKPOINT_TIMEOUT_SECONDS,
-            )
-            assert len(events) == 1, "sandbox launcher did not exit"
-            assert events[0].ident == launcher[0], events[0]
-            assert events[0].filter == select.KQ_FILTER_PROC, events[0]
-            assert events[0].fflags & select.KQ_NOTE_EXIT, events[0]
-            signal_release.release()
-            signal_returned.wait(
-                "successful signal to exited launcher",
-                FIXTURE_CHECKPOINT_TIMEOUT_SECONDS,
-            )
-            client._receive(restart)
-            assert restart["result"] == {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": (
-                            "old generation retirement output\n"
-                            "[worker stopped: in-memory state lost]\n"
-                            "[worker launcher exited with status 137]"
-                        ),
-                    }
-                ],
-                "isError": True,
-            }, restart["result"]
-            return client.transcript
-        finally:
-            relay_exit.release()
-            signal_release.release()
-            stop_client(client)
-            launcher_exit.close()
-            signal_blocked.close()
-            signal_release.close()
-            signal_returned.close()
-            relay_exit.close()
+        client.receive(restart)
+        return client.transcript
 
 
 def test_restart_accepts_owned_retirement_when_launcher_exits_before_signal_returns(
     binary: Path,
 ) -> Transcript:
-    relay = (
-        Path(__file__).resolve().parents[3]
-        / "fixtures"
-        / "server_relay"
-        / "scripted_relay.py"
-    )
-    # fmt: python
-    server = code(r"""
-        import os
-        import sys
-
-        os.environ["MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_PID"] = str(os.getpid())
-        os.environ["DYLD_INSERT_LIBRARIES"] = os.environ.pop(
-            "MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_DYLIB"
+    with launcher_retirement(binary) as retirement:
+        client = retirement.client
+        restart = client.start_send(control="restart")
+        retirement.signal_blocked.wait(
+            "server retirement signal", FIXTURE_CHECKPOINT_TIMEOUT_SECONDS
         )
-        os.execv(sys.argv[1], sys.argv[1:])
-        """)
-    with tempfile.TemporaryDirectory() as temporary_directory:
-        temporary = Path(temporary_directory)
-        signal_blocked = FifoCheckpoint.create(temporary / "signal-blocked")
-        signal_release = FifoCheckpoint.create(temporary / "signal-release")
-        signal_returned = FifoCheckpoint.create(temporary / "signal-returned")
-        signal_return_release = FifoCheckpoint.create(
-            temporary / "signal-return-release"
+        retirement.assert_launcher_running()
+        retirement.signal_release.release()
+        retirement.signal_returned.wait(
+            "successful retirement signal", FIXTURE_CHECKPOINT_TIMEOUT_SECONDS
         )
-        relay_exit = FifoCheckpoint.create(temporary / "relay-exit")
-        environment = os.environ.copy()
-        environment["TMPDIR"] = temporary_directory
-        environment["MCP_CONSOLE_TEST_RELAY_SCENARIO"] = "shutdown_nonzero_after_output"
-        environment["MCP_CONSOLE_TEST_RELAY_EXIT_STATUS"] = "137"
-        environment["MCP_CONSOLE_TEST_RELAY_EXIT_RELEASE"] = str(relay_exit.path)
-        environment["MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_DYLIB"] = str(
-            _build_launcher_retirement_interposer(temporary)
-        )
-        environment["MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_BLOCKED"] = str(
-            signal_blocked.path
-        )
-        environment["MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_RELEASE"] = str(
-            signal_release.path
-        )
-        environment["MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_RETURNED"] = str(
-            signal_returned.path
-        )
-        environment["MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_RETURN_RELEASE"] = str(
-            signal_return_release.path
-        )
-        client = McpClient(
-            Path(sys.executable),
-            (
-                "-c",
-                server,
-                str(binary),
-                "serve",
-                "--worker",
-                str(binary),
-                "--relay",
-                str(relay),
-            ),
-            environment,
-            current_directory=temporary,
-        )
-        launcher_exit = select.kqueue()
-        try:
-            client._initialize_and_list_tools()
-            client.send(control="restart")
-            assert last_tool_text(client) == "[starting new worker]\n[idle]"
-            server_identity = capture_darwin_process_identity(client.process.pid)
-            launchers = darwin_child_process_identities(server_identity)
-            assert len(launchers) == 1, launchers
-            launcher = launchers[0]
-            exit_watch = select.kevent(
-                launcher[0],
-                filter=select.KQ_FILTER_PROC,
-                flags=select.KQ_EV_ADD | select.KQ_EV_CLEAR,
-                fflags=select.KQ_NOTE_EXIT,
-            )
-            assert launcher_exit.control([exit_watch], 0, 0) == []
-
-            restart = client._start_send(control="restart")
-            signal_blocked.wait(
-                "server retirement signal",
-                FIXTURE_CHECKPOINT_TIMEOUT_SECONDS,
-            )
-            assert launcher_exit.control(None, 1, 0) == []
-            signal_release.release()
-            signal_returned.wait(
-                "successful retirement signal",
-                FIXTURE_CHECKPOINT_TIMEOUT_SECONDS,
-            )
-            events = launcher_exit.control(
-                None,
-                1,
-                FIXTURE_CHECKPOINT_TIMEOUT_SECONDS,
-            )
-            assert len(events) == 1, "sandbox launcher did not exit"
-            assert events[0].ident == launcher[0], events[0]
-            assert events[0].filter == select.KQ_FILTER_PROC, events[0]
-            assert events[0].fflags & select.KQ_NOTE_EXIT, events[0]
-            signal_return_release.release()
-            client._receive(restart)
-            assert restart["result"] == {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": (
-                            "old generation retirement output\n"
-                            "[worker stopped: in-memory state lost]\n"
-                            "[starting new worker]\n"
-                            "[idle]"
-                        ),
-                    }
-                ],
-                "isError": False,
-            }, restart["result"]
-            return client.transcript
-        finally:
-            relay_exit.release()
-            signal_release.release()
-            signal_return_release.release()
-            stop_client(client)
-            launcher_exit.close()
-            signal_blocked.close()
-            signal_release.close()
-            signal_returned.close()
-            signal_return_release.close()
-            relay_exit.close()
-
-
-def _build_relay_stdout_read_interposer(directory: Path) -> Path:
-    source = (
-        Path(__file__).resolve().parents[3]
-        / "fixtures"
-        / "native"
-        / "relay_stdout_read_interposer.c"
-    )
-    library = directory / "relay-stdout-read-interposer.dylib"
-    subprocess.run(
-        [
-            "cc",
-            "-dynamiclib",
-            "-std=c11",
-            "-Wall",
-            "-Wextra",
-            "-Werror",
-            "-o",
-            library,
-            source,
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return library
+        retirement.wait_for_launcher_exit()
+        retirement.signal_return_release.release()
+        client.receive(restart)
+        return client.transcript
 
 
 def test_restart_drains_relay_output_before_nonzero_launcher_error(
@@ -498,7 +209,7 @@ def _restart_drains_relay_output_before_nonzero_launcher_error(
         environment["MCP_CONSOLE_TEST_RELAY_SCENARIO"] = "shutdown_nonzero_after_output"
         environment["MCP_CONSOLE_TEST_RELAY_EXIT_STATUS"] = str(status)
         environment["MCP_CONSOLE_TEST_RELAY_READ_DYLIB"] = str(
-            _build_relay_stdout_read_interposer(temporary)
+            build_interposer(temporary, "relay_stdout_read_interposer")
         )
         environment["MCP_CONSOLE_TEST_RELAY_READ_MATCH"] = (
             "old generation retirement output"
@@ -522,29 +233,15 @@ def _restart_drains_relay_output_before_nonzero_launcher_error(
             current_directory=temporary,
         )
         try:
-            client._initialize_and_list_tools()
+            client.initialize_and_list_tools()
             client.send(control="restart")
             assert last_tool_text(client) == "[starting new worker]\n[idle]"
 
-            restart = client._start_send(control="restart")
+            restart = client.start_send(control="restart")
             blocked.wait("relay stdout reader", FIXTURE_CHECKPOINT_TIMEOUT_SECONDS)
             relay_exit.release()
-            client._receive(restart)
-            result = restart["result"]
+            client.receive(restart)
             release.release()
-            assert result == {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": (
-                            "old generation retirement output\n"
-                            "[worker stopped: in-memory state lost]\n"
-                            f"[worker launcher exited with status {status}]"
-                        ),
-                    }
-                ],
-                "isError": True,
-            }, result
             return client.transcript
         finally:
             relay_exit.release()
@@ -559,7 +256,7 @@ def test_restart_preserves_relay_retirement_failure(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     client = McpClient(binary, ("serve", "--worker", str(zod)))
     try:
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         client.send(r="fail sideband during shutdown")
         assert last_tool_text(client) == "[done]"
 
@@ -595,7 +292,7 @@ def test_restart_closes_worker_stdin(binary: Path) -> Transcript:
             ("serve", "--worker", str(zod)),
             environment,
         )
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         client.send(r="wait for stdin close", timeout_ms=0)
         assert last_tool_text(client) == "\n[running; poll with an empty send]"
         wait_for_marker(
@@ -623,7 +320,7 @@ def test_restart_closes_worker_stdin(binary: Path) -> Transcript:
 
         client.send(r="echo echo")
         assert last_tool_text(client) == "zod: echo\n"
-        return client._finish()
+        return client.finish()
 
 
 def test_restart_force_stops_stalled_worker(binary: Path) -> Transcript:
@@ -641,7 +338,7 @@ def test_restart_force_stops_stalled_worker(binary: Path) -> Transcript:
         worker_group = None
         passed = False
         try:
-            client._initialize_and_list_tools()
+            client.initialize_and_list_tools()
             client.send(r="stall", timeout_ms=0)
             assert last_tool_text(client) == "\n[running; poll with an empty send]"
             group_marker = wait_for_marker(
@@ -652,9 +349,9 @@ def test_restart_force_stops_stalled_worker(binary: Path) -> Transcript:
             worker_group = read_worker_group(group_marker)
             wait_for_marker(temporary_path, "zod-stalled", client)
 
-            restart_call = client._start_send(control="restart")
+            restart_call = client.start_send(control="restart")
             wait_for_process_group_exit(worker_group, client)
-            client._receive(restart_call)
+            client.receive(restart_call)
             assert last_tool_text(client) == (
                 "[active evaluation stopped by session restart request]\n"
                 "[worker stopped: in-memory state lost]\n"
@@ -664,7 +361,7 @@ def test_restart_force_stops_stalled_worker(binary: Path) -> Transcript:
 
             client.send(r="echo echo")
             assert last_tool_text(client) == "zod: echo\n"
-            transcript = client._finish()
+            transcript = client.finish()
             passed = True
             return transcript
         finally:
@@ -689,7 +386,7 @@ def test_restart_allows_accepted_relay_shutdown_to_finish(
         helper_pid = None
         passed = False
         try:
-            client._initialize_and_list_tools()
+            client.initialize_and_list_tools()
             client.send(r="stall accepted relay shutdown", timeout_ms=0)
             assert last_tool_text(client) == "\n[running; poll with an empty send]"
             helper_marker = wait_for_marker(
@@ -702,7 +399,7 @@ def test_restart_allows_accepted_relay_shutdown_to_finish(
                 helper_marker.read_text(encoding="utf-8").split(),
             )
 
-            restarted = client._start_send(control="restart")
+            restarted = client.start_send(control="restart")
             stopped_marker = wait_for_marker(
                 temporary_path,
                 "zod-relay-stopped-after-shutdown",
@@ -723,7 +420,7 @@ def test_restart_allows_accepted_relay_shutdown_to_finish(
                 "wb", buffering=0
             ) as checkpoint:
                 assert checkpoint.write(b"1") == 1
-            client._receive(restarted)
+            client.receive(restarted)
             assert not process_exists(helper_pid), (
                 "detached relay-resume helper outlived sandbox retirement"
             )
@@ -738,7 +435,7 @@ def test_restart_allows_accepted_relay_shutdown_to_finish(
 
             client.send(r="echo echo")
             assert last_tool_text(client) == "zod: echo\n"
-            transcript = client._finish()
+            transcript = client.finish()
             passed = True
             return transcript
         finally:
@@ -768,7 +465,7 @@ def _restart_outer_force_stops_unresponsive_relay(
         manager: DarwinProcessIdentity | None = None
         passed = False
         try:
-            client._initialize_and_list_tools()
+            client.initialize_and_list_tools()
             client.send(r="stall with stopped relay", timeout_ms=0)
             assert last_tool_text(client) == "\n[running; poll with an empty send]"
             helper_marker = wait_for_marker(
@@ -816,7 +513,7 @@ def _restart_outer_force_stops_unresponsive_relay(
                     "sandbox manager exited before the stall injection"
                 )
 
-            restarted = client._start_send(control="restart")
+            restarted = client.start_send(control="restart")
             retirement_deadline = time.monotonic() + (10 if stop_manager else 5)
             while (
                 process_exists(relay_target)
@@ -831,7 +528,7 @@ def _restart_outer_force_stops_unresponsive_relay(
                     "group, and its detached descendant within the deadline"
                 )
                 time.sleep(0.01)
-            client._receive(restarted)
+            client.receive(restarted)
             assert not process_group_exists(worker_group), (
                 "stopped relay process group outlived restart"
             )
@@ -849,19 +546,6 @@ def _restart_outer_force_stops_unresponsive_relay(
                     "manager": "stopped before owned retirement",
                     "verified_barrier": "manager, relay, worker, and detached descendant",
                 }
-                assert restarted["result"] == {
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": (
-                                "[active evaluation stopped by session restart request]\n"
-                                "[worker stopped: in-memory state lost]\n"
-                                "[worker launcher exited with status 1]"
-                            ),
-                        }
-                    ],
-                    "isError": True,
-                }, restarted["result"]
                 passed = True
                 return client.transcript
             assert last_tool_text(client) == (
@@ -873,7 +557,7 @@ def _restart_outer_force_stops_unresponsive_relay(
 
             client.send(r="echo echo")
             assert last_tool_text(client) == "zod: echo\n"
-            transcript = client._finish()
+            transcript = client.finish()
             passed = True
             return transcript
         finally:
@@ -925,8 +609,8 @@ def test_restart_starts_first_worker_and_waits_until_ready(
         worker_group = None
         passed = False
         try:
-            client._initialize_and_list_tools()
-            restarted = client._start_send(control="restart")
+            client.initialize_and_list_tools()
+            restarted = client.start_send(control="restart")
             wait_for_marker(
                 temporary_path,
                 "zod-replacement-waiting-ready",
@@ -936,22 +620,22 @@ def test_restart_starts_first_worker_and_waits_until_ready(
                 wait_for_marker(temporary_path, "zod-process-group", client)
             )
 
-            while_restarting = client._start_send(r="echo echo")
-            client._receive(while_restarting)
+            while_restarting = client.start_send(r="echo echo")
+            client.receive(while_restarting)
             result = while_restarting["result"]
             assert result["isError"] is True
             assert result["content"][0]["text"] == "[worker is restarting]"
 
             startup_release.touch()
-            client._receive(restarted)
+            client.receive(restarted)
             assert restarted["result"]["content"][0]["text"] == (
                 "[starting new worker]\n[idle]"
             )
 
-            after_restart = client._start_send(r="echo echo")
-            client._receive(after_restart)
+            after_restart = client.start_send(r="echo echo")
+            client.receive(after_restart)
             assert after_restart["result"]["content"][0]["text"] == "zod: echo\n"
-            transcript = client._finish()
+            transcript = client.finish()
             passed = True
             return transcript
         finally:
@@ -984,8 +668,8 @@ def test_restart_does_not_report_never_ready_worker_as_stopped(
         descendant_group = None
         passed = False
         try:
-            client._initialize_and_list_tools()
-            waiting = client._start_send(r="echo echo", timeout_ms=30_000)
+            client.initialize_and_list_tools()
+            waiting = client.start_send(r="echo echo", timeout_ms=30_000)
             wait_for_marker(
                 temporary_path,
                 "zod-replacement-waiting-ready",
@@ -999,7 +683,7 @@ def test_restart_does_not_report_never_ready_worker_as_stopped(
             descendant_group = int(marker.read_text(encoding="utf-8"))
 
             startup_control.write_text("ready", encoding="utf-8")
-            restarted = client._start_send(control="restart")
+            restarted = client.start_send(control="restart")
             responses_returned = threading.Event()
             forced_stop = threading.Event()
 
@@ -1011,8 +695,8 @@ def test_restart_does_not_report_never_ready_worker_as_stopped(
             watchdog = threading.Thread(target=stop_if_calls_block, daemon=True)
             watchdog.start()
             try:
-                client._receive(waiting)
-                client._receive(restarted)
+                client.receive(waiting)
+                client.receive(restarted)
             finally:
                 responses_returned.set()
                 watchdog.join()
@@ -1049,7 +733,7 @@ def test_restart_does_not_report_never_ready_worker_as_stopped(
 
             client.send(r="echo echo")
             assert last_tool_text(client) == "zod: echo\n"
-            transcript = client._finish()
+            transcript = client.finish()
             passed = True
             return transcript
         finally:
@@ -1075,7 +759,7 @@ def test_restart_commits_lifecycle_before_replacement_callbacks(
             ("serve", "--worker", str(zod)),
             environment,
         )
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         client.send(r="complete silently")
         assert last_tool_text(client) == "[done]"
 
@@ -1109,7 +793,7 @@ def test_restart_commits_lifecycle_before_replacement_callbacks(
 
         client.send(r="echo echo")
         assert last_tool_text(client) == "zod: echo\n"
-        return client._finish()
+        return client.finish()
 
 
 def test_restart_discards_unread_stdin(binary: Path) -> Transcript:
@@ -1118,7 +802,7 @@ def test_restart_discards_unread_stdin(binary: Path) -> Transcript:
         binary,
         ("serve", "--worker", str(zod)),
     )
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     client.send(stdin="stale\n")
     assert last_tool_text(client) == "\n[idle]"
 
@@ -1129,7 +813,7 @@ def test_restart_discards_unread_stdin(binary: Path) -> Transcript:
 
     client.send(r="input without request", stdin="fresh\n")
     assert last_tool_text(client) == "zod stdin: fresh\n"
-    return client._finish()
+    return client.finish()
 
 
 def test_retries_initial_startup_silently(binary: Path) -> Transcript:
@@ -1145,7 +829,7 @@ def test_retries_initial_startup_silently(binary: Path) -> Transcript:
             ("serve", "--worker", str(zod)),
             environment,
         )
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         client.send(r="echo echo")
         result = client.transcript[-1]["result"]
         assert result["isError"] is True
@@ -1156,7 +840,7 @@ def test_retries_initial_startup_silently(binary: Path) -> Transcript:
         startup_control.write_text("ready", encoding="utf-8")
         client.send(r="echo echo")
         assert last_tool_text(client) == "zod: echo\n"
-        return client._finish()
+        return client.finish()
 
 
 def test_runs_worker_inside_sandbox(binary: Path) -> Transcript:
@@ -1172,9 +856,9 @@ def test_runs_worker_inside_sandbox(binary: Path) -> Transcript:
             ("serve", "--worker", str(zod)),
             environment,
         )
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         client.send(r="probe sandbox")
-        transcript = client._finish()
+        transcript = client.finish()
 
         assert host_file.read_text(encoding="utf-8") == "host data"
         return transcript
@@ -1197,9 +881,9 @@ def test_shuts_down_stalled_worker(binary: Path) -> Transcript:
         worker_group = None
         passed = False
         try:
-            client._initialize_and_list_tools()
+            client.initialize_and_list_tools()
             operation = client._next_request_id
-            stalled = client._start_send(
+            stalled = client.start_send(
                 r=f"stall: {operation}",
                 stdin="x" * (2 * 1024 * 1024),
             )
@@ -1247,7 +931,7 @@ def test_shutdown_is_bounded_with_detached_stdin_descendant(
         worker_group = None
         server_stopped = False
         try:
-            client._initialize_and_list_tools()
+            client.initialize_and_list_tools()
             client.send(r="echo ready")
             assert last_tool_text(client) == "zod: ready\n"
             control.connect(client)
@@ -1327,7 +1011,7 @@ def test_shutdown_is_bounded_with_detached_stdin_descendant(
             worker_group = stalled_group
 
             poll_stdin = "p" + "x" * (LARGE_OUTPUT_SIZE - 1)
-            stalled = client._start_send(
+            stalled = client.start_send(
                 stdin=poll_stdin,
                 timeout_ms=30_000,
             )
@@ -1371,7 +1055,7 @@ def test_shutdown_is_bounded_with_detached_stdin_descendant(
             shutdown_elapsed = time.monotonic() - shutdown_started
             server_stopped = True
 
-            client._receive(stalled)
+            client.receive(stalled)
             assert stalled["result"] == {
                 "content": [
                     {

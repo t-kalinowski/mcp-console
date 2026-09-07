@@ -24,7 +24,7 @@ def test_bounds_pending_output_and_resets_after_completion(
         binary,
         ("serve", "--worker", str(zod)),
     )
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
 
     client.send(r="overflow console output")
     output = last_tool_text(client)
@@ -42,7 +42,7 @@ def test_bounds_pending_output_and_resets_after_completion(
 
     client.send(r="echo echo")
     assert last_tool_text(client) == "zod: echo\n"
-    return client._finish()
+    return client.finish()
 
 
 def test_orders_failure_and_replacement_output(binary: Path) -> Transcript:
@@ -58,7 +58,7 @@ def test_orders_failure_and_replacement_output(binary: Path) -> Transcript:
             ("serve", "--worker", str(zod)),
             environment,
         )
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
 
         client.send(r="complete silently")
         assert last_tool_text(client) == "[done]"
@@ -97,7 +97,7 @@ def test_orders_failure_and_replacement_output(binary: Path) -> Transcript:
 
         client.send(r="echo echo")
         assert last_tool_text(client) == "zod: echo\n"
-        return client._finish()
+        return client.finish()
 
 
 def test_preserves_raw_output_during_forced_stop(
@@ -108,7 +108,7 @@ def test_preserves_raw_output_during_forced_stop(
         binary,
         ("serve", "--worker", str(zod)),
     )
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
 
     for stream in ("stdout", "stderr"):
         client.send(r=f"force stop after raw {stream}")
@@ -140,7 +140,7 @@ def test_preserves_raw_output_during_forced_stop(
 
     client.send(r="echo echo")
     assert last_tool_text(client) == "zod: echo\n"
-    return client._finish()
+    return client.finish()
 
 
 if __name__ == "__main__":

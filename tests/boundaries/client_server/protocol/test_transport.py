@@ -23,14 +23,14 @@ def test_routes_send_over_sideband(binary: Path) -> Transcript:
         binary,
         ("serve", "--worker", str(zod)),
     )
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     client.send(r="echo hello")
     assert last_tool_text(client) == "zod: hello\n"
     client.send(python="echo precise 👩🏽‍💻")
     assert last_tool_text(client) == "zod python: precise 👩🏽‍💻\n"
     client.send(sql="echo two  spaces")
     assert last_tool_text(client) == "zod sql: two  spaces\n"
-    return client._finish()
+    return client.finish()
 
 
 def test_projects_console_kinds(binary: Path) -> Transcript:
@@ -39,7 +39,7 @@ def test_projects_console_kinds(binary: Path) -> Transcript:
         binary,
         ("serve", "--worker", str(zod)),
     )
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     result = client.send(r="emit console kinds")
     assert result == {
         "content": [
@@ -50,7 +50,7 @@ def test_projects_console_kinds(binary: Path) -> Transcript:
         ],
         "isError": False,
     }, result
-    return client._finish()
+    return client.finish()
 
 
 def test_returns_worker_images(binary: Path) -> Transcript:
@@ -59,7 +59,7 @@ def test_returns_worker_images(binary: Path) -> Transcript:
         binary,
         ("serve", "--worker", str(zod)),
     )
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     client.send(r="emit image")
     result = client.transcript[-1]["result"]
     assert result == {
@@ -70,7 +70,7 @@ def test_returns_worker_images(binary: Path) -> Transcript:
         ],
         "isError": False,
     }, result
-    return client._finish()
+    return client.finish()
 
 
 if __name__ == "__main__":

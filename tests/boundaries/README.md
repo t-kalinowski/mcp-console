@@ -123,7 +123,7 @@ scripts/test --timeout 1800 client_server/requirements/test_r
 scripts/test --update client_server/server/test_tools::initializes_and_lists_tools
 ```
 
-With no selectors, `scripts/test` runs every suite and case in parallel, using at least two worker processes and otherwise one per available CPU by default.
+With no selectors, `scripts/test` runs every suite and case in separate processes, with at least two concurrent cases and otherwise one per available CPU by default.
 Pass `--jobs N` to set the maximum concurrency or `--jobs 1` to run serially.
 Each case has a 600-second deadline that starts when its supervisor launches.
 The deadline includes snapshot formatting, comparison, and updates, which run in the supervised case process so the coordinator can keep handling signals and sibling failures.
@@ -132,7 +132,9 @@ On timeout, the runner names the case and requests cleanup from its supervisor p
 The supervisor sends the case `SIGINT`, allowing 15 seconds for `finally` blocks and fixture cleanup before forcibly killing that process by PID.
 Fixtures remain responsible for their subprocesses; forcibly killing a case cannot guarantee that all its descendants have exited.
 After a failure, Ctrl-C, SIGTERM, or SIGHUP, the runner cancels queued cases and gives running cases two seconds to finish before requesting the same bounded cleanup.
-It includes their further failures and captured standard error in its report.
+Cases observed to exit with `SIGINT` after cleanup was requested are labelled `cancelled`; their captured output is still printed, including errors interrupted during cleanup.
+An independent `SIGINT` racing that request can receive the same label: the exit status does not identify which signal caused it.
+This affects reporting during an already unsuccessful run; deadlines and other unsuccessful exits remain failures.
 Each supervisor watches an ownership pipe, so loss of the runner also requests cleanup, including when the runner is killed with SIGKILL.
 The case interpreter has no monitoring thread: fixtures can use `fork` and `preexec_fn`, and forced cleanup still works if native code holds the case's GIL.
 Normal runs emit one flushed `.` for every passing case and end the progress line with a newline.
@@ -152,7 +154,16 @@ A suite may set `PLATFORMS = {"darwin"}` to restrict execution and snapshot upda
 Restricted cases remain visible under `scripts/test --list` and are skipped on other platforms.
 A suite may set `REQUIRED_COMMANDS = {"ir"}` to skip when a required executable is not on `PATH`.
 
-Server cases create an `McpClient`, perform their `send` interactions, and return `client._finish()`.
+Server cases create an `McpClient`, call `initialize_and_list_tools()`, perform their `send()` interactions, and return `client.finish()`.
+Use `with McpClient(...) as client:` so an assertion also closes the input and reaps the server.
+Response reads have a 600-second ceiling, shortened to leave 14 seconds before the runner's case deadline for cleanup and diagnostics.
+This uses the remaining case time even for requests made later in a case.
+Client shutdown allows 11 seconds for server retirement and reserves two more seconds for a server-only kill and reap, within the supervisor's 15-second cleanup window.
+Constructor arguments `response_timeout` and `shutdown_timeout` can override these waits; under the runner, the case deadline and 11-second shutdown cap still apply.
+Deadline errors include the server's stderr tail.
+To make interleavings explicit, `start_send()` returns a pending transcript entry; `receive(entry)` fills in its response, and `receive_many(entries)` matches responses by request ID regardless of arrival order.
+Protocol cases can use `request()`, `start_request()`, `notify()`, and `send_message()` directly.
+Use `finish_with_standard_error()` when the case needs to assert server diagnostics alongside its transcript.
 Other cases may invoke the binary directly and return their transcript entries.
 
 Each suite is also directly runnable:

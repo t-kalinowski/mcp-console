@@ -38,14 +38,14 @@ def test_captures_worker_stdout(binary: Path) -> Transcript:
         binary,
         ("serve", "--worker", str(zod)),
     )
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     client.send(r="emit stdout")
     output = last_tool_text(client)
     assert_large_output(output, "zod stdout 👩🏽‍💻\n")
     client.transcript[-1]["result"]["content"][0]["text"] = (
         "zod stdout 👩🏽‍💻\n<large output>\n"
     )
-    return client._finish()
+    return client.finish()
 
 
 def test_compacts_split_terminal_redraws(binary: Path) -> Transcript:
@@ -54,11 +54,11 @@ def test_compacts_split_terminal_redraws(binary: Path) -> Transcript:
         binary,
         ("serve", "--worker", str(zod)),
     )
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
 
     client.send(r="emit terminal redraws")
     assert last_tool_text(client) == "ordinary stdout\r\nol\nnew\nold\x1b[2Knew\n"
-    return client._finish()
+    return client.finish()
 
 
 def test_compacts_stdout_and_stderr_independently(binary: Path) -> Transcript:
@@ -67,7 +67,7 @@ def test_compacts_stdout_and_stderr_independently(binary: Path) -> Transcript:
         binary,
         ("serve", "--worker", str(zod)),
     )
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
 
     client.send(r="emit independent stdout stderr redraws")
     output = last_tool_text(client)
@@ -78,7 +78,7 @@ def test_compacts_stdout_and_stderr_independently(binary: Path) -> Transcript:
         "target": "result.content[0].text",
         "cross_source_position": "omitted",
     }
-    return client._finish()
+    return client.finish()
 
 
 def test_compacts_each_polled_output_segment(
@@ -94,7 +94,7 @@ def test_compacts_each_polled_output_segment(
             ("serve", "--worker", str(zod)),
             environment,
         )
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
 
         client.send(r="redraw across polls", timeout_ms=0)
         assert last_tool_text(client) == "\n[running; poll with an empty send]"
@@ -114,7 +114,7 @@ def test_compacts_each_polled_output_segment(
         (marker.parent / "zod-release-redraw").touch()
         client.send(timeout_ms=3_000)
         assert last_tool_text(client) == "output 100%\n"
-        return client._finish()
+        return client.finish()
 
 
 def test_compacts_many_redraws_in_one_response(
@@ -125,11 +125,11 @@ def test_compacts_many_redraws_in_one_response(
         binary,
         ("serve", "--worker", str(zod)),
     )
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
 
     client.send(r="stress redraws")
     assert last_tool_text(client) == "stress final\nuseful output\n"
-    return client._finish()
+    return client.finish()
 
 
 def test_preserves_invalid_raw_output_when_worker_exits(binary: Path) -> Transcript:
@@ -138,7 +138,7 @@ def test_preserves_invalid_raw_output_when_worker_exits(binary: Path) -> Transcr
         binary,
         ("serve", "--worker", str(zod)),
     )
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
 
     for stream in ("stdout", "stderr"):
         client.send(r=f"exit after invalid {stream}")
@@ -162,7 +162,7 @@ def test_preserves_invalid_raw_output_when_worker_exits(binary: Path) -> Transcr
         )
         result["content"][0]["text"] = prefix + "<large output>" + failure
 
-    return client._finish()
+    return client.finish()
 
 
 def test_preserves_raw_output_during_malformed_sideband_failure(
@@ -173,7 +173,7 @@ def test_preserves_raw_output_during_malformed_sideband_failure(
         binary,
         ("serve", "--worker", str(zod)),
     )
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
 
     for stream in ("stdout", "stderr"):
         client.send(r=f"malformed sideband after {stream}")
@@ -221,7 +221,7 @@ def test_preserves_raw_output_during_malformed_sideband_failure(
             },
         }
 
-    transcript, standard_error = client._finish_with_standard_error()
+    transcript, standard_error = client.finish_with_standard_error()
     diagnostics = standard_error.splitlines()
     # Relay stderr is diagnostic-only and can be cut off when the server's
     # fail-safe stops a failed generation. The framed failure above is authoritative.
@@ -241,7 +241,7 @@ def test_preserves_raw_output_during_semantically_invalid_sideband_message(
         binary,
         ("serve", "--worker", str(zod)),
     )
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
 
     client.send(r="unexpected input receipt after stdout")
     result = client.transcript[-1]["result"]
@@ -273,7 +273,7 @@ def test_preserves_raw_output_during_semantically_invalid_sideband_message(
         "cross_source_position": "omitted",
         "replacements": {"large_output": "<large output>"},
     }
-    return client._finish()
+    return client.finish()
 
 
 def test_drains_background_stderr_while_idle(binary: Path) -> Transcript:
@@ -287,7 +287,7 @@ def test_drains_background_stderr_while_idle(binary: Path) -> Transcript:
             ("serve", "--worker", str(zod)),
             environment,
         )
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         client.send(r="start background stderr")
         assert last_tool_text(client) == "[done]"
         started = wait_for_marker(
@@ -312,7 +312,7 @@ def test_drains_background_stderr_while_idle(binary: Path) -> Transcript:
         client.transcript[-1]["result"]["content"][0]["text"] = (
             "zod background stderr\n<large output>\n[idle]"
         )
-        return client._finish()
+        return client.finish()
 
 
 def test_times_out_and_polls_running_evaluation(binary: Path) -> Transcript:
@@ -321,7 +321,7 @@ def test_times_out_and_polls_running_evaluation(binary: Path) -> Transcript:
         binary,
         ("serve", "--worker", str(zod)),
     )
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     client.send(r="echo echo")
     client.send(
         r="complete after timeout",
@@ -333,7 +333,7 @@ def test_times_out_and_polls_running_evaluation(binary: Path) -> Transcript:
     output = client.transcript[-1]["result"]["content"][0]["text"]
     assert output == "zod: complete after timeout\n", output
     client.send(r="echo echo")
-    return client._finish()
+    return client.finish()
 
 
 def test_drains_pending_sideband_output_while_running(binary: Path) -> Transcript:
@@ -347,7 +347,7 @@ def test_drains_pending_sideband_output_while_running(binary: Path) -> Transcrip
             ("serve", "--worker", str(zod)),
             environment,
         )
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
 
         client.send(r="emit output and image before completion", timeout_ms=0)
         assert last_tool_text(client) == "\n[running; poll with an empty send]"
@@ -376,7 +376,7 @@ def test_drains_pending_sideband_output_while_running(binary: Path) -> Transcrip
         (image_started.parent / "zod-release-image-completion").touch()
         client.send(timeout_ms=3_000)
         assert last_tool_text(client) == "[done]"
-        return client._finish()
+        return client.finish()
 
 
 def test_orders_queued_cancellation_behind_incomplete_response(
@@ -400,7 +400,7 @@ def test_orders_queued_cancellation_behind_incomplete_response(
             observer: ResponseGateObserver | None = None
             finished = False
             try:
-                client._initialize_and_list_tools()
+                client.initialize_and_list_tools()
                 observer = ResponseGateObserver(
                     temporary,
                     client.stdout.stream,
@@ -411,7 +411,7 @@ def test_orders_queued_cancellation_behind_incomplete_response(
                     "https://invalid.example/" + "x" * TEST_GATED_RESPONSE_SIZE
                 )
                 first_id = client._next_request_id
-                first = client._start_send(
+                first = client.start_send(
                     requirements={"python": [invalid_requirement]}
                 )
                 assert first["id"] == first_id, first
@@ -427,13 +427,13 @@ def test_orders_queued_cancellation_behind_incomplete_response(
                 )
 
                 cancelled_id = client._next_request_id
-                cancelled = client._start_send(r=f"check response gate: {cancelled_id}")
+                cancelled = client.start_send(r=f"check response gate: {cancelled_id}")
                 assert cancelled["id"] == cancelled_id, cancelled
                 client.wait_until_input_is_read(
                     f"cancelled request {cancelled_id}", control
                 )
 
-                client._notify(
+                client.notify(
                     "notifications/cancelled",
                     requestId=cancelled_id,
                     reason="cancel before worker admission",
@@ -444,7 +444,7 @@ def test_orders_queued_cancellation_behind_incomplete_response(
                 control.record_client_event(cancelled_id, "operation_accepted")
 
                 live_id = client._next_request_id
-                live = client._start_send(r=f"check response gate: {live_id}")
+                live = client.start_send(r=f"check response gate: {live_id}")
                 assert live["id"] == live_id, live
                 client.wait_until_input_is_read(f"live request {live_id}", control)
                 control.record_client_event(
@@ -453,7 +453,7 @@ def test_orders_queued_cancellation_behind_incomplete_response(
                 )
 
                 barrier_target = 1_000_000
-                client._notify(
+                client.notify(
                     "notifications/cancelled",
                     requestId=barrier_target,
                     reason="staged receive barrier",
@@ -468,7 +468,7 @@ def test_orders_queued_cancellation_behind_incomplete_response(
                 )
                 observer.finish()
                 control.record_client_event(first_id, "response_write_completed")
-                client._receive(first)
+                client.receive(first)
                 expected_error = (
                     f"Python requirement `{invalid_requirement}` is not accepted: "
                     "host-side managed resolution accepts named package "
@@ -489,7 +489,7 @@ def test_orders_queued_cancellation_behind_incomplete_response(
                 started = control.wait_for(live_id, "worker_operation_started")
                 assert started["response_gate_released"] is True, control.diagnostics()
                 control.wait_for(live_id, "worker_operation_completed")
-                client._receive(live)
+                client.receive(live)
                 assert live["result"] == {
                     "content": [
                         {
@@ -500,10 +500,10 @@ def test_orders_queued_cancellation_behind_incomplete_response(
                     "isError": False,
                 }, live
 
-                ping = client._request("ping")
+                ping = client.request("ping")
                 assert ping["result"] == {}, ping
                 client.close_input_observer()
-                transcript = client._finish()
+                transcript = client.finish()
                 control.wait_for_eof()
                 cancelled_events = [
                     event
