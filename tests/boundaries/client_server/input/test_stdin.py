@@ -27,7 +27,7 @@ def test_accepts_idle_stdin(binary: Path) -> Transcript:
         binary,
         ("serve", "--worker", str(zod)),
     )
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
 
     client.send(stdin="cold\n")
     assert last_tool_text(client) == "\n[idle]"
@@ -38,7 +38,7 @@ def test_accepts_idle_stdin(binary: Path) -> Transcript:
     assert last_tool_text(client) == "\n[idle]"
     client.send(r="input without request")
     assert last_tool_text(client) == "zod stdin: idle\n"
-    return client._finish()
+    return client.finish()
 
 
 def test_idle_stdin_startup_blocks_preparation(binary: Path) -> Transcript:
@@ -59,18 +59,18 @@ def test_idle_stdin_startup_blocks_preparation(binary: Path) -> Transcript:
         )
         passed = False
         try:
-            client._initialize_and_list_tools()
-            idle_stdin = client._start_send(stdin="queued\n")
+            client.initialize_and_list_tools()
+            idle_stdin = client.start_send(stdin="queued\n")
             wait_for_marker(
                 temporary_path,
                 "zod-replacement-waiting-ready",
                 client,
             )
 
-            preparation = client._start_send(
+            preparation = client.start_send(
                 requirements={"python": ["py-yaml12"]},
             )
-            client._receive(preparation)
+            client.receive(preparation)
             assert preparation["result"] == {
                 "content": [
                     {
@@ -82,7 +82,7 @@ def test_idle_stdin_startup_blocks_preparation(binary: Path) -> Transcript:
             }, preparation
 
             startup_release.touch()
-            client._receive(idle_stdin)
+            client.receive(idle_stdin)
             assert idle_stdin["result"] == {
                 "content": [{"type": "text", "text": "\n[idle]"}],
                 "isError": False,
@@ -90,7 +90,7 @@ def test_idle_stdin_startup_blocks_preparation(binary: Path) -> Transcript:
 
             client.send(r="input without request")
             assert last_tool_text(client) == "zod stdin: queued\n"
-            transcript = client._finish()
+            transcript = client.finish()
             passed = True
             return transcript
         finally:
@@ -110,7 +110,7 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
             ("serve", "--worker", str(zod)),
             environment,
         )
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
 
         client.send(
             r="input length without request",
@@ -161,7 +161,7 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
         client.send(r="echo echo", stdin="x" * (128 * 1024))
         client.transcript[-1]["send"]["stdin"] = "<large unread stdin>"
         assert last_tool_text(client) == "zod: echo\n"
-        return client._finish()
+        return client.finish()
 
 
 def test_routes_same_call_stdin_to_direct_fd0(binary: Path) -> Transcript:
@@ -170,11 +170,11 @@ def test_routes_same_call_stdin_to_direct_fd0(binary: Path) -> Transcript:
         binary,
         ("serve", "--worker", str(zod)),
     )
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
 
     client.send(r="read fd 0 directly", stdin="direct café\n")
     assert last_tool_text(client) == "zod fd 0: 'direct café\\n'\n"
-    return client._finish()
+    return client.finish()
 
 
 def test_preserves_unexposed_input_output(binary: Path) -> Transcript:
@@ -188,7 +188,7 @@ def test_preserves_unexposed_input_output(binary: Path) -> Transcript:
             ("serve", "--worker", str(zod)),
             environment,
         )
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
 
         client.send(
             r="request input after timeout",
@@ -208,7 +208,7 @@ def test_preserves_unexposed_input_output(binary: Path) -> Transcript:
         assert last_tool_text(client) == (
             'before\n[input requested: "late> "]\nduring request\nzod stdin: answer\n'
         )
-        return client._finish()
+        return client.finish()
 
 
 if __name__ == "__main__":

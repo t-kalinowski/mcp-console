@@ -44,7 +44,7 @@ def test_runs_without_a_resolver_bootstrap(binary: Path) -> TranscriptWithCompan
             environment,
             current_directory=workspace,
         )
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         send = client.transcript[-1]["result"]["tools"][0]
         properties = send["inputSchema"]["properties"]
         assert {"r", "python", "sql"} <= properties.keys(), properties
@@ -77,7 +77,7 @@ def test_runs_without_a_resolver_bootstrap(binary: Path) -> TranscriptWithCompan
             ],
             "isError": True,
         }, result
-        transcript = client._finish()
+        transcript = client.finish()
         session = next((workspace / ".mcp-console" / "sessions").iterdir())
         events = [
             json.loads(line)

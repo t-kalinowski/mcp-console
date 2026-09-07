@@ -24,7 +24,7 @@ def test_preserves_configured_python_environment(binary: Path) -> Transcript:
     environment = os.environ.copy()
     environment["RETICULATE_PYTHON"] = "configured-by-user"
     client = McpClient(binary, ("serve",), environment)
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
         external_python_worker <- Sys.getpid()
@@ -99,21 +99,21 @@ def test_preserves_configured_python_environment(binary: Path) -> Transcript:
         """)
     client.send(r=r)
     assert last_result_text(client) == "[1] 42\n"
-    return client._finish()
+    return client.finish()
 
 
 def test_preserves_empty_python_environment(binary: Path) -> Transcript:
     environment = os.environ.copy()
     environment["RETICULATE_PYTHON"] = ""
     client = McpClient(binary, ("serve",), environment)
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
         Sys.getenv("RETICULATE_PYTHON", unset = NA_character_)
         """)
     client.send(r=r)
     assert last_result_text(client) == '[1] "managed"\n'
-    return client._finish()
+    return client.finish()
 
 
 def test_rejects_python_older_than_3_10(binary: Path) -> Transcript:
@@ -129,7 +129,7 @@ def test_rejects_python_older_than_3_10(binary: Path) -> Transcript:
     environment = os.environ.copy()
     environment["RETICULATE_PYTHON"] = str(interpreter)
     client = McpClient(binary, ("serve",), environment)
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     client.send(python="6 * 7")
     result = client.transcript[-1]["result"]
     assert result["isError"] is True
@@ -153,7 +153,7 @@ def test_rejects_python_older_than_3_10(binary: Path) -> Transcript:
         version_failure,
     )
     result["content"][0]["text"] = bridge_failure + version_failure + worker_failure
-    return client._finish()
+    return client.finish()
 
 
 def managed_python_transcript(binary: Path, configured: bool) -> Transcript:
@@ -168,7 +168,7 @@ def managed_python_transcript(binary: Path, configured: bool) -> Transcript:
     environment["UV_OFFLINE"] = "1"
 
     client = McpClient(binary, ("serve",), environment)
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
         python <- Sys.getenv("RETICULATE_PYTHON", unset = NA_character_)
@@ -199,7 +199,7 @@ def managed_python_transcript(binary: Path, configured: bool) -> Transcript:
     client.send(python=python)
     output = last_result_text(client)
     assert output == "42\n", repr(output)
-    return client._finish()
+    return client.finish()
 
 
 def test_evaluates_with_default_managed_python(binary: Path) -> Transcript:
@@ -214,7 +214,7 @@ def test_runs_joblib_process_backend(binary: Path) -> Transcript:
     environment = os.environ.copy()
     environment.pop("RETICULATE_PYTHON", None)
     client = McpClient(binary, ("serve",), environment)
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     # fmt: python
     python = code("""
         from joblib import Parallel, delayed
@@ -227,14 +227,14 @@ def test_runs_joblib_process_backend(binary: Path) -> Transcript:
     )
     output = last_result_text(client)
     assert output == "[2, 1, 0, 1, 2]\n", repr(output)
-    return client._finish()
+    return client.finish()
 
 
 def test_runs_joblib_process_backend_after_live_resolution(binary: Path) -> Transcript:
     environment = os.environ.copy()
     environment.pop("RETICULATE_PYTHON", None)
     client = McpClient(binary, ("serve",), environment)
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     client.send(python="import sys")
     assert last_result_text(client) == "[done]"
     # fmt: python
@@ -246,14 +246,14 @@ def test_runs_joblib_process_backend_after_live_resolution(binary: Path) -> Tran
     client.send(python=python)
     output = last_result_text(client)
     assert output == "[2, 1, 0, 1, 2]\n", repr(output)
-    return client._finish()
+    return client.finish()
 
 
 def test_runs_spawn_process_after_live_resolution(binary: Path) -> Transcript:
     environment = os.environ.copy()
     environment.pop("RETICULATE_PYTHON", None)
     client = McpClient(binary, ("serve",), environment)
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     # fmt: python
     python = code("""
         import multiprocessing.spawn
@@ -285,14 +285,14 @@ def test_runs_spawn_process_after_live_resolution(binary: Path) -> Transcript:
     client.send(python=python)
     output = last_result_text(client)
     assert output == "(True, True)\n", repr(output)
-    return client._finish()
+    return client.finish()
 
 
 def test_inspects_sandbox_child_processes_with_psutil(binary: Path) -> Transcript:
     environment = os.environ.copy()
     environment.pop("RETICULATE_PYTHON", None)
     client = McpClient(binary, ("serve",), environment)
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     # fmt: python
     python = code("""
         import sys
@@ -349,7 +349,7 @@ def test_inspects_sandbox_child_processes_with_psutil(binary: Path) -> Transcrip
     client.send(python=python)
     output = last_result_text(client)
     assert output == "(True, True, True, True, True, True, True)\n", repr(output)
-    return client._finish()
+    return client.finish()
 
 
 def test_retains_environment_when_optional_psutil_setup_fails(
@@ -358,7 +358,7 @@ def test_retains_environment_when_optional_psutil_setup_fails(
     environment = os.environ.copy()
     environment.pop("RETICULATE_PYTHON", None)
     client = McpClient(binary, ("serve",), environment)
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     # fmt: python
     python = code("""
         import importlib.machinery
@@ -442,7 +442,7 @@ def test_retains_environment_when_optional_psutil_setup_fails(
     assert last_result_text(client) == "[1] TRUE\n"
     client.send(python="import psutil; psutil.__name__")
     assert last_result_text(client) == "'psutil'\n"
-    return client._finish()
+    return client.finish()
 
 
 def test_does_not_import_local_psutil_during_bootstrap(binary: Path) -> Transcript:
@@ -462,7 +462,7 @@ def test_does_not_import_local_psutil_during_bootstrap(binary: Path) -> Transcri
             environment,
             current_directory=directory,
         )
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         # fmt: python
         python = code("""
             import builtins
@@ -479,12 +479,12 @@ def test_does_not_import_local_psutil_during_bootstrap(binary: Path) -> Transcri
         assert output == "(42, False, False)\n", repr(output)
         client.send(python="import psutil; psutil.answer")
         assert last_result_text(client) == "42\n"
-        return client._finish()
+        return client.finish()
 
 
 def test_sends_python_cell_with_initial_requirements(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     # fmt: python
     python = code("""
         import yaml12
@@ -496,12 +496,12 @@ def test_sends_python_cell_with_initial_requirements(binary: Path) -> Transcript
         requirements={"python": ["py-yaml12"]},
     )
     assert last_result_text(client) == "yaml12\n"
-    return client._finish()
+    return client.finish()
 
 
 def test_compacts_native_duckdb_progress_bar(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     # fmt: python
     python = code(r"""
         import os
@@ -568,12 +568,12 @@ def test_compacts_native_duckdb_progress_bar(binary: Path) -> Transcript:
         "elapsed": "omitted",
         "trailing_progress_padding": "omitted",
     }
-    return client._finish()
+    return client.finish()
 
 
 def test_uses_200_column_default(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     # fmt: python
     python = code("""
         import shutil
@@ -598,14 +598,14 @@ def test_uses_200_column_default(binary: Path) -> Transcript:
         assert f"column_{column:02}" in output
     assert "..." not in output
     assert "[1 rows x 12 columns]" not in output
-    return client._finish()
+    return client.finish()
 
 
 def test_uses_200_column_default_after_r_initializes_python(
     binary: Path,
 ) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
         reticulate::py_run_string(
@@ -627,7 +627,7 @@ def test_uses_200_column_default_after_r_initializes_python(
     assert last_result_text(client) == (
         "R-first NumPy linewidth: 200\nR-first pandas display.width: 200\n"
     )
-    return client._finish()
+    return client.finish()
 
 
 def test_prints_requirements_with_host_uv_cache(binary: Path) -> Transcript:
@@ -654,7 +654,7 @@ def test_prints_requirements_with_host_uv_cache(binary: Path) -> Transcript:
             environment,
             current_directory=temporary,
         )
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         uv_record.write_text("", encoding="utf-8")
         # fmt: r
         r = code(r"""
@@ -688,7 +688,7 @@ def test_prints_requirements_with_host_uv_cache(binary: Path) -> Transcript:
         }
         assert all(record == expected for record in records), records
         assert not worker_cache.exists(), worker_cache
-        return client._finish()
+        return client.finish()
 
 
 if __name__ == "__main__":

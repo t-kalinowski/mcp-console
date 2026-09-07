@@ -160,7 +160,7 @@ def test_controlled_restart_resolves_requirements_before_replacement_and_timeout
         replacement_evaluation_released = False
         finished = False
         try:
-            evaluation = client.client._start_send(
+            evaluation = client.client.start_send(
                 control="restart",
                 r="replacement requirement cell",
                 requirements={"r": ["restart-requirement"]},

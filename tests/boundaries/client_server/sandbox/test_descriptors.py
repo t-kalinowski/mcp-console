@@ -75,7 +75,7 @@ def descriptor_entry(
             passed = False
             try:
                 server = capture_darwin_process_identity(client.process.pid)
-                client._initialize_and_list_tools()
+                client.initialize_and_list_tools()
                 result = client.send(python=source)
                 assert result == {
                     "content": [{"type": "text", "text": "closed\n"}],
@@ -86,7 +86,7 @@ def descriptor_entry(
                 assert descriptor not in darwin_process_file_descriptors(
                     launchers[0]
                 ), "unlisted server descriptor remained open in the sandbox launcher"
-                transcript = client._finish()
+                transcript = client.finish()
                 passed = True
             finally:
                 if not passed:

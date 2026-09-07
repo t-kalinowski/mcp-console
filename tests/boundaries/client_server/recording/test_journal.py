@@ -37,9 +37,9 @@ def test_materializes_records_only_for_console_use(binary: Path) -> Transcript:
             {**os.environ, "TMPDIR": str(unused_workspace)},
             current_directory=unused_workspace,
         )
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         assert not (unused_workspace / ".mcp-console").exists(), unused_workspace
-        removed = client._request(
+        removed = client.request(
             "tools/call",
             name="session",
             arguments={"action": "restart"},
@@ -50,7 +50,7 @@ def test_materializes_records_only_for_console_use(binary: Path) -> Transcript:
         }, removed
         assert not (unused_workspace / ".mcp-console").exists(), unused_workspace
         assert not list(unused_workspace.glob("mcp-console-tmp-*")), unused_workspace
-        transcript = client._finish()
+        transcript = client.finish()
         assert not (unused_workspace / ".mcp-console").exists(), unused_workspace
 
         workspace = temporary / "send"
@@ -60,7 +60,7 @@ def test_materializes_records_only_for_console_use(binary: Path) -> Transcript:
             ("serve", "--worker", str(zod)),
             current_directory=workspace,
         )
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         assert not (workspace / ".mcp-console").exists(), workspace
         client.send(r="echo echo")
 
@@ -78,7 +78,7 @@ def test_materializes_records_only_for_console_use(binary: Path) -> Transcript:
             "tool_result",
         ], events
         assert events[1]["request"]["name"] == "send", events[1]
-        client._finish()
+        client.finish()
 
         transcript.append(
             {
@@ -103,18 +103,18 @@ def test_continues_without_record_when_record_cannot_be_created(
             ("serve", "--worker", str(zod)),
             current_directory=workspace,
         )
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
 
         client.send(r="echo echo")
         client.send(control="restart")
 
-        client._request("tools/call", name="missing", arguments={})
+        client.request("tools/call", name="missing", arguments={})
         assert client.transcript[-1]["error"] == {
             "code": -32602,
             "message": "tool not found",
         }, client.transcript[-1]
         assert (workspace / ".mcp-console").read_text(encoding="utf-8") == "occupied"
-        transcript, standard_error = client._finish_with_standard_error()
+        transcript, standard_error = client.finish_with_standard_error()
         assert standard_error.count("\n") == 1, standard_error
         assert standard_error.startswith(
             "mcp-console: transcript recording disabled: failed to create "
@@ -143,7 +143,7 @@ def test_updates_quarto_without_rereading_journal(binary: Path) -> Transcript:
         finished = False
         journal_read_disabled = False
         try:
-            client._initialize_and_list_tools()
+            client.initialize_and_list_tools()
             client.send(r="echo first")
 
             session = next((workspace / ".mcp-console" / "sessions").iterdir())
@@ -159,7 +159,7 @@ def test_updates_quarto_without_rereading_journal(binary: Path) -> Transcript:
             assert "```{r}\necho first\n```" in quarto, quarto
             assert "```{python}\necho second\n```" in quarto, quarto
 
-            transcript = client._finish()
+            transcript = client.finish()
             transcript.append(
                 {
                     "quarto projection": {
@@ -191,7 +191,7 @@ def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanions
             current_directory=workspace,
             umask=0,
         )
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         client.send(
             r="emit image",
             stdin="recorded stdin\n",
@@ -204,7 +204,7 @@ def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanions
         assert "    - praise" in quarto_before_python_requirement
         assert "transcript-fixture" not in quarto_before_python_requirement
         image_request_id = client.transcript[-1]["id"]
-        invalid = client._request(
+        invalid = client.request(
             "tools/call",
             name="send",
             arguments={"r": "1", "python": "1"},
@@ -213,7 +213,7 @@ def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanions
         client.send(requirements={"python": ["transcript-fixture"]})
         preparation_request_id = client.transcript[-1]["id"]
         preparation_result = client.transcript[-1]["result"]
-        client._request("tools/call", name="missing", arguments={})
+        client.request("tools/call", name="missing", arguments={})
 
         sessions = list((workspace / ".mcp-console" / "sessions").iterdir())
         assert len(sessions) == 1, sessions
@@ -337,7 +337,7 @@ def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanions
             )
         }
         assert set(file_modes.values()) == {0o600}, file_modes
-        transcript = client._finish()
+        transcript = client.finish()
 
         for event in events:
             assert event["at"].endswith("Z"), event
@@ -395,7 +395,7 @@ def test_disables_recording_after_transcript_failure(binary: Path) -> Transcript
             ("serve", "--worker", str(zod)),
             current_directory=workspace,
         )
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         client.send(r="echo echo")
         session = next((workspace / ".mcp-console" / "sessions").iterdir())
         artifacts = session / "artifacts"
@@ -427,7 +427,7 @@ def test_disables_recording_after_transcript_failure(binary: Path) -> Transcript
         client.send(r="echo echo")
         assert journal.read_text(encoding="utf-8") == journal_after_failure
 
-        transcript, standard_error = client._finish_with_standard_error()
+        transcript, standard_error = client.finish_with_standard_error()
         assert standard_error.count("\n") == 1, standard_error
         assert standard_error.startswith(
             "mcp-console: transcript recording disabled: failed to create "
@@ -461,9 +461,9 @@ def test_flushes_calls_and_keeps_unpolled_images(binary: Path) -> Transcript:
             environment,
             current_directory=workspace,
         )
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
 
-        waiting = client._start_send(r="complete after release")
+        waiting = client.start_send(r="complete after release")
         started = wait_for_marker(
             temporary,
             "zod-evaluation-started",
@@ -491,7 +491,7 @@ def test_flushes_calls_and_keeps_unpolled_images(binary: Path) -> Transcript:
         quarto_inode = quarto.stat().st_ino
 
         (started.parent / "zod-release-evaluation").touch()
-        client._receive(waiting)
+        client.receive(waiting)
         after_release = [
             json.loads(line)
             for line in journal.read_text(encoding="utf-8").splitlines()
@@ -603,7 +603,7 @@ def test_flushes_calls_and_keeps_unpolled_images(binary: Path) -> Transcript:
         assert polled_quarto == unpolled_quarto
         assert quarto.stat().st_ino == unpolled_quarto_inode
 
-        transcript = client._finish()
+        transcript = client.finish()
         transcript.append(
             {
                 "live journal": {

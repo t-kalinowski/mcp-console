@@ -55,7 +55,7 @@ class RelayWorkerClient:
             ("serve", "--worker", str(mitm)),
             environment,
         )
-        self._client._initialize_and_list_tools()
+        self._client.initialize_and_list_tools()
 
     def send(self, **arguments: object) -> ToolResult:
         return self._client.send(**arguments)
@@ -76,9 +76,9 @@ class RelayWorkerClient:
         assert len(output) == expected_size, len(output)
         return output
 
-    def _finish(self) -> Transcript:
+    def finish(self) -> Transcript:
         transcript = self._read_capture(self._capture_path())
-        self._client._finish()
+        self._client.finish()
         self._temporary.cleanup()
         return transcript
 
@@ -90,7 +90,7 @@ class RelayWorkerClient:
         transcript = self._read_open_capture(old_capture)
         transcript.extend(self._read_capture(self._capture_path(excluding=old_path)))
         old_capture.close()
-        self._client._finish()
+        self._client.finish()
         self._temporary.cleanup()
         return transcript
 

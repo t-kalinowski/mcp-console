@@ -108,7 +108,7 @@ def _tool_error(entry: dict[str, Any], expected: str) -> None:
 
 
 def _ordered_input_barrier(client: McpClient) -> None:
-    barrier = client._request("ping")
+    barrier = client.request("ping")
     assert barrier["result"] == {}, barrier
 
 
@@ -145,7 +145,7 @@ class ServerRelayClient:
             ),
             environment,
         )
-        self.client._initialize_and_list_tools()
+        self.client.initialize_and_list_tools()
 
     def start_worker(self) -> None:
         assert _tool_text(self.send(control="restart")) == (
@@ -158,7 +158,7 @@ class ServerRelayClient:
     def finish_active(self) -> Transcript:
         self._wait_for(DONE_NAME)
         transcript = self._read_capture(self._capture_path())
-        self.client._finish()
+        self.client.finish()
         self._temporary.cleanup()
         return transcript
 
@@ -166,7 +166,7 @@ class ServerRelayClient:
         self._wait_for(DONE_NAME)
         capture_path = self._capture_path()
         with capture_path.open(encoding="utf-8") as capture:
-            self.client._finish()
+            self.client.finish()
             transcript = self._read_open_capture(capture)
         self._temporary.cleanup()
 
@@ -187,9 +187,9 @@ class ServerRelayClient:
         assert capture_path.is_file(), capture_path
         with capture_path.open(encoding="utf-8") as capture:
             checkpoint.with_name(RELEASE_NAME).touch()
-            self.client._receive(entry)
+            self.client.receive(entry)
             _tool_error(entry, expected)
-            self.client._finish()
+            self.client.finish()
             transcript = self._read_open_capture(capture, allow_raw=True)
         self._temporary.cleanup()
         return transcript
@@ -204,7 +204,7 @@ class ServerRelayClient:
         assert capture_path.is_file(), capture_path
         with capture_path.open(encoding="utf-8") as capture:
             checkpoint.with_name(RELEASE_NAME).touch()
-            self.client._receive(entry)
+            self.client.receive(entry)
             _tool_error(entry, expected)
             stop_client(self.client)
             transcript = self._read_open_capture(capture)
@@ -283,7 +283,7 @@ def _receive_checkpointed(
 ) -> None:
     readable, _, _ = select.select([client.stdout], [], [], 10)
     assert readable, f"mcp-console did not return {description}"
-    client._receive(entry)
+    client.receive(entry)
 
 
 def _wait_for_recorded_tool_result(

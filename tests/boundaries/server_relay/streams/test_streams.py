@@ -81,10 +81,10 @@ def test_orders_cross_source_output_by_serialized_observation(
     binary: Path,
 ) -> Transcript:
     client = ServerRelayClient(binary, "serialized_cross_source_order")
-    evaluation = client.client._start_send(r="42")
+    evaluation = client.client.start_send(r="42")
     checkpoint = client._wait_for(CHECKPOINT_NAME)
     try:
-        client.client._receive(evaluation)
+        client.client.receive(evaluation)
         assert _tool_text(evaluation["result"]) == (
             "stdout before completion\n"
             "stderr before completion\n"

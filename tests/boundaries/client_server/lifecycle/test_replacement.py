@@ -42,7 +42,7 @@ def test_reports_missing_worker_launch_failure(binary: Path) -> Transcript:
         binary,
         ("serve", "--worker", "/definitely/missing/mcp-console-worker"),
     )
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
 
     client.send(r="complete silently")
     result = client.transcript[-1]["result"]
@@ -52,7 +52,7 @@ def test_reports_missing_worker_launch_failure(binary: Path) -> Transcript:
     assert failure.endswith("]"), failure
     result["content"][0]["text"] = "[failed to launch worker: <missing executable>]"
 
-    transcript, standard_error = client._finish_with_standard_error()
+    transcript, standard_error = client.finish_with_standard_error()
     if standard_error:
         assert standard_error.strip() == failure.removeprefix("[").removesuffix("]")
     return transcript
@@ -75,12 +75,12 @@ def test_reports_replacement_startup_failure_and_retry(
             ("serve", "--worker", str(zod)),
             environment,
         )
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
 
         client.send(r="complete silently")
         assert last_tool_text(client) == "[done]"
         startup_control.write_text("fail with stderr", encoding="utf-8")
-        failed = client._start_send(r="exit unexpectedly")
+        failed = client.start_send(r="exit unexpectedly")
         wait_for_marker(
             Path(temporary_directory),
             "zod-replacement-startup-failing",
@@ -97,7 +97,7 @@ def test_reports_replacement_startup_failure_and_retry(
         watchdog = threading.Thread(target=stop_if_replacement_loops, daemon=True)
         watchdog.start()
         try:
-            client._receive(failed)
+            client.receive(failed)
         finally:
             response_returned.set()
             watchdog.join()
@@ -129,7 +129,7 @@ def test_reports_replacement_startup_failure_and_retry(
         assert last_tool_text(client) == (
             "[starting new worker]\nzod R requirement: prepared=true\n"
         )
-        return client._finish()
+        return client.finish()
 
 
 def test_polls_replacement_startup_after_send_timeout(binary: Path) -> Transcript:
@@ -154,7 +154,7 @@ def test_polls_replacement_startup_after_send_timeout(binary: Path) -> Transcrip
         response_returned = threading.Event()
         passed = False
         try:
-            client._initialize_and_list_tools()
+            client.initialize_and_list_tools()
             client.send(r="complete silently")
             assert last_tool_text(client) == "[done]"
             startup_control.write_text(
@@ -162,7 +162,7 @@ def test_polls_replacement_startup_after_send_timeout(binary: Path) -> Transcrip
                 encoding="utf-8",
             )
 
-            failed = client._start_send(r="exit unexpectedly", timeout_ms=1_000)
+            failed = client.start_send(r="exit unexpectedly", timeout_ms=1_000)
             wait_for_marker(
                 temporary_path,
                 "zod-replacement-waiting-ready",
@@ -180,7 +180,7 @@ def test_polls_replacement_startup_after_send_timeout(binary: Path) -> Transcrip
             )
             watchdog.start()
             try:
-                client._receive(failed)
+                client.receive(failed)
             finally:
                 response_returned.set()
                 watchdog.join()
@@ -230,7 +230,7 @@ def test_polls_replacement_startup_after_send_timeout(binary: Path) -> Transcrip
             startup_release.touch()
             client.send()
             assert last_tool_text(client) == "[idle]"
-            transcript = client._finish()
+            transcript = client.finish()
             passed = True
             return transcript
         finally:
@@ -253,7 +253,7 @@ def test_orders_explicit_restart_output(binary: Path) -> Transcript:
             ("serve", "--worker", str(zod)),
             environment,
         )
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
 
         client.send(r="wait for stdin close", timeout_ms=0)
         assert last_tool_text(client) == "\n[running; poll with an empty send]"
@@ -284,7 +284,7 @@ def test_orders_explicit_restart_output(binary: Path) -> Transcript:
 
         client.send(r="echo echo")
         assert last_tool_text(client) == "zod: echo\n"
-        return client._finish()
+        return client.finish()
 
 
 def test_controlled_restart_runs_cell_once_in_fresh_worker(
@@ -300,7 +300,7 @@ def test_controlled_restart_runs_cell_once_in_fresh_worker(
             ("serve", "--worker", str(zod)),
             environment,
         )
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
 
         client.send(r="set controlled restart state")
         assert last_tool_text(client) == "zod controlled state: old\n"
@@ -337,7 +337,7 @@ def test_controlled_restart_runs_cell_once_in_fresh_worker(
         client.send()
         assert last_tool_text(client) == "\n[idle]"
         assert evaluations.read_text(encoding="utf-8").splitlines() == records
-        return client._finish()
+        return client.finish()
 
 
 def test_controlled_interrupt_preserves_idle_worker_startup_failure(
@@ -381,18 +381,18 @@ def test_controlled_interrupt_preserves_idle_worker_startup_failure(
         )
         finished = False
         try:
-            client._initialize_and_list_tools()
-            preparation = client._start_send(
+            client.initialize_and_list_tools()
+            preparation = client.start_send(
                 requirements={"r": ["blocked-resolver"]},
             )
             resolver_started.wait("controlled interrupt R resolver")
 
-            controlled = client._start_send(
+            controlled = client.start_send(
                 control="interrupt",
                 stdin="unused input\n",
             )
             resolver_interrupted.wait("controlled interrupt signal delivery")
-            client._receive_many([preparation, controlled])
+            client.receive_many([preparation, controlled])
 
             assert preparation["result"].get("isError") is True, preparation
             result = controlled["result"]
@@ -413,7 +413,7 @@ def test_controlled_interrupt_preserves_idle_worker_startup_failure(
             startup_control.write_text("ready", encoding="utf-8")
             client.send(r="echo echo")
             assert last_tool_text(client) == "zod: echo\n"
-            transcript = client._finish()
+            transcript = client.finish()
             finished = True
             return transcript
         finally:
@@ -468,17 +468,17 @@ def test_control_only_interrupt_returns_while_explicit_preparation_settles(
         finished = False
         interrupt_waiting = False
         try:
-            client._initialize_and_list_tools()
+            client.initialize_and_list_tools()
 
             def interrupt_preparation(
                 preparation_arguments: dict[str, object],
                 description: str,
             ) -> None:
                 nonlocal interrupt_waiting
-                preparation = client._start_send(**preparation_arguments)
+                preparation = client.start_send(**preparation_arguments)
                 resolver_started.wait(description)
 
-                interrupt = client._start_send(
+                interrupt = client.start_send(
                     control="interrupt",
                     timeout_ms=0,
                 )
@@ -488,7 +488,7 @@ def test_control_only_interrupt_returns_while_explicit_preparation_settles(
                 assert client.stdout in readable, (
                     "control-only interrupt waited for explicit preparation to settle"
                 )
-                client._receive(interrupt)
+                client.receive(interrupt)
                 assert interrupt["result"] == {
                     "content": [
                         {
@@ -501,7 +501,7 @@ def test_control_only_interrupt_returns_while_explicit_preparation_settles(
 
                 interrupt_release.release()
                 interrupt_waiting = False
-                client._receive(preparation)
+                client.receive(preparation)
                 assert preparation["result"] == {
                     "content": [
                         {
@@ -530,7 +530,7 @@ def test_control_only_interrupt_returns_while_explicit_preparation_settles(
 
             client.send(r="echo worker remains usable")
             assert last_tool_text(client) == "zod: worker remains usable\n"
-            transcript = client._finish()
+            transcript = client.finish()
             finished = True
             return transcript
         finally:
@@ -556,7 +556,7 @@ def test_restart_preserves_pending_sideband_output(binary: Path) -> Transcript:
             ("serve", "--worker", str(zod)),
             environment,
         )
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
 
         client.send(r="emit output and image before completion", timeout_ms=0)
         assert last_tool_text(client) == "\n[running; poll with an empty send]"
@@ -587,7 +587,7 @@ def test_restart_preserves_pending_sideband_output(binary: Path) -> Transcript:
             ],
             "isError": False,
         }, result
-        return client._finish()
+        return client.finish()
 
 
 def test_restart_preserves_unpolled_completion(binary: Path) -> Transcript:
@@ -601,7 +601,7 @@ def test_restart_preserves_unpolled_completion(binary: Path) -> Transcript:
             ("serve", "--worker", str(zod)),
             environment,
         )
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
 
         client.send(r="complete before restart checkpoint", timeout_ms=0)
         assert last_tool_text(client) == "\n[running; poll with an empty send]"
@@ -619,7 +619,7 @@ def test_restart_preserves_unpolled_completion(binary: Path) -> Transcript:
             "[starting new worker]\n"
             "[idle]"
         ), restart_output
-        return client._finish()
+        return client.finish()
 
 
 def test_restart_interrupts_waiting_send(binary: Path) -> Transcript:
@@ -633,10 +633,10 @@ def test_restart_interrupts_waiting_send(binary: Path) -> Transcript:
             ("serve", "--worker", str(zod)),
             environment,
         )
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         expose_idle_sideband_output(client, temporary_path)
 
-        waiting = client._start_send(
+        waiting = client.start_send(
             r="emit output and image before completion",
             timeout_ms=30_000,
         )
@@ -648,7 +648,7 @@ def test_restart_interrupts_waiting_send(binary: Path) -> Transcript:
         (image_started.parent / "zod-release-image").touch()
         wait_for_marker(temporary_path, "zod-image-processed", client)
 
-        restarted = client._start_send(control="restart")
+        restarted = client.start_send(control="restart")
         responses_returned = threading.Event()
         forced_stop = threading.Event()
 
@@ -660,8 +660,8 @@ def test_restart_interrupts_waiting_send(binary: Path) -> Transcript:
         watchdog = threading.Thread(target=stop_if_calls_block, daemon=True)
         watchdog.start()
         try:
-            client._receive(waiting)
-            client._receive(restarted)
+            client.receive(waiting)
+            client.receive(restarted)
         finally:
             responses_returned.set()
             watchdog.join()
@@ -703,7 +703,7 @@ def test_restart_interrupts_waiting_send(binary: Path) -> Transcript:
             ],
             "isError": True,
         }, waiting
-        return client._finish()
+        return client.finish()
 
 
 def test_restarts_after_unexpected_sideband_message(binary: Path) -> Transcript:
@@ -719,7 +719,7 @@ def test_restarts_after_unexpected_sideband_message(binary: Path) -> Transcript:
         worker_group = None
         passed = False
         try:
-            client._initialize_and_list_tools()
+            client.initialize_and_list_tools()
             client.send(r="report process group")
             process_group_output = last_tool_text(client)
             process_group_prefix = "zod process group: "
@@ -738,8 +738,8 @@ def test_restarts_after_unexpected_sideband_message(binary: Path) -> Transcript:
             client.transcript[-1]["result"]["content"][0]["text"] = (
                 "zod process group: <process group>\n"
             )
-            failed_call = client._start_send(r="violate protocol")
-            client._receive(failed_call)
+            failed_call = client.start_send(r="violate protocol")
+            client.receive(failed_call)
             assert not process_exists(worker_group), (
                 "sandbox launcher did not reap the failed generation's relay"
             )
@@ -757,10 +757,10 @@ def test_restarts_after_unexpected_sideband_message(binary: Path) -> Transcript:
                 "[starting new worker]\n"
                 "[idle]"
             ), repr(actual)
-            restarted_call = client._start_send(r="complete silently")
-            client._receive(restarted_call)
+            restarted_call = client.start_send(r="complete silently")
+            client.receive(restarted_call)
             assert last_tool_text(client) == "[done]"
-            transcript = client._finish()
+            transcript = client.finish()
             passed = True
             return transcript
         finally:
@@ -775,7 +775,7 @@ def test_restarts_after_worker_exit(binary: Path) -> Transcript:
         binary,
         ("serve", "--worker", str(zod)),
     )
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     client.send(r="exit unexpectedly")
     assert client.transcript[-1]["result"] == {
         "content": [
@@ -796,7 +796,7 @@ def test_restarts_after_worker_exit(binary: Path) -> Transcript:
     assert last_tool_text(client) == "\n[idle]"
     client.send(r="input without request")
     assert last_tool_text(client) == "zod stdin: replacement\n"
-    return client._finish()
+    return client.finish()
 
 
 def test_reports_unexpected_worker_exit_zero(binary: Path) -> Transcript:
@@ -805,7 +805,7 @@ def test_reports_unexpected_worker_exit_zero(binary: Path) -> Transcript:
         binary,
         ("serve", "--worker", str(zod)),
     )
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
 
     client.send(r="exit zero")
     assert client.transcript[-1]["result"] == {
@@ -826,7 +826,7 @@ def test_reports_unexpected_worker_exit_zero(binary: Path) -> Transcript:
 
     client.send(r="echo echo")
     assert last_tool_text(client) == "zod: echo\n"
-    return client._finish()
+    return client.finish()
 
 
 def test_replaces_worker_after_relay_exit(binary: Path) -> Transcript:
@@ -845,7 +845,7 @@ def test_replaces_worker_after_relay_exit(binary: Path) -> Transcript:
         relay_pid = None
         passed = False
         try:
-            client._initialize_and_list_tools()
+            client.initialize_and_list_tools()
             client.send(r="kill relay and remain live", timeout_ms=0)
             assert last_tool_text(client) == "\n[running; poll with an empty send]"
             started = wait_for_marker(
@@ -888,7 +888,7 @@ def test_replaces_worker_after_relay_exit(binary: Path) -> Transcript:
 
             client.send(r="echo echo")
             assert last_tool_text(client) == "zod: echo\n"
-            transcript = client._finish()
+            transcript = client.finish()
             passed = True
             return transcript
         finally:

@@ -25,7 +25,7 @@ def test_routes_input_to_idle_later_callback(
     binary: Path,
 ) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     client.send(requirements={"r": ["later"]})
 
     # fmt: r
@@ -65,12 +65,12 @@ def test_routes_input_to_idle_later_callback(
     client.transcript[poll_start:] = [final_poll]
     client.send(r="collected_answer")
     assert last_tool_text(client) == '[1] "yes"\n'
-    return client._finish()
+    return client.finish()
 
 
 def test_uses_200_column_default(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
         cat("width: ", getOption("width"), "\n", sep = "")
@@ -83,13 +83,13 @@ def test_uses_200_column_default(binary: Path) -> Transcript:
     assert len(lines) == 2, repr(output)
     assert lines[1].startswith(" [1]"), repr(output)
     assert lines[1].endswith(" 45"), repr(output)
-    return client._finish()
+    return client.finish()
 
 
 def test_returns_cell_scoped_plots(binary: Path) -> Transcript:
     environment, rscript = r_test_environment()
     client = McpClient(binary, ("serve",), environment)
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
         options(
@@ -145,13 +145,13 @@ def test_returns_cell_scoped_plots(binary: Path) -> Transcript:
     )
     client.send(r=r)
     assert_result_content(client, expected_plot)
-    return client._finish()
+    return client.finish()
 
 
 def test_emits_managed_plots_when_pages_finalize(binary: Path) -> Transcript:
     environment, rscript = r_test_environment()
     client = McpClient(binary, ("serve",), environment)
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
         options(
@@ -183,13 +183,13 @@ def test_emits_managed_plots_when_pages_finalize(binary: Path) -> Transcript:
             expected_plots[1],
         ],
     )
-    return client._finish()
+    return client.finish()
 
 
 def test_returns_plots_after_r_errors(binary: Path) -> Transcript:
     environment, rscript = r_test_environment()
     client = McpClient(binary, ("serve",), environment)
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
         local({
@@ -225,13 +225,13 @@ def test_returns_plots_after_r_errors(binary: Path) -> Transcript:
     )
     client.send(r=r)
     assert_result_content(client, expected_plot)
-    return client._finish()
+    return client.finish()
 
 
 def test_leaves_explicit_plot_devices_user_controlled(binary: Path) -> Transcript:
     environment, rscript = r_test_environment()
     client = McpClient(binary, ("serve",), environment)
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
         explicit_plot <- tempfile(fileext = ".png")
@@ -318,7 +318,7 @@ def test_leaves_explicit_plot_devices_user_controlled(binary: Path) -> Transcrip
         client,
         ["all explicit complete: TRUE\n", expected_plot[0]],
     )
-    return client._finish()
+    return client.finish()
 
 
 if __name__ == "__main__":
