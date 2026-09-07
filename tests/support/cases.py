@@ -11,8 +11,6 @@ from queue import Empty, SimpleQueue
 from threading import Event, Lock, Thread
 from typing import BinaryIO
 
-from support.records import Transcript, TranscriptWithCompanions
-
 CASE_CLEANUP_SECONDS = 15
 
 
@@ -40,14 +38,15 @@ def _captured_output(stream: BinaryIO) -> str:
 
 
 def supervise_case(
-    suite_path: Path, case_name: str, result: Path, ownership: int
+    suite_path: Path, case_name: str, result: Path, ownership: int, *, update: bool
 ) -> int:
     """Keep owner loss and forced cleanup independent of the case interpreter."""
     os.set_inheritable(ownership, False)
     runner = Path(__file__).resolve().parents[1] / "boundaries" / "_run.py"
-    process = subprocess.Popen(
-        [sys.executable, runner, "--record-case", suite_path, case_name, result]
-    )
+    command = [sys.executable, runner, "--record-case", suite_path, case_name, result]
+    if update:
+        command.append("--update")
+    process = subprocess.Popen(command)
     events: SimpleQueue[int | BaseException | None] = SimpleQueue()
 
     def reap() -> None:
@@ -91,13 +90,15 @@ def supervise_case(
     return event
 
 
-def record_case_subprocess(
+def run_case_subprocess(
     suite_path: Path,
     case_name: str,
     timeout: float,
     events: SimpleQueue,
     index: int,
-) -> Transcript | TranscriptWithCompanions:
+    *,
+    update: bool,
+) -> set[Path]:
     runner = Path(__file__).resolve().parents[1] / "boundaries" / "_run.py"
     selector = f"{suite_path.relative_to(runner.parent).with_suffix('')}::{case_name}"
     with (
@@ -108,17 +109,20 @@ def record_case_subprocess(
         result = Path(directory) / "result.pickle"
         started_at = time.monotonic()
         ownership_reader, ownership_writer = os.pipe()
+        command = [
+            sys.executable,
+            runner,
+            "--supervise-case",
+            suite_path,
+            case_name,
+            result,
+            str(ownership_reader),
+        ]
+        if update:
+            command.append("--update")
         try:
             process = subprocess.Popen(
-                [
-                    sys.executable,
-                    runner,
-                    "--supervise-case",
-                    suite_path,
-                    case_name,
-                    result,
-                    str(ownership_reader),
-                ],
+                command,
                 stdout=stdout,
                 stderr=stderr,
                 start_new_session=True,

@@ -22,7 +22,7 @@ directory = Path(__file__).resolve().parent
 root = directory.parents[1]
 sys.path.insert(0, str(root / "tests"))
 
-from support.cases import CaseProcess, record_case_subprocess, supervise_case
+from support.cases import CaseProcess, run_case_subprocess, supervise_case
 from support.records import Transcript, TranscriptWithCompanions
 from support.snapshots import (
     check_recording,
@@ -332,7 +332,7 @@ def run_cases(
 
     events: SimpleQueue[tuple[int, float | None, CaseProcess | None]] = SimpleQueue()
     executor = ThreadPoolExecutor(max_workers=min(jobs, len(selected)))
-    futures: dict[int, Future[RecordedTranscript]] = {}
+    futures: dict[int, Future[set[Path]]] = {}
     active: dict[int, CaseProcess] = {}
     errors: list[BaseException] = []
     abort_deadline: float | None = None
@@ -363,12 +363,13 @@ def run_cases(
     try:
         for index, (_, case_name, suite_path) in enumerate(selected):
             future = executor.submit(
-                record_case_subprocess,
+                run_case_subprocess,
                 suite_path,
                 case_name,
                 timeout,
                 events,
                 index,
+                update=update,
             )
             futures[index] = future
             future.add_done_callback(
@@ -418,13 +419,7 @@ def run_cases(
                         index, f"{suite_name}::{case_name}", time.monotonic()
                     )
                 try:
-                    recorded = future.result()
-                    checked = check_recording(
-                        suite_name,
-                        case_name,
-                        recorded,
-                        update=update,
-                    )
+                    checked = future.result()
                 except BaseException as error:
                     reporter.finish(index, succeeded=False)
                     fail(error)
@@ -440,8 +435,8 @@ def run_cases(
         for number, handler in previous_signals.items():
             signal.signal(number, handler)
 
-    # SIGINT can arrive while checking the final snapshot. All controllers have
-    # joined, so any remaining event is an interrupt queued by our handler.
+    # A signal can arrive while reporting the final completion. All controllers
+    # have joined, so any remaining event was queued by our signal handler.
     while True:
         try:
             index, _, _ = events.get_nowait()
@@ -461,7 +456,11 @@ def main() -> None:
     if options.supervise_case is not None:
         suite_path, case_name, output_path, owner = options.supervise_case
         status = supervise_case(
-            Path(suite_path), case_name, Path(output_path), int(owner)
+            Path(suite_path),
+            case_name,
+            Path(output_path),
+            int(owner),
+            update=options.update,
         )
         if status < 0:
             number = -status
@@ -472,8 +471,14 @@ def main() -> None:
     if options.record_case is not None:
         suite_path, case_name, output_path = options.record_case
         recorded = record_case(Path(suite_path), case_name)
+        checked = check_recording(
+            suite_identifier(Path(suite_path)),
+            case_name,
+            recorded,
+            update=options.update,
+        )
         with Path(output_path).open("wb") as output:
-            pickle.dump(recorded, output)
+            pickle.dump(checked, output)
         return
     if options.jobs < 1:
         parser.error("--jobs must be at least 1")
