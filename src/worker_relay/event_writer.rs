@@ -5,7 +5,7 @@ use std::sync::{Arc, OnceLock, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::relay_protocol::{JsonlWriter, RelayEvent};
+use crate::relay_protocol::RelayEvent;
 
 const RETIREMENT_FLUSH_TIMEOUT: Duration = Duration::from_secs(1);
 
@@ -33,11 +33,17 @@ pub(super) fn start(
         .map_err(|error| format!("failed to configure relay stdout: {error}"))?;
     let (sender, receiver) = mpsc::channel();
     let thread = thread::spawn(move || {
-        let mut writer = JsonlWriter::new(output);
+        let mut writer = output;
         for request in receiver {
             match request {
                 EventRequest::Send(event) => {
-                    if let Err(error) = writer.send(&event) {
+                    // Give the deadline-aware writer a complete frame rather
+                    // than making a syscall for each JSON punctuation fragment.
+                    let mut frame = serde_json::to_vec(&event)
+                        .expect("relay event serialization should succeed");
+                    frame.push(b'\n');
+                    drop(event);
+                    if let Err(error) = writer.write_all(&frame) {
                         let error = format!("relay stdout write failed: {error}");
                         on_error(error.clone());
                         return Err(error);
@@ -194,8 +200,9 @@ impl Write for EventOutput {
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        // File writes are unbuffered; no drop or flush can bypass the deadline.
-        self.check_deadline()
+        // File writes are unbuffered. Once write_all succeeds, no pending
+        // bytes remain for a deadline to expire during this no-op.
+        Ok(())
     }
 }
 
