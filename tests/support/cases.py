@@ -127,6 +127,10 @@ def run_case_subprocess(
                 stderr=stderr,
                 start_new_session=True,
                 pass_fds=(ownership_reader,),
+                env={
+                    **os.environ,
+                    "MCP_CONSOLE_TEST_CASE_DEADLINE": str(started_at + timeout),
+                },
             )
         except BaseException:
             os.close(ownership_writer)
