@@ -3,7 +3,8 @@
 **Status:** Implemented current behavior
 
 This document describes how MCP Console prepares and retains R packages, Python packages, and DuckDB extensions.
-The first sections are operational: they explain standalone preparation, requirements declared for a `send` cell, and requirements included in `send(control = "restart")`.
+The [`send` operation-order reference](SEND_OPERATIONS.md) owns validation timing, control and stdin ordering, failure effects, and wait timeouts.
+This guide describes preparation before a cell, standalone preparation, and requirements included in restart.
 [Host resolution and trust](#host-resolution-and-trust) explains why requirement input is restricted and which work runs with server permissions.
 
 Prepared requirements configure the built-in worker; they do not attach an R package, import a Python package, or load a DuckDB extension.
@@ -32,7 +33,7 @@ The built-in server prepares these defaults before accepting MCP input:
 
 These defaults apply when startup establishes an `ir` resolver from `ir` on `PATH`, `uv` on `PATH`, an explicit `uv` selection, or ambient reticulate.
 Server-managed Python additionally needs `uv`; when only `ir` is on `PATH`, the resolved reticulate installation supplies it.
-If startup cannot establish an `ir` resolver, the built-in server retains no managed environment, exposes no `requirements` field, and starts a bare runtime from the packages already available to R, reticulate, and DuckDB.
+If no resolver bootstrap is available, the built-in server retains no managed environment, exposes no `requirements` field, and starts a bare runtime from the packages already available to R, reticulate, and DuckDB.
 R, Python, and SQL cells remain available, with ordinary R missing-package errors and explicit unavailable-adapter diagnostics where appropriate.
 
 MCP Console applies no deadline to startup discovery or these preflights, which run before the MCP transport starts.
@@ -66,24 +67,8 @@ Use the optional `requirements` field on a code-bearing `send` when a cell needs
 The field contains R, Python, and DuckDB arrays and requires at least one entry across them.
 It may accompany any cell language because the built-in languages share one worker environment: an R requirement can accompany a Python cell, for example.
 Without a cell, requirements perform standalone preparation or participate in a restart transaction.
-Nonempty stdin cannot accompany standalone preparation; send it separately or include compatible control or code.
-Requirements are not accepted with interrupt unless a cell follows.
-
-Requirements are preconditions of the cell.
-The server validates the complete declaration, prepares all changed candidates, and reserves the cell as one operation.
-It does not dispatch the cell unless that work succeeds, and no other send, preparation, restart commit, or environment change can interleave between successful preparation and evaluation reservation.
-Successful additions are retained for later cells and restarts, but the response is the normal cell response and contains no `[prepared]` marker.
-An exact repeat performs no resolver or worker preparation.
-
-Without inline control, the server prepares requirements, queues nonempty same-call stdin, then evaluates the cell.
-The preparation and cell reservation share one admission boundary.
-
-With `control = "interrupt"`, the server sends and acknowledges the interrupt, immediately queues nonempty stdin, waits 100 milliseconds, then validates and prepares requirements and dispatches the cell only if the previous evaluation has stopped and its generation remains current.
-If validation or preparation fails, the cell is not run, but the completed interrupt and stdin enqueue are not rolled back.
-
-With `control = "restart"`, the declared requirements enter the existing restart transaction.
-The server merges and resolves them before it replaces the worker; a failure leaves the existing worker and retained environment unchanged and sends neither stdin nor code.
-After successful replacement, same-call stdin and the cell belong only to that replacement generation.
+Requirements are cell preconditions, with the control-specific ordering and partial effects described in the [operation table](SEND_OPERATIONS.md#operations).
+No other operation can change the environment between successful preparation and admission of the accompanying cell.
 
 Without inline control, the preparation behavior depends on worker state:
 
@@ -92,13 +77,6 @@ Without inline control, the preparation behavior depends on worker state:
 - With an eligible stopped worker, the server resolves and retains additions without live preparation, starts the normal replacement, and evaluates the cell there.
 - After a recoverable live R failure has made further environment changes require restart, new additions fail with `requirements require session restart; cell was not run`.
   The live worker is not destroyed automatically, so its state can be saved before an explicit restart.
-
-A call may also include `stdin`.
-Nonempty stdin is queued before the evaluation command once the ordering above reaches that step.
-This guarantees transport order, not which runtime read consumes the bytes.
-For a code-bearing call, `timeout_ms` begins applying only after dispatch, so control delivery, the interrupt grace, restart, and explicit preparation can make the complete call longer than the selected evaluation wait timeout.
-A control-only interrupt instead begins its requested wait after the grace if it attaches to the active evaluation.
-Interrupt still targets an active host resolver first, and restart or closing MCP input retains its existing resolver-cancellation behavior.
 
 The built-in worker can resolve missing plain R package names and managed Python imports while a cell runs, as described below.
 Neither R nor Python source is scanned in advance.
@@ -224,11 +202,8 @@ Use a requirements-only `send` to add exact requirements without replacing the w
 }
 ```
 
-Standalone preparation requires at least one entry across the three arrays.
-Each array accepts at most 64 entries.
-Successful preparation returns `[prepared]`.
-An explicitly empty `stdin` queues nothing and preserves this call shape; nonempty `stdin` is rejected so it can be sent separately.
-`timeout_ms` does not impose a deadline on standalone preparation.
+Each array accepts at most 64 entries, and the request needs at least one entry overall.
+The [standalone preparation row](SEND_OPERATIONS.md#operations) specifies its result, input restrictions, and timeout behavior.
 
 Before a worker starts, the server resolves every changed candidate on the host, commits the retained configuration only after the complete request succeeds, and does not start the worker.
 Exact repeats return `[prepared]` without resolving them again.
@@ -327,14 +302,7 @@ A restart can continue with a cell in the same call:
 ```
 
 Omit `requirements` to restart with the retained configuration unchanged.
-If additions are present, the server merges them into the complete retained sets and resolves every changed candidate before it stops the current worker.
-The R library, Python environment, and DuckDB extension set commit together only after all required host resolution succeeds.
-
-A resolution failure leaves the current worker, its in-memory state, and its retained configuration unchanged.
-It also prevents same-call stdin from being queued and prevents any cell from running.
-After successful resolution, restart retires the worker and starts a replacement from the new retained environment.
-Restart always loses the old worker's R, Python, DuckDB catalog, debugger, and unread-stdin state.
-Restart queues same-call stdin only after the replacement is ready and dispatches any cell only to that exact replacement generation.
+The [restart row and preparation notes](SEND_OPERATIONS.md#operations) describe resolution, commit, replacement, and what can remain after failure.
 The [implemented architecture](ARCHITECTURE.md) owns the replacement lifecycle; [Explicit restart](BUILTIN_RUNTIME.md#explicit-restart) describes its user-visible response ownership and notices.
 
 ## Accepted requirement input
@@ -419,7 +387,7 @@ A custom worker always rejects managed Python requirements, regardless of `RETIC
 
 ## Bare runtime
 
-Bare mode is selected only when startup cannot establish an `ir` resolver from `ir` on `PATH`, `uv` on `PATH`, an explicit `uv` selection, or ambient reticulate.
+Bare mode is selected only when no resolver bootstrap is available from `ir` on `PATH`, `uv` on `PATH`, an explicit `uv` selection, or ambient reticulate.
 The server skips the default R, Python, and DuckDB preflights.
 The `send` schema retains R, Python, and SQL cells but omits `requirements`; a manually supplied requirements payload is also rejected.
 Automatic R wrappers and the Python import resolver callback are disabled.
