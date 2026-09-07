@@ -62,6 +62,7 @@ struct RelayConnection {
 
 struct RelayProcess {
     child: Child,
+    no_sandbox: bool,
     exit: super::child_exit::ChildExitWaiter,
     exited: bool,
     reaped: bool,
@@ -181,7 +182,7 @@ impl WorkerRuntime {
         let child = command
             .spawn()
             .map_err(|error| format!("failed to launch worker relay: {error}"))?;
-        let mut child = RelayProcess::new(child)
+        let mut child = RelayProcess::new(child, no_sandbox)
             .map_err(|error| format!("failed to monitor worker relay: {error}"))?;
         let relay_stdin = child
             .take_stdin()
@@ -285,7 +286,7 @@ fn relay_command_line(
 }
 
 impl RelayProcess {
-    fn new(child: Child) -> Result<Self, String> {
+    fn new(child: Child, no_sandbox: bool) -> Result<Self, String> {
         let exit = match super::child_exit::ChildExitWaiter::start(child.id()) {
             Ok(exit) => exit,
             Err(error) => {
@@ -294,6 +295,7 @@ impl RelayProcess {
         };
         Ok(Self {
             child,
+            no_sandbox,
             exit,
             exited: false,
             reaped: false,
@@ -435,11 +437,13 @@ impl RelayProcess {
     fn finish_reaped_status(&mut self, status: ExitStatus) -> Result<(), String> {
         self.exited = true;
         self.reaped = true;
-        // Owned retirement returns success from the launcher. Status 137 is
-        // redundant only when relay exit itself established the worker failure.
+        // A direct relay's exit is redundant when its EOF established the
+        // worker failure. A launcher still owes cleanup; only its documented
+        // status 137 recovery is redundant after that same relay failure.
         if !self.ready_committed
             || status.success()
-            || self.relay_exit_recovery_expected && status.code() == Some(128 + libc::SIGKILL)
+            || self.relay_exit_recovery_expected
+                && (self.no_sandbox || status.code() == Some(128 + libc::SIGKILL))
         {
             Ok(())
         } else if let Some(code) = status.code() {

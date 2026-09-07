@@ -27,6 +27,7 @@ pub(super) fn sandboxed_command() -> Result<(Command, TemporaryDirectory), Strin
     // intermediary and the sandbox target.
     launcher
         .env_remove("DYLD_INSERT_LIBRARIES")
+        .env("MCP_CONSOLE_SANDBOX", "1")
         .arg("-p")
         .arg(POLICY)
         .arg(parameter_definition(

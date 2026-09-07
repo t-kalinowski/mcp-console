@@ -126,7 +126,7 @@ result:
       text: |
         Traceback (most recent call last):
           File "<string>", line 255, in dispatch
-          File "<string>", line 599, in _mcp_console_without_automatic_resolution
+          File "<string>", line 602, in _mcp_console_without_automatic_resolution
           File "<string>", line 249, in _dispatch
           File "<string>", line 49, in use_r
           File "<mcp-console:python:e4>", line 10, in restore_hook

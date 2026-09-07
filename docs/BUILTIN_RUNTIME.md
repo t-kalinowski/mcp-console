@@ -272,8 +272,8 @@ The automatic resolver request carries a differently named import and distributi
 This transition does not restart the worker or Python interpreter.
 Python and R globals, Python objects, the DuckDB catalog, worker PID, and stdin state remain available.
 New subprocesses use the activated environment and can import its retained packages.
-On macOS, the built-in Python runtime makes psutil enumerate the worker's process group instead of requesting the host-wide process table.
-The default sandbox launcher gives the relay and worker a dedicated process group.
+In a sandboxed macOS worker, the built-in Python runtime makes psutil enumerate the dedicated process group instead of requesting the host-wide process table.
+With `serve --no-sandbox`, psutil retains its native host process enumeration.
 The server retains a successfully activated environment for later cells and restart, even if the inferred distribution does not provide the requested module or later code in the cell fails.
 An ordinary resolution failure before activation restores the earlier reticulate manifest and leaves the worker usable.
 Errors include the inferred distribution, the host resolver diagnostic when available, and an explicit `requirements.python` recovery example.

@@ -214,7 +214,8 @@ The server uses a hard launcher kill only as the final fail-safe; the bundled sa
 
 With `--no-sandbox`, the server retains the relay itself as its waitable child and applies the same worker and relay deadlines.
 If the relay has not exited by the applicable deadline, the server sends `SIGTERM` directly to it, allows six seconds before `SIGKILL`, and then allows one second to observe exit.
-The server reaps the relay before admitting a replacement and applies the same child-exit validation.
+The server reaps the relay before admitting a replacement.
+When relay EOF itself established the generation failure, the direct relay's exit status is redundant; otherwise, a nonzero exit after readiness fails retirement.
 Normal relay shutdown reaps its direct worker, but no sandbox manager retires remaining descendants or recovers the worker after forced relay termination.
 Concurrent or repeated retirement reuses the recorded result and never signals a retired child PID again in either mode.
 
