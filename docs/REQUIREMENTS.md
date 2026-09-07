@@ -35,8 +35,12 @@ Server-managed Python additionally needs `uv`; when only `ir` is on `PATH`, the 
 If startup cannot establish an `ir` resolver, the built-in server retains no managed environment, exposes no `requirements` field, and starts a bare runtime from the packages already available to R, reticulate, and DuckDB.
 R, Python, and SQL cells remain available, with ordinary R missing-package errors and explicit unavailable-adapter diagnostics where appropriate.
 
-MCP Console applies no deadline to these startup preflights, which run before the MCP transport starts.
-Neither interruption nor closing MCP input can cancel them because the server is not yet accepting MCP requests; if a resolver does not finish, the server does not begin accepting them.
+MCP Console applies no deadline to startup discovery or these preflights, which run before the MCP transport starts.
+When MCP standard input is a pipe or socket, closing its write end requests startup cancellation; the server stops the active resolver process group and waits for its direct resolver child to exit.
+The startup watcher does not consume buffered MCP input.
+File and device EOF is handled by the normal transport after startup.
+MCP control requests, including `send(control = "interrupt")`, are unavailable until startup finishes.
+
 Host resolution for changed requirements submitted through `send` also has no deadline.
 The call remains pending until the resolver exits; while MCP input is open, `send(control = "interrupt")` sends `SIGINT` to the active resolver, and closing MCP input cancels it during server shutdown.
 
