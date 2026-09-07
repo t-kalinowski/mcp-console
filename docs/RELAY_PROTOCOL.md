@@ -27,6 +27,11 @@ Relay standard error is inherited from the server and is not part of the protoco
 Runtime failures are also represented by a `fatal` event when relay stdout remains usable.
 The framed event is authoritative; stderr diagnostics are best effort because the server's outer fail-safe can terminate a failed relay before its final diagnostic is written.
 The sandbox launcher never writes to standard output because it carries relay JSONL.
+The relay must be the only writer to that protocol stream.
+It uses nonblocking output and restores the original descriptor status flags when its writer finishes.
+Inherited and duplicated descriptors share those flags; duplicating standard output does not isolate `O_NONBLOCK`.
+The bounded output retirement contract applies to pipes, FIFOs, and sockets.
+Regular-file redirection remains supported with the file system's usual blocking behavior.
 If sandbox setup fails before relay readiness, the detailed infrastructure error goes to inherited standard error and the closed relay transport produces a stable generic startup failure in the server.
 
 The server closes unrelated inherited descriptors before launcher exec.
@@ -173,10 +178,11 @@ Events ahead of that marker remain subject to normal validation and dispatch; ev
 The marker is server state and is not a relay frame or acknowledgment.
 For inline restart, replacement stdin and evaluation admission occur only after this retirement boundary and replacement readiness, so no old-generation relay can receive them.
 
-After parsing the command, the relay's direct-worker lifecycle producer flushes `shutdown_started` before it begins worker shutdown.
+After parsing the command, the relay's direct-worker lifecycle producer enqueues `shutdown_started` before it begins worker shutdown, without waiting for the downstream write.
 It has no request ID because each generation permits only the one shutdown request that the server registers before enqueueing the command.
 The server rejects it when no shutdown request is registered or when the relay sends it twice.
 If the server observes it by the original worker deadline, the event records timely relay acceptance and permits up to two additional seconds after that deadline for relay retirement.
+Delayed output can miss that observation deadline even while worker shutdown proceeds.
 This outer allowance does not extend the worker grace carried by the command.
 For non-intentional startup or runtime failure, the server sends zero worker grace and grants the same bounded relay-retirement allowance without requiring timely acceptance.
 The failure retirement marker and physical relay wait share one absolute two-second allowance measured from that zero-grace deadline.
@@ -206,16 +212,22 @@ Concurrent or repeated retirement reuses the recorded result and never signals a
 ## Retirement and failure
 
 On worker exit or relay failure, the relay first stops the worker transports and cancels its readers before joining them.
+After direct-worker retirement and before those joins, it starts one shared one-second allowance for flushing relay output.
+Startup failure before a worker is launched uses the same output allowance.
 Before joining the worker-sideband writer, it shuts down only its local write half, interrupting an in-flight command even when a detached worker descendant retains the peer endpoint without reading.
 The relay read half remains available for retirement draining.
 The worker-sideband, stdout, and stderr readers share a 100-millisecond allowance for additional nonblocking reads, measured from the start of local transport retirement.
 Each reader stops reading at EOF, when no bytes are immediately available, or when that deadline expires.
-An already-started worker-sideband reader forwards every complete frame assembled from its reads, including frames still buffered when the deadline expires.
+An already-started worker-sideband reader queues every complete frame assembled from its reads, including frames still buffered when the read deadline expires.
 It may abandon an incomplete frame and further descendant output so a continuously writing descendant cannot prolong local draining indefinitely.
 If transport setup fails before the sideband reader starts, the relay drops it without forwarding pending frames so `fatal` remains the first semantic event; raw stdout and stderr are drained within the same allowance.
-It then emits `stdout_closed` and `stderr_closed`, the retained `fatal` event when present, `worker_sideband_closed`, and the structured worker process outcome when one is available.
+It then queues `stdout_closed` and `stderr_closed`, the retained `fatal` event when present, `worker_sideband_closed`, and the structured worker process outcome when one is available.
 No raw output can follow its stream-closure event, and no event can follow `worker_exited` or `worker_signaled`.
 The forwarded output preserves exact bytes and per-stream order through retirement.
+The writer attempts to flush queued events within the shared write allowance.
+If pending output cannot be written before that deadline, the relay abandons the unwritten output and exits with a transport error and nonzero status.
+The delivered prefix may end midway through a JSONL frame.
+This allowance bounds writes blocked by a reader; it adds no limit on frame size or queue memory.
 
 Relay stdout EOF is a clean retirement only after the expected stream closures and final worker process outcome.
 `worker_exited` distinguishes ordinary exit, including status zero, from `worker_signaled` signal termination.

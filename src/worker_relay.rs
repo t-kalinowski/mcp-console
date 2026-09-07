@@ -1,5 +1,8 @@
 use std::ffi::OsString;
 
+#[cfg(target_os = "macos")]
+mod event_writer;
+
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn run(_command_line: &[OsString]) -> Result<(), String> {
     Err("the worker relay is currently supported only on macOS".to_string())
@@ -21,7 +24,8 @@ mod platform {
     use std::thread;
     use std::time::{Duration, Instant};
 
-    use crate::relay_protocol::{EncodedBytes, JsonlWriter, RelayCommand, RelayEvent};
+    use super::event_writer::{self, EventSender, EventWriter};
+    use crate::relay_protocol::{EncodedBytes, RelayCommand, RelayEvent};
     use crate::worker_protocol::{ServerMessage, WorkerMessage};
 
     const READ_CHUNK_SIZE: usize = 8 * 1024;
@@ -39,7 +43,10 @@ mod platform {
             .ok_or_else(|| "worker relay command must include an executable".to_string())?;
 
         let (controls, control_receiver) = mpsc::channel();
-        let (events, event_writer) = start_event_writer(controls.clone());
+        let writer_controls = controls.clone();
+        let (events, mut event_writer) = event_writer::start(move |message| {
+            let _ = writer_controls.send(Control::Stop { message });
+        })?;
         let failures = FailureReporter::new(controls.clone());
         let stopping = Arc::new(AtomicBool::new(false));
 
@@ -111,6 +118,7 @@ mod platform {
         }
 
         stopping.store(true, Ordering::SeqCst);
+        event_writer.begin_retirement();
         let mut finish_error = worker.cancel_and_join(&events);
 
         collect_error(&mut finish_error, events.send(RelayEvent::StdoutClosed));
@@ -139,13 +147,7 @@ mod platform {
             collect_error(&mut finish_error, events.send(outcome));
         }
         collect_error(&mut finish_error, events.finish());
-        match event_writer.join() {
-            Ok(result) => collect_error(&mut finish_error, result),
-            Err(_) => collect_error(
-                &mut finish_error,
-                Err("relay event writer task failed".to_string()),
-            ),
-        }
+        collect_error(&mut finish_error, event_writer.join());
 
         // Do not repeat an exact retirement failure after publishing it as the
         // authoritative Fatal event. Preserve a richer cleanup error that the
@@ -168,15 +170,17 @@ mod platform {
 
     fn report_startup_failure(
         events: &EventSender,
-        event_writer: thread::JoinHandle<Result<(), String>>,
+        mut event_writer: EventWriter,
         error: String,
     ) -> Result<(), String> {
-        let _ = events.send_confirmed(RelayEvent::Fatal {
+        event_writer.begin_retirement();
+        let _ = events.send(RelayEvent::Fatal {
             message: error.clone(),
         });
         let _ = events.finish();
-        let _ = event_writer.join();
-        Err(error)
+        let mut error = Some(error);
+        collect_error(&mut error, event_writer.join());
+        Err(error.expect("startup failure should be retained"))
     }
 
     fn supervise_worker(
@@ -229,9 +233,7 @@ mod platform {
                     deadline,
                     report_acceptance,
                 } => {
-                    if report_acceptance
-                        && events.send_confirmed(RelayEvent::ShutdownStarted).is_err()
-                    {
+                    if report_acceptance && events.send(RelayEvent::ShutdownStarted).is_err() {
                         return force_stop_worker(child, "relay event writer stopped".to_string());
                     }
                     stopping.store(true, Ordering::SeqCst);
@@ -639,84 +641,6 @@ mod platform {
                     "relay failed while starting worker I/O".to_string(),
                 );
             }
-        }
-    }
-
-    #[derive(Clone)]
-    struct EventSender(mpsc::Sender<EventRequest>);
-
-    enum EventRequest {
-        Send {
-            event: Box<RelayEvent>,
-            confirmation: Option<mpsc::SyncSender<Result<(), String>>>,
-        },
-        Finish,
-    }
-
-    fn start_event_writer(
-        controls: mpsc::Sender<Control>,
-    ) -> (EventSender, thread::JoinHandle<Result<(), String>>) {
-        let (sender, receiver) = mpsc::channel();
-        let thread = thread::spawn(move || {
-            let stdout = std::io::stdout();
-            let mut writer = JsonlWriter::new(stdout.lock());
-            for request in receiver {
-                match request {
-                    EventRequest::Send {
-                        event,
-                        confirmation,
-                    } => {
-                        let result = writer
-                            .send(&event)
-                            .map_err(|error| format!("relay stdout write failed: {error}"));
-                        if let Some(confirmation) = confirmation {
-                            let _ = confirmation.send(result.clone());
-                        }
-                        match result {
-                            Ok(()) => {}
-                            Err(error) => {
-                                let _ = controls.send(Control::Stop {
-                                    message: error.clone(),
-                                });
-                                return Err(error);
-                            }
-                        }
-                    }
-                    EventRequest::Finish => return Ok(()),
-                }
-            }
-            Ok(())
-        });
-        (EventSender(sender), thread)
-    }
-
-    impl EventSender {
-        fn send(&self, event: RelayEvent) -> Result<(), String> {
-            self.0
-                .send(EventRequest::Send {
-                    event: Box::new(event),
-                    confirmation: None,
-                })
-                .map_err(|_| "relay event writer stopped".to_string())
-        }
-
-        fn send_confirmed(&self, event: RelayEvent) -> Result<(), String> {
-            let (confirmation, receiver) = mpsc::sync_channel(0);
-            self.0
-                .send(EventRequest::Send {
-                    event: Box::new(event),
-                    confirmation: Some(confirmation),
-                })
-                .map_err(|_| "relay event writer stopped".to_string())?;
-            receiver
-                .recv()
-                .map_err(|_| "relay event writer stopped".to_string())?
-        }
-
-        fn finish(&self) -> Result<(), String> {
-            self.0
-                .send(EventRequest::Finish)
-                .map_err(|_| "relay event writer stopped".to_string())
         }
     }
 
