@@ -1040,6 +1040,12 @@ impl Client {
                     {
                         match self.generation_status(&generation)? {
                             lifecycle::GenerationStatus::CurrentReady => {
+                                let active = self.evaluation()?;
+                                if active.is_some() {
+                                    return Err(failure);
+                                }
+                                // A later cell must capture this failure in its
+                                // idle prelude when it is admitted.
                                 self.0.output.push_failure(failure);
                             }
                             lifecycle::GenerationStatus::CurrentClosing
@@ -1106,6 +1112,7 @@ impl Client {
             return Err(active.evaluation.reject_new_cell_message().to_string());
         }
         self.ensure_evaluation_admission(&generation, control)?;
+        let startup = self.reserve_worker_startup(&generation)?;
         let idle_prelude = self.0.output.take_prelude();
         let evaluation = Arc::new(Evaluation::new(
             transcript,
@@ -1132,7 +1139,7 @@ impl Client {
         let client = self.clone();
         let evaluator = evaluation.clone();
         let evaluation_task = tokio::task::spawn_blocking(move || {
-            client.evaluate_blocking(cell, evaluator, generation);
+            client.evaluate_blocking(cell, evaluator, generation, startup);
         });
         let failed = evaluation.clone();
         let _completion_task = tokio::spawn(async move {
@@ -1288,8 +1295,10 @@ impl Client {
         cell: crate::cell::Cell,
         evaluation: Arc<Evaluation>,
         generation: WorkerGeneration,
+        startup: Option<Arc<lifecycle::WorkerStartupAdmission>>,
     ) {
         let result = self.evaluate_with_worker(cell, &evaluation, generation);
+        drop(startup);
         if let Err(failure) = result {
             evaluation.complete_cell(Err(failure));
         }
@@ -1424,6 +1433,7 @@ impl Client {
     ) -> Result<(), SendFailure> {
         let replacing = matches!(&*worker, WorkerState::Stopped);
         if !matches!(&*worker, WorkerState::Running(_)) {
+            let _startup = self.reserve_worker_startup(&generation)?;
             let mut environment = match &self.0.environment {
                 Some(environment) => Some(
                     environment
@@ -1451,17 +1461,7 @@ impl Client {
                     .lifecycle
                     .lock()
                     .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
-                if !lifecycle.generation.is(&generation) {
-                    return Err("session restarted before the operation began"
-                        .to_string()
-                        .into());
-                }
-                if matches!(
-                    lifecycle.state,
-                    lifecycle::LifecycleState::ShuttingDown { .. }
-                ) {
-                    return Err("worker is shutting down".to_string().into());
-                }
+                lifecycle.ensure_startup(&generation)?;
                 **environment = prepared;
             }
             let python = environment

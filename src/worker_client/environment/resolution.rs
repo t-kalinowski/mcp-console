@@ -45,6 +45,8 @@ impl Client {
         environment: &Environment,
         delta: RequirementDelta,
     ) -> Result<Environment, EnvironmentResolutionFailure> {
+        self.ensure_startup(generation)
+            .map_err(EnvironmentResolutionFailure::Operation)?;
         let RequirementDelta {
             duckdb_extensions,
             duckdb_changed,
@@ -111,6 +113,8 @@ impl Client {
                     .clone(),
             };
             if !resolver.has_uv() {
+                self.ensure_startup(generation)
+                    .map_err(EnvironmentResolutionFailure::Operation)?;
                 let RResolver::Configured(r_resolver) = &environment.r_resolver else {
                     unreachable!("managed Python bootstrap requires a configured R resolver");
                 };
@@ -139,6 +143,8 @@ impl Client {
             )?;
             environment.python = Some(PythonEnvironment::Managed { selected, resolver });
         }
+        self.ensure_startup(generation)
+            .map_err(EnvironmentResolutionFailure::Operation)?;
         environment.duckdb_extensions = duckdb_extensions;
         Ok(environment)
     }
@@ -149,6 +155,8 @@ impl Client {
         resolver: &RResolver,
         requirements: Vec<String>,
     ) -> Result<crate::resolver::ManagedR, EnvironmentResolutionFailure> {
+        self.ensure_startup(generation)
+            .map_err(EnvironmentResolutionFailure::Operation)?;
         let mut stop_handle = None;
         let on_started = |handle: crate::resolver::ResolverStopHandle| {
             stop_handle = Some(handle.clone());
@@ -183,6 +191,8 @@ impl Client {
         resolver: &crate::resolver::ManagedPythonResolverConfiguration,
         managed_r: Option<&crate::resolver::ManagedR>,
     ) -> Result<crate::resolver::ManagedPython, EnvironmentResolutionFailure> {
+        self.ensure_startup(generation)
+            .map_err(EnvironmentResolutionFailure::Operation)?;
         let mut stop_handle = None;
         let result =
             crate::resolver::resolve_python_host(requirements, resolver, managed_r, |handle| {
@@ -206,6 +216,8 @@ impl Client {
             ));
         }
         for managed_r in managed_r {
+            self.ensure_startup(generation)
+                .map_err(EnvironmentResolutionFailure::Operation)?;
             let mut stop_handle = None;
             let result =
                 crate::resolver::resolve_duckdb_extensions(managed_r, extensions, |handle| {
