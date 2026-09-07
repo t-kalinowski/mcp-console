@@ -2,7 +2,7 @@
 
 The documents under `docs/` describe the system implemented in this repository.
 Explanatory documents cover current behavior and ownership, and protocol documents define exact transport interfaces.
-The tool description document is a human-readable mirror.
+The tool description guide links to the canonical snapshot of the registered tools and schemas.
 Source and public acceptance tests remain the final authority when prose disagrees with the implementation.
 
 ## Project and console users
@@ -18,7 +18,7 @@ Source and public acceptance tests remain the final authority when prose disagre
 - [macOS sandbox supervision](SANDBOX_SUPERVISION.md) describes primary host-side lifetime ownership, standalone terminal and signal ownership, manager failure recovery, and the remaining post-spawn boundary.
 - [Worker protocol](WORKER_PROTOCOL.md) is the exact relay-worker wire protocol and custom-worker contract.
 - [Relay protocol](RELAY_PROTOCOL.md) is the exact private server-relay JSONL protocol.
-- [Registered MCP tool descriptions](TOOL_DESCRIPTIONS.md) mirrors the current descriptions for the MCP tools and their properties.
+- [MCP tool description guidance](TOOL_DESCRIPTIONS.md) covers editorial rules and links to the canonical `tools/list` snapshot.
 
 ## Test contributors
 
