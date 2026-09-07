@@ -132,8 +132,9 @@ On timeout, the runner names the case and requests cleanup from its supervisor p
 The supervisor sends the case `SIGINT`, allowing 15 seconds for `finally` blocks and fixture cleanup before forcibly killing that process by PID.
 Fixtures remain responsible for their subprocesses; forcibly killing a case cannot guarantee that all its descendants have exited.
 After a failure, Ctrl-C, SIGTERM, or SIGHUP, the runner cancels queued cases and gives running cases two seconds to finish before requesting the same bounded cleanup.
-Cases ending with the requested `SIGINT` are labelled `cancelled`; their captured output is still printed, including errors interrupted during cleanup.
-Deadlines and other unsuccessful exits remain failures.
+Cases observed to exit with `SIGINT` after cleanup was requested are labelled `cancelled`; their captured output is still printed, including errors interrupted during cleanup.
+An independent `SIGINT` racing that request can receive the same label: the exit status does not identify which signal caused it.
+This affects reporting during an already unsuccessful run; deadlines and other unsuccessful exits remain failures.
 Each supervisor watches an ownership pipe, so loss of the runner also requests cleanup, including when the runner is killed with SIGKILL.
 The case interpreter has no monitoring thread: fixtures can use `fork` and `preexec_fn`, and forced cleanup still works if native code holds the case's GIL.
 Normal runs emit one flushed `.` for every passing case and end the progress line with a newline.
