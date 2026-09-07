@@ -157,6 +157,8 @@ def test_retires_python_resolver_descendant_after_leader_exit(
         exit_events = select.kqueue()
         try:
             client.initialize_and_list_tools()
+            client.send(requirements={"r": ["DBI"]})
+            assert last_tool_text(client) == "[prepared]"
             preparation = client.start_send(
                 requirements={"python": ["py-yaml12"]},
             )
