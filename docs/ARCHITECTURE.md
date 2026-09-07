@@ -91,7 +91,8 @@ The client does not communicate directly with a relay, worker, or resolver.
 The launcher starts one manager per invocation of `mcp-console sandbox` and is the sole host-side owner of that sandbox lifetime.
 One parent-owned invocation runs each worker generation, which may evaluate multiple cells before restart or replacement; an ordinary invocation runs one direct command.
 The manager reports readiness over a private inherited Unix socket before configured sandbox code may run.
-Readiness establishes process observation and transfers private-directory cleanup ownership to the manager.
+Readiness confirms process observation and adoption of the private-directory guard.
+The launcher relinquishes its duplicate guard after installing manager-failure recovery.
 The socket then carries no messages: the launcher holds it open as the lifetime ownership token, and EOF requests retirement.
 Successful manager process exit is the primary process-cleanup barrier; the launcher retains the direct root waitably through manager exit and any fallback cleanup, then reaps it.
 Directory removal is best effort, so successful process retirement does not prove that the directory was deleted.
