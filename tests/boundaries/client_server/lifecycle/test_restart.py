@@ -1,12 +1,14 @@
 #!/usr/bin/env -S uv run --script
 
 import os
+import select
 import signal
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+from contextlib import closing
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -17,6 +19,7 @@ from support.client import McpClient, stop_client
 from support.macos import (
     DarwinProcessIdentity,
     capture_darwin_process_identity,
+    darwin_child_process_identities,
     live_darwin_processes,
     signal_darwin_process,
 )
@@ -513,30 +516,48 @@ def _restart_outer_force_stops_unresponsive_relay(
                     "sandbox manager exited before the stall injection"
                 )
 
-            restarted = client.start_send(control="restart")
-            retirement_deadline = time.monotonic() + (10 if stop_manager else 5)
-            while (
-                process_exists(relay_target)
-                or process_group_exists(worker_group)
-                or process_exists(helper_pid)
-            ):
-                assert client.process.poll() is None, (
-                    "mcp-console stopped while retiring the sandbox lifetime"
-                )
-                assert time.monotonic() < retirement_deadline, (
-                    "sandbox manager did not retire the stopped relay, its process "
-                    "group, and its detached descendant within the deadline"
-                )
-                time.sleep(0.01)
+            relay = capture_darwin_process_identity(relay_target)
+            descendants = [relay]
+            for process in descendants:
+                descendants.extend(darwin_child_process_identities(process))
+            retiring = {identity[0] for identity in descendants}
+            assert {launcher_pid, helper_pid}.issubset(retiring), retiring
+            if manager is not None:
+                retiring.add(manager[0])
+            with closing(select.kqueue()) as exits:
+                watches = [
+                    select.kevent(
+                        pid,
+                        filter=select.KQ_FILTER_PROC,
+                        flags=select.KQ_EV_ADD | select.KQ_EV_ONESHOT,
+                        fflags=select.KQ_NOTE_EXIT,
+                    )
+                    for pid in retiring
+                ]
+                assert exits.control(watches, 0, 0) == []
+                restarted = client.start_send(control="restart")
+                retirement_deadline = time.monotonic() + (10 if stop_manager else 5)
+                # Descendants must exit; their external parents may retain zombies.
+                # The launcher must also reap its own relay and manager below.
+                while retiring:
+                    events = exits.control(
+                        None,
+                        len(retiring),
+                        max(0, retirement_deadline - time.monotonic()),
+                    )
+                    assert client.process.poll() is None, (
+                        "mcp-console stopped while retiring the sandbox lifetime"
+                    )
+                    assert events, (
+                        f"sandbox processes did not exit within the deadline: {retiring}"
+                    )
+                    for event in events:
+                        assert event.filter == select.KQ_FILTER_PROC, event
+                        assert event.fflags & select.KQ_NOTE_EXIT, event
+                        retiring.remove(event.ident)
             client.receive(restarted)
-            assert not process_group_exists(worker_group), (
-                "stopped relay process group outlived restart"
-            )
-            assert not process_exists(relay_target), (
+            assert live_darwin_processes((relay,)) == [], (
                 "sandbox launcher did not reap the relay"
-            )
-            assert not process_exists(helper_pid), (
-                "detached worker descendant outlived sandbox retirement"
             )
             if manager is not None:
                 assert live_darwin_processes((manager,)) == [], (
