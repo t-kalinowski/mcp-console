@@ -210,6 +210,32 @@ def test_evaluates_with_explicit_managed_python(binary: Path) -> Transcript:
     return managed_python_transcript(binary, configured=True)
 
 
+def test_runs_pytorch_cpu_autograd(binary: Path) -> Transcript:
+    environment = os.environ.copy()
+    environment.pop("RETICULATE_PYTHON", None)
+    with McpClient(binary, ("serve",), environment) as client:
+        client.initialize_and_list_tools()
+        # fmt: python
+        python = code("""
+            import torch
+
+            assert torch.backends.openmp.is_available()
+            torch.set_num_threads(2)
+            x = torch.ones(65536, dtype=torch.float64, device="cpu", requires_grad=True)
+            loss = x.square().sum()
+            loss.backward()
+            assert torch.equal(x.grad, torch.full_like(x, 2))
+            result = (loss.item(), x.grad[0].item(), torch.get_num_threads())
+            assert result == (65536.0, 2.0, 2)
+            result
+            """)
+        client.send(python=python, requirements={"python": ["torch"]})
+        assert client.transcript[-1]["result"].get("isError") is not True, (
+            client.transcript[-1]
+        )
+        return client.finish()
+
+
 def test_runs_joblib_process_backend(binary: Path) -> Transcript:
     environment = os.environ.copy()
     environment.pop("RETICULATE_PYTHON", None)

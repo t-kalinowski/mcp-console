@@ -39,7 +39,10 @@ Map each non-generic sandbox allowance to the real workflow that requires it and
 | POSIX semaphores            | Python spawn multiprocessing                      | `client_server/python/test_environment::runs_spawn_process_after_live_resolution`          |
 | PTYs and `kern.boottime`    | `processx`                                        | `cli/command/test_execution::allows_processx_pty_processes` and MCP process-lifetime cases |
 | Quarto device/sysctl access | Render generated `ir` document inside the sandbox | `client_server/recording/test_quarto::renders_generated_document`                          |
-| `__KMP_REGISTERED_LIB_*`    | PyTorch/libomp                                    | Add a PyTorch workflow test, or remove the allowance                                       |
+| `__KMP_REGISTERED_LIB_*`    | PyTorch CPU autograd with OpenMP                  | `client_server/python/test_environment::runs_pytorch_cpu_autograd`                         |
+
+The PyTorch build used to add this case also completes it with the same OpenMP warning when the registration allowance is removed.
+The allowance remains for compatibility; this case establishes CPU autograd support, not that every libomp build requires the allowance.
 
 When reviewing deletion candidates, separate tests may replace a combined test only when the interaction between those behaviors is not itself a plausible failure mode.
 
