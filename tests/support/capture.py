@@ -26,10 +26,11 @@ def read_lines(
 ) -> list[str]:
     descriptor = stream.fileno()  # type: ignore[attr-defined]
     output = bytearray()
+    newline_count = 0
     deadline = time.monotonic() + timeout
     with selectors.DefaultSelector() as selector:
         selector.register(descriptor, selectors.EVENT_READ)
-        while output.count(b"\n") < count:
+        while newline_count < count:
             remaining = deadline - time.monotonic()
             assert remaining > 0, f"timed out waiting for {description}"
             ready = selector.select(remaining)
@@ -37,6 +38,7 @@ def read_lines(
             chunk = os.read(descriptor, 4096)
             assert chunk, f"sandbox closed before reporting {description}"
             output.extend(chunk)
+            newline_count += chunk.count(b"\n")
     lines = output.decode("utf-8").splitlines()
     assert len(lines) == count, (description, lines)
     return lines
