@@ -98,7 +98,6 @@ impl EventQueue {
     fn next(&self) -> Option<Frame> {
         let mut state = self.lock();
         loop {
-            self.expire(&mut state);
             if matches!(state.status, Status::Failed(_)) {
                 return None;
             }
@@ -110,7 +109,12 @@ impl EventQueue {
             if matches!(state.status, Status::Finishing) {
                 return None;
             }
-            state = self.wait(state);
+            // An empty queue has no pending bytes to time out. Producers
+            // enforce their admission deadline; finish wakes this waiter.
+            state = self
+                .changed
+                .wait(state)
+                .expect("relay event queue lock poisoned");
         }
     }
 
