@@ -96,7 +96,7 @@ The suite also verifies both documents with Yamark, and the optional Quarto suit
 Shared helpers under `tests/support/` are grouped by responsibility:
 
 - `client.py` owns the public stdio MCP client.
-- `cases.py` runs individual cases with deadlines and captures their diagnostic output.
+- `cases.py` runs individual cases and their snapshot checks with deadlines and captures their diagnostic output.
 - `snapshots.py` formats and compares primary and companion snapshots.
 - `normalization.py` contains source-text and diagnostic normalization.
 - `checkpoints.py`, `capture.py`, and `processes.py` contain reusable synchronization, stream-reading, and cleanup mechanics.
@@ -126,6 +126,7 @@ scripts/test --update client_server/server/test_tools::initializes_and_lists_too
 With no selectors, `scripts/test` runs every suite and case in parallel, using at least two worker processes and otherwise one per available CPU by default.
 Pass `--jobs N` to set the maximum concurrency or `--jobs 1` to run serially.
 Each case has a 600-second deadline that starts when its supervisor launches.
+The deadline includes snapshot formatting, comparison, and updates, which run in the supervised case process so the coordinator can keep handling signals and sibling failures.
 Use `--timeout SECONDS` to allow longer runs, such as slow resolver workflows.
 On timeout, the runner names the case and requests cleanup from its supervisor process.
 The supervisor sends the case `SIGINT`, allowing 15 seconds for `finally` blocks and fixture cleanup before forcibly killing that process by PID.
