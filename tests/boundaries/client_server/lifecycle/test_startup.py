@@ -97,7 +97,7 @@ def wait_for_resolver_exit(exits: select.kqueue, pids: set[int]) -> None:
 
 def test_cancels_resolver_discovery_when_stdin_closes(binary: Path) -> Transcript:
     with blocked_startup(binary, "discovery") as (client, _release, exits, pids):
-        client._start_request(
+        client.start_request(
             "initialize",
             protocolVersion="2025-11-25",
             capabilities={},
@@ -118,7 +118,7 @@ def test_cancels_resolver_discovery_when_stdin_closes(binary: Path) -> Transcrip
 
 def test_cancels_default_preparation_when_stdin_closes(binary: Path) -> Transcript:
     with blocked_startup(binary, "preparation") as (client, _release, exits, pids):
-        client._start_request(
+        client.start_request(
             "initialize",
             protocolVersion="2025-11-25",
             capabilities={},
@@ -139,7 +139,7 @@ def test_cancels_default_preparation_when_stdin_closes(binary: Path) -> Transcri
 
 def test_preserves_initialize_buffered_during_startup(binary: Path) -> Transcript:
     with blocked_startup(binary, "discovery") as (client, release, _exits, _pids):
-        initialize = client._start_request(
+        initialize = client.start_request(
             "initialize",
             protocolVersion="2025-11-25",
             capabilities={},
@@ -148,10 +148,10 @@ def test_preserves_initialize_buffered_during_startup(binary: Path) -> Transcrip
         release.release()
         readable, _, _ = select.select([client.stdout], [], [], 30)
         assert readable, "server did not answer initialize after startup"
-        client._receive(initialize)
-        client._notify("notifications/initialized")
-        client._request("tools/list")
-        return client._finish()
+        client.receive(initialize)
+        client.notify("notifications/initialized")
+        client.request("tools/list")
+        return client.finish()
 
 
 if __name__ == "__main__":

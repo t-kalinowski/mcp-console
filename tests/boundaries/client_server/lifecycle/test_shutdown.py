@@ -49,7 +49,7 @@ def test_restart_cancels_partial_sideband_frame(binary: Path) -> Transcript:
         descendant_group = None
         passed = False
         try:
-            client._initialize_and_list_tools()
+            client.initialize_and_list_tools()
             client.send(r="start partial sideband descendant", timeout_ms=0)
             assert last_tool_text(client) == "\n[running; poll with an empty send]"
             marker = wait_for_marker(
@@ -64,13 +64,13 @@ def test_restart_cancels_partial_sideband_frame(binary: Path) -> Transcript:
             release_partial_sideband(marker)
             control.wait_for(0, "partial_sideband_written")
 
-            restarted = client._start_send(control="restart")
+            restarted = client.start_send(control="restart")
             received = threading.Event()
             errors: list[BaseException] = []
 
             def receive_restart() -> None:
                 try:
-                    client._receive(restarted)
+                    client.receive(restarted)
                 except BaseException as error:
                     errors.append(error)
                 finally:
@@ -97,7 +97,7 @@ def test_restart_cancels_partial_sideband_frame(binary: Path) -> Transcript:
             descendant_group = None
             client.send(r="echo echo")
             assert last_tool_text(client) == "zod: echo\n"
-            transcript = client._finish()
+            transcript = client.finish()
             passed = True
             return transcript
         finally:
@@ -122,7 +122,7 @@ def test_restart_cancels_reader_after_operation_result(
         descendant_group = None
         passed = False
         try:
-            client._initialize_and_list_tools()
+            client.initialize_and_list_tools()
             client.send(r="complete before partial sideband descendant")
             assert last_tool_text(client) == "[done]"
             marker = wait_for_marker(
@@ -137,13 +137,13 @@ def test_restart_cancels_reader_after_operation_result(
                 client,
             )
 
-            restarted = client._start_send(control="restart")
+            restarted = client.start_send(control="restart")
             received = threading.Event()
             errors: list[BaseException] = []
 
             def receive_restart() -> None:
                 try:
-                    client._receive(restarted)
+                    client.receive(restarted)
                 except BaseException as error:
                     errors.append(error)
                 finally:
@@ -167,7 +167,7 @@ def test_restart_cancels_reader_after_operation_result(
             descendant_group = None
             client.send(r="echo echo")
             assert last_tool_text(client) == "zod: echo\n"
-            transcript = client._finish()
+            transcript = client.finish()
             passed = True
             return transcript
         finally:
@@ -230,7 +230,7 @@ def test_restart_drains_readable_frame_before_abandoning_partial_tail(
         cancellation_ready: FifoCheckpoint | None = None
         passed = False
         try:
-            client._initialize_and_list_tools()
+            client.initialize_and_list_tools()
             client.send(r="complete silently")
             assert last_tool_text(client) == "[done]"
             control.connect(client)
@@ -240,7 +240,7 @@ def test_restart_drains_readable_frame_before_abandoning_partial_tail(
             )
             (loaded.parent / arm_name).touch()
 
-            evaluation = client._start_send(
+            evaluation = client.start_send(
                 r="wait after readable frame and partial tail"
             )
             marker = wait_for_marker(
@@ -251,12 +251,12 @@ def test_restart_drains_readable_frame_before_abandoning_partial_tail(
             descendant_group = int(marker.read_text(encoding="utf-8"))
             wait_for_marker(temporary, socket_ready_name, client)
             wait_for_marker(temporary, partial_tail_name, client)
-            restart = client._start_send(control="restart")
+            restart = client.start_send(control="restart")
             cancellation_ready.wait(
                 "relay sideband cancellation",
                 timeout=FIXTURE_CHECKPOINT_TIMEOUT_SECONDS,
             )
-            client._receive_many([evaluation, restart])
+            client.receive_many([evaluation, restart])
             result = evaluation["result"]
             assert result["isError"] is True, result
             assert result["content"] == [
@@ -289,7 +289,7 @@ def test_restart_drains_readable_frame_before_abandoning_partial_tail(
             descendant_group = None
             client.send(r="echo replacement ready")
             assert last_tool_text(client) == "zod: replacement ready\n"
-            transcript = client._finish()
+            transcript = client.finish()
             passed = True
             return transcript
         finally:
@@ -318,7 +318,7 @@ def test_shutdown_cancels_partial_sideband_frame(binary: Path) -> Transcript:
         descendant_group = None
         passed = False
         try:
-            client._initialize_and_list_tools()
+            client.initialize_and_list_tools()
             client.send(r="start partial sideband descendant", timeout_ms=0)
             assert last_tool_text(client) == "\n[running; poll with an empty send]"
             marker = wait_for_marker(
@@ -383,11 +383,11 @@ def test_shutdown_deadline_does_not_wait_for_sideband_writer(
         sideband_holder = None
         passed = False
         try:
-            client._initialize_and_list_tools()
+            client.initialize_and_list_tools()
             target_operation = client._next_request_id
             # This starts the lazy worker; Zod waits for the control below
             # before reading any byte of the evaluation from its sideband.
-            entry = client._start_send(r="x" * (2 * 1024 * 1024))
+            entry = client.start_send(r="x" * (2 * 1024 * 1024))
             assert entry["id"] == target_operation, entry
             control.connect(client)
             control.send_control(

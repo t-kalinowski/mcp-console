@@ -62,7 +62,7 @@ def test_restart_and_shutdown_with_relay_below_sandbox_root(binary: Path) -> Tra
         )
         identities = []
         try:
-            client._initialize_and_list_tools()
+            client.initialize_and_list_tools()
             for retirement in ("restart", "shutdown"):
                 client.send(
                     python=code(r"""
@@ -98,7 +98,7 @@ def test_restart_and_shutdown_with_relay_below_sandbox_root(binary: Path) -> Tra
                         "[starting new worker]\nreplacement ready\n[done]"
                     ), client.transcript[-1]
                 else:
-                    client._finish()
+                    client.finish()
                 assert live_darwin_processes(tuple(identities)) == []
                 assert not Path(temporary_directory).exists()
             return client.transcript

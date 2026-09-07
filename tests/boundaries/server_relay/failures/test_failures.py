@@ -20,7 +20,7 @@ def _reports_worker_outcome(
     diagnostic: str,
 ) -> tuple[Transcript, str]:
     client = ServerRelayClient(binary, scenario)
-    failed = client.client._start_send(r="42")
+    failed = client.client.start_send(r="42")
     transcript = client.release_failure(failed, diagnostic)
     result = failed["result"]
     assert result.get("isError") is True, result
@@ -37,7 +37,7 @@ def _reports_worker_outcome(
 
 def test_reports_fatal_failure(binary: Path) -> Transcript:
     client = ServerRelayClient(binary, "fatal")
-    failed = client.client._start_send(r="42")
+    failed = client.client.start_send(r="42")
     transcript = client.release_failure(failed, "scripted relay failure")
     output = failed["result"]["content"][0]["text"]
     assert output.startswith("drained after fatal failure\n"), output
@@ -50,7 +50,7 @@ def test_reports_fatal_failure(binary: Path) -> Transcript:
 
 def test_rejects_unsolicited_status_137_after_fatal(binary: Path) -> Transcript:
     client = ServerRelayClient(binary, "fatal_status_137")
-    failed = client.client._start_send(r="42")
+    failed = client.client.start_send(r="42")
     transcript = client.release_terminal_failure(failed, "scripted relay failure")
     output = failed["result"]["content"][0]["text"]
     assert "worker launcher exited with status 137" in output, output
@@ -60,7 +60,7 @@ def test_rejects_unsolicited_status_137_after_fatal(binary: Path) -> Transcript:
 
 def test_rejects_truncated_output(binary: Path) -> Transcript:
     client = ServerRelayClient(binary, "truncated")
-    failed = client.client._start_send(r="42")
+    failed = client.client.start_send(r="42")
     transcript = client.release_failure(
         failed,
         "relay stream closed midway through a frame",

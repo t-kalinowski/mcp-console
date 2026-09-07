@@ -7,7 +7,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from support.client import McpClient, stop_client
+from support.client import McpClient
 
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
@@ -113,13 +113,10 @@ def r_input_handler_client(binary: Path) -> Iterator[tuple[McpClient, Path]]:
         environment, rscript = r_test_environment()
         environment["TMPDIR"] = temporary_directory
         build_r_input_handler(directory, environment, rscript)
-        client = McpClient(
+        with McpClient(
             binary,
             ("serve",),
             environment=environment,
             current_directory=directory,
-        )
-        try:
+        ) as client:
             yield client, directory
-        finally:
-            stop_client(client)

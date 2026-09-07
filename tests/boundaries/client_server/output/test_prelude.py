@@ -36,7 +36,7 @@ def test_demarcates_idle_prelude_across_cell_outcomes(binary: Path) -> Transcrip
         )
         passed = False
         try:
-            client._initialize_and_list_tools()
+            client.initialize_and_list_tools()
 
             expose_idle_sideband_output(client, temporary_path, "success")
             client.send(r="echo echo")
@@ -45,7 +45,7 @@ def test_demarcates_idle_prelude_across_cell_outcomes(binary: Path) -> Transcrip
             )
 
             expose_idle_sideband_output(client, temporary_path, "timeout")
-            timed_out = client._start_send(
+            timed_out = client.start_send(
                 r="output then complete after release",
                 timeout_ms=0,
             )
@@ -54,7 +54,7 @@ def test_demarcates_idle_prelude_across_cell_outcomes(binary: Path) -> Transcrip
                 "zod-cell-output-pending",
                 client,
             )
-            client._receive(timed_out)
+            client.receive(timed_out)
             assert timed_out["result"] == {
                 "content": [
                     {
@@ -134,7 +134,7 @@ def test_demarcates_idle_prelude_across_cell_outcomes(binary: Path) -> Transcrip
                     ),
                 }
             ], result
-            transcript = client._finish()
+            transcript = client.finish()
             passed = True
             return transcript
         finally:

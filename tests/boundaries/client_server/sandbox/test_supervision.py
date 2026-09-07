@@ -189,11 +189,11 @@ def test_restart_retires_descendants_outside_the_worker_group(
     client = McpClient(binary, ("serve",))
     generation: _Generation | None = None
     try:
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         generation = _spawn_processx_generation(client)
         client.send(control="restart")
         _assert_generation_retired(generation, "restart")
-        return client._finish()
+        return client.finish()
     finally:
         stop_client(client)
         if generation is not None:
@@ -215,7 +215,7 @@ def test_failure_replacement_retires_descendants_outside_the_worker_group(
     client = McpClient(binary, ("serve",), environment)
     generation: _Generation | None = None
     try:
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         generation = _spawn_processx_generation(client)
         # The manager lists a process's children only after registering its
         # identity in the descendant tracker. Wait for the exact processx PID
@@ -241,7 +241,7 @@ def test_failure_replacement_retires_descendants_outside_the_worker_group(
         _assert_generation_retired(generation, "failure replacement")
         client.send(r='writeLines("replacement ready")')
         assert _last_text(client) == "replacement ready\n"
-        return client._finish()
+        return client.finish()
     finally:
         stop_client(client)
         if generation is not None:
@@ -257,9 +257,9 @@ def test_server_shutdown_retires_descendants_outside_the_worker_group(
     client = McpClient(binary, ("serve",))
     generation: _Generation | None = None
     try:
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         generation = _spawn_processx_generation(client)
-        transcript = client._finish()
+        transcript = client.finish()
         _assert_generation_retired(generation, "shutdown")
         return transcript
     finally:

@@ -16,7 +16,7 @@ PLATFORMS = {"darwin"}
 
 def test_accepts_long_multibyte_source_lines(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     long_value = "é" * 100_000
     assert len(long_value) == 100_000
     assert len(long_value.encode()) == 200_000
@@ -38,7 +38,7 @@ def test_accepts_long_multibyte_source_lines(binary: Path) -> Transcript:
         "source_utf8_bytes": len(source.encode()),
         "source_sha256": hashlib.sha256(source.encode()).hexdigest(),
     }
-    return client._finish()
+    return client.finish()
 
 
 if __name__ == "__main__":

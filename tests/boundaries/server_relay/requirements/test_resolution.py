@@ -110,7 +110,7 @@ def test_send_timeout_starts_after_blocked_requirements_resolver(
         client.start_worker()
         finished = False
         try:
-            evaluation = client.client._start_send(
+            evaluation = client.client.start_send(
                 r="42",
                 requirements={"r": ["timeout-requirement"]},
                 timeout_ms=50,
@@ -172,14 +172,14 @@ def test_stdin_forwarding_failure_does_not_execute_cell(
     finished = False
     with capture_path.open(encoding="utf-8") as capture:
         try:
-            evaluation = client.client._start_send(
+            evaluation = client.client.start_send(
                 r="must not execute",
                 stdin="x" * (4 * 1024 * 1024),
             )
             checkpoint = client._wait_for(CHECKPOINT_NAME)
             (client.root / STDIN_FAILURE_RELEASED_NAME).touch()
             checkpoint.with_name(RELEASE_NAME).touch()
-            client.client._receive(evaluation)
+            client.client.receive(evaluation)
             result = evaluation["result"]
             assert result.get("isError") is True, result
             output = result["content"][0]["text"]
@@ -206,7 +206,7 @@ def test_stdin_forwarding_failure_does_not_execute_cell(
             )
             replacement_capture_path = captures[0]
             with replacement_capture_path.open(encoding="utf-8") as replacement:
-                client.client._finish()
+                client.client.finish()
                 transcript.extend(client._read_open_capture(replacement))
             assert len(_normalize_shutdown_grace(transcript)) == 1
             finished = True
@@ -241,12 +241,12 @@ def test_restart_consumes_late_r_preparation_retirement_events(
         retirement_release = FifoCheckpoint.attach(old_root / RETIREMENT_RELEASE_NAME)
         finished = False
         try:
-            preparation = client.client._start_send(
+            preparation = client.client.start_send(
                 r="must not execute after resolver restart race",
                 requirements={"r": ["ordered-retirement"]},
             )
             preparation_received.wait()
-            restart = client.client._start_send(control="restart")
+            restart = client.client.start_send(control="restart")
             shutdown_received.wait()
             # The preparation response is released by the ordered retirement
             # marker, so the old relay result below is necessarily late.
@@ -287,7 +287,7 @@ def test_restart_consumes_late_r_preparation_retirement_events(
                     _tool_text(client.send(requirements={"r": ["ordered-retirement"]}))
                     == "[prepared]"
                 )
-                client.client._finish()
+                client.client.finish()
                 finished = True
                 replacement_transcript = client._read_open_capture(replacement_capture)
             finally:
@@ -372,11 +372,11 @@ def test_restart_discards_pre_marker_r_preparation_result(
         shutdown_received = FifoCheckpoint.attach(old_root / SHUTDOWN_RECEIVED_NAME)
         finished = False
         try:
-            preparation = client.client._start_send(
+            preparation = client.client.start_send(
                 requirements={"r": ["old-generation"]},
             )
             preparation_received.wait()
-            restart = client.client._start_send(
+            restart = client.client.start_send(
                 control="restart",
                 requirements={"r": ["replacement-generation"]},
             )
@@ -386,7 +386,7 @@ def test_restart_discards_pre_marker_r_preparation_result(
             resolver_release.release()
             resolver_release_gate.release()
             resolver_finished.wait()
-            client.client._receive_many([preparation, restart])
+            client.client.receive_many([preparation, restart])
 
             assert preparation["result"] == {
                 "content": [
@@ -426,7 +426,7 @@ def test_restart_discards_pre_marker_r_preparation_result(
                     _tool_text(client.send(requirements={"r": ["old-generation"]}))
                     == "[prepared]"
                 )
-                client.client._finish()
+                client.client.finish()
                 finished = True
                 replacement_transcript = client._read_open_capture(replacement_capture)
             finally:
@@ -562,7 +562,7 @@ def test_rejects_runtime_r_resolution_during_r_preparation(
         old_capture = (old_root / CAPTURE_NAME).open(encoding="utf-8")
         finished = False
         try:
-            evaluation = client.client._start_send(
+            evaluation = client.client.start_send(
                 r="must not execute",
                 requirements={"r": ["explicit-package"]},
             )
@@ -574,7 +574,7 @@ def test_rejects_runtime_r_resolution_during_r_preparation(
             output = result["content"][0]["text"]
             assert output.endswith("[worker stopped: in-memory state lost]"), output
             old_transcript = client._read_open_capture(old_capture)
-            client.client._finish()
+            client.client.finish()
             finished = True
         finally:
             if not finished:
@@ -641,7 +641,7 @@ def test_idle_runtime_r_resolution_owns_environment_until_activation(
         finished = False
         try:
             resolver_started.wait()
-            preparation = client.client._start_send(
+            preparation = client.client.start_send(
                 requirements={"r": ["english"]},
             )
             _receive_checkpointed(
@@ -725,7 +725,7 @@ def test_explicit_r_preparation_owns_environment_before_host_resolution(
         resolver_released = False
         finished = False
         try:
-            preparation = client.client._start_send(
+            preparation = client.client.start_send(
                 requirements={"r": ["english"]},
             )
             resolver_started.wait()
@@ -739,7 +739,7 @@ def test_explicit_r_preparation_owns_environment_before_host_resolution(
 
             resolver_release.release()
             resolver_released = True
-            client.client._receive(preparation)
+            client.client.receive(preparation)
             assert _tool_text(preparation["result"]) == "[prepared]"
             assert _tool_text(client.send(r="42")) == "[done]"
             transcript = client.finish_active()
@@ -833,7 +833,7 @@ def test_rejects_completion_before_runtime_r_activation(
                 "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
             ), output
             old_transcript = client._read_open_capture(old_capture)
-            client.client._finish()
+            client.client.finish()
             finished = True
         finally:
             if not finished:

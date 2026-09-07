@@ -32,7 +32,7 @@ def test_rejects_automatic_resolution_from_background_thread(
         directory = Path(temporary)
         environment, record = recording_uv_environment(directory)
         client = McpClient(binary, ("serve",), environment)
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
         # fmt: python
@@ -72,7 +72,7 @@ def test_rejects_automatic_resolution_from_background_thread(
 
         client.send(python="6 * 7")
         assert last_result_text(client) == "42\n"
-        return client._finish()
+        return client.finish()
 
 
 def test_rejects_automatic_resolution_from_fork_child(binary: Path) -> Transcript:
@@ -80,7 +80,7 @@ def test_rejects_automatic_resolution_from_fork_child(binary: Path) -> Transcrip
         directory = Path(temporary)
         environment, record = recording_uv_environment(directory)
         client = McpClient(binary, ("serve",), environment)
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
         # fmt: python
@@ -135,7 +135,7 @@ def test_rejects_automatic_resolution_from_fork_child(binary: Path) -> Transcrip
 
         client.send(python="6 * 7")
         assert last_result_text(client) == "42\n"
-        return client._finish()
+        return client.finish()
 
 
 def test_times_out_and_polls_automatic_python_resolution(
@@ -152,7 +152,7 @@ def test_times_out_and_polls_automatic_python_resolution(
         resolver_released = False
         finished = False
         try:
-            client._initialize_and_list_tools()
+            client.initialize_and_list_tools()
             client.send(python="None")
             assert last_result_text(client) == "[done]"
             # fmt: python
@@ -168,9 +168,9 @@ def test_times_out_and_polls_automatic_python_resolution(
 
                 (yaml12.__name__, automatic_timeout_attempts)
                 """)
-            evaluation = client._start_send(python=python, timeout_ms=1)
+            evaluation = client.start_send(python=python, timeout_ms=1)
             started.wait("automatic Python resolver")
-            client._receive(evaluation)
+            client.receive(evaluation)
             assert (
                 entry_result_text(evaluation) == "\n[running; poll with an empty send]"
             )
@@ -182,7 +182,7 @@ def test_times_out_and_polls_automatic_python_resolution(
                 "[resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']\n"
                 "('yaml12', 1)\n"
             )
-            transcript = client._finish()
+            transcript = client.finish()
             finished = True
             return transcript
         finally:
@@ -215,7 +215,7 @@ def test_interrupts_automatic_python_resolver_and_preserves_worker(
             signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
         passed = False
         try:
-            client._initialize_and_list_tools()
+            client.initialize_and_list_tools()
             client.send(python="None")
             assert last_result_text(client) == "[done]"
             # fmt: python
@@ -232,7 +232,7 @@ def test_interrupts_automatic_python_resolver_and_preserves_worker(
             assert last_result_text(client) == "\n[running; poll with an empty send]"
             started.wait("automatic Python resolver")
 
-            interrupt = client._start_send(control="interrupt", timeout_ms=30_000)
+            interrupt = client.start_send(control="interrupt", timeout_ms=30_000)
             interrupt_returned = threading.Event()
             forced_release = threading.Event()
 
@@ -243,7 +243,7 @@ def test_interrupts_automatic_python_resolver_and_preserves_worker(
 
             watchdog = threading.Thread(target=release_if_interrupt_blocks)
             watchdog.start()
-            client._receive(interrupt)
+            client.receive(interrupt)
             interrupt_returned.set()
             watchdog.join()
             assert not forced_release.is_set(), (
@@ -270,7 +270,7 @@ def test_interrupts_automatic_python_resolver_and_preserves_worker(
                 )
             )
             assert last_result_text(client) == "42\n"
-            transcript = client._finish()
+            transcript = client.finish()
             passed = True
             return transcript
         finally:
@@ -300,7 +300,7 @@ def test_restart_discards_unactivated_automatic_python_candidate(
         passed = False
         worker_checkpoints: list[FifoCheckpoint] = []
         try:
-            client._initialize_and_list_tools()
+            client.initialize_and_list_tools()
             # fmt: r
             r = code(r"""
                 config <- reticulate::py_config()
@@ -360,12 +360,12 @@ def test_restart_discards_unactivated_automatic_python_candidate(
             client.send(r=r)
             assert last_result_text(client) == "[done]"
 
-            evaluation = client._start_send(
+            evaluation = client.start_send(
                 python="import yaml12",
                 timeout_ms=0,
             )
             activation_ready.wait("automatic managed Python activation")
-            client._receive(evaluation)
+            client.receive(evaluation)
             evaluation_result = evaluation["result"]
             assert evaluation_result == {
                 "content": [
@@ -377,7 +377,7 @@ def test_restart_discards_unactivated_automatic_python_candidate(
                 "isError": False,
             }, evaluation_result
 
-            restart = client._start_send(
+            restart = client.start_send(
                 control="restart",
                 requirements={"python": [replacement_requirement]},
             )
@@ -385,7 +385,7 @@ def test_restart_discards_unactivated_automatic_python_candidate(
             activation_release.release()
             activation_sent.wait("published automatic Python activation")
             uv_release.release()
-            client._receive(restart)
+            client.receive(restart)
 
             restart_result = restart["result"]
             assert restart_result.get("isError") is not True, restart_result
@@ -412,7 +412,7 @@ def test_restart_discards_unactivated_automatic_python_candidate(
                 "py-yaml12",
                 replacement_requirement,
             ]
-            transcript = client._finish()
+            transcript = client.finish()
             passed = True
             return transcript
         finally:

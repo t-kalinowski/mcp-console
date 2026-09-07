@@ -23,7 +23,7 @@ PLATFORMS = {"darwin"}
 
 def test_routes_idle_and_timed_out_stdin(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
 
     # fmt: r
     direct_stdin = code(r"""
@@ -71,12 +71,12 @@ def test_routes_idle_and_timed_out_stdin(binary: Path) -> Transcript:
     client.transcript[-1]["result"]["content"][0]["text"] = (
         '[input requested: "bundled> "]\n[1] "café|timed out fd 0"\n'
     )
-    return client._finish()
+    return client.finish()
 
 
 def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
 
     # fmt: r
     r = code(r"""
@@ -156,7 +156,7 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
     output = last_tool_text(client)
     assert output == '[input requested: "quoted \\"prompt\\"\\n> "]\n', output
     assert "accepted" not in output
-    return client._finish()
+    return client.finish()
 
 
 def test_preserves_fd0_order_between_readers(binary: Path) -> Transcript:
@@ -165,7 +165,7 @@ def test_preserves_fd0_order_between_readers(binary: Path) -> Transcript:
     finished = False
     checkpoints: list[FifoCheckpoint] = []
     try:
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
 
         # Create the FIFOs inside the worker's private writable directory.
         # fmt: r
@@ -207,13 +207,13 @@ def test_preserves_fd0_order_between_readers(binary: Path) -> Transcript:
             })
             cat(paste(prompted, direct, sep = "|"), "\n", sep = "")
             """)
-        evaluation = client._start_send(
+        evaluation = client.start_send(
             r=r,
             stdin="callback\ndirect\n",
             timeout_ms=0,
         )
         started.wait("ordered fd 0 readers")
-        client._receive(evaluation)
+        client.receive(evaluation)
         assert evaluation["result"]["content"] == [
             {
                 "type": "text",
@@ -229,7 +229,7 @@ def test_preserves_fd0_order_between_readers(binary: Path) -> Transcript:
         evaluation["result"] = client.transcript[-1]["result"]
         client.transcript[-2:] = [evaluation]
 
-        transcript = client._finish()
+        transcript = client.finish()
         finished = True
         return transcript
     finally:
@@ -243,7 +243,7 @@ def test_preserves_fd0_order_between_readers(binary: Path) -> Transcript:
 
 def test_preserves_utf8_across_console_reads(binary: Path) -> Transcript:
     with r_input_handler_client(binary) as (client, _):
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
 
         # The four-byte native buffer splits the two-byte character across
         # callbacks without making thousands of single-byte reads.
@@ -283,12 +283,12 @@ def test_preserves_utf8_across_console_reads(binary: Path) -> Transcript:
             stdin="\n",
             timeout_ms=3_000,
         )
-        return client._finish()
+        return client.finish()
 
 
 def test_keeps_stdin_open_after_partial_payload(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
 
     # fmt: r
     r = code(r"""
@@ -326,7 +326,7 @@ def test_keeps_stdin_open_after_partial_payload(binary: Path) -> Transcript:
         r=r,
         stdin="next\n",
     )
-    return client._finish()
+    return client.finish()
 
 
 if __name__ == "__main__":

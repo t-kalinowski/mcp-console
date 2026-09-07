@@ -43,7 +43,7 @@ def test_interrupts_running_worker_with_sigint(binary: Path) -> Transcript:
         )
         finished = False
         try:
-            client._initialize_and_list_tools()
+            client.initialize_and_list_tools()
 
             target_id = client._next_request_id
             client.send(
@@ -82,7 +82,7 @@ def test_interrupts_running_worker_with_sigint(binary: Path) -> Transcript:
                 (checkpoint_id, "worker_operation_started"),
             )
 
-            transcript = client._finish()
+            transcript = client.finish()
             finished = True
             return transcript
         finally:
@@ -107,8 +107,8 @@ def test_supervises_stopped_and_continued_workers(binary: Path) -> Transcript:
         workers: list[tuple[int, int]] = []
         passed = False
         try:
-            client._initialize_and_list_tools()
-            evaluation = client._start_send(r="echo echo")
+            client.initialize_and_list_tools()
+            evaluation = client.start_send(r="echo echo")
             marker, worker_pid, worker_group = wait_for_stopped_worker(
                 temporary_path,
                 set(),
@@ -116,7 +116,7 @@ def test_supervises_stopped_and_continued_workers(binary: Path) -> Transcript:
                 client,
             )
 
-            interrupt = client._start_send(control="interrupt", timeout_ms=0)
+            interrupt = client.start_send(control="interrupt", timeout_ms=0)
             readable, _, _ = select.select(
                 [client.stdout],
                 [],
@@ -124,7 +124,7 @@ def test_supervises_stopped_and_continued_workers(binary: Path) -> Transcript:
                 FIXTURE_CHECKPOINT_TIMEOUT_SECONDS,
             )
             assert readable, "relay supervision did not answer the interrupt request"
-            client._receive(interrupt)
+            client.receive(interrupt)
             assert interrupt["result"] == {
                 "content": [
                     {
@@ -141,14 +141,14 @@ def test_supervises_stopped_and_continued_workers(binary: Path) -> Transcript:
                 "stopped worker to resume",
                 client,
             )
-            client._receive(evaluation)
+            client.receive(evaluation)
             assert evaluation["result"] == {
                 "content": [{"type": "text", "text": "zod: echo\n"}],
                 "isError": False,
             }, evaluation
 
             startup_control.write_text("stop startup", encoding="utf-8")
-            restarted = client._start_send(control="restart")
+            restarted = client.start_send(control="restart")
             replacement_marker, replacement_pid, replacement_group = (
                 wait_for_stopped_worker(
                     temporary_path,
@@ -168,7 +168,7 @@ def test_supervises_stopped_and_continued_workers(binary: Path) -> Transcript:
                 "replacement worker to resume",
                 client,
             )
-            client._receive(restarted)
+            client.receive(restarted)
             assert restarted["result"] == {
                 "content": [
                     {
@@ -185,7 +185,7 @@ def test_supervises_stopped_and_continued_workers(binary: Path) -> Transcript:
 
             client.send(r="echo echo")
             assert last_tool_text(client) == "zod: echo\n"
-            transcript = client._finish()
+            transcript = client.finish()
             passed = True
             return transcript
         finally:
@@ -215,8 +215,8 @@ def test_reports_resolver_interrupt_permission_error(binary: Path) -> Transcript
         resolver_group = None
         passed = False
         try:
-            client._initialize_and_list_tools()
-            preparation = client._start_send(
+            client.initialize_and_list_tools()
+            preparation = client.start_send(
                 requirements={"r": ["blocked-resolver"]},
             )
             resolver_started.wait("permission-denied R resolver")
@@ -225,7 +225,7 @@ def test_reports_resolver_interrupt_permission_error(binary: Path) -> Transcript
                 "resolver did not enter a dedicated process group"
             )
 
-            interrupt = client._start_send(control="interrupt", timeout_ms=0)
+            interrupt = client.start_send(control="interrupt", timeout_ms=0)
             responses_returned = threading.Event()
             forced_stop = threading.Event()
 
@@ -237,7 +237,7 @@ def test_reports_resolver_interrupt_permission_error(binary: Path) -> Transcript
             watchdog = threading.Thread(target=stop_if_calls_block, daemon=True)
             watchdog.start()
             try:
-                client._receive_many([preparation, interrupt])
+                client.receive_many([preparation, interrupt])
             finally:
                 responses_returned.set()
                 watchdog.join()
@@ -277,7 +277,7 @@ def test_reports_resolver_interrupt_permission_error(binary: Path) -> Transcript
 
             client.send(r="echo echo")
             assert last_tool_text(client) == "zod: echo\n"
-            transcript = client._finish()
+            transcript = client.finish()
             passed = True
             return transcript
         finally:
@@ -309,8 +309,8 @@ def test_reports_runtime_r_resolver_interrupt_permission_error(
         resolver_group = None
         passed = False
         try:
-            client._initialize_and_list_tools()
-            evaluation = client._start_send(
+            client.initialize_and_list_tools()
+            evaluation = client.start_send(
                 r="report runtime R resolution failure",
             )
             resolver_started.wait("permission-denied runtime R resolver")
@@ -319,7 +319,7 @@ def test_reports_runtime_r_resolver_interrupt_permission_error(
                 "resolver did not enter a dedicated process group"
             )
 
-            interrupt = client._start_send(control="interrupt", timeout_ms=0)
+            interrupt = client.start_send(control="interrupt", timeout_ms=0)
             responses_returned = threading.Event()
             forced_stop = threading.Event()
 
@@ -331,7 +331,7 @@ def test_reports_runtime_r_resolver_interrupt_permission_error(
             watchdog = threading.Thread(target=stop_if_calls_block, daemon=True)
             watchdog.start()
             try:
-                client._receive_many([evaluation, interrupt])
+                client.receive_many([evaluation, interrupt])
             finally:
                 responses_returned.set()
                 watchdog.join()
@@ -365,7 +365,7 @@ def test_reports_runtime_r_resolver_interrupt_permission_error(
 
             client.send(r="echo echo")
             assert last_tool_text(client) == "zod: echo\n"
-            transcript = client._finish()
+            transcript = client.finish()
             passed = True
             return transcript
         finally:

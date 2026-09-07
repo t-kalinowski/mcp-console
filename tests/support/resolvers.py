@@ -261,7 +261,7 @@ def python_inventory_client(
         environment,
         current_directory=directory,
     )
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     arguments.write_text("", encoding="utf-8")
     if resolver_record is not None:
         resolver_record.write_text("", encoding="utf-8")
@@ -417,16 +417,16 @@ def resolve_managed_python(binary: Path, directory: Path) -> Path:
     environment = os.environ.copy()
     environment.pop("RETICULATE_PYTHON", None)
     environment.pop("UV_PYTHON", None)
-    client = McpClient(
+    with McpClient(
         binary,
         ("serve",),
         environment,
         current_directory=workspace,
-    )
-    client._initialize_and_list_tools()
-    client.send(python='import sys\nprint(f"managed-python={sys.executable}")')
-    output = last_result_text(client)
-    client._finish()
+    ) as client:
+        client.initialize_and_list_tools()
+        client.send(python='import sys\nprint(f"managed-python={sys.executable}")')
+        output = last_result_text(client)
+        client.finish()
     executable = Path(
         next(
             line for line in output.splitlines() if line.startswith("managed-python=")
