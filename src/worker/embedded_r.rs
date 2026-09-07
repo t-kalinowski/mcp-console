@@ -6,7 +6,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
 
-use super::core;
+use super::core::{
+    self, emit_output, observe_stdin_shutdown, record_worker_failure, send_input_cancelled,
+    send_input_received, send_input_requested, take_pending_server_message, take_worker_failure,
+};
 use crate::cell::{Cell, Language};
 use crate::worker_protocol::{ConsoleChannel, ServerMessage, WorkerMessage};
 
@@ -21,6 +24,7 @@ static CONSOLE_STDIN: Mutex<ConsoleStdin> = Mutex::new(ConsoleStdin {
     line_prefix: Vec::new(),
 });
 static EVALUATION_STARTED: AtomicBool = AtomicBool::new(false);
+static SQL_EVALUATION_STARTED: AtomicBool = AtomicBool::new(false);
 type ReplInit = unsafe extern "C-unwind" fn();
 type ReplDoOne = unsafe extern "C-unwind" fn() -> c_int;
 type TopLevelExec = unsafe extern "C-unwind" fn(
@@ -213,7 +217,7 @@ impl Runtime {
             if core::is_shutting_down() {
                 return Ok(ServerMessage::Shutdown);
             }
-            if let Some(message) = core::take_pending_server_message()? {
+            if let Some(message) = take_pending_server_message()? {
                 return Ok(message);
             }
 
@@ -226,7 +230,7 @@ impl Runtime {
             }
 
             run_ready_handlers(&self.graphics)?;
-            if let Some(message) = core::take_worker_failure() {
+            if let Some(message) = take_worker_failure() {
                 return Err(message);
             }
         }
@@ -241,7 +245,7 @@ impl Runtime {
             if core::is_shutting_down() {
                 return Ok(false);
             }
-            if let Some(message) = core::take_worker_failure() {
+            if let Some(message) = take_worker_failure() {
                 return Err(io::Error::other(message).into());
             }
         }
@@ -260,7 +264,7 @@ impl Runtime {
                 if core::is_shutting_down() {
                     return Ok(false);
                 }
-                if let Some(message) = core::take_worker_failure().or_else(|| result.err()) {
+                if let Some(message) = take_worker_failure().or_else(|| result.err()) {
                     return Err(io::Error::other(message).into());
                 }
                 self.writer.send(&WorkerMessage::Completed)?;
@@ -272,7 +276,7 @@ impl Runtime {
                 if core::is_shutting_down() {
                     return Ok(false);
                 }
-                if let Some(message) = core::take_worker_failure() {
+                if let Some(message) = take_worker_failure() {
                     return Err(io::Error::other(message).into());
                 }
                 match result {
@@ -294,7 +298,7 @@ impl Runtime {
                 if core::is_shutting_down() {
                     return Ok(false);
                 }
-                if let Some(message) = core::take_worker_failure() {
+                if let Some(message) = take_worker_failure() {
                     return Err(io::Error::other(message).into());
                 }
                 match result.map_err(io::Error::other)? {
@@ -375,6 +379,16 @@ fn console_interrupt_pending() -> bool {
         && unsafe { libr::get(libr::R_interrupts_suspended) == libr::Rboolean_FALSE }
 }
 
+pub(crate) fn resolve_r(
+    packages: Vec<String>,
+) -> Result<crate::r_environment::ResolutionOutcome, String> {
+    // SQL callbacks can reenter R, but SQL evaluation does not resolve packages.
+    if SQL_EVALUATION_STARTED.load(Ordering::SeqCst) {
+        return Ok(crate::r_environment::ResolutionOutcome::Unavailable);
+    }
+    core::resolve_r(packages)
+}
+
 fn evaluate_cell(
     cell: Cell,
     graphics: &crate::r_graphics::Bridge,
@@ -385,7 +399,7 @@ fn evaluate_cell(
     if core::is_shutting_down() {
         return Ok(());
     }
-    if let Some(message) = core::take_worker_failure() {
+    if let Some(message) = take_worker_failure() {
         return Err(message);
     }
     let result = match cell.language {
@@ -395,7 +409,7 @@ fn evaluate_cell(
     };
     finish_console_stdin_operation()?;
     if result.is_ok() && !core::is_shutting_down() {
-        if let Some(message) = core::take_worker_failure() {
+        if let Some(message) = take_worker_failure() {
             return Err(message);
         }
         run_ready_handlers(graphics)?;
@@ -405,7 +419,7 @@ fn evaluate_cell(
 
 fn evaluate_r_cell(r: String, graphics: &crate::r_graphics::Bridge) -> Result<(), String> {
     if r.contains('\0') {
-        core::emit_output(
+        emit_output(
             ConsoleChannel::Diagnostic,
             b"Error: R source cannot contain NUL\n",
         );
@@ -419,7 +433,7 @@ fn evaluate_r_cell(r: String, graphics: &crate::r_graphics::Bridge) -> Result<()
     let result = match status {
         0 | 1 => Ok(()),
         2 => {
-            core::emit_output(ConsoleChannel::Diagnostic, b"Error: Incomplete code\n");
+            emit_output(ConsoleChannel::Diagnostic, b"Error: Incomplete code\n");
             Ok(())
         }
         status => Err(format!(
@@ -436,7 +450,7 @@ fn evaluate_python_cell(
     python: &mut crate::python::Runtime,
 ) -> Result<(), String> {
     if source.contains('\0') {
-        core::emit_output(
+        emit_output(
             ConsoleChannel::Diagnostic,
             b"SyntaxError: source code string cannot contain null bytes\n",
         );
@@ -452,16 +466,16 @@ fn evaluate_python_cell(
 
 fn evaluate_sql_cell(source: String, sql: &mut crate::sql::Bridge) -> Result<(), String> {
     if source.contains('\0') {
-        core::emit_output(
+        emit_output(
             ConsoleChannel::Diagnostic,
             b"Error: SQL source cannot contain NUL\n",
         );
         return Ok(());
     }
     EVALUATION_STARTED.store(true, Ordering::SeqCst);
-    core::set_sql_evaluation_started(true);
+    SQL_EVALUATION_STARTED.store(true, Ordering::SeqCst);
     let result = sql.evaluate(&source);
-    core::set_sql_evaluation_started(false);
+    SQL_EVALUATION_STARTED.store(false, Ordering::SeqCst);
     EVALUATION_STARTED.store(false, Ordering::SeqCst);
     result
 }
@@ -563,7 +577,7 @@ fn run_ready_handlers(graphics: &crate::r_graphics::Bridge) -> Result<(), String
     EVALUATION_STARTED.store(false, Ordering::SeqCst);
     finish_console_stdin_operation()?;
     defer_interrupts(|| graphics.finish(), check_interrupts)?;
-    core::observe_stdin_shutdown()
+    observe_stdin_shutdown()
 }
 
 fn wait_for_activity(sideband_fd: c_int) -> Result<bool, String> {
@@ -708,7 +722,7 @@ extern "C-unwind" fn r_write_console(buf: *const c_char, buflen: c_int, otype: c
     } else {
         ConsoleChannel::Diagnostic
     };
-    core::emit_output(channel, bytes);
+    emit_output(channel, bytes);
 }
 
 extern "C-unwind" fn r_show_message(buf: *const c_char) {
@@ -717,7 +731,7 @@ extern "C-unwind" fn r_show_message(buf: *const c_char) {
     }
     let mut message = unsafe { CStr::from_ptr(buf) }.to_bytes().to_vec();
     message.push(b'\n');
-    core::emit_output(ConsoleChannel::Diagnostic, &message);
+    emit_output(ConsoleChannel::Diagnostic, &message);
 }
 
 extern "C-unwind" fn r_read_console(
@@ -746,28 +760,28 @@ extern "C-unwind" fn r_read_console(
             .to_string_lossy()
             .into_owned()
     };
-    if let Err(error) = core::send_input_requested(&prompt) {
-        core::record_worker_failure(error);
+    if let Err(error) = send_input_requested(&prompt) {
+        record_worker_failure(error);
         return console_eof(buf);
     }
 
     match read_console_stdin(buf, buflen) {
         Ok(read) => {
             let receipt = if read < 0 {
-                core::send_input_cancelled()
+                send_input_cancelled()
             } else if read != 0 {
-                core::send_input_received()
+                send_input_received()
             } else {
                 Ok(())
             };
             if let Err(error) = receipt {
-                core::record_worker_failure(error);
+                record_worker_failure(error);
                 return console_eof(buf);
             }
             read
         }
         Err(error) => {
-            core::record_worker_failure(error);
+            record_worker_failure(error);
             console_eof(buf)
         }
     }

@@ -187,6 +187,9 @@ Any future sandbox-specific control plane ends at that launcher, without reachin
 The worker owns language-runtime state and implements the worker protocol.
 It reports readiness, accepts complete cells and supported preparation operations, consumes interactive stdin, publishes console events and images, and reports completion or failure through the sideband.
 
+The built-in worker's `worker::core` owns shared sideband state, deferred operation messages, resolver exchanges, output publication, and shutdown and failure state.
+The `worker::embedded_r` backend owns interpreter initialization, event handling, interactive input, interrupts, and language dispatch, including suppression of R resolution during SQL callbacks.
+
 The built-in worker embeds R on its main thread.
 Its language adapters provide persistent Python and SQL within that worker process.
 The SQL router uses a DBI provider in embedded R or a DB-API provider in CPython.

@@ -9,10 +9,10 @@ mod embedded_r;
 #[cfg(target_os = "macos")]
 pub(crate) use core::{
     publish_plot, publish_python_activation, publish_r_activation, publish_r_activation_failure,
-    resolve_python, resolve_python_version, resolve_r,
+    resolve_python, resolve_python_version,
 };
 #[cfg(target_os = "macos")]
-pub(crate) use embedded_r::run;
+pub(crate) use embedded_r::{resolve_r, run};
 
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn run() -> Result<(), Box<dyn std::error::Error>> {

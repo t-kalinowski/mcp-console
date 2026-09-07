@@ -11,7 +11,6 @@ static WORKER_WRITER: OnceLock<crate::sideband::Writer> = OnceLock::new();
 static PENDING_SERVER_MESSAGES: Mutex<VecDeque<ServerMessage>> = Mutex::new(VecDeque::new());
 static WORKER_FAILURE: Mutex<Option<String>> = Mutex::new(None);
 static WORKER_SHUTDOWN: AtomicBool = AtomicBool::new(false);
-static SQL_EVALUATION_STARTED: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn initialize(
     reader: crate::sideband::Reader,
@@ -49,10 +48,6 @@ pub(crate) fn is_shutting_down() -> bool {
 
 pub(crate) fn mark_shutting_down() {
     WORKER_SHUTDOWN.store(true, Ordering::SeqCst);
-}
-
-pub(crate) fn set_sql_evaluation_started(started: bool) {
-    SQL_EVALUATION_STARTED.store(started, Ordering::SeqCst);
 }
 
 pub(crate) fn observe_stdin_shutdown() -> Result<(), String> {
@@ -99,7 +94,8 @@ pub(crate) fn emit_output(channel: ConsoleChannel, bytes: &[u8]) {
 }
 
 pub(crate) fn send_input_requested(prompt: &str) -> Result<(), String> {
-    worker_writer()
+    WORKER_WRITER
+        .get()
         .expect("R worker sideband writer should be initialized")
         .send(&WorkerMessage::InputRequested {
             prompt: prompt.to_string(),
@@ -108,14 +104,16 @@ pub(crate) fn send_input_requested(prompt: &str) -> Result<(), String> {
 }
 
 pub(crate) fn send_input_received() -> Result<(), String> {
-    worker_writer()
+    WORKER_WRITER
+        .get()
         .expect("R worker sideband writer should be initialized")
         .send(&WorkerMessage::InputReceived)
         .map_err(|error| format!("R worker failed to report received input: {error}"))
 }
 
 pub(crate) fn send_input_cancelled() -> Result<(), String> {
-    worker_writer()
+    WORKER_WRITER
+        .get()
         .expect("R worker sideband writer should be initialized")
         .send(&WorkerMessage::InputCancelled)
         .map_err(|error| format!("R worker failed to cancel an input request: {error}"))
@@ -174,9 +172,6 @@ pub(crate) fn resolve_r(
     use crate::r_environment::{ResolutionFailureKind, ResolutionOutcome};
     use crate::worker_protocol::RResolutionFailureKind;
 
-    if SQL_EVALUATION_STARTED.load(Ordering::SeqCst) {
-        return Ok(ResolutionOutcome::Unavailable);
-    }
     send_worker_message(&WorkerMessage::ResolveR { packages })?;
     match receive_resolver_message().map_err(infrastructure_failure)? {
         ServerMessage::RResolved { library } => Ok(ResolutionOutcome::Resolved { library }),
@@ -279,15 +274,12 @@ fn worker_reader() -> Result<std::sync::MutexGuard<'static, crate::sideband::Rea
         .map_err(|_| "R worker sideband reader lock poisoned".to_string())
 }
 
-fn worker_writer() -> Option<&'static crate::sideband::Writer> {
-    WORKER_WRITER.get()
-}
-
 fn send_worker_message(message: &WorkerMessage) -> Result<(), String> {
     if !crate::sideband::available_in_process() {
         return Err("managed environment resolution is unavailable in a fork child".to_string());
     }
-    worker_writer()
+    WORKER_WRITER
+        .get()
         .ok_or_else(|| "R worker sideband writer is not initialized".to_string())?
         .send(message)
         .map_err(|error| format!("worker sideband write failed: {error}"))
@@ -303,7 +295,7 @@ fn send_output(channel: ConsoleChannel, bytes: &[u8]) -> Result<(), String> {
     if !crate::sideband::available_in_process() {
         return Ok(());
     }
-    let Some(writer) = worker_writer() else {
+    let Some(writer) = WORKER_WRITER.get() else {
         return Ok(());
     };
     if WORKER_FAILURE.lock().is_ok_and(|failure| failure.is_some()) {
@@ -320,7 +312,8 @@ fn send_output(channel: ConsoleChannel, bytes: &[u8]) -> Result<(), String> {
 }
 
 fn send_image(data: String) -> Result<(), String> {
-    worker_writer()
+    WORKER_WRITER
+        .get()
         .expect("R worker sideband writer should be initialized")
         .send(&WorkerMessage::Image {
             data,
