@@ -167,17 +167,17 @@ That fallback cannot recover a descendant that had already detached from the roo
 
 The relay is a thin ordered transport and worker supervisor.
 It owns the worker's local descriptors, translates applicable relay commands to worker-sideband messages, forwards worker observations, delivers signals, bounds shutdown, drains streams, and reaps the direct worker.
-Its producers preserve their own order, and one relay writer serializes their observations for the server.
+Each producer encodes its observations as JSONL frames before enqueueing them, and one relay writer emits those frames in queue order.
 Its FIFO bounds admitted encoded payload bytes and event count, including the write in progress, and reserves space for supervisor events.
 It accepts an oversized frame alone on the ordinary budget and pauses output readers until capacity is available.
-That serialization does not reconstruct chronology across the independent sideband, stdout, and stderr transports.
+This preserves each producer's order without reconstructing chronology across the independent sideband, stdout, and stderr transports.
 
 The relay does not own the logical session, retained requirements, evaluation admission, server pending-output budgets, response assembly, or MCP delivery.
 It exits with the worker lifetime it supervises.
 Remaining descendants, including those retaining worker streams, are retired by the sandbox launcher after the target exits or retirement is requested.
 Its cancellable local transports share a 100-millisecond allowance for additional nonblocking reads during retirement.
 They attempt to queue complete buffered sideband frames but may abandon incomplete frames and further descendant output, so draining does not depend on those descendants becoming quiet or closing their descriptors.
-After direct-worker retirement, the relay gives output one shared second to flush, starting before local I/O joins.
+After direct-worker retirement, the relay gives pipe and socket output one shared second to flush, starting before local I/O joins.
 That deadline also wakes readers waiting for queue space; abandoned output fails the transport.
 Blocked downstream pipe or socket output can therefore fail retirement without delaying worker shutdown; [the relay protocol](RELAY_PROTOCOL.md#retirement-and-failure) defines delivery and descriptor limits.
 
@@ -355,7 +355,7 @@ The resulting delivery owner covers prior-operation output, restart lifecycle no
 If MCP response delivery is cancelled or its write fails, the complete combined response returns to its delivery owner and can be delivered exactly once.
 
 Each relay producer preserves its own order.
-The serialized event stream gives the server one observation order, but it does not establish chronology between independent worker sideband, stdout, and stderr transports.
+The ordered event stream gives the server one observation order, but it does not establish chronology between independent worker sideband, stdout, and stderr transports.
 The [relay protocol](RELAY_PROTOCOL.md) owns that ordering guarantee, and the [built-in runtime guide](BUILTIN_RUNTIME.md) describes the resulting console behavior.
 
 ## Recording and image artifacts

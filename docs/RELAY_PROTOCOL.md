@@ -28,10 +28,10 @@ Runtime failures are also represented by a `fatal` event when relay stdout remai
 The framed event is authoritative; stderr diagnostics are best effort because the server's outer fail-safe can terminate a failed relay before its final diagnostic is written.
 The sandbox launcher never writes to standard output because it carries relay JSONL.
 The relay must be the only writer to that protocol stream.
-It uses nonblocking output and restores the original descriptor status flags when its writer finishes.
+For pipes, FIFOs, and sockets, it uses nonblocking output and restores the original descriptor status flags when its writer finishes.
 Inherited and duplicated descriptors share those flags; duplicating standard output does not isolate `O_NONBLOCK`.
 The bounded output retirement contract applies to pipes, FIFOs, and sockets.
-Regular-file redirection remains supported with the file system's usual blocking behavior.
+Regular-file redirection has no relay output deadline and retains the file system's usual blocking behavior.
 If sandbox setup fails before relay readiness, the detailed infrastructure error goes to inherited standard error and the closed relay transport produces a stable generic startup failure in the server.
 
 The server closes unrelated inherited descriptors before launcher exec.
@@ -166,14 +166,14 @@ Their serialized JSON remains unchanged.
 ## Event production and ordering
 
 Worker sideband, worker stdout, worker stderr, and direct-worker lifecycle each have one producer.
-Each producer enqueues complete relay events into one multi-producer queue.
-One serializer owns relay stdout, writes one complete JSONL frame at a time, and flushes each frame.
+Each producer encodes its relay events as complete JSONL frames before enqueueing them into one multi-producer queue.
+One writer owns relay stdout and writes and flushes those frames in queue order.
 Frames therefore never interleave, and each source preserves its own order.
 
 Ordering between different sources is the order in which their reader or direct-worker lifecycle threads enqueue events.
 No chronological order is promised between the independent worker sideband, stdout, and stderr transports.
 A mutex or queue cannot reconstruct the order in which the worker wrote to separate transports, and the protocol does not rely on mutex fairness.
-In particular, raw output written before an operation-result sideband frame can be serialized after that result and remain pending for a later MCP response.
+In particular, raw output written before an operation-result sideband frame can be enqueued after that result and remain pending for a later MCP response.
 
 The relay does not classify operation results and never waits for a server acknowledgment before reading another worker-sideband frame.
 It does not carry response cuts, output acknowledgments, pending-output budgets, or MCP response state.
@@ -230,7 +230,7 @@ Concurrent or repeated retirement reuses the recorded result and never signals a
 ## Retirement and failure
 
 On worker exit or relay failure, the relay first stops the worker transports and cancels its readers before joining them.
-After direct-worker retirement and before those joins, it starts one shared one-second allowance for flushing relay output.
+For pipe, FIFO, or socket stdout, it starts one shared one-second allowance for flushing relay output after direct-worker retirement and before those joins.
 Startup failure before a worker is launched uses the same output allowance.
 Before joining the worker-sideband writer, it shuts down only its local write half, interrupting an in-flight command even when a detached worker descendant retains the peer endpoint without reading.
 The relay read half remains available for retirement draining.
