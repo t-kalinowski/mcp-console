@@ -60,6 +60,24 @@ The server decodes byte-form chunks before applying its existing per-stream UTF-
 The relay does not impose line buffering or use a coalescing timer.
 Worker-sideband text and stdin remain UTF-8 JSON strings.
 
+## Output backpressure
+
+The relay serializes worker observations into one FIFO before writing them downstream.
+The ordinary queue admits at most 512 frames and 8 MiB of encoded payload, including the frame currently being written.
+A frame larger than 8 MiB is admitted alone on the ordinary budget; it keeps that budget occupied until its write completes.
+Worker-sideband, stdout, and stderr readers wait for capacity before reading more output.
+Frames are neither split nor rejected because of their size.
+
+Supervisor events have a separate allowance of 16 frames and 64 KiB, so queuing an interrupt result or shutdown acceptance does not wait for worker output to drain.
+They enter the same FIFO and cannot overtake earlier output.
+All worker-originated sideband events use the ordinary budget, including completion and resolver requests.
+Exhausting the supervisor allowance fails the transport and retires the worker.
+
+These limits cover admitted output payloads, not total process memory.
+Each reader may hold one encoded frame awaiting admission, and sideband framing and serialization still accommodate arbitrarily large frames.
+Command and worker-input queues retain their existing behavior.
+The retirement output deadline also releases readers waiting for queue space; a frame abandoned at that deadline remains a transport failure.
+
 ## Server commands
 
 The server can send these flat frames:
@@ -218,7 +236,8 @@ Before joining the worker-sideband writer, it shuts down only its local write ha
 The relay read half remains available for retirement draining.
 The worker-sideband, stdout, and stderr readers share a 100-millisecond allowance for additional nonblocking reads, measured from the start of local transport retirement.
 Each reader stops reading at EOF, when no bytes are immediately available, or when that deadline expires.
-An already-started worker-sideband reader queues every complete frame assembled from its reads, including frames still buffered when the read deadline expires.
+An already-started worker-sideband reader attempts to queue every complete frame assembled from its reads, including frames still buffered when the read deadline expires.
+Waiting for queue space remains subject to the output deadline.
 It may abandon an incomplete frame and further descendant output so a continuously writing descendant cannot prolong local draining indefinitely.
 If transport setup fails before the sideband reader starts, the relay drops it without forwarding pending frames so `fatal` remains the first semantic event; raw stdout and stderr are drained within the same allowance.
 It then queues `stdout_closed` and `stderr_closed`, the retained `fatal` event when present, `worker_sideband_closed`, and the structured worker process outcome when one is available.
@@ -227,7 +246,7 @@ The forwarded output preserves exact bytes and per-stream order through retireme
 The writer attempts to flush queued events within the shared write allowance.
 If pending output cannot be written before that deadline, the relay abandons the unwritten output and exits with a transport error and nonzero status.
 The delivered prefix may end midway through a JSONL frame.
-This allowance bounds writes blocked by a reader; it adds no limit on frame size or queue memory.
+This allowance bounds writes and queue admission blocked by a reader; individual frame size remains unlimited.
 
 Relay stdout EOF is a clean retirement only after the expected stream closures and final worker process outcome.
 `worker_exited` distinguishes ordinary exit, including status zero, from `worker_signaled` signal termination.

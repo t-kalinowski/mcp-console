@@ -1,25 +1,152 @@
+use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{self, Write};
 use std::os::fd::{AsFd, AsRawFd};
 use std::os::unix::fs::FileTypeExt;
-use std::sync::{Arc, OnceLock, mpsc};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::relay_protocol::RelayEvent;
 
 const RETIREMENT_FLUSH_TIMEOUT: Duration = Duration::from_secs(1);
+const OUTPUT_BYTES: usize = 8 * 1024 * 1024;
+const OUTPUT_FRAMES: usize = 512;
+const SUPERVISOR_BYTES: usize = 64 * 1024;
+const SUPERVISOR_FRAMES: usize = 16;
+const EXPIRED: &str = "relay stdout write failed: relay stdout retirement deadline expired";
 
 #[derive(Clone)]
-pub(super) struct EventSender(mpsc::Sender<EventRequest>);
+pub(super) struct EventSender(Arc<EventQueue>);
 
-enum EventRequest {
-    Send(Vec<u8>),
-    Finish,
+struct Frame {
+    bytes: Vec<u8>,
+    supervisor: bool,
+}
+
+#[derive(Default)]
+struct Usage {
+    bytes: usize,
+    frames: usize,
+}
+
+enum Status {
+    Open,
+    Finishing,
+    Failed(String),
+}
+
+struct QueuedEvents {
+    frames: VecDeque<Frame>,
+    output: Usage,
+    supervisor: Usage,
+    status: Status,
+}
+
+impl QueuedEvents {
+    fn fail(&mut self, error: String) {
+        if !matches!(self.status, Status::Failed(_)) {
+            self.status = Status::Failed(error);
+        }
+    }
+
+    fn usage(&mut self, supervisor: bool) -> &mut Usage {
+        if supervisor {
+            &mut self.supervisor
+        } else {
+            &mut self.output
+        }
+    }
+}
+
+struct EventQueue {
+    state: Mutex<QueuedEvents>,
+    changed: Condvar,
+    deadline: OnceLock<Instant>,
+}
+
+impl EventQueue {
+    fn lock(&self) -> MutexGuard<'_, QueuedEvents> {
+        self.state.lock().expect("relay event queue lock poisoned")
+    }
+
+    fn expire(&self, state: &mut QueuedEvents) {
+        if self
+            .deadline
+            .get()
+            .is_some_and(|deadline| Instant::now() >= *deadline)
+        {
+            state.fail(EXPIRED.to_string());
+            self.changed.notify_all();
+        }
+    }
+
+    fn wait<'a>(&self, state: MutexGuard<'a, QueuedEvents>) -> MutexGuard<'a, QueuedEvents> {
+        match self.deadline.get() {
+            Some(deadline) => {
+                self.changed
+                    .wait_timeout(state, deadline.saturating_duration_since(Instant::now()))
+                    .expect("relay event queue lock poisoned")
+                    .0
+            }
+            None => self
+                .changed
+                .wait(state)
+                .expect("relay event queue lock poisoned"),
+        }
+    }
+
+    fn next(&self) -> Option<Frame> {
+        let mut state = self.lock();
+        loop {
+            if matches!(state.status, Status::Failed(_)) {
+                return None;
+            }
+            if let Some(frame) = state.frames.pop_front() {
+                // Popping does not release capacity: the in-flight frame is
+                // still charged until the downstream write completes.
+                return Some(frame);
+            }
+            if matches!(state.status, Status::Finishing) {
+                return None;
+            }
+            // An empty queue has no pending bytes to time out. Producers
+            // enforce their admission deadline; finish wakes this waiter.
+            state = self
+                .changed
+                .wait(state)
+                .expect("relay event queue lock poisoned");
+        }
+    }
+
+    fn write(&self, mut output: EventOutput) -> Result<(), String> {
+        while let Some(frame) = self.next() {
+            let result = output.write_all(&frame.bytes).and_then(|()| output.flush());
+            let length = frame.bytes.len();
+            let supervisor = frame.supervisor;
+            drop(frame);
+            let mut state = self.lock();
+            let usage = state.usage(supervisor);
+            usage.bytes -= length;
+            usage.frames -= 1;
+            if let Err(error) = result {
+                state.fail(format!("relay stdout write failed: {error}"));
+            }
+            self.changed.notify_all();
+        }
+        let mut state = self.lock();
+        state.frames.clear();
+        self.changed.notify_all();
+        match &state.status {
+            Status::Failed(error) => Err(error.clone()),
+            Status::Finishing => Ok(()),
+            Status::Open => unreachable!("event writer stops only after finish or failure"),
+        }
+    }
 }
 
 pub(super) struct EventWriter {
-    deadline: Arc<OnceLock<Instant>>,
+    queue: Arc<EventQueue>,
     bounded_output: bool,
     wake: Option<io::PipeWriter>,
     thread: thread::JoinHandle<Result<(), String>>,
@@ -30,31 +157,31 @@ pub(super) fn start(
 ) -> Result<(EventSender, EventWriter), String> {
     let (reader, wake) =
         io::pipe().map_err(|error| format!("failed to create relay stdout wake pipe: {error}"))?;
-    let deadline = Arc::new(OnceLock::new());
-    let output = EventOutput::new(reader, deadline.clone())
+    let queue = Arc::new(EventQueue {
+        state: Mutex::new(QueuedEvents {
+            frames: VecDeque::new(),
+            output: Usage::default(),
+            supervisor: Usage::default(),
+            status: Status::Open,
+        }),
+        changed: Condvar::new(),
+        deadline: OnceLock::new(),
+    });
+    let output = EventOutput::new(reader, queue.clone())
         .map_err(|error| format!("failed to configure relay stdout: {error}"))?;
     let bounded_output = output.original_flags.is_some();
-    let (sender, receiver) = mpsc::channel();
+    let writer_queue = queue.clone();
     let thread = thread::spawn(move || {
-        let mut writer = output;
-        for request in receiver {
-            match request {
-                EventRequest::Send(frame) => {
-                    if let Err(error) = writer.write_all(&frame) {
-                        let error = format!("relay stdout write failed: {error}");
-                        on_error(error.clone());
-                        return Err(error);
-                    }
-                }
-                EventRequest::Finish => return Ok(()),
-            }
+        let result = writer_queue.write(output);
+        if let Err(error) = &result {
+            on_error(error.clone());
         }
-        Ok(())
+        result
     });
     Ok((
-        EventSender(sender),
+        EventSender(queue.clone()),
         EventWriter {
-            deadline,
+            queue,
             bounded_output,
             wake: Some(wake),
             thread,
@@ -63,33 +190,77 @@ pub(super) fn start(
 }
 
 impl EventSender {
-    pub(super) fn send(&self, event: RelayEvent) -> Result<(), String> {
-        // Encode before enqueueing so retirement leaves only pending writes,
-        // rather than a backlog of JSON encoding inside the flush deadline.
-        let mut frame =
-            serde_json::to_vec(&event).expect("relay event serialization should succeed");
-        frame.push(b'\n');
-        self.0
-            .send(EventRequest::Send(frame))
-            .map_err(|_| "relay event writer stopped".to_string())
+    // The writer owns the transport error. A false result only tells a reader
+    // to stop producing, without reporting the same error through every task.
+    pub(super) fn send(&self, event: RelayEvent) -> bool {
+        self.enqueue(event, false)
     }
 
-    pub(super) fn finish(&self) -> Result<(), String> {
-        self.0
-            .send(EventRequest::Finish)
-            .map_err(|_| "relay event writer stopped".to_string())
+    pub(super) fn send_supervisor(&self, event: RelayEvent) -> bool {
+        self.enqueue(event, true)
+    }
+
+    fn enqueue(&self, event: RelayEvent, supervisor: bool) -> bool {
+        let mut bytes =
+            serde_json::to_vec(&event).expect("relay event serialization should succeed");
+        bytes.push(b'\n');
+        // Retain only the encoded payload while waiting for capacity.
+        drop(event);
+        let length = bytes.len();
+        let mut state = self.0.lock();
+        loop {
+            self.0.expire(&mut state);
+            if !matches!(state.status, Status::Open) {
+                return false;
+            }
+            let usage = state.usage(supervisor);
+            let available = if supervisor {
+                usage.frames < SUPERVISOR_FRAMES
+                    && length <= SUPERVISOR_BYTES
+                    && usage.bytes <= SUPERVISOR_BYTES - length
+            } else {
+                usage.frames == 0
+                    || (usage.frames < OUTPUT_FRAMES
+                        && length <= OUTPUT_BYTES
+                        && usage.bytes <= OUTPUT_BYTES - length)
+            };
+            if available {
+                usage.bytes += length;
+                usage.frames += 1;
+                state.frames.push_back(Frame { bytes, supervisor });
+                self.0.changed.notify_all();
+                return true;
+            }
+            if supervisor {
+                state.fail("relay supervisor event queue capacity exceeded".to_string());
+                self.0.changed.notify_all();
+                return false;
+            }
+            state = self.0.wait(state);
+        }
+    }
+
+    pub(super) fn finish(&self) {
+        let mut state = self.0.lock();
+        if matches!(state.status, Status::Open) {
+            state.status = Status::Finishing;
+        }
+        self.0.changed.notify_all();
     }
 }
 
 impl EventWriter {
     pub(super) fn begin_retirement(&mut self) {
         if self.bounded_output {
-            self.deadline
+            // Publish under the capacity mutex so no waiter can miss the
+            // transition from an untimed wait to the retirement deadline.
+            let _state = self.queue.lock();
+            self.queue
+                .deadline
                 .set(Instant::now() + RETIREMENT_FLUSH_TIMEOUT)
                 .expect("relay stdout should retire only once");
+            self.queue.changed.notify_all();
         }
-        // Wake a writer already waiting without a deadline. Every subsequent
-        // write and wait shares the deadline, including during reader joins.
         drop(self.wake.take());
     }
 
@@ -104,11 +275,11 @@ struct EventOutput {
     file: File,
     original_flags: Option<libc::c_int>,
     wake: io::PipeReader,
-    deadline: Arc<OnceLock<Instant>>,
+    queue: Arc<EventQueue>,
 }
 
 impl EventOutput {
-    fn new(wake: io::PipeReader, deadline: Arc<OnceLock<Instant>>) -> io::Result<Self> {
+    fn new(wake: io::PipeReader, queue: Arc<EventQueue>) -> io::Result<Self> {
         let file = File::from(io::stdout().as_fd().try_clone_to_owned()?);
         let kind = file.metadata()?.file_type();
         let original_flags = if kind.is_fifo() || kind.is_socket() {
@@ -125,7 +296,7 @@ impl EventOutput {
             file,
             original_flags,
             wake,
-            deadline,
+            queue,
         };
         // Duplicates share file status flags. The relay is the sole protocol
         // writer; restore the original flags when its output task finishes.
@@ -146,6 +317,7 @@ impl EventOutput {
 
     fn check_deadline(&self) -> io::Result<()> {
         if self
+            .queue
             .deadline
             .get()
             .is_some_and(|deadline| Instant::now() >= *deadline)
@@ -161,7 +333,7 @@ impl EventOutput {
     fn wait_writable(&self) -> io::Result<()> {
         loop {
             self.check_deadline()?;
-            let deadline = self.deadline.get();
+            let deadline = self.queue.deadline.get();
             let timeout = deadline.map_or(-1, |deadline| {
                 deadline
                     .saturating_duration_since(Instant::now())
