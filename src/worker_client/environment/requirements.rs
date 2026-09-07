@@ -8,6 +8,68 @@ pub(crate) struct Requirements {
     pub(crate) r: Vec<String>,
 }
 
+impl Requirements {
+    pub(in crate::worker_client) fn validate(&self) -> Result<(), String> {
+        if self.duckdb.is_empty() && self.r.is_empty() && self.python.is_empty() {
+            return Err(
+                "at least one of `requirements.r`, `requirements.python`, or `requirements.duckdb` is required"
+                    .to_string(),
+            );
+        }
+        validate_duckdb_extensions(&self.duckdb)?;
+        validate_r_requirements(&self.r)?;
+        validate_python_requirements(&self.python)
+    }
+}
+
+fn validate_duckdb_extensions(extensions: &[String]) -> Result<(), String> {
+    if extensions.len() > 64 {
+        return Err("`requirements.duckdb` accepts at most 64 extensions".to_string());
+    }
+    if extensions.iter().any(|extension| extension.len() > 64) {
+        return Err("DuckDB extension names must be at most 64 ASCII characters".to_string());
+    }
+    if extensions.iter().any(|extension| {
+        let mut bytes = extension.bytes();
+        !bytes.next().is_some_and(|byte| byte.is_ascii_lowercase())
+            || bytes
+                .any(|byte| !(byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_'))
+    }) {
+        return Err(
+            "DuckDB extension names must start with a lowercase ASCII letter and contain only lowercase ASCII letters, digits, and underscores"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn validate_r_requirements(requirements: &[String]) -> Result<(), String> {
+    if requirements.len() > 64 {
+        return Err("`requirements.r` accepts at most 64 requirements".to_string());
+    }
+    if requirements
+        .iter()
+        .any(|requirement| requirement.trim().is_empty())
+    {
+        return Err("R requirement strings must not be empty".to_string());
+    }
+    if requirements.iter().any(|requirement| {
+        requirement
+            .bytes()
+            .any(|byte| matches!(byte, b'\0' | b'\r' | b'\n'))
+    }) {
+        return Err("R requirement strings must not contain NUL or line breaks".to_string());
+    }
+    Ok(())
+}
+
+fn validate_python_requirements(python: &[String]) -> Result<(), String> {
+    if python.len() > 64 {
+        return Err("`requirements.python` accepts at most 64 requirements".to_string());
+    }
+    crate::python_requirement::validate_all(python)
+}
+
 pub(in crate::worker_client) struct RequirementDelta {
     pub(super) duckdb_extensions: BTreeSet<String>,
     pub(super) duckdb_changed: bool,

@@ -87,7 +87,6 @@ struct ConsoleServer {
     transcript: crate::transcript::Transcript,
     deliveries: crate::server_transport::ResponseDeliveries,
     languages: Languages,
-    dynamic_resolution: bool,
     tool_router: ToolRouter<Self>,
 }
 
@@ -262,7 +261,6 @@ impl ConsoleServer {
             transcript,
             deliveries: crate::server_transport::ResponseDeliveries::default(),
             languages,
-            dynamic_resolution,
             tool_router,
         })
     }
@@ -361,65 +359,9 @@ Evaluated code can read host files, cannot directly access the network, and can 
                 Languages::field(cell.language)
             ));
         }
-        if !self.dynamic_resolution && requirements.is_some() {
-            return Err(
-                "dynamic environment resolution is unavailable; install `ir` or `uv` and restart MCP Console"
-                    .to_string(),
-            );
-        }
-        let standalone_preparation = requirements.is_some() && cell.is_none() && control.is_none();
-        if standalone_preparation && stdin.as_ref().is_some_and(|stdin| !stdin.is_empty()) {
-            return Err(
-                "requirements-only `send` performs standalone preparation and cannot also queue stdin"
-                    .to_string(),
-            );
-        }
-        if requirements.is_some()
-            && cell.is_none()
-            && matches!(control, Some(SendControl::Interrupt))
-        {
-            return Err(
-                "`requirements` with `control = \"interrupt\"` requires a code cell".to_string(),
-            );
-        }
-        let validation = requirements
-            .as_ref()
-            .map(validate_environment_requirements)
-            .transpose();
-        let deferred_validation_error = match validation {
-            Err(error) if matches!(control, Some(SendControl::Interrupt)) => Some(error),
-            Err(error) => return Err(error),
-            Ok(_) => None,
-        };
         let requirements = requirements.map(|Requirements { duckdb, r, python }| {
-            let requirements = crate::worker_client::Requirements { duckdb, r, python };
-            match deferred_validation_error {
-                Some(error) => crate::worker_client::RequirementSubmission::Invalid(error),
-                None => crate::worker_client::RequirementSubmission::Valid(requirements),
-            }
+            crate::worker_client::Requirements { duckdb, r, python }
         });
-        if standalone_preparation {
-            let Some(crate::worker_client::RequirementSubmission::Valid(requirements)) =
-                requirements
-            else {
-                unreachable!("standalone requirements were validated before preparation")
-            };
-            let text = match self.worker.prepare(requirements).await? {
-                crate::worker_client::PrepareResult::Prepared => "[prepared]",
-                crate::worker_client::PrepareResult::RestartRequired => "[restart required]",
-                crate::worker_client::PrepareResult::Failed(response)
-                | crate::worker_client::PrepareResult::WorkerStopped(response) => {
-                    return Ok(response_to_tool_result(
-                        response,
-                        &call,
-                        &self.transcript,
-                        &self.deliveries,
-                        &delivery,
-                    ));
-                }
-            };
-            return Ok(CallToolResult::success(vec![ContentBlock::text(text)]));
-        }
         let response = self
             .worker
             .send(crate::worker_client::SendRequest {
@@ -482,79 +424,6 @@ fn response_to_tool_result(
     } else {
         CallToolResult::success(content)
     }
-}
-
-fn validate_r_requirements(r: &[String]) -> Result<(), String> {
-    validate_requirements(r, "r", "R")
-}
-
-fn validate_python_requirements(python: &[String]) -> Result<(), String> {
-    if python.len() > 64 {
-        return Err("`requirements.python` accepts at most 64 requirements".to_string());
-    }
-    crate::python_requirement::validate_all(python)
-}
-
-fn validate_environment_requirements(requirements: &Requirements) -> Result<(), String> {
-    if requirements.duckdb.is_empty() && requirements.r.is_empty() && requirements.python.is_empty()
-    {
-        return Err(
-            "at least one of `requirements.r`, `requirements.python`, or `requirements.duckdb` is required"
-                .to_string(),
-        );
-    }
-    validate_duckdb_extensions(&requirements.duckdb)?;
-    validate_r_requirements(&requirements.r)?;
-    validate_python_requirements(&requirements.python)
-}
-
-fn validate_duckdb_extensions(extensions: &[String]) -> Result<(), String> {
-    if extensions.len() > 64 {
-        return Err("`requirements.duckdb` accepts at most 64 extensions".to_string());
-    }
-    if extensions.iter().any(|extension| extension.len() > 64) {
-        return Err("DuckDB extension names must be at most 64 ASCII characters".to_string());
-    }
-    if extensions.iter().any(|extension| {
-        let mut bytes = extension.bytes();
-        !bytes.next().is_some_and(|byte| byte.is_ascii_lowercase())
-            || bytes
-                .any(|byte| !(byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_'))
-    }) {
-        return Err(
-            "DuckDB extension names must start with a lowercase ASCII letter and contain only lowercase ASCII letters, digits, and underscores"
-                .to_string(),
-        );
-    }
-    Ok(())
-}
-
-fn validate_requirements(
-    requirements: &[String],
-    field: &str,
-    language: &str,
-) -> Result<(), String> {
-    if requirements.len() > 64 {
-        return Err(format!(
-            "`requirements.{field}` accepts at most 64 requirements"
-        ));
-    }
-    if requirements
-        .iter()
-        .any(|requirement| requirement.trim().is_empty())
-    {
-        return Err(format!("{language} requirement strings must not be empty"));
-    }
-    if requirements.iter().any(|requirement| {
-        requirement
-            .bytes()
-            .any(|byte| matches!(byte, b'\0' | b'\r' | b'\n'))
-    }) {
-        return Err(format!(
-            "{language} requirement strings must not contain NUL or line breaks"
-        ));
-    }
-    Ok(())
 }
 
 #[tool_handler(name = "mcp-console", router = self.tool_router)]
