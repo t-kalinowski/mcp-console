@@ -113,8 +113,27 @@ def test_failure_beside_hang(binary: Path) -> list[dict[str, str]]:
     return [{"runner": "deliberate mismatch"}]
 
 
+def test_fails_before_cleanup(binary: Path) -> list[dict[str, str]]:
+    try:
+        raise AssertionError("original failure before cleanup")
+    finally:
+        test_hangs(binary)
+
+
 if __name__ == "__main__":
     signal.pause()
+""".lstrip()
+
+# fmt: python
+SELF_INTERRUPTING_SUITE = """
+import os
+import signal
+from pathlib import Path
+
+
+def test_interrupts_itself(binary: Path) -> list[dict[str, str]]:
+    os.kill(os.getpid(), signal.SIGINT)
+    raise AssertionError("case continued after its own SIGINT")
 """.lstrip()
 
 # fmt: python
@@ -283,7 +302,7 @@ class TranscriptRunnerTests(unittest.TestCase):
             self.assertEqual(os.read(started, 1), b"1")
             stdout, stderr = process.communicate(timeout=10)
             self.assertNotEqual(process.returncode, 0, stdout)
-            self.assertIn(selector, stderr)
+            self.assertIn(f"{selector}: failed", stderr)
             self.assertIn("timed out", stderr)
             self.assertTrue((self.root / "child-cleaned").is_file())
             with self.assertRaises(ProcessLookupError):
@@ -327,6 +346,59 @@ class TranscriptRunnerTests(unittest.TestCase):
             self.assertIn("multiple transcript cases failed", stderr)
             with self.assertRaises(ProcessLookupError):
                 os.killpg(process.pid, 0)
+
+    def test_failure_cancels_hanging_sibling_without_another_failure(self) -> None:
+        selector = "client_server/server/test_tools::hangs"
+        failure = "client_server/server/test_tools::failure_beside_hang"
+        with self.hanging_runner(
+            "--timeout", "60", "--jobs", "2", selector, failure
+        ) as (
+            process,
+            started,
+            release_failure,
+        ):
+            ready, _, _ = select.select([started], [], [], 10)
+            self.assertTrue(ready, "hanging case did not start")
+            self.assertEqual(os.read(started, 1), b"1")
+            self.assertEqual(os.write(release_failure, b"1"), 1)
+            stdout, stderr = process.communicate(timeout=10)
+            self.assertNotEqual(process.returncode, 0, stdout)
+            self.assertIn(f"{failure}: failed", stderr)
+            self.assertIn("runner: deliberate mismatch", stderr)
+            self.assertIn(f"{selector}: cancelled", stdout + stderr)
+            self.assertNotIn(f"{selector}: failed", stdout + stderr)
+            self.assertNotIn("timed out", stderr)
+            self.assertNotIn("multiple transcript cases failed", stderr)
+            with self.assertRaises(ProcessLookupError):
+                os.killpg(process.pid, 0)
+
+    def test_independent_case_interrupt_remains_a_failure(self) -> None:
+        self.suite.write_text(PUBLIC_SUITE + SELF_INTERRUPTING_SUITE, encoding="utf-8")
+        selector = "client_server/server/test_tools::interrupts_itself"
+        result = self.run_runner(selector)
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn(f"{selector}: failed", result.stderr)
+        self.assertIn("KeyboardInterrupt", result.stderr)
+        self.assertNotIn(f"{selector}: cancelled", result.stdout + result.stderr)
+
+    def test_cancelled_cleanup_preserves_the_original_failure(self) -> None:
+        selector = "client_server/server/test_tools::fails_before_cleanup"
+        failure = "client_server/server/test_tools::failure_beside_hang"
+        with self.hanging_runner(
+            "--timeout", "60", "--jobs", "2", selector, failure
+        ) as (process, started, release_failure):
+            ready, _, _ = select.select([started], [], [], 10)
+            self.assertTrue(ready, "failed case did not enter its cleanup")
+            self.assertEqual(os.read(started, 1), b"1")
+            self.assertEqual(os.write(release_failure, b"1"), 1)
+            stdout, stderr = process.communicate(timeout=10)
+            self.assertNotEqual(process.returncode, 0, stdout)
+            self.assertIn(f"{failure}: failed", stderr)
+            self.assertIn("runner: deliberate mismatch", stderr)
+            self.assertIn(f"{selector}: cancelled", stdout + stderr)
+            self.assertIn("AssertionError: original failure before cleanup", stderr)
+            self.assertIn("KeyboardInterrupt", stderr)
+            self.assertNotIn("multiple transcript cases failed", stderr)
 
     def assert_signal_retires_case(self, number: signal.Signals) -> None:
         selector = "client_server/server/test_tools::hangs"

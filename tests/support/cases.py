@@ -14,6 +14,10 @@ from typing import BinaryIO
 CASE_CLEANUP_SECONDS = 15
 
 
+class CaseCancelled(Exception):
+    """A case exited with SIGINT after the runner requested cleanup."""
+
+
 @dataclass
 class CaseProcess:
     process: subprocess.Popen
@@ -173,6 +177,11 @@ def run_case_subprocess(
                 raise TimeoutError(
                     f"{selector} timed out after {timeout:g} seconds\n{output}{errors}"
                 )
+            # This is an observation-order label, not signal provenance: an
+            # independent SIGINT racing cleanup can have the same exit status.
+            # Preserve every diagnostic; the initiating failure still fails the run.
+            if case._interrupted and process.returncode == -signal.SIGINT:
+                raise CaseCancelled(f"{output}{errors}")
             if process.returncode != 0:
                 raise RuntimeError(
                     f"{selector} exited with status {process.returncode}\n{output}{errors}"
