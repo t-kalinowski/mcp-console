@@ -865,6 +865,9 @@ def main() -> None:
             writer.write('{"kind":"console_output"')
             writer.flush()
             emit_test_event(0, "partial_sideband_written")
+            # Keep the evaluation active until restart closes worker stdin.
+            # An earlier direct-worker exit would trigger automatic replacement.
+            assert os.read(0, 1) == b""
             os._exit(86)
 
         if source == "wait after readable frame and partial tail":

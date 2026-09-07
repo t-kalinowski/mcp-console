@@ -59,8 +59,8 @@ def test_restart_cancels_partial_sideband_frame(binary: Path) -> Transcript:
                 client,
             )
             descendant_group = int(marker.read_text(encoding="utf-8"))
-            # Attach before releasing the worker: its exit may remove the
-            # directory before the host observes the flushed partial frame.
+            # Attach before releasing the worker to observe its flushed-frame
+            # checkpoint. The worker then waits for restart to close stdin.
             control.connect(client)
             release_partial_sideband(marker)
             control.wait_for(0, "partial_sideband_written")
