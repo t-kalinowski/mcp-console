@@ -25,7 +25,7 @@ def test_routes_sql_cells_to_a_selected_dbi_connection(
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
     client = McpClient(binary, ("serve",), environment)
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
 
     client.send(sql="CREATE TABLE managed_values AS SELECT 'managed' AS origin")
     assert last_tool_text(client) == "[done]"
@@ -171,14 +171,14 @@ def test_routes_sql_cells_to_a_selected_dbi_connection(
     preview = last_tool_text(client)
     assert '"managed"' in preview
     assert '"a"' not in preview
-    return client._finish()
+    return client.finish()
 
 
 def test_routes_sql_cells_to_a_selected_python_dbapi_connection(
     binary: Path,
 ) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
 
     client.send(sql="CREATE TABLE managed_values AS SELECT 'managed' AS origin")
     assert last_tool_text(client) == "[done]"
@@ -331,14 +331,14 @@ def test_routes_sql_cells_to_a_selected_python_dbapi_connection(
     preview = last_tool_text(client)
     assert '"managed"' in preview
     assert "'a'" not in preview
-    return client._finish()
+    return client.finish()
 
 
 def test_preserves_selected_python_duckdb_connection_state(
     binary: Path,
 ) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
 
     # fmt: python
     python = code("""
@@ -364,14 +364,14 @@ def test_preserves_selected_python_duckdb_connection_state(
     client.send(sql="SELECT value FROM later_state")
     preview = last_tool_text(client)
     assert "value" in preview and "'retained'" in preview
-    return client._finish()
+    return client.finish()
 
 
 def test_reports_python_dbapi_cursor_cleanup_failures(
     binary: Path,
 ) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
 
     # fmt: python
     python = code("""
@@ -411,14 +411,14 @@ def test_reports_python_dbapi_cursor_cleanup_failures(
     cleanup = "Error: selected DB-API cleanup failure"
     assert execution in output and cleanup in output
     assert output.index(execution) < output.index(cleanup)
-    return client._finish()
+    return client.finish()
 
 
 def test_recovers_when_python_dbapi_connection_raises_base_exception(
     binary: Path,
 ) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
 
     # fmt: python
     python = code("""
@@ -464,7 +464,7 @@ def test_recovers_when_python_dbapi_connection_raises_base_exception(
     client.send(sql="ANSWER")
     preview = last_tool_text(client)
     assert "answer" in preview and "42" in preview
-    return client._finish()
+    return client.finish()
 
 
 def test_allows_python_dbapi_callbacks_to_select_an_r_connection(
@@ -477,7 +477,7 @@ def test_allows_python_dbapi_callbacks_to_select_an_r_connection(
         checkpoints: list[FifoCheckpoint] = []
         passed = False
         try:
-            client._initialize_and_list_tools()
+            client.initialize_and_list_tools()
             client.send(sql="CREATE TABLE managed_values AS SELECT 42 AS value")
             assert last_tool_text(client) == "[done]"
 
@@ -532,12 +532,12 @@ def test_allows_python_dbapi_callbacks_to_select_an_r_connection(
             output = last_tool_text(client)
             assert output == "[done]", output
 
-            evaluation = client._start_send(
+            evaluation = client.start_send(
                 sql="SELECT select_r_sql() AS callback_value",
                 timeout_ms=0,
             )
             started.wait("Python DB-API callback entered R")
-            client._receive(evaluation)
+            client.receive(evaluation)
             assert evaluation["result"]["content"][0]["text"] == (
                 "\n[running; poll with an empty send]"
             )
@@ -551,7 +551,7 @@ def test_allows_python_dbapi_callbacks_to_select_an_r_connection(
             preview = last_tool_text(client)
             assert "value" in preview and "42" in preview
 
-            transcript = client._finish()
+            transcript = client.finish()
             passed = True
             return transcript
         finally:
@@ -571,7 +571,7 @@ def test_interrupts_selected_python_dbapi_connection(
         client = McpClient(binary, ("serve",), environment)
         passed = False
         try:
-            client._initialize_and_list_tools()
+            client.initialize_and_list_tools()
             # fmt: python
             python = code("""
                 import os
@@ -622,7 +622,7 @@ def test_interrupts_selected_python_dbapi_connection(
             client.send(sql="ANSWER")
             preview = last_tool_text(client)
             assert "answer" in preview and "42" in preview
-            transcript = client._finish()
+            transcript = client.finish()
             passed = True
             return transcript
         finally:
@@ -638,7 +638,7 @@ def test_interrupts_python_dbapi_provider_probe(binary: Path) -> Transcript:
         checkpoints: list[FifoCheckpoint] = []
         passed = False
         try:
-            client._initialize_and_list_tools()
+            client.initialize_and_list_tools()
 
             # Create the checkpoint inside the worker's writable directory.
             # fmt: r
@@ -693,9 +693,9 @@ def test_interrupts_python_dbapi_provider_probe(binary: Path) -> Transcript:
             client.send(python=python)
             assert last_tool_text(client) == "[done]"
 
-            evaluation = client._start_send(sql="ANSWER", timeout_ms=0)
+            evaluation = client.start_send(sql="ANSWER", timeout_ms=0)
             started.wait("Python DB-API provider probe started")
-            client._receive(evaluation)
+            client.receive(evaluation)
             assert evaluation["result"]["content"][0]["text"] == (
                 "\n[running; poll with an empty send]"
             )
@@ -706,7 +706,7 @@ def test_interrupts_python_dbapi_provider_probe(binary: Path) -> Transcript:
             client.send(sql="ANSWER")
             preview = last_tool_text(client)
             assert "answer" in preview and "42" in preview
-            transcript = client._finish()
+            transcript = client.finish()
             passed = True
             return transcript
         finally:
@@ -720,7 +720,7 @@ def test_recovers_when_python_sql_dispatch_trace_raises_system_exit(
     binary: Path,
 ) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
 
     # fmt: python
     python = code("""
@@ -769,14 +769,14 @@ def test_recovers_when_python_sql_dispatch_trace_raises_system_exit(
     client.send(sql="ANSWER")
     preview = last_tool_text(client)
     assert "answer" in preview and "42" in preview
-    return client._finish()
+    return client.finish()
 
 
 def test_recovers_when_r_provider_switch_trace_raises_system_exit(
     binary: Path,
 ) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
 
     client.send(sql="CREATE TABLE managed_value AS SELECT 7 AS value")
     assert last_tool_text(client) == "[done]"
@@ -822,7 +822,7 @@ def test_recovers_when_r_provider_switch_trace_raises_system_exit(
     client.send(sql="SELECT value FROM managed_value")
     preview = last_tool_text(client)
     assert "value" in preview and "7" in preview
-    return client._finish()
+    return client.finish()
 
 
 def display_width(text: str) -> int:

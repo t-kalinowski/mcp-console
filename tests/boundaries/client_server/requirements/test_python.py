@@ -36,7 +36,7 @@ def test_prepares_initial_python_requirements(binary: Path) -> Transcript:
     environment = os.environ.copy()
     environment.pop("RETICULATE_PYTHON", None)
     client = McpClient(binary, ("serve",), environment)
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     client.send(
         requirements={"python": ["py-yaml12"]},
     )
@@ -88,7 +88,7 @@ def test_prepares_initial_python_requirements(binary: Path) -> Transcript:
         requirements={"python": ["py-yaml12"]},
     )
     assert last_tool_text(client) == "[prepared]"
-    return client._finish()
+    return client.finish()
 
 
 def test_retires_python_resolver_descendant_after_leader_exit(
@@ -156,8 +156,8 @@ def test_retires_python_resolver_descendant_after_leader_exit(
         resolver_group = None
         exit_events = select.kqueue()
         try:
-            client._initialize_and_list_tools()
-            preparation = client._start_send(
+            client.initialize_and_list_tools()
+            preparation = client.start_send(
                 requirements={"python": ["py-yaml12"]},
             )
             started.wait("Python resolver descendant")
@@ -183,7 +183,7 @@ def test_retires_python_resolver_descendant_after_leader_exit(
             assert event.filter == select.KQ_FILTER_PROC, event
             assert event.fflags & select.KQ_NOTE_EXIT, event
 
-            client._receive(preparation)
+            client.receive(preparation)
             assert preparation["result"] == {
                 "content": [{"type": "text", "text": "[prepared]"}],
                 "isError": False,
@@ -192,7 +192,7 @@ def test_retires_python_resolver_descendant_after_leader_exit(
                 "resolver process group outlived its leader"
             )
             resolver_group = None
-            transcript = client._finish()
+            transcript = client.finish()
             return transcript
         finally:
             leader_release.release()
@@ -208,7 +208,7 @@ def test_prepares_explicit_numpy_requirement(binary: Path) -> Transcript:
     environment = os.environ.copy()
     environment.pop("RETICULATE_PYTHON", None)
     client = McpClient(binary, ("serve",), environment)
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     client.send(
         requirements={"python": ["numpy"]},
     )
@@ -219,7 +219,7 @@ def test_prepares_explicit_numpy_requirement(binary: Path) -> Transcript:
         """)
     client.send(r=r)
     assert last_tool_text(client) == "[done]"
-    return client._finish()
+    return client.finish()
 
 
 def test_does_not_fail_resolution_when_matplotlib_cache_cannot_be_written(
@@ -237,7 +237,7 @@ def test_does_not_fail_resolution_when_matplotlib_cache_cannot_be_written(
             environment,
             current_directory=temporary,
         )
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         client.send(
             requirements={"python": ["matplotlib"]},
         )
@@ -259,14 +259,14 @@ def test_does_not_fail_resolution_when_matplotlib_cache_cannot_be_written(
             python="(__import__('matplotlib').__name__, __import__('yaml12').__name__)"
         )
         assert last_tool_text(client) == "('matplotlib', 'yaml12')\n"
-        return client._finish()
+        return client.finish()
 
 
 def test_restart_loses_state_and_retains_python_requirements(
     binary: Path,
 ) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     client.send(
         requirements={"python": ["py-yaml12"]},
     )
@@ -287,7 +287,7 @@ def test_restart_loses_state_and_retains_python_requirements(
         """)
     client.send(python=python)
     assert last_tool_text(client) == "(False, 'yaml12')\n"
-    return client._finish()
+    return client.finish()
 
 
 def test_restart_discards_pre_marker_python_activation(binary: Path) -> Transcript:
@@ -306,7 +306,7 @@ def test_restart_discards_pre_marker_python_activation(binary: Path) -> Transcri
         passed = False
         worker_checkpoints: list[FifoCheckpoint] = []
         try:
-            client._initialize_and_list_tools()
+            client.initialize_and_list_tools()
             # fmt: r
             r = code(r"""
                 config <- reticulate::py_config()
@@ -365,9 +365,9 @@ def test_restart_discards_pre_marker_python_activation(binary: Path) -> Transcri
                 }, globals)
                 reticulate::py_require("py-yaml12")
                 """)
-            evaluation = client._start_send(r=r, timeout_ms=0)
+            evaluation = client.start_send(r=r, timeout_ms=0)
             activation_ready.wait("managed Python activation")
-            client._receive(evaluation)
+            client.receive(evaluation)
             evaluation_result = evaluation["result"]
             assert evaluation_result == {
                 "content": [
@@ -379,7 +379,7 @@ def test_restart_discards_pre_marker_python_activation(binary: Path) -> Transcri
                 "isError": False,
             }, evaluation_result
 
-            restart = client._start_send(
+            restart = client.start_send(
                 control="restart",
                 requirements={"python": [replacement_requirement]},
             )
@@ -387,7 +387,7 @@ def test_restart_discards_pre_marker_python_activation(binary: Path) -> Transcri
             activation_release.release()
             activation_sent.wait("published managed Python activation")
             uv_release.release()
-            client._receive(restart)
+            client.receive(restart)
 
             restart_result = restart["result"]
             assert restart_result.get("isError") is not True, restart_result
@@ -416,7 +416,7 @@ def test_restart_discards_pre_marker_python_activation(binary: Path) -> Transcri
                 "py-yaml12",
                 replacement_requirement,
             ]
-            transcript = client._finish()
+            transcript = client.finish()
             passed = True
             return transcript
         finally:
@@ -430,7 +430,7 @@ def test_restart_discards_pre_marker_python_activation(binary: Path) -> Transcri
 
 def test_prepares_python_requirements_after_worker_startup(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     python = code("""
         import importlib.util; import os; import sys
         sentinel = 42; worker_pid = os.getpid(); initial_prefix = sys.prefix
@@ -477,12 +477,12 @@ def test_prepares_python_requirements_after_worker_startup(binary: Path) -> Tran
         """)
     client.send(python=python)
     assert last_tool_text(client) == "(False, 'yaml12')\n"
-    return client._finish()
+    return client.finish()
 
 
 def test_failed_live_python_requirements_do_not_run_cell(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     client.send(python="import os; live_sentinel = 42; live_worker_pid = os.getpid()")
     assert last_tool_text(client) == "[done]"
 
@@ -539,12 +539,12 @@ def test_failed_live_python_requirements_do_not_run_cell(binary: Path) -> Transc
         requirements={"python": ["py-yaml12"]},
     )
     assert last_tool_text(client) == "(42, True, True, 'yaml12')\n"
-    return client._finish()
+    return client.finish()
 
 
 def test_prepares_after_idle_python_resolution(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     client.send(requirements={"r": ["later"]})
 
     # fmt: r
@@ -574,14 +574,14 @@ def test_prepares_after_idle_python_resolution(binary: Path) -> Transcript:
     client.send(r="reticulate::py_require()$packages")
     assert "idle Python ready\n" in last_tool_text(client)
     assert '"py-yaml12"' in last_tool_text(client)
-    return client._finish()
+    return client.finish()
 
 
 def test_retains_idle_python_activation_during_continuous_collection(
     binary: Path,
 ) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     client.send(requirements={"r": ["later"]})
     client.send(r="invisible(reticulate::py_config())")
     assert last_tool_text(client) == "[done]"
@@ -630,12 +630,12 @@ def test_retains_idle_python_activation_during_continuous_collection(
     )
     client.send(python="import yaml12; yaml12.__name__")
     assert last_tool_text(client) == "'yaml12'\n"
-    return client._finish()
+    return client.finish()
 
 
 def test_does_not_retain_stale_python_materialization(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     client.send(r="invisible(reticulate::py_config())")
     assert last_tool_text(client) == "[done]"
 
@@ -675,12 +675,12 @@ def test_does_not_retain_stale_python_materialization(binary: Path) -> Transcrip
     )
     client.send(python="import yaml12; yaml12.__name__")
     assert last_tool_text(client) == "'yaml12'\n"
-    return client._finish()
+    return client.finish()
 
 
 def test_failed_restart_requirements_preserve_worker(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     client.send(python="restart_marker = 42")
     assert last_tool_text(client) == "[done]"
     invalid = "not a valid requirement !!!"
@@ -695,7 +695,7 @@ def test_failed_restart_requirements_preserve_worker(binary: Path) -> Transcript
 
     client.send(python="restart_marker")
     assert last_tool_text(client) == "42\n"
-    return client._finish()
+    return client.finish()
 
 
 def test_layers_python_requirements_declared_by_r_packages(
@@ -721,7 +721,7 @@ def test_layers_python_requirements_declared_by_r_packages(
             filter(None, (library, environment.get("R_LIBS")))
         )
         client = McpClient(binary, ("serve",), environment)
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         # fmt: python
         python = code("""
             import importlib.util
@@ -781,7 +781,7 @@ def test_layers_python_requirements_declared_by_r_packages(
             requirements={"python": ["py-yaml12"]},
         )
         assert last_tool_text(client) == "[prepared]"
-        return client._finish()
+        return client.finish()
 
 
 def test_does_not_retain_package_requirements_before_python_initializes(
@@ -807,7 +807,7 @@ def test_does_not_retain_package_requirements_before_python_initializes(
             filter(None, (library, environment.get("R_LIBS")))
         )
         client = McpClient(binary, ("serve",), environment)
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         # fmt: r
         r = code(r"""
             library(mcpconsolepyrequire)
@@ -845,14 +845,14 @@ def test_does_not_retain_package_requirements_before_python_initializes(
         client.send(r=r)
         output = last_tool_text(client)
         assert output == "[1] FALSE\n", repr(output)
-        return client._finish()
+        return client.finish()
 
 
 def test_retains_python_activation_before_later_cell_failure(
     binary: Path,
 ) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
         invisible(reticulate::py_config())
@@ -890,7 +890,7 @@ def test_retains_python_activation_before_later_cell_failure(
         """)
     client.send(python=python)
     assert last_tool_text(client) == "'yaml12'\n"
-    return client._finish()
+    return client.finish()
 
 
 if __name__ == "__main__":

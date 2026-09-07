@@ -39,7 +39,7 @@ def test_renders_generated_document(binary: Path) -> Transcript:
             environment,
             current_directory=workspace,
         )
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         (workspace / "render-value.txt").write_text("40\n", encoding="utf-8")
         r_source = (
             "  #| eval: false\n"
@@ -60,7 +60,7 @@ def test_renders_generated_document(binary: Path) -> Transcript:
         python_result = client.transcript[-1]["result"]["content"][0]["text"]
         assert "executed-python=42" in python_result, python_result
         assert "<div>not markdown</div>" in python_result, python_result
-        transcript = client._finish()
+        transcript = client.finish()
 
         session = next((workspace / ".mcp-console" / "sessions").iterdir())
         document = session / "transcript.qmd"

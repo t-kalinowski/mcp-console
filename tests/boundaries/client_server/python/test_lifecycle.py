@@ -38,7 +38,7 @@ def test_rejects_python_preparation_while_evaluation_is_running(
         environment["MCP_CONSOLE_TEST_REAL_UV"] = real_uv
         environment["MCP_CONSOLE_TEST_UV_RECORD"] = str(uv_record)
         client = McpClient(binary, ("serve",), environment)
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         python = code("""
             runtime_generation_marker = "original runtime retained"
             preparation_gate = input("preparation gate> ")
@@ -93,7 +93,7 @@ def test_rejects_python_preparation_while_evaluation_is_running(
             python=("runtime_generation_marker, 'combined_cell_ran' not in globals()")
         )
         assert last_result_text(client) == "('original runtime retained', True)\n"
-        return client._finish()
+        return client.finish()
 
 
 def test_interrupts_running_python_evaluation(binary: Path) -> Transcript:
@@ -104,7 +104,7 @@ def test_interrupts_running_python_evaluation(binary: Path) -> Transcript:
         client = McpClient(binary, ("serve",), environment)
         passed = False
         try:
-            client._initialize_and_list_tools()
+            client.initialize_and_list_tools()
             # fmt: r
             r = code(r"""
                 invisible(suppressMessages(base::trace(
@@ -195,7 +195,7 @@ def test_interrupts_running_python_evaluation(binary: Path) -> Transcript:
 
             client.send(python="python_interrupt_state + 1")
             assert last_result_text(client) == "42\n"
-            transcript = client._finish()
+            transcript = client.finish()
             passed = True
             return transcript
         finally:
@@ -207,7 +207,7 @@ def test_initializes_private_runtime_once_on_first_python_cell(
     binary: Path,
 ) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
         length(getHook("reticulate::matplotlib.pyplot::load"))
@@ -222,7 +222,7 @@ def test_initializes_private_runtime_once_on_first_python_cell(
         """)
     client.send(r=r)
     assert last_result_text(client) == "[1] 1\n"
-    return client._finish()
+    return client.finish()
 
 
 def test_retries_python_runtime_initialization_after_interrupt(
@@ -235,7 +235,7 @@ def test_retries_python_runtime_initialization_after_interrupt(
         client = McpClient(binary, ("serve",), environment)
         passed = False
         try:
-            client._initialize_and_list_tools()
+            client.initialize_and_list_tools()
             # fmt: r
             r = code(r"""
                 invisible(suppressMessages(base::trace(
@@ -308,7 +308,7 @@ def test_retries_python_runtime_initialization_after_interrupt(
                 """)
             client.send(python=python)
             assert last_result_text(client) == "1\n"
-            transcript = client._finish()
+            transcript = client.finish()
             passed = True
             return transcript
         finally:
@@ -318,7 +318,7 @@ def test_retries_python_runtime_initialization_after_interrupt(
 
 def test_dispatch_does_not_mutate_python_globals(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     # fmt: python
     python = code("""
         import threading
@@ -355,7 +355,7 @@ def test_dispatch_does_not_mutate_python_globals(binary: Path) -> Transcript:
         """)
     client.send(python=python)
     assert last_result_text(client) == "['stable']\n"
-    return client._finish()
+    return client.finish()
 
 
 def test_interrupts_live_python_resolver(binary: Path) -> Transcript:
@@ -381,23 +381,23 @@ def test_interrupts_live_python_resolver(binary: Path) -> Transcript:
         passed = False
         interrupt_released = False
         try:
-            client._initialize_and_list_tools()
+            client.initialize_and_list_tools()
             client.send(r="resolver_interrupt_state <- 41L")
             assert last_result_text(client) == "[done]"
 
-            preparation = client._start_send(
+            preparation = client.start_send(
                 r="resolver_interrupt_cell_ran <- TRUE",
                 requirements={"python": ["mcp-console-blocked-live-preparation"]},
             )
             uv_started.wait("live Python preparation")
 
-            interrupt = client._start_send(control="interrupt", timeout_ms=0)
+            interrupt = client.start_send(control="interrupt", timeout_ms=0)
             uv_interrupted.wait("live Python resolver interrupt")
             readable, _, _ = select.select([client.stdout], [], [], 10)
             assert client.stdout in readable, (
                 "control-only interrupt waited for Python preparation to settle"
             )
-            client._receive(interrupt)
+            client.receive(interrupt)
             assert interrupt["result"] == {
                 "content": [
                     {
@@ -410,7 +410,7 @@ def test_interrupts_live_python_resolver(binary: Path) -> Transcript:
 
             uv_interrupt_release.release()
             interrupt_released = True
-            client._receive(preparation)
+            client.receive(preparation)
             assert preparation["result"]["isError"] is True, preparation
             error = preparation["result"]["content"][0]["text"]
             assert "managed Python resolution" in error, error
@@ -428,7 +428,7 @@ def test_interrupts_live_python_resolver(binary: Path) -> Transcript:
                 )
             )
             assert last_result_text(client) == "[1] 42\n"
-            transcript = client._finish()
+            transcript = client.finish()
             passed = True
             return transcript
         finally:
@@ -452,11 +452,11 @@ def test_restart_cancels_live_python_preparation(binary: Path) -> Transcript:
         client = McpClient(binary, ("serve",), environment)
         passed = False
         try:
-            client._initialize_and_list_tools()
+            client.initialize_and_list_tools()
             client.send(r="restart_marker <- 42L")
             assert last_result_text(client) == "[done]"
 
-            preparation = client._start_send(
+            preparation = client.start_send(
                 r="stop('cancelled requirements cell ran')",
                 requirements={"python": ["mcp-console-blocked-live-preparation"]},
             )
@@ -472,11 +472,11 @@ def test_restart_cancels_live_python_preparation(binary: Path) -> Transcript:
 
             watchdog = threading.Thread(target=release_if_calls_block)
             watchdog.start()
-            poll = client._start_send()
-            second_prepare = client._start_send(
+            poll = client.start_send()
+            second_prepare = client.start_send(
                 requirements={"python": ["py-yaml12"]},
             )
-            client._receive_many([poll, second_prepare])
+            client.receive_many([poll, second_prepare])
             calls_returned.set()
             watchdog.join()
             assert not forced_release.is_set(), (
@@ -495,8 +495,8 @@ def test_restart_cancels_live_python_preparation(binary: Path) -> Transcript:
                 "isError": True,
             }, second_prepare
 
-            restart = client._start_send(control="restart")
-            client._receive_many([preparation, restart])
+            restart = client.start_send(control="restart")
+            client.receive_many([preparation, restart])
 
             preparation_result = preparation["result"]
             assert preparation_result == {
@@ -528,7 +528,7 @@ def test_restart_cancels_live_python_preparation(binary: Path) -> Transcript:
                 """)
             client.send(r=r)
             assert last_result_text(client) == "[done]"
-            transcript = client._finish()
+            transcript = client.finish()
             passed = True
             return transcript
         finally:
@@ -549,7 +549,7 @@ def test_does_not_parse_requirements_as_rscript_options(binary: Path) -> Transcr
         environment.pop("RETICULATE_PYTHON", None)
         environment["MCP_CONSOLE_HOST_MARKER"] = str(marker)
         client = McpClient(binary, ("serve",), environment)
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         client.send(
             requirements={"python": ["-e", expression]},
         )
@@ -557,7 +557,7 @@ def test_does_not_parse_requirements_as_rscript_options(binary: Path) -> Transcr
         assert result["isError"] is True, result
         assert not marker.exists(), "requirement executed as unsandboxed R code"
         assert result["content"][0]["text"] == named_requirement_error("-e")
-        return client._finish()
+        return client.finish()
 
 
 def test_forces_uv_offline_in_builtin_worker(binary: Path) -> Transcript:
@@ -565,14 +565,14 @@ def test_forces_uv_offline_in_builtin_worker(binary: Path) -> Transcript:
     environment.pop("RETICULATE_PYTHON", None)
     environment["UV_OFFLINE"] = "0"
     client = McpClient(binary, ("serve",), environment)
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
         Sys.getenv("UV_OFFLINE", unset = NA_character_)
         """)
     client.send(r=r)
     assert last_result_text(client) == '[1] "1"\n'
-    return client._finish()
+    return client.finish()
 
 
 if __name__ == "__main__":

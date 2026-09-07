@@ -57,7 +57,7 @@ def test_uses_current_r_library_for_managed_python_resolution(
             environment,
             current_directory=temporary,
         )
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         client.send(r="initial_r_library <- .libPaths()[[1L]]")
         assert last_result_text(client) == "[done]"
 
@@ -121,7 +121,7 @@ def test_uses_current_r_library_for_managed_python_resolution(
         )
         restarted_r_library = current_r_library()
         assert_resolver_used(restarted_r_library)
-        return client._finish()
+        return client.finish()
 
 
 def test_validates_registry_only_python_requirements(binary: Path) -> Transcript:
@@ -142,7 +142,7 @@ def test_validates_registry_only_python_requirements(binary: Path) -> Transcript
             environment,
             current_directory=temporary,
         )
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         uv_record.write_text("", encoding="utf-8")
 
         project = temporary / "project"
@@ -374,7 +374,7 @@ def test_validates_registry_only_python_requirements(binary: Path) -> Transcript
         assert error in result["content"][0]["text"], result
         result["content"][0]["text"] = error
         assert uv_record.read_text(encoding="utf-8") == ""
-        transcript = client._finish()
+        transcript = client.finish()
         transcript_json = json.dumps(transcript)
         transcript_json = transcript_json.replace(
             str(project), "<absolute project path>"
@@ -403,7 +403,7 @@ def test_recovers_from_python_version_resolution_failure(binary: Path) -> Transc
         environment["MCP_CONSOLE_TEST_UV_FAILURE_ARGUMENT"] = "list"
 
         client = McpClient(binary, ("serve",), environment)
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         failure_marker.touch()
         # fmt: r
         r = code(r"""
@@ -423,7 +423,7 @@ def test_recovers_from_python_version_resolution_failure(binary: Path) -> Transc
 
         client.send(r="identical(Sys.getpid(), worker_pid)")
         assert last_result_text(client) == "[1] TRUE\n"
-        return client._finish()
+        return client.finish()
 
 
 def test_resolves_python_version_inventory_semantics(binary: Path) -> Transcript:
@@ -452,7 +452,7 @@ def test_resolves_python_version_inventory_semantics(binary: Path) -> Transcript
         assert last_result_text(client) == "[prepared]"
         assert recorded_python_preferences(arguments) == ["only-managed"]
         assert recorded_tool_run_pythons(arguments) == ["3.12.12"]
-        return client._finish()
+        return client.finish()
 
 
 def test_resolves_python_version_constraint_semantics(binary: Path) -> Transcript:
@@ -496,7 +496,7 @@ def test_resolves_python_version_constraint_semantics(binary: Path) -> Transcrip
             [">=3.12.0a1", "!=3.12.0"],
         )
         assert numeric_not_equal == "3.12.0a5\n", numeric_not_equal
-        return client._finish()
+        return client.finish()
 
 
 def test_falls_back_after_filtering_unsupported_python_versions(
@@ -539,7 +539,7 @@ def test_falls_back_after_filtering_unsupported_python_versions(
             "only-system",
         ]
         assert recorded_tool_run_pythons(arguments) == ["3.11.14"]
-        return client._finish()
+        return client.finish()
 
 
 def test_respects_system_python_preference_with_custom_install_directory(
@@ -589,7 +589,7 @@ def test_respects_system_python_preference_with_custom_install_directory(
             "only-system",
         ]
         assert recorded_tool_run_pythons(arguments) == ["3.13.11"]
-        return client._finish()
+        return client.finish()
 
 
 def test_uses_reticulate_managed_uv_for_python_resolution(
@@ -677,7 +677,7 @@ def test_uses_reticulate_managed_uv_for_python_resolution(
             environment,
             current_directory=temporary,
         )
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
         uv_record.write_text("", encoding="utf-8")
         resolver_record.write_text("", encoding="utf-8")
         write_uv_python_inventories(
@@ -712,7 +712,7 @@ def test_uses_reticulate_managed_uv_for_python_resolution(
             ), record
         tool_arguments = tool_runs[0]["arguments"]
         assert tool_arguments[tool_arguments.index("--python") + 1] == "3.12.9"
-        return client._finish()
+        return client.finish()
 
 
 def test_retains_managed_python_when_uv_caching_is_disabled(
@@ -746,7 +746,7 @@ def test_retains_managed_python_when_uv_caching_is_disabled(
             version_lists
         )
         assert all(record["UV_NO_CACHE"] is None for record in tool_runs), tool_runs
-        return client._finish()
+        return client.finish()
 
 
 def test_removes_disabled_uv_python_source_aliases(binary: Path) -> Transcript:
@@ -772,7 +772,7 @@ def test_removes_disabled_uv_python_source_aliases(binary: Path) -> Transcript:
         assert all(record["UV_NO_MANAGED_PYTHON"] is None for record in records), (
             records
         )
-        return client._finish()
+        return client.finish()
 
 
 def test_interrupts_python_cache_warmup_without_committing(
@@ -833,7 +833,7 @@ def test_interrupts_python_cache_warmup_without_committing(
                 "MCP_CONSOLE_TEST_BLOCKED_WARMUP": str(blocked_warmup),
             },
         )
-        preparation = client._start_send(requirements={"python": ["py-yaml12"]})
+        preparation = client.start_send(requirements={"python": ["py-yaml12"]})
         deadline = time.monotonic() + 5
         while not blocked_warmup.exists():
             assert client.process.poll() is None, (
@@ -842,11 +842,11 @@ def test_interrupts_python_cache_warmup_without_committing(
             assert time.monotonic() < deadline, "Python cache warmup did not start"
             time.sleep(0.01)
 
-        interrupt = client._start_send(
+        interrupt = client.start_send(
             control="interrupt",
             timeout_ms=30_000,
         )
-        client._receive_many([preparation, interrupt])
+        client.receive_many([preparation, interrupt])
         preparation_result = preparation["result"]
         assert preparation_result["isError"] is True, preparation_result
         preparation_text = preparation_result["content"][0]["text"]
@@ -858,7 +858,7 @@ def test_interrupts_python_cache_warmup_without_committing(
         client.send(requirements={"python": ["py-yaml12"]})
         assert last_result_text(client) == "[prepared]"
         assert len(recorded_tool_run_pythons(arguments)) == 2
-        return client._finish()
+        return client.finish()
 
 
 def test_stops_before_cache_warmup_after_python_resolver_interrupt(
@@ -920,7 +920,7 @@ def test_stops_before_cache_warmup_after_python_resolver_interrupt(
             },
         )
         block_tool_run.touch()
-        preparation = client._start_send(requirements={"python": ["py-yaml12"]})
+        preparation = client.start_send(requirements={"python": ["py-yaml12"]})
         deadline = time.monotonic() + 5
         while not tool_run_started.exists():
             assert client.process.poll() is None, (
@@ -929,11 +929,11 @@ def test_stops_before_cache_warmup_after_python_resolver_interrupt(
             assert time.monotonic() < deadline, "Python resolver did not start"
             time.sleep(0.01)
 
-        interrupt = client._start_send(
+        interrupt = client.start_send(
             control="interrupt",
             timeout_ms=30_000,
         )
-        client._receive_many([preparation, interrupt])
+        client.receive_many([preparation, interrupt])
         preparation_result = preparation["result"]
         assert preparation_result["isError"] is True, preparation_result
         preparation_text = preparation_result["content"][0]["text"]
@@ -949,7 +949,7 @@ def test_stops_before_cache_warmup_after_python_resolver_interrupt(
         client.send(requirements={"python": ["py-yaml12"]})
         assert last_result_text(client) == "[prepared]"
         assert len(recorded_tool_run_pythons(arguments)) == 2
-        return client._finish()
+        return client.finish()
 
 
 if __name__ == "__main__":

@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from support.assertions import last_result_text
 from support.checkpoints import release_fixture_checkpoint
-from support.client import McpClient
+from support.client import McpClient, TextReader
 from support.processes import (
     process_group_exists,
     stop_process_group,
@@ -324,11 +324,7 @@ def queued_socket_bytes(stream: socket.socket) -> int:
     return available[0]
 
 
-class SocketTextReader:
-    def __init__(self, stream: socket.socket) -> None:
-        self.stream = stream
-        self.buffer = bytearray()
-
+class SocketTextReader(TextReader):
     def wait_for_incomplete_response(
         self,
         request: int,
@@ -382,28 +378,6 @@ class SocketTextReader:
                 return
             self.buffer.extend(self.stream.recv(pending))
 
-    def readline(self) -> str:
-        while b"\n" not in self.buffer:
-            chunk = self.stream.recv(64 * 1024)
-            if not chunk:
-                data = bytes(self.buffer)
-                self.buffer.clear()
-                return data.decode()
-            self.buffer.extend(chunk)
-        line, _, remainder = self.buffer.partition(b"\n")
-        self.buffer = bytearray(remainder)
-        return (line + b"\n").decode()
-
-    def read(self) -> str:
-        chunks = [bytes(self.buffer)]
-        self.buffer.clear()
-        while chunk := self.stream.recv(64 * 1024):
-            chunks.append(chunk)
-        return b"".join(chunks).decode()
-
-    def close(self) -> None:
-        self.stream.close()
-
 
 class SocketGateMcpClient(McpClient):
     def __init__(
@@ -441,7 +415,7 @@ class SocketGateMcpClient(McpClient):
         self.process = process
         self.stdin = input_stream
         self.stdout = SocketTextReader(output_reader)
-        self.stderr = process.stderr
+        self.stderr = TextReader(process.stderr)
         self.transcript = []
         self._next_request_id = 1
         self._issued_request_ids = set()
@@ -483,13 +457,13 @@ class SocketGateMcpClient(McpClient):
 
 
 def expose_idle_input_request(client: McpClient, temporary_path: Path) -> None:
-    requested = client._start_send(r="request input while idle")
+    requested = client.start_send(r="request input while idle")
     completed = wait_for_marker(
         temporary_path,
         "zod-idle-input-cell-completed",
         client,
     )
-    client._receive(requested)
+    client.receive(requested)
     assert last_result_text(client) == "[done]"
 
     release_fixture_checkpoint(completed.parent / "zod-release-idle-input-request")
@@ -512,9 +486,9 @@ def submit_prompted_stdin(
     expected: str,
 ) -> None:
     poll_start = len(client.transcript)
-    submitted = client._start_send(stdin=stdin)
+    submitted = client.start_send(stdin=stdin)
     wait_for_marker(temporary_path, marker, client)
-    client._receive(submitted)
+    client.receive(submitted)
     if last_result_text(client) != expected:
         assert last_result_text(client) == "\n[waiting for stdin]"
         client.send()

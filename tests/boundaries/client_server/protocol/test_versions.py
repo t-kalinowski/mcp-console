@@ -12,8 +12,8 @@ from support.suites import run_this_suite
 
 def request_lifecycle(binary: Path, method: str, **params: object) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._request(method, **params)
-    return client._finish()
+    client.request(method, **params)
+    return client.finish()
 
 
 def test_negotiates_legacy_and_discovers_modern_versions(binary: Path) -> Transcript:

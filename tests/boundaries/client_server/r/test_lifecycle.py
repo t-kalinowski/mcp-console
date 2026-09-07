@@ -20,7 +20,7 @@ PLATFORMS = {"darwin"}
 
 def test_evaluates_source_without_final_newline(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
         answer <- 40
@@ -29,12 +29,12 @@ def test_evaluates_source_without_final_newline(binary: Path) -> Transcript:
     assert not r.endswith("\n")
     client.send(r=r)
     assert last_tool_text(client) == "[1] 42\n"
-    return client._finish()
+    return client.finish()
 
 
 def test_recoverable_language_errors(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     client.send(r="answer <- 41")
     # fmt: r
     r = code(r"""
@@ -58,12 +58,12 @@ def test_recoverable_language_errors(binary: Path) -> Transcript:
         """)
     client.send(r=r)
     client.send(r="answer")
-    return client._finish()
+    return client.finish()
 
 
 def test_restarts_after_r_worker_segfault(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     client.send(r="r_worker_marker <- TRUE")
 
     # Ask R's fatal-signal handler to abort after reporting the crash.
@@ -89,12 +89,12 @@ def test_restarts_after_r_worker_segfault(binary: Path) -> Transcript:
     assert last_tool_text(client) == "[1] FALSE\n"
     client.send(r="1 + 1")
     assert last_tool_text(client) == "[1] 2\n"
-    return client._finish()
+    return client.finish()
 
 
 def test_reports_r_worker_exit_status(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
 
     # fmt: r
     r = code(r"""
@@ -113,12 +113,12 @@ def test_reports_r_worker_exit_status(binary: Path) -> Transcript:
 
     client.send(r="1 + 1")
     assert last_tool_text(client) == "[1] 2\n"
-    return client._finish()
+    return client.finish()
 
 
 def test_reports_r_worker_restart_with_idle_stdin(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     client.send(r="invisible(NULL)")
 
     # fmt: r
@@ -149,12 +149,12 @@ def test_reports_r_worker_restart_with_idle_stdin(binary: Path) -> Transcript:
         """)
     client.send(r=direct_stdin)
     assert last_tool_text(client) == '[1] "replacement"\n'
-    return client._finish()
+    return client.finish()
 
 
 def test_restarts_and_evaluates_r_cell_in_one_send(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     client.send(r="inline_restart_marker <- TRUE")
 
     client.send(
@@ -165,12 +165,12 @@ def test_restarts_and_evaluates_r_cell_in_one_send(binary: Path) -> Transcript:
         "[worker stopped: in-memory state lost]\n[starting new worker]\n"
         "[1] FALSE\n[done]"
     )
-    return client._finish()
+    return client.finish()
 
 
 def test_restart_while_r_waits_for_input(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
         restart_marker <- TRUE
@@ -192,12 +192,12 @@ def test_restart_while_r_waits_for_input(binary: Path) -> Transcript:
 
     client.send(r='exists("restart_marker", inherits = FALSE)')
     assert last_tool_text(client) == "[1] FALSE\n"
-    return client._finish()
+    return client.finish()
 
 
 def test_restart_skips_cell_boundary_callbacks(binary: Path) -> Transcript:
     with r_input_handler_client(binary) as (client, directory):
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
 
         # Leave a callback ready for the initial boundary turn. Restart after
         # it requests input, and verify that the submitted cell is never
@@ -244,12 +244,12 @@ def test_restart_skips_cell_boundary_callbacks(binary: Path) -> Transcript:
         )
         client.send(control="restart")
         assert "post-cell callback ran" not in last_tool_text(client)
-        return client._finish()
+        return client.finish()
 
 
 def test_restart_skips_direct_stdin_boundary_callback(binary: Path) -> Transcript:
     with r_input_handler_client(binary) as (client, directory):
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
 
         # A direct fd-0 read bypasses the worker's ReadConsole callback.
         # Restart still must prevent the submitted cell from running after EOF
@@ -281,7 +281,7 @@ def test_restart_skips_direct_stdin_boundary_callback(binary: Path) -> Transcrip
         )
         fifo.write_bytes(b"x")
 
-        waiting = client._start_send(
+        waiting = client.start_send(
             r='cat("direct stdin cell ran\\n")',
             timeout_ms=30_000,
         )
@@ -291,18 +291,18 @@ def test_restart_skips_direct_stdin_boundary_callback(binary: Path) -> Transcrip
             client,
         )
 
-        restarted = client._start_send(control="restart")
-        client._receive(waiting)
-        client._receive(restarted)
+        restarted = client.start_send(control="restart")
+        client.receive(waiting)
+        client.receive(restarted)
         assert "direct callback released" in waiting["result"]["content"][0]["text"]
         assert "direct stdin cell ran" not in waiting["result"]["content"][0]["text"]
         assert "direct stdin cell ran" not in restarted["result"]["content"][0]["text"]
-        return client._finish()
+        return client.finish()
 
 
 def test_browser_input(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
         step <- function() {
@@ -327,12 +327,12 @@ def test_browser_input(binary: Path) -> Transcript:
         "R browser input",
         stdin="c\n",
     )
-    return client._finish()
+    return client.finish()
 
 
 def test_times_out_and_polls_running_evaluation(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     client.send(r="invisible(NULL)")
     # fmt: r
     r = code(r"""
@@ -347,7 +347,7 @@ def test_times_out_and_polls_running_evaluation(binary: Path) -> Transcript:
     output = client.transcript[-1]["result"]["content"][0]["text"]
     assert output == "[1] 42\n", output
     client.send(r="answer + 1")
-    return client._finish()
+    return client.finish()
 
 
 def test_interrupts_running_r_evaluation(binary: Path) -> Transcript:
@@ -374,7 +374,7 @@ def test_interrupts_running_r_evaluation(binary: Path) -> Transcript:
         )
         passed = False
         try:
-            client._initialize_and_list_tools()
+            client.initialize_and_list_tools()
             # fmt: r
             r = code(r"""
                 interrupt_state <- 41L
@@ -464,7 +464,7 @@ def test_interrupts_running_r_evaluation(binary: Path) -> Transcript:
             assert last_tool_text(client) == (
                 '[1] "idle time does not consume a cell limit"\n'
             )
-            transcript = client._finish()
+            transcript = client.finish()
             passed = True
             return transcript
         finally:
@@ -476,7 +476,7 @@ def test_interrupts_managed_console_input(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
     passed = False
     try:
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
 
         # fmt: r
         r = code(r"""
@@ -552,7 +552,7 @@ def test_interrupts_managed_console_input(binary: Path) -> Transcript:
         assert last_tool_text(client) == "[1] 42\n"
         client.send(python="python_input_state + 1")
         assert last_tool_text(client) == "42\n"
-        transcript = client._finish()
+        transcript = client.finish()
         passed = True
         return transcript
     finally:
@@ -564,7 +564,7 @@ def test_replays_console_prefix_after_operation_boundary_interrupt(
     binary: Path,
 ) -> Transcript:
     with r_input_handler_client(binary) as (client, directory):
-        client._initialize_and_list_tools()
+        client.initialize_and_list_tools()
 
         # A small native buffer makes a later managed callback deterministic
         # without relying on the server's 10 millisecond request grace.
@@ -654,7 +654,7 @@ def test_replays_console_prefix_after_operation_boundary_interrupt(
         assert output == ('[input requested: "after boundary> "]\n[1] TRUE\n'), repr(
             output
         )
-        return client._finish()
+        return client.finish()
 
 
 if __name__ == "__main__":

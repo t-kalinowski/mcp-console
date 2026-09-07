@@ -47,7 +47,7 @@ def assert_invalid_send_has_no_external_effects(binary: Path) -> None:
         client = McpClient(binary, ("serve", "--worker", str(zod)), environment)
         passed = False
         try:
-            client._initialize_and_list_tools()
+            client.initialize_and_list_tools()
             invalid = (
                 (
                     {"r": "echo invalid R cell ran", "requirements": {"r": [""]}},
@@ -86,7 +86,7 @@ def assert_invalid_send_has_no_external_effects(binary: Path) -> None:
 
             assert not resolver_record.exists(), "invalid input started a host resolver"
             assert not worker_started.exists(), "invalid input started or ran a worker"
-            client._finish()
+            client.finish()
             passed = True
         finally:
             if not passed:
@@ -100,7 +100,7 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",), environment)
     assert client.temporary_directory is not None
     workspace = Path(client.temporary_directory.name)
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     listed_tools = client.transcript[-1]["result"]["tools"]
     assert [tool["name"] for tool in listed_tools] == ["send"], listed_tools
     tools = {tool["name"]: tool for tool in listed_tools}
@@ -361,7 +361,7 @@ def test_initializes_and_lists_tools(binary: Path) -> Transcript:
         "JSON and ICU are already prepared for built-in workers" in duckdb_description
     )
     assert "for the managed DuckDB backend" in duckdb_description
-    transcript = client._finish()
+    transcript = client.finish()
     assert not (workspace / ".mcp-console").exists(), workspace
     return transcript
 
@@ -378,7 +378,7 @@ def assert_limits_send_languages_from_environment(binary: Path) -> None:
         ("serve", "--worker", str(zod)),
         environment,
     )
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
 
     tools = {tool["name"]: tool for tool in client.transcript[-1]["result"]["tools"]}
     send_properties = tools["send"]["inputSchema"]["properties"]
@@ -399,14 +399,14 @@ def assert_limits_send_languages_from_environment(binary: Path) -> None:
         }
     ], result
     assert not worker_started.exists(), worker_started
-    client._finish()
+    client.finish()
     client_directory.cleanup()
 
 
 def test_validates_send_arguments(binary: Path) -> Transcript:
     assert_invalid_send_has_no_external_effects(binary)
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     client.send(
         # fmt: python
         python=code("""
@@ -504,12 +504,12 @@ def test_validates_send_arguments(binary: Path) -> Transcript:
     client.send(r=None)
     output = client.transcript[-1]["result"]["content"][0]["text"]
     assert output == "\n[idle]", output
-    return client._finish()
+    return client.finish()
 
 
 def test_validates_standalone_requirement_arguments(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     client.send(requirements={})
     result = client.transcript[-1]["result"]
     assert result["isError"] is True
@@ -579,17 +579,17 @@ def test_validates_standalone_requirement_arguments(binary: Path) -> Transcript:
         "DuckDB extension names must start with a lowercase ASCII letter and "
         "contain only lowercase ASCII letters, digits, and underscores"
     )
-    return client._finish()
+    return client.finish()
 
 
 def test_rejects_interrupt_without_worker(binary: Path) -> Transcript:
     client = McpClient(binary, ("serve",))
-    client._initialize_and_list_tools()
+    client.initialize_and_list_tools()
     client.send(control="interrupt", timeout_ms=0)
     result = client.transcript[-1]["result"]
     assert result["isError"] is True
     assert result["content"][0]["text"] == "[worker is not running]"
-    return client._finish()
+    return client.finish()
 
 
 if __name__ == "__main__":

@@ -1,16 +1,67 @@
 import json
 import os
 import select
+import socket
 import subprocess
 import tempfile
-from concurrent.futures import ThreadPoolExecutor
+import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Self, TextIO
 
 from support.records import ToolResult, Transcript, TranscriptEntry
 
 
+class TextReader:
+    """Descriptor-backed text with an explicit buffer and bounded reads."""
+
+    def __init__(self, stream: TextIO | socket.socket) -> None:
+        self.stream = stream
+        self.buffer = bytearray()
+        self.eof = False
+        self.closed = False
+
+    def fileno(self) -> int:
+        return self.stream.fileno()
+
+    def fill(self) -> None:
+        chunk = os.read(self.fileno(), 64 * 1024)
+        self.buffer.extend(chunk)
+        self.eof = not chunk
+
+    def _wait(self, deadline: float) -> None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or not select.select([self], [], [], remaining)[0]:
+            raise TimeoutError("timed out reading test transport")
+        self.fill()
+
+    def readline(self, timeout: float = 15) -> str:
+        deadline = time.monotonic() + timeout
+        while b"\n" not in self.buffer and not self.eof:
+            self._wait(deadline)
+        line, separator, remainder = self.buffer.partition(b"\n")
+        self.buffer = bytearray(remainder)
+        return (line + separator).decode("utf-8")
+
+    def read(self, timeout: float = 15) -> str:
+        deadline = time.monotonic() + timeout
+        while not self.eof:
+            self._wait(deadline)
+        result = self.buffer.decode("utf-8")
+        self.buffer.clear()
+        return result
+
+    def close(self) -> None:
+        self.stream.close()
+        self.eof = True
+        self.closed = True
+
+
 class McpClient:
+    """A synchronous, recording MCP client; use a context to own its lifetime."""
+
+    response_timeout: float = 600
+    shutdown_timeout: float = 15
+
     def __init__(
         self,
         binary: Path,
@@ -19,7 +70,11 @@ class McpClient:
         current_directory: Path | None = None,
         umask: int = -1,
         pass_fds: tuple[int, ...] = (),
+        response_timeout: float = 600,
+        shutdown_timeout: float = 15,
     ) -> None:
+        self.response_timeout = response_timeout
+        self.shutdown_timeout = shutdown_timeout
         self.temporary_directory = (
             tempfile.TemporaryDirectory() if current_directory is None else None
         )
@@ -44,8 +99,8 @@ class McpClient:
 
         self.process = process
         self.stdin = process.stdin
-        self.stdout = process.stdout
-        self.stderr = process.stderr
+        self.stdout = TextReader(process.stdout)
+        self.stderr = TextReader(process.stderr)
         self.transcript: Transcript = []
         self._next_request_id = 1
         self._issued_request_ids: set[int] = set()
@@ -54,7 +109,13 @@ class McpClient:
     def send(self, **arguments: Any) -> ToolResult:
         return self._call_tool("send", **arguments)
 
-    def _send_message(self, message: dict[str, Any]) -> TranscriptEntry:
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *exception: object) -> None:
+        self.close()
+
+    def send_message(self, message: dict[str, Any]) -> TranscriptEntry:
         recorded_message = message.copy()
         assert recorded_message.pop("jsonrpc", None) == "2.0", message
 
@@ -87,24 +148,32 @@ class McpClient:
         return entry
 
     def _read_response_line(self) -> str:
-        line = self.stdout.readline()
-        if line:
-            return line
-
-        return_code = self.process.poll()
-        standard_error = ""
-        readable, _, _ = select.select([self.stderr], [], [], 0)
-        if readable:
-            standard_error = os.read(self.stderr.fileno(), 64 * 1024).decode(
-                "utf-8",
-                errors="replace",
-            )
+        deadline = time.monotonic() + self.response_timeout
+        while b"\n" not in self.stdout.buffer and not self.stdout.eof:
+            self._wait_for_output(deadline, "response")
+        if self.stdout.buffer:
+            return self.stdout.readline()
         raise AssertionError(
-            "mcp-console stdout closed before replying: "
-            f"return_code={return_code!r}, stderr={standard_error!r}"
+            f"mcp-console stdout closed before replying: {self._diagnostics()}"
         )
 
-    def _receive(self, entry: TranscriptEntry) -> None:
+    def _diagnostics(self) -> str:
+        tail = self.stderr.buffer[-64 * 1024 :].decode("utf-8", errors="replace")
+        return f"return_code={self.process.poll()!r}, stderr={tail!r}"
+
+    def _wait_for_output(self, deadline: float, stage: str) -> None:
+        streams = [stream for stream in (self.stdout, self.stderr) if not stream.eof]
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or not (
+            ready := select.select(streams, [], [], remaining)[0]
+        ):
+            raise TimeoutError(
+                f"mcp-console timed out waiting for {stage}: {self._diagnostics()}"
+            )
+        for stream in ready:
+            stream.fill()
+
+    def receive(self, entry: TranscriptEntry) -> None:
         line = self._read_response_line()
         message = json.loads(line)
         assert message.pop("jsonrpc", None) == "2.0", message
@@ -113,7 +182,7 @@ class McpClient:
         assert entry.keys().isdisjoint(message), message
         entry.update(message)
 
-    def _receive_many(self, entries: list[TranscriptEntry]) -> None:
+    def receive_many(self, entries: list[TranscriptEntry]) -> None:
         pending = {entry["id"]: entry for entry in entries}
         assert len(pending) == len(entries), "response batch reused a request ID"
         for _ in entries:
@@ -127,7 +196,7 @@ class McpClient:
             assert entry.keys().isdisjoint(message), message
             entry.update(message)
 
-    def _start_request(self, method: str, **params: Any) -> TranscriptEntry:
+    def start_request(self, method: str, **params: Any) -> TranscriptEntry:
         message: dict[str, Any] = {
             "jsonrpc": "2.0",
             "id": self._next_request_id,
@@ -137,14 +206,14 @@ class McpClient:
         if params:
             message["params"] = params
 
-        return self._send_message(message)
+        return self.send_message(message)
 
-    def _request(self, method: str, **params: Any) -> TranscriptEntry:
-        entry = self._start_request(method, **params)
-        self._receive(entry)
+    def request(self, method: str, **params: Any) -> TranscriptEntry:
+        entry = self.start_request(method, **params)
+        self.receive(entry)
         return entry
 
-    def _notify(self, method: str, **params: Any) -> None:
+    def notify(self, method: str, **params: Any) -> None:
         message: dict[str, Any] = {
             "jsonrpc": "2.0",
             "method": method,
@@ -152,10 +221,10 @@ class McpClient:
         if params:
             message["params"] = params
 
-        self._send_message(message)
+        self.send_message(message)
 
-    def _initialize_and_list_tools(self) -> None:
-        self._request(
+    def initialize_and_list_tools(self) -> None:
+        self.request(
             "initialize",
             protocolVersion="2025-11-25",
             capabilities={},
@@ -164,11 +233,11 @@ class McpClient:
                 "version": "1.0.0",
             },
         )
-        self._notify("notifications/initialized")
-        self._request("tools/list")
+        self.notify("notifications/initialized")
+        self.request("tools/list")
 
     def _start_tool_call(self, name: str, **arguments: Any) -> TranscriptEntry:
-        return self._start_request(
+        return self.start_request(
             "tools/call",
             name=name,
             arguments=arguments,
@@ -176,40 +245,67 @@ class McpClient:
 
     def _call_tool(self, name: str, **arguments: Any) -> ToolResult:
         entry = self._start_tool_call(name, **arguments)
-        self._receive(entry)
+        self.receive(entry)
         result = entry["result"]
         assert isinstance(result, dict), result
         return result
 
-    def _start_send(self, **arguments: Any) -> TranscriptEntry:
+    def start_send(self, **arguments: Any) -> TranscriptEntry:
         return self._start_tool_call("send", **arguments)
 
-    def _finish(self) -> Transcript:
-        transcript, standard_error = self._finish_with_standard_error()
+    def finish(self) -> Transcript:
+        transcript, standard_error = self.finish_with_standard_error()
         assert standard_error == "", standard_error
         return transcript
 
-    def _finish_with_standard_error(self) -> tuple[Transcript, str]:
-        self.stdin.close()
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            stdout = executor.submit(self.stdout.read)
-            stderr = executor.submit(self.stderr.read)
-            return_code = self.process.wait()
-            extra_output = stdout.result()
-            standard_error = stderr.result()
+    def finish_with_standard_error(self) -> tuple[Transcript, str]:
+        try:
+            self._shutdown()
+            extra_output = self.stdout.read()
+            standard_error = self.stderr.read()
+            assert self.process.returncode == 0, standard_error
+            assert extra_output == "", f"unexpected extra output: {extra_output}"
+            return self.transcript, standard_error
+        finally:
+            self._dispose()
 
-        assert return_code == 0, standard_error
-        assert extra_output == "", f"unexpected extra output: {extra_output}"
-        return self.transcript, standard_error
+    def _shutdown(self) -> None:
+        if not self.stdin.closed:
+            self.stdin.close()
+        deadline = time.monotonic() + self.shutdown_timeout
+        while not (self.stdout.eof and self.stderr.eof):
+            self._wait_for_output(deadline, "shutdown")
+        try:
+            self.process.wait(timeout=max(0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            raise TimeoutError(
+                f"mcp-console timed out waiting for shutdown: {self._diagnostics()}"
+            ) from None
+
+    def _dispose(self) -> None:
+        if self.process.poll() is None:
+            self.process.kill()
+        self.process.wait(timeout=5)
+        for stream in (self.stdin, self.stdout, self.stderr):
+            stream.close()
+        if self.temporary_directory is not None:
+            self.temporary_directory.cleanup()
+
+    def close(self) -> None:
+        """Close input, allow staged retirement, then kill only the server PID."""
+        if (
+            self.stdout.closed
+            and self.stderr.closed
+            and self.process.poll() is not None
+        ):
+            return
+        try:
+            self._shutdown()
+        except TimeoutError:
+            pass
+        finally:
+            self._dispose()
 
 
 def stop_client(client: McpClient) -> None:
-    if client.process.poll() is not None:
-        return
-    if not client.stdin.closed:
-        client.stdin.close()
-    try:
-        client.process.wait(timeout=2)
-    except subprocess.TimeoutExpired:
-        client.process.kill()
-        client.process.wait()
+    client.close()

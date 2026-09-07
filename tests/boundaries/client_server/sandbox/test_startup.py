@@ -138,7 +138,7 @@ def test_sandbox_setup_failure_is_reported_and_retryable(binary: Path) -> Transc
         client = McpClient(binary, ("serve", "--worker", str(worker)), environment)
         try:
             server = capture_darwin_process_identity(client.process.pid)
-            client._initialize_and_list_tools()
+            client.initialize_and_list_tools()
             result = client.send(r="echo echo")
             assert result == {
                 "content": [
@@ -152,7 +152,7 @@ def test_sandbox_setup_failure_is_reported_and_retryable(binary: Path) -> Transc
             temporary_parent.mkdir()
             client.send(r="echo echo")
             _assert_zod_echo(client.transcript[-1])
-            transcript, stderr = client._finish_with_standard_error()
+            transcript, stderr = client.finish_with_standard_error()
             diagnostic = re.sub(
                 re.escape(str(temporary_parent)) + r"/mcp-console-tmp-\d+-\d+",
                 "<sandbox temp>",
@@ -202,8 +202,8 @@ def test_manager_failure_before_readiness_keeps_custom_relay_gated(
         identities: tuple[DarwinProcessIdentity, ...] = ()
         replacement_released = False
         try:
-            client._initialize_and_list_tools()
-            waiting = client._start_send(r="echo echo")
+            client.initialize_and_list_tools()
+            waiting = client.start_send(r="echo echo")
             manager_started.wait("manager startup")
 
             root_pid, manager_pid = _worker_generation_processes(client.process.pid)
@@ -217,7 +217,7 @@ def test_manager_failure_before_readiness_keeps_custom_relay_gated(
             )
             readable, _, _ = select.select([client.stdout], [], [], TIMEOUT)
             assert readable, "server did not return after sandbox manager failure"
-            client._receive(waiting)
+            client.receive(waiting)
             result = waiting["result"]
             assert result == {
                 "content": [
@@ -228,9 +228,7 @@ def test_manager_failure_before_readiness_keeps_custom_relay_gated(
                 ],
                 "isError": True,
             }, result
-            readable, _, _ = select.select([client.stderr], [], [], TIMEOUT)
-            assert readable, "sandbox launcher did not report its startup failure"
-            diagnostic = client.stderr.readline().rstrip("\n")
+            diagnostic = client.stderr.readline(timeout=TIMEOUT).rstrip("\n")
             assert diagnostic == (
                 "sandbox manager did not become ready: failed to fill whole buffer"
             ), diagnostic
@@ -243,18 +241,18 @@ def test_manager_failure_before_readiness_keeps_custom_relay_gated(
                 "verified_cleanup": "gated relay root and manager",
             }
 
-            replacement = client._start_send(r="echo echo")
+            replacement = client.start_send(r="echo echo")
             manager_started.wait("replacement manager startup")
             manager_release.release()
             replacement_released = True
-            client._receive(replacement)
+            client.receive(replacement)
             _assert_zod_echo(replacement)
             markers = list(temporary.glob(f"**/{MARKER_NAME}"))
             assert len(markers) == 1, markers
             replacement["startup_supervision_recovery"] = {
                 "custom_relay": "executed only for the replacement generation",
             }
-            return client._finish()
+            return client.finish()
         finally:
             if not replacement_released:
                 manager_release.release()

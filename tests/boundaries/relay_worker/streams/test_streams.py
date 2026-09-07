@@ -74,7 +74,7 @@ def test_routes_python_output(binary: Path) -> Transcript:
     output = _tool_text(client.send(python=python))
     output = client._collect_output(output, sum(len(line) + 1 for line in expected))
     assert sorted(output.splitlines()) == sorted(expected), repr(output)
-    return client._finish()
+    return client.finish()
 
 
 def test_routes_r_console_channels(binary: Path) -> Transcript:
@@ -91,7 +91,7 @@ def test_routes_r_console_channels(binary: Path) -> Transcript:
     assert _tool_text(client.send(r=r)) == (
         "R output\nR diagnostic\nWARNING: Only editing the first in the list of files\n"
     )
-    return client._finish()
+    return client.finish()
 
 
 def test_preserves_python_output_from_fork_children(binary: Path) -> Transcript:
@@ -132,7 +132,7 @@ def test_preserves_python_output_from_fork_children(binary: Path) -> Transcript:
     output = _tool_text(client.send(python=python))
     output = client._collect_output(output, sum(len(line) + 1 for line in expected))
     assert sorted(output.splitlines()) == sorted(expected), repr(output)
-    return client._finish()
+    return client.finish()
 
 
 def test_drains_standard_streams_while_evaluating(binary: Path) -> Transcript:
@@ -157,7 +157,7 @@ def test_drains_standard_streams_while_evaluating(binary: Path) -> Transcript:
     assert output.count("x") == size
     assert output.count("y") == size
 
-    transcript = client._finish()
+    transcript = client.finish()
     assert transcript[-2] == {"stdout": "x" * size, "stderr": "y" * size}
     assert transcript[-1] == {"worker": {"kind": "completed"}}
     transcript[-2]["stdout"] = f"<{size} bytes>"

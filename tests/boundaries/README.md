@@ -148,7 +148,13 @@ A suite may set `PLATFORMS = {"darwin"}` to restrict execution and snapshot upda
 Restricted cases remain visible under `scripts/test --list` and are skipped on other platforms.
 A suite may set `REQUIRED_COMMANDS = {"ir"}` to skip when a required executable is not on `PATH`.
 
-Server cases create an `McpClient`, perform their `send` interactions, and return `client._finish()`.
+Server cases create an `McpClient`, call `initialize_and_list_tools()`, perform their `send()` interactions, and return `client.finish()`.
+Use `with McpClient(...) as client:` so an assertion also closes the input and reaps the server.
+Response reads have a 600-second deadline and shutdown has a 15-second deadline; constructor arguments `response_timeout` and `shutdown_timeout` can override them.
+Deadline errors include the server's stderr tail.
+To make interleavings explicit, `start_send()` returns a pending transcript entry; `receive(entry)` fills in its response, and `receive_many(entries)` matches responses by request ID regardless of arrival order.
+Protocol cases can use `request()`, `start_request()`, `notify()`, and `send_message()` directly.
+Use `finish_with_standard_error()` when the case needs to assert server diagnostics alongside its transcript.
 Other cases may invoke the binary directly and return their transcript entries.
 
 Each suite is also directly runnable:

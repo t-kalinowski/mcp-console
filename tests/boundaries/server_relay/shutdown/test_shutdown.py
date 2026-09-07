@@ -63,7 +63,7 @@ def test_shutdown_precedes_blocked_resolver_cancellation(binary: Path) -> Transc
         retirement_release = FifoCheckpoint.attach(relay_root / RETIREMENT_RELEASE_NAME)
         finished = False
         try:
-            preparation = client.client._start_send(
+            preparation = client.client.start_send(
                 r="must not execute during shutdown",
                 requirements={"r": ["blocked-resolver"]},
             )
@@ -83,7 +83,7 @@ def test_shutdown_precedes_blocked_resolver_cancellation(binary: Path) -> Transc
                 {"type": "text", "text": "R package resolution cancelled"}
             ], result
             retirement_release.release()
-            client.client._finish()
+            client.client.finish()
             finished = True
             transcript = client._read_open_capture(capture)
         finally:
@@ -119,11 +119,11 @@ def test_cancelled_send_returns_owned_output_to_restart(binary: Path) -> Transcr
         prelude_release.release()
         prelude_processed.wait()
 
-        waiting = client.client._start_send(r="42", timeout_ms=30_000)
+        waiting = client.client.start_send(r="42", timeout_ms=30_000)
         output_ready.wait()
-        restart = client.client._start_send(control="restart")
+        restart = client.client.start_send(control="restart")
         shutdown_received.wait()
-        client.client._notify(
+        client.client.notify(
             "notifications/cancelled",
             requestId=waiting["id"],
             reason="acceptance test cancelled the waiting send",
@@ -133,7 +133,7 @@ def test_cancelled_send_returns_owned_output_to_restart(binary: Path) -> Transcr
         cancellation["requestId"] = "<request ID>"
         retirement_release.release()
         retirement_released = True
-        client.client._receive(restart)
+        client.client.receive(restart)
 
         assert "result" not in waiting, waiting
         result = restart["result"]
@@ -188,7 +188,7 @@ def test_cancelled_send_returns_owned_output_to_restart(binary: Path) -> Transcr
 
         client.send()
         assert _tool_text(client.client.transcript[-1]["result"]) == "\n[idle]"
-        transcript = client.client._finish()
+        transcript = client.client.finish()
         finished = True
         return transcript
     finally:
