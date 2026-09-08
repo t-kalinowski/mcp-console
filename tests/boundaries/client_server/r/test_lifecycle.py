@@ -1,5 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
+import subprocess
 import sys
 import tempfile
 import time
@@ -14,6 +15,7 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.r import build_r_input_handler, r_input_handler_client, r_test_environment
 from support.records import Transcript
+from support.requirements import NATIVE_FIXTURES, requires
 from support.suites import run_this_suite
 
 
@@ -65,44 +67,75 @@ def test_recoverable_language_errors(binary: Path, execution: Execution) -> Tran
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(NATIVE_FIXTURES)
 def test_restarts_after_r_worker_segfault(
     binary: Path, execution: Execution
 ) -> Transcript:
-    client = McpClient(binary, execution.serve())
-    client.initialize_and_list_tools()
-    client.send(r="r_worker_marker <- TRUE")
+    source = Path(__file__).resolve().parents[3] / "fixtures" / "r_segfault.c"
+    with tempfile.TemporaryDirectory() as temporary:
+        directory = Path(temporary)
+        subprocess.run(
+            [
+                "cc",
+                "-dynamiclib",
+                "-O2",
+                "-std=c11",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                "-o",
+                directory / "mcp_test_segfault.dylib",
+                source,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        with McpClient(
+            binary, execution.serve(), current_directory=directory
+        ) as client:
+            client.initialize_and_list_tools()
+            client.send(r="r_worker_marker <- TRUE")
 
-    # Observe R's fatal-signal menu before choosing to abort.
-    # fmt: r
-    r = code(r"""
-        tools::pskill(Sys.getpid(), signal = 11L)
-        """)
-    client.send(r=r)
-    fatal_output = last_tool_text(client)
-    assert "Possible actions:\n1: abort (with core dump, if enabled)\n" in fatal_output
-    assert fatal_output.endswith(
-        '[input requested: "Selection: "]\n[waiting for stdin]'
-    ), repr(fatal_output)
+            # Fault inside R's native call, retaining the default segfault handler.
+            # fmt: r
+            r = code(r"""
+                dyn.load("./mcp_test_segfault.dylib")
+                .C("mcp_test_segfault")
+                """)
+            client.send(r=r)
+            fatal_output = last_tool_text(client)
+            assert fatal_output.startswith(
+                "\n *** caught segfault ***\n"
+                "address 0x1, cause 'invalid permissions'\n"
+                '\nTraceback:\n 1: .C("mcp_test_segfault")\n'
+            ), repr(fatal_output)
+            assert (
+                "Possible actions:\n1: abort (with core dump, if enabled)\n"
+                in fatal_output
+            )
+            assert fatal_output.endswith(
+                '[input requested: "Selection: "]\n[waiting for stdin]'
+            ), repr(fatal_output)
+            wait_for_evaluation_output(
+                client,
+                "R is aborting now ...\n"
+                "[worker sideband read failed: worker sideband closed]\n"
+                "[worker terminated by signal 11]\n"
+                "[worker stopped: in-memory state lost]\n"
+                "[starting new worker]\n"
+                "[idle]",
+                "R fatal-signal abort and replacement",
+                expected_error=True,
+                completion_timeout_seconds=60,
+                stdin="1\n",
+            )
 
-    wait_for_evaluation_output(
-        client,
-        "R is aborting now ...\n"
-        "[worker sideband read failed: worker sideband closed]\n"
-        "[worker terminated by signal 11]\n"
-        "[worker stopped: in-memory state lost]\n"
-        "[starting new worker]\n"
-        "[idle]",
-        "R fatal-signal abort and replacement",
-        expected_error=True,
-        completion_timeout_seconds=60,
-        stdin="1\n",
-    )
-
-    client.send(r='exists("r_worker_marker", inherits = FALSE)')
-    assert last_tool_text(client) == "[1] FALSE\n"
-    client.send(r="1 + 1")
-    assert last_tool_text(client) == "[1] 2\n"
-    return client.finish()
+            client.send(r='exists("r_worker_marker", inherits = FALSE)')
+            assert last_tool_text(client) == "[1] FALSE\n"
+            client.send(r="1 + 1")
+            assert last_tool_text(client) == "[1] 2\n"
+            return client.finish()
 
 
 @executions(DIRECT, SANDBOXED)
