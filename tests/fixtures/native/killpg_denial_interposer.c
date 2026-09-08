@@ -4,7 +4,6 @@
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/syscall.h>
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -27,7 +26,7 @@ static int deny_killpg(pid_t process_group, int signal) {
         errno = EPERM;
         return -1;
     }
-    return (int)syscall(SYS_kill, -process_group, signal);
+    return kill(-process_group, signal);
 }
 
 __attribute__((constructor))
