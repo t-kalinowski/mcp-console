@@ -170,8 +170,8 @@ class ReleaseScriptTests(unittest.TestCase):
             #!/usr/bin/env python3
             import json
             import os
+            import signal
             import sys
-            import time
 
             if sys.argv[1:] == ["--version"]:
                 print("mcp-console 0.0.2")
@@ -194,9 +194,31 @@ class ReleaseScriptTests(unittest.TestCase):
                     },
                 }), flush=True)
                 json.loads(sys.stdin.readline())
+                startup = json.loads(sys.stdin.readline())
+                assert startup["params"] == {
+                    "name": "send",
+                    "arguments": {"control": "restart"},
+                }
+                if os.environ.get("FAKE_MCP_STARTUP_HANG"):
+                    signal.pause()
+                print(json.dumps({
+                    "jsonrpc": "2.0",
+                    "id": startup["id"],
+                    "result": {
+                        "content": [{
+                            "type": "text",
+                            "text": "[starting new worker]\\n[idle]",
+                        }],
+                        "isError": False,
+                    },
+                }), flush=True)
                 evaluation = json.loads(sys.stdin.readline())
+                assert evaluation["params"] == {
+                    "name": "send",
+                    "arguments": {"r": "6 * 7"},
+                }
                 if os.environ.get("FAKE_MCP_EVALUATION_HANG"):
-                    time.sleep(60)
+                    signal.pause()
                 print(json.dumps({
                     "jsonrpc": "2.0",
                     "id": evaluation["id"],
@@ -313,7 +335,30 @@ class ReleaseScriptTests(unittest.TestCase):
             )
 
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("MCP response timed out", result.stderr)
+            self.assertIn("MCP response timed out after 0.01 seconds", result.stderr)
+
+    def test_smoke_wheel_bounds_runtime_startup_separately(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            environment, wheel, cargo_bin = self.smoke_environment(directory)
+            environment["FAKE_MCP_STARTUP_HANG"] = "1"
+
+            result = self.run_script(
+                "smoke-wheel",
+                str(wheel),
+                str(cargo_bin),
+                "--target",
+                "aarch64-apple-darwin",
+                "--startup-timeout-seconds",
+                "1",
+                "--response-timeout-seconds",
+                "0.01",
+                cwd=directory,
+                env=environment,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("MCP response timed out after 1 seconds", result.stderr)
 
     def test_verify_wheel_set_requires_both_macos_architectures(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
