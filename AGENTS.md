@@ -29,7 +29,7 @@ Do not treat `design-sketches/` as evidence of implemented behavior.
 
 The sandbox command, worker relay, and built-in worker are supported on macOS.
 Linux and Windows are not supported yet.
-Retain platform conditionals that select different implementations or unsupported-platform stubs; avoid redundant gates on shared code.
+Retain platform conditionals for modules that use OS-specific APIs and for selecting different implementations or unsupported-platform stubs; avoid redundant gates on shared code.
 CI runs the complete check on macOS.
 
 Run commands from the repository root:
