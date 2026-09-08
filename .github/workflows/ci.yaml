@@ -133,12 +133,13 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: |
-            target/private-wheel-data
+            wheel-data
             target/sandbox-runner-build.json
-          # The pin includes the source revision and compiler. Bump v1 if CI
-          # changes runner build flags or the macOS deployment target.
+          # v2 caches the wheel-data staging root. The pin includes the source
+          # revision and compiler. Bump the version for changes to runner build
+          # flags or the macOS deployment target.
           key: >-
-            sandbox-runner-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('sandbox-runner.json', 'scripts/stage-sandbox-runner') }}
+            sandbox-runner-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('sandbox-runner.json', 'scripts/stage-sandbox-runner') }}
 
       - name: Stage private sandbox runner
         if: runner.os == 'macOS' && steps.sandbox-cache.outputs.cache-hit != 'true'
@@ -232,7 +233,7 @@ jobs:
         uses: actions/cache/save@v6
         with:
           path: |
-            target/private-wheel-data
+            wheel-data
             target/sandbox-runner-build.json
           key: ${{ steps.sandbox-cache.outputs.cache-primary-key }}
 
