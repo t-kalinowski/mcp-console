@@ -11,7 +11,7 @@ The documents under `design-sketches/` describe intended behavior, not the curre
 - `README.md` describes the current user-facing project status.
 - `docs/README.md` maps the implemented documentation by audience.
 - `docs/ARCHITECTURE.md` describes the implemented process structure, ownership, and lifecycle.
-- `docs/SANDBOX_SUPERVISION.md` describes macOS sandbox lifetime supervision and standalone terminal and signal ownership.
+- `docs/SANDBOX_SUPERVISION.md` describes macOS sandbox lifetime supervision, setup-FD ownership, policy exceptions, and standalone terminal and signal ownership.
 - `docs/BUILTIN_RUNTIME.md` describes user-visible behavior of the built-in mixed-language console.
 - `docs/SEND_OPERATIONS.md` defines validation, preparation, control, input, and timeout ordering for `send`.
 - `docs/REQUIREMENTS.md` describes dependency and environment behavior and its trust boundary.
@@ -113,7 +113,7 @@ Keep these invariants intact:
 
 - `src/resolver.rs`, `src/resolver/` — retained host environments, direct Python-version selection, validation, platform implementations, and resolver process-group lifecycle.
 - `src/resolver/programs/` — compile-time R programs for DuckDB extension preparation, R-library resolution, and `uv` discovery.
-- `src/sandbox/runner.rs`, `src/sandbox/policy_extensions.sbpl`, `src/process_descriptors.rs` — private executable bootstrap, macOS policy additions, and inherited-descriptor boundary.
+- `src/sandbox/runner.rs`, `src/sandbox/policy_extensions.sbpl`, `src/process_descriptors.rs` — one-shot runner setup, macOS policy additions, and inherited-descriptor boundary.
 - `sandbox-runner.json`, `scripts/stage-sandbox-runner`, `src/sandbox/installation.rs` — pinned source, private artifact staging, and installed artifact verification.
 
 ### Tests and development scripts

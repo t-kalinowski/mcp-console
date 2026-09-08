@@ -9,7 +9,7 @@ The material under `design-sketches/` is future or exploratory design, not evide
 
 ## Process layout
 
-By default, MCP Console has three runtime communication boundaries, one launcher-private manager channel for startup and lifetime ownership of each sandbox, and one host-only resolver path:
+By default, MCP Console has three runtime communication boundaries, a one-shot runner setup pipe and a launcher-private manager channel for lifetime ownership of each sandbox, and one host-only resolver path:
 
 ```text
 MCP client
@@ -30,13 +30,13 @@ mcp-console sandbox launcher               host, outside the sandbox
     ├──── sandbox manager                  host, outside the sandbox
     │     primary lifetime observer and private-directory owner
     │
-    │ private startup gate
+    │ setup pipe: one frame after manager readiness
     ▼
-private sandbox executable                 host, process-group leader
-    │ one bootstrap frame after manager readiness
+private sandbox runner                     host, process-group leader
+    │ native sandbox setup
     ▼
 hidden target wrapper → worker relay        macOS sandbox
-    │ original fd 0 received through the startup socket
+    │ original fd 0 inherited from process creation
     │ worker sideband plus fd 0, 1, and 2
     ▼
 worker                                     same sandbox and process group
@@ -54,7 +54,7 @@ mcp-console sandbox launcher               host, outside the sandbox
     ├──── sandbox manager                  host, outside the sandbox
     │     primary lifetime observer for this command
     ▼
-private sandbox executable                 host, process-group leader
+private sandbox runner                     host, process-group leader
     └── command and observed descendants    macOS sandbox
 ```
 
@@ -62,16 +62,18 @@ The server is the MCP stdio process.
 For each sandboxed worker lifetime, it constructs either the built-in relay command line or a configured custom relay command line, then starts the current executable as `mcp-console sandbox` in hidden parent-owned mode with that relay as the target.
 The launcher is the server's direct child and the sole host-side sandbox owner.
 It retains the private sandbox executable and manager as waitable children.
-After the manager reports readiness and manager-failure recovery is installed, the launcher sends the executable one bootstrap frame specifying the command, environment, filesystem permissions, network policy, and macOS policy additions.
-The executable applies the native sandbox to a hidden target wrapper, which receives the original stdin descriptor and signal mask through the same socket and replaces itself with the relay.
+After the manager reports readiness and manager-failure recovery is installed, the launcher sends the executable one setup frame specifying the command, environment, filesystem permissions, network policy, and macOS policy additions.
+The runner applies the native sandbox to a hidden target wrapper, which restores the original signal mask from a private argument and replaces itself with the relay.
+The runner inherits the original stdin at process creation; setup never uses fd 0.
 The server's piped launcher input and output and inherited error stream pass through to that relay without a data proxy.
-After transferring standard input to the sandboxed target, the owned launcher replaces its own copy with `/dev/null` so relay closure remains observable to the server's writer.
+After spawning the runner, the owned launcher detaches nonterminal stdin by replacing its own copy with `/dev/null`.
+The runner drops its owned stdin immediately after spawning the target, so relay input closure remains observable to the server's writer.
 The private executable leads the process group and waits for its direct child; the relay and worker inherit that group.
 The relay also works below a wrapper process and does not inspect or manage the surrounding process group.
 Submitted R, Python, and SQL cells run in the worker, not in the server or a host resolver.
 
 For a direct `mcp-console sandbox` invocation, the launcher retains the same private executable as its direct child and starts the same primary manager while a root-only waiter supplies exit and signal wakeups.
-It releases the requested command through the same bootstrap and descriptor handoff after manager readiness and failure monitoring.
+It releases the requested command by sending the same setup frame after manager readiness and failure monitoring.
 It has no MCP, relay, worker, resolver, recording, or retained-session responsibilities.
 
 R, Python, and DuckDB dependency resolution follows a separate path.
@@ -92,7 +94,7 @@ One `send` can poll, provide stdin, prepare requirements, evaluate a cell, inter
 This is the only public protocol boundary.
 The client does not communicate directly with a relay, worker, or resolver.
 
-### Sandbox launcher and private executable
+### Sandbox launcher and private runner
 
 The private `mcp-console-sandbox` executable contains the extracted native sandbox implementation and is pinned by source revision in `sandbox-runner.json`.
 macOS wheels install it under the installation prefix's `libexec` directory; only `mcp-console` is exposed on PATH.
@@ -100,7 +102,13 @@ MCP Console resolves that private path relative to the canonical public executab
 Cargo builds copy the verified staged artifact into the target prefix's `libexec` directory and use the same executable-relative lookup as installed wheels.
 A missing or mismatched artifact is an installation error.
 
-The executable consumes a length-prefixed JSON bootstrap on stdin, launches one sandboxed command, and returns its status.
+The runner accepts `--bootstrap-fd <N>` with an inherited readable descriptor greater than 2.
+Protocol 2 carries one four-byte big-endian length followed by 1 through 1,048,576 bytes of UTF-8 JSON on that descriptor.
+The runner reads exactly the frame and closes the descriptor before native setup; startup does not wait for EOF.
+The launcher starts the runner before writing, closes its unused read end after spawn, and closes the writer after sending the frame.
+Only the designated setup descriptor is inherited beyond stdio at runner exec; the parent keeps both pipe ends close-on-exec.
+The setup pipe does not reach the manager, target, or relay.
+The runner launches one sandboxed command and returns its status.
 It has no console, relay, descendant-retirement, or private-directory-cleanup responsibilities.
 The launcher supplies a small macOS policy extension that preserves host-terminal restrictions, runtime allowances, and full mutability of its private temporary directory.
 The native implementation owns the base policy.
@@ -163,7 +171,7 @@ With `--no-sandbox`, the server owns and reaps the relay directly; no manager su
 The sandbox launcher preserves the requested command's status after natural completion and owns the complete host-side sandbox lifetime.
 It inherits only the three documented streams from the server, independently closes every unrelated inherited descriptor before target exec, places the target in a dedicated process group, and retains the direct root as a waitable child.
 After cleanup succeeds, natural root completion returns that root's exit status; a handled retirement request in hidden parent-owned mode returns success as the cleanup acknowledgment.
-It owns the target startup gate, exact parent-exit observation in owned mode, manager-failure recovery, and ordinary-mode terminal and signal handling.
+It owns runner setup, exact parent-exit observation in owned mode, manager-failure recovery, and ordinary-mode terminal and signal handling.
 It does not own descendant tracking, console state, dependency resolution, recording, relay transport, or worker protocol behavior.
 It does not implement stopped/continued job state or general shell-pipeline job control.
 The launcher itself never writes to standard output because that stream carries relay JSONL in a worker generation.

@@ -396,6 +396,55 @@ def test_cannot_open_a_preexisting_pseudo_terminal(binary: Path) -> Transcript:
     return [entry]
 
 
+def test_cannot_flush_a_host_terminal(binary: Path) -> Transcript:
+    # Reading terminal attributes remains usable for interactive commands, but
+    # flushing another host terminal's queued input is a mutating ioctl.
+    # fmt: python
+    script = code(r"""
+        import errno
+        import sys
+        import termios
+
+        assert termios.tcgetattr(0)
+        try:
+            termios.tcflush(0, termios.TCIFLUSH)
+        except termios.error as error:
+            assert error.args[0] == errno.EPERM
+            assert sys.argv[1] == "sandbox"
+            print("blocked")
+        else:
+            assert sys.argv[1] == "host", "sandbox flushed a host terminal"
+            print("flushed")
+        """)
+    master, slave = pty.openpty()
+    try:
+        for prefix, expected in (
+            ([], b"flushed\n"),
+            ([binary, "sandbox", "--"], b"blocked\n"),
+        ):
+            result = subprocess.run(
+                [
+                    *prefix,
+                    sys.executable,
+                    "-c",
+                    script,
+                    "sandbox" if prefix else "host",
+                ],
+                stdin=slave,
+                capture_output=True,
+                timeout=10,
+            )
+            assert result.returncode == 0, result
+            assert result.stdout == expected, result
+            assert result.stderr == b"", result
+    finally:
+        os.close(master)
+        os.close(slave)
+    return [
+        {"scenario": "mutating ioctl on an inherited host PTY", "stdout": "blocked\n"}
+    ]
+
+
 def test_cannot_hard_link_a_host_file_into_the_writable_directory(
     binary: Path,
 ) -> Transcript:

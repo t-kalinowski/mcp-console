@@ -9,7 +9,7 @@ The broader process and responsibility model remains in [implemented architectur
 ## Lifetime ownership
 
 Each sandbox lifetime has one host-side manager outside Seatbelt and one private sandbox executable as its direct root and process-group leader.
-The executable initially blocks on its bootstrap socket before applying Seatbelt to a hidden target wrapper, which executes the built-in relay, a configured relay, or the standalone command.
+The runner initially blocks on its setup pipe before applying Seatbelt to a hidden target wrapper, which executes the built-in relay, a configured relay, or the standalone command.
 The executable remains outside Seatbelt and waits for that direct child to exit.
 The manager records the root and every descendant identity it observes by PID and process start time.
 Once observed, a descendant remains a cleanup target after changing process group or session.
@@ -22,24 +22,42 @@ After readiness, the launcher holds the control socket open only as the live-san
 The launcher supports a hidden `--exit-with-parent <PID>` mode, which the server uses for one launcher subprocess per worker generation.
 It verifies and captures its exact parent identity before creating the sandbox, watches that identity for exit, and revalidates it after watch registration and immediately before releasing the target.
 The server closes unrelated inherited descriptors before launcher exec and then owns only the launcher's piped input and output, inherited error stream, and normal child exit, signaling, and reaping.
-The owned launcher transfers the input pipe to the sandboxed target and replaces its own copy with `/dev/null`, while retaining output through manager cleanup so relay input closure and cleanup completion remain observable at the server boundary.
+The runner starts with the original target stdin already attached.
+After spawning it, the owned launcher replaces its own nonterminal input with `/dev/null`, while retaining output through manager cleanup.
+After spawning the target, the runner drops its owned stdin and the launch command that held it.
+No input copy in either host process masks relay input closure from the server.
+Terminal stdin remains available to the launcher for foreground restoration.
 The relay owns its direct worker and local transports.
 All process-group and observed-descendant cleanup belongs to the sandbox lifetime, including descendants that retain worker streams after direct-worker exit.
 The configured target may wrap the relay in another process; the relay need not be the sandbox root or process-group leader.
 
 ## Startup
 
-The launcher starts the sandbox root behind its private gate, then launches the manager with the root PID, cleanup timeout, and private-directory path as native command arguments.
+The launcher starts the runner with `--bootstrap-fd <N>`, blocked on an inherited setup pipe, then launches the manager with the root PID, cleanup timeout, and private-directory path as native command arguments.
 The manager derives the owner PID from its parent, while the private inherited Unix socket carries readiness and then remains open as the ownership token.
 The manager validates the direct-child relationship and exact root identity, installs root and descendant tracking plus control-socket observation, adopts the directory guard, and reports readiness.
-After receiving readiness, the launcher installs manager-failure recovery while the direct root remains live and waitable, relinquishes its duplicate guard, and sends the complete native bootstrap frame.
-The private executable consumes exactly that frame and passes the same socket to the hidden wrapper as fd 0.
-The launcher then transfers the original stdin descriptor with `SCM_RIGHTS`, together with the inherited signal mask.
-The wrapper closes the socket, installs the original stdin as fd 0, restores the mask, and replaces itself with the configured relay or requested command.
-Application input never passes through a data proxy or shares the bootstrap framing.
+After receiving readiness, the launcher installs manager-failure recovery while the direct root remains live and waitable, relinquishes its duplicate guard, and revalidates the owner identity.
+An owned `SIGTERM` already pending at this point requests retirement without sending setup.
+Otherwise the launcher writes the complete protocol-2 frame: a four-byte unsigned big-endian length followed by 1 through 1,048,576 bytes of UTF-8 JSON.
+The runner is spawned before writing because a valid frame can exceed pipe capacity.
+It consumes exactly that frame, closes its setup descriptor before native setup, and starts the target without waiting for EOF.
+The launcher closes its writer after sending; there is no later release payload, descriptor transfer, acknowledgment, or persistent runner control channel.
+On failure or cancellation before release, the launcher retains the setup writer through lifetime cleanup and closes it on return.
+This stops the waiting root before pipe closure can race a truncated-frame diagnostic against the cancellation error.
+
+The setup pipe is close-on-exec in the parent.
+The runner command owns its read end until spawn returns; a child-only inheritance exception preserves that dynamically allocated descriptor and sanitizes unrelated descriptors.
+Dropping the command promptly closes the launcher's unused read end.
+The manager inherits neither pipe end, and the final target and relay never see the setup resource.
+Original fd 0, 1, and 2 carry only target streams; stdin retains its open file description, offsets, seekability, and terminal identity.
+Rust startup supplies `/dev/null` when the caller closed stdin before invoking the launcher.
+
+The hidden `sandbox-target` wrapper only restores the original macOS signal mask from the validated unsigned `--signal-mask <MASK>` argument and execs the target command after `--`.
+It neither reads setup nor replaces stdin, and wrapper arguments do not reach the requested command.
+The runner retains the blocked forwarded signals while waiting; inherited dispositions still come from the launcher's child configuration.
 Configured sandbox code therefore cannot run before manager observation is active and failure recovery is installed.
 The manager control socket carries no messages after readiness; it remains open only as an ownership token, and owner EOF requests retirement.
-Abrupt owner loss before readiness closes the control socket and startup gate before configured code runs, but private-directory cleanup is not guaranteed.
+Abrupt owner loss before readiness closes the control socket and setup pipe before configured code runs, but private-directory cleanup is not guaranteed.
 Before readiness, the launcher retains its guard and preserves it whenever manager adoption is ambiguous.
 After readiness, the launcher relinquishes that guard and the manager becomes the sole directory-cleanup owner.
 The adopted guard preserves on unexpected unwind and is armed for removal only after the manager proves cleanup.
@@ -106,16 +124,59 @@ A signal received after that final drain can then follow its inherited dispositi
 With `--exit-with-parent`, `SIGTERM` is reserved for managed retirement rather than relayed.
 The launcher closes the ownership token, waits for manager cleanup, reaps the direct root, and only then drains pending signals and restores its inherited mask.
 
+## Policy extensions and compatibility
+
+The pinned runner uses the base and preferences policies in `codex-rs/sandboxing/src/seatbelt*.sbpl` at `4a061c4ec94f5ad99e148982168ea4f21367c26c`.
+MCP Console supplies read access to the filesystem root, restricted networking with no proxy, and its trusted `policy_extensions.sbpl`.
+Managed networking and configurable user policies remain planned work.
+
+Compared with the previous `read_only_policy.sbpl`, the native base already provides the CPU and R startup sysctls (including `hw.logicalcpu` and `kern.usrstack64`), Python's `kern.sysv.semmns`, POSIX semaphores, OpenMP shared memory, process permissions, `/dev/null`, PTY allocation, user lookup, power-management lookup, and read-only preferences.
+Those local rules became redundant; their deletion does not mean the applications stopped needing them.
+The unscoped semaphore permission still allows same-user semaphore interaction, as before.
+The native base's broad host-PTY ioctl grant is overridden locally: host-terminal read and mutating ioctl stay denied, while slaves created inside the sandbox retain read, write, and ioctl through the PTY extension.
+Attribute queries and the launcher's foreground-terminal handling remain usable.
+The CLI host-terminal regressions and processx PTY workflow cover both sides of this boundary.
+
+The temporary directory is disposable storage, not a writable workspace anchor.
+MCP Console grants `file-write*` on its canonical private path through SBPL, rather than adding a native writable-workspace entry that protects the root and metadata directories.
+The command can remove and replace that root and `.git`, `.agents`, and `.codex` directories inside it; the manager still attempts cleanup at lifetime end.
+The CLI temporary-directory replacement and host-hard-link tests cover these semantics.
+
+Each remaining exception has a comment beside its rule.
+Evidence has different strengths:
+
+| Exception                               | Workflow and evidence                                                                                                                           | Remaining uncertainty                                                     |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| `kern.boottime`                         | processx loads ps; `r-lib/ps/src/api-macos.c::ps__boot_time` reads `KERN_BOOTTIME` and throws on failure. Covered by the processx PTY workflow. | None about the read; package versions may change the loading path.        |
+| `machdep.ptrauth_enabled`               | Pointer-authentication probe retained from the original Apple Silicon runtime observations.                                                     | The individual native library was not recorded.                           |
+| `kern.ngroups`                          | Group-limit query attributed by the previous policy to Quarto's platform-probe workflow.                                                        | The exact utility and current necessity remain unconfirmed.               |
+| `sysctl.oidfmt.*`                       | `sysctl(8)` queries OID type/format metadata, including for binary output used by R/Quarto probes.                                              | A particular rendering run may not use this path.                         |
+| `sysctl.name.*`                         | `sysctl(8)` translates numeric OIDs into printable names; separate from format metadata.                                                        | A particular rendering run may not use this path.                         |
+| `security.mac.lockdown_mode_state`      | Lockdown Mode query observed during the original uv system-configuration startup.                                                               | Exact framework call site and current fatal dependency unconfirmed.       |
+| `kern.bootargs`                         | Boot-argument query observed during that startup workflow.                                                                                      | Exact framework call site and current fatal dependency unconfirmed.       |
+| `/dev/dtracehelper` write               | Device write access observed during uv SystemConfiguration startup.                                                                             | Exact operation and current fatal dependency unconfirmed.                 |
+| `/dev/dtracehelper` ioctl               | Previous policy records EPERM in the Quarto wrapper/child-utility workflow.                                                                     | The utility and ioctl number were not recorded.                           |
+| `com.apple.SystemConfiguration.configd` | uv's HTTP client discovers macOS proxy settings through SystemConfiguration. The uv lockfile retains the `system-configuration` dependency.     | The offline install test does not prove every framework lookup is needed. |
+| `com.apple.logd`                        | Logging endpoint observed during the original uv startup workflow.                                                                              | Exact caller and current fatal dependency unconfirmed.                    |
+| `com.apple.system.notification_center`  | Notification endpoint observed separately during that workflow.                                                                                 | Exact registration and current fatal dependency unconfirmed.              |
+
+The original observations are preserved in commit `6e8ece1a8deec6064ad0c881c97889ed0745b142`'s policy comments.
+They establish why the exceptions were introduced, not that every current runtime requires each one.
+The processx, R, Python, generated Quarto document, and sandboxed uv offline-wheel-install tests exercise actual workflows; host resolver tests alone cannot validate sandbox compatibility.
+None of the remaining named exceptions is supplied by the pinned base.
+To remove one as unnecessary, reproduce its motivating workflow without that permission and check the platform/runtime versions involved; to remove it as redundant, verify that the new pinned base supplies it.
+Unresolved attribution is retained explicitly rather than assigning a probe to an unsupported package guess.
+
 ## Scope
 
 One launcher-owned implementation serves sandboxed built-in and custom worker relay generations and direct `mcp-console sandbox` invocations.
-The server invokes the launcher with the relay command line as its target and has no in-process sandbox construction, manager handle, startup gate, root identity, temporary-directory guard, or manager-recovery state.
+The server invokes the launcher with the relay command line as its target and has no in-process sandbox construction, manager handle, setup pipe, root identity, temporary-directory guard, or manager-recovery state.
 The launcher retains the manager-owned process-group race backstop, with launcher fallback after manager failure, and gates the target before any configured code runs.
 The direct path retains inherited standard streams, uses a dedicated target process group, and supplies the foreground-terminal and signal behavior above.
 Hidden owned mode adds exact parent-exit observation and a `SIGTERM` retirement request without another control descriptor.
 The relay receives only its standard streams from the launcher.
-The private executable's JSON bootstrap requires UTF-8 command arguments, paths, and environment values; the launcher rejects unsupported values before spawning it.
+The runner's initial JSON configuration requires UTF-8 command arguments, paths, and environment values; the launcher rejects unsupported values before spawning it.
 Standard-stream contents remain arbitrary bytes.
-Any future sandbox-specific control channel must terminate at the sandbox process boundary; its transport and bootstrap mechanism are independent of the relay protocol.
+Any future sandbox-specific control channel must terminate at the sandbox process boundary; its transport and setup mechanism are independent of the relay protocol.
 The launcher does not support `Ctrl-Z` followed by `fg` or general pipeline job-control semantics.
 Linux and Windows are not supported.

@@ -25,7 +25,7 @@ Private-boundary tests cover only the architectural seam they observe and do not
 Security and liveness cases may add causal or process assertions for facts a snapshot cannot represent.
 Do not test exact internal sequencing unless it is itself an observable contract.
 
-The direct CLI sandbox cases own argument and standard-stream fidelity, job control, signal and exit status, security policy, and manager-owned retirement.
+The direct CLI sandbox cases own setup cancellation, large-frame startup, original-stdin identity and closure, argument and standard-stream fidelity, job control, signal and exit status, security policy, and manager-owned retirement.
 The public MCP sandbox cases cover the launch-path descriptor matrix, sandbox-dependent runtime workflows, startup failure and gating, worker replacement, supervisor loss, restart, and shutdown.
 The relay wrapper workflow verifies MCP restart and shutdown when the relay is below the sandbox root and a worker descendant retains its streams.
 The direct relay CLI case compares the complete protocol through ordinary direct launch and the public sandbox command, without requiring the relay to be a process-group leader.
@@ -39,7 +39,11 @@ Map each non-generic sandbox allowance to the real workflow that requires it and
 | POSIX semaphores            | Python spawn multiprocessing                      | `client_server/python/test_environment::runs_spawn_process_after_live_resolution`          |
 | PTYs and `kern.boottime`    | `processx`                                        | `cli/command/test_execution::allows_processx_pty_processes` and MCP process-lifetime cases |
 | Quarto device/sysctl access | Render generated `ir` document inside the sandbox | `client_server/recording/test_quarto::renders_generated_document`                          |
-| `__KMP_REGISTERED_LIB_*`    | PyTorch/libomp                                    | Add a PyTorch workflow test, or remove the allowance                                       |
+| `__KMP_REGISTERED_LIB_*`    | PyTorch/libomp                                    | Supplied by the pinned native base; no local extension                                     |
+| uv platform services        | Offline wheel installation in private storage     | `cli/command/test_uv::installs_a_local_wheel_into_private_storage`                         |
+
+The [policy audit](../../docs/SANDBOX_SUPERVISION.md#policy-extensions-and-compatibility) distinguishes redundant base-policy rules from local exceptions whose current necessity or precise caller is unconfirmed.
+Runner protocol parsing belongs to the extraction's executable tests; `tests/sandbox_installation.py` covers the installed caller boundary, one-shot resource closure, and startup without setup EOF.
 
 When reviewing deletion candidates, separate tests may replace a combined test only when the interaction between those behaviors is not itself a plausible failure mode.
 
