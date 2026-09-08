@@ -597,7 +597,7 @@ class ReleaseScriptTests(unittest.TestCase):
                 import sys
                 from pathlib import Path
 
-                for name in ("CARGO_MAKEFLAGS", "CARGO_BUILD_BUILD_DIR", "RUSTC", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "CARGO_ENCODED_RUSTFLAGS", "MACOSX_DEPLOYMENT_TARGET"):
+                for name in ("CARGO_MAKEFLAGS", "CARGO_BUILD_BUILD_DIR", "RUSTC", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "CARGO_ENCODED_RUSTFLAGS", "CARGO_BUILD_RUSTFLAGS", "CARGO_TARGET_X86_64_APPLE_DARWIN_RUSTFLAGS", "CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS", "MACOSX_DEPLOYMENT_TARGET"):
                     assert name not in os.environ, name
                 Path(os.environ["FAKE_CARGO_ARGUMENTS"]).write_text(json.dumps(sys.argv[1:]))
                 target = sys.argv[sys.argv.index("--target") + 1] if "--target" in sys.argv else os.environ["CARGO_BUILD_TARGET"]
@@ -643,6 +643,9 @@ class ReleaseScriptTests(unittest.TestCase):
                     "RUSTC_WRAPPER": "/outer/wrapper",
                     "RUSTC_WORKSPACE_WRAPPER": "/outer/clippy-driver",
                     "CARGO_ENCODED_RUSTFLAGS": "--deny=warnings",
+                    "CARGO_BUILD_RUSTFLAGS": "--deny=warnings",
+                    "CARGO_TARGET_X86_64_APPLE_DARWIN_RUSTFLAGS": "-C link-arg=-mmacosx-version-min=15.0",
+                    "CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS": "-C link-arg=-mmacosx-version-min=15.0",
                     "MACOSX_DEPLOYMENT_TARGET": "15.0",
                 }
             )
@@ -665,10 +668,11 @@ class ReleaseScriptTests(unittest.TestCase):
                 fn main() {
                     assert!(std::env::var_os("CARGO_MAKEFLAGS").is_some());
                     let status = std::process::Command::new(std::env::var_os("STAGING_PYTHON").unwrap())
+                        .arg(std::env::var_os("STAGING_LAUNCHER").unwrap())
                         .arg(std::env::var_os("STAGING_SCRIPT").unwrap())
                         .arg(std::env::var_os("STAGING_CHECKOUT").unwrap())
                         .arg("--target")
-                        .arg(std::env::var_os("TARGET").unwrap())
+                        .arg("aarch64-apple-darwin")
                         .status().unwrap();
                     assert!(status.success());
                 }
@@ -680,6 +684,7 @@ class ReleaseScriptTests(unittest.TestCase):
                 "FAKE_CARGO_ARGUMENTS": environment["FAKE_CARGO_ARGUMENTS"],
                 "RUSTC": shutil.which("rustc"),
                 "STAGING_PYTHON": sys.executable,
+                "STAGING_LAUNCHER": str(launcher),
                 "STAGING_SCRIPT": str(scripts / STAGE_SCRIPT.name),
                 "STAGING_CHECKOUT": str(checkout),
             }
@@ -769,6 +774,7 @@ class ReleaseScriptTests(unittest.TestCase):
             cached_output = directory / "cached-output"
             cached_command = [
                 sys.executable,
+                str(launcher),
                 str(scripts / STAGE_SCRIPT.name),
                 "--target",
                 "x86_64-apple-darwin",
@@ -777,6 +783,12 @@ class ReleaseScriptTests(unittest.TestCase):
             ]
             cached_environment = environment.copy()
             cached_environment.pop("MCP_CONSOLE_SANDBOX_SOURCE", None)
+            for name in (
+                "CARGO_BUILD_RUSTFLAGS",
+                "CARGO_TARGET_X86_64_APPLE_DARWIN_RUSTFLAGS",
+                "CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS",
+            ):
+                cached_environment.pop(name)
             # Lowering the application's deployment target must reuse a runner
             # built for the pinned compiler's default deployment target.
             cached_environment["MACOSX_DEPLOYMENT_TARGET"] = "11.0"

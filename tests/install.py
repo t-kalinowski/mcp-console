@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
@@ -87,6 +88,25 @@ class InstallationTests(unittest.TestCase):
             print(result.stdout, flush=True)
             wheels = list((directory / "dist").glob("*.whl"))
             self.assertEqual(len(wheels), 1)
+            result = subprocess.run(
+                ["uv", "build", "--sdist", "--out-dir", str(directory / "dist")],
+                cwd=source,
+                env=environment,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                timeout=120,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout)
+            archives = list((directory / "dist").glob("*.tar.gz"))
+            self.assertEqual(len(archives), 1)
+            with tarfile.open(archives[0]) as archive:
+                wheel_data = [
+                    name.split("/", 1)[1]
+                    for name in archive.getnames()
+                    if "/wheel-data/" in name
+                ]
+            self.assertEqual(wheel_data, ["wheel-data/data/.gitignore"])
             bundle = directory / "relocated"
             (bundle / "bin").mkdir(parents=True)
             binary = bundle / "bin/mcp-console"

@@ -156,10 +156,14 @@ def build(checkout: Path, output: Path, target: str, pin: dict[str, object]) -> 
         "RUSTC_WORKSPACE_WRAPPER",
         "RUSTFLAGS",
         "CARGO_ENCODED_RUSTFLAGS",
+        "CARGO_BUILD_RUSTFLAGS",
         "CLIPPY_ARGS",
         "MACOSX_DEPLOYMENT_TARGET",
     ):
         environment.pop(name, None)
+    for name in list(environment):
+        if name.startswith("CARGO_TARGET_") and name.endswith("_RUSTFLAGS"):
+            del environment[name]
     command = [
         *toolchain,
         "cargo",

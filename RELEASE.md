@@ -17,6 +17,7 @@ The script fetches the exact source revision into `sandbox-runner-cache/<commit>
 Source builds require Python 3, Git, and rustup; rustup installs the pinned toolchain if needed.
 The runner has its own Cargo build directory and jobserver, so the nested build also works when the outer Cargo uses `--jobs 1` or a custom target directory.
 It uses the pinned compiler's default macOS deployment target, independently of the application's `MACOSX_DEPLOYMENT_TARGET`.
+Inherited generic and target-specific Rust flags are removed from the nested build environment.
 Normal Cargo and rustup dependency caches still apply.
 Completed runner bundles are cached separately under `sandbox-runner-cache/artifacts/`, keyed by the pin, staging script, and target.
 Cache hits verify the executable, license, and notice checksums and copy the bundle without fetching sources or invoking Cargo.
