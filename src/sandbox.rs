@@ -22,6 +22,7 @@ const TARGET_GATE_RELEASE: u8 = 1;
 #[cfg(target_os = "macos")]
 #[path = "sandbox/child.rs"]
 mod child;
+#[cfg(target_os = "macos")]
 #[path = "sandbox/macos.rs"]
 mod platform;
 #[cfg(target_os = "macos")]

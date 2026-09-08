@@ -8,6 +8,7 @@ mod cli;
 mod process_descriptors;
 #[cfg(target_os = "macos")]
 mod process_exit;
+#[cfg(target_os = "macos")]
 mod python;
 mod python_requirement;
 #[cfg(target_os = "macos")]
@@ -22,8 +23,7 @@ mod resolver;
 mod sandbox;
 mod server;
 mod server_transport;
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-#[cfg_attr(target_os = "linux", allow(dead_code))]
+#[cfg(unix)]
 mod sideband;
 #[cfg(target_os = "macos")]
 mod sql;
