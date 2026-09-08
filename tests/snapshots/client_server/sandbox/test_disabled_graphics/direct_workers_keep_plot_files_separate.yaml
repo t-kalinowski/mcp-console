@@ -13,7 +13,7 @@ result:
     tools: {}
   serverInfo:
     name: mcp-console
-    version: 0.0.2
+    version: 0.0.3
 ---
 input:
   method: notifications/initialized
@@ -279,7 +279,7 @@ result:
     tools: {}
   serverInfo:
     name: mcp-console
-    version: 0.0.2
+    version: 0.0.3
 ---
 input:
   method: notifications/initialized

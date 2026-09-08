@@ -13,7 +13,7 @@ result:
     tools: {}
   serverInfo:
     name: mcp-console
-    version: 0.0.2
+    version: 0.0.3
 ---
 input:
   method: server/discover
@@ -39,4 +39,4 @@ result:
   _meta:
     io.modelcontextprotocol/serverInfo:
       name: mcp-console
-      version: 0.0.2
+      version: 0.0.3
