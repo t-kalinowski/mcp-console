@@ -31,6 +31,7 @@ Do not treat `design-sketches/` as evidence of implemented behavior.
 The worker relay, built-in worker, and managed resolvers support macOS and Linux.
 Linux requires `serve --no-sandbox`; the sandbox command remains macOS-only.
 Windows is not supported.
+Other Unix operating systems are not supported build or runtime targets; shared `cfg(unix)` modules do not imply support for them.
 Retain platform conditionals for modules that use OS-specific APIs and for selecting different implementations or unsupported-platform stubs; avoid redundant gates on shared code.
 CI runs core checks and all capability-applicable transcript modes on macOS and Linux.
 

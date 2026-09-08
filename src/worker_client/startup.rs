@@ -5,6 +5,8 @@ use std::sync::Mutex;
 
 use crate::resolver::ResolverStopHandle;
 
+// The supported targets are macOS and Linux. `cfg(unix)` on shared runtime
+// modules describes their API requirements, not support for other Unix targets.
 #[cfg(target_os = "macos")]
 #[path = "startup/macos.rs"]
 mod platform;
