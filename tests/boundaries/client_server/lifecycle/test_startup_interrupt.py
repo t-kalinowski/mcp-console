@@ -21,7 +21,7 @@ from support.macos import build_interposer
 from support.normalization import code
 from support.r import r_test_environment
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, requires
+from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, command, requires
 from support.suites import run_this_suite
 
 RUNNING = "\n[running; poll with an empty send]"
@@ -89,7 +89,7 @@ def before_resolver_spawn(
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(PROCESS_EVENTS, NATIVE_FIXTURES)
+@requires(PROCESS_EVENTS, NATIVE_FIXTURES, command("ir"), command("uv"))
 def test_interrupts_first_cell_before_resolver_registration(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -116,7 +116,7 @@ def test_interrupts_first_cell_before_resolver_registration(
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(PROCESS_EVENTS, NATIVE_FIXTURES)
+@requires(PROCESS_EVENTS, NATIVE_FIXTURES, command("ir"), command("uv"))
 def test_interrupts_first_cell_between_resolver_phases(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -147,7 +147,7 @@ def test_interrupts_first_cell_between_resolver_phases(
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(PROCESS_EVENTS, NATIVE_FIXTURES)
+@requires(PROCESS_EVENTS, NATIVE_FIXTURES, command("ir"), command("uv"))
 def test_interrupts_first_cell_admitted_during_stdin_startup(
     binary: Path,
     execution: Execution,

@@ -28,7 +28,7 @@ from support.macos import (
 from support.normalization import code
 from support.r import r_test_environment
 from support.records import Transcript
-from support.requirements import PROCESS_EVENTS, requires
+from support.requirements import PROCESS_EVENTS, command, requires
 from support.suites import run_this_suite
 
 RUNNING = "\n[running; poll with an empty send]"
@@ -152,7 +152,7 @@ def startup_fixture(
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(PROCESS_EVENTS)
+@requires(PROCESS_EVENTS, command("ir"), command("uv"))
 def test_preserves_initialize_buffered_during_startup(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -170,7 +170,7 @@ def test_preserves_initialize_buffered_during_startup(
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(PROCESS_EVENTS)
+@requires(PROCESS_EVENTS, command("ir"), command("uv"))
 def test_initializes_before_uv_bootstrap_installation(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -181,7 +181,7 @@ def test_initializes_before_uv_bootstrap_installation(
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(PROCESS_EVENTS)
+@requires(PROCESS_EVENTS, command("ir"), command("uv"))
 def test_first_cell_prepares_defaults_after_running_response(
     binary: Path,
     execution: Execution,
@@ -264,7 +264,7 @@ def test_first_cell_prepares_defaults_after_running_response(
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(PROCESS_EVENTS)
+@requires(PROCESS_EVENTS, command("ir"), command("uv"))
 def test_explicit_preparation_keeps_its_wait_precondition(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -293,7 +293,7 @@ def test_explicit_preparation_keeps_its_wait_precondition(
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(PROCESS_EVENTS)
+@requires(PROCESS_EVENTS, command("ir"), command("uv"))
 def test_cancels_resolver_discovery_when_stdin_closes(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -317,7 +317,7 @@ def test_cancels_resolver_discovery_when_stdin_closes(
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(PROCESS_EVENTS)
+@requires(PROCESS_EVENTS, command("ir"), command("uv"))
 def test_cancels_default_preparation_when_stdin_closes(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -341,7 +341,7 @@ def test_cancels_default_preparation_when_stdin_closes(
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(PROCESS_EVENTS)
+@requires(PROCESS_EVENTS, command("ir"), command("uv"))
 def test_interrupts_first_use_preparation_without_running_cell(
     binary: Path,
     execution: Execution,
@@ -363,7 +363,7 @@ def test_interrupts_first_use_preparation_without_running_cell(
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(PROCESS_EVENTS)
+@requires(PROCESS_EVENTS, command("ir"), command("uv"))
 def test_restart_replaces_first_use_cell_and_stdin(
     binary: Path, execution: Execution
 ) -> Transcript:

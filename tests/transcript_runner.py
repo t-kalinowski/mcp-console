@@ -290,6 +290,64 @@ test_unselected = requires(available, missing, command("mcp-console-deliberately
         self.assertEqual(selected_skip.returncode, 0, selected_skip.stderr)
         self.assertIn("fixture deliberately unavailable", selected_skip.stdout)
 
+    def test_repository_cases_skip_missing_resolver_and_formatter_commands(
+        self,
+    ) -> None:
+        shutil.copytree(
+            ROOT / "tests" / "support",
+            self.root / "tests" / "support",
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns("__pycache__"),
+        )
+        selectors = {
+            "recording/test_markdown::emits_yamark_formatted_documents": ("yamark",),
+            "lifecycle/test_startup": ("ir", "uv"),
+            "lifecycle/test_startup_interrupt": ("ir", "uv"),
+            "requirements/test_r_automatic": ("ir",),
+            "requirements/test_r::failed_mixed_preparation_retains_live_python_activation": (
+                "ir",
+                "uv",
+            ),
+        }
+        uv = shutil.which("uv")
+        assert uv is not None
+        for selector, commands in selectors.items():
+            suite = selector.partition("::")[0] + ".py"
+            destination = self.boundaries / "client_server" / suite
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(RUNNER.parent / "client_server" / suite, destination)
+            for missing in commands:
+                with self.subTest(selector=selector, missing=missing):
+                    with tempfile.TemporaryDirectory(dir=self.root) as path:
+                        for command in set(commands) - {missing}:
+                            executable = Path(path) / command
+                            executable.touch()
+                            executable.chmod(0o755)
+                        result = subprocess.run(
+                            [
+                                uv,
+                                "run",
+                                "--script",
+                                self.boundaries / "_run.py",
+                                "--jobs",
+                                "1",
+                                f"client_server/{selector}",
+                            ],
+                            cwd=self.root,
+                            env={**os.environ, "PATH": path},
+                            capture_output=True,
+                            text=True,
+                            timeout=10,
+                        )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    skipped = result.stdout.splitlines()
+                    self.assertTrue(skipped, result.stdout)
+                    for line in skipped:
+                        self.assertIn(": skipped;", line)
+                        self.assertIn(
+                            f"{missing}: {missing} is missing from PATH", line
+                        )
+
     def test_full_update_preserves_skipped_case_and_companions(self) -> None:
         self.suite.write_text(
             PUBLIC_SUITE
@@ -387,10 +445,10 @@ def test_selected(binary):
 from support.execution import Execution, executions
 from support.records import TranscriptWithCompanions
 
-sandbox = [{"input": {"method": "initialize"}, "result": "sandbox"}]
-direct = [{"input": {"method": "initialize"}, "result": "direct"}]
-bare_sandbox = [{"input": {"method": "initialize"}, "result": "bare sandbox"}]
-bare_direct = [{"input": {"method": "initialize"}, "result": "bare direct"}]
+sandbox = [{"id": 1, "input": {"method": "initialize"}, "result": "sandbox"}]
+direct = [{"id": 2, "input": {"method": "initialize"}, "result": "direct"}]
+bare_sandbox = [{"id": 3, "input": {"method": "initialize"}, "result": "bare sandbox"}]
+bare_direct = [{"id": 4, "input": {"method": "initialize"}, "result": "bare direct"}]
 
 def test_initializes_and_lists_tools(binary):
     return TranscriptWithCompanions(sandbox, {
@@ -406,12 +464,15 @@ def test_selected(binary, execution):
     return handshake + [{"runner": "between sessions"}] + handshake + bare
 
 def test_unselected(binary):
-    return sandbox + direct
+    return TranscriptWithCompanions(sandbox + direct, {"wire.yaml": direct})
 """,
             encoding="utf-8",
         )
         result = self.run_runner("--update", "--jobs", "1")
         self.assertEqual(result.returncode, 0, result.stderr)
+        for reference in self.snapshots.glob("initializes_and_lists_tools*.yaml"):
+            self.assertNotIn("id:", reference.read_text())
+        self.assertIn("id: 2", (self.snapshots / "unselected.wire.yaml").read_text())
         selected = (self.snapshots / "selected.yaml").read_text()
         self.assertEqual(selected.count("!same-as"), 3, selected)
         self.assertIn("bare MCP initialization for this execution mode", selected)

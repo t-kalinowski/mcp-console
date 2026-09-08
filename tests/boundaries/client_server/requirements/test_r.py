@@ -18,6 +18,7 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.r import r_test_environment
 from support.records import Transcript
+from support.requirements import command, requires
 from support.resolvers import checkpoint_uv_environment
 from support.suites import run_this_suite
 
@@ -293,6 +294,7 @@ def test_stops_live_preparation_for_idle_callback_input(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(command("ir"), command("uv"))
 def test_failed_mixed_preparation_retains_live_python_activation(
     binary: Path,
     execution: Execution,

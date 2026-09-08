@@ -236,6 +236,10 @@ def check_recording(
             check_text_snapshot(companion, contents, case, update=update)
         else:
             assert companion.suffix == ".yaml", companion
+            if snapshot == root / initialization_reference:
+                # These companions are MCP handshakes; other YAML companions
+                # can carry protocol IDs that must remain visible.
+                contents = without_request_ids(contents)
             check_snapshot(companion, contents, case, update=update)
         checked.add(companion)
     return checked

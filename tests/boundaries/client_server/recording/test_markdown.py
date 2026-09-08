@@ -14,6 +14,7 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.r import r_test_environment, reference_plots
 from support.records import Transcript, TranscriptWithCompanions
+from support.requirements import command, requires
 from support.suites import run_this_suite
 
 
@@ -124,6 +125,7 @@ def test_records_real_mixed_language_session(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(command("yamark"))
 def test_emits_yamark_formatted_documents(
     binary: Path, execution: Execution
 ) -> Transcript:

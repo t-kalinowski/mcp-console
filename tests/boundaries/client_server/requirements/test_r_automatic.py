@@ -23,7 +23,7 @@ from support.macos import (
 from support.normalization import code
 from support.r import r_test_environment
 from support.records import Transcript
-from support.requirements import PROCESS_EVENTS, requires
+from support.requirements import PROCESS_EVENTS, command, requires
 from support.suites import run_this_suite
 
 
@@ -189,6 +189,7 @@ def send_and_collect_runtime_r_resolution(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(command("ir"))
 def test_resolves_missing_r_packages_during_evaluation(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -239,6 +240,7 @@ def test_resolves_missing_r_packages_during_evaluation(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(command("ir"))
 def test_does_not_resolve_missing_r_packages_from_sql_callbacks(
     binary: Path,
     execution: Execution,
@@ -297,6 +299,7 @@ def test_does_not_resolve_missing_r_packages_from_sql_callbacks(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(command("ir"))
 def test_resolves_reached_r_packages_at_runtime(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -391,6 +394,7 @@ def test_resolves_reached_r_packages_at_runtime(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(command("ir"))
 def test_retains_automatic_r_package_after_error_and_restart(
     binary: Path,
     execution: Execution,
@@ -427,6 +431,7 @@ def test_retains_automatic_r_package_after_error_and_restart(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(command("ir"))
 def test_does_not_resolve_unreached_package_loads(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -460,6 +465,7 @@ def test_does_not_resolve_unreached_package_loads(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(command("ir"))
 def test_rejects_non_package_runtime_names_before_ir(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -503,6 +509,7 @@ def test_rejects_non_package_runtime_names_before_ir(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(command("ir"))
 def test_preserves_base_r_loading_semantics_without_resolution(
     binary: Path,
     execution: Execution,
@@ -627,6 +634,7 @@ def test_preserves_base_r_loading_semantics_without_resolution(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(command("ir"))
 def test_loads_package_with_devtools(binary: Path, execution: Execution) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
@@ -676,6 +684,7 @@ def test_loads_package_with_devtools(binary: Path, execution: Execution) -> Tran
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(command("ir"))
 def test_r_activation_failure_requires_restart_without_stopping_worker(
     binary: Path,
     execution: Execution,
@@ -740,6 +749,7 @@ def test_r_activation_failure_requires_restart_without_stopping_worker(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(command("ir"))
 def test_restart_discards_unactivated_r_candidate(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -835,6 +845,7 @@ def test_restart_discards_unactivated_r_candidate(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(command("ir"))
 def test_rejects_preparation_while_automatic_r_resolver_is_running(
     binary: Path,
     execution: Execution,
@@ -906,7 +917,7 @@ def test_rejects_preparation_while_automatic_r_resolver_is_running(
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(PROCESS_EVENTS)
+@requires(PROCESS_EVENTS, command("ir"))
 def test_interrupts_automatic_r_resolver_and_preserves_worker(
     binary: Path,
     execution: Execution,
