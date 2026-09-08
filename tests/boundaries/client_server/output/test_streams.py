@@ -15,8 +15,9 @@ from support.assertions import (
 )
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.native import build_interposer
 from support.records import Transcript
-from support.requirements import PROCESS_EVENTS, requires
+from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, requires
 from support.suites import run_this_suite
 
 TEST_GATED_RESPONSE_SIZE = 128 * 1024
@@ -143,73 +144,95 @@ def test_preserves_invalid_raw_output_when_worker_exits(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(NATIVE_FIXTURES)
 def test_preserves_raw_output_during_malformed_sideband_failure(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
-    zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
-    client = McpClient(
-        binary,
-        execution.serve("--worker", str(zod)),
-    )
-    client.initialize_and_list_tools()
-
-    for stream in ("stdout", "stderr"):
-        client.send(r=f"malformed sideband after {stream}")
-        result = client.transcript[-1]["result"]
-        assert result["isError"] is True, result
-        output = result["content"][0]["text"]
-        marker_prefix = f"zod expected {stream} malformed tail: "
-        output, tail_size = remove_length_marker(output, marker_prefix)
-        prefix = f"zod malformed {stream}: "
-        raw = large_output(prefix) + ("z" * tail_size)
-        failure_start = output.find("[worker sideband read failed: ")
-        assert failure_start >= 0, output[-200:]
-        failure_end = output.find("\n", failure_start)
-        assert failure_end >= 0, output[-200:]
-        failure = output[failure_start:failure_end]
-        notices = [
-            failure,
-            "[worker terminated by signal 9]",
-            "[worker stopped: in-memory state lost]",
-            "[starting new worker]",
-            "[idle]",
-        ]
-        assert output.count(raw) == 1, f"malformed frame lost {stream} bytes"
-        assert all(output.count(notice) == 1 for notice in notices), repr(output)
-        assert [output.index(notice) for notice in notices] == sorted(
-            output.index(notice) for notice in notices
-        ), repr(output)
-        remainder = output.replace(raw, "")
-        for notice in notices:
-            remainder = remainder.replace(notice, "")
-        assert not remainder.replace("\n", ""), repr(output)
-        result["content"][0]["text"] = (
-            f"{prefix}<large output>\n"
-            "[worker sideband read failed: <invalid frame>]\n"
-            "[worker terminated by signal 9]\n"
-            "[worker stopped: in-memory state lost]\n"
-            "[starting new worker]\n[idle]"
+    fixtures = Path(__file__).resolve().parents[3] / "fixtures"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        interposer = build_interposer(
+            Path(temporary_directory), "relay_stdout_read_interposer"
         )
-        client.transcript[-1]["transcript_normalization"] = {
-            "target": "result.content[0].text",
-            "cross_source_position": "omitted",
-            "replacements": {
-                "large_output": "<large output>",
-                "sideband_failure_detail": "<invalid frame>",
-            },
-        }
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        environment["MCP_CONSOLE_TEST_RELAY_BINARY"] = str(binary)
+        environment["MCP_CONSOLE_TEST_RELAY_READ_DYLIB"] = str(interposer)
+        environment["MCP_CONSOLE_TEST_RELAY_READ_MATCH"] = "zod malformed output read\n"
+        with McpClient(
+            binary,
+            execution.serve(
+                "--worker",
+                str(fixtures / "zod"),
+                "--relay",
+                str(fixtures / "retirement_read_relay"),
+            ),
+            environment,
+        ) as client:
+            client.initialize_and_list_tools()
 
-    transcript, standard_error = client.finish_with_standard_error()
-    diagnostics = standard_error.splitlines()
-    # Relay stderr is diagnostic-only and can be cut off when the server's
-    # fail-safe stops a failed generation. The framed failure above is authoritative.
-    assert len(diagnostics) <= 2, standard_error
-    assert all(
-        diagnostic.startswith("worker sideband read failed: ")
-        for diagnostic in diagnostics
-    ), standard_error
-    return transcript
+            for stream in ("stdout", "stderr"):
+                client.send(r=f"malformed sideband after {stream}")
+                result = client.transcript[-1]["result"]
+                assert result["isError"] is True, result
+                output = result["content"][0]["text"]
+                marker_prefix = f"zod expected {stream} malformed tail: "
+                output, tail_size = remove_length_marker(output, marker_prefix)
+                prefix = f"zod malformed {stream}: "
+                raw = (
+                    large_output(prefix)
+                    + ("z" * tail_size)
+                    + "zod malformed output read\n"
+                )
+                failure_start = output.find("[worker sideband read failed: ")
+                assert failure_start >= 0, output[-200:]
+                failure_end = output.find("\n", failure_start)
+                assert failure_end >= 0, output[-200:]
+                failure = output[failure_start:failure_end]
+                notices = [
+                    failure,
+                    "[worker terminated by signal 9]",
+                    "[worker stopped: in-memory state lost]",
+                    "[starting new worker]",
+                    "[idle]",
+                ]
+                assert output.count(raw) == 1, f"malformed frame lost {stream} bytes"
+                assert all(output.count(notice) == 1 for notice in notices), repr(
+                    output
+                )
+                assert [output.index(notice) for notice in notices] == sorted(
+                    output.index(notice) for notice in notices
+                ), repr(output)
+                remainder = output.replace(raw, "")
+                for notice in notices:
+                    remainder = remainder.replace(notice, "")
+                assert not remainder.replace("\n", ""), repr(output)
+                result["content"][0]["text"] = (
+                    f"{prefix}<large output>\n"
+                    "[worker sideband read failed: <invalid frame>]\n"
+                    "[worker terminated by signal 9]\n"
+                    "[worker stopped: in-memory state lost]\n"
+                    "[starting new worker]\n[idle]"
+                )
+                client.transcript[-1]["transcript_normalization"] = {
+                    "target": "result.content[0].text",
+                    "cross_source_position": "omitted",
+                    "replacements": {
+                        "large_output": "<large output>",
+                        "sideband_failure_detail": "<invalid frame>",
+                    },
+                }
+
+            transcript, standard_error = client.finish_with_standard_error()
+            diagnostics = standard_error.splitlines()
+            # Relay stderr is diagnostic-only and can be cut off when the server's
+            # fail-safe stops a failed generation. The framed failure above is authoritative.
+            assert len(diagnostics) <= 2, standard_error
+            assert all(
+                diagnostic.startswith("worker sideband read failed: ")
+                for diagnostic in diagnostics
+            ), standard_error
+            return transcript
 
 
 @executions(DIRECT, SANDBOXED)
