@@ -3,6 +3,7 @@
 MCP Console releases are built from tags and published as binary-only PyPI wheels.
 The release workflow publishes native Apple Silicon and Intel macOS wheels and ARM64 and x86-64 Linux wheels.
 Linux wheels are built on Ubuntu 24.04 and require glibc 2.39 or later.
+Wheel builds require Maturin 1.15 or later.
 It does not publish a source distribution, Windows wheels, or GitHub release archives.
 
 `Cargo.toml` is the package-version source of truth.

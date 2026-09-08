@@ -150,7 +150,7 @@ jobs:
 
           rm -rf dist
           cargo build --locked --bin mcp-console
-          uvx --from 'maturin==1.14.1' \
+          uvx --from 'maturin==1.15.0' \
             maturin build \
             --release \
             --locked \
