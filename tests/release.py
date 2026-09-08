@@ -503,7 +503,7 @@ class ReleaseScriptTests(unittest.TestCase):
                 import sys
                 from pathlib import Path
 
-                for name in ("CARGO_MAKEFLAGS", "CARGO_BUILD_BUILD_DIR", "RUSTC", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "CARGO_ENCODED_RUSTFLAGS"):
+                for name in ("CARGO_MAKEFLAGS", "CARGO_BUILD_BUILD_DIR", "RUSTC", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "CARGO_ENCODED_RUSTFLAGS", "MACOSX_DEPLOYMENT_TARGET"):
                     assert name not in os.environ, name
                 Path(os.environ["FAKE_CARGO_ARGUMENTS"]).write_text(json.dumps(sys.argv[1:]))
                 target = sys.argv[sys.argv.index("--target") + 1] if "--target" in sys.argv else os.environ["CARGO_BUILD_TARGET"]
@@ -536,6 +536,7 @@ class ReleaseScriptTests(unittest.TestCase):
                     "RUSTC_WRAPPER": "/outer/wrapper",
                     "RUSTC_WORKSPACE_WRAPPER": "/outer/clippy-driver",
                     "CARGO_ENCODED_RUSTFLAGS": "--deny=warnings",
+                    "MACOSX_DEPLOYMENT_TARGET": "15.0",
                 }
             )
             command = [
@@ -625,7 +626,14 @@ class ReleaseScriptTests(unittest.TestCase):
                         {
                             "source_revision": pin["commit"],
                             "target": target,
-                            "sha256": hashlib.sha256(b"runner bytes").hexdigest(),
+                            "sha256": {
+                                name: hashlib.sha256(contents).hexdigest()
+                                for name, contents in (
+                                    ("mcp-console-sandbox", b"runner bytes"),
+                                    ("LICENSE", b"license\n"),
+                                    ("NOTICE", b"notice\n"),
+                                )
+                            },
                         },
                     )
             data = root / "target" / "sandbox-runner"
@@ -653,6 +661,9 @@ class ReleaseScriptTests(unittest.TestCase):
             ]
             cached_environment = environment.copy()
             cached_environment.pop("MCP_CONSOLE_SANDBOX_SOURCE", None)
+            # Lowering the application's deployment target must reuse a runner
+            # built for the pinned compiler's default deployment target.
+            cached_environment["MACOSX_DEPLOYMENT_TARGET"] = "11.0"
             result = subprocess.run(
                 cached_command,
                 env=cached_environment,
@@ -694,19 +705,29 @@ class ReleaseScriptTests(unittest.TestCase):
                 self.assertTrue((directory / "cargo.json").exists())
                 (directory / "cargo.json").unlink()
 
-            for runner in (root / "target/sandbox-runner-cache/artifacts").rglob(
-                "mcp-console-sandbox"
-            ):
-                runner.write_bytes(b"corrupt cached runner")
-            result = subprocess.run(
-                cached_command,
-                env=cached_environment,
-                capture_output=True,
-                text=True,
-            )
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("cached runner does not match", result.stderr)
-            self.assertFalse((directory / "cargo.json").exists())
+            for name in ("mcp-console-sandbox", "LICENSE", "NOTICE"):
+                with self.subTest(corrupt_file=name):
+                    originals = {
+                        path: path.read_bytes()
+                        for path in (
+                            root / "target/sandbox-runner-cache/artifacts"
+                        ).rglob(name)
+                    }
+                    try:
+                        for path in originals:
+                            path.write_bytes(b"corrupt cached file")
+                        result = subprocess.run(
+                            cached_command,
+                            env=cached_environment,
+                            capture_output=True,
+                            text=True,
+                        )
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn("does not match", result.stderr)
+                        self.assertFalse((directory / "cargo.json").exists())
+                    finally:
+                        for path, original in originals.items():
+                            path.write_bytes(original)
 
 
 if __name__ == "__main__":

@@ -14,9 +14,10 @@ Cargo builds prepare it automatically with `scripts/stage-sandbox-runner`, inclu
 The script fetches the exact source revision into `sandbox-runner-cache/<commit>` under Cargo's target prefix and builds it with the pinned toolchain and lockfile.
 Source builds require Python 3, Git, and rustup; rustup installs the pinned toolchain if needed.
 The runner has its own Cargo build directory and jobserver, so the nested build also works when the outer Cargo uses `--jobs 1` or a custom target directory.
+It uses the pinned compiler's default macOS deployment target, independently of the application's `MACOSX_DEPLOYMENT_TARGET`.
 Normal Cargo and rustup dependency caches still apply.
 Completed runner bundles are cached separately under `sandbox-runner-cache/artifacts/`, keyed by the pin, staging script, and target.
-Cache hits verify the runner's checksum and copy the bundle without fetching sources or invoking Cargo.
+Cache hits verify the executable, license, and notice checksums and copy the bundle without fetching sources or invoking Cargo.
 
 The source checkout and runner build stay under the selected target prefix.
 To use a dedicated clean checkout at the pin on a cache miss, explicitly set `MCP_CONSOLE_SANDBOX_SOURCE`; the release workflow uses a checkout within its own workspace.
@@ -25,7 +26,7 @@ For a standalone runner build, run `scripts/stage-sandbox-runner`; its output is
 Use `--target aarch64-apple-darwin` or `--target x86_64-apple-darwin` for an explicit target.
 Without that option, the standalone script selects the pinned compiler's native target.
 
-MCP Console verifies the runner's source revision, target, and SHA-256 before embedding the executable, upstream license, and notice.
+MCP Console verifies the runner's source revision, target, and SHA-256 of each bundled file before embedding the executable, upstream license, and notice.
 Cargo and wheel installations both contain one public executable with no companion-file requirement.
 On first sandbox launch, it publishes the embedded files atomically under `$HOME/Library/Caches/mcp-console/sandbox/<sha256>/`, keyed by the complete bundle's digest, and verifies cached contents before use.
 The worker sandbox cannot write to this cache.
@@ -40,6 +41,7 @@ Release smoke exercises the installed runner directly with a non-default descrip
 
 Maturin packages the same executable without requiring generated data during metadata preparation.
 CI caches the completed runner independently of the application's dependencies, so ordinary changes do not rebuild the runner or restore its source and dependency graph.
+Successful main-branch checks save this cache before the Rust cache action removes non-Cargo artifacts.
 Cargo installation, uv source installation, and wheel construction share the application's Cargo target directory and use Cargo's normal parallelism.
 The small staging-script fixture checks isolation from the outer jobserver and compiler environment.
 Installation checks use unstaged sources, hide the build artifacts, and check the installed commands with a decoy runner on PATH.

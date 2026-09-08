@@ -47,12 +47,12 @@ fn bind_private_runner() {
         serde_json::from_slice(&std::fs::read(stage.join("build.json")).unwrap()).unwrap();
     assert_eq!(build["source_revision"], pin["commit"]);
     assert_eq!(build["target"].as_str(), Some(target.as_str()));
-    let digest = Sha256::digest(std::fs::read(stage.join("mcp-console-sandbox")).unwrap());
-    let digest_hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
-    assert_eq!(build["sha256"].as_str(), Some(digest_hex.as_str()));
     let mut bundle = Sha256::new();
     for name in ["mcp-console-sandbox", "LICENSE", "NOTICE"] {
         let bytes = std::fs::read(stage.join(name)).unwrap();
+        let digest = Sha256::digest(&bytes);
+        let digest_hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+        assert_eq!(build["sha256"][name].as_str(), Some(digest_hex.as_str()));
         bundle.update((bytes.len() as u64).to_be_bytes());
         bundle.update(bytes);
     }

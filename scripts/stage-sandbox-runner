@@ -15,6 +15,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 TARGETS = ("aarch64-apple-darwin", "x86_64-apple-darwin")
+BUNDLE_FILES = ("mcp-console-sandbox", "LICENSE", "NOTICE")
 
 
 def fail(message: str) -> None:
@@ -115,12 +116,13 @@ def main() -> None:
         if (
             metadata["source_revision"] != pin["commit"]
             or metadata["target"] != target
-            or metadata["sha256"]
-            != hashlib.sha256(
-                (artifact / "mcp-console-sandbox").read_bytes()
-            ).hexdigest()
+            or any(
+                metadata["sha256"][name]
+                != hashlib.sha256((artifact / name).read_bytes()).hexdigest()
+                for name in BUNDLE_FILES
+            )
         ):
-            fail(f"cached runner does not match its build metadata: {artifact}")
+            fail(f"cached runner bundle does not match its build metadata: {artifact}")
         shutil.copytree(artifact, args.output_dir, dirs_exist_ok=True)
 
 
@@ -141,6 +143,8 @@ def build(checkout: Path, output: Path, target: str, pin: dict[str, object]) -> 
     environment["CARGO_TARGET_DIR"] = str(workspace / "target")
     # Build independently of the outer Cargo's jobserver, compiler, and Clippy
     # wrapper. rustup must select the runner's pinned compiler and Cargo.
+    # Use that compiler's default deployment target, regardless of the outer
+    # application's setting, so the cached runner keeps the same minimum OS.
     for name in (
         "CARGO_MAKEFLAGS",
         "MAKEFLAGS",
@@ -153,6 +157,7 @@ def build(checkout: Path, output: Path, target: str, pin: dict[str, object]) -> 
         "RUSTFLAGS",
         "CARGO_ENCODED_RUSTFLAGS",
         "CLIPPY_ARGS",
+        "MACOSX_DEPLOYMENT_TARGET",
     ):
         environment.pop(name, None)
     command = [
@@ -172,8 +177,6 @@ def build(checkout: Path, output: Path, target: str, pin: dict[str, object]) -> 
     if result.returncode != 0:
         fail(f"runner build failed with status {result.returncode}")
     runner = workspace / "target" / target / "release" / "mcp-console-sandbox"
-    digest = hashlib.sha256(runner.read_bytes()).hexdigest()
-
     output.mkdir(parents=True, exist_ok=True)
     staged_runner = output / "mcp-console-sandbox"
     shutil.copyfile(runner, staged_runner)
@@ -184,7 +187,14 @@ def build(checkout: Path, output: Path, target: str, pin: dict[str, object]) -> 
         destination.chmod(0o644)
     (output / "build.json").write_text(
         json.dumps(
-            {"source_revision": pin["commit"], "target": target, "sha256": digest},
+            {
+                "source_revision": pin["commit"],
+                "target": target,
+                "sha256": {
+                    name: hashlib.sha256((output / name).read_bytes()).hexdigest()
+                    for name in BUNDLE_FILES
+                },
+            },
             indent=2,
         )
         + "\n",
