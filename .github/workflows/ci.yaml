@@ -98,13 +98,14 @@ jobs:
             target/release
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Restore private sandbox executable
+      - name: Restore private sandbox runner
         id: sandbox-cache
         uses: actions/cache/restore@v6
         with:
           path: target/sandbox-runner-cache/artifacts
+          # v2 caches the complete bundle used by automatic source builds.
           key: >-
-            sandbox-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('sandbox-runner.json', 'scripts/stage-sandbox-runner') }}
+            sandbox-runner-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('sandbox-runner.json', 'scripts/stage-sandbox-runner') }}
 
       - name: Run core checks
         env:
@@ -112,14 +113,6 @@ jobs:
         run: |
           scripts/check-core
           cargo build --locked --bin mcp-console
-
-      # Save before rust-cache's post-job cleanup removes non-Cargo files.
-      - name: Save private sandbox executable
-        if: steps.sandbox-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v6
-        with:
-          path: target/sandbox-runner-cache/artifacts
-          key: ${{ steps.sandbox-cache.outputs.cache-primary-key }}
 
       - name: Check Cargo, uv, and wheel installations
         env:
@@ -178,6 +171,16 @@ jobs:
         env:
           GITHUB_PAT: ${{ github.token }}
         run: scripts/test --jobs 6
+
+      # Save before rust-cache's post-job cleanup removes non-Cargo artifacts.
+      - name: Save private sandbox runner
+        if: >-
+          github.ref == 'refs/heads/main' && steps.sandbox-cache.outputs.cache-hit
+          != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: target/sandbox-runner-cache/artifacts
+          key: ${{ steps.sandbox-cache.outputs.cache-primary-key }}
 
       - name: Save R environments
         if: >-
