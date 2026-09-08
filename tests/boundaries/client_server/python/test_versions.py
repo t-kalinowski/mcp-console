@@ -7,11 +7,13 @@ import subprocess
 import sys
 import tempfile
 import time
+from contextlib import ExitStack
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import last_result_text
+from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
@@ -901,18 +903,19 @@ def test_stops_before_cache_warmup_after_python_resolver_interrupt(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary_directory:
+    with tempfile.TemporaryDirectory() as temporary_directory, ExitStack() as cleanup:
         temporary = Path(temporary_directory)
         fake_python = temporary / "python"
         block_tool_run = temporary / "block-tool-run"
-        tool_run_started = temporary / "tool-run-started"
+        tool_run_started = FifoCheckpoint.create(temporary / "tool-run-started")
+        cleanup.callback(tool_run_started.close)
         unexpected_warmup = temporary / "unexpected-warmup"
         write_python_executable(
             fake_python,
             code("""                #!/usr/bin/env python3
                 import os
+                import signal
                 import sys
-                import time
                 from pathlib import Path
 
 
@@ -921,13 +924,12 @@ def test_stops_before_cache_warmup_after_python_resolver_interrupt(
                     blocked = Path(os.environ["MCP_CONSOLE_TEST_BLOCK_TOOL_RUN"])
                     if arguments and arguments[0] == "-c":
                         if blocked.exists():
-                            Path(
-                                os.environ["MCP_CONSOLE_TEST_TOOL_RUN_STARTED"]
-                            ).touch()
-                            try:
-                                time.sleep(30)
-                            except KeyboardInterrupt:
-                                pass
+                            # Block SIGINT before publishing readiness, so an
+                            # early interrupt stays pending for sigwait().
+                            signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
+                            with open(os.environ["MCP_CONSOLE_TEST_TOOL_RUN_STARTED"], "wb", buffering=0) as started:
+                                started.write(b"1")
+                            signal.sigwait({signal.SIGINT})
                         Path(arguments[-1]).write_text(
                             os.environ["MCP_CONSOLE_TEST_UV_PYTHON"],
                             encoding="utf-8",
@@ -953,19 +955,13 @@ def test_stops_before_cache_warmup_after_python_resolver_interrupt(
             resolver_python=fake_python,
             extra_environment={
                 "MCP_CONSOLE_TEST_BLOCK_TOOL_RUN": str(block_tool_run),
-                "MCP_CONSOLE_TEST_TOOL_RUN_STARTED": str(tool_run_started),
+                "MCP_CONSOLE_TEST_TOOL_RUN_STARTED": str(tool_run_started.path),
                 "MCP_CONSOLE_TEST_UNEXPECTED_WARMUP": str(unexpected_warmup),
             },
         )
         block_tool_run.touch()
         preparation = client.start_send(requirements={"python": ["py-yaml12"]})
-        deadline = time.monotonic() + 5
-        while not tool_run_started.exists():
-            assert client.process.poll() is None, (
-                "mcp-console stopped before Python resolver started"
-            )
-            assert time.monotonic() < deadline, "Python resolver did not start"
-            time.sleep(0.01)
+        tool_run_started.wait("Python resolver started", timeout=5)
 
         interrupt = client.start_send(
             control="interrupt",
