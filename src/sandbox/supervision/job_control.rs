@@ -218,9 +218,9 @@ impl SignalRelay {
 
         unsafe {
             command.pre_exec(move || {
-                // Give the command a dedicated process group. If this launcher
-                // owns a terminal, hand foreground control to that group before
-                // exec so terminal signals reach it directly and exactly once.
+                // Give the runner a dedicated process group and transfer any
+                // exclusively owned terminal before exec. The target inherits
+                // this group when native setup spawns it.
                 // Stopped/continued job-control state is intentionally not
                 // proxied; supporting Ctrl-Z requires a separate wait state
                 // machine that restores and later reassigns the terminal.
@@ -235,6 +235,8 @@ impl SignalRelay {
                 // The private runner waits in the target's process group. Keep
                 // forwarded signals blocked in that intermediary; the target
                 // restores the original mask from its private wrapper argument.
+                // Signals pending before target creation are not inherited or
+                // replayed. See the startup limitation in SANDBOX_SUPERVISION.md.
                 let result =
                     libc::pthread_sigmask(libc::SIG_BLOCK, &forwarded, std::ptr::null_mut());
                 if result != 0 {
@@ -302,17 +304,6 @@ impl SignalRelay {
         FORWARDED_SIGNALS
             .into_iter()
             .filter(|signal| unsafe { libc::sigismember(&self.wait_set, *signal) } == 1)
-    }
-
-    pub(in crate::sandbox) fn retirement_pending(&self) -> Result<bool, String> {
-        let mut pending = 0;
-        if unsafe { libc::sigpending(&mut pending) } != 0 {
-            return Err(format!(
-                "failed to inspect pending launcher signals: {}",
-                std::io::Error::last_os_error()
-            ));
-        }
-        Ok(unsafe { libc::sigismember(&pending, libc::SIGTERM) } == 1)
     }
 
     pub(super) fn relay_pending(

@@ -40,7 +40,9 @@ After receiving readiness, the launcher installs manager-failure recovery while 
 An owned `SIGTERM` already pending at this point requests retirement without sending setup.
 Otherwise the launcher writes the complete protocol-2 frame: a four-byte unsigned big-endian length followed by 1 through 1,048,576 bytes of UTF-8 JSON.
 The runner is spawned before writing because a valid frame can exceed pipe capacity.
-It consumes exactly that frame, closes its setup descriptor before native setup, and starts the target without waiting for EOF.
+The launcher writes only available pipe capacity and waits for writability alongside owner exit, launcher signals, root exit, and manager recovery on the existing event queue.
+An owned retirement request remains observable while a setup reader is stopped or unresponsive; the setup channel adds no writer thread or separate control message.
+The runner consumes exactly that frame, closes its setup descriptor before native setup, and starts the target without waiting for EOF.
 The launcher closes its writer after sending; there is no later release payload, descriptor transfer, acknowledgment, or persistent runner control channel.
 On failure or cancellation before release, the launcher retains the setup writer through lifetime cleanup and closes it on return.
 This stops the waiting root before pipe closure can race a truncated-frame diagnostic against the cancellation error.
@@ -56,6 +58,14 @@ The hidden `sandbox-target` wrapper only restores the original macOS signal mask
 It neither reads setup nor replaces stdin, and wrapper arguments do not reach the requested command.
 The runner retains the blocked forwarded signals while waiting; inherited dispositions still come from the launcher's child configuration.
 Configured sandbox code therefore cannot run before manager observation is active and failure recovery is installed.
+
+Signal delivery has a known startup limitation: before the runner spawns its target, it can be the only member of the target process group.
+A group-directed `SIGHUP`, `SIGINT`, `SIGQUIT`, or `SIGTERM` received in that interval remains pending in the runner and is neither inherited nor replayed to the target.
+This includes terminal-generated signals after foreground ownership has transferred, and signals relayed by the launcher; an early Ctrl-C can therefore leave the requested command running once startup completes.
+Exactly-once signal delivery applies after the target exists.
+Owned cancellation through launcher-addressed `SIGTERM` or owner exit uses lifetime retirement and remains available during setup writes.
+The one-shot runner contract supplies no target-readiness acknowledgment or signal replay; extending that contract is outside the current integration.
+
 The manager control socket carries no messages after readiness; it remains open only as an ownership token, and owner EOF requests retirement.
 Abrupt owner loss before readiness closes the control socket and setup pipe before configured code runs, but private-directory cleanup is not guaranteed.
 Before readiness, the launcher retains its guard and preserves it whenever manager adoption is ambiguous.
@@ -68,7 +78,8 @@ A descendant that becomes orphaned before the manager resolves its fork event re
 The requested target runs in a dedicated process group.
 Its root waiter blocks in `kevent()` for direct-root exit, signals addressed to the launcher, and the configured parent identity in owned mode.
 The ordinary launcher consumes pending `SIGHUP`, `SIGINT`, `SIGQUIT`, and `SIGTERM` and relays them to the target group.
-The private executable keeps these signals blocked while waiting; the target restores the original mask before exec, so each signal reaches the command once and the executable retains the waitable group identity through cleanup.
+After target creation, the private executable keeps these signals blocked while the target restores its original mask before exec, so each signal reaches the command once and the executable retains the waitable group identity through cleanup.
+The startup limitation above applies before target creation.
 In owned mode, parent exit or launcher-addressed `SIGTERM` requests managed retirement instead; the other supported signals retain their relay behavior.
 When the launcher exclusively owns its foreground process group, it transfers controlling-terminal ownership to the target group; when a pipeline peer shares that group, it leaves terminal ownership unchanged.
 The manager owns descendant cleanup and the private directory; the launcher preserves the direct command's status after natural completion and owns terminal state and signal relay.

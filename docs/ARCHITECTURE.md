@@ -106,12 +106,14 @@ The runner accepts `--bootstrap-fd <N>` with an inherited readable descriptor gr
 Protocol 2 carries one four-byte big-endian length followed by 1 through 1,048,576 bytes of UTF-8 JSON on that descriptor.
 The runner reads exactly the frame and closes the descriptor before native setup; startup does not wait for EOF.
 The launcher starts the runner before writing, closes its unused read end after spawn, and closes the writer after sending the frame.
+Setup writes share the launcher's event-driven lifetime wait, so pipe backpressure cannot block owned cancellation or failure recovery.
 Only the designated setup descriptor is inherited beyond stdio at runner exec; the parent keeps both pipe ends close-on-exec.
 The setup pipe does not reach the manager, target, or relay.
 The runner launches one sandboxed command and returns its status.
 It has no console, relay, descendant-retirement, or private-directory-cleanup responsibilities.
 The launcher supplies a small macOS policy extension that preserves host-terminal restrictions, runtime allowances, and full mutability of its private temporary directory.
 The native implementation owns the base policy.
+Signals sent to the target group before the runner creates its child are not replayed to that child; this remains a documented startup limitation.
 The [supervision guide](SANDBOX_SUPERVISION.md) describes startup and signal handling across this boundary.
 
 ### Sandbox launcher and sandbox manager

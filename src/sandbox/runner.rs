@@ -4,7 +4,7 @@ use super::{installation, platform::TemporaryDirectory};
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::io::{self, PipeWriter, Write as _};
-use std::os::fd::AsRawFd as _;
+use std::os::fd::{AsRawFd as _, RawFd};
 use std::process::Command;
 
 const POLICY_EXTENSION: &str = include_str!("policy_extensions.sbpl");
@@ -12,6 +12,7 @@ const POLICY_EXTENSION: &str = include_str!("policy_extensions.sbpl");
 pub(super) struct Setup {
     writer: Option<PipeWriter>,
     frame: Vec<u8>,
+    written: usize,
 }
 
 impl Setup {
@@ -24,6 +25,16 @@ impl Setup {
     ) -> Result<Self, String> {
         let (reader, writer) =
             io::pipe().map_err(|error| format!("failed to create sandbox setup pipe: {error}"))?;
+        let flags = unsafe { libc::fcntl(writer.as_raw_fd(), libc::F_GETFL) };
+        if flags < 0
+            || unsafe { libc::fcntl(writer.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) }
+                < 0
+        {
+            return Err(format!(
+                "failed to configure sandbox setup writes: {}",
+                io::Error::last_os_error()
+            ));
+        }
         command
             .arg("--bootstrap-fd")
             .arg(reader.as_raw_fd().to_string());
@@ -87,17 +98,37 @@ impl Setup {
         Ok(Self {
             writer: Some(writer),
             frame,
+            written: 0,
         })
     }
 
-    pub(super) fn release(&mut self) -> io::Result<()> {
-        // Spawn before this potentially pipe-sized write. A complete frame
-        // releases native setup without EOF. Taking the writer closes it on
-        // success or failure, with no later release message.
+    pub(super) fn descriptor(&self) -> RawFd {
         self.writer
-            .take()
-            .expect("setup released once")
-            .write_all(&self.frame)
+            .as_ref()
+            .expect("setup has not started")
+            .as_raw_fd()
+    }
+
+    pub(super) fn write_available(&mut self) -> io::Result<()> {
+        let Some(writer) = &mut self.writer else {
+            return Ok(());
+        };
+        // The launcher waits on pipe writability alongside lifetime events.
+        // Never block cancellation on a stopped or unresponsive setup reader.
+        while self.written < self.frame.len() {
+            match writer.write(&self.frame[self.written..]) {
+                Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
+                Ok(count) => self.written += count,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(()),
+                Err(error) if error.kind() == io::ErrorKind::BrokenPipe => break,
+                Err(error) => return Err(error),
+            }
+        }
+        // Closing the completed channel also removes its kqueue write watch.
+        // Native setup starts at the complete frame, without requiring EOF.
+        self.writer = None;
+        Ok(())
     }
 }
 

@@ -396,6 +396,93 @@ def test_sigterm_before_setup_retires_without_releasing_target(
         ]
 
 
+def test_cancels_owned_launch_during_setup(binary: Path) -> Transcript:
+    transcript = []
+    for cancellation in ("SIGTERM", "owner exit"):
+        with tempfile.TemporaryDirectory() as directory:
+            temporary = Path(directory)
+            checkpoints = {
+                name: FifoCheckpoint.create(temporary / name)
+                for name in (
+                    "manager-started",
+                    "manager-release",
+                    "write-started",
+                    "write-release",
+                )
+            }
+            environment = os.environ | {
+                "TMPDIR": directory,
+                "LARGE_SETUP": "x" * (96 * 1024),
+                "MCP_CONSOLE_TEST_MANAGER_START": str(
+                    checkpoints["manager-started"].path
+                ),
+                "MCP_CONSOLE_TEST_MANAGER_RELEASE": str(
+                    checkpoints["manager-release"].path
+                ),
+                "MCP_CONSOLE_TEST_SETUP_WRITE_STARTED": str(
+                    checkpoints["write-started"].path
+                ),
+                "MCP_CONSOLE_TEST_SETUP_WRITE_RELEASE": str(
+                    checkpoints["write-release"].path
+                ),
+                "DYLD_INSERT_LIBRARIES": str(
+                    _build_startup_interposer(
+                        temporary,
+                        "setup_write_interposer",
+                        "-I",
+                        str(Path(__file__).resolve().parents[3] / "fixtures/native"),
+                    )
+                ),
+            }
+            owner = _start_owned_echo_owner(binary, environment)
+            identities = []
+            try:
+                (launcher_pid,) = _read_lines(owner.stdout, 1, "owned launcher")
+                checkpoints["manager-started"].wait("manager before setup")
+                launcher = capture_darwin_process_identity(int(launcher_pid))
+                root = capture_darwin_process_identity(_sandbox_root_pid(launcher[0]))
+                manager = capture_darwin_process_identity(_manager_pid(launcher[0]))
+                identities = [launcher, root, manager]
+                assert signal_darwin_process(root, signal.SIGSTOP)
+                checkpoints["manager-release"].release()
+                checkpoints["write-started"].wait("first setup byte queued")
+                if cancellation == "SIGTERM":
+                    assert signal_darwin_process(launcher, signal.SIGTERM)
+                else:
+                    owner.kill()
+                checkpoints["write-release"].release()
+                assert owner.wait(timeout=TIMEOUT) == (
+                    0 if cancellation == "SIGTERM" else -signal.SIGKILL
+                )
+                _wait_for_process_exit(
+                    tuple(identities), "setup cancellation leaked a process"
+                )
+                stdout, stderr = owner.communicate()
+                assert (stdout, stderr) == (b"", b""), (stdout, stderr)
+                assert not list(temporary.glob("mcp-console-tmp-*"))
+                transcript.append(
+                    {
+                        "scenario": cancellation
+                        + " after setup writing begins with a stopped reader",
+                        "stdout": "",
+                        "stderr": "",
+                        "verified_cleanup": "launcher, runner, manager, and private directory",
+                    }
+                )
+            finally:
+                checkpoints["manager-release"].release()
+                checkpoints["write-release"].release()
+                kill_darwin_processes(identities)
+                if owner.poll() is None:
+                    owner.kill()
+                    owner.wait(timeout=TIMEOUT)
+                owner.stdout.close()
+                owner.stderr.close()
+                for checkpoint in checkpoints.values():
+                    checkpoint.close()
+    return transcript
+
+
 def test_owner_loss_retires_the_sandbox_lifetime(binary: Path) -> Transcript:
     # Keep the target behind its inherited stdin until the owner has reported
     # the launcher PID. The detached child then leaves the target's session, so

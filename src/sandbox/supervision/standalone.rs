@@ -8,7 +8,6 @@ use crate::sandbox::{
     runner::Setup,
 };
 use std::ffi::{OsStr, OsString};
-use std::io::ErrorKind;
 use std::process::{Child, Command, ExitCode, ExitStatus};
 use std::time::Duration;
 
@@ -49,16 +48,14 @@ pub(in crate::sandbox) fn status(
     };
 
     let root_wait = match (|| {
-        // An owned SIGTERM queued during manager startup cancels execution.
-        // Keep the setup channel owned through retirement so the stopped root
-        // cannot race a parsing diagnostic against cancellation.
-        if (!owned || !signal_relay.retirement_pending()?)
-            && let Err(error) = setup.release()
-            && error.kind() != ErrorKind::BrokenPipe
-        {
-            return Err(format!("failed to send sandbox setup: {error}"));
-        }
-        wait_for_root_exit(&root.child, &signal_relay, &mut root_waiter, owned)
+        root_waiter.watch_setup(setup.descriptor())?;
+        wait_for_root_exit(
+            &root.child,
+            &signal_relay,
+            &mut root_waiter,
+            owned,
+            &mut setup,
+        )
     })() {
         Ok(root_wait) => root_wait,
         Err(mut error) => {
@@ -222,6 +219,7 @@ fn wait_for_root_exit(
     signal_relay: &SignalRelay,
     root_waiter: &mut RootExitWaiter,
     retire_on_sigterm: bool,
+    setup: &mut Setup,
 ) -> Result<RootCompletion, String> {
     loop {
         if root_has_exited(child, Duration::ZERO)? {
@@ -232,6 +230,9 @@ fn wait_for_root_exit(
         if signal_relay.relay_pending(process_group, retire_on_sigterm)? {
             return Ok(RootCompletion::RetirementRequested);
         }
+        setup
+            .write_available()
+            .map_err(|error| format!("failed to send sandbox setup: {error}"))?;
         match root_waiter.wait_for_events(None) {
             Ok(RootWait::RootExited) => return Ok(RootCompletion::RootExited),
             Ok(RootWait::OwnerExited) => return Ok(RootCompletion::RetirementRequested),
