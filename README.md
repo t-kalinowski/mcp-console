@@ -124,6 +124,7 @@ Render only code you trust.
 Run development commands from the repository root:
 
 ```text
+scripts/stage-sandbox-runner /path/to/pinned-source-checkout
 scripts/format
 scripts/check
 scripts/test [BOUNDARY/SUITE[::CASE]]
@@ -131,6 +132,7 @@ scripts/test --list
 scripts/test --update BOUNDARY/SUITE[::CASE]
 ```
 
+Stage the private sandbox executable before the first macOS build or after changing the source pin; [RELEASE.md](RELEASE.md) describes the required checkout and toolchain.
 See [AGENTS.md](https://github.com/t-kalinowski/mcp-console/blob/main/AGENTS.md) for development rules and the repository map, and the [boundary test guide](https://github.com/t-kalinowski/mcp-console/blob/main/tests/boundaries/README.md) for test selection and snapshot updates.
 The standalone `mcp-console sandbox -- COMMAND [ARG]...` command is also available for development; [macOS sandbox supervision](https://github.com/t-kalinowski/mcp-console/blob/main/docs/SANDBOX_SUPERVISION.md) defines its lifecycle, terminal behavior, and limitations.
 

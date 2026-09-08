@@ -98,7 +98,7 @@ def test_pending_signal_at_root_exit_preserves_status(binary: Path) -> Transcrip
 
 def test_owned_sigterm_retires_the_sandbox_lifetime(binary: Path) -> Transcript:
     lifetime = _start_lifetime(binary, exit_with_parent=os.getpid())
-    cleanup = (lifetime.root, lifetime.descendant, lifetime.manager)
+    cleanup = (lifetime.root, lifetime.target, lifetime.descendant, lifetime.manager)
     exit_events, watches = _watch_process_exits((*cleanup, lifetime.launcher))
     try:
         assert signal_darwin_process(lifetime.launcher, signal.SIGTERM), (
@@ -147,7 +147,7 @@ def test_owned_sigterm_retires_when_inherited_ignored(binary: Path) -> Transcrip
         exit_with_parent=os.getpid(),
         ignore_sigterm=True,
     )
-    cleanup = (lifetime.root, lifetime.descendant, lifetime.manager)
+    cleanup = (lifetime.root, lifetime.target, lifetime.descendant, lifetime.manager)
     exit_events, watches = _watch_process_exits((*cleanup, lifetime.launcher))
     try:
         assert signal_darwin_process(lifetime.launcher, signal.SIGTERM), (
@@ -193,7 +193,7 @@ def test_owned_sigterm_retires_when_inherited_ignored(binary: Path) -> Transcrip
 
 def test_owned_root_exit_waits_for_cleanup(binary: Path) -> Transcript:
     lifetime = _start_lifetime(binary, exit_with_parent=os.getpid())
-    cleanup = (lifetime.root, lifetime.descendant, lifetime.manager)
+    cleanup = (lifetime.root, lifetime.target, lifetime.descendant, lifetime.manager)
     exit_events, watches = _watch_process_exits((*cleanup, lifetime.launcher))
     try:
         lifetime.process.stdin.write(b"exit\n")

@@ -65,7 +65,7 @@ def _worker_generation_processes(server_pid: int) -> tuple[int, int]:
     deadline = time.monotonic() + TIMEOUT
     while True:
         processes = subprocess.run(
-            ["/bin/ps", "-axo", "pid=,ppid=,command="],
+            ["/bin/ps", "-axo", "pid=,ppid=,comm="],
             check=True,
             capture_output=True,
             text=True,
@@ -77,24 +77,27 @@ def _worker_generation_processes(server_pid: int) -> tuple[int, int]:
             if len(fields) == 3:
                 records.append((int(fields[0]), int(fields[1]), fields[2]))
 
-        # The CLI launcher is the sandbox owner. Locate its gated root and
-        # manager by ancestry and executable role.
-        descendants = {server_pid}
-        while True:
-            discovered = {pid for pid, parent, _ in records if parent in descendants}
-            if discovered.issubset(descendants):
-                break
-            descendants.update(discovered)
+        # At this checkpoint the server owns a launcher, whose only children
+        # are the gated runner and manager. Preserve full executable paths,
+        # including spaces, instead of tokenizing the process's arguments.
+        server_executable = next(
+            executable for pid, _, executable in records if pid == server_pid
+        )
+        launchers = {
+            pid
+            for pid, parent, executable in records
+            if parent == server_pid and executable == server_executable
+        }
 
         managers = [
             pid
-            for pid, _, command in records
-            if pid in descendants and "sandbox-manager" in command.split()
+            for pid, parent, executable in records
+            if parent in launchers and executable == server_executable
         ]
         roots = [
             pid
-            for pid, _, command in records
-            if pid in descendants and "sandbox-target" in command.split()
+            for pid, parent, executable in records
+            if parent in launchers and Path(executable).name == "mcp-console-sandbox"
         ]
         assert len(managers) <= 1, managers
         assert len(roots) <= 1, roots

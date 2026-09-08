@@ -25,7 +25,7 @@ Private-boundary tests cover only the architectural seam they observe and do not
 Security and liveness cases may add causal or process assertions for facts a snapshot cannot represent.
 Do not test exact internal sequencing unless it is itself an observable contract.
 
-The direct CLI sandbox cases own argument and standard-stream fidelity, job control, signal and exit status, security policy, and manager-owned retirement.
+The direct CLI sandbox cases own setup cancellation, large-frame startup, original-stdin identity and closure, argument and standard-stream fidelity, job control, signal and exit status, security policy, and manager-owned retirement.
 The public MCP sandbox cases cover the launch-path descriptor matrix, sandbox-dependent runtime workflows, startup failure and gating, worker replacement, supervisor loss, restart, and shutdown.
 The relay wrapper workflow verifies MCP restart and shutdown when the relay is below the sandbox root and a worker descendant retains its streams.
 The direct relay CLI case compares the complete protocol through ordinary direct launch and the public sandbox command, without requiring the relay to be a process-group leader.
@@ -39,11 +39,16 @@ Map each non-generic sandbox allowance to the real workflow that requires it and
 | POSIX semaphores            | Python spawn multiprocessing                      | `client_server/python/test_environment::runs_spawn_process_after_live_resolution`          |
 | PTYs and `kern.boottime`    | `processx`                                        | `cli/command/test_execution::allows_processx_pty_processes` and MCP process-lifetime cases |
 | Quarto device/sysctl access | Render generated `ir` document inside the sandbox | `client_server/recording/test_quarto::renders_generated_document`                          |
+| `__KMP_REGISTERED_LIB_*`    | PyTorch/libomp                                    | Supplied by the pinned native base; no local extension                                     |
+| uv platform services        | Offline wheel installation in private storage     | `cli/command/test_uv::installs_a_local_wheel_into_private_storage`                         |
+
+The [policy audit](../../docs/SANDBOX_SUPERVISION.md#policy-extensions-and-compatibility) distinguishes redundant base-policy rules from local exceptions whose current necessity or precise caller is unconfirmed.
+Runner protocol parsing belongs to the extraction's executable tests; `tests/sandbox_installation.py` covers the installed caller boundary, one-shot resource closure, and startup without setup EOF.
 
 `cli/command/test_pytorch::matches_unsandboxed_autograd` runs one CPU autograd script outside and inside the default sandbox with the same freshly resolved PyTorch environment.
 It compares the loss, full gradient, and thread count against the live unsandboxed run; the snapshot records that comparison without dependency warnings or fixed numerical values.
 This is an intentional exception to exact-output snapshots: warnings and other non-result output may change across releases, while nonzero exits and numerical differences still fail with captured stdout and stderr.
-The `__KMP_REGISTERED_LIB_*` registration allowance remains an unverified compatibility exception.
+The native base policy's `__KMP_REGISTERED_LIB_*` registration allowance remains an unverified compatibility exception.
 This comparison does not establish a need for that permission.
 
 When reviewing deletion candidates, separate tests may replace a combined test only when the interaction between those behaviors is not itself a plausible failure mode.
@@ -73,7 +78,7 @@ When accepting a handshake change, update the full snapshot before the abbreviat
 The `cli/interface/test_help` suite records command lines and stdout in one stream with color disabled.
 It adds the exit code for failures and stderr when nonempty.
 The `server_relay` suites launch a deterministic scripted relay through an internal development seam.
-That relay is the sandbox root and process-group leader behind the server's owned launcher child, and it communicates only through the same fd 0/1/2 boundary as the production relay.
+That relay runs in the private sandbox executable's process group behind the server's owned launcher child, and it communicates only through the same fd 0/1/2 boundary as the production relay.
 The suite records complete parsed JSONL frames under `server` and `relay` direction labels.
 The truncated-frame case instead records the exact incomplete bytes as base64 under `relay_raw`.
 Its snapshots show flat commands and semantic events, operation results without acknowledgments, readable UTF-8 raw chunks and base64 byte fallbacks, interrupt results, structured worker outcomes, and complete stream drainage.
