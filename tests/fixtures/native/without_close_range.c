@@ -8,7 +8,8 @@
 #include <unistd.h>
 
 // Exercise the public server with the responses produced by pre-5.9 kernels
-// (ENOSYS) and kernels without CLOSE_RANGE_CLOEXEC (EINVAL).
+// (ENOSYS), kernels without CLOSE_RANGE_CLOEXEC (EINVAL), and seccomp policies
+// that deny close_range (EPERM).
 int main(int argc, char **argv) {
     if (argc < 3) return 90;
     unsigned int error = (unsigned int)atoi(argv[1]);

@@ -150,7 +150,7 @@ def test_sanitizes_descriptors_without_close_range_cloexec(binary: Path) -> Tran
             check=True,
         )
         transcript = []
-        for error in (errno.ENOSYS, errno.EINVAL):
+        for error in (errno.ENOSYS, errno.EINVAL, errno.EPERM):
             prefix = (str(wrapper), str(error))
             transcript.append(
                 descriptor_entry(

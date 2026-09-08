@@ -177,7 +177,8 @@ pub(crate) fn close_unlisted_from_multithreaded_parent(
     unsafe {
         command.pre_exec(|| {
             // Retain Rust's exec-error pipe until exec. Older kernels either
-            // lack close_range (ENOSYS) or its CLOEXEC flag (EINVAL).
+            // lack close_range (ENOSYS) or its CLOEXEC flag (EINVAL). Seccomp
+            // can deny it (EPERM) while still allowing procfs and fcntl.
             if libc::syscall(
                 libc::SYS_close_range,
                 3u32,
@@ -187,7 +188,7 @@ pub(crate) fn close_unlisted_from_multithreaded_parent(
             {
                 let error = std::io::Error::last_os_error();
                 return match error.raw_os_error() {
-                    Some(libc::ENOSYS | libc::EINVAL) => cloexec_proc_descriptors(),
+                    Some(libc::ENOSYS | libc::EINVAL | libc::EPERM) => cloexec_proc_descriptors(),
                     _ => Err(error),
                 };
             }

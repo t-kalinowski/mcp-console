@@ -22,7 +22,7 @@ MCP Console runs on macOS and Linux.
 Linux currently requires `serve --no-sandbox`; Windows is not supported.
 The release workflow builds native wheels for Apple Silicon and Intel macOS and for ARM64 and x86-64 Linux.
 Linux wheels require glibc 2.39 or later; building from source uses the host glibc.
-On older Linux kernels, inherited-descriptor cleanup requires `/proc` to be mounted.
+On older Linux kernels or when seccomp denies `close_range` with `EPERM`, inherited-descriptor cleanup requires `/proc` to be mounted.
 
 A working R installation is required.
 Set `R_HOME` or make `R` discoverable on `PATH`.
