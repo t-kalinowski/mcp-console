@@ -1308,8 +1308,23 @@ impl Client {
         generation: WorkerGeneration,
         startup: Option<Arc<lifecycle::WorkerStartupAdmission>>,
     ) {
-        let result = self.evaluate_with_worker(cell, &evaluation, generation);
-        drop(startup);
+        let result = (|| {
+            self.ensure_generation(&generation)
+                .map_err(SendFailure::from)?;
+            let mut worker = self
+                .0
+                .worker
+                .lock()
+                .map_err(|_| SendFailure::from("worker lock poisoned".to_string()))?;
+            let result = self.evaluate_with_worker(&mut worker, cell, &evaluation, generation);
+            drop(startup);
+            // Restart waits for this lock before taking the old output cut.
+            // Publish failures before releasing it, including startup failures.
+            if let Err(failure) = result {
+                evaluation.complete_cell(Err(failure));
+            }
+            Ok(())
+        })();
         if let Err(failure) = result {
             evaluation.complete_cell(Err(failure));
         }
@@ -1317,24 +1332,18 @@ impl Client {
 
     fn evaluate_with_worker(
         &self,
+        worker: &mut WorkerState,
         cell: crate::cell::Cell,
         evaluation: &Arc<Evaluation>,
         generation: WorkerGeneration,
     ) -> Result<(), SendFailure> {
         self.ensure_generation(&generation)
             .map_err(SendFailure::from)?;
-        let mut worker = self
-            .0
-            .worker
-            .lock()
-            .map_err(|_| SendFailure::from("worker lock poisoned".to_string()))?;
-        self.ensure_generation(&generation)
-            .map_err(SendFailure::from)?;
         // Only an established worker can publish idle output in the admission
         // gap. A new worker's startup output remains part of this call.
-        let capture_idle_prelude = matches!(&*worker, WorkerState::Running(_));
+        let capture_idle_prelude = matches!(worker, WorkerState::Running(_));
         if let Err(mut failure) = self.start_worker(
-            &mut worker,
+            worker,
             generation.clone(),
             true,
             |stop_handle| self.register_stop_handle(&generation, stop_handle),
@@ -1347,7 +1356,7 @@ impl Client {
             }
             return Err(failure);
         }
-        let WorkerState::Running(running) = &mut *worker else {
+        let WorkerState::Running(running) = worker else {
             return Err(SendFailure::from("worker is not running".to_string()));
         };
         let result = running
@@ -1357,7 +1366,7 @@ impl Client {
             Ok(()) => return Ok(()),
             Err(failure) => failure,
         };
-        match self.stop_failed_worker(&mut worker, &generation) {
+        match self.stop_failed_worker(worker, &generation) {
             Ok(lifecycle::FailedWorkerStop::Stopped(outcome)) => {
                 failure = failure.worker_outcome(outcome);
             }
@@ -1371,7 +1380,7 @@ impl Client {
         evaluation.start_replacement(failure.worker_stopped());
         let replacement = self
             .start_worker(
-                &mut worker,
+                worker,
                 generation.clone(),
                 true,
                 |stop_handle| self.register_stop_handle(&generation, stop_handle),

@@ -36,7 +36,9 @@ struct EvaluationState {
     input_report_at: Option<Instant>,
     /// Whether one `send` currently owns the right to drain this evaluation's response.
     waiting: bool,
-    restart_reserved: bool,
+    /// Restart or controlled handoff permanently retires this evaluation.
+    /// Releasing its response reservation must not revive late task failures.
+    retired: bool,
     restart_handoff: Option<Response>,
     #[cfg(unix)]
     stdin: Option<super::platform::StdinSender>,
@@ -122,7 +124,7 @@ impl Evaluation {
                 controlled_completion,
                 input_report_at: None,
                 waiting: false,
-                restart_reserved: false,
+                retired: false,
                 restart_handoff: None,
                 #[cfg(unix)]
                 stdin: None,
@@ -147,7 +149,7 @@ impl Evaluation {
         if state.completion_collected && state.reclaimed.is_none() {
             return Err("evaluation response was already delivered".to_string());
         }
-        if state.restart_reserved {
+        if state.retired {
             return Err("session restart began before this send could wait".to_string());
         }
         if state.waiting {
@@ -185,7 +187,7 @@ impl Evaluation {
                 .lock()
                 .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
         }
-        state.restart_reserved = true;
+        state.retired = true;
         let waiting = state.waiting;
         let unfinished = !matches!(state.phase, EvaluationPhase::Complete(_));
         let completion = match state.phase {
@@ -245,7 +247,7 @@ impl Evaluation {
         let EvaluationPhase::Complete(completion_kind) = state.phase else {
             return Ok(None);
         };
-        state.restart_reserved = true;
+        state.retired = true;
         let completion = (!state.completion_collected).then_some(completion_kind);
         Ok(Some(EvaluationReservation {
             evaluation: self.clone(),
@@ -274,7 +276,7 @@ impl Evaluation {
             && state.delivery.is_none()
             && state.reclaimed.is_none()
             && !state.waiting
-            && !state.restart_reserved)
+            && !state.retired)
     }
 
     /// Adopts output that remained idle until the worker operation became active.
@@ -492,7 +494,7 @@ impl Evaluation {
         };
         state.input_report_at = None;
         if let Err(failure) = result
-            && (!state.restart_reserved || failure.should_survive_restart())
+            && (!state.retired || failure.should_survive_restart())
         {
             self.output.push_failure(failure);
         }
@@ -507,7 +509,7 @@ impl Evaluation {
     pub(super) fn classify_failure(&self, message: String) -> SendFailure {
         let failure = SendFailure::from(message);
         match self.state.lock() {
-            Ok(state) if !state.restart_reserved => failure.preceded_restart(),
+            Ok(state) if !state.retired => failure.preceded_restart(),
             Ok(_) | Err(_) => failure,
         }
     }
@@ -566,7 +568,7 @@ impl Evaluation {
             .state
             .lock()
             .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
-        if state.restart_reserved {
+        if state.retired {
             return Ok(match state.restart_handoff.take() {
                 Some(response) => EvaluationStatus::Report(EvaluationWait::Restarted(response)),
                 None => EvaluationStatus::Waiting,
@@ -751,7 +753,6 @@ impl EvaluationReservation {
             }
         };
         if !state.waiting {
-            state.restart_reserved = false;
             return Ok(RestartDelivery::Unclaimed(response));
         }
         let (acknowledged, wait_for_acknowledgment) = mpsc::sync_channel(0);
@@ -777,18 +778,6 @@ fn take_owned_response(
     };
     control.extend_logical_region(cell);
     control
-}
-
-impl Drop for EvaluationReservation {
-    fn drop(&mut self) {
-        let Ok(mut state) = self.evaluation.state.lock() else {
-            return;
-        };
-        if state.restart_handoff.is_none() {
-            state.restart_reserved = false;
-            self.evaluation.changed.notify_one();
-        }
-    }
 }
 
 impl Drop for WaitClaim {
