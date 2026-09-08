@@ -4,7 +4,9 @@ import base64
 import json
 import os
 import select
+import signal
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -104,13 +106,10 @@ PNG_1X1 = (
 
 class ScriptedRelay:
     def __init__(self) -> None:
-        process_id = os.getpid()
-        process_group = os.getpgrp()
-        assert process_id != process_group and os.getppid() == process_group, (
-            f"scripted relay {process_id} is not a child of sandbox root {process_group}"
+        self.temporary = tempfile.TemporaryDirectory(
+            prefix="scripted-relay-", dir=os.environ["TMPDIR"]
         )
-
-        self.root = Path(os.environ["TMPDIR"])
+        self.root = Path(self.temporary.name)
         self.capture = (self.root / CAPTURE_NAME).open("w", encoding="utf-8")
         self.checkpoints: dict[str, int] = {}
 
@@ -118,6 +117,7 @@ class ScriptedRelay:
         for checkpoint in self.checkpoints.values():
             os.close(checkpoint)
         self.capture.close()
+        self.temporary.cleanup()
 
     def record(self, entry: dict[str, Any]) -> None:
         self.capture.write(json.dumps(entry, separators=(",", ":")) + "\n")
@@ -403,10 +403,10 @@ def run_stdin_forwarding_failure(relay: ScriptedRelay) -> None:
     assert prefix.startswith(b'{"kind":"stdin","data":"'), prefix
     relay.record({"server_raw": base64.b64encode(prefix).decode("ascii")})
     relay.wait_for_release()
+    signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
     os.close(0)
     relay.mark_done()
-    while True:
-        time.sleep(60)
+    assert signal.sigwait({signal.SIGTERM}) == signal.SIGTERM
 
 
 def run_interrupt(relay: ScriptedRelay) -> None:

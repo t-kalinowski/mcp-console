@@ -1,5 +1,5 @@
 ---
-!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+!same-as MCP initialization for this execution mode
 ---
 send:
   r: emit terminal redraws

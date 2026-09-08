@@ -18,9 +18,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from support.capture import read_lines
 from support.checkpoints import FifoCheckpoint
 from support.records import Transcript
+from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, WORKER, requires
 from support.suites import run_this_suite
-
-PLATFORMS = {"darwin"}
 
 
 @contextmanager
@@ -148,6 +147,7 @@ def retirement_result(
     ]
 
 
+@requires(WORKER, NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_starts_worker_shutdown_while_relay_stdout_is_backpressured(
     binary: Path,
 ) -> Transcript:
@@ -163,6 +163,7 @@ def test_starts_worker_shutdown_while_relay_stdout_is_backpressured(
         return retirement_result(process, worker_exit)
 
 
+@requires(WORKER, NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_finishes_natural_worker_exit_while_relay_stdout_is_backpressured(
     binary: Path,
 ) -> Transcript:
@@ -171,6 +172,7 @@ def test_finishes_natural_worker_exit_while_relay_stdout_is_backpressured(
         return retirement_result(process, worker_exit)
 
 
+@requires(WORKER, NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_retires_when_backpressure_exhausts_supervisor_event_reserve(
     binary: Path,
 ) -> Transcript:
@@ -205,6 +207,7 @@ def test_retires_when_backpressure_exhausts_supervisor_event_reserve(
         ]
 
 
+@requires(WORKER, NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_resumes_relay_output_after_downstream_backpressure(
     binary: Path,
 ) -> Transcript:
@@ -237,6 +240,7 @@ def test_resumes_relay_output_after_downstream_backpressure(
         ]
 
 
+@requires(WORKER, NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_finishes_startup_failure_while_relay_stdout_is_backpressured(
     binary: Path,
 ) -> Transcript:
@@ -314,6 +318,7 @@ def retirement_clock_environment(
         yield root, environment
 
 
+@requires(WORKER, NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_succeeds_when_deadline_passes_after_final_output(binary: Path) -> Transcript:
     with retirement_clock_environment({"kind": "worker_exited", "code": 0}) as (
         root,
@@ -347,6 +352,7 @@ os.write(int(os.environ["MCP_CONSOLE_SIDEBAND_FD"]), b'{"kind":"ready"}\n')
         ]
 
 
+@requires(WORKER, NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_writes_regular_file_after_retirement_deadline(binary: Path) -> Transcript:
     with retirement_clock_environment({"kind": "stdout_closed"}) as (
         root,

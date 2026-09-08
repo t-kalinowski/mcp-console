@@ -13,18 +13,19 @@ from support.assertions import (
     wait_for_idle_output,
 )
 from support.client import McpClient
+from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.r import r_test_environment, reference_plots
 from support.records import Transcript
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
 
-
+@executions(DIRECT, SANDBOXED)
 def test_routes_input_to_idle_later_callback(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
-    client = McpClient(binary, ("serve",))
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     client.send(requirements={"r": ["later"]})
 
@@ -68,8 +69,9 @@ def test_routes_input_to_idle_later_callback(
     return client.finish()
 
 
-def test_uses_200_column_default(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_uses_200_column_default(binary: Path, execution: Execution) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
@@ -86,9 +88,10 @@ def test_uses_200_column_default(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_returns_cell_scoped_plots(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_returns_cell_scoped_plots(binary: Path, execution: Execution) -> Transcript:
     environment, rscript = r_test_environment()
-    client = McpClient(binary, ("serve",), environment)
+    client = McpClient(binary, execution.serve(), environment)
     client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
@@ -148,9 +151,12 @@ def test_returns_cell_scoped_plots(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_emits_managed_plots_when_pages_finalize(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_emits_managed_plots_when_pages_finalize(
+    binary: Path, execution: Execution
+) -> Transcript:
     environment, rscript = r_test_environment()
-    client = McpClient(binary, ("serve",), environment)
+    client = McpClient(binary, execution.serve(), environment)
     client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
@@ -186,9 +192,10 @@ def test_emits_managed_plots_when_pages_finalize(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_returns_plots_after_r_errors(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_returns_plots_after_r_errors(binary: Path, execution: Execution) -> Transcript:
     environment, rscript = r_test_environment()
-    client = McpClient(binary, ("serve",), environment)
+    client = McpClient(binary, execution.serve(), environment)
     client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
@@ -228,9 +235,12 @@ def test_returns_plots_after_r_errors(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_leaves_explicit_plot_devices_user_controlled(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_leaves_explicit_plot_devices_user_controlled(
+    binary: Path, execution: Execution
+) -> Transcript:
     environment, rscript = r_test_environment()
-    client = McpClient(binary, ("serve",), environment)
+    client = McpClient(binary, execution.serve(), environment)
     client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""

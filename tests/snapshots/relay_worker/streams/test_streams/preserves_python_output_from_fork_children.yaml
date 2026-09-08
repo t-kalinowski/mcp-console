@@ -20,7 +20,15 @@ relay:
   source: |
     import os
     import sys
+    import warnings
 
+    # The client-server fork-resolution case preserves CPython's complete
+    # deprecation diagnostic. This cell selects only the four stream writes.
+    warnings.filterwarnings(
+        "ignore",
+        message=r"This process \(pid=\d+\) is multi-threaded, use of fork\(\) may lead to deadlocks in the child\.$",
+        category=DeprecationWarning,
+    )
     assert fork_ready
     child = os.fork()
     if child == 0:

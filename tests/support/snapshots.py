@@ -7,7 +7,6 @@ from yaml12 import Yaml, format_yaml, parse_yaml, read_yaml
 
 from support.records import Transcript, TranscriptWithCompanions, YamlStream
 
-
 root = Path(__file__).resolve().parents[2]
 snapshot_directory = root / "tests" / "snapshots"
 initialization_suite = "client_server/server/test_tools"
@@ -163,15 +162,49 @@ def without_request_ids(transcript: Transcript) -> Transcript:
     return rendered
 
 
+def compact_initializations(
+    actual: Transcript, references: list[Path], *, execution: str | None
+) -> YamlStream:
+    expected = [
+        (path, without_request_ids(read_yaml(path, multi=True))) for path in references
+    ]
+    assert all(reference for _, reference in expected), "empty initialization reference"
+    compacted = []
+    index = 0
+    while index < len(actual):
+        for path, reference in expected:
+            if identical(actual[index : index + len(reference)], reference):
+                variant = (
+                    path.stem.removeprefix(Path(initialization_reference).stem)
+                    .removesuffix(".direct")
+                    .removeprefix(".")
+                )
+                target = (
+                    f"{variant + ' ' if variant else ''}MCP initialization for this execution mode"
+                    if execution is not None
+                    else path.relative_to(root).as_posix()
+                )
+                compacted.append(Yaml(target, tag="!same-as"))
+                index += len(reference)
+                break
+        else:
+            compacted.append(actual[index])
+            index += 1
+    return compacted
+
+
 def check_recording(
     suite_name: str,
     case_name: str,
     recorded: Transcript | TranscriptWithCompanions,
     *,
     update: bool,
+    execution: str | None = None,
 ) -> set[Path]:
     snapshot = snapshot_path(suite_name, case_name)
     case = f"{suite_name}::{case_name}"
+    if execution is not None:
+        case += f"[{execution}]"
     if isinstance(recorded, TranscriptWithCompanions):
         actual = without_request_ids(recorded.transcript)
         companions = []
@@ -183,15 +216,19 @@ def check_recording(
         actual = without_request_ids(recorded)
         companions = []
     if snapshot != root / initialization_reference:
-        reference = without_request_ids(
-            read_yaml(root / initialization_reference, multi=True)
-        )
-        assert reference, f"{initialization_reference} contains no documents"
-        if identical(actual[: len(reference)], reference):
-            actual = [
-                Yaml(initialization_reference, tag="!same-as"),
-                *actual[len(reference) :],
+        reference = root / initialization_reference
+        references = [
+            reference,
+            *sorted(reference.parent.glob(f"{reference.stem}.*.yaml")),
+        ]
+        if execution is not None:
+            references = [
+                path
+                for path in references
+                if path.stem.endswith(".direct") == (execution == "direct")
             ]
+        assert references, f"no initialization reference for {execution}"
+        actual = compact_initializations(actual, references, execution=execution)
     check_snapshot(snapshot, actual, case, update=update)
     checked = {snapshot}
     for companion, contents in companions:
@@ -199,6 +236,10 @@ def check_recording(
             check_text_snapshot(companion, contents, case, update=update)
         else:
             assert companion.suffix == ".yaml", companion
+            if snapshot == root / initialization_reference:
+                # These companions are MCP handshakes; other YAML companions
+                # can carry protocol IDs that must remain visible.
+                contents = without_request_ids(contents)
             check_snapshot(companion, contents, case, update=update)
         checked.add(companion)
     return checked

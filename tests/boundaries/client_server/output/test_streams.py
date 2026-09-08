@@ -14,10 +14,11 @@ from support.assertions import (
     remove_length_marker,
 )
 from support.client import McpClient, stop_client
+from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.records import Transcript
+from support.requirements import PROCESS_EVENTS, requires
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
 TEST_GATED_RESPONSE_SIZE = 128 * 1024
 PNG_1X1 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42Y"
@@ -32,11 +33,12 @@ from boundaries.client_server._harness import (
 )
 
 
-def test_captures_worker_stdout(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_captures_worker_stdout(binary: Path, execution: Execution) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     client = McpClient(
         binary,
-        ("serve", "--worker", str(zod)),
+        execution.serve("--worker", str(zod)),
     )
     client.initialize_and_list_tools()
     client.send(r="emit stdout")
@@ -48,11 +50,14 @@ def test_captures_worker_stdout(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_compacts_split_terminal_redraws(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_compacts_split_terminal_redraws(
+    binary: Path, execution: Execution
+) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     client = McpClient(
         binary,
-        ("serve", "--worker", str(zod)),
+        execution.serve("--worker", str(zod)),
     )
     client.initialize_and_list_tools()
 
@@ -61,11 +66,14 @@ def test_compacts_split_terminal_redraws(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_compacts_stdout_and_stderr_independently(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_compacts_stdout_and_stderr_independently(
+    binary: Path, execution: Execution
+) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     client = McpClient(
         binary,
-        ("serve", "--worker", str(zod)),
+        execution.serve("--worker", str(zod)),
     )
     client.initialize_and_list_tools()
 
@@ -81,8 +89,11 @@ def test_compacts_stdout_and_stderr_independently(binary: Path) -> Transcript:
     return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS)
 def test_compacts_each_polled_output_segment(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
@@ -91,7 +102,7 @@ def test_compacts_each_polled_output_segment(
         environment["TMPDIR"] = temporary_directory
         client = McpClient(
             binary,
-            ("serve", "--worker", str(zod)),
+            execution.serve("--worker", str(zod)),
             environment,
         )
         client.initialize_and_list_tools()
@@ -117,13 +128,15 @@ def test_compacts_each_polled_output_segment(
         return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_compacts_many_redraws_in_one_response(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     client = McpClient(
         binary,
-        ("serve", "--worker", str(zod)),
+        execution.serve("--worker", str(zod)),
     )
     client.initialize_and_list_tools()
 
@@ -132,11 +145,14 @@ def test_compacts_many_redraws_in_one_response(
     return client.finish()
 
 
-def test_preserves_invalid_raw_output_when_worker_exits(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_preserves_invalid_raw_output_when_worker_exits(
+    binary: Path, execution: Execution
+) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     client = McpClient(
         binary,
-        ("serve", "--worker", str(zod)),
+        execution.serve("--worker", str(zod)),
     )
     client.initialize_and_list_tools()
 
@@ -165,13 +181,15 @@ def test_preserves_invalid_raw_output_when_worker_exits(binary: Path) -> Transcr
     return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_preserves_raw_output_during_malformed_sideband_failure(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     client = McpClient(
         binary,
-        ("serve", "--worker", str(zod)),
+        execution.serve("--worker", str(zod)),
     )
     client.initialize_and_list_tools()
 
@@ -233,13 +251,15 @@ def test_preserves_raw_output_during_malformed_sideband_failure(
     return transcript
 
 
+@executions(DIRECT, SANDBOXED)
 def test_preserves_raw_output_during_semantically_invalid_sideband_message(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     client = McpClient(
         binary,
-        ("serve", "--worker", str(zod)),
+        execution.serve("--worker", str(zod)),
     )
     client.initialize_and_list_tools()
 
@@ -276,7 +296,11 @@ def test_preserves_raw_output_during_semantically_invalid_sideband_message(
     return client.finish()
 
 
-def test_drains_background_stderr_while_idle(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS)
+def test_drains_background_stderr_while_idle(
+    binary: Path, execution: Execution
+) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
@@ -284,7 +308,7 @@ def test_drains_background_stderr_while_idle(binary: Path) -> Transcript:
         environment["TMPDIR"] = temporary_directory
         client = McpClient(
             binary,
-            ("serve", "--worker", str(zod)),
+            execution.serve("--worker", str(zod)),
             environment,
         )
         client.initialize_and_list_tools()
@@ -315,11 +339,14 @@ def test_drains_background_stderr_while_idle(binary: Path) -> Transcript:
         return client.finish()
 
 
-def test_times_out_and_polls_running_evaluation(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_times_out_and_polls_running_evaluation(
+    binary: Path, execution: Execution
+) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     client = McpClient(
         binary,
-        ("serve", "--worker", str(zod)),
+        execution.serve("--worker", str(zod)),
     )
     client.initialize_and_list_tools()
     client.send(r="echo echo")
@@ -336,7 +363,11 @@ def test_times_out_and_polls_running_evaluation(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_drains_pending_sideband_output_while_running(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS)
+def test_drains_pending_sideband_output_while_running(
+    binary: Path, execution: Execution
+) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
@@ -344,7 +375,7 @@ def test_drains_pending_sideband_output_while_running(binary: Path) -> Transcrip
         environment["TMPDIR"] = temporary_directory
         client = McpClient(
             binary,
-            ("serve", "--worker", str(zod)),
+            execution.serve("--worker", str(zod)),
             environment,
         )
         client.initialize_and_list_tools()
@@ -379,8 +410,10 @@ def test_drains_pending_sideband_output_while_running(binary: Path) -> Transcrip
         return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_orders_queued_cancellation_behind_incomplete_response(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     environment = os.environ.copy()
@@ -393,7 +426,7 @@ def test_orders_queued_cancellation_behind_incomplete_response(
             control.configure(environment)
             client = SocketGateMcpClient(
                 binary,
-                ("serve", "--worker", str(zod)),
+                execution.serve("--worker", str(zod)),
                 environment,
                 temporary,
             )

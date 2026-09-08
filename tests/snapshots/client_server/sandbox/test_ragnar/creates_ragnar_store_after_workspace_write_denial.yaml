@@ -1,0 +1,44 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  requirements:
+    r:
+      - ragnar
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+send:
+  r: |
+    ragnar::ragnar_store_create(
+      "knowledge.ragnar.duckdb",
+      embed = NULL
+    )
+result:
+  content:
+    - type: text
+      text: |
+        Error in file(con, "w") : cannot open the connection
+        In addition: Warning message:
+        In file(con, "w") :
+          cannot open file 'knowledge.ragnar.duckdb': Operation not permitted
+  isError: false
+---
+send:
+  r: |
+    store_path <- file.path(tempdir(), "knowledge.ragnar.duckdb")
+    store <- suppressMessages(ragnar::ragnar_store_create(
+      store_path,
+      embed = NULL
+    ))
+    stopifnot(DBI::dbIsValid(store@con), file.exists(store_path))
+    writeLines("created store under the worker tempdir")
+result:
+  content:
+    - type: text
+      text: |
+        created store under the worker tempdir
+  isError: false

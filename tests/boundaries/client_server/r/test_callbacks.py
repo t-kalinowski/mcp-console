@@ -15,16 +15,16 @@ from support.assertions import (
 )
 from support.checkpoints import wait_for_worker_file
 from support.client import McpClient
+from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.r import r_input_handler_client, r_test_environment, reference_plots
 from support.records import Transcript
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
 
-
-def test_evaluates_a_complete_cell(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_evaluates_a_complete_cell(binary: Path, execution: Execution) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
@@ -53,8 +53,11 @@ def test_evaluates_a_complete_cell(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_services_r_input_handlers_at_cell_boundaries(binary: Path) -> Transcript:
-    with r_input_handler_client(binary) as (client, directory):
+@executions(DIRECT, SANDBOXED)
+def test_services_r_input_handlers_at_cell_boundaries(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with r_input_handler_client(binary, execution) as (client, directory):
         client.initialize_and_list_tools()
 
         # Make the handler ready before the worker's final boundary turn.
@@ -102,8 +105,11 @@ def test_services_r_input_handlers_at_cell_boundaries(binary: Path) -> Transcrip
         return client.finish()
 
 
-def test_services_later_callbacks_while_idle(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_services_later_callbacks_while_idle(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     client.send(requirements={"r": ["later"]})
 
@@ -132,8 +138,11 @@ def test_services_later_callbacks_while_idle(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_collects_idle_later_callbacks_with_empty_send(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_collects_idle_later_callbacks_with_empty_send(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     client.send(requirements={"r": ["later"]})
     client.send()
@@ -167,8 +176,11 @@ def test_collects_idle_later_callbacks_with_empty_send(binary: Path) -> Transcri
     return client.finish()
 
 
-def test_snapshots_output_while_idle_later_callback_runs(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_snapshots_output_while_idle_later_callback_runs(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     client.send(requirements={"r": ["later"]})
 
@@ -215,8 +227,11 @@ def test_snapshots_output_while_idle_later_callback_runs(binary: Path) -> Transc
     return client.finish()
 
 
-def test_restarts_while_idle_callback_runs(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_restarts_while_idle_callback_runs(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     client.send(requirements={"r": ["later"]})
 
@@ -253,9 +268,12 @@ def test_restarts_while_idle_callback_runs(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_returns_plots_from_idle_later_callbacks(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_returns_plots_from_idle_later_callbacks(
+    binary: Path, execution: Execution
+) -> Transcript:
     environment, rscript = r_test_environment()
-    client = McpClient(binary, ("serve",), environment)
+    client = McpClient(binary, execution.serve(), environment)
     client.initialize_and_list_tools()
     client.send(requirements={"r": ["later"]})
 
@@ -294,8 +312,11 @@ def test_returns_plots_from_idle_later_callbacks(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_stops_cell_after_boundary_callback_failure(binary: Path) -> Transcript:
-    with r_input_handler_client(binary) as (client, directory):
+@executions(DIRECT, SANDBOXED)
+def test_stops_cell_after_boundary_callback_failure(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with r_input_handler_client(binary, execution) as (client, directory):
         client.initialize_and_list_tools()
 
         # Create the finalized page without read permissions. The PNG device
@@ -340,8 +361,11 @@ def test_stops_cell_after_boundary_callback_failure(binary: Path) -> Transcript:
         return client.finish()
 
 
-def test_skips_final_boundary_callbacks_after_cell_failure(binary: Path) -> Transcript:
-    with r_input_handler_client(binary) as (client, _directory):
+@executions(DIRECT, SANDBOXED)
+def test_skips_final_boundary_callbacks_after_cell_failure(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with r_input_handler_client(binary, execution) as (client, _directory):
         client.initialize_and_list_tools()
 
         # Record a plot publication failure during the cell after making an
@@ -386,8 +410,11 @@ def test_skips_final_boundary_callbacks_after_cell_failure(binary: Path) -> Tran
         return client.finish()
 
 
-def test_routes_input_to_idle_later_callbacks_before_a_cell(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_routes_input_to_idle_later_callbacks_before_a_cell(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     client.send(requirements={"r": ["later"]})
 

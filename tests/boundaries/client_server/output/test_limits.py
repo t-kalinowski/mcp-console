@@ -10,20 +10,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import large_output, last_tool_text
 from support.client import McpClient
+from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.records import Transcript
+from support.requirements import NATIVE_FIXTURES, requires
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
 PENDING_TEXT_BUDGET = 8 * 1024 * 1024
 
 
+@executions(DIRECT, SANDBOXED)
 def test_bounds_pending_output_and_resets_after_completion(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     client = McpClient(
         binary,
-        ("serve", "--worker", str(zod)),
+        execution.serve("--worker", str(zod)),
     )
     client.initialize_and_list_tools()
 
@@ -46,7 +49,11 @@ def test_bounds_pending_output_and_resets_after_completion(
     return client.finish()
 
 
-def test_orders_failure_and_replacement_output(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+@requires(NATIVE_FIXTURES)
+def test_orders_failure_and_replacement_output(
+    binary: Path, execution: Execution
+) -> Transcript:
     fixtures = Path(__file__).resolve().parents[3] / "fixtures"
     with tempfile.TemporaryDirectory() as temporary_directory:
         interposer = Path(temporary_directory) / "relay-stdout-read.dylib"
@@ -75,8 +82,7 @@ def test_orders_failure_and_replacement_output(binary: Path) -> Transcript:
         environment["MCP_CONSOLE_TEST_RELAY_READ_MATCH"] = "zod stdout tail\n"
         with McpClient(
             binary,
-            (
-                "serve",
+            execution.serve(
                 "--worker",
                 str(fixtures / "zod"),
                 "--relay",
@@ -128,13 +134,15 @@ def test_orders_failure_and_replacement_output(binary: Path) -> Transcript:
             return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_preserves_raw_output_during_forced_stop(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     client = McpClient(
         binary,
-        ("serve", "--worker", str(zod)),
+        execution.serve("--worker", str(zod)),
     )
     client.initialize_and_list_tools()
 

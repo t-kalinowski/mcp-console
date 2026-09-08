@@ -7,21 +7,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import last_tool_text
 from support.client import McpClient
+from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.records import Transcript
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
 PNG_1X1 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42Y"
     "AAAAASUVORK5CYII="
 )
 
 
-def test_routes_send_over_sideband(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_routes_send_over_sideband(binary: Path, execution: Execution) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     client = McpClient(
         binary,
-        ("serve", "--worker", str(zod)),
+        execution.serve("--worker", str(zod)),
     )
     client.initialize_and_list_tools()
     client.send(r="echo hello")
@@ -33,11 +34,12 @@ def test_routes_send_over_sideband(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_projects_console_kinds(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_projects_console_kinds(binary: Path, execution: Execution) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     client = McpClient(
         binary,
-        ("serve", "--worker", str(zod)),
+        execution.serve("--worker", str(zod)),
     )
     client.initialize_and_list_tools()
     result = client.send(r="emit console kinds")
@@ -53,11 +55,12 @@ def test_projects_console_kinds(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_returns_worker_images(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_returns_worker_images(binary: Path, execution: Execution) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     client = McpClient(
         binary,
-        ("serve", "--worker", str(zod)),
+        execution.serve("--worker", str(zod)),
     )
     client.initialize_and_list_tools()
     client.send(r="emit image")

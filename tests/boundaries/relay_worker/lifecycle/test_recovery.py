@@ -14,16 +14,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from boundaries.relay_worker._harness import RelayWorkerClient
 from support.assertions import tool_text as _tool_text
+from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript
+from support.requirements import NATIVE_FIXTURES, WORKER, requires
 from support.suites import run_this_suite
 
 
-PLATFORMS = {"darwin"}
-
-
-def test_tolerates_enotconn_during_directional_shutdown(binary: Path) -> Transcript:
-    client = RelayWorkerClient(binary, inject_shutdown_enotconn=True)
+@executions(DIRECT, SANDBOXED)
+def test_tolerates_enotconn_during_directional_shutdown(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = RelayWorkerClient(
+        binary, inject_shutdown_enotconn=True, execution=execution
+    )
     assert _tool_text(client.send(r="invisible(NULL)")) == "[done]"
     old_path, old_capture = client._open_capture()
     result = _tool_text(client.send(control="restart"))
@@ -38,6 +42,7 @@ def test_tolerates_enotconn_during_directional_shutdown(binary: Path) -> Transcr
     return transcript
 
 
+@requires(WORKER, NATIVE_FIXTURES)
 def test_tolerates_connection_reset_with_unread_shutdown(
     binary: Path,
 ) -> Transcript:
@@ -156,12 +161,16 @@ def test_tolerates_connection_reset_with_unread_shutdown(
             process.stderr.close()
 
 
-def test_recovers_after_worker_segfault(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_recovers_after_worker_segfault(
+    binary: Path, execution: Execution
+) -> Transcript:
     # Disable R's fatal-signal UI so the native fault terminates the worker directly.
     client = RelayWorkerClient(
         binary,
         capture_worker_sideband_close=True,
         disable_r_segv_handler=True,
+        execution=execution,
     )
     # fmt: r
     before_crash = code(r"""

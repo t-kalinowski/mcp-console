@@ -9,8 +9,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.client import McpClient
+from support.execution import DIRECT, SANDBOXED, Execution
 from support.normalization import code
-from support.records import Transcript
+from support.records import Transcript, TranscriptWithCompanions
+from support.requirements import WORKER, requires
+from support.resolvers import bare_runtime_environment
 from support.suites import run_this_suite
 
 
@@ -44,7 +47,9 @@ def test_invalid_send_has_no_external_effects(binary: Path) -> Transcript:
         environment["MCP_CONSOLE_TEST_RESOLVER_RECORD"] = str(resolver_record)
         environment["MCP_CONSOLE_TEST_ZOD_STARTED"] = str(worker_started)
 
-        with McpClient(binary, ("serve", "--worker", str(zod)), environment) as client:
+        with McpClient(
+            binary, DIRECT.serve("--worker", str(zod)), environment
+        ) as client:
             client.initialize_and_list_tools()
             invalid = (
                 {"r": "echo invalid R cell ran", "requirements": {"r": [""]}},
@@ -68,37 +73,56 @@ def test_invalid_send_has_no_external_effects(binary: Path) -> Transcript:
             return client.finish()
 
 
-def test_initializes_and_lists_tools(binary: Path) -> Transcript:
+def test_initializes_and_lists_tools(binary: Path) -> TranscriptWithCompanions:
+    return TranscriptWithCompanions(
+        _initializes_and_lists_tools(binary, SANDBOXED),
+        {
+            "direct.yaml": _initializes_and_lists_tools(binary, DIRECT),
+            "bare.yaml": _initializes_and_lists_tools(binary, SANDBOXED, bare=True),
+            "bare.direct.yaml": _initializes_and_lists_tools(binary, DIRECT, bare=True),
+        },
+    )
+
+
+def _initializes_and_lists_tools(
+    binary: Path, execution: Execution, *, bare: bool = False
+) -> Transcript:
     environment = os.environ.copy()
     environment.pop("MCP_CONSOLE_LANGUAGES", None)
-    with McpClient(binary, ("serve",), environment) as client:
-        assert client.temporary_directory is not None
-        workspace = Path(client.temporary_directory.name)
-        client.initialize_and_list_tools()
-        listed_tools = client.transcript[-1]["result"]["tools"]
-        assert [tool["name"] for tool in listed_tools] == ["send"], listed_tools
-        send = listed_tools[0]
-        control = send["inputSchema"]["properties"]["control"]
-        assert control["type"] == "string", control
-        assert control["enum"] == ["interrupt", "restart"], control
-        send_schema = json.dumps(send["inputSchema"])
-        assert '"$defs"' not in send_schema, send["inputSchema"]
-        assert '"$ref"' not in send_schema, send["inputSchema"]
+    with tempfile.TemporaryDirectory() as library:
+        if bare:
+            environment = bare_runtime_environment(environment, Path(library))
+        with McpClient(binary, execution.serve(), environment) as client:
+            assert client.temporary_directory is not None
+            workspace = Path(client.temporary_directory.name)
+            client.initialize_and_list_tools()
+            listed_tools = client.transcript[-1]["result"]["tools"]
+            assert [tool["name"] for tool in listed_tools] == ["send"], listed_tools
+            send = listed_tools[0]
+            control = send["inputSchema"]["properties"]["control"]
+            assert control["type"] == "string", control
+            assert control["enum"] == ["interrupt", "restart"], control
+            send_schema = json.dumps(send["inputSchema"])
+            assert '"$defs"' not in send_schema, send["inputSchema"]
+            assert '"$ref"' not in send_schema, send["inputSchema"]
 
-        send_requirements = send["inputSchema"]["properties"]["requirements"]
-        assert send_requirements["type"] == ["object", "null"], send_requirements
-        assert send_requirements["additionalProperties"] is False, send_requirements
-        requirement_properties = send_requirements["properties"]
-        assert requirement_properties.keys() == {"duckdb", "r", "python"}
-        for requirement in requirement_properties.values():
-            assert requirement["type"] == "array", requirement
-            assert requirement["maxItems"] == 64, requirement
-            assert requirement["default"] == [], requirement
-            assert requirement["items"]["type"] == "string", requirement
-            assert requirement["items"]["minLength"] == 1, requirement
-        assert requirement_properties["duckdb"]["items"]["maxLength"] == 64
-        assert not (workspace / ".mcp-console").exists(), workspace
-        return client.finish()
+            assert not (workspace / ".mcp-console").exists(), workspace
+            if bare:
+                assert "requirements" not in send["inputSchema"]["properties"]
+                return client.finish()
+            send_requirements = send["inputSchema"]["properties"]["requirements"]
+            assert send_requirements["type"] == ["object", "null"], send_requirements
+            assert send_requirements["additionalProperties"] is False, send_requirements
+            requirement_properties = send_requirements["properties"]
+            assert requirement_properties.keys() == {"duckdb", "r", "python"}
+            for requirement in requirement_properties.values():
+                assert requirement["type"] == "array", requirement
+                assert requirement["maxItems"] == 64, requirement
+                assert requirement["default"] == [], requirement
+                assert requirement["items"]["type"] == "string", requirement
+                assert requirement["items"]["minLength"] == 1, requirement
+            assert requirement_properties["duckdb"]["items"]["maxLength"] == 64
+            return client.finish()
 
 
 def test_limits_send_languages_from_environment(binary: Path) -> Transcript:
@@ -108,7 +132,9 @@ def test_limits_send_languages_from_environment(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as client_directory:
         worker_started = Path(client_directory) / "zod-started"
         environment["MCP_CONSOLE_TEST_ZOD_STARTED"] = str(worker_started)
-        with McpClient(binary, ("serve", "--worker", str(zod)), environment) as client:
+        with McpClient(
+            binary, DIRECT.serve("--worker", str(zod)), environment
+        ) as client:
             client.initialize_and_list_tools()
 
             tools = {
@@ -129,8 +155,9 @@ def test_limits_send_languages_from_environment(binary: Path) -> Transcript:
             return client.finish()
 
 
+@requires(WORKER)
 def test_validates_send_arguments(binary: Path) -> Transcript:
-    with McpClient(binary, ("serve",)) as client:
+    with McpClient(binary, DIRECT.serve()) as client:
         client.initialize_and_list_tools()
         client.send(
             # fmt: python
@@ -233,7 +260,7 @@ def test_validates_send_arguments(binary: Path) -> Transcript:
 
 
 def test_validates_standalone_requirement_arguments(binary: Path) -> Transcript:
-    with McpClient(binary, ("serve",)) as client:
+    with McpClient(binary, DIRECT.serve()) as client:
         client.initialize_and_list_tools()
         client.send(requirements={})
         result = client.transcript[-1]["result"]
@@ -308,7 +335,7 @@ def test_validates_standalone_requirement_arguments(binary: Path) -> Transcript:
 
 
 def test_rejects_interrupt_without_worker(binary: Path) -> Transcript:
-    with McpClient(binary, ("serve",)) as client:
+    with McpClient(binary, DIRECT.serve()) as client:
         client.initialize_and_list_tools()
         client.send(control="interrupt", timeout_ms=0)
         result = client.transcript[-1]["result"]

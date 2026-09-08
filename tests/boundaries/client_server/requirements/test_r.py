@@ -14,14 +14,13 @@ from support.assertions import (
     wait_for_idle_output,
 )
 from support.client import McpClient, stop_client
+from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.r import r_test_environment
 from support.records import Transcript
+from support.requirements import command, requires
 from support.resolvers import checkpoint_uv_environment
 from support.suites import run_this_suite
-
-PLATFORMS = {"darwin"}
-REQUIRED_COMMANDS = {"ir"}
 
 
 def named_requirement_error(requirement: str) -> str:
@@ -31,7 +30,10 @@ def named_requirement_error(requirement: str) -> str:
     )
 
 
-def test_rejects_unsupported_ir_version(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_rejects_unsupported_ir_version(
+    binary: Path, execution: Execution
+) -> Transcript:
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
 
@@ -64,7 +66,7 @@ def test_rejects_unsupported_ir_version(binary: Path) -> Transcript:
 
         client = McpClient(
             binary,
-            ("serve", "--worker", str(zod)),
+            execution.serve("--worker", str(zod)),
             environment,
             current_directory=workspace,
         )
@@ -81,7 +83,8 @@ def test_rejects_unsupported_ir_version(binary: Path) -> Transcript:
         return client.finish()
 
 
-def test_rejects_local_r_installation(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_rejects_local_r_installation(binary: Path, execution: Execution) -> Transcript:
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
     environment.pop("IR_NO_LOCAL_SOURCES", None)
@@ -99,7 +102,7 @@ def test_rejects_local_r_installation(binary: Path) -> Transcript:
 
         client = McpClient(
             binary,
-            ("serve",),
+            execution.serve(),
             environment,
             current_directory=workspace,
         )
@@ -141,10 +144,13 @@ def test_rejects_local_r_installation(binary: Path) -> Transcript:
         return client.finish()
 
 
-def test_prepares_and_uses_cran_packages(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_prepares_and_uses_cran_packages(
+    binary: Path, execution: Execution
+) -> Transcript:
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
-    client = McpClient(binary, ("serve",), environment)
+    client = McpClient(binary, execution.serve(), environment)
     client.initialize_and_list_tools()
     client.send(
         requirements={"r": ["praise, zeallot"]},
@@ -168,10 +174,13 @@ def test_prepares_and_uses_cran_packages(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_sends_r_cell_with_initial_requirements(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_sends_r_cell_with_initial_requirements(
+    binary: Path, execution: Execution
+) -> Transcript:
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
-    client = McpClient(binary, ("serve",), environment)
+    client = McpClient(binary, execution.serve(), environment)
     client.initialize_and_list_tools()
 
     # fmt: r
@@ -188,10 +197,13 @@ def test_sends_r_cell_with_initial_requirements(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_prepares_r_requirements_after_worker_startup(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_prepares_r_requirements_after_worker_startup(
+    binary: Path, execution: Execution
+) -> Transcript:
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
-    client = McpClient(binary, ("serve",), environment)
+    client = McpClient(binary, execution.serve(), environment)
     client.initialize_and_list_tools()
     client.send(requirements={"r": ["praise"]})
     assert last_result_text(client) == "[prepared]"
@@ -220,8 +232,11 @@ def test_prepares_r_requirements_after_worker_startup(binary: Path) -> Transcrip
     return client.finish()
 
 
-def test_stops_live_preparation_for_idle_callback_input(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_stops_live_preparation_for_idle_callback_input(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     client.send(requirements={"r": ["later"]})
 
@@ -278,8 +293,11 @@ def test_stops_live_preparation_for_idle_callback_input(binary: Path) -> Transcr
     return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
+@requires(command("ir"), command("uv"))
 def test_failed_mixed_preparation_retains_live_python_activation(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     requirement = "mcpconsolepreparationfixture"
     with tempfile.TemporaryDirectory() as temporary_directory:
@@ -306,7 +324,7 @@ def test_failed_mixed_preparation_retains_live_python_activation(
         environment["MCP_CONSOLE_TEST_IR_REQUIREMENT"] = requirement
         environment["MCP_CONSOLE_TEST_IR_LIBRARY"] = str(candidate)
 
-        client = McpClient(binary, ("serve",), environment)
+        client = McpClient(binary, execution.serve(), environment)
         passed = False
         try:
             client.initialize_and_list_tools()
@@ -367,9 +385,12 @@ def test_failed_mixed_preparation_retains_live_python_activation(
                 stop_client(client)
 
 
-def test_failed_late_mixed_preparation_preserves_worker(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_failed_late_mixed_preparation_preserves_worker(
+    binary: Path, execution: Execution
+) -> Transcript:
     environment, _ = r_test_environment()
-    client = McpClient(binary, ("serve",), environment)
+    client = McpClient(binary, execution.serve(), environment)
     client.initialize_and_list_tools()
     client.send(requirements={"r": ["praise"]})
     assert last_result_text(client) == "[prepared]"
@@ -409,7 +430,10 @@ def test_failed_late_mixed_preparation_preserves_worker(binary: Path) -> Transcr
     return client.finish()
 
 
-def test_evaluates_with_default_managed_r(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_evaluates_with_default_managed_r(
+    binary: Path, execution: Execution
+) -> Transcript:
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
     with tempfile.TemporaryDirectory() as temporary:
@@ -422,7 +446,7 @@ def test_evaluates_with_default_managed_r(binary: Path) -> Transcript:
 
         client = McpClient(
             binary,
-            ("serve",),
+            execution.serve(),
             environment,
             current_directory=workspace,
         )
@@ -459,7 +483,10 @@ def test_evaluates_with_default_managed_r(binary: Path) -> Transcript:
         return client.finish()
 
 
-def test_prepares_initial_r_requirements(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_prepares_initial_r_requirements(
+    binary: Path, execution: Execution
+) -> Transcript:
     environment, _ = r_test_environment()
     initial_r = "praise"
     candidate_r = "zeallot"
@@ -474,7 +501,7 @@ def test_prepares_initial_r_requirements(binary: Path) -> Transcript:
 
         client = McpClient(
             binary,
-            ("serve",),
+            execution.serve(),
             environment,
             current_directory=workspace,
         )

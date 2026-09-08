@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.execution import SANDBOXED
 from support.client import McpClient, stop_client
 from support.macos import (
     capture_darwin_process_identity,
@@ -18,9 +19,8 @@ from support.macos import (
 )
 from support.normalization import code
 from support.records import Transcript, TranscriptEntry
+from support.requirements import PROCESS_EVENTS, SANDBOX, requires
 from support.suites import run_this_suite
-
-PLATFORMS = {"darwin"}
 
 
 def descriptor_entry(
@@ -67,7 +67,7 @@ def descriptor_entry(
             environment["MCP_CONSOLE_TEST_INHERITED_FD"] = str(descriptor)
             client = McpClient(
                 Path(sys.executable),
-                ("-c", launcher, str(binary), "serve", *serve_arguments),
+                ("-c", launcher, str(binary), *SANDBOXED.serve(*serve_arguments)),
                 environment,
                 current_directory=temporary,
                 pass_fds=(descriptor,),
@@ -99,6 +99,7 @@ def descriptor_entry(
         return entry
 
 
+@requires(SANDBOX, PROCESS_EVENTS)
 def test_closes_unlisted_server_descriptors_on_every_launch_path(
     binary: Path,
 ) -> Transcript:

@@ -8,6 +8,7 @@ from pathlib import Path
 from support.assertions import last_result_text
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
+from support.execution import Execution
 from support.normalization import code
 from support.r import r_test_environment
 
@@ -223,8 +224,25 @@ def matplotlib_test_environment(cache_home: Path) -> dict[str, str]:
     return environment
 
 
+def bare_runtime_environment(
+    environment: dict[str, str], library: Path
+) -> dict[str, str]:
+    environment = environment.copy()
+    environment["PATH"] = os.pathsep.join(
+        entry
+        for entry in environment["PATH"].split(os.pathsep)
+        if not any((Path(entry) / name).exists() for name in ("ir", "uv", "uvx"))
+    )
+    environment.pop("RETICULATE_UV", None)
+    environment.pop("RETICULATE_PYTHON", None)
+    for name in ("R_LIBS", "R_LIBS_SITE", "R_LIBS_USER"):
+        environment[name] = str(library)
+    return environment
+
+
 def python_inventory_client(
     binary: Path,
+    execution: Execution,
     directory: Path,
     *,
     preference: str | None = None,
@@ -257,7 +275,7 @@ def python_inventory_client(
         environment.update(extra_environment)
     client = McpClient(
         binary,
-        ("serve",),
+        execution.serve(),
         environment,
         current_directory=directory,
     )
@@ -413,7 +431,7 @@ def initialize_python_and_record_baseline(client: McpClient, record: Path) -> in
     return len(uv_tool_run_requirements(record))
 
 
-def resolve_managed_python(binary: Path, directory: Path) -> Path:
+def resolve_managed_python(binary: Path, execution: Execution, directory: Path) -> Path:
     workspace = directory / "managed-python"
     workspace.mkdir()
     environment = os.environ.copy()
@@ -421,7 +439,7 @@ def resolve_managed_python(binary: Path, directory: Path) -> Path:
     environment.pop("UV_PYTHON", None)
     with McpClient(
         binary,
-        ("serve",),
+        execution.serve(),
         environment,
         current_directory=workspace,
     ) as client:

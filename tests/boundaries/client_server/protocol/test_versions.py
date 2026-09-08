@@ -6,12 +6,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.client import McpClient
+from support.execution import SANDBOXED
 from support.records import Transcript
 from support.suites import run_this_suite
 
 
 def request_lifecycle(binary: Path, method: str, **params: object) -> Transcript:
-    client = McpClient(binary, ("serve",))
+    client = McpClient(binary, SANDBOXED.serve())
     client.request(method, **params)
     return client.finish()
 

@@ -15,6 +15,7 @@ from pathlib import Path
 
 from support.client import McpClient
 from support.macos import capture_darwin_process_identity, signal_darwin_process
+from support.requirements import POSIX, PROCESS_EVENTS
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -124,7 +125,7 @@ def test_waits_with_client(binary: Path) -> list[dict[str, str]]:
 """.lstrip()
 
 
-@unittest.skipUnless(os.name == "posix", "requires POSIX FIFO APIs")
+@unittest.skipUnless(POSIX.available, POSIX.reason)
 class McpClientTests(unittest.TestCase):
     @contextmanager
     def client_runner(
@@ -153,6 +154,8 @@ class McpClientTests(unittest.TestCase):
                 "client.py",
                 "records.py",
                 "snapshots.py",
+                "requirements.py",
+                "execution.py",
             ):
                 shutil.copy2(ROOT / "tests" / "support" / name, support / name)
             binary.touch()
@@ -279,7 +282,7 @@ class McpClientTests(unittest.TestCase):
             self.assertEqual(client.process.returncode, 0)
             self.assertTrue((root / "stdin-closed").is_file())
 
-    @unittest.skipUnless(sys.platform == "darwin", "requires macOS process exit events")
+    @unittest.skipUnless(PROCESS_EVENTS.available, PROCESS_EVENTS.reason)
     def test_runner_interrupt_allows_client_to_reap_unresponsive_server(self) -> None:
         with self.client_runner(RUNNER_CLIENT_SUITE, "--timeout", "60") as (
             process,
