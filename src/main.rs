@@ -8,10 +8,14 @@ mod cli;
 mod process_descriptors;
 #[cfg(target_os = "macos")]
 mod process_exit;
+#[cfg(target_os = "macos")]
 mod python;
 mod python_requirement;
+#[cfg(target_os = "macos")]
 mod r_bridge;
+#[cfg(target_os = "macos")]
 mod r_environment;
+#[cfg(target_os = "macos")]
 mod r_graphics;
 mod r_package_name;
 mod relay_protocol;
@@ -19,7 +23,9 @@ mod resolver;
 mod sandbox;
 mod server;
 mod server_transport;
+#[cfg(unix)]
 mod sideband;
+#[cfg(target_os = "macos")]
 mod sql;
 mod transcript;
 mod worker;

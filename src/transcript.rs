@@ -1,5 +1,6 @@
 use std::fs::{DirBuilder, File, OpenOptions};
 use std::io::{BufWriter, Write};
+#[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -477,6 +478,7 @@ fn report_projection_failure(error: &str) {
 fn create_private_directory(path: &Path, recursive: bool) -> std::io::Result<()> {
     let mut builder = DirBuilder::new();
     builder.recursive(recursive);
+    #[cfg(unix)]
     builder.mode(0o700);
     builder.create(path)
 }
@@ -484,6 +486,7 @@ fn create_private_directory(path: &Path, recursive: bool) -> std::io::Result<()>
 fn create_private_file(path: &Path) -> std::io::Result<File> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
+    #[cfg(unix)]
     options.mode(0o600);
     options.open(path)
 }

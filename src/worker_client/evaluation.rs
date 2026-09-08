@@ -38,6 +38,7 @@ struct EvaluationState {
     waiting: bool,
     restart_reserved: bool,
     restart_handoff: Option<Response>,
+    #[cfg(target_os = "macos")]
     stdin: Option<super::platform::StdinSender>,
     pending_stdin: String,
 }
@@ -123,6 +124,7 @@ impl Evaluation {
                 waiting: false,
                 restart_reserved: false,
                 restart_handoff: None,
+                #[cfg(target_os = "macos")]
                 stdin: None,
                 pending_stdin: String::new(),
             }),
@@ -303,6 +305,7 @@ impl Evaluation {
         if let Some(report_at) = state.input_report_at.as_mut() {
             *report_at = Instant::now() + INPUT_REQUEST_GRACE;
         }
+        #[cfg(target_os = "macos")]
         if let Some(writer) = &state.stdin {
             writer.send(stdin)?;
             return Ok(());
@@ -311,6 +314,7 @@ impl Evaluation {
         Ok(())
     }
 
+    #[cfg(target_os = "macos")]
     pub(super) fn attach_writer(&self, writer: super::platform::StdinSender) -> Result<(), String> {
         let mut state = self
             .state
