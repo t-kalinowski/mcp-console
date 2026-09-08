@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -59,34 +60,72 @@ def main() -> None:
     if sys.platform != "darwin":
         fail(f"building private runner artifacts is unsupported on {sys.platform}")
 
+    target = args.target
+    if target is None:
+        target = subprocess.run(
+            [
+                "rustup",
+                "run",
+                "--install",
+                pin["rust_toolchain"],
+                "rustc",
+                "--print",
+                "host-tuple",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        if target not in TARGETS:
+            fail(f"unsupported native target: {target}")
+    key = hashlib.sha256(
+        (ROOT / "sandbox-runner.json").read_bytes() + Path(__file__).read_bytes()
+    ).hexdigest()
+    artifact = args.cache_dir / "artifacts" / key / target
     args.cache_dir.mkdir(parents=True, exist_ok=True)
     # Multiple Cargo profiles can request the same source build concurrently.
     with (args.cache_dir / f"{pin['commit']}.lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         checkout = args.checkout
-        if checkout is None:
-            checkout = args.cache_dir / pin["commit"]
-            checkout.mkdir(exist_ok=True)
-            if not (checkout / ".git").exists():
-                git_output(checkout, "init")
-            if not (checkout / "codex-rs/Cargo.toml").exists():
-                git_output(
-                    checkout,
-                    "fetch",
-                    "--depth",
-                    "1",
-                    f"https://github.com/{pin['repository']}.git",
-                    pin["commit"],
-                )
-                git_output(checkout, "checkout", "--detach", pin["commit"])
-        build(checkout.resolve(), args.output_dir.resolve(), args.target, pin)
+        if checkout is not None:
+            validate_checkout(checkout, pin)
+        if not artifact.exists():
+            if checkout is None:
+                checkout = args.cache_dir / pin["commit"]
+                checkout.mkdir(exist_ok=True)
+                if not (checkout / ".git").exists():
+                    git_output(checkout, "init")
+                if not (checkout / "codex-rs/Cargo.toml").exists():
+                    git_output(
+                        checkout,
+                        "fetch",
+                        "--depth",
+                        "1",
+                        f"https://github.com/{pin['repository']}.git",
+                        pin["commit"],
+                    )
+                    git_output(checkout, "checkout", "--detach", pin["commit"])
+                validate_checkout(checkout, pin)
+            artifact.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(dir=artifact.parent) as temporary:
+                staging = Path(temporary) / "bundle"
+                build(checkout.resolve(), staging, target, pin)
+                staging.rename(artifact)
+        metadata = json.loads((artifact / "build.json").read_text())
+        if (
+            metadata["source_revision"] != pin["commit"]
+            or metadata["target"] != target
+            or metadata["sha256"]
+            != hashlib.sha256(
+                (artifact / "mcp-console-sandbox").read_bytes()
+            ).hexdigest()
+        ):
+            fail(f"cached runner does not match its build metadata: {artifact}")
+        shutil.copytree(artifact, args.output_dir, dirs_exist_ok=True)
 
 
-def build(
-    checkout: Path, output: Path, target: str | None, pin: dict[str, object]
-) -> None:
-    workspace = checkout / "codex-rs"
-    if not (workspace / "mcp-console-sandbox" / "Cargo.toml").is_file():
+def validate_checkout(checkout: Path, pin: dict[str, object]) -> None:
+    if not (checkout / "codex-rs/mcp-console-sandbox/Cargo.toml").is_file():
         fail(f"not a sandbox-runner source checkout: {checkout}")
     head = git_output(checkout, "rev-parse", "HEAD")
     if head != pin["commit"]:
@@ -94,18 +133,10 @@ def build(
     if git_output(checkout, "status", "--porcelain", "--untracked-files=all"):
         fail("source checkout is not clean")
 
-    toolchain = ["rustup", "run", "--install", str(pin["rust_toolchain"])]
-    if target is None:
-        target = subprocess.run(
-            [*toolchain, "rustc", "--print", "host-tuple"],
-            cwd=workspace,
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
-        if target not in TARGETS:
-            fail(f"unsupported native target: {target}")
 
+def build(checkout: Path, output: Path, target: str, pin: dict[str, object]) -> None:
+    workspace = checkout / "codex-rs"
+    toolchain = ["rustup", "run", "--install", str(pin["rust_toolchain"])]
     environment = os.environ.copy()
     environment["CARGO_TARGET_DIR"] = str(workspace / "target")
     # Build independently of the outer Cargo's jobserver, compiler, and Clippy
@@ -153,7 +184,8 @@ def build(
         destination.chmod(0o644)
     (output / "build.json").write_text(
         json.dumps(
-            {"source_revision": head, "target": target, "sha256": digest}, indent=2
+            {"source_revision": pin["commit"], "target": target, "sha256": digest},
+            indent=2,
         )
         + "\n",
         encoding="utf-8",

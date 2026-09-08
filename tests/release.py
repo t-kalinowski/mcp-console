@@ -543,6 +543,54 @@ class ReleaseScriptTests(unittest.TestCase):
                 str(scripts / STAGE_SCRIPT.name),
                 str(checkout),
             ]
+            # Exercise a real one-token Cargo jobserver with a tiny outer
+            # package, rather than serializing the full application build.
+            outer = directory / "outer"
+            (outer / "src").mkdir(parents=True)
+            (outer / "Cargo.toml").write_text(
+                '[package]\nname = "staging-fixture"\nversion = "0.1.0"\n'
+            )
+            (outer / "src/main.rs").write_text("fn main() {}\n")
+            (outer / "build.rs").write_text(
+                textwrap.dedent("""
+                fn main() {
+                    assert!(std::env::var_os("CARGO_MAKEFLAGS").is_some());
+                    let status = std::process::Command::new(std::env::var_os("STAGING_PYTHON").unwrap())
+                        .arg(std::env::var_os("STAGING_SCRIPT").unwrap())
+                        .arg(std::env::var_os("STAGING_CHECKOUT").unwrap())
+                        .arg("--target")
+                        .arg(std::env::var_os("TARGET").unwrap())
+                        .status().unwrap();
+                    assert!(status.success());
+                }
+                """)
+            )
+            outer_environment = os.environ.copy() | {
+                "PATH": environment["PATH"],
+                "FAKE_SOURCE_REVISION": pin["commit"],
+                "FAKE_CARGO_ARGUMENTS": environment["FAKE_CARGO_ARGUMENTS"],
+                "RUSTC": shutil.which("rustc"),
+                "STAGING_PYTHON": sys.executable,
+                "STAGING_SCRIPT": str(scripts / STAGE_SCRIPT.name),
+                "STAGING_CHECKOUT": str(checkout),
+            }
+            result = subprocess.run(
+                [
+                    shutil.which("cargo"),
+                    "build",
+                    "--offline",
+                    "--jobs",
+                    "1",
+                    "--target-dir",
+                    str(outer / "target"),
+                ],
+                cwd=outer,
+                env=outer_environment,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
             for arguments, target in (
                 ([], "aarch64-apple-darwin"),
                 (["--target", "x86_64-apple-darwin"], "x86_64-apple-darwin"),
@@ -589,6 +637,36 @@ class ReleaseScriptTests(unittest.TestCase):
                 "license\n",
             )
             (directory / "cargo.json").unlink()
+            # A completed build must serve another Cargo profile without a
+            # source checkout, compiler, or nested Cargo invocation.
+            for name in ("git", "rustup"):
+                (commands / name).rename(commands / f"{name}.working")
+                write_executable(commands / name, "#!/bin/sh\nexit 97\n")
+            cached_output = directory / "cached-output"
+            cached_command = [
+                sys.executable,
+                str(scripts / STAGE_SCRIPT.name),
+                "--target",
+                "x86_64-apple-darwin",
+                "--output-dir",
+                str(cached_output),
+            ]
+            cached_environment = environment.copy()
+            cached_environment.pop("MCP_CONSOLE_SANDBOX_SOURCE", None)
+            result = subprocess.run(
+                cached_command,
+                env=cached_environment,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            for name in ("mcp-console-sandbox", "LICENSE", "NOTICE", "build.json"):
+                self.assertEqual(
+                    (cached_output / name).read_bytes(), (data / name).read_bytes()
+                )
+            self.assertFalse((directory / "cargo.json").exists())
+            for name in ("git", "rustup"):
+                (commands / f"{name}.working").replace(commands / name)
             for changes in (
                 {"FAKE_SOURCE_REVISION": "b" * 40},
                 {"FAKE_SOURCE_DIRTY": " M Cargo.lock"},
@@ -598,6 +676,37 @@ class ReleaseScriptTests(unittest.TestCase):
                 )
                 self.assertNotEqual(result.returncode, 0)
                 self.assertFalse((directory / "cargo.json").exists())
+
+            # Both provenance and the build recipe invalidate the artifact.
+            pin["protocol_version"] = 3
+            (root / "sandbox-runner.json").write_text(json.dumps(pin))
+            for recipe_change in (False, True):
+                if recipe_change:
+                    with (scripts / STAGE_SCRIPT.name).open("a") as script:
+                        script.write("\n# changed build recipe\n")
+                result = subprocess.run(
+                    command + ["--target", "x86_64-apple-darwin"],
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertTrue((directory / "cargo.json").exists())
+                (directory / "cargo.json").unlink()
+
+            for runner in (root / "target/sandbox-runner-cache/artifacts").rglob(
+                "mcp-console-sandbox"
+            ):
+                runner.write_bytes(b"corrupt cached runner")
+            result = subprocess.run(
+                cached_command,
+                env=cached_environment,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("cached runner does not match", result.stderr)
+            self.assertFalse((directory / "cargo.json").exists())
 
 
 if __name__ == "__main__":

@@ -22,9 +22,6 @@ jobs:
   macos:
     name: macOS (macos-latest)
     runs-on: macos-latest
-    env:
-      MCP_CONSOLE_SANDBOX_SOURCE: ${{ github.workspace }}/.sandbox-runner-source
-
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -33,17 +30,6 @@ jobs:
         uses: actions/setup-python@v7
         with:
           python-version: "3.13"
-
-      - name: Read private sandbox source pin
-        id: sandbox-pin
-        run: scripts/stage-sandbox-runner --github-output "$GITHUB_OUTPUT"
-
-      - name: Check out private sandbox source
-        uses: actions/checkout@v7
-        with:
-          repository: ${{ steps.sandbox-pin.outputs.repository }}
-          ref: ${{ steps.sandbox-pin.outputs.commit }}
-          path: .sandbox-runner-source
 
       - name: Install uv
         uses: astral-sh/setup-uv@v10.0.1
@@ -79,12 +65,6 @@ jobs:
         with:
           components: clippy, rustfmt
 
-      - name: Install private sandbox Rust toolchain
-        run: >-
-          rustup toolchain install
-          "${{ steps.sandbox-pin.outputs.rust_toolchain }}"
-          --profile minimal
-
       - name: Select R cache epoch
         id: cache-epoch
         run: printf 'value=%s\n' "$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
@@ -110,44 +90,44 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: debug
-          workspaces: |
-            . -> target
-            .sandbox-runner-source/codex-rs -> target
+          # The runner has a separate completed-artifact cache. Keep its
+          # source checkout and dependency graph out of this cache.
+          cache-targets: false
+          cache-directories: |
+            target/debug
+            target/release
           save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Restore private sandbox executable
+        id: sandbox-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: target/sandbox-runner-cache/artifacts
+          key: >-
+            sandbox-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('sandbox-runner.json', 'scripts/stage-sandbox-runner') }}
 
       - name: Run core checks
         env:
           GITHUB_PAT: ${{ github.token }}
-        run: scripts/check-core
+        run: |
+          scripts/check-core
+          cargo build --locked --bin mcp-console
 
-      - name: Install from unstaged sources with Cargo and uv
-        run: python3 tests/cargo_install.py
+      # Save before rust-cache's post-job cleanup removes non-Cargo files.
+      - name: Save private sandbox executable
+        if: steps.sandbox-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: target/sandbox-runner-cache/artifacts
+          key: ${{ steps.sandbox-cache.outputs.cache-primary-key }}
 
-      - name: Build and smoke-test Python package
-        shell: bash
+      - name: Check Cargo, uv, and wheel installations
         env:
           GITHUB_PAT: ${{ github.token }}
-          UV_TOOL_DIR: ${{ runner.temp }}/mcp-console-tool
-          UV_TOOL_BIN_DIR: ${{ runner.temp }}/mcp-console-bin
           UV_CACHE_DIR: ${{ runner.temp }}/mcp-console-cache
           UV_PYTHON_DOWNLOADS: never
           UV_NO_CONFIG: "1"
-        run: |
-          set -euo pipefail
-
-          rm -rf dist
-          cargo build --locked --bin mcp-console
-          uvx --from 'maturin==1.14.1' \
-            maturin build \
-            --release \
-            --locked \
-            --compatibility pypi \
-            --out dist
-          python3 scripts/release.py \
-            smoke-wheel \
-            dist/*.whl \
-            target/debug/mcp-console
-          python3 tests/sandbox_installation.py "$UV_TOOL_BIN_DIR/mcp-console"
+        run: python3 tests/cargo_install.py
 
       - name: Install R package dependencies
         uses: r-lib/actions/setup-r-dependencies@v2

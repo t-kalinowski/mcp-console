@@ -1,4 +1,4 @@
-"""Install from unstaged sources, then exercise the relocated public executable."""
+"""Check source and wheel installations using one shared Cargo target directory."""
 
 from __future__ import annotations
 
@@ -21,8 +21,14 @@ class CargoInstallationTests(unittest.TestCase):
         ) as temporary:
             directory = Path(temporary)
             source = directory / "source"
+            target = ROOT / "target"
             environment = os.environ.copy()
             environment.pop("MCP_CONSOLE_SANDBOX_SOURCE", None)
+            environment |= {
+                "CARGO_TARGET_DIR": str(target),
+                "UV_TOOL_DIR": str(directory / "uv-tools"),
+                "UV_TOOL_BIN_DIR": str(directory / "uv-bin"),
+            }
             tracked = (
                 subprocess.check_output(["git", "ls-files", "-z"], cwd=ROOT)
                 .decode()
@@ -38,12 +44,11 @@ class CargoInstallationTests(unittest.TestCase):
                     "install",
                     "--path",
                     ".",
+                    "--locked",
                     "--root",
                     str(directory / "installation"),
                     "--target-dir",
-                    str(ROOT / "target" / "cargo-install-test"),
-                    "--jobs",
-                    "1",
+                    str(target),
                 ],
                 cwd=source,
                 env=environment,
@@ -53,11 +58,7 @@ class CargoInstallationTests(unittest.TestCase):
                 timeout=1800,
             )
             self.assertEqual(result.returncode, 0, result.stdout)
-            environment |= {
-                "UV_TOOL_DIR": str(directory / "uv-tools"),
-                "UV_TOOL_BIN_DIR": str(directory / "uv-bin"),
-                "CARGO_TARGET_DIR": str(ROOT / "target" / "cargo-install-test"),
-            }
+            print(result.stdout, flush=True)
             result = subprocess.run(
                 ["uv", "tool", "install", "--reinstall", "."],
                 cwd=source,
@@ -68,16 +69,64 @@ class CargoInstallationTests(unittest.TestCase):
                 timeout=1800,
             )
             self.assertEqual(result.returncode, 0, result.stdout)
+            print(result.stdout, flush=True)
+            # Build the distributable wheel from the same source and target
+            # directory, so its Rust compilation is already complete.
+            result = subprocess.run(
+                [
+                    "uv",
+                    "build",
+                    "--wheel",
+                    "--config-setting",
+                    "maturin.build-args=--compatibility pypi",
+                    "--out-dir",
+                    str(directory / "dist"),
+                ],
+                cwd=source,
+                env=environment,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                timeout=1800,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout)
+            print(result.stdout, flush=True)
+            wheels = list((directory / "dist").glob("*.whl"))
+            self.assertEqual(len(wheels), 1)
             binary = directory / "mcp-console"
             shutil.move(directory / "installation" / "bin" / "mcp-console", binary)
             shutil.rmtree(source)
             shutil.rmtree(directory / "installation")
             # Make every compiled-in build path unavailable during runtime checks.
-            target = ROOT / "target" / "cargo-install-test"
             hidden = directory / "build-artifacts"
             target.rename(hidden)
             try:
-                for installed in (binary, directory / "uv-bin" / "mcp-console"):
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(ROOT / "scripts" / "release.py"),
+                        "smoke-wheel",
+                        str(wheels[0]),
+                        str(binary),
+                    ],
+                    cwd=ROOT,
+                    env=environment
+                    | {
+                        "UV_TOOL_DIR": str(directory / "wheel-tools"),
+                        "UV_TOOL_BIN_DIR": str(directory / "wheel-bin"),
+                    },
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    timeout=600,
+                )
+                self.assertEqual(result.returncode, 0, result.stdout)
+                print(result.stdout, flush=True)
+                for installed in (
+                    binary,
+                    directory / "uv-bin" / "mcp-console",
+                    directory / "wheel-bin" / "mcp-console",
+                ):
                     with self.subTest(installer=installed):
                         result = subprocess.run(
                             [

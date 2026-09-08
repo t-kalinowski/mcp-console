@@ -15,9 +15,11 @@ The script fetches the exact source revision into `sandbox-runner-cache/<commit>
 Source builds require Python 3, Git, and rustup; rustup installs the pinned toolchain if needed.
 The runner has its own Cargo build directory and jobserver, so the nested build also works when the outer Cargo uses `--jobs 1` or a custom target directory.
 Normal Cargo and rustup dependency caches still apply.
+Completed runner bundles are cached separately under `sandbox-runner-cache/artifacts/`, keyed by the pin, staging script, and target.
+Cache hits verify the runner's checksum and copy the bundle without fetching sources or invoking Cargo.
 
 The source checkout and runner build stay under the selected target prefix.
-To reuse a dedicated clean checkout at the pin, explicitly set `MCP_CONSOLE_SANDBOX_SOURCE`; CI uses a checkout within its own workspace.
+To use a dedicated clean checkout at the pin on a cache miss, explicitly set `MCP_CONSOLE_SANDBOX_SOURCE`; the release workflow uses a checkout within its own workspace.
 The default build does not inspect or change other working checkouts.
 For a standalone runner build, run `scripts/stage-sandbox-runner`; its output is `target/sandbox-runner/`.
 Use `--target aarch64-apple-darwin` or `--target x86_64-apple-darwin` for an explicit target.
@@ -37,7 +39,10 @@ When advancing the pin, inspect the package's `PROTOCOL.md`, implementation, exe
 Release smoke exercises the installed runner directly with a non-default descriptor and open, idle stdin, then checks the public launcher and artifact verification.
 
 Maturin packages the same executable without requiring generated data during metadata preparation.
-CI installs unstaged sources with both Cargo and uv, hides their build artifacts, and checks the installed commands with a decoy runner on PATH.
+CI caches the completed runner independently of the application's dependencies, so ordinary changes do not rebuild the runner or restore its source and dependency graph.
+Cargo installation, uv source installation, and wheel construction share the application's Cargo target directory and use Cargo's normal parallelism.
+The small staging-script fixture checks isolation from the outer jobserver and compiler environment.
+Installation checks use unstaged sources, hide the build artifacts, and check the installed commands with a decoy runner on PATH.
 Wheel verification also checks sandbox launches with an empty PATH, the embedded license notices, concurrent cache creation, and rejection of modified cached artifacts.
 
 ## One-time PyPI setup

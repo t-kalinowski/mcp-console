@@ -46,7 +46,7 @@ scripts/test --update BOUNDARY/SUITE[::CASE]
 
 `scripts/format` attempts Ruff, Yamark, rustfmt, and Air in sequence.
 A missing or failing formatter does not prevent the remaining formatters from running or make the script fail, so review its output and resulting changes.
-`scripts/check` validates extracted runtime sources, checks Rust formatting and Clippy, runs Rust tests, runs the complete transcript suite, and checks Cargo and uv installation from unstaged sources.
+`scripts/check` validates extracted runtime sources, checks Rust formatting and Clippy, runs Rust tests, runs the complete transcript suite, and checks Cargo, uv source, and wheel installations with a shared Cargo target directory.
 
 ### Boundary snapshots
 
