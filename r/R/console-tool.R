@@ -6,8 +6,9 @@
 #'
 #' When the tool is garbage collected, it closes the server's input to request
 #' shutdown and waits up to 15 seconds before forcibly stopping the server.
-#' The sandbox manager owns cleanup of worker descendants; the R wrapper's
-#' fallback targets only the server process.
+#' With sandboxing enabled, the sandbox manager owns cleanup of worker
+#' descendants; the R wrapper's fallback targets only the server process.
+#' With `no_sandbox = TRUE`, worker descendants may survive server shutdown.
 #'
 #' @section Executable resolution:
 #'
