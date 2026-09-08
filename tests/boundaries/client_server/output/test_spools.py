@@ -29,17 +29,23 @@ def test_separates_startup_omissions_from_retained_cell_text(
     binary: Path, execution: Execution
 ) -> Transcript:
     fixtures = Path(__file__).resolve().parents[3] / "fixtures"
-    environment = {**os.environ, "MCP_CONSOLE_TEST_RELAY_SCENARIO": "startup_output"}
-    with McpClient(
-        binary,
-        execution.serve(
-            "--worker",
-            str(fixtures / "zod"),
-            "--relay",
-            str(fixtures / "server_relay" / "scripted_relay.py"),
-        ),
-        environment,
-    ) as client:
+    with (
+        tempfile.TemporaryDirectory() as temporary,
+        McpClient(
+            binary,
+            execution.serve(
+                "--worker",
+                str(fixtures / "zod"),
+                "--relay",
+                str(fixtures / "server_relay" / "scripted_relay.py"),
+            ),
+            {
+                **os.environ,
+                "TMPDIR": temporary,
+                "MCP_CONSOLE_TEST_RELAY_SCENARIO": "startup_output",
+            },
+        ) as client,
+    ):
         client.initialize_and_list_tools()
         client.send(r="42")
         output = last_tool_text(client)

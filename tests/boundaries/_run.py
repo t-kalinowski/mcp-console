@@ -167,6 +167,10 @@ def record_case(suite_path: Path, case_name: str, *, update: bool) -> set[Path]:
     modes = available_executions(case, f"{suite_name}::{case_name}")
     assert modes, "selected case has no available execution"
     checked = set()
+    initialization = (suite_name, case_name) == (
+        initialization_suite,
+        initialization_case,
+    )
     for index, execution in enumerate(modes):
         try:
             recorded = case(binary) if execution is None else case(binary, execution)
@@ -174,13 +178,13 @@ def record_case(suite_path: Path, case_name: str, *, update: bool) -> set[Path]:
                 suite_name,
                 case_name,
                 recorded,
-                update=update and index == 0,
+                update=update and (index == 0 or initialization),
                 execution=execution.name if execution is not None else None,
             )
-            assert index == 0 or mode_snapshots == checked, (
+            assert initialization or index == 0 or mode_snapshots == checked, (
                 "execution modes produced different companion snapshots"
             )
-            checked = mode_snapshots
+            checked.update(mode_snapshots)
         except BaseException as error:
             if execution is not None:
                 error.add_note(f"execution mode: {execution.name}")

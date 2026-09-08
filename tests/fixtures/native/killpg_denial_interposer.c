@@ -1,9 +1,9 @@
+#define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/syscall.h>
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -26,14 +26,16 @@ static int deny_killpg(pid_t process_group, int signal) {
         errno = EPERM;
         return -1;
     }
-    return (int)syscall(SYS_kill, -process_group, signal);
+    return kill(-process_group, signal);
 }
 
 __attribute__((constructor))
 static void remove_interposer_from_child_environment(void) {
     unsetenv("DYLD_INSERT_LIBRARIES");
+    unsetenv("LD_PRELOAD");
 }
 
+#ifdef __APPLE__
 __attribute__((used))
 static struct {
     const void *replacement;
@@ -41,3 +43,7 @@ static struct {
 } interposers[] __attribute__((section("__DATA,__interpose"))) = {
     {(const void *)&deny_killpg, (const void *)&killpg},
 };
+
+#else
+int killpg(pid_t process_group, int signal) { return deny_killpg(process_group, signal); }
+#endif

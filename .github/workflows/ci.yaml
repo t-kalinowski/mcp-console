@@ -19,9 +19,14 @@ env:
   UV_VERSION: 0.12.4
 
 jobs:
-  macos:
-    name: macOS (macos-latest)
-    runs-on: macos-latest
+  check:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-24.04]
+
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -56,6 +61,7 @@ jobs:
       # The managed R environment can build data.table from source. Its NLS
       # code needs libintl.h in R's /opt/R/<arch> build prefix.
       - name: Install gettext for R source packages
+        if: runner.os == 'macOS'
         run: |
           sudo Rscript --vanilla -e \
             'source("https://mac.R-project.org/bin/install.R"); install.libs("gettext"); stopifnot(file.exists(file.path("/opt/R", Sys.info()[["machine"]], "include", "libintl.h")))'
@@ -64,6 +70,12 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+
+      - name: Install Linux resolver build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libcurl4-openssl-dev
 
       - name: Select R cache epoch
         id: cache-epoch
@@ -99,6 +111,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Restore private sandbox runner
+        if: runner.os == 'macOS'
         id: sandbox-cache
         uses: actions/cache/restore@v6
         with:
@@ -175,8 +188,8 @@ jobs:
       # Save before rust-cache's post-job cleanup removes non-Cargo artifacts.
       - name: Save private sandbox runner
         if: >-
-          github.ref == 'refs/heads/main' && steps.sandbox-cache.outputs.cache-hit
-          != 'true'
+          runner.os == 'macOS' && github.ref == 'refs/heads/main' &&
+          steps.sandbox-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
           path: target/sandbox-runner-cache/artifacts

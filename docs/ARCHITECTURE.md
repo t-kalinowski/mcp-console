@@ -43,7 +43,7 @@ worker                                     same sandbox and process group
     └── built-in R, Python, and DuckDB runtime
 ```
 
-With `serve --no-sandbox`, the server launches the relay directly, omitting the sandbox launcher, manager, private executable, and hidden wrapper.
+With `serve --no-sandbox` (required on Linux), the server launches the relay directly, omitting the sandbox launcher, manager, private executable, and hidden wrapper.
 The relay and worker run with host permissions and inherit the host temporary-directory environment; no sandbox-owned private directory is created.
 
 The direct development command uses the same launcher implementation without a relay or worker protocol:
@@ -169,6 +169,7 @@ At generation retirement, it first requests graceful shutdown through the relay 
 In sandboxed mode, it then sends `SIGTERM` to the launcher to request managed retirement and uses a hard launcher kill only as the final fail-safe.
 On normal and owned-retirement paths, successful managed launcher exit is the synchronous cleanup barrier before the server reaps it.
 With `--no-sandbox`, the server owns and reaps the relay directly; no manager supplies descendant cleanup.
+After the relay deadline, the server accepts termination from its own successful `SIGTERM` request as completed direct retirement.
 
 ### Sandbox launcher
 
@@ -227,6 +228,8 @@ The built-in worker's `worker::core` owns shared sideband state, deferred operat
 The `worker::embedded_r` backend owns interpreter initialization, event handling, interactive input, interrupts, and language dispatch, including suppression of R resolution during SQL callbacks.
 
 The built-in worker embeds R on its main thread.
+On Linux, it re-executes before R initialization with the selected `R_HOME/lib` first in `LD_LIBRARY_PATH`, preserving inherited library paths and its sideband endpoint.
+This lets native R packages resolve R's shared libraries even when that R installation is absent from the system linker cache.
 Its language adapters provide persistent Python and SQL within that worker process.
 The SQL router uses a DBI provider in embedded R or a DB-API provider in CPython.
 The R provider owns a managed DuckDB connection by default and can retain a user-selected DBI connection; the Python provider retains a user-selected DB-API connection without converting it or its result rows through reticulate.
@@ -449,6 +452,12 @@ This includes a server working directory that cannot be represented as UTF-8 bec
 
 ## Platform support
 
-The implemented sandbox command, relay, built-in worker, and managed resolvers are supported only on macOS.
-The complete CI check runs on macOS.
-Linux and Windows have unsupported-platform paths but no working execution stack yet.
+The relay, built-in worker, and managed resolvers support macOS and Linux.
+Linux requires `serve --no-sandbox`.
+Descriptor sanitation uses `close_range(CLOSE_RANGE_CLOEXEC)` when available.
+On kernels without that syscall or flag, the forked child enumerates `/proc/self/fd` with `getdents64` and marks descriptors close-on-exec with `fcntl`.
+This path requires mounted procfs, uses no allocation after fork, covers descriptors above a lowered descriptor limit and those opened by other parent threads, and preserves Rust's spawn-error pipe until exec.
+Other sanitation errors fail the spawn.
+The server uses blocking `poll` on Linux and `kqueue` on macOS for startup input-closure observation.
+CI runs core checks and the applicable transcript cases on both platforms.
+The sandbox command remains macOS-only, and Windows has no working execution stack.

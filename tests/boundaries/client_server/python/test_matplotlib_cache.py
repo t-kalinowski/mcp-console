@@ -1,12 +1,13 @@
 #!/usr/bin/env -S uv run --script
 
+import os
 import sys
 import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.assertions import last_result_text
+from support.assertions import last_result_text, tool_text
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
@@ -128,6 +129,50 @@ def test_preserves_matplotlib_cache_across_activation_and_restart(
             )
         )
         return transcript
+
+
+@executions(DIRECT, SANDBOXED)
+def test_keeps_python_caches_private_between_workers(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        environment = {**os.environ, "TMPDIR": directory}
+        with (
+            McpClient(binary, execution.serve(), environment) as first,
+            McpClient(binary, execution.serve(), environment) as second,
+        ):
+            for client in (first, second):
+                client.initialize_and_list_tools()
+                result = client.send(
+                    python=code("""
+                    import os
+                    from pathlib import Path
+
+                    cache = Path(os.environ["MPLCONFIGDIR"])
+                    cache.mkdir(parents=True, exist_ok=True)
+                    marker = cache / "session-marker"
+                    print(marker.exists())
+                    """)
+                )
+                assert tool_text(result) == "False\n", result
+                result = client.send(
+                    python=code("""
+                    marker.write_text("private")
+                    print(marker.read_text())
+                    """)
+                )
+                assert tool_text(result) == "private\n", result
+            first.send(control="restart")
+            result = first.send(
+                python=code("""
+                import os
+                from pathlib import Path
+
+                print((Path(os.environ["MPLCONFIGDIR"]) / "session-marker").exists())
+                """)
+            )
+            assert tool_text(result) == "False\n", result
+            return first.finish() + second.finish()
 
 
 if __name__ == "__main__":

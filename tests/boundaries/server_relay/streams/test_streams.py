@@ -47,6 +47,28 @@ def test_forwards_raw_stdout_and_stderr(
 
 
 @executions(DIRECT, SANDBOXED)
+def test_compacts_split_terminal_redraws(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = ServerRelayClient(binary, "split_terminal_redraws", execution=execution)
+    assert (
+        _tool_text(client.send(r="42")) == "ordinary stdout\r\nol\nnew\nold\x1b[2Knew\n"
+    )
+    return client.finish_active()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_compacts_stdout_and_stderr_independently(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = ServerRelayClient(
+        binary, "independent_stream_redraws", execution=execution
+    )
+    assert _tool_text(client.send(r="42")) == "stdout final\nstderr final\n"
+    return client.finish_active()
+
+
+@executions(DIRECT, SANDBOXED)
 def test_interleaved_stream_ends_prior_redraw_run(
     binary: Path,
     execution: Execution,

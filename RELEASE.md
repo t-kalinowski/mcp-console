@@ -1,8 +1,10 @@
 # Releasing MCP Console
 
 MCP Console releases are built from tags and published as binary-only PyPI wheels.
-The release workflow publishes native Apple Silicon and Intel macOS wheels.
-It does not publish a source distribution, Linux or Windows wheels, or GitHub release archives.
+The release workflow publishes native Apple Silicon and Intel macOS wheels and ARM64 and x86-64 Linux wheels.
+Linux wheels are built on Ubuntu 24.04 and require glibc 2.39 or later.
+Wheel builds require Maturin 1.15 or later.
+It does not publish a source distribution, Windows wheels, or GitHub release archives.
 
 `Cargo.toml` is the package-version source of truth.
 Keep the root `mcp-console` entry in `Cargo.lock` synchronized with it.
@@ -10,7 +12,7 @@ Keep the root `mcp-console` entry in `Cargo.lock` synchronized with it.
 ## Private sandbox executable
 
 `sandbox-runner.json` pins the runner source repository, release, commit, protocol, and Rust toolchain.
-Cargo builds prepare it automatically with `scripts/stage-sandbox-runner`, including when invoked by `uv tool install --reinstall .`.
+macOS Cargo builds prepare it automatically with `scripts/stage-sandbox-runner`, including when invoked by `uv tool install --reinstall .`.
 The script fetches the exact source revision into `sandbox-runner-cache/<commit>` under Cargo's target prefix and builds it with the pinned toolchain and lockfile.
 Source builds require Python 3, Git, and rustup; rustup installs the pinned toolchain if needed.
 The runner has its own Cargo build directory and jobserver, so the nested build also works when the outer Cargo uses `--jobs 1` or a custom target directory.
@@ -59,6 +61,8 @@ uv source installation and wheel construction share the application's Cargo targ
 The small staging-script fixture checks isolation from the outer jobserver and compiler environment.
 Installation checks use unstaged sources, hide the build artifacts, and check the installed commands with a decoy runner on PATH.
 Wheel verification also checks sandbox launches with an empty PATH, bundled license notices, relocation without a writable home directory, bounded verification allocations, and rejection of missing or modified companions.
+Linux builds leave the wheel-data directory empty and require no sandbox runner.
+The Linux installation smoke test evaluates R through `serve --no-sandbox`.
 
 ## One-time PyPI setup
 
@@ -90,7 +94,7 @@ Rehearse the Release workflow on the release branch before tagging, replacing `r
 gh workflow run release.yml --ref release/X.Y.Z
 ```
 
-Wait for both native wheel builds and smoke tests to pass.
+Wait for all four native wheel builds and smoke tests to pass.
 Manual dispatch does not publish; the publication job should be skipped.
 The rehearsal exercises installation and runtime setup on fresh runners, which ordinary CI with cached dependencies can miss.
 
@@ -118,12 +122,12 @@ git push origin "refs/tags/v$release_version"
 
 The tag command opens an editor for the release annotation; use `-F <message-file>` when running noninteractively.
 The tag-triggered workflow verifies the version match, ancestry on `main`, and successful push CI for the exact release SHA.
-It builds both native wheels, install-tests them with `uv`, checks that the artifact set contains exactly those two wheels, and publishes through PyPI Trusted Publishing.
+It builds all four native wheels, install-tests them with `uv`, checks that the artifact set contains exactly those four wheels, and publishes through PyPI Trusted Publishing.
 
 ## Verify the publication
 
 Read `https://pypi.org/pypi/mcp-console/X.Y.Z/json` for the published version.
-Confirm that both expected macOS wheels are present and unyanked, and compare their SHA-256 digests with the artifacts from the tag-triggered workflow.
+Confirm that all four expected macOS and Linux wheels are present and unyanked, and compare their SHA-256 digests with the artifacts from the tag-triggered workflow.
 
 Use the chosen `$release_version`, clean `uv` directories, and the public index when testing consumer installation:
 
@@ -148,6 +152,7 @@ uv tool install --no-cache --no-sources --default-index https://pypi.org/simple 
 ```
 
 Verify these commands on both Apple Silicon and Intel macOS.
+On ARM64 and x86-64 Linux, omit the `sandbox` invocation and add `--no-sandbox` when starting `serve` through an MCP client.
 Also start
 
 ```sh

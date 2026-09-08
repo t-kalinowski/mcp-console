@@ -8,17 +8,17 @@ pub(crate) enum ResolverControlOutcome {
     Cancelled,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 mod managed_duckdb;
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 mod managed_python;
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 mod managed_r;
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 mod process;
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 mod python_version;
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(unix))]
 mod unsupported;
 
 #[derive(Clone)]
@@ -170,20 +170,20 @@ fn is_uv_environment_variable(name: &OsStr) -> bool {
     name.as_encoded_bytes().starts_with(b"UV_")
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 pub(crate) use managed_duckdb::resolve_duckdb_extensions;
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 pub(crate) use managed_python::{
     ManagedPython, resolve_python_host, resolve_python_manifest, resolve_python_version,
 };
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 pub(crate) use managed_r::{
     ManagedR, ManagedRBootstrap, ManagedRResolverConfiguration, detect_r_bootstrap, resolve_r,
     resolve_r_with,
 };
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 pub(crate) use process::ResolverStopHandle;
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(unix))]
 pub(crate) use unsupported::{
     ManagedPython, ManagedR, ManagedRBootstrap, ManagedRResolverConfiguration, ResolverStopHandle,
     resolve_duckdb_extensions, resolve_python, resolve_python_host, resolve_python_manifest,

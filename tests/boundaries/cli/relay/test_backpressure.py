@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import select
 import signal
 import subprocess
 import sys
@@ -17,6 +16,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.capture import read_lines
 from support.checkpoints import FifoCheckpoint
+from support.events import Events
+from support.native import SHARED_LIBRARY_FLAG
+from support.native import LOADER_VARIABLE
 from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, WORKER, requires
 from support.suites import run_this_suite
@@ -33,7 +35,8 @@ def stdout_backpressure_environment(
         subprocess.run(
             [
                 "cc",
-                "-dynamiclib",
+                SHARED_LIBRARY_FLAG,
+                "-fPIC",
                 "-std=c11",
                 "-Wall",
                 "-Wextra",
@@ -49,7 +52,7 @@ def stdout_backpressure_environment(
         blocked = FifoCheckpoint.create(root / "stdout-blocked")
         environment = os.environ.copy()
         environment["TMPDIR"] = directory
-        environment["DYLD_INSERT_LIBRARIES"] = str(interposer)
+        environment[LOADER_VARIABLE] = str(interposer)
         environment["MCP_CONSOLE_TEST_STDOUT_BLOCKED"] = str(root / "stdout-blocked")
         try:
             yield root, environment, blocked
@@ -60,7 +63,7 @@ def stdout_backpressure_environment(
 @contextmanager
 def backpressured_relay(
     binary: Path, mode: str
-) -> Iterator[tuple[subprocess.Popen[str], dict[str, FifoCheckpoint], select.kqueue]]:
+) -> Iterator[tuple[subprocess.Popen[str], dict[str, FifoCheckpoint], Events]]:
     fixtures = Path(__file__).resolve().parents[3] / "fixtures"
     with stdout_backpressure_environment() as (root, environment, blocked):
         checkpoints = {
@@ -82,19 +85,13 @@ def backpressured_relay(
             env=environment,
             start_new_session=True,
         )
-        worker_exit = select.kqueue()
+        worker_exit = Events()
         try:
             assert process.stdin is not None and process.stdout is not None
             ready = read_lines(process.stdout, 1, "relay ready")
             assert [json.loads(line) for line in ready] == [{"kind": "ready"}]
             worker_pid = int((root / "worker-pid").read_text())
-            watch = select.kevent(
-                worker_pid,
-                filter=select.KQ_FILTER_PROC,
-                flags=select.KQ_EV_ADD | select.KQ_EV_ONESHOT,
-                fflags=select.KQ_NOTE_EXIT,
-            )
-            assert worker_exit.control([watch], 0, 0) == []
+            worker_exit.watch_process(worker_pid)
             send(process, {"kind": "evaluate", "language": "r", "source": "output"})
             blocked.wait("relay stdout write returned EAGAIN")
             yield process, checkpoints, worker_exit
@@ -119,11 +116,10 @@ def send(process: subprocess.Popen[str], command: dict[str, object]) -> None:
 
 
 def retirement_result(
-    process: subprocess.Popen[str], worker_exit: select.kqueue
+    process: subprocess.Popen[str], worker_exit: Events
 ) -> Transcript:
-    observed = worker_exit.control(None, 1, 3)
+    observed = worker_exit.wait(3)
     assert len(observed) == 1, "direct worker did not exit"
-    assert observed[0].fflags & select.KQ_NOTE_EXIT, observed
     # Do not read stdout until process exit: draining it would release the bug.
     exit_code = process.wait(timeout=5)
     stdout, stderr = process.communicate(timeout=5)
@@ -187,8 +183,8 @@ def test_retires_when_backpressure_exhausts_supervisor_event_reserve(
                 f"worker accepted SIGINT {request_id}"
             )
         send(process, {"kind": "interrupt", "request_id": 17})
-        observed = worker_exit.control(None, 1, 5)
-        assert len(observed) == 1 and observed[0].fflags & select.KQ_NOTE_EXIT, observed
+        observed = worker_exit.wait(5)
+        assert len(observed) == 1, observed
         assert process.wait(timeout=5) == 1
         stdout, stderr = process.communicate(timeout=5)
         assert stderr == "relay supervisor event queue capacity exceeded\n", stderr
@@ -217,8 +213,8 @@ def test_resumes_relay_output_after_downstream_backpressure(
         output = {"kind": "console_output", "data": "blocked output\n"}
         assert all(json.loads(line) == output for line in lines), lines
         checkpoints["worker-exit"].release()
-        observed = worker_exit.control(None, 1, 3)
-        assert len(observed) == 1 and observed[0].fflags & select.KQ_NOTE_EXIT, observed
+        observed = worker_exit.wait(3)
+        assert len(observed) == 1, observed
         assert process.wait(timeout=5) == 0
         stdout, stderr = process.communicate(timeout=5)
         assert stderr == "", stderr
@@ -295,7 +291,8 @@ def retirement_clock_environment(
         subprocess.run(
             [
                 "cc",
-                "-dynamiclib",
+                SHARED_LIBRARY_FLAG,
+                "-fPIC",
                 "-std=c11",
                 "-Wall",
                 "-Wextra",
@@ -310,7 +307,7 @@ def retirement_clock_environment(
         )
         marker = root / "output-complete"
         environment = os.environ.copy()
-        environment["DYLD_INSERT_LIBRARIES"] = str(interposer)
+        environment[LOADER_VARIABLE] = str(interposer)
         environment["MCP_CONSOLE_TEST_OUTPUT_COMPLETE"] = str(marker)
         environment["MCP_CONSOLE_TEST_CLOCK_AFTER_FRAME"] = (
             json.dumps(after_frame, separators=(",", ":")) + "\n"

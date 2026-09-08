@@ -2,7 +2,8 @@
 
 `mcp.console` adds MCP Console to an [ellmer](https://ellmer.tidyverse.org/) chat as a persistent workbench for R, Python, and DuckDB.
 
-MCP Console currently supports macOS only.
+MCP Console supports macOS and Linux.
+On Linux, use `console_tool(no_sandbox = TRUE)` to run evaluated code with the server's filesystem and network permissions.
 
 ## Install
 
@@ -28,7 +29,7 @@ The console keeps its R, Python, and DuckDB state between calls.
 When using `chat$chat_async()`, set `tool_mode = "sequential"` when later calls depend on earlier ones.
 
 When the tool is garbage collected, it closes the server's input to request shutdown and waits up to 15 seconds before forcibly stopping the server.
-The sandbox manager owns cleanup of worker descendants; the R wrapper's fallback targets only the server process.
+With sandboxing enabled, the sandbox manager owns cleanup of worker descendants; the R wrapper's fallback targets only the server process.
 
 With neither `path` nor `version` supplied, `console_tool()` uses the first `mcp-console` executable on `PATH`.
 If none is found, it resolves the latest published release with `reticulate::uv_run_tool()`.
@@ -46,4 +47,5 @@ tool <- console_tool(version = "0.0.2")
 ```
 
 `path` and `version` are mutually exclusive and must be named.
+`no_sandbox = TRUE` skips the sandbox launcher and does not guarantee cleanup of worker descendants.
 `...` is reserved for future use and must currently be empty.

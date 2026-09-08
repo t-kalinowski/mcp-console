@@ -454,10 +454,32 @@ def test_inherits_explicit_matplotlib_config(
 def test_inherits_default_matplotlib_config(
     binary: Path, execution: Execution
 ) -> Transcript:
+    return inherits_matplotlib_config(binary, execution, xdg=False)
+
+
+@executions(DIRECT, SANDBOXED)
+def test_inherits_xdg_matplotlib_config(
+    binary: Path, execution: Execution
+) -> Transcript:
+    return inherits_matplotlib_config(binary, execution, xdg=True)
+
+
+def inherits_matplotlib_config(
+    binary: Path, execution: Execution, *, xdg: bool
+) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
         home = temporary / "home"
-        matplotlib = home / ".matplotlib"
+        config_root = temporary / "xdg-config" if xdg else home / ".config"
+        cache_root = temporary / "xdg-cache" if xdg else home / ".cache"
+        matplotlib = (
+            config_root / "matplotlib"
+            if sys.platform == "linux"
+            else home / ".matplotlib"
+        )
+        font_cache = (
+            cache_root / "matplotlib" if sys.platform == "linux" else matplotlib
+        )
         matplotlib.mkdir(parents=True)
         matplotlibrc = matplotlib / "matplotlibrc"
         matplotlibrc.write_text("lines.linewidth: 9.25\n", encoding="utf-8")
@@ -488,7 +510,13 @@ def test_inherits_default_matplotlib_config(
             text=True,
         ).stdout.strip()
         environment = matplotlib_test_environment(temporary / "host-cache")
+        home.mkdir(exist_ok=True)
         environment["HOME"] = str(home)
+        environment.pop("XDG_CONFIG_HOME", None)
+        environment.pop("XDG_CACHE_HOME", None)
+        if xdg:
+            environment["XDG_CONFIG_HOME"] = str(config_root)
+            environment["XDG_CACHE_HOME"] = str(cache_root)
         environment["TMPDIR"] = temporary_directory
         environment["R_LIBS_USER"] = os.pathsep.join(r_libraries)
         environment["RETICULATE_UV"] = uv
@@ -522,7 +550,7 @@ def test_inherits_default_matplotlib_config(
         assert output == "(True, 9.25)\n", repr(output)
         transcript = client.finish()
         assert matplotlibrc.read_text(encoding="utf-8") == "lines.linewidth: 9.25\n"
-        caches = list(matplotlib.glob("fontlist-v*.json"))
+        caches = list(font_cache.glob("fontlist-v*.json"))
         assert len(caches) == 1, caches
         assert not list(
             (temporary / "host-cache" / "mcp-console" / "matplotlib").glob(

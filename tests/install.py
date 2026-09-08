@@ -13,7 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 
-@unittest.skipUnless(sys.platform == "darwin", "the sandbox requires macOS")
+@unittest.skipUnless(sys.platform in ("darwin", "linux"), "requires macOS or Linux")
 class InstallationTests(unittest.TestCase):
     def test_uv_installs_a_relocatable_bundle_from_unstaged_sources(self) -> None:
         with tempfile.TemporaryDirectory(prefix="mcp-console-install-") as temporary:
@@ -61,8 +61,9 @@ class InstallationTests(unittest.TestCase):
             print(result.stdout, flush=True)
             # Metadata must also work after deleting staged data when Cargo
             # already has a compiled executable for this exact source tree.
-            for relative in ("libexec", "share"):
-                shutil.rmtree(source / "wheel-data/data" / relative)
+            if sys.platform == "darwin":
+                for relative in ("libexec", "share"):
+                    shutil.rmtree(source / "wheel-data/data" / relative)
             # Build the distributable wheel from the same source and target
             # directory, so its Rust compilation is already complete.
             result = subprocess.run(
@@ -90,8 +91,9 @@ class InstallationTests(unittest.TestCase):
             (bundle / "bin").mkdir(parents=True)
             binary = bundle / "bin/mcp-console"
             shutil.copy2(target / "release/mcp-console", binary)
-            for relative in ("libexec", "share/licenses/mcp-console"):
-                shutil.copytree(target / relative, bundle / relative)
+            if sys.platform == "darwin":
+                for relative in ("libexec", "share/licenses/mcp-console"):
+                    shutil.copytree(target / relative, bundle / relative)
             shutil.rmtree(source)
             # Make every compiled-in build path unavailable during runtime checks.
             hidden = directory / "build-artifacts"

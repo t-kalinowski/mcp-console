@@ -18,8 +18,11 @@ R plots made with the default device and open Matplotlib figures are returned as
 
 ## Install
 
-MCP Console is currently distributed as native wheels for Apple Silicon and Intel macOS.
-Linux and Windows are not supported yet.
+MCP Console runs on macOS and Linux.
+Linux currently requires `serve --no-sandbox`; Windows is not supported.
+The release workflow builds native wheels for Apple Silicon and Intel macOS and for ARM64 and x86-64 Linux.
+Linux wheels require glibc 2.39 or later; building from source uses the host glibc.
+On older Linux kernels or when seccomp denies `close_range` with `EPERM`, inherited-descriptor cleanup requires `/proc` to be mounted.
 
 A working R installation is required.
 Set `R_HOME` or make `R` discoverable on `PATH`.
@@ -42,6 +45,19 @@ uv tool install mcp-console
 
 mcp-console --help
 mcp-console serve
+```
+
+On Linux, add `--no-sandbox` to the `serve` command:
+
+```sh
+mcp-console serve --no-sandbox
+```
+
+To build and run the current source on Linux:
+
+```sh
+cargo build --release
+target/release/mcp-console serve --no-sandbox
 ```
 
 `mcp-console serve` communicates with its MCP client over standard input and output.
@@ -103,7 +119,8 @@ See [Recording and artifacts](https://github.com/t-kalinowski/mcp-console/blob/m
 
 ## Security boundary
 
-By default, submitted R, Python, and SQL have shell-class capability inside the worker sandbox.
+Submitted R, Python, and SQL have shell-class capability.
+On macOS, the worker sandbox is enabled by default.
 The worker can read host files, but direct network access and regular-file writes outside its private temporary directory are denied.
 This is a process boundary, not a safe evaluator for untrusted code with access to sensitive readable files.
 
@@ -121,9 +138,9 @@ Render only code you trust.
 
 ## Development
 
-Install the current checkout on macOS with `uv tool install --reinstall .`.
-Source builds require Python 3, Git, and rustup in addition to the Rust compiler and native build tools.
-The first build fetches and compiles the pinned sandbox runner automatically, using a dedicated checkout under Cargo's target directory.
+Install the current checkout with `uv tool install --reinstall .`.
+macOS source builds require Python 3, Git, and rustup in addition to the Rust compiler and native build tools.
+The first macOS build fetches and compiles the pinned sandbox runner automatically, using a dedicated checkout under Cargo's target directory.
 It installs the pinned Rust toolchain if needed and uses the usual Cargo dependency cache.
 Later builds reuse the completed runner while its pin, build script, and target are unchanged.
 It does not use another working checkout.
@@ -138,12 +155,12 @@ scripts/test --list
 scripts/test --update BOUNDARY/SUITE[::CASE]
 ```
 
-The installation contains `bin/mcp-console`, a private runner under `libexec`, and its license notices under `share/licenses/mcp-console`.
+The macOS installation contains `bin/mcp-console`, a private runner under `libexec`, and its license notices under `share/licenses/mcp-console`.
 Move the whole bundle to relocate it; copying only `mcp-console` leaves the runner behind.
 `cargo build` prepares a runnable development bundle under `target`, but `cargo install` installs only the main binary and is not a complete installation.
 [RELEASE.md](RELEASE.md) describes the bundle and build caches.
 See [AGENTS.md](https://github.com/t-kalinowski/mcp-console/blob/main/AGENTS.md) for development rules and the repository map, and the [boundary test guide](https://github.com/t-kalinowski/mcp-console/blob/main/tests/boundaries/README.md) for test selection and snapshot updates.
-The standalone `mcp-console sandbox -- COMMAND [ARG]...` command is also available for development; [macOS sandbox supervision](https://github.com/t-kalinowski/mcp-console/blob/main/docs/SANDBOX_SUPERVISION.md) defines its lifecycle, terminal behavior, and limitations.
+The standalone `mcp-console sandbox -- COMMAND [ARG]...` command is also available for development on macOS; [macOS sandbox supervision](https://github.com/t-kalinowski/mcp-console/blob/main/docs/SANDBOX_SUPERVISION.md) defines its lifecycle, terminal behavior, and limitations.
 
 ## Documentation
 

@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from boundaries.server_relay._harness import ServerRelayClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.records import Transcript
+from support.requirements import WORKER, requires
 from support.suites import run_this_suite
 
 
@@ -116,6 +117,17 @@ def test_reports_unexpected_worker_signal(
     assert transcript[-1] == {"relay": {"kind": "worker_signaled", "signal": 15}}, (
         transcript
     )
+    return transcript
+
+
+@requires(WORKER)
+def test_rejects_unsolicited_sigterm_without_sandbox(binary: Path) -> Transcript:
+    client = ServerRelayClient(binary, "fatal_sigterm", execution=DIRECT)
+    failed = client.client.start_send(r="42")
+    transcript = client.release_terminal_failure(failed, "scripted relay failure")
+    output = failed["result"]["content"][0]["text"]
+    assert "worker launcher terminated by signal 15" in output, output
+    assert "[starting new worker]" not in output, output
     return transcript
 
 

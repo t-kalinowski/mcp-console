@@ -16,6 +16,7 @@ from boundaries.relay_worker._harness import RelayWorkerClient
 from support.assertions import tool_text as _tool_text
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
+from support.native import SHARED_LIBRARY_FLAG
 from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, WORKER, requires
 from support.suites import run_this_suite
@@ -57,7 +58,8 @@ def test_tolerates_connection_reset_with_unread_shutdown(
         subprocess.run(
             [
                 "cc",
-                "-dynamiclib",
+                SHARED_LIBRARY_FLAG,
+                "-fPIC",
                 "-std=c11",
                 "-Wall",
                 "-Wextra",
@@ -70,7 +72,7 @@ def test_tolerates_connection_reset_with_unread_shutdown(
             capture_output=True,
             text=True,
         )
-        reset_marker = temporary / "reset-sideband-eof-injected"
+        reset_marker = temporary / "reset-sideband-eof-observed"
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
         environment["MCP_CONSOLE_TEST_RELAY_BINARY"] = str(binary)

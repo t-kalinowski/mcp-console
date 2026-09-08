@@ -17,6 +17,7 @@ from support.checkpoints import FifoCheckpoint, wait_for_worker_file
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
+from support.native import SHARED_LIBRARY_FLAG
 from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, requires
 from support.resolvers import checkpoint_uv_environment, named_requirement_error
@@ -116,7 +117,8 @@ def test_interrupts_running_python_evaluation(
         subprocess.run(
             [
                 "cc",
-                "-dynamiclib",
+                SHARED_LIBRARY_FLAG,
+                "-fPIC",
                 "-std=c11",
                 "-Wall",
                 "-Wextra",

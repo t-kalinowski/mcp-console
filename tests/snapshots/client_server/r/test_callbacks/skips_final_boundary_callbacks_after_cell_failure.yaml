@@ -14,6 +14,10 @@ send:
     writeBin(as.raw(1), writer)
     close(writer)
     plot(1)
+    Sys.chmod(list.files(
+      file.path(tempdir(), "mcp-console-plots"),
+      full.names = TRUE
+    ), "0000")
     old_umask <- Sys.umask("0777")
     on.exit(Sys.umask(old_umask), add = TRUE)
     grDevices::dev.off()

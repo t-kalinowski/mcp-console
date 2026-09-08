@@ -13,8 +13,8 @@ from support.execution import SANDBOXED
 from support.assertions import last_tool_text
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
+from support.native import build_interposer
 from support.macos import (
-    build_interposer,
     capture_darwin_process_identity,
     darwin_child_process_identities,
 )

@@ -1,3 +1,5 @@
+#define _GNU_SOURCE
+#include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -18,15 +20,27 @@ typedef ssize_t (*read_function)(int, void *, size_t);
 typedef ssize_t (*recv_function)(int, void *, size_t, int);
 
 static poll_function next_poll(void) {
+#ifdef __APPLE__
   return poll;
+#else
+  return (poll_function)dlsym(RTLD_NEXT, "poll");
+#endif
 }
 
 static read_function next_read(void) {
+#ifdef __APPLE__
   return read;
+#else
+  return (read_function)dlsym(RTLD_NEXT, "read");
+#endif
 }
 
 static recv_function next_recv(void) {
+#ifdef __APPLE__
   return recv;
+#else
+  return (recv_function)dlsym(RTLD_NEXT, "recv");
+#endif
 }
 
 static bool target_process(void) {
@@ -112,7 +126,9 @@ static int delayed_poll(struct pollfd *descriptors, nfds_t count, int timeout) {
 }
 
 static bool reset_sideband_eof(int descriptor, ssize_t result) {
-  if (result != 0 || !target_process() ||
+  // Linux can already report ECONNRESET when the peer closes with unread data.
+  // Acknowledge that result through the same checkpoint as an injected reset.
+  if ((result != 0 && !(result == -1 && errno == ECONNRESET)) || !target_process() ||
       descriptor != atomic_load(&sideband_descriptor) ||
       getenv("MCP_CONSOLE_TEST_RESET_SIDEBAND_EOF") == NULL ||
       atomic_exchange(&reset_claimed, true)) {
@@ -148,9 +164,11 @@ __attribute__((constructor)) static void prevent_worker_injection(void) {
   if (target_process()) {
     mark("MCP_CONSOLE_TEST_POLL_LOADED");
     unsetenv("DYLD_INSERT_LIBRARIES");
+    unsetenv("LD_PRELOAD");
   }
 }
 
+#ifdef __APPLE__
 #define DYLD_INTERPOSE(replacement, replacee)                                  \
   __attribute__((used)) static struct {                                        \
     const void *replacement;                                                   \
@@ -162,3 +180,15 @@ __attribute__((constructor)) static void prevent_worker_injection(void) {
 DYLD_INTERPOSE(delayed_poll, poll)
 DYLD_INTERPOSE(reset_read, read)
 DYLD_INTERPOSE(reset_recv, recv)
+
+#else
+int poll(struct pollfd *descriptors, nfds_t count, int timeout) {
+  return delayed_poll(descriptors, count, timeout);
+}
+ssize_t read(int descriptor, void *buffer, size_t length) {
+  return reset_read(descriptor, buffer, length);
+}
+ssize_t recv(int descriptor, void *buffer, size_t length, int flags) {
+  return reset_recv(descriptor, buffer, length, flags);
+}
+#endif

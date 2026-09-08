@@ -5,6 +5,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from support.native import LOADER_VARIABLE, build_interposer
 from support.assertions import last_result_text
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
@@ -60,20 +61,6 @@ def checkpoint_uv_environment(
             modules / f"{module}.py"
         )
     return environment, started, release
-
-
-def build_killpg_denial_interposer(directory: Path) -> Path:
-    source = directory / "deny-killpg.c"
-    library = directory / "deny-killpg.dylib"
-    fixture = FIXTURES / "native" / "killpg_denial_interposer.c"
-    shutil.copyfile(fixture, source)
-    subprocess.run(
-        ["cc", "-dynamiclib", "-o", library, source],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return library
 
 
 def record_resolved_r_library(environment: dict[str, str], directory: Path) -> None:
@@ -150,8 +137,8 @@ def resolver_interrupt_permission_environment(
     environment["MCP_CONSOLE_TEST_RESOLVER_LIFETIME"] = str(resolver_lifetime.path)
     # The interposer removes its loader variable after reaching the server, so
     # the resolver and Zod do not inherit it.
-    environment["DYLD_INSERT_LIBRARIES"] = str(
-        build_killpg_denial_interposer(temporary_path)
+    environment[LOADER_VARIABLE] = str(
+        build_interposer(temporary_path, "killpg_denial_interposer")
     )
     return (
         environment,

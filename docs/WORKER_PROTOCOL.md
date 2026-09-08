@@ -35,8 +35,8 @@ The sideband has no protocol negotiation, capability exchange, session name, req
 Interrupt delivery is a process signal managed by the relay.
 Response cuts, output budgets, and MCP response assembly are server state and never appear on this boundary.
 
-The sideband transport implementation is compiled for macOS and Linux.
-The complete protocol execution stack is currently supported only on macOS because the worker relay and sandbox runtime are macOS-only.
+The sideband transport, worker relay, and built-in worker support macOS and Linux.
+Linux requires `serve --no-sandbox`; the sandbox launcher is macOS-only.
 
 ## Launch contract
 

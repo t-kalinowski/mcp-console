@@ -4,18 +4,18 @@ use clap::Parser;
 
 mod cell;
 mod cli;
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 mod process_descriptors;
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 mod process_exit;
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 mod python;
 mod python_requirement;
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 mod r_bridge;
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 mod r_environment;
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 mod r_graphics;
 mod r_package_name;
 mod relay_protocol;
@@ -25,7 +25,7 @@ mod server;
 mod server_transport;
 #[cfg(unix)]
 mod sideband;
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 mod sql;
 mod transcript;
 mod worker;
@@ -81,6 +81,10 @@ fn run_server(
     relay: Option<std::path::PathBuf>,
     no_sandbox: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(target_os = "linux")]
+    if !no_sandbox {
+        return Err("Linux requires `mcp-console serve --no-sandbox`".into());
+    }
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;

@@ -177,15 +177,15 @@ unsafe extern "C-unwind" {
 }
 
 pub(crate) fn run() -> Result<(), Box<dyn Error>> {
-    // SAFETY: pthread_main_np has no preconditions.
-    if unsafe { libc::pthread_main_np() } != 1 {
-        return Err(io::Error::other("R worker must run on the process main thread").into());
-    }
-    crate::python::configure_worker_environment()?;
     let (reader, writer) = crate::sideband::connect_from_env()?;
     let r_home = harp::command::r_home_setup()?;
+    #[cfg(target_os = "linux")]
+    reexec_with_r_library_path(&r_home, &reader)?;
     normalize_interrupt_signal()?;
     initialize_r(&r_home)?;
+    let temporary_directory =
+        std::path::PathBuf::from(String::try_from(harp::parse_eval_base("base::tempdir()")?)?);
+    crate::python::configure_worker_environment(&temporary_directory)?;
     core::initialize(reader, writer.clone())?;
     let graphics = crate::r_graphics::Bridge::initialize()?;
     let r_environment = crate::r_environment::Bridge::initialize()?;
@@ -201,6 +201,31 @@ pub(crate) fn run() -> Result<(), Box<dyn Error>> {
         sql,
     }
     .run()
+}
+
+#[cfg(target_os = "linux")]
+fn reexec_with_r_library_path(
+    r_home: &std::path::Path,
+    reader: &crate::sideband::Reader,
+) -> Result<(), Box<dyn Error>> {
+    use std::os::unix::process::CommandExt;
+
+    let library = r_home.join("lib");
+    let mut paths: Vec<_> = std::env::var_os("LD_LIBRARY_PATH")
+        .map(|value| std::env::split_paths(&value).collect())
+        .unwrap_or_default();
+    if paths.first() == Some(&library) {
+        return Ok(());
+    }
+    paths.insert(0, library);
+    // The ELF loader reads LD_LIBRARY_PATH at exec, before native R packages
+    // need to resolve libR.so and its companion libraries.
+    let mut command = std::process::Command::new(std::env::current_exe()?);
+    command
+        .args(std::env::args_os().skip(1))
+        .env("LD_LIBRARY_PATH", std::env::join_paths(paths)?);
+    reader.configure_exec(&mut command)?;
+    Err(command.exec().into())
 }
 
 impl Runtime {

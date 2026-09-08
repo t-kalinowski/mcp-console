@@ -19,6 +19,8 @@ PACKAGE_VERSION = re.compile(r'^version\s*=\s*"([^"]+)"\s*$')
 TARGET_ARCHITECTURES = {
     "aarch64-apple-darwin": "arm64",
     "x86_64-apple-darwin": "x86_64",
+    "aarch64-unknown-linux-gnu": "aarch64",
+    "x86_64-unknown-linux-gnu": "x86_64",
 }
 
 
@@ -108,9 +110,10 @@ def smoke_mcp(
     env: dict[str, str],
     startup_timeout: float,
     response_timeout: float,
+    no_sandbox: bool,
 ) -> None:
     process = subprocess.Popen(
-        [str(executable), "serve"],
+        [str(executable), "serve", *(["--no-sandbox"] if no_sandbox else [])],
         env=env,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
@@ -188,7 +191,7 @@ def smoke_mcp(
                 "content": [{"type": "text", "text": "[1] 42\n"}],
                 "isError": False,
             },
-            "unexpected R evaluation response",
+            f"unexpected R evaluation response: {json.dumps(evaluation, ensure_ascii=False)}",
         )
     except Exception as error:
         standard_error = terminate(process)
@@ -212,11 +215,17 @@ def smoke_mcp(
     require(not standard_error, f"MCP server wrote to stderr: {standard_error}")
 
 
-def inspect_wheel_commands(wheel: Path) -> None:
+def inspect_wheel_commands(wheel: Path, *, linux: bool) -> None:
     data = f"mcp_console-{package_version()}.data/data"
     runner = f"{data}/libexec/mcp-console-sandbox"
     with zipfile.ZipFile(wheel) as archive:
         members = archive.namelist()
+        if linux:
+            require(
+                not any(Path(name).name == "mcp-console-sandbox" for name in members),
+                "Linux wheel contains a macOS sandbox executable",
+            )
+            return
         require(
             [name for name in members if Path(name).name == "mcp-console-sandbox"]
             == [runner],
@@ -247,14 +256,20 @@ def smoke_wheel(args: argparse.Namespace) -> None:
         wheel.name.startswith(f"mcp_console-{version}-"),
         f"wheel version does not match {version}: {wheel.name}",
     )
-    require("-macosx_" in wheel.name, f"wheel must be macOS-specific: {wheel.name}")
+    platform = wheel.name.rsplit("-", 1)[-1]
+    require(
+        platform.startswith(("macosx_", "manylinux", "linux_")),
+        f"unsupported wheel platform: {wheel.name}",
+    )
+    linux = not platform.startswith("macosx_")
     require(not wheel.name.endswith("-none-any.whl"), "wheel must be platform-specific")
-    inspect_wheel_commands(wheel)
+    inspect_wheel_commands(wheel, linux=linux)
 
     if args.target is not None:
         architecture = TARGET_ARCHITECTURES[args.target]
         require(
-            wheel.name.endswith(f"_{architecture}.whl"),
+            wheel.name.endswith(f"_{architecture}.whl")
+            and linux == ("linux" in args.target),
             f"wheel does not match {args.target}: {wheel.name}",
         )
 
@@ -293,11 +308,16 @@ def smoke_wheel(args: argparse.Namespace) -> None:
         not public_runner.exists(),
         f"private sandbox runner was installed as a public command: {public_runner}",
     )
-    with tempfile.TemporaryDirectory(prefix="mcp-console-empty-path-") as directory:
-        sandbox_env = os.environ.copy()
-        sandbox_env["PATH"] = directory
-        run_command([str(cargo_bin), "sandbox", "--", "/usr/bin/true"], env=sandbox_env)
-        run_command([str(installed), "sandbox", "--", "/usr/bin/true"], env=sandbox_env)
+    if not linux:
+        with tempfile.TemporaryDirectory(prefix="mcp-console-empty-path-") as directory:
+            sandbox_env = os.environ.copy()
+            sandbox_env["PATH"] = directory
+            run_command(
+                [str(cargo_bin), "sandbox", "--", "/usr/bin/true"], env=sandbox_env
+            )
+            run_command(
+                [str(installed), "sandbox", "--", "/usr/bin/true"], env=sandbox_env
+            )
 
     internal_ir = installed.resolve().with_name("ir")
     require(not internal_ir.exists(), f"wheel contains sibling `ir`: {internal_ir}")
@@ -330,6 +350,7 @@ def smoke_wheel(args: argparse.Namespace) -> None:
             env,
             args.startup_timeout_seconds,
             args.response_timeout_seconds,
+            no_sandbox=linux,
         )
 
 
@@ -400,12 +421,16 @@ def verify_wheel_set(args: argparse.Namespace) -> None:
     wheels = sorted(directory.glob("*.whl"))
     arm64 = list(directory.glob("mcp_console-*-macosx_*_arm64.whl"))
     x86_64 = list(directory.glob("mcp_console-*-macosx_*_x86_64.whl"))
+    linux_arm64 = list(directory.glob("mcp_console-*-manylinux_*_aarch64.whl"))
+    linux_x86_64 = list(directory.glob("mcp_console-*-manylinux_*_x86_64.whl"))
     universal = list(directory.glob("*-none-any.whl"))
     sdists = list(directory.glob("*.tar.gz"))
 
-    require(len(wheels) == 2, f"expected exactly two wheels, found {len(wheels)}")
+    require(len(wheels) == 4, f"expected exactly four wheels, found {len(wheels)}")
     require(len(arm64) == 1, "expected exactly one Apple Silicon wheel")
     require(len(x86_64) == 1, "expected exactly one Intel macOS wheel")
+    require(len(linux_arm64) == 1, "expected exactly one ARM64 Linux wheel")
+    require(len(linux_x86_64) == 1, "expected exactly one x86-64 Linux wheel")
     require(not universal, "a platform-independent wheel must not be published")
     require(not sdists, "a source distribution must not be published")
 

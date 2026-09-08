@@ -12,9 +12,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from support.macos import build_interposer
+from support.native import build_interposer
 
 
+@unittest.skipUnless(sys.platform == "darwin", "the sandbox requires macOS")
 class SandboxInstallationTests(unittest.TestCase):
     binary_source: Path
 

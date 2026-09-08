@@ -9,7 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.client import McpClient
-from support.execution import DIRECT, SANDBOXED, Execution
+from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript, TranscriptWithCompanions
 from support.requirements import WORKER, requires
@@ -73,14 +73,13 @@ def test_invalid_send_has_no_external_effects(binary: Path) -> Transcript:
             return client.finish()
 
 
-def test_initializes_and_lists_tools(binary: Path) -> TranscriptWithCompanions:
+@executions(DIRECT, SANDBOXED)
+def test_initializes_and_lists_tools(
+    binary: Path, execution: Execution
+) -> TranscriptWithCompanions:
     return TranscriptWithCompanions(
-        _initializes_and_lists_tools(binary, SANDBOXED),
-        {
-            "direct.yaml": _initializes_and_lists_tools(binary, DIRECT),
-            "bare.yaml": _initializes_and_lists_tools(binary, SANDBOXED, bare=True),
-            "bare.direct.yaml": _initializes_and_lists_tools(binary, DIRECT, bare=True),
-        },
+        _initializes_and_lists_tools(binary, execution),
+        {"bare.yaml": _initializes_and_lists_tools(binary, execution, bare=True)},
     )
 
 

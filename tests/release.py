@@ -180,6 +180,10 @@ class ReleaseScriptTests(unittest.TestCase):
             import sys
             from pathlib import Path
 
+            if record := os.environ.get("FAKE_MCP_ARGUMENTS"):
+                with open(record, "a") as stream:
+                    stream.write(json.dumps(sys.argv[1:]) + "\\n")
+
             if sys.argv[1:] == ["--version"]:
                 print("mcp-console 0.0.2")
             elif sys.argv[1:] == ["--help"]:
@@ -191,7 +195,7 @@ class ReleaseScriptTests(unittest.TestCase):
                 Path(os.environ["FAKE_SANDBOX_PATH_RECORD"]).write_text(
                     os.environ.get("PATH", ""), encoding="utf-8"
                 )
-            elif sys.argv[1:] == ["serve"]:
+            elif sys.argv[1:] in (["serve"], ["serve", "--no-sandbox"]):
                 initialize = json.loads(sys.stdin.readline())
                 print(json.dumps({
                     "jsonrpc": "2.0",
@@ -459,13 +463,57 @@ class ReleaseScriptTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("MCP response timed out after 1 seconds", result.stderr)
 
-    def test_verify_wheel_set_requires_both_macos_architectures(self) -> None:
+    def test_smoke_linux_wheel_uses_no_sandbox(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            environment, wheel, cargo_bin = self.smoke_environment(directory)
+            linux_wheel = wheel.with_name(
+                "mcp_console-0.0.2-py3-none-manylinux_2_34_x86_64.whl"
+            )
+            self.write_wheel(linux_wheel, omit="mcp-console-sandbox")
+            wheel.unlink()
+            record = directory / "arguments.jsonl"
+            environment["FAKE_MCP_ARGUMENTS"] = str(record)
+            command = (
+                "smoke-wheel",
+                str(linux_wheel),
+                str(cargo_bin),
+                "--target",
+                "x86_64-unknown-linux-gnu",
+            )
+            result = self.run_script(
+                *command,
+                cwd=directory,
+                env=environment,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            invocations = [json.loads(line) for line in record.read_text().splitlines()]
+            self.assertIn(["serve", "--no-sandbox"], invocations)
+            self.assertFalse(any(call[:1] == ["sandbox"] for call in invocations))
+
+            self.write_wheel(linux_wheel)
+            result = self.run_script(
+                *command,
+                cwd=directory,
+                env=environment,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                "Linux wheel contains a macOS sandbox executable", result.stderr
+            )
+
+    def test_verify_wheel_set_requires_macos_and_linux_architectures(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)
             arm64 = directory / "mcp_console-0.0.2-py3-none-macosx_11_0_arm64.whl"
             x86_64 = directory / "mcp_console-0.0.2-py3-none-macosx_11_0_x86_64.whl"
             arm64.touch()
             x86_64.touch()
+            for architecture in ("aarch64", "x86_64"):
+                (
+                    directory
+                    / f"mcp_console-0.0.2-py3-none-manylinux_2_39_{architecture}.whl"
+                ).touch()
 
             result = self.run_script("verify-wheel-set", str(directory), cwd=ROOT)
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -473,7 +521,7 @@ class ReleaseScriptTests(unittest.TestCase):
             x86_64.unlink()
             result = self.run_script("verify-wheel-set", str(directory), cwd=ROOT)
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("expected exactly two wheels", result.stderr)
+            self.assertIn("expected exactly four wheels", result.stderr)
 
     def test_stage_runner_builds_the_pin_and_records_artifact_integrity(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -482,6 +530,23 @@ class ReleaseScriptTests(unittest.TestCase):
             scripts = root / "scripts"
             scripts.mkdir(parents=True)
             shutil.copyfile(STAGE_SCRIPT, scripts / STAGE_SCRIPT.name)
+            placeholder = root / "wheel-data/data/.gitignore"
+            placeholder.parent.mkdir(parents=True)
+            placeholder.write_text("/*\n!/.gitignore\n")
+            # The toolchain below is fake; exercise its macOS staging contract
+            # on every test host without building or executing a native runner.
+            launcher = scripts / "macos-stage.py"
+            write_executable(
+                launcher,
+                """
+                import runpy
+                import sys
+
+                sys.platform = "darwin"
+                sys.argv.pop(0)
+                runpy.run_path(sys.argv[0], run_name="__main__")
+                """,
+            )
             pin = {
                 "repository": "t-kalinowski/codex",
                 "release": "rust-v0.150.1",
@@ -583,6 +648,7 @@ class ReleaseScriptTests(unittest.TestCase):
             )
             command = [
                 sys.executable,
+                str(launcher),
                 str(scripts / STAGE_SCRIPT.name),
                 str(checkout),
             ]
@@ -646,6 +712,7 @@ class ReleaseScriptTests(unittest.TestCase):
                         text=True,
                     )
                     self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(placeholder.read_text(), "/*\n!/.gitignore\n")
                     self.assertEqual(
                         json.loads((directory / "cargo.json").read_text()),
                         [

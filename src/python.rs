@@ -25,8 +25,10 @@ pub(crate) enum SqlProvider {
     Handled,
 }
 
-pub(crate) fn configure_worker_environment() -> std::io::Result<()> {
-    platform::configure_worker_environment()?;
+pub(crate) fn configure_worker_environment(
+    temporary_directory: &std::path::Path,
+) -> std::io::Result<()> {
+    platform::configure_worker_environment(temporary_directory)?;
     reticulate::configure_worker_environment()
 }
 
@@ -86,16 +88,17 @@ mod platform {
     static MATPLOTLIB_DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
     static INHERITED_MATPLOTLIB_DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
 
-    pub(crate) fn configure_worker_environment() -> io::Result<()> {
-        let matplotlib_cache_directory = inherited_matplotlib_directory();
+    pub(crate) fn configure_worker_environment(temporary_directory: &Path) -> io::Result<()> {
+        let matplotlib_cache_directory = inherited_matplotlib_directory("XDG_CACHE_HOME", ".cache");
+        let matplotlib_config_directory =
+            inherited_matplotlib_directory("XDG_CONFIG_HOME", ".config");
         // Preserve the selected host configuration before redirecting all
         // Matplotlib writes to the worker's private directory.
-        if let Some(config) = inherited_matplotlibrc(matplotlib_cache_directory.as_deref()) {
+        if let Some(config) = inherited_matplotlibrc(matplotlib_config_directory.as_deref()) {
             let config = CString::new(config.as_os_str().as_bytes())
                 .expect("Matplotlib configuration path should not contain NUL");
             set_environment(c"MATPLOTLIBRC", &config, true)?;
         }
-        let temporary_directory = std::env::temp_dir();
         let matplotlib_directory = temporary_directory.join("matplotlib");
         MATPLOTLIB_DIRECTORY
             .set(matplotlib_directory.clone())
@@ -168,9 +171,20 @@ mod platform {
         regular_file(&config_directory?.join("matplotlibrc"))
     }
 
-    fn inherited_matplotlib_directory() -> Option<PathBuf> {
+    fn inherited_matplotlib_directory(xdg_variable: &str, xdg_default: &str) -> Option<PathBuf> {
         let directory = match std::env::var_os("MPLCONFIGDIR") {
             Some(directory) if !directory.is_empty() => PathBuf::from(directory),
+            Some(_) | None if cfg!(target_os = "linux") => {
+                let root = std::env::var_os(xdg_variable)
+                    .filter(|path| !path.is_empty())
+                    .map(PathBuf::from)
+                    .or_else(|| {
+                        std::env::var_os("HOME")
+                            .filter(|home| !home.is_empty())
+                            .map(|home| PathBuf::from(home).join(xdg_default))
+                    })?;
+                root.join("matplotlib")
+            }
             Some(_) | None => {
                 PathBuf::from(std::env::var_os("HOME").filter(|home| !home.is_empty())?)
                     .join(".matplotlib")
