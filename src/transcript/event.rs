@@ -35,6 +35,14 @@ pub(super) enum Event<'a> {
         mime_type: &'a str,
         bytes: usize,
     },
+    CellOutput {
+        call_id: u64,
+        path: &'a str,
+        retained_bytes: u64,
+        inline_omitted_bytes: u64,
+        discarded_bytes: u64,
+        retention_limit_bytes: u64,
+    },
     ToolResult {
         call_id: u64,
         #[serde(flatten)]

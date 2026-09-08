@@ -394,7 +394,7 @@ Each relay producer preserves its own order.
 The ordered event stream gives the server one observation order, but it does not establish chronology between independent worker sideband, stdout, and stderr transports.
 The [relay protocol](RELAY_PROTOCOL.md) owns that ordering guarantee, and the [built-in runtime guide](BUILTIN_RUNTIME.md) describes the resulting console behavior.
 
-## Recording and image artifacts
+## Recording, cell output, and image artifacts
 
 Recording is a server responsibility and does not add messages to either private protocol.
 On the first `send` call, the server creates a private run directory under `.mcp-console/sessions/` in its working directory.
@@ -430,10 +430,21 @@ uv tool run --from r-lib-ir ir render transcript.qmd
 
 When `ir` is installed on `PATH`, `ir render transcript.qmd` is equivalent.
 
+Each admitted evaluation also owns `outputs/call-NNNNNN.log` beneath the run directory.
+The server attaches that file to the ordered output tape at the same boundary as the worker operation, appends console text and direct stdout and stderr before pending-output admission can discard it, and detaches it at the evaluation's completion or restart cut.
+Response cuts flush the active file, so output already returned by `send` is also visible through ordinary file reads while the evaluation remains active.
+The file is limited to 1 GiB; later worker output is still drained and counted after the limit or a file failure.
+
+At file completion, a `cell_output` journal event records its initiating call, relative path, retained bytes, bytes omitted from inline responses, bytes not retained in the file (`discarded_bytes`), and retention limit.
+These counts describe separate projections: text not retained in the file may still have been delivered inline.
+The Markdown projection links to the file when either projection omitted text.
+The source-only Quarto projection ignores cell output events.
+
 Images remain ordinary MCP image content for the client.
 For recording, the server decodes retained image data into files under the run's `artifacts/` directory and records artifact identifiers and relative paths in the JSONL result instead of duplicating the encoded payload there.
 Artifact events appear as links in the live Markdown projection as soon as their files are recorded, even when no later poll collects them; result image blocks remain inline in result-content order.
 A journal or artifact failure disables further recording and reports a server diagnostic without stopping the console or worker.
+A cell output failure stops only that file, reports the loss in the console response, and leaves the journal and projections available when they can still be written.
 A Markdown or Quarto creation, append, or regeneration failure disables both derived projections; the journal and artifacts continue, and the server reports the failure once.
 This includes a server working directory that cannot be represented as UTF-8 because its exact path cannot be emitted as the QMD execution root.
 

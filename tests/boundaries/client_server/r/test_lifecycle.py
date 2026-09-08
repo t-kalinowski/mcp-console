@@ -95,13 +95,11 @@ def r_segfault_transcript(binary: Path, execution: Execution, cause: str) -> Tra
         environment["MCP_CONSOLE_TEST_SEGFAULT_LIBRARY"] = str(
             build_interposer(Path(directory), "r_segfault")
         )
-        return restart_after_r_segfault(binary, execution, environment, cause)
+        with McpClient(binary, execution.serve(), environment) as client:
+            return restart_after_r_segfault(client, cause)
 
 
-def restart_after_r_segfault(
-    binary: Path, execution: Execution, environment: dict[str, str], cause: str
-) -> Transcript:
-    client = McpClient(binary, execution.serve(), environment)
+def restart_after_r_segfault(client: McpClient, cause: str) -> Transcript:
     client.initialize_and_list_tools()
     client.send(r="r_worker_marker <- TRUE")
 
@@ -125,6 +123,11 @@ def restart_after_r_segfault(
         fatal_output,
     )
     assert count == 1, fatal_output
+    assert normalized.startswith(
+        "\n *** caught segfault ***\n"
+        f"address 0x0, cause '{cause}'\n"
+        '\nTraceback:\n 1: .C("mcp_test_segfault")\n'
+    ), repr(fatal_output)
     client.transcript[-1]["result"]["content"][0]["text"] = normalized
     wait_for_evaluation_output(
         client,

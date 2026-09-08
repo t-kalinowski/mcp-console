@@ -166,13 +166,24 @@ def test_cancelled_send_returns_owned_output_to_restart(
         cell_prefix = "cell before image\n"
         retained = "x" * (PENDING_TEXT_BUDGET - len(cell_prefix))
         omitted = len(cell_prefix) + 7
+        assert client.client.temporary_directory is not None
+        workspace = Path(client.client.temporary_directory.name)
+        session = next((workspace / ".mcp-console" / "sessions").iterdir())
+        relative_output = Path("outputs/call-000002.log")
+        public_output = (
+            f".mcp-console/sessions/{session.name}/{relative_output.as_posix()}"
+        )
         truncation = (
             f"[output truncated: omitted {omitted} text bytes and "
-            "0 encoded image bytes across 1 event]"
+            "0 encoded image bytes across 1 event; "
+            f"retained text: {public_output} ({omitted} of {omitted} omitted text bytes)]"
         )
         tail = result["content"][4]["text"]
         assert tail.startswith(retained + "\n" + truncation), (
             f"unexpected reclaimed tail: length={len(tail)}, tail={tail[-500:]!r}"
+        )
+        assert (session / relative_output).read_text(encoding="utf-8") == (
+            cell_prefix + "x" * (PENDING_TEXT_BUDGET + 7)
         )
         for notice in (
             truncation,
@@ -187,7 +198,7 @@ def test_cancelled_send_returns_owned_output_to_restart(
             retained,
             f"<retained {len(retained)} text bytes>",
             1,
-        )
+        ).replace(session.name, "<run ID>")
 
         client.send()
         assert _tool_text(client.client.transcript[-1]["result"]) == "\n[idle]"
