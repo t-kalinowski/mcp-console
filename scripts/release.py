@@ -228,7 +228,7 @@ def smoke_private_runner(runner: Path, env: dict[str, str], timeout: float) -> N
     with tempfile.TemporaryDirectory(prefix="mcp-console-runner-smoke-") as directory:
         temporary = str(Path(directory).resolve())
         request = {
-            "version": 1,
+            "version": 2,
             "command": ["/bin/cat"],
             "cwd": temporary,
             "environment": {"PATH": env["PATH"], "TMPDIR": temporary},
@@ -247,14 +247,31 @@ def smoke_private_runner(runner: Path, env: dict[str, str], timeout: float) -> N
         }
         payload = json.dumps(request).encode("utf-8")
         sentinel = bytes(range(256)) * 64
-        result = subprocess.run(
-            [str(runner)],
-            env=env,
-            input=len(payload).to_bytes(4, "big") + payload + sentinel,
-            capture_output=True,
-            timeout=timeout,
-            check=False,
-        )
+        read, write = os.pipe()
+        with os.fdopen(read, "rb", buffering=0) as setup_read, os.fdopen(
+            write, "wb", buffering=0
+        ) as setup_write:
+            with subprocess.Popen(
+                [str(runner), "--bootstrap-fd", str(read)],
+                pass_fds=(read,),
+                env=env,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            ) as child:
+                setup_read.close()
+                try:
+                    setup_write.write(len(payload).to_bytes(4, "big") + payload)
+                    setup_write.close()
+                    stdout, stderr = child.communicate(sentinel, timeout=timeout)
+                except BaseException:
+                    setup_write.close()
+                    child.kill()
+                    child.wait()
+                    raise
+                result = subprocess.CompletedProcess(
+                    child.args, child.returncode, stdout, stderr
+                )
         require(
             result.returncode == 0,
             f"private sandbox runner failed with status {result.returncode}: "

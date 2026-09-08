@@ -234,7 +234,7 @@ impl SignalRelay {
                 restore_signal_mask(&previous_mask)?;
                 // The private runner waits in the target's process group. Keep
                 // forwarded signals blocked in that intermediary; the target
-                // restores the original mask after receiving its startup gate.
+                // restores the original mask from its private wrapper argument.
                 let result =
                     libc::pthread_sigmask(libc::SIG_BLOCK, &forwarded, std::ptr::null_mut());
                 if result != 0 {
@@ -302,6 +302,17 @@ impl SignalRelay {
         FORWARDED_SIGNALS
             .into_iter()
             .filter(|signal| unsafe { libc::sigismember(&self.wait_set, *signal) } == 1)
+    }
+
+    pub(in crate::sandbox) fn retirement_pending(&self) -> Result<bool, String> {
+        let mut pending = 0;
+        if unsafe { libc::sigpending(&mut pending) } != 0 {
+            return Err(format!(
+                "failed to inspect pending launcher signals: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        Ok(unsafe { libc::sigismember(&pending, libc::SIGTERM) } == 1)
     }
 
     pub(super) fn relay_pending(

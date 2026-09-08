@@ -5,7 +5,7 @@ use crate::process_descriptors;
 use crate::sandbox::{
     child::{append_retirement_error, terminate_standalone_root, terminate_unmanaged_child},
     platform,
-    runner::StartupGate,
+    runner::Setup,
 };
 use std::ffi::{OsStr, OsString};
 use std::io::ErrorKind;
@@ -21,16 +21,19 @@ pub(in crate::sandbox) fn status(
     arguments: &[OsString],
     owner: Option<super::SandboxOwner>,
 ) -> Result<ExitCode, String> {
-    let mut startup_gate =
-        StartupGate::new(&mut command, &temporary_directory, program, arguments)?;
-
     let signal_relay = SignalRelay::install(owner.is_some())?;
+    let mut setup = Setup::new(
+        &mut command,
+        &temporary_directory,
+        program,
+        arguments,
+        signal_relay.target_signal_mask(),
+    )?;
     let mut foreground_terminal = ForegroundTerminal::detect()?;
     let owned = owner.is_some();
     let (mut root, mut root_waiter) = match start_managed_root(
         command,
         temporary_directory,
-        &mut startup_gate,
         &signal_relay,
         foreground_terminal.descriptor(),
         owner,
@@ -45,7 +48,18 @@ pub(in crate::sandbox) fn status(
         }
     };
 
-    let root_wait = match wait_for_root_exit(&root.child, &signal_relay, &mut root_waiter, owned) {
+    let root_wait = match (|| {
+        // An owned SIGTERM queued during manager startup cancels execution.
+        // Keep the setup channel owned through retirement so the stopped root
+        // cannot race a parsing diagnostic against cancellation.
+        if (!owned || !signal_relay.retirement_pending()?)
+            && let Err(error) = setup.release()
+            && error.kind() != ErrorKind::BrokenPipe
+        {
+            return Err(format!("failed to send sandbox setup: {error}"));
+        }
+        wait_for_root_exit(&root.child, &signal_relay, &mut root_waiter, owned)
+    })() {
         Ok(root_wait) => root_wait,
         Err(mut error) => {
             if let Err(stop_error) = stop_managed_root(&mut root.child, &mut root.supervisor) {
@@ -113,31 +127,25 @@ struct ManagedRoot {
 fn start_managed_root(
     mut command: Command,
     mut temporary_directory: platform::TemporaryDirectory,
-    startup_gate: &mut StartupGate,
     signal_relay: &SignalRelay,
     terminal_descriptor: Option<libc::c_int>,
     owner: Option<super::SandboxOwner>,
 ) -> Result<(ManagedRoot, RootExitWaiter), String> {
-    if owner.is_some() && terminal_descriptor != Some(libc::STDIN_FILENO) {
-        process_descriptors::detach_stdin()?;
-    }
     command.env("TMPDIR", temporary_directory.path());
-    // fd 0 becomes the private bootstrap socket before pre_exec. Keep the
-    // original terminal descriptor available for foreground assignment.
-    let child_terminal = terminal_descriptor.map(|descriptor| {
-        if descriptor == libc::STDIN_FILENO {
-            startup_gate.input_descriptor()
-        } else {
-            descriptor
-        }
-    });
-    signal_relay.configure_child(&mut command, child_terminal);
-    process_descriptors::close_unlisted(&mut command)?;
+    signal_relay.configure_child(&mut command, terminal_descriptor);
 
     let mut child = command
         .spawn()
         .map_err(|error| format!("failed to launch `{}`: {error}", platform::RUNNER_NAME))?;
     drop(command);
+    // The runner already inherited the original fd 0. Detach the owned
+    // launcher's input before starting any host-side observer or manager.
+    if owner.is_some()
+        && terminal_descriptor != Some(libc::STDIN_FILENO)
+        && let Err(error) = process_descriptors::detach_stdin()
+    {
+        return Err(fail_before_manager_start(child, temporary_directory, error));
+    }
     let root_waiter = match RootExitWaiter::start(child.id() as libc::pid_t, signal_relay, owner) {
         Ok(root_waiter) => root_waiter,
         Err(error) => {
@@ -160,13 +168,6 @@ fn start_managed_root(
     if let Err(error) = root_waiter.validate_owner() {
         return Err(finish_failed_startup(&mut child, supervisor, error));
     }
-    if let Err(write_error) = startup_gate.release(signal_relay.target_signal_mask())
-        && write_error.kind() != ErrorKind::BrokenPipe
-    {
-        let error = format!("failed to release sandbox target startup gate: {write_error}");
-        return Err(finish_failed_startup(&mut child, supervisor, error));
-    }
-
     Ok((ManagedRoot { child, supervisor }, root_waiter))
 }
 

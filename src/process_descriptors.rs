@@ -19,7 +19,10 @@ pub(crate) fn detach_stdin() -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn close_unlisted(command: &mut Command) -> Result<(), String> {
+pub(crate) fn close_unlisted(
+    command: &mut Command,
+    setup: std::io::PipeReader,
+) -> Result<(), String> {
     // The standalone path reaches this point before starting any threads, so
     // this snapshot contains every inherited descriptor that can reach the
     // child. Change flags only after fork to leave the launcher unchanged.
@@ -30,6 +33,13 @@ pub(crate) fn close_unlisted(command: &mut Command) -> Result<(), String> {
         command.pre_exec(move || {
             for descriptor in &descriptors {
                 set_close_on_exec(*descriptor)?;
+            }
+            // Keep the dynamically allocated setup descriptor alive through
+            // fork and make it the only inheritance exception beyond stdio.
+            let descriptor = setup.as_raw_fd();
+            let flags = libc::fcntl(descriptor, libc::F_GETFD);
+            if flags < 0 || libc::fcntl(descriptor, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
+                return Err(std::io::Error::last_os_error());
             }
             Ok(())
         });

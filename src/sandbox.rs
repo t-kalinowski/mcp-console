@@ -55,18 +55,17 @@ pub(crate) fn run_manager(
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) fn run_target(
-    gate_descriptor: libc::c_int,
-    command_line: &[OsString],
-) -> Result<ExitCode, String> {
+pub(crate) fn run_target(signal_mask: u32, command_line: &[OsString]) -> Result<ExitCode, String> {
     let (program, arguments) = command_line
         .split_first()
         .expect("sandbox target must include a program");
-    if gate_descriptor != libc::STDIN_FILENO {
-        return Err("sandbox target startup gate descriptor is invalid".to_string());
-    }
-    if !runner::restore_target_input()? {
-        return Ok(ExitCode::FAILURE);
+    let result =
+        unsafe { libc::pthread_sigmask(libc::SIG_SETMASK, &signal_mask, std::ptr::null_mut()) };
+    if result != 0 {
+        return Err(format!(
+            "failed to restore sandbox target signal mask: {}",
+            std::io::Error::from_raw_os_error(result)
+        ));
     }
 
     let error = Command::new(program).args(arguments).exec();
@@ -92,8 +91,8 @@ pub(crate) fn run_manager(
 
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn run_target(
-    _gate_descriptor: libc::c_int,
+    _signal_mask: u32,
     _command_line: &[OsString],
 ) -> Result<ExitCode, String> {
-    Err("the sandbox target gate is currently supported only on macOS".to_string())
+    Err("the sandbox target wrapper is currently supported only on macOS".to_string())
 }

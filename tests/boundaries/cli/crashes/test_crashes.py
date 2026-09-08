@@ -325,6 +325,77 @@ def test_owner_loss_before_target_release_cancels_startup(binary: Path) -> Trans
             owner.stderr.close()
 
 
+def test_sigterm_before_setup_retires_without_releasing_target(
+    binary: Path,
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        temporary = Path(directory)
+        started = FifoCheckpoint.create(temporary / "manager-started")
+        release = FifoCheckpoint.create(temporary / "manager-release")
+        environment = os.environ | {
+            "TMPDIR": directory,
+            "LARGE_SETUP": "x" * (96 * 1024),
+            "MCP_CONSOLE_TEST_MANAGER_START": str(started.path),
+            "MCP_CONSOLE_TEST_MANAGER_RELEASE": str(release.path),
+            "DYLD_INSERT_LIBRARIES": str(
+                _build_startup_interposer(temporary, "manager_start_interposer")
+            ),
+        }
+        process = subprocess.Popen(
+            [
+                binary,
+                "sandbox",
+                "--exit-with-parent",
+                str(os.getpid()),
+                "--",
+                "/bin/echo",
+                "target ran",
+            ],
+            env=environment,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        identities = []
+        try:
+            started.wait("manager startup before cancellation")
+            launcher = capture_darwin_process_identity(process.pid)
+            root = capture_darwin_process_identity(_sandbox_root_pid(process.pid))
+            manager = capture_darwin_process_identity(_manager_pid(process.pid))
+            identities = [launcher, root, manager]
+            # A stopped reader and a frame larger than pipe capacity make an
+            # incorrect release block. This exposes cancellation ordering without
+            # racing target execution against the manager's retirement signals.
+            assert signal_darwin_process(root, signal.SIGSTOP)
+            assert signal_darwin_process(launcher, signal.SIGTERM)
+            release.release()
+            assert process.wait(timeout=TIMEOUT) == 0
+            stdout, stderr = process.communicate()
+            assert (stdout, stderr) == (b"", b""), (stdout, stderr)
+            _wait_for_process_exit(tuple(identities), "cancelled startup survived")
+            assert not list(temporary.glob("mcp-console-tmp-*"))
+        finally:
+            release.release()
+            # Killing the stopped reader also unblocks an incorrect pipe write.
+            kill_darwin_processes(identities[1:])
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=TIMEOUT)
+            for stream in (process.stdin, process.stdout, process.stderr):
+                stream.close()
+            started.close()
+            release.close()
+        return [
+            {
+                "scenario": "owned SIGTERM before setup with stopped runner and large frame",
+                "stdout": "",
+                "stderr": "",
+                "exit_code": process.returncode,
+                "verified_cleanup": "runner, manager, and private directory",
+            }
+        ]
+
+
 def test_owner_loss_retires_the_sandbox_lifetime(binary: Path) -> Transcript:
     # Keep the target behind its inherited stdin until the owner has reported
     # the launcher PID. The detached child then leaves the target's session, so

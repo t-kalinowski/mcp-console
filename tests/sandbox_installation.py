@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
+import json
 import os
+import select
 import shutil
 import subprocess
 import sys
@@ -57,6 +60,61 @@ class SandboxInstallationTests(unittest.TestCase):
         result = self.run_sandbox(link)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((result.stdout, result.stderr), (b"", b""))
+
+    def test_setup_is_one_shot_with_idle_stdin(self) -> None:
+        request = {
+            "version": 2,
+            "command": ["/bin/sh", "-c", "printf 'ready\\n'; exec /bin/cat"],
+            "cwd": str(self.root.resolve()),
+            "environment": {},
+            "filesystem": {
+                "kind": "restricted",
+                "entries": [
+                    {
+                        "path": {"type": "special", "value": {"kind": "root"}},
+                        "access": "read",
+                    }
+                ],
+            },
+            "network": "restricted",
+            "proxy": None,
+        }
+        payload = json.dumps(request).encode()
+        read, write = os.pipe()
+        relocated = fcntl.fcntl(read, fcntl.F_DUPFD_CLOEXEC, 73)
+        os.close(read)
+        with os.fdopen(relocated, "rb", buffering=0) as setup_read, os.fdopen(
+            write, "wb"
+        ) as setup_write:
+            process = subprocess.Popen(
+                [self.runner, "--bootstrap-fd", str(relocated)],
+                pass_fds=(relocated,),
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            setup_read.close()
+            try:
+                setup_write.write(len(payload).to_bytes(4, "big") + payload)
+                setup_write.flush()
+                # Both setup and target-input writers remain open and idle.
+                ready, _, _ = select.select([process.stdout], [], [], 10)
+                self.assertTrue(ready, "setup waited for EOF or consumed target stdin")
+                self.assertEqual(os.read(process.stdout.fileno(), 6), b"ready\n")
+                with self.assertRaises(BrokenPipeError):
+                    os.write(setup_write.fileno(), b"no setup reader may remain")
+                sentinel = bytes(range(256))
+                stdout, stderr = process.communicate(sentinel, timeout=10)
+                self.assertEqual(
+                    (process.returncode, stdout, stderr), (0, sentinel, b"")
+                )
+            finally:
+                if process.poll() is None:
+                    process.stdin.close()
+                    process.kill()
+                    process.wait(timeout=10)
+                for stream in (process.stdin, process.stdout, process.stderr):
+                    stream.close()
 
     def test_missing_private_runner_does_not_use_path(self) -> None:
         self.runner.unlink()

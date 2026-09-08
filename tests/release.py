@@ -176,19 +176,28 @@ class ReleaseScriptTests(unittest.TestCase):
             import sys
             from pathlib import Path
 
-            assert len(sys.argv) == 1
-            data = sys.stdin.buffer.read()
-            size = int.from_bytes(data[:4], "big")
-            request = json.loads(data[4:4 + size])
-            Path(os.environ["FAKE_RUNNER_RECORD"]).write_text(json.dumps({
-                "request": request,
-                "path": os.environ.get("PATH", ""),
-            }))
+            assert len(sys.argv) == 3 and sys.argv[1] == "--bootstrap-fd"
+            descriptor = int(sys.argv[2])
+            assert descriptor > 2
+            with os.fdopen(descriptor, "rb") as setup:
+                size = int.from_bytes(setup.read(4), "big")
+                request = json.loads(setup.read(size))
+            assert request["version"] == 2
+            with Path(os.environ["FAKE_RUNNER_RECORD"]).open("a") as record:
+                print(json.dumps({
+                    "request": request,
+                    "path": os.environ.get("PATH", ""),
+                }), file=record)
             mode = os.environ.get("FAKE_RUNNER_MODE")
             if mode == "failure":
                 print("fixture launch failure", file=sys.stderr)
                 raise SystemExit(42)
-            sys.stdout.buffer.write(b"wrong bytes" if mode == "corrupt" else data[4 + size:])
+            if mode == "corrupt":
+                sys.stdin.buffer.read()
+                sys.stdout.buffer.write(b"wrong bytes")
+            else:
+                os.chdir(request["cwd"])
+                os.execvpe(request["command"][0], request["command"], request["environment"])
             """
         write_executable(
             libexec / "mcp-console-sandbox",
@@ -409,9 +418,11 @@ class ReleaseScriptTests(unittest.TestCase):
             sandbox_path = Path(environment["FAKE_SANDBOX_PATH_RECORD"]).read_text()
             self.assertEqual(len(sandbox_path.split(os.pathsep)), 1)
             self.assertNotEqual(sandbox_path, environment["PATH"])
-            runner = json.loads(Path(environment["FAKE_RUNNER_RECORD"]).read_text())
+            runner = json.loads(
+                Path(environment["FAKE_RUNNER_RECORD"]).read_text().splitlines()[0]
+            )
             request = runner["request"]
-            self.assertEqual(request["version"], 1)
+            self.assertEqual(request["version"], 2)
             self.assertEqual(request["command"], ["/bin/cat"])
             self.assertEqual(request["network"], "restricted")
             self.assertEqual(
@@ -513,7 +524,7 @@ class ReleaseScriptTests(unittest.TestCase):
                 "repository": "t-kalinowski/codex",
                 "release": "rust-v0.150.1",
                 "commit": "a" * 40,
-                "protocol_version": 1,
+                "protocol_version": 2,
                 "rust_toolchain": "1.95.0",
             }
             (root / "sandbox-runner.json").write_text(json.dumps(pin))
