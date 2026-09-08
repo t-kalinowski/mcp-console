@@ -4,11 +4,17 @@ import json
 import os
 import sys
 import tempfile
+from contextlib import closing
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import last_tool_text
+from support.checkpoints import (
+    FifoCheckpoint,
+    release_fixture_checkpoint,
+    wait_for_worker_file,
+)
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
@@ -157,18 +163,40 @@ def test_reports_omitted_bytes_retained_at_the_file_limit(
     binary: Path, execution: Execution
 ) -> Transcript:
     fixtures = Path(__file__).resolve().parents[3] / "fixtures"
-    with McpClient(
-        binary, execution.serve("--worker", str(fixtures / "zod"))
-    ) as client:
+    with (
+        tempfile.TemporaryDirectory() as temporary,
+        McpClient(
+            binary,
+            execution.serve("--worker", str(fixtures / "zod")),
+            {**os.environ, "TMPDIR": temporary},
+        ) as client,
+    ):
         client.initialize_and_list_tools()
-        client.send(r="overflow cell retention limit", timeout_ms=120_000)
+        client.send(r="complete silently")
+        assert last_tool_text(client) == "[done]"
+        client.send(r="overflow cell retention limit", timeout_ms=0)
+        assert last_tool_text(client) == "\n[running; poll with an empty send]"
+        release = wait_for_worker_file(
+            Path(temporary), "zod-release-retention-output", client
+        )
+        with closing(
+            FifoCheckpoint.attach(release.with_name("zod-retention-completed"))
+        ) as completed:
+            release_fixture_checkpoint(release)
+            # Keep all output pending until the server acknowledges completion;
+            # intermediate polls would reset the inline budget and split counts.
+            completed.wait(timeout=client.response_timeout)
+        client.send(timeout_ms=0)
         output = last_tool_text(client)
         assert client.temporary_directory is not None
         workspace = Path(client.temporary_directory.name)
         session = next((workspace / ".mcp-console" / "sessions").iterdir())
-        path = f".mcp-console/sessions/{session.name}/outputs/call-000001.log"
+        path = f".mcp-console/sessions/{session.name}/outputs/call-000002.log"
         limit = 1024 * 1024 * 1024
-        assert (workspace / path).stat().st_size == limit
+        assert (workspace / path).stat().st_size == limit, (
+            (workspace / path).stat().st_size,
+            output[-1500:],
+        )
         with (workspace / path).open("rb") as retained:
             block = b"x" * (1024 * 1024)
             for _ in range(1024):
@@ -188,7 +216,11 @@ def test_reports_omitted_bytes_retained_at_the_file_limit(
             json.loads(line)
             for line in (session / "internal/events.jsonl").read_text().splitlines()
         ]
-        summary = next(event for event in events if event["event"] == "cell_output")
+        summary = next(
+            event
+            for event in events
+            if event["event"] == "cell_output" and event["call_id"] == 2
+        )
         assert summary["retained_bytes"] == limit, summary
         assert summary["discarded_bytes"] == 5, summary
         assert summary["inline_omitted_bytes"] == omitted_retained + 5, summary

@@ -2,13 +2,31 @@
 !same-as MCP initialization for this execution mode
 ---
 send:
+  r: complete silently
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
   r: overflow cell retention limit
-  timeout_ms: 120000
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running; poll with an empty send]
+  isError: false
+---
+send:
+  timeout_ms: 0
 result:
   content:
     - type: text
       text: |
         <retained 8388608 text bytes>
-        [output truncated: omitted 1065353221 text bytes and 0 encoded image bytes across 128 events; retained text: .mcp-console/sessions/<run ID>/outputs/call-000001.log (1065353216 of 1065353221 omitted text bytes)]
-        [cell output retention limit reached at 1073741824 bytes for .mcp-console/sessions/<run ID>/outputs/call-000001.log; later text is not retained in this file]
+        [output truncated: omitted 1065353221 text bytes and 0 encoded image bytes across 128 events; retained text: .mcp-console/sessions/<run ID>/outputs/call-000002.log (1065353216 of 1065353221 omitted text bytes)]
+        [cell output retention limit reached at 1073741824 bytes for .mcp-console/sessions/<run ID>/outputs/call-000002.log; later text is not retained in this file]
   isError: false
