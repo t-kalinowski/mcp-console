@@ -330,6 +330,10 @@ def test_stops_cell_after_boundary_callback_failure(
               file.path(tempdir(), "failing-handler-fifo"),
               function() {
                 plot(1)
+                Sys.chmod(list.files(
+                  file.path(tempdir(), "mcp-console-plots"),
+                  full.names = TRUE
+                ), "0000")
                 old_umask <- Sys.umask("0777")
                 on.exit(Sys.umask(old_umask), add = TRUE)
                 grDevices::dev.off()
@@ -385,6 +389,10 @@ def test_skips_final_boundary_callbacks_after_cell_failure(
             writeBin(as.raw(1), writer)
             close(writer)
             plot(1)
+            Sys.chmod(list.files(
+              file.path(tempdir(), "mcp-console-plots"),
+              full.names = TRUE
+            ), "0000")
             old_umask <- Sys.umask("0777")
             on.exit(Sys.umask(old_umask), add = TRUE)
             grDevices::dev.off()

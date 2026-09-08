@@ -3,31 +3,35 @@
 from __future__ import annotations
 
 import fcntl
+import errno
 import os
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.execution import SANDBOXED
+from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.client import McpClient, stop_client
-from support.macos import (
-    capture_darwin_process_identity,
-    darwin_child_process_identities,
-    darwin_process_file_descriptors,
+from support.processes import (
+    capture_process_identity,
+    child_process_identities,
+    process_file_descriptors,
 )
 from support.normalization import code
 from support.records import Transcript, TranscriptEntry
-from support.requirements import PROCESS_EVENTS, SANDBOX, requires
+from support.requirements import LINUX_NATIVE, PROCESS_EVENTS, requires
 from support.suites import run_this_suite
 
 
 def descriptor_entry(
     binary: Path,
+    execution: Execution,
     launch_path: str,
     serve_arguments: tuple[str, ...],
     environment_updates: dict[str, str] | None = None,
+    launch_prefix: tuple[str, ...] = (),
 ) -> TranscriptEntry:
     # fmt: python
     launcher = code(r"""
@@ -67,25 +71,31 @@ def descriptor_entry(
             environment["MCP_CONSOLE_TEST_INHERITED_FD"] = str(descriptor)
             client = McpClient(
                 Path(sys.executable),
-                ("-c", launcher, str(binary), *SANDBOXED.serve(*serve_arguments)),
+                (
+                    "-c",
+                    launcher,
+                    *launch_prefix,
+                    str(binary),
+                    *execution.serve(*serve_arguments),
+                ),
                 environment,
                 current_directory=temporary,
                 pass_fds=(descriptor,),
             )
             passed = False
             try:
-                server = capture_darwin_process_identity(client.process.pid)
+                server = capture_process_identity(client.process.pid)
                 client.initialize_and_list_tools()
                 result = client.send(python=source)
                 assert result == {
                     "content": [{"type": "text", "text": "closed\n"}],
                     "isError": False,
                 }, result
-                launchers = darwin_child_process_identities(server)
+                launchers = child_process_identities(server)
                 assert len(launchers) == 1, launchers
-                assert descriptor not in darwin_process_file_descriptors(
-                    launchers[0]
-                ), "unlisted server descriptor remained open in the sandbox launcher"
+                assert descriptor not in process_file_descriptors(launchers[0]), (
+                    "unlisted server descriptor remained open in the relay launcher"
+                )
                 transcript = client.finish()
                 passed = True
             finally:
@@ -99,9 +109,11 @@ def descriptor_entry(
         return entry
 
 
-@requires(SANDBOX, PROCESS_EVENTS)
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS)
 def test_closes_unlisted_server_descriptors_on_every_launch_path(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     probe = Path(__file__).resolve().parents[3] / "fixtures" / "descriptor_probe"
     cases = (
@@ -114,9 +126,67 @@ def test_closes_unlisted_server_descriptors_on_every_launch_path(
         ),
     )
     return [
-        descriptor_entry(binary, launch_path, arguments, environment)
+        descriptor_entry(binary, execution, launch_path, arguments, environment)
         for launch_path, arguments, environment in cases
     ]
+
+
+@requires(LINUX_NATIVE, PROCESS_EVENTS)
+def test_sanitizes_descriptors_without_close_range_cloexec(binary: Path) -> Transcript:
+    fixtures = Path(__file__).resolve().parents[3] / "fixtures"
+    with tempfile.TemporaryDirectory() as directory:
+        wrapper = Path(directory) / "without-close-range"
+        subprocess.run(
+            [
+                "cc",
+                "-std=c11",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                "-o",
+                wrapper,
+                fixtures / "native" / "without_close_range.c",
+            ],
+            check=True,
+        )
+        transcript = []
+        for error in (errno.ENOSYS, errno.EINVAL, errno.EPERM):
+            prefix = (str(wrapper), str(error))
+            transcript.append(
+                descriptor_entry(
+                    binary,
+                    DIRECT,
+                    errno.errorcode[error],
+                    (),
+                    launch_prefix=prefix,
+                )
+            )
+            with McpClient(
+                wrapper,
+                (
+                    str(error),
+                    str(binary),
+                    *DIRECT.serve(
+                        "--worker",
+                        str(fixtures / "descriptor_probe"),
+                        "--relay",
+                        "/missing-relay",
+                    ),
+                ),
+            ) as client:
+                client.initialize_and_list_tools()
+                result = client.send(r="must not run")
+                assert result == {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "[failed to launch worker relay: No such file or directory (os error 2)]",
+                        }
+                    ],
+                    "isError": True,
+                }, result
+                transcript.extend(client.finish()[-1:])
+        return transcript
 
 
 if __name__ == "__main__":

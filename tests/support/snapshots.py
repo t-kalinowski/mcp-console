@@ -202,6 +202,9 @@ def check_recording(
     execution: str | None = None,
 ) -> set[Path]:
     snapshot = snapshot_path(suite_name, case_name)
+    initialization = snapshot == root / initialization_reference
+    mode_suffix = ".direct" if initialization and execution == "direct" else ""
+    primary = snapshot.with_suffix(f"{mode_suffix}.yaml")
     case = f"{suite_name}::{case_name}"
     if execution is not None:
         case += f"[{execution}]"
@@ -211,11 +214,16 @@ def check_recording(
         for name, contents in recorded.companions.items():
             assert name and Path(name).name == name and not name.startswith("."), name
             assert name in {"md", "qmd"} or name.endswith(".yaml"), name
-            companions.append((snapshot.with_suffix(f".{name}"), contents))
+            suffix = (
+                f".{name.removesuffix('.yaml')}{mode_suffix}.yaml"
+                if initialization
+                else f".{name}"
+            )
+            companions.append((snapshot.with_suffix(suffix), contents))
     else:
         actual = without_request_ids(recorded)
         companions = []
-    if snapshot != root / initialization_reference:
+    if not initialization:
         reference = root / initialization_reference
         references = [
             reference,
@@ -229,14 +237,14 @@ def check_recording(
             ]
         assert references, f"no initialization reference for {execution}"
         actual = compact_initializations(actual, references, execution=execution)
-    check_snapshot(snapshot, actual, case, update=update)
-    checked = {snapshot}
+    check_snapshot(primary, actual, case, update=update)
+    checked = {primary}
     for companion, contents in companions:
         if isinstance(contents, str):
             check_text_snapshot(companion, contents, case, update=update)
         else:
             assert companion.suffix == ".yaml", companion
-            if snapshot == root / initialization_reference:
+            if initialization:
                 # These companions are MCP handshakes; other YAML companions
                 # can carry protocol IDs that must remain visible.
                 contents = without_request_ids(contents)

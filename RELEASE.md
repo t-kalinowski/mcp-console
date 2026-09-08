@@ -1,8 +1,10 @@
 # Releasing MCP Console
 
 MCP Console releases are built from tags and published as binary-only PyPI wheels.
-The release workflow publishes native Apple Silicon and Intel macOS wheels.
-It does not publish a source distribution, Linux or Windows wheels, or GitHub release archives.
+The release workflow publishes native Apple Silicon and Intel macOS wheels and ARM64 and x86-64 Linux wheels.
+Linux wheels are built on Ubuntu 24.04 and require glibc 2.39 or later.
+Wheel builds require Maturin 1.15 or later.
+It does not publish a source distribution, Windows wheels, or GitHub release archives.
 
 `Cargo.toml` is the package-version source of truth.
 Keep the root `mcp-console` entry in `Cargo.lock` synchronized with it.
@@ -10,13 +12,13 @@ Keep the root `mcp-console` entry in `Cargo.lock` synchronized with it.
 ## Private sandbox executable
 
 `sandbox-runner.json` pins the runner source repository, release, commit, protocol, and Rust toolchain.
-Build and stage it from a clean checkout at that commit before building MCP Console:
+On macOS, build and stage it from a clean checkout at that commit before building MCP Console:
 
 ```sh
 scripts/stage-sandbox-runner ~/github/t-kalinowski/codex
 ```
 
-The script builds with the pinned toolchain and lockfile, stages the executable at `target/private-wheel-data/data/libexec/mcp-console-sandbox`, and records its source revision, target triple, and SHA-256 in `target/sandbox-runner-build.json`.
+The script builds with the pinned toolchain and lockfile, stages the executable at `wheel-data/data/libexec/mcp-console-sandbox`, and records its source revision, target triple, and SHA-256 in `target/sandbox-runner-build.json`.
 By default it builds for the pinned compiler's native target, passing that target explicitly to Cargo.
 Use `--target aarch64-apple-darwin` or `--target x86_64-apple-darwin` when building for an explicit target; inherited Cargo default-target settings do not change this selection.
 The source checkout remains unchanged.
@@ -33,7 +35,9 @@ Release smoke exercises the installed runner directly with a non-default descrip
 
 Maturin includes the staged executable under the installation's private `libexec` directory, with the upstream license and notice under `share/licenses/mcp-console/`.
 Only `mcp-console` is installed as a public command.
-CI and the release workflow build the pinned source before packaging and verify the private layout, executable permissions, and sandbox launches from both the Cargo binary and installed command with an empty `PATH`.
+On macOS, CI and the release workflow build the pinned source before packaging and verify the private layout, executable permissions, and sandbox launches from both the Cargo binary and installed command with an empty `PATH`.
+Linux builds use the tracked `wheel-data/data` directory without staging a sandbox executable; its placeholder is excluded from wheels.
+The Linux smoke test verifies installation and evaluates R through `serve --no-sandbox`.
 
 ## One-time PyPI setup
 
@@ -65,7 +69,7 @@ Rehearse the Release workflow on the release branch before tagging, replacing `r
 gh workflow run release.yml --ref release/X.Y.Z
 ```
 
-Wait for both native wheel builds and smoke tests to pass.
+Wait for all four native wheel builds and smoke tests to pass.
 Manual dispatch does not publish; the publication job should be skipped.
 The rehearsal exercises installation and runtime setup on fresh runners, which ordinary CI with cached dependencies can miss.
 
@@ -93,12 +97,12 @@ git push origin "refs/tags/v$release_version"
 
 The tag command opens an editor for the release annotation; use `-F <message-file>` when running noninteractively.
 The tag-triggered workflow verifies the version match, ancestry on `main`, and successful push CI for the exact release SHA.
-It builds both native wheels, install-tests them with `uv`, checks that the artifact set contains exactly those two wheels, and publishes through PyPI Trusted Publishing.
+It builds all four native wheels, install-tests them with `uv`, checks that the artifact set contains exactly those four wheels, and publishes through PyPI Trusted Publishing.
 
 ## Verify the publication
 
 Read `https://pypi.org/pypi/mcp-console/X.Y.Z/json` for the published version.
-Confirm that both expected macOS wheels are present and unyanked, and compare their SHA-256 digests with the artifacts from the tag-triggered workflow.
+Confirm that all four expected macOS and Linux wheels are present and unyanked, and compare their SHA-256 digests with the artifacts from the tag-triggered workflow.
 
 Use the chosen `$release_version`, clean `uv` directories, and the public index when testing consumer installation:
 
@@ -123,6 +127,7 @@ uv tool install --no-cache --no-sources --default-index https://pypi.org/simple 
 ```
 
 Verify these commands on both Apple Silicon and Intel macOS.
+On ARM64 and x86-64 Linux, omit the `sandbox` invocation and add `--no-sandbox` when starting `serve` through an MCP client.
 Also start
 
 ```sh

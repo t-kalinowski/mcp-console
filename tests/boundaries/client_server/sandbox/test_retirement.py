@@ -17,6 +17,7 @@ from support.assertions import last_tool_text
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient, stop_client
 from support.execution import SANDBOXED
+from support.native import build_interposer
 from support.macos import (
     DarwinProcessIdentity,
     capture_darwin_process_identity,
@@ -49,7 +50,6 @@ from boundaries.client_server._harness import (
     wait_for_stopped_process,
 )
 from boundaries.client_server.sandbox._fixtures import (
-    build_interposer,
     launcher_retirement,
 )
 

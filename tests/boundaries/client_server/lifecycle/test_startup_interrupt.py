@@ -17,7 +17,7 @@ from support.assertions import last_tool_text
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
-from support.macos import build_interposer
+from support.native import build_interposer
 from support.normalization import code
 from support.r import r_test_environment
 from support.records import Transcript
@@ -37,7 +37,9 @@ def before_resolver_spawn(
         import sys
 
         os.environ["MCP_CONSOLE_TEST_SPAWN_SERVER"] = str(os.getpid())
-        os.environ["DYLD_INSERT_LIBRARIES"] = os.environ.pop("MCP_CONSOLE_TEST_SPAWN_LIBRARY")
+        os.environ["DYLD_INSERT_LIBRARIES" if sys.platform == "darwin" else "LD_PRELOAD"] = (
+            os.environ.pop("MCP_CONSOLE_TEST_SPAWN_LIBRARY")
+        )
         os.execv(sys.argv[1], sys.argv[1:])
         """)
     with ExitStack() as resources:

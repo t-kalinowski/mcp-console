@@ -10,7 +10,7 @@ import sys
 import tempfile
 import time
 from collections.abc import Iterator
-from contextlib import closing, contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -20,15 +20,17 @@ from support.assertions import collect_running_output, last_tool_text
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
-from support.macos import (
-    DarwinProcessIdentity,
-    capture_darwin_process_identity,
-    kill_darwin_processes,
+from support.processes import (
+    ProcessIdentity,
+    capture_process_identity,
+    kill_processes,
 )
 from support.normalization import code
+from support.native import LOADER_VARIABLE, build_interposer
 from support.r import r_test_environment
+from support.events import Events
 from support.records import Transcript
-from support.requirements import PROCESS_EVENTS, command, requires
+from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, command, requires
 from support.suites import run_this_suite
 
 RUNNING = "\n[running; poll with an empty send]"
@@ -40,25 +42,17 @@ class StartupFixture:
     root: Path
     started: FifoCheckpoint
     release: FifoCheckpoint
-    exits: select.kqueue
-    identities: list[DarwinProcessIdentity] = field(default_factory=list)
+    exits: Events
+    identities: list[ProcessIdentity] = field(default_factory=list)
 
     def wait_for_resolver(self) -> None:
         self.started.wait("first-use resolver")
         identity = self.root / "identity"
         pids = set(map(int, identity.read_text(encoding="utf-8").split()))
         assert len(pids) == 2, pids
-        self.identities = [capture_darwin_process_identity(pid) for pid in pids]
-        watches = [
-            select.kevent(
-                pid,
-                filter=select.KQ_FILTER_PROC,
-                flags=select.KQ_EV_ADD | select.KQ_EV_ONESHOT,
-                fflags=select.KQ_NOTE_EXIT,
-            )
-            for pid in pids
-        ]
-        assert self.exits.control(watches, 0, 0) == []
+        self.identities = [capture_process_identity(pid) for pid in pids]
+        for pid in pids:
+            self.exits.watch_process(pid)
 
     def wait_for_resolver_exit(self) -> None:
         pending = {identity[0] for identity in self.identities}
@@ -66,12 +60,9 @@ class StartupFixture:
         while pending:
             remaining = deadline - time.monotonic()
             assert remaining > 0, f"resolver processes did not exit: {pending}"
-            observed = self.exits.control(None, len(pending), remaining)
+            observed = self.exits.wait(remaining)
             assert observed, f"resolver processes did not exit: {pending}"
-            for event in observed:
-                assert event.filter == select.KQ_FILTER_PROC, event
-                assert event.fflags & select.KQ_NOTE_EXIT, event
-                pending.remove(event.ident)
+            pending.difference_update(observed)
 
     def invocations(self) -> list[dict[str, object]]:
         record = self.root / "resolver.jsonl"
@@ -82,9 +73,14 @@ class StartupFixture:
 
 @contextmanager
 def startup_fixture(
-    binary: Path, execution: Execution, *, bootstrap: str = "ir", phase: str = "all"
+    binary: Path,
+    execution: Execution,
+    *,
+    bootstrap: str = "ir",
+    phase: str = "all",
+    server_environment: dict[str, str] | None = None,
 ) -> Iterator[StartupFixture]:
-    with tempfile.TemporaryDirectory() as directory, closing(select.kqueue()) as exits:
+    with tempfile.TemporaryDirectory() as directory, Events() as exits:
         temporary = Path(directory)
         fake_bin = temporary / "bin"
         fake_bin.mkdir()
@@ -126,6 +122,7 @@ def startup_fixture(
                 "MCP_CONSOLE_TEST_STARTUP_RELEASE": str(release.path),
             }
         )
+        environment.update(server_environment or {})
         client = McpClient(
             binary,
             execution.serve(),
@@ -146,7 +143,7 @@ def startup_fixture(
             try:
                 client.close()
             finally:
-                kill_darwin_processes(fixture.identities)
+                kill_processes(fixture.identities)
                 started.close()
                 release.close()
 
@@ -363,16 +360,44 @@ def test_interrupts_first_use_preparation_without_running_cell(
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(PROCESS_EVENTS, command("ir"), command("uv"))
+@requires(NATIVE_FIXTURES, PROCESS_EVENTS, command("ir"), command("uv"))
 def test_restart_replaces_first_use_cell_and_stdin(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with startup_fixture(binary, execution, phase="preparation") as fixture:
+    with ExitStack() as resources:
+        root = Path(resources.enter_context(tempfile.TemporaryDirectory()))
+        contended = FifoCheckpoint.create(root / "contended")
+        cancel_release = FifoCheckpoint.create(root / "cancel-release")
+        unlocked = FifoCheckpoint.create(root / "unlocked")
+        release = FifoCheckpoint.create(root / "release")
+        parked = FifoCheckpoint.create(root / "parked")
+        for checkpoint in (contended, cancel_release, unlocked, release, parked):
+            resources.callback(checkpoint.close)
+        armed = root / "armed"
+        environment = {
+            LOADER_VARIABLE: str(
+                build_interposer(root, "evaluation_return_interposer")
+            ),
+            "MCP_CONSOLE_TEST_COMPLETION_ARMED": str(armed),
+            "MCP_CONSOLE_TEST_COMPLETION_CONTENDED": str(contended.path),
+            "MCP_CONSOLE_TEST_COMPLETION_CANCEL_RELEASE": str(cancel_release.path),
+            "MCP_CONSOLE_TEST_COMPLETION_UNLOCKED": str(unlocked.path),
+            "MCP_CONSOLE_TEST_COMPLETION_RELEASE": str(release.path),
+            "MCP_CONSOLE_TEST_COMPLETION_PARKED": str(parked.path),
+        }
+        fixture = resources.enter_context(
+            startup_fixture(
+                binary, execution, phase="preparation", server_environment=environment
+            )
+        )
+        resources.callback(release.release)
+        resources.callback(cancel_release.release)
         client = fixture.client
         client.initialize_and_list_tools()
         client.send(python="startup_cell_ran = True", stdin="old input\n", timeout_ms=0)
         assert last_tool_text(client) == RUNNING
         fixture.wait_for_resolver()
+        armed.touch()
         client.response_timeout = 600
         # fmt: python
         python = code("""
@@ -380,16 +405,24 @@ def test_restart_replaces_first_use_cell_and_stdin(
             assert input() == "replacement input"
             print("replacement only")
             """)
-        client.send(
+        replacement = client.start_send(
             control="restart",
             python=python,
             stdin="replacement input\n",
             timeout_ms=600_000,
         )
+        contended.wait("restart waits for the cancelling evaluation's worker lock")
+        cancel_release.release()
+        unlocked.wait("old evaluation released the worker lock")
+        client.receive(replacement)
         assert last_tool_text(client).count("replacement only\n") == 1, (
             client.transcript[-1]
         )
         fixture.wait_for_resolver_exit()
+        release.release()
+        parked.wait("old evaluation task returned to the pool")
+        client.send()
+        assert last_tool_text(client) == "\n[idle]"
         return client.finish()
 
 

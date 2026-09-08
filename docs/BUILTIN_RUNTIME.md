@@ -401,7 +401,8 @@ A nonempty inherited `MPLBACKEND` takes precedence and may select an interactive
 Calling `savefig()` does not suppress return of an open figure; calling `close()` before cell end does.
 Figures not registered with pyplot are not captured.
 
-The built-in worker preserves an existing host `matplotlibrc` selected through inherited `MATPLOTLIBRC` or `MPLCONFIGDIR` (falling back to `$HOME/.matplotlib`) while redirecting Matplotlib configuration and cache writes to worker-private storage.
+The built-in worker preserves an existing host `matplotlibrc` selected through inherited `MATPLOTLIBRC` or `MPLCONFIGDIR` (falling back to `$HOME/.matplotlib` on macOS and `$XDG_CONFIG_HOME/matplotlib` or `$HOME/.config/matplotlib` on Linux) while redirecting Matplotlib configuration and cache writes to worker-private storage.
+On Linux, the inherited font cache is `$MPLCONFIGDIR`, `$XDG_CACHE_HOME/matplotlib`, or `$HOME/.cache/matplotlib`, in that order.
 It can reuse matching host font indexes read-only; sandboxed worker code does not modify the host configuration or cache.
 
 R plots created through Python's `r` bridge follow the R graphics rules.
@@ -497,11 +498,13 @@ The [implemented architecture](ARCHITECTURE.md) describes the session record and
 - Managed DuckDB cannot query Python objects until they are bound as R data; a selected Python driver sees only objects registered on its own connection.
 - SQL previews do not include affected-row counts or total result counts.
 - Only default-device R graphics and open pyplot figures are captured automatically.
+  Managed graphics and Python caches use each worker's R session temporary directory, including with `--no-sandbox`.
 - In the default sandboxed mode, normal restart, automatic failure replacement, orderly server shutdown, and unexpected server or relay failure retire descendants observed by the launcher-owned sandbox manager across process-group and session changes.
   The configured relay starts only after the manager has adopted the private directory, installed root, descendant, and control-socket observation, and reported readiness, and the launcher has installed manager-failure recovery.
   A later descendant that becomes orphaned before the manager resolves its fork event remains outside this guarantee.
 - With `serve --no-sandbox`, the worker runs with host permissions and no manager tracks or retires its descendants; normal relay shutdown still reaps the direct worker.
-- Linux and Windows are not supported.
+- Linux requires `serve --no-sandbox`.
+- Windows is not supported.
 
 The [architecture](ARCHITECTURE.md) explains lifecycle and process ownership.
 The [worker protocol](WORKER_PROTOCOL.md) defines exact message and closure rules.

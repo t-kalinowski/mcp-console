@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from support.assertions import large_output, last_tool_text
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.native import SHARED_LIBRARY_FLAG
 from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, requires
 from support.suites import run_this_suite
@@ -115,7 +116,8 @@ def test_orders_failure_and_replacement_output(
         subprocess.run(
             [
                 "cc",
-                "-dynamiclib",
+                SHARED_LIBRARY_FLAG,
+                "-fPIC",
                 "-std=c11",
                 "-Wall",
                 "-Wextra",

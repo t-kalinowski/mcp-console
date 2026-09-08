@@ -225,7 +225,7 @@ class ArchitectureCheckTests(unittest.TestCase):
             ),
             ("server.rs", "use crate::{sandbox, server};", "depends on"),
             (
-                "worker_client/macos.rs",
+                "worker_client/unix.rs",
                 "use super::{sandbox as private};",
                 "depends on",
             ),

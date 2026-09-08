@@ -30,7 +30,8 @@ Ordinary runtime, protocol, and lifecycle cases stay with those subjects, includ
 Direct-launch host access and recovery live under `client_server/lifecycle`; plot-session isolation lives under `client_server/r`.
 
 The direct CLI sandbox cases own setup cancellation, large-frame startup, original-stdin identity and closure, argument and standard-stream fidelity, job control, signal and exit status, security policy, and manager-owned retirement.
-The public MCP sandbox cases cover the launch-path descriptor matrix, sandbox-dependent runtime workflows, startup failure and gating, worker replacement, supervisor loss, restart, and shutdown.
+The public MCP sandbox cases cover sandbox-dependent runtime workflows, startup failure and gating, worker replacement, supervisor loss, restart, and shutdown.
+The lifecycle suites own the inherited-descriptor launch matrix in direct and sandboxed modes.
 The relay wrapper workflow verifies MCP restart and shutdown when the relay is below the sandbox root and a worker descendant retains its streams.
 The direct relay CLI case compares the complete protocol through ordinary direct launch and the public sandbox command, without requiring the relay to be a process-group leader.
 
@@ -182,9 +183,14 @@ Skipped cases retain all their primary and companion snapshots during full updat
 
 Cases run by default.
 Declare only the capabilities a case needs, beside its definition, with `@requires(...)` from `support.requirements`.
-For example, `@requires(SANDBOX)` identifies a sandbox contract, `@requires(PROCESS_EVENTS)` identifies a test using macOS process observation, and `@requires(command("quarto"))` identifies an optional executable.
+For example, `@requires(SANDBOX)` identifies a sandbox contract, `@requires(PROCESS_EVENTS)` identifies a test using shared process observation, and `@requires(command("quarto"))` identifies an optional executable.
 All platform availability decisions belong in test support.
-The current `WORKER` capability reflects the implemented macOS runtime; this test reorganization does not enable Linux or Windows workers.
+`WORKER`, `PROCESS_EVENTS`, and `NATIVE_FIXTURES` support macOS and Linux.
+Linux process-observation fixtures require procfs, inotify, and pidfds (kernel 5.3 or later); this is a test-host requirement, not a worker runtime requirement.
+Linux descriptor compatibility cases use seccomp to reproduce unavailable `close_range` and CLOEXEC-flag support.
+R null-fault recovery uses mutually exclusive diagnostic cases: ARM macOS reports `SEGV_ACCERR`, while Linux and Intel macOS report `SEGV_MAPERR`.
+Both cases use the same crash and recovery sequence and retain the full R diagnostic, with only libc's null-pointer formatting normalized.
+Sandbox contracts remain gated by `SANDBOX`.
 Native checkpoint requirements describe the fixture facility, not ownership of the tested runtime contract.
 Do not mark a portable case as sandbox-only because its fixture previously launched sandboxed.
 
@@ -211,6 +217,9 @@ The runner checks each mode's requirements separately, then runs available modes
 All modes compare against one primary snapshot and the same companions.
 During an update, the first available mode writes the snapshot and subsequent modes must match it.
 This preserves differences as failures instead of letting the last mode overwrite the result.
+The canonical initialization case is the exception: each available mode updates its own full and bare-runtime references (`.direct.yaml` and `.bare.direct.yaml` for direct mode).
+Full updates retain initialization references for unavailable modes.
+Multi-session transcripts reuse the same mode-aware handshake compaction.
 All cases remain discoverable with `--list` and `--locate`; execution and updates report the selector, mode when applicable, and each missing capability's reason.
 An explicitly selected unavailable case is reported as skipped.
 

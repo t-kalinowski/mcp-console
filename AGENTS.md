@@ -28,10 +28,12 @@ Do not treat `design-sketches/` as evidence of implemented behavior.
 
 ## Platform and development
 
-The sandbox command, worker relay, and built-in worker are supported on macOS.
-Linux and Windows are not supported yet.
+The worker relay, built-in worker, and managed resolvers support macOS and Linux.
+Linux requires `serve --no-sandbox`; the sandbox command remains macOS-only.
+Windows is not supported.
+Other Unix operating systems are not supported build or runtime targets; shared `cfg(unix)` modules do not imply support for them.
 Retain platform conditionals for modules that use OS-specific APIs and for selecting different implementations or unsupported-platform stubs; avoid redundant gates on shared code.
-CI runs the complete check on macOS.
+CI runs core checks and all capability-applicable transcript modes on macOS and Linux.
 
 Build the pinned private sandbox executable with `scripts/stage-sandbox-runner` before the first macOS Cargo build or after changing `sandbox-runner.json` or the Cargo target; see `RELEASE.md` for the source checkout and toolchain.
 Run commands from the repository root:
@@ -103,7 +105,7 @@ Keep these invariants intact:
 - `src/worker_protocol.rs`, `src/sideband.rs` — relay-worker message and framing contract.
 - `src/relay_protocol.rs` — server-relay JSONL message and framing contract.
 - `src/worker_relay.rs`, `src/worker_relay/event_writer.rs` — worker launch, I/O forwarding, ordered event output, direct-worker signaling, termination, and reaping.
-- `src/worker_client.rs`, `src/worker_client/` — session coordination and send planning, server-owned environment, evaluation, lifecycle, ordinary launcher child ownership, ordered event dispatch, output tape, and macOS relay transport.
+- `src/worker_client.rs`, `src/worker_client/` — session coordination and send planning, server-owned environment, evaluation, lifecycle, ordinary launcher child ownership, ordered event dispatch, output tape, shared Unix relay transport, and platform-specific startup observation.
 - `src/process_exit.rs` — shared direct-child exit observation without reaping, used by launcher ownership and sandbox cleanup.
 - `src/sandbox.rs`, `src/sandbox/{child,installation,macos,process_group,runner}.rs`, `src/sandbox/supervision.rs`, `src/sandbox/supervision/` — launcher-owned sandbox construction, child and process-group cleanup, primary host-manager supervision, manager-failure recovery, and standalone job control.
 - `src/worker.rs`, `src/worker/core.rs`, `src/worker/embedded_r.rs`, `src/r_repl.c` — worker-facing facade, shared process services, current embedded-R backend, cell dispatch, console callbacks, and the C-owned DLL-REPL boundary.
@@ -125,7 +127,7 @@ Keep these invariants intact:
 
 ### Tests and development scripts
 
-- `tests/support/` — shared capability requirements, explicit execution fixtures, transcript records, snapshots, normalization, checkpoints, capture, process, macOS, assertion, R, resolver, client, and direct-suite helpers.
+- `tests/support/` — shared capability requirements, explicit execution fixtures, transcript records, snapshots, normalization, checkpoints, capture, process, platform event, native fixture, macOS, assertion, R, resolver, client, and direct-suite helpers.
 - `tests/fixtures/` — deterministic workers, resolvers, package fixtures, searchable native interposers, and boundary-specific relay and worker programs.
 - `tests/boundaries/client_server/` — public MCP client-server behavior.
 - `tests/boundaries/server_relay/` — private server-relay wire behavior.

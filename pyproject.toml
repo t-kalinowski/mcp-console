@@ -1,5 +1,5 @@
 [build-system]
-requires = ["maturin>=1.10,<2.0"]
+requires = ["maturin>=1.15,<2.0"]
 build-backend = "maturin"
 
 [project]
@@ -15,6 +15,7 @@ classifiers = [
     "Environment :: Console",
     "License :: OSI Approved :: MIT License",
     "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
     "Programming Language :: Rust",
     "Topic :: Scientific/Engineering",
 ]
@@ -27,5 +28,6 @@ Issues = "https://github.com/t-kalinowski/mcp-console/issues"
 [tool.maturin]
 bindings = "bin"
 compatibility = "pypi"
-data = "target/private-wheel-data"
+data = "wheel-data"
+exclude = ["wheel-data/data/.gitignore"]
 locked = true

@@ -3,13 +3,16 @@
 use std::io;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(target_os = "macos")]
+use std::time::Instant;
 
 const CHILD_EXITED: libc::c_int = 1;
 const CHILD_KILLED: libc::c_int = 2;
 const CHILD_DUMPED: libc::c_int = 3;
 const CHILD_STOPPED: libc::c_int = 5;
 const CHILD_CONTINUED: libc::c_int = 6;
+#[cfg(target_os = "macos")]
 const CHILD_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(1);
 
 pub(crate) struct ChildExitWaiter {
@@ -50,6 +53,7 @@ impl ChildExitWaiter {
     }
 }
 
+#[cfg(target_os = "macos")]
 pub(crate) fn wait_for_process_exit_without_reaping(
     process_id: u32,
     timeout: Duration,
@@ -114,15 +118,17 @@ fn observe_direct_child(process_id: libc::pid_t, nonblocking: bool) -> io::Resul
         // SAFETY: successful `waitid` initialized the zeroed structure. Darwin
         // leaves `si_pid` zero when WNOHANG finds no matching event.
         let information = unsafe { information.assume_init() };
-        if information.si_pid == 0 {
+        // SAFETY: waitid populated the child-status variant of siginfo_t.
+        let observed_pid = unsafe { information.si_pid() };
+        if observed_pid == 0 {
             return Ok(false);
         }
-        if information.si_pid != process_id {
+        if observed_pid != process_id {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!(
                     "waitid returned process {} while waiting for child process {process_id}",
-                    information.si_pid
+                    observed_pid
                 ),
             ));
         }
@@ -161,15 +167,17 @@ fn consume_non_exit_notification(wait_id: libc::id_t, process_id: libc::pid_t) -
 
     // SAFETY: successful `waitid` initialized the zeroed structure.
     let information = unsafe { information.assume_init() };
-    if information.si_pid == 0 {
+    // SAFETY: waitid populated the child-status variant of siginfo_t.
+    let observed_pid = unsafe { information.si_pid() };
+    if observed_pid == 0 {
         return Ok(());
     }
-    if information.si_pid != process_id {
+    if observed_pid != process_id {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
                 "waitid returned process {} while consuming a notification for child process {process_id}",
-                information.si_pid
+                observed_pid
             ),
         ));
     }

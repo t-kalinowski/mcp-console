@@ -33,3 +33,12 @@ result:
         replacement only
         [done]
   isError: false
+---
+send: {}
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false

@@ -1,3 +1,5 @@
+#define _GNU_SOURCE
+#include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdatomic.h>
@@ -15,6 +17,7 @@ static int is_server(void) {
 __attribute__((constructor)) static void prevent_child_injection(void) {
     if (is_server()) {
         unsetenv("DYLD_INSERT_LIBRARIES");
+        unsetenv("LD_PRELOAD");
     }
 }
 
@@ -39,9 +42,14 @@ static pid_t checkpoint_fork(void) {
         close(started);
         close(release);
     }
+#ifdef __APPLE__
     return fork();
+#else
+    return ((pid_t (*)(void))dlsym(RTLD_NEXT, "fork"))();
+#endif
 }
 
+#ifdef __APPLE__
 __attribute__((used)) static struct {
     const void *replacement;
     const void *original;
@@ -49,3 +57,7 @@ __attribute__((used)) static struct {
     (const void *)(uintptr_t)&checkpoint_fork,
     (const void *)(uintptr_t)&fork,
 };
+
+#else
+pid_t fork(void) { return checkpoint_fork(); }
+#endif

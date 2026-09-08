@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-STAGE_ROOT = ROOT / "target" / "private-wheel-data"
+STAGE_ROOT = ROOT / "wheel-data"
 TARGETS = ("aarch64-apple-darwin", "x86_64-apple-darwin")
 
 
@@ -96,8 +96,9 @@ def main() -> None:
     runner = workspace / "target" / target / "release" / "mcp-console-sandbox"
     digest = hashlib.sha256(runner.read_bytes()).hexdigest()
 
-    if STAGE_ROOT.exists():
-        shutil.rmtree(STAGE_ROOT)
+    for generated in (STAGE_ROOT / "data/libexec", STAGE_ROOT / "data/share"):
+        if generated.exists():
+            shutil.rmtree(generated)
     libexec = STAGE_ROOT / "data" / "libexec"
     licenses = STAGE_ROOT / "data" / "share" / "licenses" / "mcp-console"
     libexec.mkdir(parents=True)
@@ -109,7 +110,9 @@ def main() -> None:
         destination = licenses / f"Codex-{name}"
         shutil.copyfile(checkout / name, destination)
         destination.chmod(0o644)
-    (ROOT / "target" / "sandbox-runner-build.json").write_text(
+    build_record = ROOT / "target" / "sandbox-runner-build.json"
+    build_record.parent.mkdir(exist_ok=True)
+    build_record.write_text(
         json.dumps(
             {"source_revision": head, "target": target, "sha256": digest}, indent=2
         )

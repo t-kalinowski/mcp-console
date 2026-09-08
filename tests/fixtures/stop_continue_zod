@@ -6,6 +6,7 @@ import json
 import os
 import signal
 import socket
+import tempfile
 from pathlib import Path
 from typing import TextIO
 
@@ -58,7 +59,7 @@ def main() -> None:
     endpoint = socket.socket(fileno=descriptor)
     reader = endpoint.makefile("r", encoding="utf-8")
     writer = endpoint.makefile("w", encoding="utf-8")
-    temporary = Path(os.environ["TMPDIR"])
+    temporary = Path(tempfile.gettempdir())
     mode = Path(os.environ["ZOD_STARTUP_CONTROL"]).read_text(encoding="utf-8")
 
     if mode == "stop startup":

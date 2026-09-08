@@ -1,6 +1,6 @@
 name: Release
 
-# Build native macOS wheels and publish them to PyPI.
+# Build native macOS and Linux wheels and publish them to PyPI.
 #
 # Releases are tag-driven. A manual workflow run builds artifacts for
 # inspection but does not publish.
@@ -38,6 +38,10 @@ jobs:
             target: aarch64-apple-darwin
           - os: macos-15-intel
             target: x86_64-apple-darwin
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
 
     steps:
       - name: Check out repository
@@ -49,10 +53,12 @@ jobs:
           python-version: "3.13"
 
       - name: Read private sandbox source pin
+        if: runner.os == 'macOS'
         id: sandbox-pin
         run: scripts/stage-sandbox-runner --github-output "$GITHUB_OUTPUT"
 
       - name: Check out private sandbox source
+        if: runner.os == 'macOS'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ steps.sandbox-pin.outputs.repository }}
@@ -65,6 +71,7 @@ jobs:
       # The default R environment may build data.table from source. Its NLS code
       # needs libintl.h in R's /opt/R/<arch> build prefix.
       - name: Install gettext for R source packages
+        if: runner.os == 'macOS'
         run: |
           sudo Rscript --vanilla -e \
             'source("https://mac.R-project.org/bin/install.R"); install.libs("gettext"); stopifnot(file.exists(file.path("/opt/R", Sys.info()[["machine"]], "include", "libintl.h")))'
@@ -75,22 +82,30 @@ jobs:
           version: 0.12.4
 
       - name: Install private sandbox Rust toolchain
+        if: runner.os == 'macOS'
         run: >-
           rustup toolchain install
           "${{ steps.sandbox-pin.outputs.rust_toolchain }}"
           --profile minimal
 
       - name: Stage private sandbox runner
+        if: runner.os == 'macOS'
         run: >-
           scripts/stage-sandbox-runner
           .sandbox-runner-source
           --target "${{ matrix.target }}"
 
+      - name: Install Linux resolver build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libcurl4-openssl-dev
+
       - name: Build wheel
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
-          maturin-version: v1.14.1
-          rust-toolchain: ${{ steps.sandbox-pin.outputs.rust_toolchain }}
+          maturin-version: v1.15.0
+          rust-toolchain: ${{ steps.sandbox-pin.outputs.rust_toolchain || 'stable' }}
           target: ${{ matrix.target }}
           manylinux: off
           args: --release --locked --compatibility pypi --out dist

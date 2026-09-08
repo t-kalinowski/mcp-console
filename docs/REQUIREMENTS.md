@@ -11,6 +11,10 @@ Prepared requirements configure the built-in worker; they do not attach an R pac
 Runtime use is covered by the [built-in runtime guide](BUILTIN_RUNTIME.md).
 Exact live-worker messages and custom-worker receipts belong to the [worker protocol](WORKER_PROTOCOL.md).
 
+On Linux, preparing a managed environment can compile R packages, including the resolver's own `pak` tooling.
+On Debian and Ubuntu, install `build-essential`, `pkg-config`, and `libcurl4-openssl-dev` for that bootstrap.
+Additional R packages can require their own system libraries and development headers.
+
 ## Retained environments
 
 MCP Console retains one environment configuration in server memory:
@@ -420,9 +424,9 @@ It must also apply its first managed R library before loading DuckDB; a DuckDB n
 
 ## Host resolution and trust
 
-By default, the worker sandbox denies direct network access and regular writes outside its private temporary directory.
+When enabled on macOS, the worker sandbox denies direct network access and regular writes outside its private temporary directory.
 Dependency resolution is a deliberate exception to that boundary: the server launches R, Python, and DuckDB resolvers on the host, outside the sandbox.
-With `serve --no-sandbox`, the worker and the package or extension code it loads also run with the server's filesystem, process, and network permissions.
+With `serve --no-sandbox` (required on Linux), the worker and the package or extension code it loads also run with the server's filesystem, process, and network permissions.
 The requirement validation and trusted-resolver rules apply in both modes.
 
 Host resolvers may access the network and their normal caches.

@@ -13,9 +13,11 @@ from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from pathlib import Path
 
-from support.macos import (
-    capture_darwin_process_identity,
-    signal_darwin_process,
+from support.events import Events
+from support.native import SHARED_LIBRARY_FLAG
+from support.processes import (
+    capture_process_identity,
+    signal_process,
 )
 from support.requirements import POSIX, PROCESS_EVENTS
 
@@ -487,6 +489,48 @@ def test_unselected(binary):
         self.assertIn("result: sandbox", differing.stderr)
         self.assertIn("::selected[direct] differs", differing.stderr)
 
+    def test_initialization_updates_only_available_execution_references(self) -> None:
+        source = (
+            PUBLIC_SUITE
+            + """
+from support.execution import Execution, executions
+from support.records import TranscriptWithCompanions
+from support.requirements import Requirement
+
+@executions(Execution("direct"), Execution("sandbox", (Requirement("sandbox", AVAILABLE, "unavailable"),)))
+def test_initializes_and_lists_tools(binary, execution):
+    return TranscriptWithCompanions(
+        [{"mode": execution.name}], {"bare.yaml": [{"bare": execution.name}]}
+    )
+"""
+        )
+        self.suite.write_text(source.replace("AVAILABLE", "True"))
+        result = self.run_runner("--update", "--jobs", "1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        references = {
+            path: path.read_bytes()
+            for path in self.snapshots.glob("initializes_and_lists_tools*.yaml")
+        }
+        self.assertEqual(len(references), 4)
+        self.suite.write_text(source.replace("AVAILABLE", "False"))
+        for arguments in (
+            ("--list",),
+            (
+                "--locate",
+                "client_server/server/test_tools::initializes_and_lists_tools",
+            ),
+            ("--update",),
+            (
+                "--update",
+                "client_server/server/test_tools::initializes_and_lists_tools",
+            ),
+        ):
+            result = self.run_runner(*arguments)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                {path: path.read_bytes() for path in references}, references
+            )
+
     @contextmanager
     def hanging_runner(
         self, *arguments: str
@@ -788,7 +832,8 @@ def test_unselected(binary):
         subprocess.run(
             [
                 "cc",
-                "-dynamiclib",
+                SHARED_LIBRARY_FLAG,
+                "-fPIC",
                 "-std=c11",
                 "-Wall",
                 "-Wextra",
@@ -814,32 +859,25 @@ def test_unselected(binary):
             "client_server/server/test_tools::holds_gil",
         )
         identity = None
-        exits = select.kqueue()
+        exits = Events()
         try:
             ready, _, _ = select.select([started], [], [], 10)
             self.assertTrue(ready, "case did not enter its native GIL-holding call")
             self.assertEqual(os.read(started, 1), b"1")
             pid = int((self.root / "gil-case-pid").read_text(encoding="utf-8"))
-            identity = capture_darwin_process_identity(pid)
-            watch = select.kevent(
-                pid,
-                filter=select.KQ_FILTER_PROC,
-                flags=select.KQ_EV_ADD | select.KQ_EV_ONESHOT,
-                fflags=select.KQ_NOTE_EXIT,
-            )
-            self.assertEqual(exits.control([watch], 0, 0), [])
+            identity = capture_process_identity(pid)
+            exits.watch_process(pid)
             os.killpg(process.pid, signal.SIGKILL)
             process.wait(timeout=5)
-            observed = exits.control(None, 1, 20)
+            observed = exits.wait(20)
             self.assertTrue(
                 observed, "GIL-holding case outlived its runner's cleanup deadline"
             )
-            self.assertEqual(observed[0].ident, pid)
-            self.assertTrue(observed[0].fflags & select.KQ_NOTE_EXIT)
+            self.assertEqual(observed, {pid})
         finally:
             os.write(release, b"1")
             if identity is not None:
-                signal_darwin_process(identity, signal.SIGKILL)
+                signal_process(identity, signal.SIGKILL)
             with suppress(ProcessLookupError):
                 os.killpg(process.pid, signal.SIGKILL)
             process.communicate(timeout=5)

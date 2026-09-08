@@ -280,6 +280,32 @@ def run_raw_output(relay: ScriptedRelay) -> None:
     relay.retire()
 
 
+def run_split_terminal_redraws(relay: ScriptedRelay) -> None:
+    relay.ready()
+    relay.expect(EVALUATION)
+    for chunk in (
+        "ordinary stdout\r\r\n",
+        "old\r\b\n",
+        "old\r\b",
+        "newx\b\n",
+        "old\x1b[",
+        "2Knew\n",
+    ):
+        relay.send({"kind": "stdout", "data": chunk})
+    relay.complete()
+    relay.retire()
+
+
+def run_independent_stream_redraws(relay: ScriptedRelay) -> None:
+    relay.ready()
+    relay.expect(EVALUATION)
+    for stream in ("stdout", "stderr"):
+        relay.send({"kind": stream, "data": f"\r{stream} old"})
+        relay.send({"kind": stream, "data": f"\r{stream} final\n"})
+    relay.complete()
+    relay.retire()
+
+
 def run_interleaved_stream_redraws(relay: ScriptedRelay) -> None:
     relay.ready()
     relay.expect(EVALUATION)
@@ -1114,7 +1140,7 @@ def run_fatal(relay: ScriptedRelay) -> None:
     )
 
 
-def run_fatal_status_137(relay: ScriptedRelay) -> None:
+def run_fatal_exit(relay: ScriptedRelay) -> None:
     relay.ready()
     command = relay.receive()
     if command.get("kind") == "shutdown":
@@ -1126,6 +1152,8 @@ def run_fatal_status_137(relay: ScriptedRelay) -> None:
     command = relay.receive()
     assert command.get("kind") == "shutdown", command
     relay.send({"kind": "shutdown_started"})
+    if os.environ[SCENARIO_ENV] == "fatal_sigterm":
+        os.kill(os.getpid(), signal.SIGTERM)
     raise SystemExit(137)
 
 
@@ -1172,6 +1200,8 @@ def main() -> None:
         "startup_output": run_startup_output,
         "evaluate": run_evaluate,
         "raw_output": run_raw_output,
+        "split_terminal_redraws": run_split_terminal_redraws,
+        "independent_stream_redraws": run_independent_stream_redraws,
         "interleaved_stream_redraws": run_interleaved_stream_redraws,
         "raw_malformed_redraw": run_raw_malformed_redraw,
         "empty_raw_close_between_redraws": run_empty_raw_close_between_redraws,
@@ -1227,7 +1257,8 @@ def main() -> None:
         "completion_before_r_activation": run_completion_before_r_activation,
         "cancelled_waiting_send": run_cancelled_waiting_send,
         "fatal": run_fatal,
-        "fatal_status_137": run_fatal_status_137,
+        "fatal_status_137": run_fatal_exit,
+        "fatal_sigterm": run_fatal_exit,
         "truncated": run_truncated,
         "exit_zero": run_exit_zero,
         "exit_nonzero": run_exit_nonzero,

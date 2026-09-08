@@ -6,20 +6,26 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.client import McpClient
-from support.execution import SANDBOXED
+from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.records import Transcript
 from support.suites import run_this_suite
 
 
-def request_lifecycle(binary: Path, method: str, **params: object) -> Transcript:
-    client = McpClient(binary, SANDBOXED.serve())
+def request_lifecycle(
+    binary: Path, execution: Execution, method: str, **params: object
+) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.request(method, **params)
     return client.finish()
 
 
-def test_negotiates_legacy_and_discovers_modern_versions(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_negotiates_legacy_and_discovers_modern_versions(
+    binary: Path, execution: Execution
+) -> Transcript:
     legacy = request_lifecycle(
         binary,
+        execution,
         "initialize",
         protocolVersion="2025-06-18",
         capabilities={},
@@ -30,6 +36,7 @@ def test_negotiates_legacy_and_discovers_modern_versions(binary: Path) -> Transc
     )
     modern = request_lifecycle(
         binary,
+        execution,
         "server/discover",
         _meta={
             "io.modelcontextprotocol/protocolVersion": "2026-07-28",

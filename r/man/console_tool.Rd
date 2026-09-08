@@ -4,7 +4,7 @@
 \alias{console_tool}
 \title{Use MCP Console as an ellmer tool}
 \usage{
-console_tool(..., path = NULL, version = NULL)
+console_tool(..., path = NULL, version = NULL, no_sandbox = FALSE)
 }
 \arguments{
 \item{...}{Must be empty. Reserved for future use.}
@@ -13,6 +13,9 @@ console_tool(..., path = NULL, version = NULL)
 
 \item{version}{\code{NULL}, or one published \code{mcp-console} version, such as
 \code{"0.0.2"}.}
+
+\item{no_sandbox}{Run evaluated code with the server's filesystem and
+network permissions. Required on Linux.}
 }
 \value{
 An \link[ellmer:ToolDef]{ellmer::ToolDef} to pass to an ellmer chat's
@@ -26,8 +29,9 @@ DuckDB state live as long as the returned tool remains reachable.
 \details{
 When the tool is garbage collected, it closes the server's input to request
 shutdown and waits up to 15 seconds before forcibly stopping the server.
-The sandbox manager owns cleanup of worker descendants; the R wrapper's
-fallback targets only the server process.
+With sandboxing enabled, the sandbox manager owns cleanup of worker
+descendants; the R wrapper's fallback targets only the server process.
+With \code{no_sandbox = TRUE}, worker descendants may survive server shutdown.
 }
 \section{Executable resolution}{
 

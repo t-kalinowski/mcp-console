@@ -1,6 +1,7 @@
 """Capabilities of the implemented runtime and of the host test facilities."""
 
 import os
+import platform
 import shutil
 import sys
 from collections.abc import Callable
@@ -18,7 +19,7 @@ class Requirement:
 
 # Keep implementation availability here until the corresponding runtime lands.
 WORKER = Requirement(
-    "worker", sys.platform == "darwin", "workers are implemented only on macOS"
+    "worker", sys.platform in {"darwin", "linux"}, "workers require macOS or Linux"
 )
 SANDBOX = Requirement(
     "sandbox", sys.platform == "darwin", "the sandbox is implemented only on macOS"
@@ -28,13 +29,25 @@ POSIX = Requirement(
 )
 PROCESS_EVENTS = Requirement(
     "process events",
-    sys.platform == "darwin",
-    "requires macOS process identity and kqueue events",
+    sys.platform in {"darwin", "linux"},
+    "requires macOS process events or Linux procfs, inotify, and pidfds",
 )
 NATIVE_FIXTURES = Requirement(
     "native fixtures",
-    sys.platform == "darwin",
-    "requires macOS native fixture compilation and interposition",
+    sys.platform in {"darwin", "linux"},
+    "requires macOS or Linux native fixture compilation and interposition",
+)
+# XNU's bsd/dev/arm/unix_signal.c reports SEGV_ACCERR for every SIGSEGV,
+# including null access. Keep these real kernel diagnostics in separate cases.
+NULL_FAULT_ACCERR = Requirement(
+    "null fault with SEGV_ACCERR",
+    sys.platform == "darwin" and platform.machine() == "arm64",
+    "requires ARM macOS null-fault diagnostics",
+)
+NULL_FAULT_MAPERR = Requirement(
+    "null fault with SEGV_MAPERR",
+    WORKER.available and not NULL_FAULT_ACCERR.available,
+    "ARM macOS reports SEGV_ACCERR for null faults",
 )
 NO_WORKER = Requirement(
     "unsupported worker", not WORKER.available, "workers are available on this platform"
@@ -83,3 +96,11 @@ def missing_reasons(requirements: tuple[Requirement, ...]) -> str:
         for requirement in dict.fromkeys(requirements)
         if not requirement.available
     )
+
+
+# ELF loader and seccomp fixtures exercise Linux implementation details.
+LINUX_NATIVE = Requirement(
+    "Linux native fixtures",
+    sys.platform == "linux",
+    "requires Linux ELF loading and seccomp",
+)

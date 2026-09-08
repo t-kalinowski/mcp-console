@@ -7,6 +7,8 @@ fn main() {
 
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
         bind_private_runner();
+    }
+    if std::env::var_os("CARGO_CFG_UNIX").is_some() {
         cc::Build::new()
             .file("src/r_graphics.c")
             .file("src/r_repl.c")
@@ -18,7 +20,7 @@ fn bind_private_runner() {
     let root = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let pin_path = root.join("sandbox-runner.json");
     let build_path = root.join("target/sandbox-runner-build.json");
-    let runner_path = root.join("target/private-wheel-data/data/libexec/mcp-console-sandbox");
+    let runner_path = root.join("wheel-data/data/libexec/mcp-console-sandbox");
     for path in [&pin_path, &build_path, &runner_path] {
         println!("cargo:rerun-if-changed={}", path.display());
     }

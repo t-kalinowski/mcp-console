@@ -120,7 +120,9 @@ test_that("console_tool works when registered with an ellmer chat", {
         )
         tryCatch(
           {
-            chat$register_tool(console_tool())
+            chat$register_tool(console_tool(
+              no_sandbox = Sys.info()[["sysname"]] == "Linux"
+            ))
 
             expect_identical(
               as.character(chat$chat("Use the console.")),

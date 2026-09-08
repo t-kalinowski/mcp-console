@@ -11,7 +11,7 @@ result:
 ---
 send:
   r: |
-    dyn.load("./mcp_test_segfault.dylib")
+    dyn.load(Sys.getenv("MCP_CONSOLE_TEST_SEGFAULT_LIBRARY"))
     .C("mcp_test_segfault")
 result:
   content:
@@ -19,7 +19,7 @@ result:
       text: |2-
 
          *** caught segfault ***
-        address 0x1, cause 'invalid permissions'
+        address 0x0, cause 'memory not mapped'
 
         Traceback:
          1: .C("mcp_test_segfault")

@@ -1,3 +1,7 @@
+#ifdef __linux__
+#define _GNU_SOURCE
+#endif
+
 #include <fcntl.h>
 #include <stdatomic.h>
 #include <stdbool.h>
@@ -8,6 +12,14 @@
 #include <time.h>
 #include <unistd.h>
 
+#ifdef __linux__
+#include <dlfcn.h>
+static ssize_t (*native_write)(int descriptor, const void *buffer, size_t length);
+#define write native_write
+static int (*native_clock_gettime)(clockid_t clock, struct timespec *time);
+#define clock_gettime native_clock_gettime
+#endif
+
 static atomic_bool completed = false;
 static struct stat output_identity;
 static int completion_record;
@@ -15,6 +27,13 @@ static const char *completed_frame;
 
 __attribute__((constructor)) static void initialize_clock(void) {
     unsetenv("DYLD_INSERT_LIBRARIES");
+#ifdef __linux__
+    unsetenv("LD_PRELOAD");
+    native_write = dlsym(RTLD_NEXT, "write");
+    if (native_write == NULL) _exit(90);
+    native_clock_gettime = dlsym(RTLD_NEXT, "clock_gettime");
+    if (native_clock_gettime == NULL) _exit(90);
+#endif
     completed_frame = getenv("MCP_CONSOLE_TEST_CLOCK_AFTER_FRAME");
     completion_record = open(getenv("MCP_CONSOLE_TEST_OUTPUT_COMPLETE"),
                              O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
@@ -60,6 +79,7 @@ static int advance_after_output(clockid_t clock, struct timespec *time) {
     return result;
 }
 
+#ifdef __APPLE__
 #define DYLD_INTERPOSE(replacement, replacee)                                  \
     __attribute__((used)) static struct {                                      \
         const void *replacement;                                              \
@@ -71,3 +91,14 @@ static int advance_after_output(clockid_t clock, struct timespec *time) {
 
 DYLD_INTERPOSE(observe_completed_write, write)
 DYLD_INTERPOSE(advance_after_output, clock_gettime)
+
+#else
+#undef write
+ssize_t write(int descriptor, const void *buffer, size_t length) {
+    return observe_completed_write(descriptor, buffer, length);
+}
+#undef clock_gettime
+int clock_gettime(clockid_t clock, struct timespec *time) {
+    return advance_after_output(clock, time);
+}
+#endif

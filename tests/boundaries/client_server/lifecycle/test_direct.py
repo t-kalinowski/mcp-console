@@ -11,12 +11,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from support.assertions import last_tool_text
 from support.client import McpClient, stop_client
 from support.execution import DIRECT
-from support.macos import (
-    DarwinProcessIdentity,
-    capture_darwin_process_identity,
-    darwin_child_process_identities,
-    kill_darwin_processes,
-    live_darwin_processes,
+from support.processes import (
+    ProcessIdentity,
+    capture_process_identity,
+    child_process_identities,
+    kill_processes,
+    live_processes,
 )
 from support.normalization import code
 from support.records import Transcript
@@ -24,11 +24,9 @@ from support.requirements import PROCESS_EVENTS, WORKER, requires
 from support.suites import run_this_suite
 
 
-def _direct_generation(
-    client: McpClient, binary: Path
-) -> tuple[DarwinProcessIdentity, ...]:
-    server = capture_darwin_process_identity(client.process.pid)
-    children = darwin_child_process_identities(server)
+def _direct_generation(client: McpClient, binary: Path) -> tuple[ProcessIdentity, ...]:
+    server = capture_process_identity(client.process.pid)
+    children = child_process_identities(server)
     assert len(children) == 1, children
     relay = children[0]
     command = subprocess.run(
@@ -38,7 +36,7 @@ def _direct_generation(
         check=True,
     ).stdout.strip()
     assert command.startswith(f"{binary} worker-relay "), command
-    children = darwin_child_process_identities(relay)
+    children = child_process_identities(relay)
     assert len(children) == 1, children
     worker = children[0]
     return relay, worker
@@ -80,14 +78,14 @@ def test_builtin_worker_runs_directly_with_host_access(binary: Path) -> Transcri
                 python='print("output" in globals())',
             )
             assert "False\n" in last_tool_text(client), client.transcript[-1]
-            assert live_darwin_processes(identities) == []
+            assert live_processes(identities) == []
             identities.extend(_direct_generation(client, binary))
             client.finish()
-            assert live_darwin_processes(identities) == []
+            assert live_processes(identities) == []
             return client.transcript
         finally:
             stop_client(client)
-            kill_darwin_processes(identities)
+            kill_processes(identities)
 
 
 @requires(WORKER, PROCESS_EVENTS)
@@ -125,14 +123,14 @@ def test_custom_worker_runs_directly_with_host_access(binary: Path) -> Transcrip
             identities.extend(_direct_generation(client, binary))
             client.send(control="restart", r="echo replacement ready")
             assert "zod: replacement ready\n" in last_tool_text(client)
-            assert live_darwin_processes(identities) == []
+            assert live_processes(identities) == []
             identities.extend(_direct_generation(client, binary))
             client.finish()
-            assert live_darwin_processes(identities) == []
+            assert live_processes(identities) == []
             return client.transcript
         finally:
             stop_client(client)
-            kill_darwin_processes(identities)
+            kill_processes(identities)
 
 
 if __name__ == "__main__":

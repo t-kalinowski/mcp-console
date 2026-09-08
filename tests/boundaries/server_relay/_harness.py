@@ -14,6 +14,7 @@ from support.assertions import tool_text as _tool_text
 from support.capture import read_jsonl, read_jsonl_path
 from support.client import McpClient, stop_client
 from support.execution import Execution
+from support.events import Events
 from support.records import ToolResult, Transcript
 
 SCENARIO_ENV = "MCP_CONSOLE_TEST_RELAY_SCENARIO"
@@ -297,19 +298,8 @@ def _wait_for_recorded_tool_result(
     session = next((workspace / ".mcp-console" / "sessions").iterdir())
     journal = session / "internal" / "events.jsonl"
     with journal.open(encoding="utf-8") as journal_stream:
-        journal_events = select.kqueue()
-        journal_events.control(
-            [
-                select.kevent(
-                    journal_stream.fileno(),
-                    filter=select.KQ_FILTER_VNODE,
-                    flags=select.KQ_EV_ADD | select.KQ_EV_CLEAR,
-                    fflags=select.KQ_NOTE_WRITE,
-                )
-            ],
-            0,
-            0,
-        )
+        journal_events = Events()
+        journal_events.watch_file(journal)
         try:
             while True:
                 journal_stream.seek(0)
@@ -338,7 +328,7 @@ def _wait_for_recorded_tool_result(
                 assert client.process.poll() is None, (
                     "mcp-console stopped before recording the tool result"
                 )
-                assert journal_events.control(None, 1, 10), (
+                assert journal_events.wait(10), (
                     "mcp-console did not record the tool result"
                 )
         finally:
