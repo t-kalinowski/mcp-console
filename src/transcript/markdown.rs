@@ -109,7 +109,9 @@ impl QuartoWriter {
                 }
                 changed
             }
-            Event::ArtifactCreated { .. } | Event::ToolResult { .. } => false,
+            Event::ArtifactCreated { .. } | Event::CellOutput { .. } | Event::ToolResult { .. } => {
+                false
+            }
         };
         if !changed {
             return Ok(());
@@ -312,6 +314,23 @@ fn render_event(document: &mut String, envelope: &Envelope<'_>) -> Result<(), St
                 "## Artifact {artifact_id} for call {call_id}\n\n[Artifact {artifact_id} from call {call_id}](<{path}>)\n"
             )
             .expect("writing to a String cannot fail");
+            Ok(())
+        }
+        Event::CellOutput {
+            call_id,
+            path,
+            retained_bytes,
+            inline_omitted_bytes,
+            discarded_bytes,
+            ..
+        } => {
+            if *inline_omitted_bytes != 0 || *discarded_bytes != 0 {
+                writeln!(
+                    document,
+                    "## Retained output for call {call_id}\n\n[Retained text output for call {call_id}](<{path}>)\n\n{retained_bytes} bytes retained; {inline_omitted_bytes} bytes omitted from inline responses; {discarded_bytes} bytes not retained in this file.\n"
+                )
+                .expect("writing to a String cannot fail");
+            }
             Ok(())
         }
         Event::ToolResult { call_id, outcome } => render_tool_result(document, *call_id, outcome),

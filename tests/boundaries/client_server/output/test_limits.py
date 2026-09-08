@@ -1,5 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
+import json
 import os
 import subprocess
 import sys
@@ -16,6 +17,7 @@ from support.requirements import NATIVE_FIXTURES, requires
 from support.suites import run_this_suite
 
 PENDING_TEXT_BUDGET = 8 * 1024 * 1024
+CELL_OUTPUT_RETENTION_LIMIT = 1024 * 1024 * 1024
 
 
 @executions(DIRECT, SANDBOXED)
@@ -24,29 +26,82 @@ def test_bounds_pending_output_and_resets_after_completion(
     execution: Execution,
 ) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
-    client = McpClient(
-        binary,
-        execution.serve("--worker", str(zod)),
-    )
-    client.initialize_and_list_tools()
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        workspace = Path(temporary_directory)
+        client = McpClient(
+            binary,
+            execution.serve("--worker", str(zod)),
+            current_directory=workspace,
+            umask=0,
+        )
+        client.initialize_and_list_tools()
 
-    client.send(r="overflow console output")
-    output = last_tool_text(client)
-    retained = "x" * PENDING_TEXT_BUDGET
-    notice = (
-        "\n[output truncated: omitted 7 text bytes and "
-        "0 encoded image bytes across 1 event]"
-    )
-    assert output == retained + notice, (
-        f"unexpected bounded output: length={len(output)}, tail={output[-200:]!r}"
-    )
-    client.transcript[-1]["result"]["content"][0]["text"] = (
-        f"<retained {PENDING_TEXT_BUDGET} text bytes>{notice}"
-    )
+        client.send(r="overflow console output")
+        overflow = client.transcript[-1]
+        output = last_tool_text(client)
+        session = next((workspace / ".mcp-console" / "sessions").iterdir())
+        relative_output = Path("outputs/call-000001.log")
+        public_output = (
+            f".mcp-console/sessions/{session.name}/{relative_output.as_posix()}"
+        )
+        retained = "x" * PENDING_TEXT_BUDGET
+        notice = (
+            "\n[output truncated: omitted 7 text bytes and "
+            "0 encoded image bytes across 1 event; "
+            f"retained text: {public_output} (7 of 7 omitted text bytes)]"
+        )
+        assert output == retained + notice, (
+            f"unexpected bounded output: length={len(output)}, tail={output[-300:]!r}"
+        )
 
-    client.send(r="echo echo")
-    assert last_tool_text(client) == "zod: echo\n"
-    return client.finish()
+        output_path = session / relative_output
+        assert output_path.read_text(encoding="utf-8") == "x" * (
+            PENDING_TEXT_BUDGET + 7
+        )
+        assert output_path.stat().st_mode & 0o777 == 0o600, output_path
+
+        events = [
+            json.loads(line)
+            for line in (session / "internal" / "events.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ]
+        cell_output = next(event for event in events if event["event"] == "cell_output")
+        assert {
+            key: cell_output[key]
+            for key in (
+                "call_id",
+                "path",
+                "retained_bytes",
+                "inline_omitted_bytes",
+                "discarded_bytes",
+                "retention_limit_bytes",
+            )
+        } == {
+            "call_id": 1,
+            "path": relative_output.as_posix(),
+            "retained_bytes": PENDING_TEXT_BUDGET + 7,
+            "inline_omitted_bytes": 7,
+            "discarded_bytes": 0,
+            "retention_limit_bytes": CELL_OUTPUT_RETENTION_LIMIT,
+        }, cell_output
+        markdown = (session / "transcript.md").read_text(encoding="utf-8")
+        assert f"[Retained text output for call 1](<{relative_output}>)" in markdown
+        assert relative_output.as_posix() not in (session / "transcript.qmd").read_text(
+            encoding="utf-8"
+        )
+
+        normalized_notice = notice.replace(session.name, "<run ID>")
+        overflow["result"]["content"][0]["text"] = (
+            f"<retained {PENDING_TEXT_BUDGET} text bytes>{normalized_notice}"
+        )
+
+        client.send(r="echo echo")
+        assert last_tool_text(client) == "zod: echo\n"
+        assert (session / "outputs" / "call-000002.log").read_text(
+            encoding="utf-8"
+        ) == "zod: echo\n"
+        return client.finish()
 
 
 @executions(DIRECT, SANDBOXED)

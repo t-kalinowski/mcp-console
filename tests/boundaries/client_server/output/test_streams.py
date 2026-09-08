@@ -44,6 +44,12 @@ def test_captures_worker_stdout(binary: Path, execution: Execution) -> Transcrip
     client.send(r="emit stdout")
     output = last_tool_text(client)
     assert_large_output(output, "zod stdout 👩🏽‍💻\n")
+    assert client.temporary_directory is not None
+    workspace = Path(client.temporary_directory.name)
+    session = next((workspace / ".mcp-console" / "sessions").iterdir())
+    assert (session / "outputs" / "call-000001.log").read_text(
+        encoding="utf-8"
+    ) == output
     client.transcript[-1]["result"]["content"][0]["text"] = (
         "zod stdout 👩🏽‍💻\n<large output>\n"
     )
@@ -403,6 +409,12 @@ def test_drains_pending_sideband_output_while_running(
             ],
             "isError": False,
         }, result
+        assert client.temporary_directory is not None
+        workspace = Path(client.temporary_directory.name)
+        session = next((workspace / ".mcp-console" / "sessions").iterdir())
+        assert (session / "outputs" / "call-000001.log").read_text(
+            encoding="utf-8"
+        ) == "before pending image\nafter pending image\n"
 
         (image_started.parent / "zod-release-image-completion").touch()
         client.send(timeout_ms=3_000)
