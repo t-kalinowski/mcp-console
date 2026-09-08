@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from boundaries.cli._harness import (
     _command,
     _read_lines,
+    _sandbox_root_pid,
     _start_with_controlling_terminal,
 )
 from support.macos import (
@@ -98,6 +99,7 @@ def test_retires_processx_descendants_across_sessions(binary: Path) -> Transcrip
         pids = [int(root_pid), int(child_pid), int(grandchild_pid)]
         for pid in pids:
             identities.append(_capture_identity(pid))
+        identities.append(_capture_identity(_sandbox_root_pid(process.pid)))
         temporary_directory = Path(temporary_directory)
 
         assert os.getsid(pids[1]) != os.getsid(pids[0])
@@ -195,7 +197,10 @@ def test_relays_interrupt_then_retires_descendants(binary: Path) -> Transcript:
             )
         ]
         identities = [_capture_identity(pid) for pid in pids]
-        assert os.getpgid(pids[0]) == pids[0]
+        root = _capture_identity(_sandbox_root_pid(process.pid))
+        identities.append(root)
+        assert os.getpgid(pids[0]) == root[0]
+        assert root[0] != pids[0]
         assert os.getpgid(pids[1]) != os.getpgid(pids[0])
         os.kill(process.pid, signal.SIGINT)
         returncode = process.wait(timeout=TIMEOUT)
@@ -304,7 +309,10 @@ def test_delivers_terminal_interrupt_once(binary: Path) -> Transcript:
         assert len(readiness) == 3 and readiness[0] == "ready", readiness
         target_pid, target_group = map(int, readiness[1:])
         identities.append(_capture_identity(target_pid))
-        assert target_group == target_pid
+        root = _capture_identity(_sandbox_root_pid(process.pid))
+        identities.append(root)
+        assert target_group == root[0]
+        assert target_group != target_pid
         assert target_group != process.pid
         assert os.tcgetpgrp(master) == target_group
 
@@ -408,7 +416,10 @@ def test_preserves_terminal_ownership_with_foreground_peer(binary: Path) -> Tran
 
             assert os.getpgid(process.pid) == process.pid
             assert os.getpgid(peer_pid) == process.pid
-            assert target_group == target_pid
+            root = _capture_identity(_sandbox_root_pid(process.pid))
+            identities.insert(0, root)
+            assert target_group == root[0]
+            assert target_group != target_pid
             assert foreground_group == process.pid
             assert target_group != foreground_group
 

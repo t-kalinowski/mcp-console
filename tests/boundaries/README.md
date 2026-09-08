@@ -29,7 +29,7 @@ Sandbox contracts live in a `sandbox/` directory within their owning boundary.
 Ordinary runtime, protocol, and lifecycle cases stay with those subjects, including cases that also run sandboxed.
 Direct-launch host access and recovery live under `client_server/lifecycle`; plot-session isolation lives under `client_server/r`.
 
-The direct CLI sandbox cases own argument and standard-stream fidelity, job control, signal and exit status, security policy, and manager-owned retirement.
+The direct CLI sandbox cases own setup cancellation, large-frame startup, original-stdin identity and closure, argument and standard-stream fidelity, job control, signal and exit status, security policy, and manager-owned retirement.
 The public MCP sandbox cases cover the launch-path descriptor matrix, sandbox-dependent runtime workflows, startup failure and gating, worker replacement, supervisor loss, restart, and shutdown.
 The relay wrapper workflow verifies MCP restart and shutdown when the relay is below the sandbox root and a worker descendant retains its streams.
 The direct relay CLI case compares the complete protocol through ordinary direct launch and the public sandbox command, without requiring the relay to be a process-group leader.
@@ -43,13 +43,18 @@ Map each non-generic sandbox allowance to the real workflow that requires it and
 | POSIX semaphores            | Python spawn multiprocessing                      | `client_server/python/test_processes::runs_spawn_process_after_live_resolution`            |
 | PTYs and `kern.boottime`    | `processx`                                        | `cli/sandbox/test_execution::allows_processx_pty_processes` and MCP process-lifetime cases |
 | Quarto device/sysctl access | Render generated `ir` document inside the sandbox | `client_server/sandbox/test_quarto::renders_generated_document`                            |
+| `__KMP_REGISTERED_LIB_*`    | PyTorch/libomp                                    | Supplied by the pinned native base; no local extension                                     |
+| uv platform services        | Offline wheel installation in private storage     | `cli/sandbox/test_uv::installs_a_local_wheel_into_private_storage`                         |
+
+The [policy audit](../../docs/SANDBOX_SUPERVISION.md#policy-extensions-and-compatibility) distinguishes redundant base-policy rules from local exceptions whose current necessity or precise caller is unconfirmed.
+Runner protocol parsing belongs to the extraction's executable tests; `tests/sandbox_installation.py` covers the installed caller boundary, one-shot resource closure, and startup without setup EOF.
 
 `cli/sandbox/test_pytorch::matches_unsandboxed_autograd` runs one CPU autograd script outside and inside the default sandbox with the same freshly resolved PyTorch environment.
 It compares the loss, full gradient, and thread count against the live unsandboxed run; the snapshot records that comparison without dependency warnings or fixed numerical values.
 This is an intentional exception to exact-output snapshots: warnings and other non-result output may change across releases, while nonzero exits and numerical differences still fail with captured stdout and stderr.
 Portable Matplotlib image and cache-activation cases live under `client_server/python`; `client_server/sandbox/test_matplotlib` owns host-file write denials and macOS system-font discovery.
 The Ragnar SQL workflows remain under `client_server/sql`; `client_server/sandbox/test_ragnar` preserves workspace-write denial followed by successful creation in the worker directory.
-The `__KMP_REGISTERED_LIB_*` registration allowance remains an unverified compatibility exception.
+The native base policy's `__KMP_REGISTERED_LIB_*` registration allowance remains an unverified compatibility exception.
 This comparison does not establish a need for that permission.
 
 When reviewing deletion candidates, separate tests may replace a combined test only when the interaction between those behaviors is not itself a plausible failure mode.
@@ -88,6 +93,7 @@ It adds the exit code for failures and stderr when nonempty.
 The `server_relay` suites launch a deterministic scripted relay through an internal development seam.
 The execution fixture launches it directly or through the sandbox; it communicates only through the same fd 0/1/2 boundary as the production relay.
 Each fixture generation owns its capture directory, independently of sandbox directory layout or process-group ownership.
+In sandboxed mode, the native executable owns the process group and the relay is its child.
 The suite records complete parsed JSONL frames under `server` and `relay` direction labels.
 The truncated-frame case instead records the exact incomplete bytes as base64 under `relay_raw`.
 Its snapshots show flat commands and semantic events, operation results without acknowledgments, readable UTF-8 raw chunks and base64 byte fallbacks, interrupt results, structured worker outcomes, and complete stream drainage.

@@ -8,6 +8,7 @@ mod cli;
 mod process_descriptors;
 #[cfg(target_os = "macos")]
 mod process_exit;
+#[cfg(target_os = "macos")]
 mod python;
 mod python_requirement;
 #[cfg(target_os = "macos")]
@@ -22,8 +23,7 @@ mod resolver;
 mod sandbox;
 mod server;
 mod server_transport;
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-#[cfg_attr(target_os = "linux", allow(dead_code))]
+#[cfg(unix)]
 mod sideband;
 #[cfg(target_os = "macos")]
 mod sql;
@@ -59,12 +59,13 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
-        cli::Command::SandboxTarget { gate_fd, command } => {
-            match sandbox::run_target(gate_fd, &command) {
-                Ok(exit_code) => exit_code,
-                Err(error) => exit_with_error(error),
-            }
-        }
+        cli::Command::SandboxTarget {
+            signal_mask,
+            command,
+        } => match sandbox::run_target(signal_mask, &command) {
+            Ok(exit_code) => exit_code,
+            Err(error) => exit_with_error(error),
+        },
         cli::Command::Sandbox {
             exit_with_parent,
             command,

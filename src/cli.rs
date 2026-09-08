@@ -76,12 +76,12 @@ pub enum Command {
         temporary_directory: PathBuf,
     },
 
-    /// Hold a sandbox target until host supervision is ready
+    /// Restore the target signal mask and execute its command
     #[command(hide = true)]
     SandboxTarget {
-        /// Inherited descriptor that releases target execution
-        #[arg(long, value_name = "FD")]
-        gate_fd: i32,
+        /// Original macOS signal mask, encoded as an unsigned decimal integer
+        #[arg(long, value_name = "MASK")]
+        signal_mask: u32,
 
         /// Command and arguments to run after host supervision is ready
         #[arg(

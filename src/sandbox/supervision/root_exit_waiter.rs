@@ -153,6 +153,11 @@ impl RootExitWaiter {
         }
     }
 
+    pub(super) fn watch_setup(&self, descriptor: libc::c_int) -> Result<(), String> {
+        self.kqueue
+            .watch_write(descriptor, "failed to watch sandbox setup writes")
+    }
+
     pub(in crate::sandbox) fn validate_owner(&self) -> Result<(), String> {
         let Some(owner) = self.owner else {
             return Ok(());

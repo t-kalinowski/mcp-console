@@ -28,22 +28,6 @@ class _DarwinProcessFdInfo(ctypes.Structure):
     ]
 
 
-class _DarwinThreadInfo(ctypes.Structure):
-    _fields_ = [
-        ("user_time", ctypes.c_uint64),
-        ("system_time", ctypes.c_uint64),
-        ("cpu_usage", ctypes.c_int32),
-        ("policy", ctypes.c_int32),
-        ("run_state", ctypes.c_int32),
-        ("flags", ctypes.c_int32),
-        ("sleep_time", ctypes.c_int32),
-        ("current_priority", ctypes.c_int32),
-        ("priority", ctypes.c_int32),
-        ("max_priority", ctypes.c_int32),
-        ("name", ctypes.c_char * 64),
-    ]
-
-
 _LIBPROC = None
 if sys.platform == "darwin":
     _LIBPROC = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
@@ -170,91 +154,6 @@ def darwin_process_file_descriptors(
     return {info.fd for info in fd_infos[:count]}
 
 
-def _darwin_process_resources(
-    identity: DarwinProcessIdentity,
-) -> tuple[set[tuple[int, int]], _DarwinThreadInfo] | None:
-    assert _LIBPROC is not None
-    if current_darwin_process_identity(identity[0]) != identity:
-        return None
-
-    proc_pidlistfds = 1
-    proc_pidlistthreads = 6
-    proc_pidthreadinfo = 5
-
-    fd_infos = (_DarwinProcessFdInfo * 16)()
-    fd_size = _LIBPROC.proc_pidinfo(
-        identity[0],
-        proc_pidlistfds,
-        0,
-        fd_infos,
-        ctypes.sizeof(fd_infos),
-    )
-    if fd_size <= 0:
-        return None
-    assert fd_size % ctypes.sizeof(_DarwinProcessFdInfo) == 0, fd_size
-    file_descriptors = {
-        (info.fd, info.fdtype)
-        for info in fd_infos[: fd_size // ctypes.sizeof(_DarwinProcessFdInfo)]
-    }
-    thread_ids = (ctypes.c_uint64 * 16)()
-    thread_size = _LIBPROC.proc_pidinfo(
-        identity[0],
-        proc_pidlistthreads,
-        0,
-        thread_ids,
-        ctypes.sizeof(thread_ids),
-    )
-    if thread_size != ctypes.sizeof(ctypes.c_uint64):
-        return None
-
-    thread_info = _DarwinThreadInfo()
-    info_size = _LIBPROC.proc_pidinfo(
-        identity[0],
-        proc_pidthreadinfo,
-        thread_ids[0],
-        ctypes.byref(thread_info),
-        ctypes.sizeof(thread_info),
-    )
-    if (
-        info_size != ctypes.sizeof(thread_info)
-        or current_darwin_process_identity(identity[0]) != identity
-    ):
-        return None
-    return file_descriptors, thread_info
-
-
-def _darwin_main_thread_waits(thread_info: _DarwinThreadInfo) -> bool:
-    th_state_waiting = 3
-    return (
-        thread_info.run_state == th_state_waiting
-        and thread_info.name.rstrip(b"\0") == b"main"
-    )
-
-
-def darwin_process_waits_for_startup_release(
-    identity: DarwinProcessIdentity,
-) -> bool:
-    """Return whether the exact target wrapper is waiting on its private gate."""
-    prox_fdtype_socket = 2
-    resources = _darwin_process_resources(identity)
-    if resources is None:
-        return False
-    file_descriptors, thread_info = resources
-    standard_descriptors = {
-        descriptor for descriptor, _ in file_descriptors if descriptor <= 2
-    }
-    extra_descriptors = [
-        descriptor_type
-        for descriptor, descriptor_type in file_descriptors
-        if descriptor > 2
-    ]
-    return (
-        standard_descriptors == {0, 1, 2}
-        and extra_descriptors == [prox_fdtype_socket]
-        and _darwin_main_thread_waits(thread_info)
-    )
-
-
 def signal_darwin_process(identity: DarwinProcessIdentity, number: int) -> bool:
     # macOS has no pidfd-like signal API. Recheck the start time immediately
     # before signaling so a reused PID is not treated as the test process.
@@ -299,23 +198,6 @@ def wait_for_darwin_process_state(
             return
         assert time.monotonic() < deadline, (
             f"timed out waiting for {description} state {prefix!r}"
-        )
-        time.sleep(0.01)
-
-
-def wait_for_darwin_startup_release(
-    identity: DarwinProcessIdentity,
-    description: str,
-    *,
-    timeout: float = 10,
-) -> None:
-    deadline = time.monotonic() + timeout
-    while not darwin_process_waits_for_startup_release(identity):
-        assert live_darwin_processes((identity,)), (
-            f"{description} exited before reaching its private startup gate"
-        )
-        assert time.monotonic() < deadline, (
-            f"{description} did not block at its private startup gate"
         )
         time.sleep(0.01)
 

@@ -294,6 +294,51 @@ def test_enforces_host_read_only_and_temporary_writes(binary: Path) -> Transcrip
 
 
 @requires(SANDBOX)
+def test_allows_replacing_temporary_directories(binary: Path) -> Transcript:
+    # fmt: python
+    script = code(r"""
+        import os
+        from pathlib import Path
+
+        temporary = Path(os.environ["TMPDIR"])
+        nested = temporary / "nested"
+        nested.mkdir()
+        for parent in (temporary, nested):
+            for name in (".git", ".agents", ".codex"):
+                directory = parent / name
+                directory.mkdir()
+                (directory / "payload").write_text("temporary data", encoding="utf-8")
+                renamed = directory.with_name(name + "-renamed")
+                directory.rename(renamed)
+                assert (renamed / "payload").read_text(encoding="utf-8") == "temporary data"
+                (renamed / "payload").unlink()
+                renamed.rmdir()
+                directory.mkdir()
+                directory.rmdir()
+                print(f"{parent.relative_to(temporary)}: {name} created, renamed, removed")
+
+        nested.rmdir()
+        temporary.rmdir()
+        assert not temporary.exists()
+        temporary.mkdir()
+        print("temporary directory recreated")
+        """)
+    entry = record(binary, "sandbox", "--", "python", "-c", script)
+    assert "exit_code" not in entry, entry
+    assert "stderr" not in entry, entry
+    assert entry["stdout"] == (
+        ".: .git created, renamed, removed\n"
+        ".: .agents created, renamed, removed\n"
+        ".: .codex created, renamed, removed\n"
+        "nested: .git created, renamed, removed\n"
+        "nested: .agents created, renamed, removed\n"
+        "nested: .codex created, renamed, removed\n"
+        "temporary directory recreated\n"
+    ), entry
+    return [entry]
+
+
+@requires(SANDBOX)
 def test_allows_processx_pty_processes(binary: Path) -> Transcript:
     # fmt: r
     script = code(r"""
@@ -354,6 +399,56 @@ def test_cannot_open_a_preexisting_pseudo_terminal(binary: Path) -> Transcript:
         "pseudo_terminal_path": "omitted",
     }
     return [entry]
+
+
+@requires(SANDBOX)
+def test_cannot_flush_a_host_terminal(binary: Path) -> Transcript:
+    # Reading terminal attributes remains usable for interactive commands, but
+    # flushing another host terminal's queued input is a mutating ioctl.
+    # fmt: python
+    script = code(r"""
+        import errno
+        import sys
+        import termios
+
+        assert termios.tcgetattr(0)
+        try:
+            termios.tcflush(0, termios.TCIFLUSH)
+        except termios.error as error:
+            assert error.args[0] == errno.EPERM
+            assert sys.argv[1] == "sandbox"
+            print("blocked")
+        else:
+            assert sys.argv[1] == "host", "sandbox flushed a host terminal"
+            print("flushed")
+        """)
+    master, slave = pty.openpty()
+    try:
+        for prefix, expected in (
+            ([], b"flushed\n"),
+            ([binary, "sandbox", "--"], b"blocked\n"),
+        ):
+            result = subprocess.run(
+                [
+                    *prefix,
+                    sys.executable,
+                    "-c",
+                    script,
+                    "sandbox" if prefix else "host",
+                ],
+                stdin=slave,
+                capture_output=True,
+                timeout=10,
+            )
+            assert result.returncode == 0, result
+            assert result.stdout == expected, result
+            assert result.stderr == b"", result
+    finally:
+        os.close(master)
+        os.close(slave)
+    return [
+        {"scenario": "mutating ioctl on an inherited host PTY", "stdout": "blocked\n"}
+    ]
 
 
 @requires(SANDBOX)
