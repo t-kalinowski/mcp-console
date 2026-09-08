@@ -1,24 +1,40 @@
 use std::ffi::OsString;
 use std::process::ExitCode;
 
+#[cfg(target_os = "macos")]
 use std::fs::File;
+#[cfg(target_os = "macos")]
 use std::io::Read as _;
+#[cfg(target_os = "macos")]
 use std::os::fd::{FromRawFd as _, OwnedFd};
+#[cfg(target_os = "macos")]
 use std::os::unix::process::CommandExt as _;
+#[cfg(target_os = "macos")]
 use std::process::{Command, Stdio};
+#[cfg(target_os = "macos")]
 use std::time::Duration;
 
+#[cfg(target_os = "macos")]
 const MANAGER_CLEANUP_TIMEOUT: Duration = Duration::from_secs(1);
+#[cfg(target_os = "macos")]
 const TARGET_GATE_RELEASE: u8 = 1;
 
+#[cfg(target_os = "macos")]
 #[path = "sandbox/child.rs"]
 mod child;
 #[path = "sandbox/macos.rs"]
 mod platform;
+#[cfg(target_os = "macos")]
 mod process_group;
+#[cfg(target_os = "macos")]
 #[path = "sandbox/supervision.rs"]
 mod supervision;
 
+#[cfg(not(target_os = "macos"))]
+#[path = "sandbox/unsupported.rs"]
+mod platform;
+
+#[cfg(target_os = "macos")]
 pub fn run(command_line: &[OsString], exit_with_parent: Option<u32>) -> Result<ExitCode, String> {
     let owner = exit_with_parent
         .map(supervision::SandboxOwner::capture)
@@ -34,6 +50,7 @@ pub fn run(command_line: &[OsString], exit_with_parent: Option<u32>) -> Result<E
     supervision::status(sandboxed, temporary_directory, program, arguments, owner)
 }
 
+#[cfg(target_os = "macos")]
 pub(crate) fn run_manager(
     root_pid: u32,
     cleanup_timeout_millis: u64,
@@ -42,6 +59,7 @@ pub(crate) fn run_manager(
     supervision::run_manager(root_pid, cleanup_timeout_millis, temporary_directory)
 }
 
+#[cfg(target_os = "macos")]
 pub(crate) fn run_target(
     gate_descriptor: libc::c_int,
     command_line: &[OsString],
@@ -86,4 +104,26 @@ pub(crate) fn run_target(
         "failed to launch sandbox target `{}`: {error}",
         program.to_string_lossy()
     ))
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn run(command_line: &[OsString], _exit_with_parent: Option<u32>) -> Result<ExitCode, String> {
+    platform::run(command_line)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn run_manager(
+    _root_pid: u32,
+    _cleanup_timeout_millis: u64,
+    _temporary_directory: std::path::PathBuf,
+) -> Result<(), String> {
+    Err("the sandbox manager is currently supported only on macOS".to_string())
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn run_target(
+    _gate_descriptor: libc::c_int,
+    _command_line: &[OsString],
+) -> Result<ExitCode, String> {
+    Err("the sandbox target gate is currently supported only on macOS".to_string())
 }

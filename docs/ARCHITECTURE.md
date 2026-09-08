@@ -413,4 +413,4 @@ This includes a server working directory that cannot be represented as UTF-8 bec
 
 The implemented sandbox command, relay, built-in worker, and managed resolvers are supported only on macOS.
 The complete CI check runs on macOS.
-Linux and Windows are not supported.
+Linux and Windows have unsupported-platform paths but no working execution stack yet.
