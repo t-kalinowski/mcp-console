@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import last_result_text
 from support.client import McpClient
+from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.r import r_test_environment
 from support.records import Transcript
@@ -32,11 +33,11 @@ from support.resolvers import (
 )
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin", "linux"}
 
-
+@executions(DIRECT, SANDBOXED)
 def test_uses_current_r_library_for_managed_python_resolution(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
@@ -53,7 +54,7 @@ def test_uses_current_r_library_for_managed_python_resolution(
         environment["MCP_CONSOLE_TEST_R_LIBS_RECORD"] = str(r_libs_record)
         client = McpClient(
             binary,
-            ("serve",),
+            execution.serve(),
             environment,
             current_directory=temporary,
         )
@@ -124,7 +125,10 @@ def test_uses_current_r_library_for_managed_python_resolution(
         return client.finish()
 
 
-def test_validates_registry_only_python_requirements(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_validates_registry_only_python_requirements(
+    binary: Path, execution: Execution
+) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
         uv_record = temporary / "uv-environment.jsonl"
@@ -138,7 +142,7 @@ def test_validates_registry_only_python_requirements(binary: Path) -> Transcript
         environment["MCP_CONSOLE_TEST_UV_RECORD"] = str(uv_record)
         client = McpClient(
             binary,
-            ("serve",),
+            execution.serve(),
             environment,
             current_directory=temporary,
         )
@@ -362,7 +366,9 @@ def test_validates_registry_only_python_requirements(binary: Path) -> Transcript
         uv_record.write_text("", encoding="utf-8")
         # fmt: r
         r = code(rf"""
-            reticulate::py_require({json.dumps(runtime_rejected)})
+            reticulate::py_require({
+              json.dumps(runtime_rejected)
+            })
             invisible(reticulate::py_config())
             """)
         client.send(r=r)
@@ -386,7 +392,10 @@ def test_validates_registry_only_python_requirements(binary: Path) -> Transcript
         return json.loads(transcript_json)
 
 
-def test_recovers_from_python_version_resolution_failure(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_recovers_from_python_version_resolution_failure(
+    binary: Path, execution: Execution
+) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
         uv = Path(__file__).parents[3] / "fixtures" / "record_uv_environment"
@@ -400,7 +409,7 @@ def test_recovers_from_python_version_resolution_failure(binary: Path) -> Transc
         environment["MCP_CONSOLE_TEST_UV_FAILURE_MARKER"] = str(failure_marker)
         environment["MCP_CONSOLE_TEST_UV_FAILURE_ARGUMENT"] = "list"
 
-        client = McpClient(binary, ("serve",), environment)
+        client = McpClient(binary, execution.serve(), environment)
         client.initialize_and_list_tools()
         client.send(r="worker_pid <- Sys.getpid()")
         assert last_result_text(client) == "[done]"
@@ -425,11 +434,15 @@ def test_recovers_from_python_version_resolution_failure(binary: Path) -> Transc
         return client.finish()
 
 
-def test_resolves_python_version_inventory_semantics(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_resolves_python_version_inventory_semantics(
+    binary: Path, execution: Execution
+) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
         client, inventories, arguments = python_inventory_client(
             binary,
+            execution,
             temporary,
             resolver_python=Path(sys.executable),
         )
@@ -454,10 +467,13 @@ def test_resolves_python_version_inventory_semantics(binary: Path) -> Transcript
         return client.finish()
 
 
-def test_resolves_python_version_constraint_semantics(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_resolves_python_version_constraint_semantics(
+    binary: Path, execution: Execution
+) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
-        client, inventories, _ = python_inventory_client(binary, temporary)
+        client, inventories, _ = python_inventory_client(binary, execution, temporary)
 
         write_uv_python_inventories(
             inventories,
@@ -498,13 +514,16 @@ def test_resolves_python_version_constraint_semantics(binary: Path) -> Transcrip
         return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_falls_back_after_filtering_unsupported_python_versions(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
         client, inventories, arguments = python_inventory_client(
             binary,
+            execution,
             temporary,
             resolver_python=Path(sys.executable),
         )
@@ -541,8 +560,10 @@ def test_falls_back_after_filtering_unsupported_python_versions(
         return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_respects_system_python_preference_with_custom_install_directory(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
@@ -550,6 +571,7 @@ def test_respects_system_python_preference_with_custom_install_directory(
         install_directory.mkdir()
         client, inventories, arguments = python_inventory_client(
             binary,
+            execution,
             temporary,
             preference="system",
             install_directory=install_directory,
@@ -591,8 +613,10 @@ def test_respects_system_python_preference_with_custom_install_directory(
         return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_uses_reticulate_managed_uv_for_python_resolution(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
@@ -672,7 +696,7 @@ def test_uses_reticulate_managed_uv_for_python_resolution(
 
         client = McpClient(
             binary,
-            ("serve",),
+            execution.serve(),
             environment,
             current_directory=temporary,
         )
@@ -716,14 +740,17 @@ def test_uses_reticulate_managed_uv_for_python_resolution(
         return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_retains_managed_python_when_uv_caching_is_disabled(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
         resolver_record = temporary / "uv-resolver.jsonl"
         client, _, _ = python_inventory_client(
             binary,
+            execution,
             temporary,
             resolver_python=Path(sys.executable),
             resolver_record=resolver_record,
@@ -750,12 +777,16 @@ def test_retains_managed_python_when_uv_caching_is_disabled(
         return client.finish()
 
 
-def test_removes_disabled_uv_python_source_aliases(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_removes_disabled_uv_python_source_aliases(
+    binary: Path, execution: Execution
+) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
         resolver_record = temporary / "uv-resolver.jsonl"
         client, _, _ = python_inventory_client(
             binary,
+            execution,
             temporary,
             resolver_python=Path(sys.executable),
             resolver_record=resolver_record,
@@ -776,8 +807,10 @@ def test_removes_disabled_uv_python_source_aliases(binary: Path) -> Transcript:
         return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_interrupts_python_cache_warmup_without_committing(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
@@ -827,6 +860,7 @@ def test_interrupts_python_cache_warmup_without_committing(
         )
         client, _, arguments = python_inventory_client(
             binary,
+            execution,
             temporary,
             resolver_python=fake_python,
             extra_environment={
@@ -862,8 +896,10 @@ def test_interrupts_python_cache_warmup_without_committing(
         return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_stops_before_cache_warmup_after_python_resolver_interrupt(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
@@ -912,6 +948,7 @@ def test_stops_before_cache_warmup_after_python_resolver_interrupt(
         )
         client, _, arguments = python_inventory_client(
             binary,
+            execution,
             temporary,
             resolver_python=fake_python,
             extra_environment={

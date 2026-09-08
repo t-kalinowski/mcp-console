@@ -12,16 +12,18 @@ from support.assertions import (
 )
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient, stop_client
+from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.r import r_input_handler_client
 from support.records import Transcript
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin", "linux"}
 
-
-def test_routes_idle_and_timed_out_stdin(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_routes_idle_and_timed_out_stdin(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
 
     # fmt: r
@@ -73,8 +75,11 @@ def test_routes_idle_and_timed_out_stdin(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_routes_combined_and_followup_stdin(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     client.send(requirements={"r": ["DBI"]})
     assert last_tool_text(client) == "[prepared]"
@@ -150,8 +155,11 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_preserves_fd0_order_between_readers(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_preserves_fd0_order_between_readers(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = McpClient(binary, execution.serve())
     released = False
     finished = False
     checkpoints: list[FifoCheckpoint] = []
@@ -232,8 +240,11 @@ def test_preserves_fd0_order_between_readers(binary: Path) -> Transcript:
             stop_client(client)
 
 
-def test_preserves_utf8_across_console_reads(binary: Path) -> Transcript:
-    with r_input_handler_client(binary) as (client, _):
+@executions(DIRECT, SANDBOXED)
+def test_preserves_utf8_across_console_reads(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with r_input_handler_client(binary, execution) as (client, _):
         client.initialize_and_list_tools()
 
         # The four-byte native buffer splits the two-byte character across
@@ -277,8 +288,11 @@ def test_preserves_utf8_across_console_reads(binary: Path) -> Transcript:
         return client.finish()
 
 
-def test_keeps_stdin_open_after_partial_payload(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_keeps_stdin_open_after_partial_payload(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     client.send(requirements={"r": ["DBI"]})
     assert last_tool_text(client) == "[prepared]"

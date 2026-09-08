@@ -12,18 +12,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.capture import read_lines
 from support.checkpoints import FifoCheckpoint
+from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.processes import (
     capture_process_identity,
     kill_processes,
     live_processes,
 )
+from support.native import SHARED_LIBRARY_FLAG
+from support.native import LOADER_VARIABLE
 from support.records import Transcript
+from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, WORKER, requires
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin", "linux"}
-CASE_PLATFORMS = {"relay_protocol_is_independent_of_sandbox_launch": {"darwin"}}
 
-
+@requires(WORKER, PROCESS_EVENTS, NATIVE_FIXTURES)
 def test_retires_while_descendant_keeps_refilling_output(binary: Path) -> Transcript:
     fixtures = Path(__file__).resolve().parents[3] / "fixtures"
     transcript: Transcript = []
@@ -33,7 +35,7 @@ def test_retires_while_descendant_keeps_refilling_output(binary: Path) -> Transc
         subprocess.run(
             [
                 "cc",
-                "-dynamiclib" if sys.platform == "darwin" else "-shared",
+                SHARED_LIBRARY_FLAG,
                 "-fPIC",
                 "-std=c11",
                 "-Wall",
@@ -61,9 +63,7 @@ def test_retires_while_descendant_keeps_refilling_output(binary: Path) -> Transc
             }
             environment = os.environ.copy()
             environment["TMPDIR"] = str(root)
-            environment[
-                "DYLD_INSERT_LIBRARIES" if sys.platform == "darwin" else "LD_PRELOAD"
-            ] = str(interposer)
+            environment[LOADER_VARIABLE] = str(interposer)
             environment["MCP_CONSOLE_TEST_REFILL_MATCH"] = (
                 '{"kind":"console_output","data":"descendant output\\n"}\n'
                 if stream == "sideband"
@@ -158,63 +158,62 @@ def test_retires_while_descendant_keeps_refilling_output(binary: Path) -> Transc
     return transcript
 
 
-def test_relay_protocol_is_independent_of_sandbox_launch(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_relay_protocol_is_independent_of_sandbox_launch(
+    binary: Path, execution: Execution
+) -> Transcript:
     worker = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     transcript: Transcript = []
-    for sandboxed in (False, True):
-        with tempfile.TemporaryDirectory() as directory:
-            environment = os.environ.copy()
-            environment["TMPDIR"] = directory
-            target = [str(binary), "worker-relay", sys.executable, str(worker)]
-            command = [str(binary), "sandbox", "--", *target] if sandboxed else target
-            process = subprocess.Popen(
-                command,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                env=environment,
+    with tempfile.TemporaryDirectory() as directory:
+        environment = os.environ.copy()
+        environment["TMPDIR"] = directory
+        command = execution.command(binary, "worker-relay", sys.executable, str(worker))
+        process = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=environment,
+        )
+        try:
+            if execution == DIRECT:
+                assert os.getpgid(process.pid) == os.getpgrp()
+            assert process.stdin is not None and process.stdout is not None
+            events = [
+                json.loads(line) for line in read_lines(process.stdout, 1, "ready")
+            ]
+            assert events == [{"kind": "ready"}], events
+            evaluate = {"kind": "evaluate", "language": "r", "source": "echo hello"}
+            process.stdin.write(json.dumps(evaluate) + "\n")
+            process.stdin.flush()
+            events.extend(
+                json.loads(line)
+                for line in read_lines(process.stdout, 3, "evaluation completion")
             )
-            try:
-                if not sandboxed:
-                    assert os.getpgid(process.pid) == os.getpgrp()
-                assert process.stdin is not None and process.stdout is not None
-                events = [
-                    json.loads(line) for line in read_lines(process.stdout, 1, "ready")
-                ]
-                assert events == [{"kind": "ready"}], events
-                evaluate = {"kind": "evaluate", "language": "r", "source": "echo hello"}
-                process.stdin.write(json.dumps(evaluate) + "\n")
-                process.stdin.flush()
-                events.extend(
-                    json.loads(line)
-                    for line in read_lines(process.stdout, 3, "evaluation completion")
-                )
-                shutdown = {"kind": "shutdown", "grace_millis": 1000}
-                stdout, stderr = process.communicate(
-                    json.dumps(shutdown) + "\n", timeout=10
-                )
-                events.extend(json.loads(line) for line in stdout.splitlines())
-                assert process.returncode == 0, stderr
-                assert stderr == "", stderr
-                assert events == [
-                    {"kind": "ready"},
-                    {"kind": "console_output", "data": "zod: "},
-                    {"kind": "console_output", "data": "hello\n"},
-                    {"kind": "completed"},
-                    {"kind": "shutdown_started"},
-                    {"kind": "stdout_closed"},
-                    {"kind": "stderr_closed"},
-                    {"kind": "worker_sideband_closed"},
-                    {"kind": "worker_exited", "code": 0},
-                ], events
-                transcript.append(
-                    {"launch": "sandbox" if sandboxed else "direct", "events": events}
-                )
-            finally:
-                if process.poll() is None:
-                    process.kill()
-                process.communicate(timeout=10)
+            shutdown = {"kind": "shutdown", "grace_millis": 1000}
+            stdout, stderr = process.communicate(
+                json.dumps(shutdown) + "\n", timeout=10
+            )
+            events.extend(json.loads(line) for line in stdout.splitlines())
+            assert process.returncode == 0, stderr
+            assert stderr == "", stderr
+            assert events == [
+                {"kind": "ready"},
+                {"kind": "console_output", "data": "zod: "},
+                {"kind": "console_output", "data": "hello\n"},
+                {"kind": "completed"},
+                {"kind": "shutdown_started"},
+                {"kind": "stdout_closed"},
+                {"kind": "stderr_closed"},
+                {"kind": "worker_sideband_closed"},
+                {"kind": "worker_exited", "code": 0},
+            ], events
+            transcript.append({"events": events})
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.communicate(timeout=10)
     return transcript
 
 

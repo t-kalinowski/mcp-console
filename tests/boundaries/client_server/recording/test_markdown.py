@@ -10,18 +10,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import assert_result_content
 from support.client import McpClient
+from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.r import r_test_environment, reference_plots
 from support.records import Transcript, TranscriptWithCompanions
+from support.requirements import command, requires
 from support.suites import run_this_suite
 
 
-PLATFORMS = {"darwin", "linux"}
-REQUIRED_COMMANDS = {"yamark"}
-
-
+@executions(DIRECT, SANDBOXED)
 def test_records_real_mixed_language_session(
     binary: Path,
+    execution: Execution,
 ) -> TranscriptWithCompanions:
     with tempfile.TemporaryDirectory() as temporary_directory:
         workspace = Path(temporary_directory)
@@ -29,7 +29,7 @@ def test_records_real_mixed_language_session(
         environment.pop("RETICULATE_PYTHON", None)
         client = McpClient(
             binary,
-            ("serve",),
+            execution.serve(),
             environment,
             current_directory=workspace,
         )
@@ -124,13 +124,17 @@ def test_records_real_mixed_language_session(
         )
 
 
-def test_emits_yamark_formatted_documents(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+@requires(command("yamark"))
+def test_emits_yamark_formatted_documents(
+    binary: Path, execution: Execution
+) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         workspace = Path(temporary_directory)
         client = McpClient(
             binary,
-            ("serve", "--worker", str(zod)),
+            execution.serve("--worker", str(zod)),
             current_directory=workspace,
         )
         client.initialize_and_list_tools()

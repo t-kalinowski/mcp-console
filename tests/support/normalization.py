@@ -1,6 +1,9 @@
 import re
 from textwrap import dedent
 
+from support.assertions import last_tool_text
+from support.client import McpClient
+
 
 def code(source: str) -> str:
     return dedent(source).removeprefix("\n")
@@ -48,3 +51,25 @@ def normalize_python_traceback_paths(error: str) -> str:
         error = re.sub(pattern, replacement, error)
     assert re.search(r'(?m)^\s+File "/', error) is None, error
     return error
+
+
+def normalize_duckdb_progress(client: McpClient) -> str:
+    output = last_tool_text(client)
+    sections = output.split("\r")
+    assert all(
+        not section.strip() or section.startswith("DuckDB progress:")
+        for section in sections[:-1]
+    ), output
+    output = sections[-1]
+    client.transcript[-1]["result"]["content"][0]["text"] = output
+    return normalize_trailing_spaces(client)
+
+
+def normalize_trailing_spaces(client: McpClient) -> str:
+    output = last_tool_text(client)
+    trailing_newline = output.endswith("\n")
+    output = "\n".join(line.rstrip() for line in output.splitlines())
+    if trailing_newline:
+        output += "\n"
+    client.transcript[-1]["result"]["content"][0]["text"] = output
+    return output

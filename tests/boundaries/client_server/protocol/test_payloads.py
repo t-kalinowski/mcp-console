@@ -8,14 +8,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import last_tool_text
 from support.client import McpClient
+from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.records import Transcript
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin", "linux"}
 
-
-def test_accepts_long_multibyte_source_lines(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_accepts_long_multibyte_source_lines(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     long_value = "é" * 100_000
     assert len(long_value) == 100_000

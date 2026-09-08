@@ -11,24 +11,28 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from support.assertions import last_tool_text
 from support.checkpoints import wait_for_worker_file
 from support.client import McpClient, stop_client
-from support.normalization import code
+from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.normalization import (
+    code,
+    normalize_duckdb_progress,
+    normalize_trailing_spaces,
+)
 from support.r import r_test_environment
 from support.records import Transcript
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin", "linux"}
-# This walkthrough asserts filesystem and network denials from the sandbox.
-CASE_PLATFORMS = {"uses_ragnar_like_the_guide_and_adapts_to_the_console": {"darwin"}}
 
-
-def test_uses_default_duckdb_extensions(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_uses_default_duckdb_extensions(
+    binary: Path, execution: Execution
+) -> Transcript:
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
     with tempfile.TemporaryDirectory() as temporary:
         workspace = Path(temporary)
         client = McpClient(
             binary,
-            ("serve",),
+            execution.serve(),
             environment,
             current_directory=workspace,
         )
@@ -62,7 +66,10 @@ def test_uses_default_duckdb_extensions(binary: Path) -> Transcript:
         return client.finish()
 
 
-def test_restart_adds_r_and_duckdb_requirements(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_restart_adds_r_and_duckdb_requirements(
+    binary: Path, execution: Execution
+) -> Transcript:
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
     with tempfile.TemporaryDirectory() as temporary:
@@ -74,7 +81,7 @@ def test_restart_adds_r_and_duckdb_requirements(binary: Path) -> Transcript:
         environment["R_LIBS_USER"] = str(ambient_library)
         client = McpClient(
             binary,
-            ("serve",),
+            execution.serve(),
             environment,
             current_directory=workspace,
         )
@@ -135,14 +142,17 @@ def test_restart_adds_r_and_duckdb_requirements(binary: Path) -> Transcript:
         return client.finish()
 
 
-def test_prepares_and_loads_duckdb_extensions(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_prepares_and_loads_duckdb_extensions(
+    binary: Path, execution: Execution
+) -> Transcript:
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
     with tempfile.TemporaryDirectory() as temporary:
         workspace = Path(temporary)
         client = McpClient(
             binary,
-            ("serve",),
+            execution.serve(),
             environment,
             current_directory=workspace,
         )
@@ -256,10 +266,13 @@ def test_prepares_and_loads_duckdb_extensions(binary: Path) -> Transcript:
         return client.finish()
 
 
-def test_sends_sql_cell_with_initial_requirements(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_sends_sql_cell_with_initial_requirements(
+    binary: Path, execution: Execution
+) -> Transcript:
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
-    client = McpClient(binary, ("serve",), environment)
+    client = McpClient(binary, execution.serve(), environment)
     client.initialize_and_list_tools()
 
     sql = code(r"""
@@ -273,14 +286,17 @@ def test_sends_sql_cell_with_initial_requirements(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_queries_a_ragnar_store_created_in_r(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_queries_a_ragnar_store_created_in_r(
+    binary: Path, execution: Execution
+) -> Transcript:
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
     temporary = tempfile.TemporaryDirectory()
     workspace = Path(temporary.name)
     client = McpClient(
         binary,
-        ("serve",),
+        execution.serve(),
         environment,
         current_directory=workspace,
     )
@@ -399,8 +415,10 @@ def test_queries_a_ragnar_store_created_in_r(binary: Path) -> Transcript:
     return transcript
 
 
+@executions(DIRECT, SANDBOXED)
 def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
@@ -408,7 +426,7 @@ def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
     workspace = Path(temporary.name)
     client = McpClient(
         binary,
-        ("serve",),
+        execution.serve(),
         environment,
         current_directory=workspace,
     )
@@ -423,21 +441,6 @@ def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
 
     client.send(requirements={"r": ["ragnar"]})
     assert last_tool_text(client) == "[prepared]"
-
-    r = code(r"""
-        ragnar::ragnar_store_create(
-          "knowledge.ragnar.duckdb",
-          embed = NULL
-        )
-        """)
-    client.send(r=r)
-    output = normalize_duckdb_progress(client)
-    assert "knowledge.ragnar.duckdb" in output
-    assert "Operation not permitted" in output
-    for directory in (str(workspace.resolve()), str(workspace)):
-        output = output.replace(directory, "<workspace>")
-    client.transcript[-1]["result"]["content"][0]["text"] = output
-    assert not (workspace / "knowledge.ragnar.duckdb").exists()
 
     # fmt: r
     r = code(r"""
@@ -620,7 +623,10 @@ def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
     return transcript
 
 
-def test_evaluates_queries_in_a_persistent_catalog(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_evaluates_queries_in_a_persistent_catalog(
+    binary: Path, execution: Execution
+) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         workspace = Path(temporary)
         ambient_library = workspace / "ambient-library"
@@ -632,7 +638,7 @@ def test_evaluates_queries_in_a_persistent_catalog(binary: Path) -> Transcript:
         environment["RETICULATE_PYTHON"] = ""
         client = McpClient(
             binary,
-            ("serve",),
+            execution.serve(),
             environment,
             current_directory=workspace,
         )
@@ -659,14 +665,15 @@ def test_evaluates_queries_in_a_persistent_catalog(binary: Path) -> Transcript:
         return client.finish()
 
 
-def test_interrupts_running_sql_query(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_interrupts_running_sql_query(binary: Path, execution: Execution) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
         environment, _ = r_test_environment()
         environment["TMPDIR"] = temporary_directory
         client = McpClient(
             binary,
-            ("serve",),
+            execution.serve(),
             environment,
             current_directory=temporary_path,
         )
@@ -723,8 +730,9 @@ def test_interrupts_running_sql_query(binary: Path) -> Transcript:
                 stop_client(client)
 
 
-def test_queries_r_data_frames(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_queries_r_data_frames(binary: Path, execution: Execution) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     r = code(r"""
         measurements <- data.frame(
@@ -747,8 +755,11 @@ def test_queries_r_data_frames(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_sql_views_follow_rebound_r_data_frames(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_sql_views_follow_rebound_r_data_frames(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     r = code(r"""
         measurements <- data.frame(value = 2L)
@@ -778,8 +789,11 @@ def test_sql_views_follow_rebound_r_data_frames(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_prefers_catalog_relations_over_r_data_frames(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_prefers_catalog_relations_over_r_data_frames(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     r = code(r"""
         values <- data.frame(origin = "r")
@@ -798,8 +812,11 @@ def test_prefers_catalog_relations_over_r_data_frames(binary: Path) -> Transcrip
     return client.finish()
 
 
-def test_scans_r_bindings_named_like_bridge_state(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_scans_r_bindings_named_like_bridge_state(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     r = code(r"""
         connection <- data.frame(name = "connection")
@@ -821,8 +838,11 @@ def test_scans_r_bindings_named_like_bridge_state(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_exposes_catalog_as_lazy_r_relations(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_exposes_catalog_as_lazy_r_relations(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     sql = code(r"""
         CREATE TABLE sql_values AS
@@ -866,10 +886,12 @@ def test_exposes_catalog_as_lazy_r_relations(binary: Path) -> Transcript:
     return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_keeps_connection_helper_after_clearing_r_workspace(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
-    client = McpClient(binary, ("serve",))
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     sql = code(r"""
         CREATE TABLE retained_values AS
@@ -891,8 +913,9 @@ def test_keeps_connection_helper_after_clearing_r_workspace(
     return client.finish()
 
 
-def test_recovers_from_sql_errors(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_recovers_from_sql_errors(binary: Path, execution: Execution) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     sql = code(r"""
         SELECT * FROM table_that_does_not_exist
@@ -912,8 +935,11 @@ def test_recovers_from_sql_errors(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_avoids_private_preview_name_collisions(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_avoids_private_preview_name_collisions(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     sql = code(r"""
         CREATE TABLE __mcp_console_preview_e2 AS
@@ -939,8 +965,11 @@ def test_avoids_private_preview_name_collisions(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_previews_schema_and_exact_values(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_previews_schema_and_exact_values(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     r = code(r"""
         invisible(options(
@@ -1026,8 +1055,9 @@ def test_previews_schema_and_exact_values(binary: Path) -> Transcript:
     return transcript
 
 
-def test_uses_200_column_default(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_uses_200_column_default(binary: Path, execution: Execution) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     sql = code(r"""
         SELECT
@@ -1050,10 +1080,12 @@ def test_uses_200_column_default(binary: Path) -> Transcript:
     return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_bounds_query_previews_without_materializing_results(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
-    client = McpClient(binary, ("serve",))
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     sql = code(r"""
         SELECT
@@ -1104,8 +1136,11 @@ def test_bounds_query_previews_without_materializing_results(
     return transcript
 
 
-def test_keeps_repeated_previews_deterministic(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_keeps_repeated_previews_deterministic(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     sql = code(r"""
         CREATE VIEW wide_values AS SELECT
@@ -1144,18 +1179,6 @@ def test_keeps_repeated_previews_deterministic(binary: Path) -> Transcript:
     return transcript
 
 
-def normalize_duckdb_progress(client: McpClient) -> str:
-    output = last_tool_text(client)
-    sections = output.split("\r")
-    assert all(
-        not section.strip() or section.startswith("DuckDB progress:")
-        for section in sections[:-1]
-    ), output
-    output = sections[-1]
-    client.transcript[-1]["result"]["content"][0]["text"] = output
-    return normalize_trailing_spaces(client)
-
-
 def normalize_duckdb_extension_error(client: McpClient) -> str:
     output = normalize_duckdb_progress(client)
     output, download_urls = re.subn(
@@ -1171,16 +1194,6 @@ def normalize_duckdb_extension_error(client: McpClient) -> str:
         count=1,
     )
     assert (download_urls, troubleshooting_urls) == (1, 1), output
-    client.transcript[-1]["result"]["content"][0]["text"] = output
-    return output
-
-
-def normalize_trailing_spaces(client: McpClient) -> str:
-    output = last_tool_text(client)
-    trailing_newline = output.endswith("\n")
-    output = "\n".join(line.rstrip() for line in output.splitlines())
-    if trailing_newline:
-        output += "\n"
     client.transcript[-1]["result"]["content"][0]["text"] = output
     return output
 

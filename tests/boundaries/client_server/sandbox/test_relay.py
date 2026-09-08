@@ -9,18 +9,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import last_tool_text
 from support.client import McpClient, stop_client
+from support.execution import SANDBOXED
 from support.macos import (
     capture_darwin_process_identity,
+    darwin_child_process_identities,
     kill_darwin_processes,
     live_darwin_processes,
 )
 from support.normalization import code
 from support.records import Transcript
+from support.requirements import PROCESS_EVENTS, SANDBOX, requires
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
 
-
+@requires(SANDBOX, PROCESS_EVENTS)
 def test_restart_and_shutdown_with_relay_below_sandbox_root(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         wrapper = Path(directory) / "relay-wrapper"
@@ -57,7 +59,7 @@ def test_restart_and_shutdown_with_relay_below_sandbox_root(binary: Path) -> Tra
         environment["MCP_CONSOLE_TEST_BINARY"] = str(binary)
         client = McpClient(
             binary,
-            ("serve", "--worker", str(worker), "--relay", str(wrapper)),
+            SANDBOXED.serve("--worker", str(worker), "--relay", str(wrapper)),
             environment,
         )
         identities = []
@@ -78,6 +80,13 @@ def test_restart_and_shutdown_with_relay_below_sandbox_root(binary: Path) -> Tra
                 root, relay, worker_pid, descendant = map(int, processes.split())
                 assert root != relay, "relay unexpectedly replaced the sandbox root"
                 assert os.getpgid(relay) == root
+                root_identity = capture_darwin_process_identity(root)
+                (wrapper_identity,) = darwin_child_process_identities(root_identity)
+                assert wrapper_identity[0] != relay
+                assert darwin_child_process_identities(wrapper_identity) == (
+                    capture_darwin_process_identity(relay),
+                )
+                identities.append(wrapper_identity)
                 identities.extend(
                     capture_darwin_process_identity(pid)
                     for pid in (root, relay, worker_pid, descendant)

@@ -21,7 +21,7 @@ pub(super) fn terminate_unmanaged_child(
             error,
             format!(
                 "failed to stop `{}` process group: {group_error}",
-                platform::SANDBOX_EXEC
+                platform::RUNNER_NAME
             ),
         );
     }
@@ -35,7 +35,7 @@ pub(super) fn terminate_unmanaged_child(
     {
         error = append_retirement_error(
             error,
-            format!("failed to stop `{}`: {kill_error}", platform::SANDBOX_EXEC),
+            format!("failed to stop `{}`: {kill_error}", platform::RUNNER_NAME),
         );
     }
     if !exited {
@@ -50,7 +50,7 @@ pub(super) fn terminate_unmanaged_child(
                         error,
                         format!(
                             "failed to wait for `{}` to exit before reaping it: {wait_error}",
-                            platform::SANDBOX_EXEC
+                            platform::RUNNER_NAME
                         ),
                     ),
                     identity_released: wait_error.raw_os_error() == Some(libc::ECHILD),
@@ -64,7 +64,7 @@ pub(super) fn terminate_unmanaged_child(
                 error,
                 format!(
                     "failed to reap `{}`: process remained live after {} ms",
-                    platform::SANDBOX_EXEC,
+                    platform::RUNNER_NAME,
                     DIRECT_CHILD_CLEANUP_TIMEOUT.as_millis()
                 ),
             ),
@@ -79,7 +79,7 @@ pub(super) fn terminate_unmanaged_child(
         Err(wait_error) => UnmanagedChildCleanup {
             error: append_retirement_error(
                 error,
-                format!("failed to reap `{}`: {wait_error}", platform::SANDBOX_EXEC),
+                format!("failed to reap `{}`: {wait_error}", platform::RUNNER_NAME),
             ),
             identity_released: wait_error.raw_os_error() == Some(libc::ECHILD),
         },
@@ -110,7 +110,7 @@ pub(super) fn terminate_standalone_root(
         Err(error) => {
             return Err(format!(
                 "failed to read {} status during termination: {error}",
-                platform::SANDBOX_EXEC
+                platform::RUNNER_NAME
             ));
         }
     }
@@ -120,7 +120,7 @@ pub(super) fn terminate_standalone_root(
     {
         return Err(format!(
             "failed to terminate direct {} process: {error}{}",
-            platform::SANDBOX_EXEC,
+            platform::RUNNER_NAME,
             group_error_suffix(&group_error)
         ));
     }
@@ -129,14 +129,14 @@ pub(super) fn terminate_standalone_root(
         platform::wait_for_process_exit_without_reaping(child.id(), timeout).map_err(|error| {
             format!(
                 "failed to inspect `{}` exit status: {error}{}",
-                platform::SANDBOX_EXEC,
+                platform::RUNNER_NAME,
                 group_error_suffix(&group_error)
             )
         })?;
     if !exited {
         return Err(format!(
             "timed out waiting for terminated {}{}",
-            platform::SANDBOX_EXEC,
+            platform::RUNNER_NAME,
             group_error_suffix(&group_error)
         ));
     }
@@ -144,7 +144,7 @@ pub(super) fn terminate_standalone_root(
     let status = child.wait().map_err(|error| {
         format!(
             "failed to wait for terminated {}: {error}{}",
-            platform::SANDBOX_EXEC,
+            platform::RUNNER_NAME,
             group_error_suffix(&group_error)
         )
     })?;

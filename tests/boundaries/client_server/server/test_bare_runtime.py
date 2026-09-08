@@ -1,7 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
 import json
-import os
 import sys
 import tempfile
 from pathlib import Path
@@ -10,37 +9,29 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import last_result_text
 from support.client import McpClient
+from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.r import r_test_environment
 from support.records import TranscriptWithCompanions
+from support.resolvers import bare_runtime_environment
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin", "linux"}
 
-
-def test_runs_without_a_resolver_bootstrap(binary: Path) -> TranscriptWithCompanions:
+@executions(DIRECT, SANDBOXED)
+def test_runs_without_a_resolver_bootstrap(
+    binary: Path, execution: Execution
+) -> TranscriptWithCompanions:
     environment, _ = r_test_environment()
-    path = environment.get("PATH")
-    assert path is not None, "PATH is required"
-    environment["PATH"] = os.pathsep.join(
-        entry
-        for entry in path.split(os.pathsep)
-        if not any((Path(entry) / name).exists() for name in ("ir", "uv", "uvx"))
-    )
-    environment.pop("RETICULATE_UV", None)
-    environment.pop("RETICULATE_PYTHON", None)
 
     with tempfile.TemporaryDirectory() as temporary:
         workspace = Path(temporary)
         library = workspace / "library"
         library.mkdir()
-        environment["R_LIBS"] = str(library)
-        environment["R_LIBS_SITE"] = str(library)
-        environment["R_LIBS_USER"] = str(library)
+        environment = bare_runtime_environment(environment, library)
 
         client = McpClient(
             binary,
-            ("serve",),
+            execution.serve(),
             environment,
             current_directory=workspace,
         )
@@ -95,7 +86,6 @@ def test_runs_without_a_resolver_bootstrap(binary: Path) -> TranscriptWithCompan
         quarto = quarto.replace(str(workspace.resolve()), "<workspace>")
         return TranscriptWithCompanions(
             transcript=transcript,
-            platform="linux" if sys.platform == "linux" else None,
             companions={
                 "events.yaml": [
                     {

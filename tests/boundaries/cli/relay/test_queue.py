@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import select
 import signal
 import subprocess
 import sys
@@ -18,11 +17,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from boundaries.cli.relay.test_backpressure import send, stdout_backpressure_environment
 from support.capture import read_lines
 from support.checkpoints import FifoCheckpoint
+from support.events import Events
 from support.records import Transcript
+from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, WORKER, requires
 from support.suites import run_this_suite
 
-# Its native checkpoint interposes pthread_cond_wait; Linux Rust uses futexes.
-PLATFORMS = {"darwin"}
 MEBIBYTE = 1024 * 1024
 READY = b'{"kind":"ready"}\n'
 
@@ -41,7 +40,7 @@ def output_frame(index: int, size: int) -> str:
 class QueuedRelay:
     process: subprocess.Popen[str]
     checkpoints: dict[str, FifoCheckpoint]
-    worker_exit: select.kqueue
+    worker_exit: Events
     consumed_bytes: int
     consumed_frames: int
 
@@ -91,20 +90,14 @@ def queued_relay(
             env=environment,
             start_new_session=True,
         )
-        worker_exit = select.kqueue()
+        worker_exit = Events()
         try:
             assert process.stdout is not None
             assert read_lines(process.stdout, 1, "relay ready") == [
                 READY.decode().rstrip()
             ]
             worker_pid = int((root / "worker-pid").read_text())
-            watch = select.kevent(
-                worker_pid,
-                filter=select.KQ_FILTER_PROC,
-                flags=select.KQ_EV_ADD | select.KQ_EV_ONESHOT,
-                fflags=select.KQ_NOTE_EXIT,
-            )
-            assert worker_exit.control([watch], 0, 0) == []
+            worker_exit.watch_process(worker_pid)
             send(
                 process,
                 {"kind": "evaluate", "language": "r", "source": "queued output"},
@@ -141,8 +134,8 @@ def interrupt_and_shutdown(relay: QueuedRelay, first_size: int) -> Transcript:
     relay.checkpoints["worker-shutdown"].wait(
         "worker accepted shutdown while queue is full"
     )
-    observed = relay.worker_exit.control(None, 1, 3)
-    assert len(observed) == 1 and observed[0].fflags & select.KQ_NOTE_EXIT, observed
+    observed = relay.worker_exit.wait(3)
+    assert len(observed) == 1, observed
     assert relay.process.wait(timeout=5) == 1
     stdout, stderr = relay.process.communicate(timeout=5)
     assert stdout and output_frame(0, first_size).startswith(stdout), stdout
@@ -163,6 +156,7 @@ def interrupt_and_shutdown(relay: QueuedRelay, first_size: int) -> Transcript:
     ]
 
 
+@requires(WORKER, NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_backpressures_worker_when_relay_event_bytes_are_full(
     binary: Path,
 ) -> Transcript:
@@ -172,6 +166,7 @@ def test_backpressures_worker_when_relay_event_bytes_are_full(
         return interrupt_and_shutdown(relay, MEBIBYTE)
 
 
+@requires(WORKER, NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_backpressures_worker_when_relay_event_count_is_full(
     binary: Path,
 ) -> Transcript:
@@ -181,6 +176,7 @@ def test_backpressures_worker_when_relay_event_count_is_full(
         return interrupt_and_shutdown(relay, MEBIBYTE)
 
 
+@requires(WORKER, NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_preserves_oversized_frames_when_relay_output_resumes(
     binary: Path,
 ) -> Transcript:

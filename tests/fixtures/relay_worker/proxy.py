@@ -1,7 +1,7 @@
-#!/usr/bin/env -S UV_CACHE_DIR=${TMPDIR}/uv-cache uv run --script
-# /// script
-# requires-python = ">=3.11"
-# ///
+#!/bin/sh
+""":"
+exec "${MCP_CONSOLE_TEST_PYTHON:?}" "$0" "$@"
+":"""
 
 import codecs
 import errno
@@ -10,13 +10,9 @@ import os
 import select
 import socket
 import subprocess
-import sys
+import tempfile
 from pathlib import Path
 from typing import Any, BinaryIO, TextIO
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import fixture_directory
-
 
 SIDEBAND_FD_ENV = "MCP_CONSOLE_SIDEBAND_FD"
 WORKER_ENV = "MCP_CONSOLE_MITM_WORKER"
@@ -200,7 +196,6 @@ def proxy(
 
 
 def main() -> None:
-    temporary = fixture_directory.configure()
     relay = take_sideband()
     proxy_endpoint, worker_endpoint = socket.socketpair()
     environment = os.environ.copy()
@@ -222,8 +217,12 @@ def main() -> None:
     assert process.stdout is not None
     assert process.stderr is not None
 
-    capture_path = temporary / CAPTURE_NAME
-    with capture_path.open("w", encoding="utf-8") as capture:
+    with (
+        tempfile.TemporaryDirectory(
+            prefix="worker-wire-", dir=os.environ["TMPDIR"]
+        ) as directory,
+        Path(directory, CAPTURE_NAME).open("w", encoding="utf-8") as capture,
+    ):
         proxy(
             relay,
             proxy_endpoint,

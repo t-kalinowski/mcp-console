@@ -1,6 +1,6 @@
 [package]
 name = "mcp-console"
-version = "0.0.2"
+version = "0.0.3"
 edition = "2024"
 rust-version = "1.95"
 description = "Persistent R, Python, and SQL sessions for MCP clients"
@@ -28,10 +28,13 @@ rust-embed = { version = "8.11", features = ["debug-embed"] }
 semver = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.11"
 tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
 
 [build-dependencies]
 cc = "1"
+serde_json = "1"
+sha2 = "0.11"
 
 [profile.release]
 strip = true

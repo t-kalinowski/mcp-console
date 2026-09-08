@@ -1,10 +1,7 @@
-#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod reticulate;
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
 const RUNTIME_SOURCE: &str = include_str!("python/runtime.py");
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[derive(serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum PreparationOutcome {
@@ -20,17 +17,14 @@ pub(crate) enum PreparationOutcome {
 /// Rust owns the selected interpreter library, initialization, and private
 /// evaluator source, while the current backend delegates object conversion and
 /// evaluation dispatch to reticulate.
-#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) struct Runtime(reticulate::Runtime);
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) enum SqlProvider {
     R,
     Managed,
     Handled,
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) fn configure_worker_environment(
     temporary_directory: &std::path::Path,
 ) -> std::io::Result<()> {
@@ -38,7 +32,6 @@ pub(crate) fn configure_worker_environment(
     reticulate::configure_worker_environment()
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
 impl Runtime {
     pub(crate) fn initialize() -> Result<Self, String> {
         reticulate::Runtime::initialize().map(Self)
@@ -53,22 +46,19 @@ impl Runtime {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) fn install_sql_runtime(source: &str) -> Result<(), String> {
     library::install_sql_runtime(source)
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) fn dispatch_sql(source: &str) -> Result<SqlProvider, String> {
     library::dispatch_sql(source)
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) fn use_r_sql() -> Result<(), String> {
     library::use_r_sql()
 }
 
-#[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
+#[cfg(test)]
 mod tests {
     use super::PreparationOutcome;
 
@@ -84,10 +74,8 @@ mod tests {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod library;
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod platform {
     use std::ffi::{CStr, CString};
     use std::fs;
@@ -222,5 +210,4 @@ mod platform {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) use platform::link_matplotlib_caches;

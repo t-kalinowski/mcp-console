@@ -20,13 +20,17 @@ relay:
   source: |
     import os
     import sys
-
-    assert fork_ready
     import warnings
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        child = os.fork()
+    # The client-server fork-resolution case preserves CPython's complete
+    # deprecation diagnostic. This cell selects only the four stream writes.
+    warnings.filterwarnings(
+        "ignore",
+        message=r"This process \(pid=\d+\) is multi-threaded, use of fork\(\) may lead to deadlocks in the child\.$",
+        category=DeprecationWarning,
+    )
+    assert fork_ready
+    child = os.fork()
     if child == 0:
         print("fork child stdout", flush=True)
         sys.stderr.write("fork child stderr\n")

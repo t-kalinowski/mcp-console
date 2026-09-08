@@ -22,7 +22,7 @@ MCP Console runs on macOS and Linux.
 Linux currently requires `serve --no-sandbox`; Windows is not supported.
 The release workflow builds native wheels for Apple Silicon and Intel macOS and for ARM64 and x86-64 Linux.
 Linux wheels require glibc 2.39 or later; building from source uses the host glibc.
-Linux execution requires kernel 5.11 or later.
+On older Linux kernels, inherited-descriptor cleanup requires `/proc` to be mounted.
 
 A working R installation is required.
 Set `R_HOME` or make `R` discoverable on `PATH`.
@@ -53,7 +53,7 @@ On Linux, add `--no-sandbox` to the `serve` command:
 mcp-console serve --no-sandbox
 ```
 
-To build and run the current source:
+To build and run the current source on Linux:
 
 ```sh
 cargo build --release
@@ -141,6 +141,7 @@ Render only code you trust.
 Run development commands from the repository root:
 
 ```text
+scripts/stage-sandbox-runner /path/to/pinned-source-checkout
 scripts/format
 scripts/check
 scripts/test [BOUNDARY/SUITE[::CASE]]
@@ -148,6 +149,7 @@ scripts/test --list
 scripts/test --update BOUNDARY/SUITE[::CASE]
 ```
 
+Stage the private sandbox executable before the first macOS build or after changing the source pin; [RELEASE.md](RELEASE.md) describes the required checkout and toolchain.
 See [AGENTS.md](https://github.com/t-kalinowski/mcp-console/blob/main/AGENTS.md) for development rules and the repository map, and the [boundary test guide](https://github.com/t-kalinowski/mcp-console/blob/main/tests/boundaries/README.md) for test selection and snapshot updates.
 The standalone `mcp-console sandbox -- COMMAND [ARG]...` command is also available for development on macOS; [macOS sandbox supervision](https://github.com/t-kalinowski/mcp-console/blob/main/docs/SANDBOX_SUPERVISION.md) defines its lifecycle, terminal behavior, and limitations.
 

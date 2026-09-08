@@ -3,12 +3,13 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
+from support.native import LOADER_VARIABLE, build_interposer
 from support.assertions import last_result_text
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
+from support.execution import Execution
 from support.normalization import code
 from support.r import r_test_environment
 
@@ -60,27 +61,6 @@ def checkpoint_uv_environment(
             modules / f"{module}.py"
         )
     return environment, started, release
-
-
-def build_killpg_denial_interposer(directory: Path) -> Path:
-    source = directory / "deny-killpg.c"
-    library = directory / "deny-killpg.dylib"
-    fixture = FIXTURES / "native" / "killpg_denial_interposer.c"
-    shutil.copyfile(fixture, source)
-    subprocess.run(
-        [
-            "cc",
-            "-dynamiclib" if sys.platform == "darwin" else "-shared",
-            "-fPIC",
-            "-o",
-            library,
-            source,
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return library
 
 
 def record_resolved_r_library(environment: dict[str, str], directory: Path) -> None:
@@ -157,9 +137,9 @@ def resolver_interrupt_permission_environment(
     environment["MCP_CONSOLE_TEST_RESOLVER_LIFETIME"] = str(resolver_lifetime.path)
     # The interposer removes its loader variable after reaching the server, so
     # the resolver and Zod do not inherit it.
-    environment[
-        "DYLD_INSERT_LIBRARIES" if sys.platform == "darwin" else "LD_PRELOAD"
-    ] = str(build_killpg_denial_interposer(temporary_path))
+    environment[LOADER_VARIABLE] = str(
+        build_interposer(temporary_path, "killpg_denial_interposer")
+    )
     return (
         environment,
         resolver_started,
@@ -231,8 +211,25 @@ def matplotlib_test_environment(cache_home: Path) -> dict[str, str]:
     return environment
 
 
+def bare_runtime_environment(
+    environment: dict[str, str], library: Path
+) -> dict[str, str]:
+    environment = environment.copy()
+    environment["PATH"] = os.pathsep.join(
+        entry
+        for entry in environment["PATH"].split(os.pathsep)
+        if not any((Path(entry) / name).exists() for name in ("ir", "uv", "uvx"))
+    )
+    environment.pop("RETICULATE_UV", None)
+    environment.pop("RETICULATE_PYTHON", None)
+    for name in ("R_LIBS", "R_LIBS_SITE", "R_LIBS_USER"):
+        environment[name] = str(library)
+    return environment
+
+
 def python_inventory_client(
     binary: Path,
+    execution: Execution,
     directory: Path,
     *,
     preference: str | None = None,
@@ -265,7 +262,7 @@ def python_inventory_client(
         environment.update(extra_environment)
     client = McpClient(
         binary,
-        ("serve",),
+        execution.serve(),
         environment,
         current_directory=directory,
     )
@@ -343,7 +340,9 @@ def resolve_public_python_version(
     # fmt: r
     r = code(rf"""
         reticulate::py_require(
-          python_version = {constraints_r},
+          python_version = {
+            constraints_r
+          },
           action = "set"
         )
         result <- tryCatch(
@@ -419,7 +418,7 @@ def initialize_python_and_record_baseline(client: McpClient, record: Path) -> in
     return len(uv_tool_run_requirements(record))
 
 
-def resolve_managed_python(binary: Path, directory: Path) -> Path:
+def resolve_managed_python(binary: Path, execution: Execution, directory: Path) -> Path:
     workspace = directory / "managed-python"
     workspace.mkdir()
     environment = os.environ.copy()
@@ -427,7 +426,7 @@ def resolve_managed_python(binary: Path, directory: Path) -> Path:
     environment.pop("UV_PYTHON", None)
     with McpClient(
         binary,
-        ("serve",),
+        execution.serve(),
         environment,
         current_directory=workspace,
     ) as client:

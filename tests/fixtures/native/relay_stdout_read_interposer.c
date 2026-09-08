@@ -1,3 +1,5 @@
+#define _GNU_SOURCE
+#include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
@@ -17,11 +19,19 @@ typedef ssize_t (*read_function)(int, void *, size_t);
 typedef int (*pthread_join_function)(pthread_t, void **);
 
 static read_function next_read(void) {
+#ifdef __APPLE__
     return read;
+#else
+    return (read_function)dlsym(RTLD_NEXT, "read");
+#endif
 }
 
 static pthread_join_function next_pthread_join(void) {
+#ifdef __APPLE__
     return pthread_join;
+#else
+    return (pthread_join_function)dlsym(RTLD_NEXT, "pthread_join");
+#endif
 }
 
 static bool target_process(void) {
@@ -94,19 +104,21 @@ static ssize_t delayed_read(int descriptor, void *buffer, size_t length) {
         return result;
     }
 
-    atomic_store(&blocked_thread, (uintptr_t)pthread_self());
-    notify("MCP_CONSOLE_TEST_RELAY_READ_BLOCKED");
     const char *release = getenv("MCP_CONSOLE_TEST_RELAY_READ_RELEASE");
     if (release == NULL) {
         return result;
     }
     int release_descriptor;
     do {
-        release_descriptor = open(release, O_RDONLY);
+        release_descriptor = open(release, O_RDWR);
     } while (release_descriptor < 0 && errno == EINTR);
     if (release_descriptor < 0) {
         return result;
     }
+    // Establish the release reader before publishing the blocked thread, so
+    // join can release it even if the read thread is immediately descheduled.
+    atomic_store(&blocked_thread, (uintptr_t)pthread_self());
+    notify("MCP_CONSOLE_TEST_RELAY_READ_BLOCKED");
     char token;
     while (read_next(release_descriptor, &token, 1) < 0 && errno == EINTR) {
     }
@@ -126,9 +138,11 @@ static int releasing_pthread_join(pthread_t thread, void **result) {
 __attribute__((constructor)) static void prevent_child_injection(void) {
     if (target_process()) {
         unsetenv("DYLD_INSERT_LIBRARIES");
+        unsetenv("LD_PRELOAD");
     }
 }
 
+#ifdef __APPLE__
 #define DYLD_INTERPOSE(replacement, replacee)                                  \
     __attribute__((used)) static struct {                                      \
         const void *replacement;                                               \
@@ -140,3 +154,12 @@ __attribute__((constructor)) static void prevent_child_injection(void) {
 
 DYLD_INTERPOSE(delayed_read, read)
 DYLD_INTERPOSE(releasing_pthread_join, pthread_join)
+
+#else
+ssize_t read(int descriptor, void *buffer, size_t length) {
+    return delayed_read(descriptor, buffer, length);
+}
+int pthread_join(pthread_t thread, void **result) {
+    return releasing_pthread_join(thread, result);
+}
+#endif

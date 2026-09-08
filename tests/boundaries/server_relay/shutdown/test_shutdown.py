@@ -23,23 +23,25 @@ from boundaries.server_relay._harness import (
 from support.assertions import tool_text as _tool_text
 from support.checkpoints import FifoCheckpoint
 from support.client import stop_client
+from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.records import Transcript
 from support.resolvers import fake_ir_environment as _fake_ir_environment
 from support.suites import run_this_suite
 
 
-PLATFORMS = {"darwin", "linux"}
-
-
-def test_gracefully_shuts_down(binary: Path) -> Transcript:
-    client = ServerRelayClient(binary, "shutdown")
+@executions(DIRECT, SANDBOXED)
+def test_gracefully_shuts_down(binary: Path, execution: Execution) -> Transcript:
+    client = ServerRelayClient(binary, "shutdown", execution=execution)
     assert _tool_text(client.send(control="restart")) == (
         "[starting new worker]\n[idle]"
     )
     return client.finish_shutdown()
 
 
-def test_shutdown_precedes_blocked_resolver_cancellation(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_shutdown_precedes_blocked_resolver_cancellation(
+    binary: Path, execution: Execution
+) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
         library = root / "blocked-candidate"
@@ -52,9 +54,7 @@ def test_shutdown_precedes_blocked_resolver_cancellation(binary: Path) -> Transc
         environment["MCP_CONSOLE_TEST_IR_RELEASE"] = str(resolver_release)
 
         client = ServerRelayClient(
-            binary,
-            "blocked_live_r_resolver_shutdown",
-            environment,
+            binary, "blocked_live_r_resolver_shutdown", environment, execution=execution
         )
         client.start_worker()
         relay_root = client.relay_root()
@@ -104,8 +104,11 @@ def test_shutdown_precedes_blocked_resolver_cancellation(binary: Path) -> Transc
     return transcript
 
 
-def test_cancelled_send_returns_owned_output_to_restart(binary: Path) -> Transcript:
-    client = ServerRelayClient(binary, "cancelled_waiting_send")
+@executions(DIRECT, SANDBOXED)
+def test_cancelled_send_returns_owned_output_to_restart(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = ServerRelayClient(binary, "cancelled_waiting_send", execution=execution)
     client.start_worker()
     relay_root = client.relay_root()
     prelude_release = FifoCheckpoint.attach(relay_root / PRELUDE_RELEASE_NAME)

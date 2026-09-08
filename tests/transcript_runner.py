@@ -13,10 +13,13 @@ from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from pathlib import Path
 
-from support.macos import (
-    capture_darwin_process_identity,
-    signal_darwin_process,
+from support.events import Events
+from support.native import SHARED_LIBRARY_FLAG
+from support.processes import (
+    capture_process_identity,
+    signal_process,
 )
+from support.requirements import POSIX, PROCESS_EVENTS
 
 ROOT = Path(__file__).resolve().parent.parent
 RUNNER = ROOT / "tests" / "boundaries" / "_run.py"
@@ -193,7 +196,7 @@ def check_recording(*arguments: object, **keywords: object) -> object:
 """.lstrip()
 
 
-@unittest.skipUnless(os.name == "posix", "requires POSIX process and FIFO APIs")
+@unittest.skipUnless(POSIX.available, POSIX.reason)
 class TranscriptRunnerTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -214,7 +217,14 @@ class TranscriptRunnerTests(unittest.TestCase):
             directory.mkdir(parents=True, exist_ok=True)
 
         shutil.copy2(RUNNER, self.boundaries / "_run.py")
-        for name in ("__init__.py", "cases.py", "records.py", "snapshots.py"):
+        for name in (
+            "__init__.py",
+            "cases.py",
+            "records.py",
+            "snapshots.py",
+            "requirements.py",
+            "execution.py",
+        ):
             shutil.copy2(ROOT / "tests" / "support" / name, support / name)
         self.suite.write_text(PUBLIC_SUITE, encoding="utf-8")
         binary.touch()
@@ -249,6 +259,277 @@ class TranscriptRunnerTests(unittest.TestCase):
         return subprocess.CompletedProcess(
             arguments, process.returncode, stdout, stderr
         )
+
+    def test_case_requirements_and_skip_reporting(self) -> None:
+        self.suite.write_text(
+            PUBLIC_SUITE
+            + """
+from support.requirements import Requirement, command, requires
+
+available = Requirement("available fixture", True, "fixture is available")
+missing = Requirement("missing fixture", False, "fixture deliberately unavailable")
+test_selected = requires(available)(test_selected)
+test_unselected = requires(available, missing, command("mcp-console-deliberately-missing-test-command"))(test_unselected)
+""",
+            encoding="utf-8",
+        )
+        listed = self.run_runner("--list")
+        self.assertEqual(listed.returncode, 0, listed.stderr)
+        self.assertIn("::unselected", listed.stdout)
+        result = self.run_runner("--jobs", "1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.root / "selected.marker").exists())
+        self.assertFalse((self.root / "unselected.marker").exists())
+        self.assertIn(
+            "::unselected: skipped; missing fixture: fixture deliberately unavailable",
+            result.stdout,
+        )
+        self.assertIn(
+            "mcp-console-deliberately-missing-test-command is missing from PATH",
+            result.stdout,
+        )
+        selected_skip = self.run_runner("client_server/server/test_tools::unselected")
+        self.assertEqual(selected_skip.returncode, 0, selected_skip.stderr)
+        self.assertIn("fixture deliberately unavailable", selected_skip.stdout)
+
+    def test_repository_cases_skip_missing_resolver_and_formatter_commands(
+        self,
+    ) -> None:
+        shutil.copytree(
+            ROOT / "tests" / "support",
+            self.root / "tests" / "support",
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns("__pycache__"),
+        )
+        selectors = {
+            "recording/test_markdown::emits_yamark_formatted_documents": ("yamark",),
+            "lifecycle/test_startup": ("ir", "uv"),
+            "lifecycle/test_startup_interrupt": ("ir", "uv"),
+            "requirements/test_r_automatic": ("ir",),
+            "requirements/test_r::failed_mixed_preparation_retains_live_python_activation": (
+                "ir",
+                "uv",
+            ),
+        }
+        uv = shutil.which("uv")
+        assert uv is not None
+        for selector, commands in selectors.items():
+            suite = selector.partition("::")[0] + ".py"
+            destination = self.boundaries / "client_server" / suite
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(RUNNER.parent / "client_server" / suite, destination)
+            for missing in commands:
+                with self.subTest(selector=selector, missing=missing):
+                    with tempfile.TemporaryDirectory(dir=self.root) as path:
+                        for command in set(commands) - {missing}:
+                            executable = Path(path) / command
+                            executable.touch()
+                            executable.chmod(0o755)
+                        result = subprocess.run(
+                            [
+                                uv,
+                                "run",
+                                "--script",
+                                self.boundaries / "_run.py",
+                                "--jobs",
+                                "1",
+                                f"client_server/{selector}",
+                            ],
+                            cwd=self.root,
+                            env={**os.environ, "PATH": path},
+                            capture_output=True,
+                            text=True,
+                            timeout=10,
+                        )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    skipped = result.stdout.splitlines()
+                    self.assertTrue(skipped, result.stdout)
+                    for line in skipped:
+                        self.assertIn(": skipped;", line)
+                        self.assertIn(
+                            f"{missing}: {missing} is missing from PATH", line
+                        )
+
+    def test_full_update_preserves_skipped_case_and_companions(self) -> None:
+        self.suite.write_text(
+            PUBLIC_SUITE
+            + """
+from support.requirements import Requirement, requires
+
+test_unselected = requires(
+    Requirement("unavailable", False, "deliberate skip")
+)(test_unselected)
+""",
+            encoding="utf-8",
+        )
+        companion = self.snapshots / "unselected.md"
+        companion.write_text("retained companion", encoding="utf-8")
+        stale = self.snapshots / "selected.md"
+        stale.write_text("obsolete companion", encoding="utf-8")
+        before = (self.snapshots / "unselected.yaml").read_bytes()
+        result = self.run_runner("--update", "--jobs", "1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.snapshots / "unselected.yaml").read_bytes(), before)
+        self.assertEqual(companion.read_text(), "retained companion")
+        self.assertFalse(stale.exists())
+
+    def test_execution_requirements_share_one_behavior_snapshot(self) -> None:
+        self.suite.write_text(
+            PUBLIC_SUITE
+            + """
+from support.execution import Execution, executions
+from support.requirements import Requirement
+
+first = Execution("first")
+second = Execution("second")
+missing = Execution("missing", (Requirement("mode", False, "unavailable mode"),))
+
+@executions(first, missing, second)
+def test_selected(binary, execution):
+    record(binary, execution.name)
+    return [{"runner": "selected"}]
+""",
+            encoding="utf-8",
+        )
+        result = self.run_runner("--update", "--jobs", "1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.root / "first.marker").exists())
+        self.assertTrue((self.root / "second.marker").exists())
+        self.assertFalse((self.root / "missing.marker").exists())
+        self.assertIn(
+            "::selected[missing]: skipped; mode: unavailable mode", result.stdout
+        )
+        self.assertFalse(list(self.snapshots.glob("selected.*.yaml")))
+        # Updating must compare subsequent modes, never overwrite the first one.
+        self.suite.write_text(
+            self.suite.read_text().replace(
+                'return [{"runner": "selected"}]',
+                'return [{"runner": execution.name}]',
+            )
+        )
+        differing = self.run_runner("--update", "--jobs", "1")
+        self.assertNotEqual(differing.returncode, 0)
+        self.assertIn("second", differing.stderr)
+
+    def test_compacts_each_complete_session_and_preserves_differences(self) -> None:
+        handshake = [
+            {"input": {"method": "initialize"}, "result": {"protocolVersion": "test"}},
+            {"notification": {"method": "notifications/initialized"}},
+            {"input": {"method": "tools/list"}, "result": {"tools": []}},
+        ]
+        changed = [
+            *handshake[:-1],
+            {"input": {"method": "tools/list"}, "result": {"tools": ["different"]}},
+        ]
+        self.suite.write_text(
+            PUBLIC_SUITE
+            + f"""
+def test_initializes_and_lists_tools(binary):
+    return {handshake!r}
+
+def test_selected(binary):
+    return [{{"runner": "before"}}] + {handshake!r} + [{{"runner": "between"}}] + {handshake!r} + {changed!r} + {handshake[:-1]!r}
+""",
+            encoding="utf-8",
+        )
+        result = self.run_runner("--update", "--jobs", "1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        snapshot = (self.snapshots / "selected.yaml").read_text()
+        self.assertEqual(snapshot.count("!same-as"), 2, snapshot)
+        self.assertIn("different", snapshot)
+        # The differing complete session and incomplete session remain visible.
+        self.assertEqual(snapshot.count("method: initialize"), 2, snapshot)
+
+    def test_sessions_use_the_reference_for_their_execution(self) -> None:
+        self.suite.write_text(
+            PUBLIC_SUITE
+            + """
+from support.execution import Execution, executions
+from support.records import TranscriptWithCompanions
+
+sandbox = [{"id": 1, "input": {"method": "initialize"}, "result": "sandbox"}]
+direct = [{"id": 2, "input": {"method": "initialize"}, "result": "direct"}]
+bare_sandbox = [{"id": 3, "input": {"method": "initialize"}, "result": "bare sandbox"}]
+bare_direct = [{"id": 4, "input": {"method": "initialize"}, "result": "bare direct"}]
+
+def test_initializes_and_lists_tools(binary):
+    return TranscriptWithCompanions(sandbox, {
+        "direct.yaml": direct,
+        "bare.yaml": bare_sandbox,
+        "bare.direct.yaml": bare_direct,
+    })
+
+@executions(Execution("sandbox"), Execution("direct"))
+def test_selected(binary, execution):
+    handshake = sandbox if execution.name == "sandbox" else direct
+    bare = bare_sandbox if execution.name == "sandbox" else bare_direct
+    return handshake + [{"runner": "between sessions"}] + handshake + bare
+
+def test_unselected(binary):
+    return TranscriptWithCompanions(sandbox + direct, {"wire.yaml": direct})
+""",
+            encoding="utf-8",
+        )
+        result = self.run_runner("--update", "--jobs", "1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for reference in self.snapshots.glob("initializes_and_lists_tools*.yaml"):
+            self.assertNotIn("id:", reference.read_text())
+        self.assertIn("id: 2", (self.snapshots / "unselected.wire.yaml").read_text())
+        selected = (self.snapshots / "selected.yaml").read_text()
+        self.assertEqual(selected.count("!same-as"), 3, selected)
+        self.assertIn("bare MCP initialization for this execution mode", selected)
+        mixed = (self.snapshots / "unselected.yaml").read_text()
+        self.assertIn("initializes_and_lists_tools.yaml", mixed)
+        self.assertIn("initializes_and_lists_tools.direct.yaml", mixed)
+        self.suite.write_text(
+            self.suite.read_text().replace("else direct", "else sandbox")
+        )
+        differing = self.run_runner("--jobs", "1")
+        self.assertNotEqual(differing.returncode, 0)
+        self.assertIn("result: sandbox", differing.stderr)
+        self.assertIn("::selected[direct] differs", differing.stderr)
+
+    def test_initialization_updates_only_available_execution_references(self) -> None:
+        source = (
+            PUBLIC_SUITE
+            + """
+from support.execution import Execution, executions
+from support.records import TranscriptWithCompanions
+from support.requirements import Requirement
+
+@executions(Execution("direct"), Execution("sandbox", (Requirement("sandbox", AVAILABLE, "unavailable"),)))
+def test_initializes_and_lists_tools(binary, execution):
+    return TranscriptWithCompanions(
+        [{"mode": execution.name}], {"bare.yaml": [{"bare": execution.name}]}
+    )
+"""
+        )
+        self.suite.write_text(source.replace("AVAILABLE", "True"))
+        result = self.run_runner("--update", "--jobs", "1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        references = {
+            path: path.read_bytes()
+            for path in self.snapshots.glob("initializes_and_lists_tools*.yaml")
+        }
+        self.assertEqual(len(references), 4)
+        self.suite.write_text(source.replace("AVAILABLE", "False"))
+        for arguments in (
+            ("--list",),
+            (
+                "--locate",
+                "client_server/server/test_tools::initializes_and_lists_tools",
+            ),
+            ("--update",),
+            (
+                "--update",
+                "client_server/server/test_tools::initializes_and_lists_tools",
+            ),
+        ):
+            result = self.run_runner(*arguments)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                {path: path.read_bytes() for path in references}, references
+            )
 
     @contextmanager
     def hanging_runner(
@@ -542,7 +823,7 @@ class TranscriptRunnerTests(unittest.TestCase):
             finally:
                 os.close(cleaned)
 
-    @unittest.skipUnless(sys.platform == "darwin", "requires macOS process exit events")
+    @unittest.skipUnless(PROCESS_EVENTS.available, PROCESS_EVENTS.reason)
     def test_runner_loss_retires_case_holding_the_gil(self) -> None:
         self.suite.write_text(PUBLIC_SUITE + GIL_HOLDING_SUITE, encoding="utf-8")
         (self.snapshots / "holds_gil.yaml").write_text(
@@ -551,7 +832,8 @@ class TranscriptRunnerTests(unittest.TestCase):
         subprocess.run(
             [
                 "cc",
-                "-dynamiclib",
+                SHARED_LIBRARY_FLAG,
+                "-fPIC",
                 "-std=c11",
                 "-Wall",
                 "-Wextra",
@@ -577,32 +859,25 @@ class TranscriptRunnerTests(unittest.TestCase):
             "client_server/server/test_tools::holds_gil",
         )
         identity = None
-        exits = select.kqueue()
+        exits = Events()
         try:
             ready, _, _ = select.select([started], [], [], 10)
             self.assertTrue(ready, "case did not enter its native GIL-holding call")
             self.assertEqual(os.read(started, 1), b"1")
             pid = int((self.root / "gil-case-pid").read_text(encoding="utf-8"))
-            identity = capture_darwin_process_identity(pid)
-            watch = select.kevent(
-                pid,
-                filter=select.KQ_FILTER_PROC,
-                flags=select.KQ_EV_ADD | select.KQ_EV_ONESHOT,
-                fflags=select.KQ_NOTE_EXIT,
-            )
-            self.assertEqual(exits.control([watch], 0, 0), [])
+            identity = capture_process_identity(pid)
+            exits.watch_process(pid)
             os.killpg(process.pid, signal.SIGKILL)
             process.wait(timeout=5)
-            observed = exits.control(None, 1, 20)
+            observed = exits.wait(20)
             self.assertTrue(
                 observed, "GIL-holding case outlived its runner's cleanup deadline"
             )
-            self.assertEqual(observed[0].ident, pid)
-            self.assertTrue(observed[0].fflags & select.KQ_NOTE_EXIT)
+            self.assertEqual(observed, {pid})
         finally:
             os.write(release, b"1")
             if identity is not None:
-                signal_darwin_process(identity, signal.SIGKILL)
+                signal_process(identity, signal.SIGKILL)
             with suppress(ProcessLookupError):
                 os.killpg(process.pid, signal.SIGKILL)
             process.communicate(timeout=5)
@@ -620,64 +895,6 @@ class TranscriptRunnerTests(unittest.TestCase):
         )
         result = self.run_runner("client_server/server/test_tools::forks")
         self.assertEqual(result.returncode, 0, result.stderr)
-
-    def test_case_platform_selection(self) -> None:
-        with self.suite.open("a") as suite:
-            suite.write('\nCASE_PLATFORMS = {"selected": {"unsupported"}}\n')
-        result = self.run_runner("client_server/server/test_tools")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("selected: skipped on", result.stdout)
-        self.assertFalse((self.root / "selected.marker").exists())
-        self.assertTrue((self.root / "unselected.marker").exists())
-
-    def test_platform_recording_preserves_other_platform_snapshots(self) -> None:
-        with self.suite.open("a") as suite:
-            suite.write("""
-import sys
-from support.records import TranscriptWithCompanions
-
-def test_selected(binary):
-    return TranscriptWithCompanions([{"runner": sys.platform}], {}, platform=sys.platform)
-""")
-        other = "linux" if sys.platform == "darwin" else "darwin"
-        peer = self.snapshots / f"selected.{other}.yaml"
-        peer.write_text(f"---\nrunner: {other}\n...\n")
-        result = self.run_runner("--update")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue(peer.is_file())
-        self.assertTrue((self.snapshots / "selected.yaml").is_file())
-        actual = self.snapshots / f"selected.{sys.platform}.yaml"
-        self.assertIn(sys.platform, actual.read_text())
-        result = self.run_runner("client_server/server/test_tools::selected")
-        self.assertEqual(result.returncode, 0, result.stderr)
-
-    def test_platform_initialization_reference_preserves_shared_transcripts(
-        self,
-    ) -> None:
-        reference = "tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml"
-        with self.suite.open("a") as suite:
-            suite.write("""
-from support.records import TranscriptWithCompanions
-import sys
-
-def test_initializes_and_lists_tools(binary):
-    return TranscriptWithCompanions([{"runner": sys.platform}], {}, platform=sys.platform)
-
-def test_selected(binary):
-    return [{"runner": sys.platform}, {"runner": "selected"}]
-""")
-        platform_reference = (
-            self.snapshots / f"initializes_and_lists_tools.{sys.platform}.yaml"
-        )
-        platform_reference.write_text(f"---\nrunner: {sys.platform}\n...\n")
-        shared = self.snapshots / "selected.yaml"
-        shared.write_text(f"--- !same-as {reference}\n---\nrunner: selected\n...\n")
-        result = self.run_runner("client_server/server/test_tools::selected")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        platform_reference.write_text("---\nrunner: different platform metadata\n...\n")
-        result = self.run_runner("client_server/server/test_tools::selected")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("differs from its snapshot", result.stderr)
 
     def test_collection_selectors_and_locate(self) -> None:
         hidden = (

@@ -1,25 +1,18 @@
-#[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::io::{self, BufRead, Write};
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
 use base64::Engine as _;
-#[cfg(any(target_os = "macos", target_os = "linux"))]
 use serde::{Deserialize, Serialize};
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
 use crate::cell::Language;
-#[cfg(any(target_os = "macos", target_os = "linux"))]
 use crate::worker_protocol::{
     PythonRequirementManifest, PythonResolveRequest, PythonVersionResolveRequest,
     RResolutionFailureKind, WorkerMessage, deserialize_payload_free,
 };
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(transparent)]
 pub(crate) struct EncodedBytes(String);
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum RelayCommand {
@@ -63,7 +56,6 @@ pub(crate) enum RelayCommand {
     },
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum RelayEvent {
@@ -154,7 +146,6 @@ pub(crate) enum RelayEvent {
     },
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
 impl From<WorkerMessage> for RelayEvent {
     fn from(message: WorkerMessage) -> Self {
         match message {
@@ -188,7 +179,6 @@ impl From<WorkerMessage> for RelayEvent {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
 impl EncodedBytes {
     pub(crate) fn from_bytes(bytes: &[u8]) -> Self {
         Self(base64::engine::general_purpose::STANDARD.encode(bytes))
@@ -201,13 +191,11 @@ impl EncodedBytes {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) struct JsonlReader<R> {
     reader: R,
     buffer: Vec<u8>,
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
 impl<R: BufRead> JsonlReader<R> {
     pub(crate) fn new(reader: R) -> Self {
         Self {
@@ -238,12 +226,10 @@ impl<R: BufRead> JsonlReader<R> {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) struct JsonlWriter<W> {
     writer: W,
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
 impl<W: Write> JsonlWriter<W> {
     pub(crate) fn new(writer: W) -> Self {
         Self { writer }
@@ -256,7 +242,7 @@ impl<W: Write> JsonlWriter<W> {
     }
 }
 
-#[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
+#[cfg(test)]
 mod tests {
     use super::{RelayCommand, RelayEvent};
     use crate::worker_protocol::RResolutionFailureKind;

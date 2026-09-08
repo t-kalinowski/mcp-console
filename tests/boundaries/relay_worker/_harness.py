@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from support.assertions import tool_text as _tool_text
 from support.capture import read_jsonl, read_jsonl_path
 from support.client import McpClient
+from support.execution import Execution
 from support.records import ToolResult, Transcript
 
 CAPTURE_NAME = "mcp-console-worker-wire.jsonl"
@@ -26,6 +27,7 @@ class RelayWorkerClient:
         self,
         binary: Path,
         *,
+        execution: Execution,
         capture_stdin_close: bool = False,
         capture_worker_sideband_close: bool = False,
         disable_r_segv_handler: bool = False,
@@ -52,7 +54,7 @@ class RelayWorkerClient:
         )
         self._client = McpClient(
             binary,
-            ("serve", "--worker", str(mitm)),
+            execution.serve("--worker", str(mitm)),
             environment,
         )
         self._client.initialize_and_list_tools()
@@ -96,11 +98,7 @@ class RelayWorkerClient:
 
     def _capture_path(self, excluding: Path | None = None) -> Path:
         root = Path(self._temporary.name)
-        captures = [
-            path
-            for path in root.glob(f"mcp-console-tmp-*/{CAPTURE_NAME}")
-            if path != excluding
-        ]
+        captures = [path for path in root.rglob(CAPTURE_NAME) if path != excluding]
         assert len(captures) == 1, captures
         return captures[0]
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
+import os
 import re
 import sys
 import tempfile
@@ -11,16 +12,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from support.assertions import last_tool_text, wait_for_evaluation_output
 from support.checkpoints import wait_for_worker_file
 from support.client import McpClient, stop_client
+from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.r import build_r_input_handler, r_input_handler_client, r_test_environment
-from support.records import Transcript, TranscriptWithCompanions
+from support.native import build_interposer
+from support.requirements import NATIVE_FIXTURES, requires
+from support.records import Transcript
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin", "linux"}
 
-
-def test_evaluates_source_without_final_newline(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_evaluates_source_without_final_newline(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
@@ -33,8 +38,9 @@ def test_evaluates_source_without_final_newline(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_recoverable_language_errors(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_recoverable_language_errors(binary: Path, execution: Execution) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     client.send(r="answer <- 41")
     # fmt: r
@@ -62,15 +68,31 @@ def test_recoverable_language_errors(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_restarts_after_r_worker_segfault(binary: Path) -> TranscriptWithCompanions:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+@requires(NATIVE_FIXTURES)
+def test_restarts_after_r_worker_segfault(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        environment = os.environ.copy()
+        environment["MCP_CONSOLE_TEST_SEGFAULT_LIBRARY"] = str(
+            build_interposer(Path(directory), "r_segfault")
+        )
+        return restart_after_r_segfault(binary, execution, environment)
+
+
+def restart_after_r_segfault(
+    binary: Path, execution: Execution, environment: dict[str, str]
+) -> Transcript:
+    client = McpClient(binary, execution.serve(), environment)
     client.initialize_and_list_tools()
     client.send(r="r_worker_marker <- TRUE")
 
     # Observe R's fatal-signal menu before choosing to abort.
     # fmt: r
     r = code(r"""
-        tools::pskill(Sys.getpid(), signal = 11L)
+        dyn.load(Sys.getenv("MCP_CONSOLE_TEST_SEGFAULT_LIBRARY"))
+        .C("mcp_test_segfault")
         """)
     client.send(r=r)
     fatal_output = last_tool_text(client)
@@ -79,11 +101,14 @@ def test_restarts_after_r_worker_segfault(binary: Path) -> TranscriptWithCompani
         '[input requested: "Selection: "]\n[waiting for stdin]'
     ), repr(fatal_output)
 
-    if sys.platform == "linux":
-        # SI_USER carries a sender identity, not a fault address.
-        client.transcript[-1]["result"]["content"][0]["text"] = re.sub(
-            r"(?m)^address 0x[0-9a-f]+,", "address <signal sender>,", fatal_output
-        )
+    # Only the mapped address is incidental; preserve the cause and traceback.
+    normalized, count = re.subn(
+        r"(?m)^address 0x[0-9a-f]+, cause 'invalid permissions'$",
+        "address <read-only page>, cause 'invalid permissions'",
+        fatal_output,
+    )
+    assert count == 1, fatal_output
+    client.transcript[-1]["result"]["content"][0]["text"] = normalized
     wait_for_evaluation_output(
         client,
         "R is aborting now ...\n"
@@ -102,13 +127,12 @@ def test_restarts_after_r_worker_segfault(binary: Path) -> TranscriptWithCompani
     assert last_tool_text(client) == "[1] FALSE\n"
     client.send(r="1 + 1")
     assert last_tool_text(client) == "[1] 2\n"
-    return TranscriptWithCompanions(
-        client.finish(), {}, platform="linux" if sys.platform == "linux" else None
-    )
+    return client.finish()
 
 
-def test_reports_r_worker_exit_status(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_reports_r_worker_exit_status(binary: Path, execution: Execution) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
 
     # fmt: r
@@ -131,8 +155,11 @@ def test_reports_r_worker_exit_status(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_reports_r_worker_restart_with_idle_stdin(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_reports_r_worker_restart_with_idle_stdin(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     client.send(r="invisible(NULL)")
 
@@ -167,8 +194,11 @@ def test_reports_r_worker_restart_with_idle_stdin(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_restarts_and_evaluates_r_cell_in_one_send(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_restarts_and_evaluates_r_cell_in_one_send(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     client.send(r="inline_restart_marker <- TRUE")
 
@@ -183,8 +213,11 @@ def test_restarts_and_evaluates_r_cell_in_one_send(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_restart_while_r_waits_for_input(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_restart_while_r_waits_for_input(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
@@ -210,8 +243,11 @@ def test_restart_while_r_waits_for_input(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_restart_skips_cell_boundary_callbacks(binary: Path) -> Transcript:
-    with r_input_handler_client(binary) as (client, directory):
+@executions(DIRECT, SANDBOXED)
+def test_restart_skips_cell_boundary_callbacks(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with r_input_handler_client(binary, execution) as (client, directory):
         client.initialize_and_list_tools()
 
         # Leave a callback ready for the initial boundary turn. Restart after
@@ -262,8 +298,11 @@ def test_restart_skips_cell_boundary_callbacks(binary: Path) -> Transcript:
         return client.finish()
 
 
-def test_restart_skips_direct_stdin_boundary_callback(binary: Path) -> Transcript:
-    with r_input_handler_client(binary) as (client, directory):
+@executions(DIRECT, SANDBOXED)
+def test_restart_skips_direct_stdin_boundary_callback(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with r_input_handler_client(binary, execution) as (client, directory):
         client.initialize_and_list_tools()
 
         # A direct fd-0 read bypasses the worker's ReadConsole callback.
@@ -315,8 +354,9 @@ def test_restart_skips_direct_stdin_boundary_callback(binary: Path) -> Transcrip
         return client.finish()
 
 
-def test_browser_input(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_browser_input(binary: Path, execution: Execution) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
@@ -345,8 +385,11 @@ def test_browser_input(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_times_out_and_polls_running_evaluation(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_times_out_and_polls_running_evaluation(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     client.send(r="invisible(NULL)")
     # fmt: r
@@ -365,7 +408,10 @@ def test_times_out_and_polls_running_evaluation(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_interrupts_running_r_evaluation(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_interrupts_running_r_evaluation(
+    binary: Path, execution: Execution
+) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
         environment, rscript = r_test_environment()
@@ -383,13 +429,7 @@ def test_interrupts_running_r_evaluation(binary: Path) -> Transcript:
             """)
         client = McpClient(
             Path(sys.executable),
-            (
-                "-c",
-                launcher,
-                str(binary),
-                "serve",
-                *(("--no-sandbox",) if sys.platform == "linux" else ()),
-            ),
+            ("-c", launcher, str(binary), *execution.serve()),
             environment,
             current_directory=temporary_path,
         )
@@ -495,8 +535,11 @@ def test_interrupts_running_r_evaluation(binary: Path) -> Transcript:
                 stop_client(client)
 
 
-def test_interrupts_managed_console_input(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_interrupts_managed_console_input(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = McpClient(binary, execution.serve())
     passed = False
     try:
         client.initialize_and_list_tools()
@@ -513,8 +556,13 @@ def test_interrupts_managed_console_input(binary: Path) -> Transcript:
         assert last_tool_text(client) == (
             '[input requested: "R interrupt> "]\n[waiting for stdin]'
         )
-        client.send(control="interrupt", timeout_ms=0)
-        assert last_tool_text(client) == "R input interrupted\n"
+        wait_for_evaluation_output(
+            client,
+            "R input interrupted\n",
+            "interrupted R console input",
+            control="interrupt",
+            timeout_ms=0,
+        )
         wait_for_evaluation_output(
             client,
             '[input requested: "R replay> "]\n[1] "R partial!"\n',
@@ -559,8 +607,13 @@ def test_interrupts_managed_console_input(binary: Path) -> Transcript:
         assert last_tool_text(client) == (
             '[input requested: "Python interrupt> "]\n[waiting for stdin]'
         )
-        client.send(control="interrupt", timeout_ms=0)
-        assert last_tool_text(client) == "Python input interrupted\n"
+        wait_for_evaluation_output(
+            client,
+            "Python input interrupted\n",
+            "interrupted Python console input",
+            control="interrupt",
+            timeout_ms=0,
+        )
         wait_for_evaluation_output(
             client,
             "[input requested: \"Python replay> \"]\n'Python partial!'\n",
@@ -581,10 +634,12 @@ def test_interrupts_managed_console_input(binary: Path) -> Transcript:
             stop_client(client)
 
 
+@executions(DIRECT, SANDBOXED)
 def test_replays_console_prefix_after_operation_boundary_interrupt(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
-    with r_input_handler_client(binary) as (client, directory):
+    with r_input_handler_client(binary, execution) as (client, directory):
         client.initialize_and_list_tools()
 
         # A small native buffer makes a later managed callback deterministic

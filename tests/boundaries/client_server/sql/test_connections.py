@@ -12,20 +12,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from support.assertions import last_tool_text
 from support.checkpoints import FifoCheckpoint, wait_for_worker_file
 from support.client import McpClient, stop_client
+from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.r import r_test_environment
+from support.native import SHARED_LIBRARY_FLAG
 from support.records import Transcript
+from support.requirements import NATIVE_FIXTURES, requires
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin", "linux"}
 
-
+@executions(DIRECT, SANDBOXED)
 def test_routes_sql_cells_to_a_selected_dbi_connection(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
-    client = McpClient(binary, ("serve",), environment)
+    client = McpClient(binary, execution.serve(), environment)
     client.initialize_and_list_tools()
 
     client.send(sql="CREATE TABLE managed_values AS SELECT 'managed' AS origin")
@@ -175,10 +178,12 @@ def test_routes_sql_cells_to_a_selected_dbi_connection(
     return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_routes_sql_cells_to_a_selected_python_dbapi_connection(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
-    client = McpClient(binary, ("serve",))
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
 
     client.send(sql="CREATE TABLE managed_values AS SELECT 'managed' AS origin")
@@ -335,10 +340,12 @@ def test_routes_sql_cells_to_a_selected_python_dbapi_connection(
     return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_preserves_selected_python_duckdb_connection_state(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
-    client = McpClient(binary, ("serve",))
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
 
     # fmt: python
@@ -368,10 +375,12 @@ def test_preserves_selected_python_duckdb_connection_state(
     return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_reports_python_dbapi_cursor_cleanup_failures(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
-    client = McpClient(binary, ("serve",))
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
 
     # fmt: python
@@ -415,10 +424,12 @@ def test_reports_python_dbapi_cursor_cleanup_failures(
     return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_recovers_when_python_dbapi_connection_raises_base_exception(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
-    client = McpClient(binary, ("serve",))
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
 
     # fmt: python
@@ -468,13 +479,15 @@ def test_recovers_when_python_dbapi_connection_raises_base_exception(
     return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_allows_python_dbapi_callbacks_to_select_an_r_connection(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
-        client = McpClient(binary, ("serve",), environment)
+        client = McpClient(binary, execution.serve(), environment)
         checkpoints: list[FifoCheckpoint] = []
         passed = False
         try:
@@ -562,14 +575,16 @@ def test_allows_python_dbapi_callbacks_to_select_an_r_connection(
                 stop_client(client)
 
 
+@executions(DIRECT, SANDBOXED)
 def test_interrupts_selected_python_dbapi_connection(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
-        client = McpClient(binary, ("serve",), environment)
+        client = McpClient(binary, execution.serve(), environment)
         passed = False
         try:
             client.initialize_and_list_tools()
@@ -631,7 +646,11 @@ def test_interrupts_selected_python_dbapi_connection(
                 stop_client(client)
 
 
-def test_interrupts_python_dbapi_provider_probe(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+@requires(NATIVE_FIXTURES)
+def test_interrupts_python_dbapi_provider_probe(
+    binary: Path, execution: Execution
+) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         library = Path(temporary_directory) / "python-probe-checkpoint.dylib"
         source = (
@@ -643,7 +662,7 @@ def test_interrupts_python_dbapi_provider_probe(binary: Path) -> Transcript:
         subprocess.run(
             [
                 "cc",
-                "-dynamiclib" if sys.platform == "darwin" else "-shared",
+                SHARED_LIBRARY_FLAG,
                 "-fPIC",
                 "-std=c11",
                 "-Wall",
@@ -660,7 +679,7 @@ def test_interrupts_python_dbapi_provider_probe(binary: Path) -> Transcript:
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
         environment["MCP_CONSOLE_SQL_PROBE_LIBRARY"] = str(library)
-        client = McpClient(binary, ("serve",), environment)
+        client = McpClient(binary, execution.serve(), environment)
         checkpoints: list[FifoCheckpoint] = []
         release = None
         passed = False
@@ -786,10 +805,12 @@ def test_interrupts_python_dbapi_provider_probe(binary: Path) -> Transcript:
                 stop_client(client)
 
 
+@executions(DIRECT, SANDBOXED)
 def test_recovers_when_python_sql_dispatch_trace_raises_system_exit(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
-    client = McpClient(binary, ("serve",))
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
 
     # fmt: python
@@ -842,10 +863,12 @@ def test_recovers_when_python_sql_dispatch_trace_raises_system_exit(
     return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_recovers_when_r_provider_switch_trace_raises_system_exit(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
-    client = McpClient(binary, ("serve",))
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
 
     client.send(sql="CREATE TABLE managed_value AS SELECT 7 AS value")

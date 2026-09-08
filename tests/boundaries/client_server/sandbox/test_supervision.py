@@ -15,17 +15,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import last_tool_text as _last_text
 from support.client import McpClient, stop_client
+from support.execution import SANDBOXED
 from support.macos import (
     DarwinProcessIdentity as _ProcessIdentity,
+)
+from support.macos import (
     capture_darwin_process_identity as _capture_identity,
+)
+from support.macos import (
     signal_darwin_process,
 )
 from support.normalization import code
 from support.records import Transcript
+from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, SANDBOX, requires
 from support.suites import run_this_suite
 
-
-PLATFORMS = {"darwin"}
 TIMEOUT = 10
 
 
@@ -183,10 +187,11 @@ def _spawn_processx_generation(client: McpClient) -> _Generation:
     return _normalize_generation(client)
 
 
+@requires(SANDBOX, PROCESS_EVENTS)
 def test_restart_retires_descendants_outside_the_worker_group(
     binary: Path,
 ) -> Transcript:
-    client = McpClient(binary, ("serve",))
+    client = McpClient(binary, SANDBOXED.serve())
     generation: _Generation | None = None
     try:
         client.initialize_and_list_tools()
@@ -201,6 +206,7 @@ def test_restart_retires_descendants_outside_the_worker_group(
             shutil.rmtree(generation[3], ignore_errors=True)
 
 
+@requires(SANDBOX, NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_failure_replacement_retires_descendants_outside_the_worker_group(
     binary: Path,
 ) -> Transcript:
@@ -212,7 +218,7 @@ def test_failure_replacement_retires_descendants_outside_the_worker_group(
     environment["DYLD_INSERT_LIBRARIES"] = str(
         _build_manager_observation_interposer(temporary)
     )
-    client = McpClient(binary, ("serve",), environment)
+    client = McpClient(binary, SANDBOXED.serve(), environment)
     generation: _Generation | None = None
     try:
         client.initialize_and_list_tools()
@@ -251,10 +257,11 @@ def test_failure_replacement_retires_descendants_outside_the_worker_group(
         temporary_owner.cleanup()
 
 
+@requires(SANDBOX, PROCESS_EVENTS)
 def test_server_shutdown_retires_descendants_outside_the_worker_group(
     binary: Path,
 ) -> Transcript:
-    client = McpClient(binary, ("serve",))
+    client = McpClient(binary, SANDBOXED.serve())
     generation: _Generation | None = None
     try:
         client.initialize_and_list_tools()

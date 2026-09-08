@@ -11,7 +11,18 @@ root = Path(os.environ["TMPDIR"])
 endpoint = socket.socket(fileno=int(os.environ["MCP_CONSOLE_SIDEBAND_FD"]))
 interrupted = os.open(root / "worker-interrupted", os.O_WRONLY)
 shutdown = os.open(root / "worker-shutdown", os.O_WRONLY)
-signal.signal(signal.SIGINT, lambda _signal, _frame: os.write(interrupted, b"1"))
+
+
+def acknowledge_interrupts() -> None:
+    while True:
+        assert signal.sigwait({signal.SIGINT}) == signal.SIGINT
+        assert os.write(interrupted, b"1") == 1
+
+
+# All threads inherit the mask. Receive SIGINT independently of the main
+# thread's blocking socket reads and Python's deferred signal callbacks.
+signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
+threading.Thread(target=acknowledge_interrupts, daemon=True).start()
 (root / "worker-pid").write_text(str(os.getpid()))
 endpoint.sendall(b'{"kind":"ready"}\n')
 reader = endpoint.makefile("rb")
@@ -38,12 +49,8 @@ def produce_output() -> None:
                 assert release.read(1) == b"1"
 
 
-# The Python handler runs on the main thread. Keep SIGINT from waking only
-# the producer while the main thread is blocked reading a sideband command.
-signal_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
 producer = threading.Thread(target=produce_output, daemon=True)
 producer.start()
-signal.pthread_sigmask(signal.SIG_SETMASK, signal_mask)
 if sys.argv[4] == "natural":
     producer.join()
     with (root / "worker-exit").open("rb", buffering=0) as release:

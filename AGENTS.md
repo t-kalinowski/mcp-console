@@ -9,9 +9,10 @@ The documents under `design-sketches/` describe intended behavior, not the curre
 ## Sources of truth
 
 - `README.md` describes the current user-facing project status.
+- `RELEASE.md` defines release preparation, wheel rehearsal, publication, verification, and recovery.
 - `docs/README.md` maps the implemented documentation by audience.
 - `docs/ARCHITECTURE.md` describes the implemented process structure, ownership, and lifecycle.
-- `docs/SANDBOX_SUPERVISION.md` describes macOS sandbox lifetime supervision and standalone terminal and signal ownership.
+- `docs/SANDBOX_SUPERVISION.md` describes macOS sandbox lifetime supervision, setup-FD ownership, policy exceptions, and standalone terminal and signal ownership.
 - `docs/BUILTIN_RUNTIME.md` describes user-visible behavior of the built-in mixed-language console.
 - `docs/SEND_OPERATIONS.md` defines validation, preparation, control, input, and timeout ordering for `send`.
 - `docs/REQUIREMENTS.md` describes dependency and environment behavior and its trust boundary.
@@ -28,10 +29,12 @@ Do not treat `design-sketches/` as evidence of implemented behavior.
 ## Platform and development
 
 The worker relay, built-in worker, and managed resolvers support macOS and Linux.
-Linux requires `serve --no-sandbox` and kernel 5.11 or later.
-The sandbox command is macOS-only; Windows is not supported.
-CI runs core checks and platform-applicable transcript cases on macOS and Linux.
+Linux requires `serve --no-sandbox`; the sandbox command remains macOS-only.
+Windows is not supported.
+Retain platform conditionals for modules that use OS-specific APIs and for selecting different implementations or unsupported-platform stubs; avoid redundant gates on shared code.
+CI runs core checks and all capability-applicable transcript modes on macOS and Linux.
 
+Build the pinned private sandbox executable with `scripts/stage-sandbox-runner` before the first macOS Cargo build or after changing `sandbox-runner.json` or the Cargo target; see `RELEASE.md` for the source checkout and toolchain.
 Run commands from the repository root:
 
 ```text
@@ -47,6 +50,11 @@ A missing or failing formatter does not prevent the remaining formatters from ru
 `scripts/check` validates extracted runtime sources, checks Rust formatting and Clippy, runs Rust tests, and runs the complete transcript suite.
 
 ### Boundary snapshots
+
+Cases run by default; declare capability requirements beside affected cases with `@requires(...)` from `tests/support/requirements.py`.
+Keep platform availability in test support.
+Use `@executions(DIRECT, SANDBOXED)` and `execution.serve(...)` to reuse ordinary cases across applicable execution modes with a shared snapshot.
+Sandbox contracts use explicit sandbox fixtures and requirements.
 
 Never hand-edit files under `tests/snapshots/`.
 They may change only through `scripts/test --update ...` or Yamark via `scripts/format`.
@@ -98,7 +106,7 @@ Keep these invariants intact:
 - `src/worker_relay.rs`, `src/worker_relay/event_writer.rs` — worker launch, I/O forwarding, ordered event output, direct-worker signaling, termination, and reaping.
 - `src/worker_client.rs`, `src/worker_client/` — session coordination and send planning, server-owned environment, evaluation, lifecycle, ordinary launcher child ownership, ordered event dispatch, output tape, shared Unix relay transport, and platform-specific startup observation.
 - `src/process_exit.rs` — shared direct-child exit observation without reaping, used by launcher ownership and sandbox cleanup.
-- `src/sandbox.rs`, `src/sandbox/{child,macos,process_group}.rs`, `src/sandbox/supervision.rs`, `src/sandbox/supervision/` — launcher-owned sandbox construction, child and process-group cleanup, primary host-manager supervision, manager-failure recovery, and standalone job control.
+- `src/sandbox.rs`, `src/sandbox/{child,installation,macos,process_group,runner}.rs`, `src/sandbox/supervision.rs`, `src/sandbox/supervision/` — launcher-owned sandbox construction, child and process-group cleanup, primary host-manager supervision, manager-failure recovery, and standalone job control.
 - `src/worker.rs`, `src/worker/core.rs`, `src/worker/embedded_r.rs`, `src/r_repl.c` — worker-facing facade, shared process services, current embedded-R backend, cell dispatch, console callbacks, and the C-owned DLL-REPL boundary.
 
 ### Language adapters
@@ -113,16 +121,18 @@ Keep these invariants intact:
 
 - `src/resolver.rs`, `src/resolver/` — retained host environments, direct Python-version selection, validation, platform implementations, and resolver process-group lifecycle.
 - `src/resolver/programs/` — compile-time R programs for DuckDB extension preparation, R-library resolution, and `uv` discovery.
-- `src/sandbox/macos.rs`, `src/process_descriptors.rs` — macOS Seatbelt policy and inherited-descriptor boundary shared by the server and sandbox launcher.
+- `src/sandbox/runner.rs`, `src/sandbox/policy_extensions.sbpl`, `src/process_descriptors.rs` — one-shot runner setup, macOS policy additions, and inherited-descriptor boundary.
+- `sandbox-runner.json`, `scripts/stage-sandbox-runner`, `src/sandbox/installation.rs` — pinned source, private artifact staging, and installed artifact verification.
 
 ### Tests and development scripts
 
-- `tests/support/` — shared transcript records, snapshots, normalization, checkpoints, capture, process, platform event, macOS, assertion, R, resolver, client, and direct-suite helpers.
+- `tests/support/` — shared capability requirements, explicit execution fixtures, transcript records, snapshots, normalization, checkpoints, capture, process, platform event, native fixture, macOS, assertion, R, resolver, client, and direct-suite helpers.
 - `tests/fixtures/` — deterministic workers, resolvers, package fixtures, searchable native interposers, and boundary-specific relay and worker programs.
 - `tests/boundaries/client_server/` — public MCP client-server behavior.
 - `tests/boundaries/server_relay/` — private server-relay wire behavior.
 - `tests/boundaries/relay_worker/` — worker sideband and standard-stream behavior through the relay.
 - `tests/boundaries/cli/` — direct CLI behavior.
+- `tests/boundaries/*/sandbox/` — sandbox-specific contracts within their owning boundary; ordinary cases remain under their runtime, protocol, or lifecycle subject.
 - `tests/boundaries/*/_harness.py` — boundary-specific process launch and capture mechanics.
 - `tests/boundaries/_run.py`, `tests/transcript_runner.py` — recursive transcript discovery, selection, location, snapshot checking, progress reporting, and runner regressions.
 - `tests/architecture.py` — sandbox dependency-direction checks and their command-line regressions.
@@ -135,6 +145,10 @@ Keep these invariants intact:
 
 ## Working rules
 
+- Before merging any PR, require passing CI and a verified thumbs-up reaction from the GPT connector reviewer for the current PR head.
+  Check the actual GitHub reaction; a completed review or absence of findings is not approval.
+- Follow `RELEASE.md` before pushing a release tag.
+  Never yank or remove published PyPI files.
 - Keep PRs coherent and easy to review.
   For behavior-changing implementation, aim for fewer than 200 added and deleted lines as a heuristic.
   Mechanical moves, internal-only reorganization, tests, snapshots, and documentation do not count toward it.

@@ -13,11 +13,12 @@ from support.client import McpClient
 from support.normalization import code
 from support.r import r_test_environment
 from support.records import Transcript
+from support.execution import DIRECT
+from support.requirements import LINUX_NATIVE, requires
 from support.suites import run_this_suite
 
-PLATFORMS = {"linux"}
 
-
+@requires(LINUX_NATIVE)
 def test_loads_native_libraries_from_selected_r_home(binary: Path) -> Transcript:
     environment, _ = r_test_environment()
     original = Path(environment["R_HOME"])
@@ -100,7 +101,7 @@ def test_loads_native_libraries_from_selected_r_home(binary: Path) -> Transcript
             [str(inherited), *filter(None, [environment.get("LD_LIBRARY_PATH")])]
         )
         with McpClient(
-            binary, ("serve",), environment, current_directory=root
+            binary, DIRECT.serve(), environment, current_directory=root
         ) as client:
             client.initialize_and_list_tools()
             result = client.send(

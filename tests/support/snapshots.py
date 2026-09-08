@@ -1,13 +1,11 @@
 import difflib
 import json
-import sys
 from collections.abc import Iterator
 from pathlib import Path
 
 from yaml12 import Yaml, format_yaml, parse_yaml, read_yaml
 
 from support.records import Transcript, TranscriptWithCompanions, YamlStream
-
 
 root = Path(__file__).resolve().parents[2]
 snapshot_directory = root / "tests" / "snapshots"
@@ -164,47 +162,92 @@ def without_request_ids(transcript: Transcript) -> Transcript:
     return rendered
 
 
+def compact_initializations(
+    actual: Transcript, references: list[Path], *, execution: str | None
+) -> YamlStream:
+    expected = [
+        (path, without_request_ids(read_yaml(path, multi=True))) for path in references
+    ]
+    assert all(reference for _, reference in expected), "empty initialization reference"
+    compacted = []
+    index = 0
+    while index < len(actual):
+        for path, reference in expected:
+            if identical(actual[index : index + len(reference)], reference):
+                variant = (
+                    path.stem.removeprefix(Path(initialization_reference).stem)
+                    .removesuffix(".direct")
+                    .removeprefix(".")
+                )
+                target = (
+                    f"{variant + ' ' if variant else ''}MCP initialization for this execution mode"
+                    if execution is not None
+                    else path.relative_to(root).as_posix()
+                )
+                compacted.append(Yaml(target, tag="!same-as"))
+                index += len(reference)
+                break
+        else:
+            compacted.append(actual[index])
+            index += 1
+    return compacted
+
+
 def check_recording(
     suite_name: str,
     case_name: str,
     recorded: Transcript | TranscriptWithCompanions,
     *,
     update: bool,
+    execution: str | None = None,
 ) -> set[Path]:
     snapshot = snapshot_path(suite_name, case_name)
+    initialization = snapshot == root / initialization_reference
+    mode_suffix = ".direct" if initialization and execution == "direct" else ""
+    primary = snapshot.with_suffix(f"{mode_suffix}.yaml")
     case = f"{suite_name}::{case_name}"
-    if isinstance(recorded, TranscriptWithCompanions) and recorded.platform is not None:
-        assert recorded.platform in {"darwin", "linux"}, recorded.platform
-        snapshot = snapshot.with_suffix(f".{recorded.platform}.yaml")
+    if execution is not None:
+        case += f"[{execution}]"
     if isinstance(recorded, TranscriptWithCompanions):
         actual = without_request_ids(recorded.transcript)
         companions = []
         for name, contents in recorded.companions.items():
             assert name and Path(name).name == name and not name.startswith("."), name
             assert name in {"md", "qmd"} or name.endswith(".yaml"), name
-            companions.append((snapshot.with_suffix(f".{name}"), contents))
+            suffix = (
+                f".{name.removesuffix('.yaml')}{mode_suffix}.yaml"
+                if initialization
+                else f".{name}"
+            )
+            companions.append((snapshot.with_suffix(suffix), contents))
     else:
         actual = without_request_ids(recorded)
         companions = []
-    reference_path = root / initialization_reference
-    platform_reference = reference_path.with_suffix(f".{sys.platform}.yaml")
-    if platform_reference.exists():
-        reference_path = platform_reference
-    if snapshot != reference_path:
-        reference = without_request_ids(read_yaml(reference_path, multi=True))
-        assert reference, f"{initialization_reference} contains no documents"
-        if identical(actual[: len(reference)], reference):
-            actual = [
-                Yaml(initialization_reference, tag="!same-as"),
-                *actual[len(reference) :],
+    if not initialization:
+        reference = root / initialization_reference
+        references = [
+            reference,
+            *sorted(reference.parent.glob(f"{reference.stem}.*.yaml")),
+        ]
+        if execution is not None:
+            references = [
+                path
+                for path in references
+                if path.stem.endswith(".direct") == (execution == "direct")
             ]
-    check_snapshot(snapshot, actual, case, update=update)
-    checked = {snapshot}
+        assert references, f"no initialization reference for {execution}"
+        actual = compact_initializations(actual, references, execution=execution)
+    check_snapshot(primary, actual, case, update=update)
+    checked = {primary}
     for companion, contents in companions:
         if isinstance(contents, str):
             check_text_snapshot(companion, contents, case, update=update)
         else:
             assert companion.suffix == ".yaml", companion
+            if initialization:
+                # These companions are MCP handshakes; other YAML companions
+                # can carry protocol IDs that must remain visible.
+                contents = without_request_ids(contents)
             check_snapshot(companion, contents, case, update=update)
         checked.add(companion)
     return checked

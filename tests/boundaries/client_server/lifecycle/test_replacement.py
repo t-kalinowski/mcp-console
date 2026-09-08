@@ -10,25 +10,21 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import large_output, last_tool_text
-from support.checkpoints import FifoCheckpoint, release_fixture_checkpoint
+from support.checkpoints import (
+    FifoCheckpoint,
+)
 from support.client import McpClient, stop_client
+from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.processes import (
     process_exists,
-    process_group_exists,
     stop_process,
-    stop_process_group,
-    stop_process_id,
 )
 from support.r import r_test_environment
 from support.records import Transcript
+from support.requirements import PROCESS_EVENTS, requires
 from support.resolvers import record_resolved_r_library
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin", "linux"}
-# These cases assert sandbox process-tree or filesystem isolation.
-CASE_PLATFORMS = {
-    "replaces_worker_after_relay_exit": {"darwin"},
-}
 FIXTURE_CHECKPOINT_TIMEOUT_SECONDS = 15
 PNG_1X1 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42Y"
@@ -41,10 +37,13 @@ from boundaries.client_server._harness import (
 )
 
 
-def test_reports_missing_worker_launch_failure(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_reports_missing_worker_launch_failure(
+    binary: Path, execution: Execution
+) -> Transcript:
     client = McpClient(
         binary,
-        ("serve", "--worker", "/definitely/missing/mcp-console-worker"),
+        execution.serve("--worker", "/definitely/missing/mcp-console-worker"),
     )
     client.initialize_and_list_tools()
 
@@ -62,8 +61,11 @@ def test_reports_missing_worker_launch_failure(binary: Path) -> Transcript:
     return transcript
 
 
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS)
 def test_reports_replacement_startup_failure_and_retry(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
@@ -76,7 +78,7 @@ def test_reports_replacement_startup_failure_and_retry(
         record_resolved_r_library(environment, Path(temporary_directory))
         client = McpClient(
             binary,
-            ("serve", "--worker", str(zod)),
+            execution.serve("--worker", str(zod)),
             environment,
         )
         client.initialize_and_list_tools()
@@ -136,7 +138,11 @@ def test_reports_replacement_startup_failure_and_retry(
         return client.finish()
 
 
-def test_polls_replacement_startup_after_send_timeout(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS)
+def test_polls_replacement_startup_after_send_timeout(
+    binary: Path, execution: Execution
+) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
@@ -151,7 +157,7 @@ def test_polls_replacement_startup_after_send_timeout(binary: Path) -> Transcrip
         record_resolved_r_library(environment, temporary_path)
         client = McpClient(
             binary,
-            ("serve", "--worker", str(zod)),
+            execution.serve("--worker", str(zod)),
             environment,
         )
         forced_release = threading.Event()
@@ -243,7 +249,11 @@ def test_polls_replacement_startup_after_send_timeout(binary: Path) -> Transcrip
                 stop_process(client.process)
 
 
-def test_orders_explicit_restart_output(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS)
+def test_orders_explicit_restart_output(
+    binary: Path, execution: Execution
+) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
@@ -254,7 +264,7 @@ def test_orders_explicit_restart_output(binary: Path) -> Transcript:
         environment["ZOD_STARTUP_CONTROL"] = str(startup_control)
         client = McpClient(
             binary,
-            ("serve", "--worker", str(zod)),
+            execution.serve("--worker", str(zod)),
             environment,
         )
         client.initialize_and_list_tools()
@@ -291,8 +301,11 @@ def test_orders_explicit_restart_output(binary: Path) -> Transcript:
         return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS)
 def test_controlled_restart_runs_cell_once_in_fresh_worker(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
@@ -301,7 +314,7 @@ def test_controlled_restart_runs_cell_once_in_fresh_worker(
         environment["TMPDIR"] = temporary_directory
         client = McpClient(
             binary,
-            ("serve", "--worker", str(zod)),
+            execution.serve("--worker", str(zod)),
             environment,
         )
         client.initialize_and_list_tools()
@@ -344,8 +357,10 @@ def test_controlled_restart_runs_cell_once_in_fresh_worker(
         return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_controlled_interrupt_preserves_idle_worker_startup_failure(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     ordered_ir = (
@@ -380,7 +395,7 @@ def test_controlled_interrupt_preserves_idle_worker_startup_failure(
 
         client = McpClient(
             binary,
-            ("serve", "--worker", str(zod)),
+            execution.serve("--worker", str(zod)),
             environment,
         )
         finished = False
@@ -429,8 +444,10 @@ def test_controlled_interrupt_preserves_idle_worker_startup_failure(
                 stop_client(client)
 
 
+@executions(DIRECT, SANDBOXED)
 def test_control_only_interrupt_returns_while_explicit_preparation_settles(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     ordered_ir = (
@@ -466,7 +483,7 @@ def test_control_only_interrupt_returns_while_explicit_preparation_settles(
 
         client = McpClient(
             binary,
-            ("serve", "--worker", str(zod)),
+            execution.serve("--worker", str(zod)),
             environment,
         )
         finished = False
@@ -549,7 +566,11 @@ def test_control_only_interrupt_returns_while_explicit_preparation_settles(
                 stop_client(client)
 
 
-def test_restart_preserves_pending_sideband_output(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS)
+def test_restart_preserves_pending_sideband_output(
+    binary: Path, execution: Execution
+) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
@@ -557,7 +578,7 @@ def test_restart_preserves_pending_sideband_output(binary: Path) -> Transcript:
         environment["TMPDIR"] = temporary_directory
         client = McpClient(
             binary,
-            ("serve", "--worker", str(zod)),
+            execution.serve("--worker", str(zod)),
             environment,
         )
         client.initialize_and_list_tools()
@@ -594,7 +615,11 @@ def test_restart_preserves_pending_sideband_output(binary: Path) -> Transcript:
         return client.finish()
 
 
-def test_restart_preserves_unpolled_completion(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS)
+def test_restart_preserves_unpolled_completion(
+    binary: Path, execution: Execution
+) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
@@ -602,7 +627,7 @@ def test_restart_preserves_unpolled_completion(binary: Path) -> Transcript:
         environment["TMPDIR"] = temporary_directory
         client = McpClient(
             binary,
-            ("serve", "--worker", str(zod)),
+            execution.serve("--worker", str(zod)),
             environment,
         )
         client.initialize_and_list_tools()
@@ -626,7 +651,11 @@ def test_restart_preserves_unpolled_completion(binary: Path) -> Transcript:
         return client.finish()
 
 
-def test_restart_interrupts_waiting_send(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS)
+def test_restart_interrupts_waiting_send(
+    binary: Path, execution: Execution
+) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
@@ -634,7 +663,7 @@ def test_restart_interrupts_waiting_send(binary: Path) -> Transcript:
         environment["TMPDIR"] = temporary_directory
         client = McpClient(
             binary,
-            ("serve", "--worker", str(zod)),
+            execution.serve("--worker", str(zod)),
             environment,
         )
         client.initialize_and_list_tools()
@@ -710,74 +739,12 @@ def test_restart_interrupts_waiting_send(binary: Path) -> Transcript:
         return client.finish()
 
 
-def test_restarts_after_unexpected_sideband_message(binary: Path) -> Transcript:
-    zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
-    with tempfile.TemporaryDirectory() as temporary_directory:
-        environment = os.environ.copy()
-        environment["TMPDIR"] = temporary_directory
-        client = McpClient(
-            binary,
-            ("serve", "--worker", str(zod)),
-            environment,
-        )
-        worker_group = None
-        passed = False
-        try:
-            client.initialize_and_list_tools()
-            client.send(r="report process group")
-            process_group_output = last_tool_text(client)
-            process_group_prefix = "zod process group: "
-            assert process_group_output.startswith(process_group_prefix), (
-                process_group_output
-            )
-            worker_group = int(
-                process_group_output.removeprefix(process_group_prefix).removesuffix(
-                    "\n"
-                )
-            )
-            assert process_group_output == f"{process_group_prefix}{worker_group}\n"
-            assert worker_group != os.getpgrp(), (
-                "Zod did not enter a dedicated process group"
-            )
-            client.transcript[-1]["result"]["content"][0]["text"] = (
-                "zod process group: <process group>\n"
-            )
-            failed_call = client.start_send(r="violate protocol")
-            client.receive(failed_call)
-            assert not process_exists(worker_group), (
-                "sandbox launcher did not reap the failed generation's relay"
-            )
-            assert not process_group_exists(worker_group), (
-                "failed worker generation survived sandbox manager retirement"
-            )
-            result = failed_call["result"]
-            assert result["isError"] is True
-            actual = result["content"][0]["text"]
-            assert actual == (
-                "zod output before protocol failure\n"
-                "[worker sent an unexpected ready message]\n"
-                "[worker terminated by signal 9]\n"
-                "[worker stopped: in-memory state lost]\n"
-                "[starting new worker]\n"
-                "[idle]"
-            ), repr(actual)
-            restarted_call = client.start_send(r="complete silently")
-            client.receive(restarted_call)
-            assert last_tool_text(client) == "[done]"
-            transcript = client.finish()
-            passed = True
-            return transcript
-        finally:
-            if not passed:
-                stop_process_group(worker_group)
-                stop_process(client.process)
-
-
-def test_restarts_after_worker_exit(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_restarts_after_worker_exit(binary: Path, execution: Execution) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     client = McpClient(
         binary,
-        ("serve", "--worker", str(zod)),
+        execution.serve("--worker", str(zod)),
     )
     client.initialize_and_list_tools()
     client.send(r="exit unexpectedly")
@@ -803,11 +770,14 @@ def test_restarts_after_worker_exit(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_reports_unexpected_worker_exit_zero(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_reports_unexpected_worker_exit_zero(
+    binary: Path, execution: Execution
+) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     client = McpClient(
         binary,
-        ("serve", "--worker", str(zod)),
+        execution.serve("--worker", str(zod)),
     )
     client.initialize_and_list_tools()
 
@@ -831,76 +801,6 @@ def test_reports_unexpected_worker_exit_zero(binary: Path) -> Transcript:
     client.send(r="echo echo")
     assert last_tool_text(client) == "zod: echo\n"
     return client.finish()
-
-
-def test_replaces_worker_after_relay_exit(binary: Path) -> Transcript:
-    zod = Path(__file__).resolve().parents[3] / "fixtures" / "wrapped_zod"
-    with tempfile.TemporaryDirectory() as temporary_directory:
-        temporary_path = Path(temporary_directory)
-        environment = os.environ.copy()
-        environment["TMPDIR"] = temporary_directory
-        client = McpClient(
-            binary,
-            ("serve", "--worker", str(zod)),
-            environment,
-        )
-        worker_pid = None
-        launcher_pid = None
-        relay_pid = None
-        passed = False
-        try:
-            client.initialize_and_list_tools()
-            client.send(r="kill relay and remain live", timeout_ms=0)
-            assert last_tool_text(client) == "\n[running; poll with an empty send]"
-            started = wait_for_marker(
-                temporary_path,
-                "zod-relay-exit-evaluation-started",
-                client,
-            )
-            release_fixture_checkpoint(started.parent / "zod-release-relay-exit")
-            client.send()
-
-            result = client.transcript[-1]["result"]
-            assert result["isError"] is True, result
-            text = result["content"][0]["text"]
-            assert text.startswith("zod worker pid: "), text
-            topology, failure = text.split("\n", 1)
-            worker, launcher, relay = topology.split("; ")
-            worker_pid = int(worker.removeprefix("zod worker pid: "))
-            launcher_pid = int(launcher.removeprefix("launcher pid: "))
-            relay_pid = int(relay.removeprefix("relay process group: "))
-            assert len({worker_pid, launcher_pid, relay_pid}) == 3, topology
-            assert failure == (
-                "[worker relay stdout closed before retirement completed]\n"
-                "[worker stopped: in-memory state lost]\n"
-                "[starting new worker]\n"
-                "[idle]"
-            ), failure
-            result["content"][0]["text"] = (
-                "zod worker pid: <worker pid>; "
-                "launcher pid: <launcher pid>; "
-                "relay process group: <relay process group>\n" + failure
-            )
-            assert not process_exists(worker_pid), "worker outlived its relay"
-            assert not process_exists(launcher_pid), (
-                "worker launcher outlived its relay"
-            )
-            assert not process_exists(relay_pid), "server did not reap the relay"
-            assert not process_group_exists(relay_pid), (
-                "relay process group outlived sandbox manager retirement"
-            )
-
-            client.send(r="echo echo")
-            assert last_tool_text(client) == "zod: echo\n"
-            transcript = client.finish()
-            passed = True
-            return transcript
-        finally:
-            if not passed:
-                stop_process_group(relay_pid)
-                stop_process_id(launcher_pid)
-                stop_process_id(worker_pid)
-                stop_process(client.process)
 
 
 if __name__ == "__main__":

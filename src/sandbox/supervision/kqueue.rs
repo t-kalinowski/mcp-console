@@ -66,6 +66,20 @@ impl Kqueue {
         let _ = submit_events(self.descriptor.as_raw_fd(), std::slice::from_ref(&event));
     }
 
+    pub(super) fn watch_write(
+        &self,
+        descriptor: libc::c_int,
+        description: &str,
+    ) -> Result<(), String> {
+        // Setup yields after each write instead of draining to WouldBlock.
+        // Keep reporting writability while the pipe still has capacity.
+        let event = libc::kevent {
+            filter: libc::EVFILT_WRITE,
+            ..read_event(descriptor, libc::EV_ADD)
+        };
+        self.submit(std::slice::from_ref(&event), description)
+    }
+
     pub(super) fn watch_user(
         &self,
         ident: libc::uintptr_t,

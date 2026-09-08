@@ -8,7 +8,6 @@ import math
 import os
 import pickle
 import runpy
-import shutil
 import signal
 import sys
 import time
@@ -28,7 +27,9 @@ from support.cases import (
     run_case_subprocess,
     supervise_case,
 )
+from support.execution import Execution
 from support.records import Transcript, TranscriptWithCompanions
+from support.requirements import missing_reasons
 from support.snapshots import (
     check_recording,
     initialization_case,
@@ -72,8 +73,8 @@ parser.add_argument(
 )
 parser.add_argument("selectors", nargs="*", metavar="BOUNDARY/SUITE[::CASE]")
 
-TranscriptCase = Callable[[Path], Transcript | TranscriptWithCompanions]
 RecordedTranscript = Transcript | TranscriptWithCompanions
+TranscriptCase = Callable[..., RecordedTranscript]
 
 
 def suite_identifier(suite_path: Path) -> str:
@@ -86,7 +87,7 @@ def suite_identifier(suite_path: Path) -> str:
 
 def load_suite(
     suite_path: Path,
-) -> tuple[dict[str, TranscriptCase], set[str] | None, set[str]]:
+) -> dict[str, TranscriptCase]:
     namespace = runpy.run_path(str(suite_path))
     cases = {
         name.removeprefix("test_"): value
@@ -94,20 +95,28 @@ def load_suite(
         if name.startswith("test_") and callable(value)
     }
     assert cases, f"{suite_path.relative_to(root)} defines no test_ functions"
-    platforms = namespace.get("PLATFORMS")
-    assert platforms is None or isinstance(platforms, set), (
-        f"{suite_path.relative_to(root)} PLATFORMS must be a set"
+    assert "PLATFORMS" not in namespace and "REQUIRED_COMMANDS" not in namespace, (
+        f"{suite_path.relative_to(root)}: declare requirements beside cases"
     )
-    case_platforms = namespace.get("CASE_PLATFORMS", {})
-    assert isinstance(case_platforms, dict) and case_platforms.keys() <= cases.keys()
-    for name, supported in case_platforms.items():
-        assert isinstance(supported, set)
-        cases[name].platforms = supported
-    required_commands = namespace.get("REQUIRED_COMMANDS", set())
-    assert isinstance(required_commands, set) and all(
-        isinstance(command, str) and command for command in required_commands
-    ), f"{suite_path.relative_to(root)} REQUIRED_COMMANDS must be a set of names"
-    return cases, platforms, required_commands
+    return cases
+
+
+def available_executions(
+    case: TranscriptCase, selector: str, *, report: bool = False
+) -> list[Execution | None]:
+    available = []
+    for execution in getattr(case, "executions", (None,)):
+        requirements = getattr(case, "requirements", ())
+        if execution is not None:
+            requirements += execution.requirements
+        reason = missing_reasons(requirements)
+        if reason:
+            if report:
+                suffix = f"[{execution.name}]" if execution is not None else ""
+                print(f"{selector}{suffix}: skipped; {reason}", flush=True)
+        else:
+            available.append(execution)
+    return available
 
 
 def orphan_snapshots(suites: dict[str, Path]) -> list[Path]:
@@ -121,7 +130,7 @@ def orphan_snapshots(suites: dict[str, Path]) -> list[Path]:
             orphans.append(snapshot)
             continue
         if suite_name not in cases_by_suite:
-            cases, _, _ = load_suite(suites[suite_name])
+            cases = load_suite(suites[suite_name])
             cases_by_suite[suite_name] = tuple(f"{case_name}." for case_name in cases)
         if not snapshot.name.startswith(cases_by_suite[suite_name]):
             orphans.append(snapshot)
@@ -134,7 +143,7 @@ def locate(suites: dict[str, Path], selector: str) -> None:
         parser.error(f"unknown transcript suite: {suite_name}")
 
     suite_path = suites[suite_name]
-    cases, _, _ = load_suite(suite_path)
+    cases = load_suite(suite_path)
     if separator:
         if case_name not in cases:
             parser.error(f"unknown transcript case in {suite_name}: {case_name}")
@@ -151,12 +160,37 @@ def locate(suites: dict[str, Path], selector: str) -> None:
         print(f"  snapshot: {snapshot}")
 
 
-def record_case(
-    suite_path: Path,
-    case_name: str,
-) -> RecordedTranscript:
-    cases, _, _ = load_suite(suite_path)
-    return cases[case_name](binary)
+def record_case(suite_path: Path, case_name: str, *, update: bool) -> set[Path]:
+    os.environ["MCP_CONSOLE_TEST_PYTHON"] = sys.executable
+    case = load_suite(suite_path)[case_name]
+    suite_name = suite_identifier(suite_path)
+    modes = available_executions(case, f"{suite_name}::{case_name}")
+    assert modes, "selected case has no available execution"
+    checked = set()
+    initialization = (suite_name, case_name) == (
+        initialization_suite,
+        initialization_case,
+    )
+    for index, execution in enumerate(modes):
+        try:
+            recorded = case(binary) if execution is None else case(binary, execution)
+            mode_snapshots = check_recording(
+                suite_name,
+                case_name,
+                recorded,
+                update=update and (index == 0 or initialization),
+                execution=execution.name if execution is not None else None,
+            )
+            assert initialization or index == 0 or mode_snapshots == checked, (
+                "execution modes produced different companion snapshots"
+            )
+            checked.update(mode_snapshots)
+        except BaseException as error:
+            if execution is not None:
+                error.add_note(f"execution mode: {execution.name}")
+            raise
+
+    return checked
 
 
 def format_duration(elapsed: float) -> str:
@@ -279,7 +313,7 @@ def selected_cases(
     selected: list[tuple[str, str, Path]] = []
     for suite_name, selected_case_names in selected_suites.items():
         suite_path = suites[suite_name]
-        cases, platforms, required_commands = load_suite(suite_path)
+        cases = load_suite(suite_path)
 
         if selected_case_names is None:
             case_names = list(cases)
@@ -292,56 +326,31 @@ def selected_cases(
                 )
             case_names = selected_case_names
 
-        if platforms is not None and sys.platform not in platforms:
-            print(f"{suite_name}: skipped on {sys.platform}")
-            continue
-
-        missing_commands = sorted(
-            command for command in required_commands if shutil.which(command) is None
-        )
-        if missing_commands:
-            print(
-                f"{suite_name}: skipped; missing {', '.join(missing_commands)} on PATH"
+        selected.extend(
+            (suite_name, case_name, suite_path)
+            for case_name in case_names
+            if available_executions(
+                cases[case_name], f"{suite_name}::{case_name}", report=True
             )
-            continue
-
-        for case_name in case_names:
-            supported = getattr(cases[case_name], "platforms", None)
-            if supported is not None and sys.platform not in supported:
-                print(f"{suite_name}::{case_name}: skipped on {sys.platform}")
-                continue
-            selected.append((suite_name, case_name, suite_path))
+        )
     return selected
 
 
 def prune_stale_snapshots(checked_snapshots: set[Path], orphans: list[Path]) -> None:
     snapshot_root = snapshot_directory
     checked_cases = {
-        (path.parent, path.name.split(".")[0]) for path in checked_snapshots
+        snapshot.with_suffix("")
+        for snapshot in checked_snapshots
+        if snapshot.suffix == ".yaml"
     }
     orphans = set(orphans)
 
     for snapshot in snapshot_root.rglob("*"):
         if not snapshot.is_file() or snapshot.suffix not in {".yaml", ".md", ".qmd"}:
             continue
-        name = snapshot.name.split(".")[0]
-        parts = snapshot.name.split(".")
-        peer_platform = (
-            len(parts) > 2
-            and parts[1] in {"darwin", "linux"}
-            and parts[1] != sys.platform
-        )
-        platform_variant = (
-            snapshot.with_name(f"{name}.{sys.platform}.yaml") in checked_snapshots
-        )
-        default_for_peer = platform_variant and (
-            len(parts) == 2 or parts[1] not in {"darwin", "linux"}
-        )
+        owner = snapshot.parent / snapshot.name.split(".", 1)[0]
         stale = snapshot in orphans or (
-            (snapshot.parent, name) in checked_cases
-            and snapshot not in checked_snapshots
-            and not peer_platform
-            and not default_for_peer
+            owner in checked_cases and snapshot not in checked_snapshots
         )
 
         if stale:
@@ -507,13 +516,7 @@ def main() -> None:
         raise SystemExit(status)
     if options.record_case is not None:
         suite_path, case_name, output_path = options.record_case
-        recorded = record_case(Path(suite_path), case_name)
-        checked = check_recording(
-            suite_identifier(Path(suite_path)),
-            case_name,
-            recorded,
-            update=options.update,
-        )
+        checked = record_case(Path(suite_path), case_name, update=options.update)
         with Path(output_path).open("wb") as output:
             pickle.dump(checked, output)
         return
@@ -542,7 +545,7 @@ def main() -> None:
 
     if options.list_tests:
         for suite_name, suite_path in suites.items():
-            cases, _, _ = load_suite(suite_path)
+            cases = load_suite(suite_path)
             for case_name in cases:
                 print(f"{suite_name}::{case_name}")
         return

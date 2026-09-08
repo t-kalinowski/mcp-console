@@ -1,19 +1,19 @@
 use std::ffi::OsString;
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(unix)]
 mod event_writer;
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(unix))]
 pub(crate) fn run(_command_line: &[OsString]) -> Result<(), String> {
     Err("the worker relay is currently supported only on macOS".to_string())
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(unix)]
 pub(crate) fn run(command_line: &[OsString]) -> Result<(), String> {
     platform::run(command_line)
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(unix)]
 mod platform {
     use std::io::{Read, Write};
     use std::os::fd::{AsRawFd, RawFd};

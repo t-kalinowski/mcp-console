@@ -7,19 +7,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from boundaries.relay_worker._harness import RelayWorkerClient
 from support.assertions import tool_text as _tool_text
+from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript
 from support.suites import run_this_suite
 
 
-PLATFORMS = {"darwin", "linux"}
-
-
-def test_restarts_session(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_restarts_session(binary: Path, execution: Execution) -> Transcript:
     client = RelayWorkerClient(
         binary,
         capture_stdin_close=True,
         capture_worker_sideband_close=True,
+        execution=execution,
     )
     # fmt: r
     before_restart = code(r"""

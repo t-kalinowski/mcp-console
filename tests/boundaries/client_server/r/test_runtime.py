@@ -6,15 +6,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.client import McpClient
+from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin", "linux"}
 
-
-def test_default_sandbox_supports_r_core_detection(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_detects_cpu_cores(binary: Path, execution: Execution) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
@@ -30,10 +30,12 @@ def test_default_sandbox_supports_r_core_detection(binary: Path) -> Transcript:
     return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_applies_complete_expressions_before_incomplete_source(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
-    client = McpClient(binary, ("serve",))
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
@@ -52,8 +54,11 @@ def test_applies_complete_expressions_before_incomplete_source(
     return client.finish()
 
 
-def test_runs_native_top_level_bookkeeping(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_runs_native_top_level_bookkeeping(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
@@ -84,8 +89,11 @@ def test_runs_native_top_level_bookkeeping(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_preserves_native_stack_and_last_value_binding(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_preserves_native_stack_and_last_value_binding(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""

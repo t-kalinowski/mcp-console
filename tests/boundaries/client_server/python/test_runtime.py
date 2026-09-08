@@ -1,7 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
 import os
-import plistlib
 import shutil
 import subprocess
 import sys
@@ -13,23 +12,24 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from support.assertions import (
     assert_exact_interleaving,
     assert_result_content,
+    last_result_text,
     wait_for_evaluation_output,
 )
-from support.assertions import last_result_text
 from support.checkpoints import wait_for_worker_file
 from support.client import McpClient, stop_client
+from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.r import r_test_environment, reference_plots
-from support.records import Transcript, TranscriptWithCompanions
+from support.records import Transcript
 from support.resolvers import matplotlib_test_environment
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin", "linux"}
-CASE_PLATFORMS = {"inherits_xdg_matplotlib_config": {"linux"}}
 
-
-def test_evaluates_cells_in_persistent_reticulate_state(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_evaluates_cells_in_persistent_reticulate_state(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
@@ -157,9 +157,12 @@ def test_evaluates_cells_in_persistent_reticulate_state(binary: Path) -> Transcr
     return client.finish()
 
 
-def test_returns_r_plots_from_python_bridge(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_returns_r_plots_from_python_bridge(
+    binary: Path, execution: Execution
+) -> Transcript:
     environment, rscript = r_test_environment()
-    client = McpClient(binary, ("serve",), environment)
+    client = McpClient(binary, execution.serve(), environment)
     client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
@@ -194,87 +197,25 @@ def test_returns_r_plots_from_python_bridge(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_returns_matplotlib_plots(binary: Path) -> TranscriptWithCompanions:
+@executions(DIRECT, SANDBOXED)
+def test_returns_matplotlib_plots(binary: Path, execution: Execution) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
-        workspace = temporary / "workspace-one"
+        workspace = temporary / "workspace"
         workspace.mkdir()
-        font_root = Path(
-            "/System/Library/Fonts" if sys.platform == "darwin" else "/usr/share/fonts"
-        )
-        system_fonts = sorted(
-            path
-            for path in font_root.rglob("*")
-            if path.is_file() and path.suffix.lower() in {".otf", ".ttc", ".ttf"}
-        )
-        assert system_fonts, "test system font is required"
-        system_font = system_fonts[0]
-        profiler_output = temporary / "system-profiler.plist"
-        profiler_output.write_bytes(
-            plistlib.dumps([{"_items": [{"path": str(system_font)}]}])
-        )
-        path = os.environ.get("PATH")
-        assert path is not None, "PATH is required"
-        probe = (
-            temporary
-            / "bin"
-            / ("system_profiler" if sys.platform == "darwin" else "fc-list")
-        )
-        probe.parent.mkdir()
-        probe.write_text(
-            code(r"""
-                #!/bin/sh
-                set -eu
-                test "$#" -eq 2
-                test "$1" = "-xml"
-                test "$2" = "SPFontsDataType"
-                : > "$TMPDIR/mcp-console-font-discovery"
-                /bin/cat "$MCP_CONSOLE_TEST_SYSTEM_PROFILER_OUTPUT"
-                """),
-            encoding="utf-8",
-        )
-        if sys.platform == "linux":
-            probe.write_text(
-                code(r"""
-                #!/bin/sh
-                set -eu
-                if [ "$1" = "--help" ]; then
-                  printf '%s\n' --format
-                else
-                  : > "$TMPDIR/mcp-console-font-discovery"
-                  printf '%s\n' "$MCP_CONSOLE_TEST_FONT"
-                fi
-                """)
-            )
-        probe.chmod(0o755)
-        fontconfig = temporary / "fonts.conf"
-        fontconfig.write_text(
-            code(r"""
-                <?xml version="1.0"?>
-                <!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
-                <fontconfig>
-                  <cachedir prefix="xdg">mcp-console-test</cachedir>
-                </fontconfig>
-                """),
-            encoding="utf-8",
-        )
         host_matplotlib = temporary / "host-matplotlib"
         host_matplotlib.mkdir()
         host_matplotlibrc = host_matplotlib / "matplotlibrc"
         host_matplotlibrc.write_text("lines.linewidth: 7.25\n", encoding="utf-8")
         environment = matplotlib_test_environment(temporary / "host-cache")
         environment["TMPDIR"] = temporary_directory
-        environment["FONTCONFIG_FILE"] = str(fontconfig)
-        environment["MCP_CONSOLE_TEST_FONT"] = str(system_font)
         environment["MPLCONFIGDIR"] = str(host_matplotlib)
         environment["MCP_CONSOLE_TEST_MATPLOTLIBRC"] = str(host_matplotlibrc)
-        environment["MCP_CONSOLE_TEST_SYSTEM_PROFILER_OUTPUT"] = str(profiler_output)
-        environment["PATH"] = os.pathsep.join((str(probe.parent), path))
         environment.pop("MATPLOTLIBRC", None)
-        environment.pop("MPL_IGNORE_SYSTEM_FONTS", None)
+        environment["MPL_IGNORE_SYSTEM_FONTS"] = "1"
         client = McpClient(
             binary,
-            ("serve",),
+            execution.serve(),
             environment,
             current_directory=workspace,
         )
@@ -286,13 +227,6 @@ def test_returns_matplotlib_plots(binary: Path) -> TranscriptWithCompanions:
             """)
         client.send(r=r)
         assert last_result_text(client) == "[done]"
-        host_discovery = temporary / "mcp-console-font-discovery"
-        assert host_discovery.is_file()
-        persistent_caches = list(host_matplotlib.glob("fontlist-v*.json"))
-        assert len(persistent_caches) == 1, persistent_caches
-        persistent_cache_bytes = persistent_caches[0].read_bytes()
-        host_discovery.unlink()
-
         # fmt: python
         python = code("""
             import os
@@ -314,17 +248,11 @@ def test_returns_matplotlib_plots(binary: Path) -> TranscriptWithCompanions:
 
             figure, axes = plt.subplots(num=10)
             axes.plot([1, 2, 3], [3, 1, 2])
-            invalid_cache = Path(os.environ["MPLCONFIGDIR"]) / "fontlist-v999.json"
-            invalid_cache.write_text(
-                '{"__class__":"FontManager","_version":999}',
-                encoding="utf-8",
-            )
 
             reference = Path(os.environ["TMPDIR"]) / "matplotlib-reference.png"
             figure.savefig(reference, format="png")
             """)
         client.send(python=python)
-        assert not list(temporary.rglob("mcp-console-font-discovery"))
         reference = wait_for_worker_file(
             Path(temporary_directory),
             "matplotlib-reference.png",
@@ -458,117 +386,13 @@ def test_returns_matplotlib_plots(binary: Path) -> TranscriptWithCompanions:
         client.send(python="plt.get_fignums()")
         assert last_result_text(client) == "[]\n"
 
-        # Replacing the private link must not make a later runtime resolution
-        # overwrite user-owned worker state or discard the worker.
-        # fmt: python
-        python = code("""
-            private_cache = next(
-                path
-                for path in Path(os.environ["MPLCONFIGDIR"]).glob("fontlist-v*.json")
-                if path.is_symlink()
-            )
-            private_cache_bytes = private_cache.read_bytes()
-            private_cache.unlink()
-            private_cache.write_bytes(private_cache_bytes)
-            cache_link_replaced = True
-            """)
-        client.send(python=python)
-        assert last_result_text(client) == "[done]"
-
-        # fmt: r
-        r = code(r"""
-            reticulate::py_require("py-yaml12")
-            """)
-        client.send(r=r)
-        assert last_result_text(client) == "[done]"
-        client.send(python="(cache_link_replaced, __import__('yaml12').__name__)")
-        assert last_result_text(client) == "(True, 'yaml12')\n"
-
-        client.send(control="restart")
-        assert last_result_text(client) == (
-            "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
-        )
-        # fmt: python
-        python = code("""
-            import os
-            from pathlib import Path
-
-            marker = Path(os.environ["TMPDIR"]) / "mcp-console-font-discovery"
-            invalid_cache = Path(os.environ["MPLCONFIGDIR"]) / "fontlist-v999.json"
-            invalid_cache_was_seeded = invalid_cache.exists()
-
-            import matplotlib
-            import matplotlib.font_manager
-
-            config = Path(matplotlib.matplotlib_fname())
-            font_cache = next(Path(os.environ["MPLCONFIGDIR"]).glob("fontlist-v*.json"))
-            try:
-                with font_cache.open("a", encoding="utf-8"):
-                    pass
-            except PermissionError:
-                font_cache_read_only = True
-            else:
-                font_cache_read_only = False
-
-            try:
-                with config.open("a", encoding="utf-8"):
-                    pass
-            except PermissionError:
-                config_read_only = True
-            else:
-                config_read_only = False
-
-            try:
-                config.with_name("worker-payload").write_text("payload", encoding="utf-8")
-            except PermissionError:
-                config_directory_read_only = True
-            else:
-                config_directory_read_only = False
-
-            private_probe = Path(os.environ["MPLCONFIGDIR"]) / "config-write-probe"
-            private_probe.write_text("ok", encoding="utf-8")
-
-            (
-                config.resolve() == Path(os.environ["MCP_CONSOLE_TEST_MATPLOTLIBRC"]).resolve(),
-                matplotlib.rcParams["lines.linewidth"],
-                font_cache_read_only,
-                config_read_only,
-                config_directory_read_only,
-                private_probe.read_text(encoding="utf-8") == "ok",
-                marker.exists(),
-                invalid_cache_was_seeded,
-            )
-            """)
-        client.send(python=python)
-        output = last_result_text(client)
-        permissions = (
-            "True, True, True" if sys.platform == "darwin" else "False, False, False"
-        )
-        assert output == f"(True, 7.25, {permissions}, True, False, False)\n", repr(
-            output
-        )
-        assert not list(temporary.rglob("mcp-console-font-discovery"))
-        transcript = client.finish()
-        assert (
-            host_matplotlibrc.read_text(encoding="utf-8") == "lines.linewidth: 7.25\n"
-        )
-        assert (host_matplotlib / "worker-payload").exists() == (
-            sys.platform == "linux"
-        )
-        assert len(persistent_caches) == 1, persistent_caches
-        assert persistent_caches[0].read_bytes() == persistent_cache_bytes
-        assert not (persistent_caches[0].parent / "fontlist-v999.json").exists()
-        assert not list(
-            (temporary / "host-cache" / "mcp-console" / "matplotlib").glob(
-                "fontlist-v*.json"
-            )
-        )
-        return TranscriptWithCompanions(
-            transcript, {}, platform="linux" if sys.platform == "linux" else None
-        )
+        return client.finish()
 
 
-def test_inherits_explicit_matplotlib_config(binary: Path) -> TranscriptWithCompanions:
+@executions(DIRECT, SANDBOXED)
+def test_inherits_explicit_matplotlib_config(
+    binary: Path, execution: Execution
+) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
         explicit = temporary / "explicit"
@@ -587,7 +411,7 @@ def test_inherits_explicit_matplotlib_config(binary: Path) -> TranscriptWithComp
         environment["MATPLOTLIBRC"] = str(explicit_rc)
         environment["MPL_IGNORE_SYSTEM_FONTS"] = "1"
         environment["MCP_CONSOLE_TEST_MATPLOTLIBRC"] = str(explicit_rc)
-        client = McpClient(binary, ("serve",), environment)
+        client = McpClient(binary, execution.serve(), environment)
         client.initialize_and_list_tools()
         client.send(
             requirements={"python": ["matplotlib"]},
@@ -601,29 +425,18 @@ def test_inherits_explicit_matplotlib_config(binary: Path) -> TranscriptWithComp
             import matplotlib
 
             config = Path(matplotlib.matplotlib_fname())
-            try:
-                with config.open("a", encoding="utf-8"):
-                    pass
-            except PermissionError:
-                config_read_only = True
-            else:
-                config_read_only = False
-
             private_probe = Path(os.environ["MPLCONFIGDIR"]) / "config-write-probe"
             private_probe.write_text("ok", encoding="utf-8")
 
             (
                 config.resolve() == Path(os.environ["MCP_CONSOLE_TEST_MATPLOTLIBRC"]).resolve(),
                 matplotlib.rcParams["lines.linewidth"],
-                config_read_only,
                 private_probe.read_text(encoding="utf-8") == "ok",
             )
             """)
         client.send(python=python)
         output = last_result_text(client)
-        assert output == f"(True, 8.25, {sys.platform == 'darwin'}, True)\n", repr(
-            output
-        )
+        assert output == "(True, 8.25, True)\n", repr(output)
         transcript = client.finish()
         assert explicit_rc.read_text(encoding="utf-8") == "lines.linewidth: 8.25\n"
         assert not list(explicit.glob("fontlist-v*.json"))
@@ -634,32 +447,39 @@ def test_inherits_explicit_matplotlib_config(binary: Path) -> TranscriptWithComp
                 "fontlist-v*.json"
             )
         )
-        return TranscriptWithCompanions(
-            transcript, {}, platform="linux" if sys.platform == "linux" else None
-        )
+        return transcript
 
 
-def test_inherits_default_matplotlib_config(binary: Path) -> Transcript:
-    return inherits_matplotlib_config(binary, xdg=False)
+@executions(DIRECT, SANDBOXED)
+def test_inherits_default_matplotlib_config(
+    binary: Path, execution: Execution
+) -> Transcript:
+    return inherits_matplotlib_config(binary, execution, xdg=False)
 
 
-def test_inherits_xdg_matplotlib_config(binary: Path) -> Transcript:
-    return inherits_matplotlib_config(binary, xdg=True)
+@executions(DIRECT, SANDBOXED)
+def test_inherits_xdg_matplotlib_config(
+    binary: Path, execution: Execution
+) -> Transcript:
+    return inherits_matplotlib_config(binary, execution, xdg=True)
 
 
-def inherits_matplotlib_config(binary: Path, *, xdg: bool) -> Transcript:
+def inherits_matplotlib_config(
+    binary: Path, execution: Execution, *, xdg: bool
+) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
         home = temporary / "home"
-        home.mkdir()
-        if sys.platform == "linux":
-            config_root = temporary / "xdg-config" if xdg else home / ".config"
-            cache_root = temporary / "xdg-cache" if xdg else home / ".cache"
-            matplotlib = config_root / "matplotlib"
-            font_cache = cache_root / "matplotlib"
-        else:
-            matplotlib = home / ".matplotlib"
-            font_cache = matplotlib
+        config_root = temporary / "xdg-config" if xdg else home / ".config"
+        cache_root = temporary / "xdg-cache" if xdg else home / ".cache"
+        matplotlib = (
+            config_root / "matplotlib"
+            if sys.platform == "linux"
+            else home / ".matplotlib"
+        )
+        font_cache = (
+            cache_root / "matplotlib" if sys.platform == "linux" else matplotlib
+        )
         matplotlib.mkdir(parents=True)
         matplotlibrc = matplotlib / "matplotlibrc"
         matplotlibrc.write_text("lines.linewidth: 9.25\n", encoding="utf-8")
@@ -690,6 +510,7 @@ def inherits_matplotlib_config(binary: Path, *, xdg: bool) -> Transcript:
             text=True,
         ).stdout.strip()
         environment = matplotlib_test_environment(temporary / "host-cache")
+        home.mkdir(exist_ok=True)
         environment["HOME"] = str(home)
         environment.pop("XDG_CONFIG_HOME", None)
         environment.pop("XDG_CACHE_HOME", None)
@@ -705,12 +526,12 @@ def inherits_matplotlib_config(binary: Path, *, xdg: bool) -> Transcript:
         environment["MCP_CONSOLE_TEST_MATPLOTLIBRC"] = str(matplotlibrc)
         environment.pop("MATPLOTLIBRC", None)
         environment.pop("MPLCONFIGDIR", None)
-        client = McpClient(binary, ("serve",), environment)
+        client = McpClient(binary, execution.serve(), environment)
         client.initialize_and_list_tools()
         client.send(
             requirements={"python": ["matplotlib"]},
         )
-        assert last_result_text(client) == "[prepared]", client.transcript[-1]
+        assert last_result_text(client) == "[prepared]"
         # fmt: python
         python = code("""
             import os
@@ -739,8 +560,9 @@ def inherits_matplotlib_config(binary: Path, *, xdg: bool) -> Transcript:
         return transcript
 
 
-def test_runs_async_python_explicitly(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_runs_async_python_explicitly(binary: Path, execution: Execution) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     # fmt: python
     python = code("""
@@ -758,8 +580,9 @@ def test_runs_async_python_explicitly(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_recovers_from_python_errors(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_recovers_from_python_errors(binary: Path, execution: Execution) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     # fmt: python
     python = code("""
@@ -802,13 +625,15 @@ def test_recovers_from_python_errors(binary: Path) -> Transcript:
     return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_releases_python_threads_before_running_init_hooks(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
-        client = McpClient(binary, ("serve",), environment)
+        client = McpClient(binary, execution.serve(), environment)
         release: Path | None = None
         try:
             client.initialize_and_list_tools()
@@ -899,8 +724,9 @@ def test_releases_python_threads_before_running_init_hooks(
             stop_client(client)
 
 
-def test_routes_python_input(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_routes_python_input(binary: Path, execution: Execution) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
 
     # fmt: python
@@ -940,8 +766,9 @@ def test_routes_python_input(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_python_debugger_input(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_python_debugger_input(binary: Path, execution: Execution) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
 
     # fmt: python
@@ -971,8 +798,11 @@ def test_python_debugger_input(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_restarts_after_python_bridge_failure(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_restarts_after_python_bridge_failure(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""

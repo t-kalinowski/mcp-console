@@ -15,12 +15,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.capture import read_lines
-from support.events import Events
 from support.checkpoints import FifoCheckpoint
+from support.events import Events
+from support.native import SHARED_LIBRARY_FLAG
+from support.native import LOADER_VARIABLE
 from support.records import Transcript
+from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, WORKER, requires
 from support.suites import run_this_suite
-
-PLATFORMS = {"darwin", "linux"}
 
 
 @contextmanager
@@ -34,7 +35,7 @@ def stdout_backpressure_environment(
         subprocess.run(
             [
                 "cc",
-                "-dynamiclib" if sys.platform == "darwin" else "-shared",
+                SHARED_LIBRARY_FLAG,
                 "-fPIC",
                 "-std=c11",
                 "-Wall",
@@ -51,9 +52,7 @@ def stdout_backpressure_environment(
         blocked = FifoCheckpoint.create(root / "stdout-blocked")
         environment = os.environ.copy()
         environment["TMPDIR"] = directory
-        environment[
-            "DYLD_INSERT_LIBRARIES" if sys.platform == "darwin" else "LD_PRELOAD"
-        ] = str(interposer)
+        environment[LOADER_VARIABLE] = str(interposer)
         environment["MCP_CONSOLE_TEST_STDOUT_BLOCKED"] = str(root / "stdout-blocked")
         try:
             yield root, environment, blocked
@@ -144,6 +143,7 @@ def retirement_result(
     ]
 
 
+@requires(WORKER, NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_starts_worker_shutdown_while_relay_stdout_is_backpressured(
     binary: Path,
 ) -> Transcript:
@@ -159,6 +159,7 @@ def test_starts_worker_shutdown_while_relay_stdout_is_backpressured(
         return retirement_result(process, worker_exit)
 
 
+@requires(WORKER, NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_finishes_natural_worker_exit_while_relay_stdout_is_backpressured(
     binary: Path,
 ) -> Transcript:
@@ -167,6 +168,7 @@ def test_finishes_natural_worker_exit_while_relay_stdout_is_backpressured(
         return retirement_result(process, worker_exit)
 
 
+@requires(WORKER, NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_retires_when_backpressure_exhausts_supervisor_event_reserve(
     binary: Path,
 ) -> Transcript:
@@ -201,6 +203,7 @@ def test_retires_when_backpressure_exhausts_supervisor_event_reserve(
         ]
 
 
+@requires(WORKER, NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_resumes_relay_output_after_downstream_backpressure(
     binary: Path,
 ) -> Transcript:
@@ -233,6 +236,7 @@ def test_resumes_relay_output_after_downstream_backpressure(
         ]
 
 
+@requires(WORKER, NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_finishes_startup_failure_while_relay_stdout_is_backpressured(
     binary: Path,
 ) -> Transcript:
@@ -287,7 +291,7 @@ def retirement_clock_environment(
         subprocess.run(
             [
                 "cc",
-                "-dynamiclib" if sys.platform == "darwin" else "-shared",
+                SHARED_LIBRARY_FLAG,
                 "-fPIC",
                 "-std=c11",
                 "-Wall",
@@ -303,9 +307,7 @@ def retirement_clock_environment(
         )
         marker = root / "output-complete"
         environment = os.environ.copy()
-        environment[
-            "DYLD_INSERT_LIBRARIES" if sys.platform == "darwin" else "LD_PRELOAD"
-        ] = str(interposer)
+        environment[LOADER_VARIABLE] = str(interposer)
         environment["MCP_CONSOLE_TEST_OUTPUT_COMPLETE"] = str(marker)
         environment["MCP_CONSOLE_TEST_CLOCK_AFTER_FRAME"] = (
             json.dumps(after_frame, separators=(",", ":")) + "\n"
@@ -313,6 +315,7 @@ def retirement_clock_environment(
         yield root, environment
 
 
+@requires(WORKER, NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_succeeds_when_deadline_passes_after_final_output(binary: Path) -> Transcript:
     with retirement_clock_environment({"kind": "worker_exited", "code": 0}) as (
         root,
@@ -346,6 +349,7 @@ os.write(int(os.environ["MCP_CONSOLE_SIDEBAND_FD"]), b'{"kind":"ready"}\n')
         ]
 
 
+@requires(WORKER, NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_writes_regular_file_after_retirement_deadline(binary: Path) -> Transcript:
     with retirement_clock_environment({"kind": "stdout_closed"}) as (
         root,

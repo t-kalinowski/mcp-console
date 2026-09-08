@@ -7,23 +7,26 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.assertions import last_tool_text
-from support.checkpoints import release_fixture_checkpoint
-from support.client import McpClient
-from support.processes import stop_process
-from support.records import Transcript
-from support.suites import run_this_suite
-
-PLATFORMS = {"darwin", "linux"}
-
 from boundaries.client_server._harness import (
     expose_idle_sideband_output,
     submit_prompted_stdin,
     wait_for_marker,
 )
+from support.assertions import last_tool_text
+from support.checkpoints import release_fixture_checkpoint
+from support.client import McpClient
+from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.processes import stop_process
+from support.records import Transcript
+from support.requirements import PROCESS_EVENTS, requires
+from support.suites import run_this_suite
 
 
-def test_demarcates_idle_prelude_across_cell_outcomes(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS)
+def test_demarcates_idle_prelude_across_cell_outcomes(
+    binary: Path, execution: Execution
+) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
@@ -31,7 +34,7 @@ def test_demarcates_idle_prelude_across_cell_outcomes(binary: Path) -> Transcrip
         environment["TMPDIR"] = temporary_directory
         client = McpClient(
             binary,
-            ("serve", "--worker", str(zod)),
+            execution.serve("--worker", str(zod)),
             environment,
         )
         passed = False

@@ -7,16 +7,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from boundaries.relay_worker._harness import RelayWorkerClient
 from support.assertions import tool_text as _tool_text
+from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript
+from support.requirements import POSIX, requires
 from support.suites import run_this_suite
 
 
-PLATFORMS = {"darwin", "linux"}
-
-
-def test_routes_python_output(binary: Path) -> Transcript:
-    client = RelayWorkerClient(binary)
+@executions(DIRECT, SANDBOXED)
+def test_routes_python_output(binary: Path, execution: Execution) -> Transcript:
+    client = RelayWorkerClient(binary, execution=execution)
     # fmt: r
     r = code(r"""
         suppressWarnings(
@@ -77,8 +77,9 @@ def test_routes_python_output(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_routes_r_console_channels(binary: Path) -> Transcript:
-    client = RelayWorkerClient(binary)
+@executions(DIRECT, SANDBOXED)
+def test_routes_r_console_channels(binary: Path, execution: Execution) -> Transcript:
+    client = RelayWorkerClient(binary, execution=execution)
     # fmt: r
     r = code(r"""
         cat("R output\n")
@@ -94,8 +95,12 @@ def test_routes_r_console_channels(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_preserves_python_output_from_fork_children(binary: Path) -> Transcript:
-    client = RelayWorkerClient(binary)
+@executions(DIRECT, SANDBOXED)
+@requires(POSIX)
+def test_preserves_python_output_from_fork_children(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = RelayWorkerClient(binary, execution=execution)
     # fmt: r
     r = code(r"""
         python <- Sys.which("python3")
@@ -109,13 +114,17 @@ def test_preserves_python_output_from_fork_children(binary: Path) -> Transcript:
     python = code(r"""
         import os
         import sys
-
-        assert fork_ready
         import warnings
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            child = os.fork()
+        # The client-server fork-resolution case preserves CPython's complete
+        # deprecation diagnostic. This cell selects only the four stream writes.
+        warnings.filterwarnings(
+            "ignore",
+            message=r"This process \(pid=\d+\) is multi-threaded, use of fork\(\) may lead to deadlocks in the child\.$",
+            category=DeprecationWarning,
+        )
+        assert fork_ready
+        child = os.fork()
         if child == 0:
             print("fork child stdout", flush=True)
             sys.stderr.write("fork child stderr\n")
@@ -139,8 +148,11 @@ def test_preserves_python_output_from_fork_children(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_drains_standard_streams_while_evaluating(binary: Path) -> Transcript:
-    client = RelayWorkerClient(binary)
+@executions(DIRECT, SANDBOXED)
+def test_drains_standard_streams_while_evaluating(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = RelayWorkerClient(binary, execution=execution)
     size = 4 * 1024 * 1024
     # fmt: python
     python = code(rf"""

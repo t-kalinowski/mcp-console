@@ -8,18 +8,18 @@ mod evaluation;
 mod lifecycle;
 mod output;
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(unix)]
 mod child_exit;
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(unix)]
 mod events;
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(unix)]
 mod startup;
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(unix)]
 #[path = "worker_client/unix.rs"]
 mod platform;
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(unix))]
 #[path = "worker_client/unsupported.rs"]
 mod platform;
 
@@ -354,9 +354,9 @@ impl Client {
     }
 
     pub(crate) fn builtin(no_sandbox: bool) -> Result<Self, String> {
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        #[cfg(unix)]
         return startup::with_input_owner(|on_started| Self::builtin_with(no_sandbox, on_started));
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        #[cfg(not(unix))]
         Self::builtin_with(no_sandbox, &|_| Ok(()))
     }
 
@@ -368,7 +368,7 @@ impl Client {
         let configured_python = std::env::var_os("RETICULATE_PYTHON");
         let program = std::env::current_exe()
             .map_err(|error| format!("failed to locate the R worker executable: {error}"))?;
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        #[cfg(unix)]
         let (r, duckdb_extensions, python, r_resolver) = {
             match crate::resolver::detect_r_bootstrap(&mut python_resolver, on_started)? {
                 Some(bootstrap) => (
@@ -389,7 +389,7 @@ impl Client {
                 ),
             }
         };
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        #[cfg(not(unix))]
         let (r, duckdb_extensions, python, r_resolver) = (
             Option::<crate::resolver::ManagedR>::None,
             Default::default(),

@@ -12,12 +12,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import last_tool_text
 from support.client import McpClient, stop_client
+from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.processes import stop_process, stop_process_group
 from support.records import Transcript
+from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, requires
 from support.resolvers import resolver_interrupt_permission_environment
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin", "linux"}
 FIXTURE_CHECKPOINT_TIMEOUT_SECONDS = 15
 
 from boundaries.client_server._harness import (
@@ -31,14 +32,17 @@ from boundaries.client_server._harness import (
 )
 
 
-def test_interrupts_running_worker_with_sigint(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_interrupts_running_worker_with_sigint(
+    binary: Path, execution: Execution
+) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     environment = os.environ.copy()
     with ZodFixtureControl() as control:
         control.configure(environment)
         client = McpClient(
             binary,
-            ("serve", "--worker", str(zod)),
+            execution.serve("--worker", str(zod)),
             environment,
         )
         finished = False
@@ -90,7 +94,11 @@ def test_interrupts_running_worker_with_sigint(binary: Path) -> Transcript:
                 stop_client(client)
 
 
-def test_supervises_stopped_and_continued_workers(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS)
+def test_supervises_stopped_and_continued_workers(
+    binary: Path, execution: Execution
+) -> Transcript:
     wrapper = Path(__file__).resolve().parents[3] / "fixtures" / "stop_continue_zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
@@ -101,7 +109,7 @@ def test_supervises_stopped_and_continued_workers(binary: Path) -> Transcript:
         environment["ZOD_STARTUP_CONTROL"] = str(startup_control)
         client = McpClient(
             binary,
-            ("serve", "--worker", str(wrapper)),
+            execution.serve("--worker", str(wrapper)),
             environment,
         )
         workers: list[tuple[int, int]] = []
@@ -114,6 +122,7 @@ def test_supervises_stopped_and_continued_workers(binary: Path) -> Transcript:
                 set(),
                 workers,
                 client,
+                execution,
             )
 
             interrupt = client.start_send(control="interrupt", timeout_ms=0)
@@ -155,12 +164,17 @@ def test_supervises_stopped_and_continued_workers(binary: Path) -> Transcript:
                     {worker_pid},
                     workers,
                     client,
+                    execution,
                 )
             )
-            assert replacement_group != worker_group, (
-                "replacement reused the retiring process group"
+            assert replacement_pid != worker_pid, (
+                "replacement reused the retiring worker"
             )
-            wait_for_worker_retirement(worker_pid, worker_group, client)
+            if execution == SANDBOXED:
+                assert replacement_group != worker_group, (
+                    "replacement reused the retiring process group"
+                )
+            wait_for_worker_retirement(worker_pid, worker_group, client, execution)
 
             continue_stopped_worker(replacement_pid, replacement_group)
             wait_for_path(
@@ -191,11 +205,15 @@ def test_supervises_stopped_and_continued_workers(binary: Path) -> Transcript:
         finally:
             if not passed:
                 for recorded_pid, recorded_group in reversed(workers):
-                    stop_recorded_worker(recorded_pid, recorded_group)
+                    stop_recorded_worker(recorded_pid, recorded_group, execution)
                 stop_process(client.process)
 
 
-def test_reports_resolver_interrupt_permission_error(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS, NATIVE_FIXTURES)
+def test_reports_resolver_interrupt_permission_error(
+    binary: Path, execution: Execution
+) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
@@ -209,7 +227,7 @@ def test_reports_resolver_interrupt_permission_error(binary: Path) -> Transcript
 
         client = McpClient(
             binary,
-            ("serve", "--worker", str(zod)),
+            execution.serve("--worker", str(zod)),
             environment,
         )
         resolver_group = None
@@ -288,8 +306,11 @@ def test_reports_resolver_interrupt_permission_error(binary: Path) -> Transcript
             resolver_lifetime.close()
 
 
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS, NATIVE_FIXTURES)
 def test_reports_runtime_r_resolver_interrupt_permission_error(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
@@ -303,7 +324,7 @@ def test_reports_runtime_r_resolver_interrupt_permission_error(
         ) = resolver_interrupt_permission_environment(temporary_path)
         client = McpClient(
             binary,
-            ("serve", "--worker", str(zod)),
+            execution.serve("--worker", str(zod)),
             environment,
         )
         resolver_group = None

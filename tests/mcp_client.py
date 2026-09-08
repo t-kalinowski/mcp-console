@@ -14,7 +14,9 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from support.client import McpClient
-from support.macos import capture_darwin_process_identity, signal_darwin_process
+from support.events import Events
+from support.processes import capture_process_identity, signal_process
+from support.requirements import POSIX, PROCESS_EVENTS
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -124,7 +126,7 @@ def test_waits_with_client(binary: Path) -> list[dict[str, str]]:
 """.lstrip()
 
 
-@unittest.skipUnless(os.name == "posix", "requires POSIX FIFO APIs")
+@unittest.skipUnless(POSIX.available, POSIX.reason)
 class McpClientTests(unittest.TestCase):
     @contextmanager
     def client_runner(
@@ -153,6 +155,8 @@ class McpClientTests(unittest.TestCase):
                 "client.py",
                 "records.py",
                 "snapshots.py",
+                "requirements.py",
+                "execution.py",
             ):
                 shutil.copy2(ROOT / "tests" / "support" / name, support / name)
             binary.touch()
@@ -279,7 +283,7 @@ class McpClientTests(unittest.TestCase):
             self.assertEqual(client.process.returncode, 0)
             self.assertTrue((root / "stdin-closed").is_file())
 
-    @unittest.skipUnless(sys.platform == "darwin", "requires macOS process exit events")
+    @unittest.skipUnless(PROCESS_EVENTS.available, PROCESS_EVENTS.reason)
     def test_runner_interrupt_allows_client_to_reap_unresponsive_server(self) -> None:
         with self.client_runner(RUNNER_CLIENT_SUITE, "--timeout", "60") as (
             process,
@@ -287,36 +291,30 @@ class McpClientTests(unittest.TestCase):
             checkpoints,
         ):
             identity = None
-            exits = select.kqueue()
+            exits = Events()
             try:
                 ready, _, _ = select.select([checkpoints[2]], [], [], 10)
                 self.assertTrue(ready, "case did not receive its server response")
                 self.assertEqual(os.read(checkpoints[2], 1), b"1")
                 pid = int((root / "server-pid").read_text())
-                identity = capture_darwin_process_identity(pid)
-                watch = select.kevent(
-                    pid,
-                    filter=select.KQ_FILTER_PROC,
-                    flags=select.KQ_EV_ADD | select.KQ_EV_ONESHOT,
-                    fflags=select.KQ_NOTE_EXIT,
-                )
-                self.assertEqual(exits.control([watch], 0, 0), [])
+                identity = capture_process_identity(pid)
+                exits.watch_process(pid)
                 process.send_signal(signal.SIGINT)
                 ready, _, _ = select.select([checkpoints[4]], [], [], 10)
                 self.assertTrue(ready, "case did not close server stdin")
                 self.assertEqual(os.read(checkpoints[4], 1), b"1")
                 # Server exit must leave room for the case to finish before
                 # its supervisor's 15-second forced-cleanup deadline.
-                observed = exits.control(None, 1, 14)
+                observed = exits.wait(14)
                 self.assertTrue(observed, "client left no time for case cleanup")
-                self.assertEqual(observed[0].ident, pid)
+                self.assertEqual(observed, {pid})
                 stdout, stderr = process.communicate(timeout=5)
                 self.assertNotEqual(process.returncode, 0, stdout)
                 self.assertEqual((root / "client-closed").read_text(), "-9")
                 self.assertIn("KeyboardInterrupt", stderr)
             finally:
                 if identity is not None:
-                    signal_darwin_process(identity, signal.SIGKILL)
+                    signal_process(identity, signal.SIGKILL)
                 exits.close()
 
     def test_later_response_reports_diagnostics_before_runner_deadline(self) -> None:
