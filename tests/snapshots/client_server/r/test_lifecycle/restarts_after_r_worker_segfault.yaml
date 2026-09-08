@@ -19,7 +19,7 @@ result:
       text: |2-
 
          *** caught segfault ***
-        address <read-only page>, cause 'invalid permissions'
+        address 0x0, cause 'memory not mapped'
 
         Traceback:
          1: .C("mcp_test_segfault")

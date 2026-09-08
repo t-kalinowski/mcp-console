@@ -188,6 +188,8 @@ All platform availability decisions belong in test support.
 `WORKER`, `PROCESS_EVENTS`, and `NATIVE_FIXTURES` support macOS and Linux.
 Linux process-observation fixtures require procfs, inotify, and pidfds (kernel 5.3 or later); this is a test-host requirement, not a worker runtime requirement.
 Linux descriptor compatibility cases use seccomp to reproduce unavailable `close_range` and CLOEXEC-flag support.
+R null-fault recovery uses mutually exclusive diagnostic cases: ARM macOS reports `SEGV_ACCERR`, while Linux and Intel macOS report `SEGV_MAPERR`.
+Both cases use the same crash and recovery sequence and retain the full R diagnostic, with only libc's null-pointer formatting normalized.
 Sandbox contracts remain gated by `SANDBOX`.
 Native checkpoint requirements describe the fixture facility, not ownership of the tested runtime contract.
 Do not mark a portable case as sandbox-only because its fixture previously launched sandboxed.

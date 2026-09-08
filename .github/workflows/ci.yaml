@@ -136,6 +136,20 @@ jobs:
           GITHUB_PAT: ${{ github.token }}
         run: scripts/check-core
 
+      - name: Record ARM macOS null-fault diagnostic
+        if: runner.os == 'macOS'
+        env:
+          GITHUB_PAT: ${{ github.token }}
+        run: scripts/test --update client_server/r/test_lifecycle::restarts_after_r_worker_segfault_with_permission_diagnostic
+
+      - name: Upload ARM macOS null-fault diagnostic
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: r-null-fault-diagnostic
+          path: tests/snapshots/client_server/r/test_lifecycle/restarts_after_r_worker_segfault_with_permission_diagnostic.yaml
+          if-no-files-found: error
+
       - name: Build and smoke-test Python package
         shell: bash
         env:

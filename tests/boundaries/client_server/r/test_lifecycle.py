@@ -16,7 +16,12 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.r import build_r_input_handler, r_input_handler_client, r_test_environment
 from support.native import build_interposer
-from support.requirements import NATIVE_FIXTURES, requires
+from support.requirements import (
+    NATIVE_FIXTURES,
+    NULL_FAULT_ACCERR,
+    NULL_FAULT_MAPERR,
+    requires,
+)
 from support.records import Transcript
 from support.suites import run_this_suite
 
@@ -69,20 +74,32 @@ def test_recoverable_language_errors(binary: Path, execution: Execution) -> Tran
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(NATIVE_FIXTURES)
+@requires(NATIVE_FIXTURES, NULL_FAULT_MAPERR)
 def test_restarts_after_r_worker_segfault(
     binary: Path, execution: Execution
 ) -> Transcript:
+    return r_segfault_transcript(binary, execution, "memory not mapped")
+
+
+@executions(DIRECT, SANDBOXED)
+@requires(NATIVE_FIXTURES, NULL_FAULT_ACCERR)
+def test_restarts_after_r_worker_segfault_with_permission_diagnostic(
+    binary: Path, execution: Execution
+) -> Transcript:
+    return r_segfault_transcript(binary, execution, "invalid permissions")
+
+
+def r_segfault_transcript(binary: Path, execution: Execution, cause: str) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         environment = os.environ.copy()
         environment["MCP_CONSOLE_TEST_SEGFAULT_LIBRARY"] = str(
             build_interposer(Path(directory), "r_segfault")
         )
-        return restart_after_r_segfault(binary, execution, environment)
+        return restart_after_r_segfault(binary, execution, environment, cause)
 
 
 def restart_after_r_segfault(
-    binary: Path, execution: Execution, environment: dict[str, str]
+    binary: Path, execution: Execution, environment: dict[str, str], cause: str
 ) -> Transcript:
     client = McpClient(binary, execution.serve(), environment)
     client.initialize_and_list_tools()
@@ -101,10 +118,10 @@ def restart_after_r_segfault(
         '[input requested: "Selection: "]\n[waiting for stdin]'
     ), repr(fatal_output)
 
-    # Only the mapped address is incidental; preserve the cause and traceback.
+    # libc formats null as either (nil) or 0x0; preserve the cause and traceback.
     normalized, count = re.subn(
-        r"(?m)^address 0x[0-9a-f]+, cause 'invalid permissions'$",
-        "address <read-only page>, cause 'invalid permissions'",
+        rf"(?m)^address (?:\(nil\)|0x0), cause '{cause}'$",
+        f"address 0x0, cause '{cause}'",
         fatal_output,
     )
     assert count == 1, fatal_output
