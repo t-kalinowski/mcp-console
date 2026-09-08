@@ -176,7 +176,7 @@ def test_cancelled_send_returns_owned_output_to_restart(
         truncation = (
             f"[output truncated: omitted {omitted} text bytes and "
             "0 encoded image bytes across 1 event; "
-            f"retained text: {public_output}]"
+            f"retained text: {public_output} ({omitted} of {omitted} omitted text bytes)]"
         )
         tail = result["content"][4]["text"]
         assert tail.startswith(retained + "\n" + truncation), (

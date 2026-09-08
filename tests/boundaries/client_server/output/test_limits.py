@@ -48,7 +48,7 @@ def test_bounds_pending_output_and_resets_after_completion(
         notice = (
             "\n[output truncated: omitted 7 text bytes and "
             "0 encoded image bytes across 1 event; "
-            f"retained text: {public_output}]"
+            f"retained text: {public_output} (7 of 7 omitted text bytes)]"
         )
         assert output == retained + notice, (
             f"unexpected bounded output: length={len(output)}, tail={output[-300:]!r}"

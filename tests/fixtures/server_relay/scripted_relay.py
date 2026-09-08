@@ -1157,9 +1157,19 @@ def run_signaled(relay: ScriptedRelay) -> None:
     relay.unexpected_outcome({"kind": "worker_signaled", "signal": 15})
 
 
+def run_startup_output(relay: ScriptedRelay) -> None:
+    relay.send({"kind": "stdout", "data": "s" * (PENDING_TEXT_BUDGET + 7)})
+    relay.send({"kind": "ready"})
+    relay.expect(EVALUATION)
+    relay.send({"kind": "console_output", "data": "cell output\n"})
+    relay.send(COMPLETED)
+    relay.retire()
+
+
 def main() -> None:
     scenarios = {
         "ready": run_ready,
+        "startup_output": run_startup_output,
         "evaluate": run_evaluate,
         "raw_output": run_raw_output,
         "interleaved_stream_redraws": run_interleaved_stream_redraws,

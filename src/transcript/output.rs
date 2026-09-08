@@ -88,16 +88,16 @@ impl CellOutput {
 
     /// Appends bytes while the retention limit permits it.
     ///
-    /// A returned message is a server-owned notice that must be published after
+    /// Returns the retained prefix length and a server-owned notice to publish after
     /// the corresponding ordinary output event. Further writes are still
     /// drained from the worker even after persistence stops.
-    pub(crate) fn append(&mut self, bytes: &[u8]) -> Option<String> {
+    pub(crate) fn append(&mut self, bytes: &[u8]) -> (usize, Option<String>) {
         if bytes.is_empty() {
-            return None;
+            return (0, None);
         }
         if self.writer.is_none() {
             self.discarded_bytes = self.discarded_bytes.saturating_add(bytes.len() as u64);
-            return None;
+            return (0, None);
         }
 
         let remaining = MAX_CELL_OUTPUT_BYTES.saturating_sub(self.retained_bytes);
@@ -122,29 +122,36 @@ impl CellOutput {
                 .retained_bytes
                 .saturating_add(self.discarded_bytes)
                 .saturating_add(bytes.len() as u64);
+            let appended = (observed - self.retained_bytes) as usize;
             self.retained_bytes = observed;
             self.discarded_bytes = seen.saturating_sub(observed);
             self.writer = None;
-            return Some(format!(
-                "cell output file {} stopped after {} retained bytes: {error}; later text is permanently discarded",
-                self.public_path, self.retained_bytes
-            ));
+            return (
+                appended,
+                Some(format!(
+                    "cell output file {} stopped after {} retained bytes: {error}; later text is not retained in this file",
+                    self.public_path, self.retained_bytes
+                )),
+            );
         }
         self.retained_bytes = self.retained_bytes.saturating_add(retained as u64);
 
         let discarded = bytes.len() - retained;
         if discarded == 0 {
-            return None;
+            return (retained, None);
         }
         self.discarded_bytes = self.discarded_bytes.saturating_add(discarded as u64);
         if self.retention_limit_reported {
-            return None;
+            return (retained, None);
         }
         self.retention_limit_reported = true;
-        Some(format!(
-            "cell output retention limit reached at {MAX_CELL_OUTPUT_BYTES} bytes for {}; later text is permanently discarded",
-            self.public_path
-        ))
+        (
+            retained,
+            Some(format!(
+                "cell output retention limit reached at {MAX_CELL_OUTPUT_BYTES} bytes for {}; later text is not retained in this file",
+                self.public_path
+            )),
+        )
     }
 
     pub(crate) fn note_inline_omission(&mut self, bytes: usize) {
@@ -156,7 +163,7 @@ impl CellOutput {
         if let Err(error) = writer.flush() {
             self.writer = None;
             return Some(format!(
-                "cell output file {} stopped after {} retained bytes: {error}; later text is permanently discarded",
+                "cell output file {} stopped after {} retained bytes: {error}; later text is not retained in this file",
                 self.public_path, self.retained_bytes
             ));
         }

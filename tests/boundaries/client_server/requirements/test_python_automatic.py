@@ -114,7 +114,9 @@ def test_keeps_mapped_resolution_notice_atomic_at_output_limit(
     session = next((workspace / ".mcp-console" / "sessions").iterdir())
     relative_output = Path("outputs/call-000001.log")
     public_output = f".mcp-console/sessions/{session.name}/{relative_output.as_posix()}"
-    assert f"; retained text: {public_output}]" in remainder, remainder[-300:]
+    assert (
+        f"; retained text: {public_output} (9 of 78 omitted text bytes)]" in remainder
+    ), remainder[-300:]
     assert (session / relative_output).read_text(encoding="utf-8") == (
         prefix + "'yaml12'\n"
     )

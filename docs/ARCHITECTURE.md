@@ -432,8 +432,9 @@ The server attaches that file to the ordered output tape at the same boundary as
 Response cuts flush the active file, so output already returned by `send` is also visible through ordinary file reads while the evaluation remains active.
 The file is limited to 1 GiB; later worker output is still drained and counted after the limit or a file failure.
 
-At file completion, a `cell_output` journal event records its initiating call, relative path, retained bytes, bytes omitted from inline responses, permanently discarded bytes, and retention limit.
-The Markdown projection links to the file when inline or permanent omission occurred.
+At file completion, a `cell_output` journal event records its initiating call, relative path, retained bytes, bytes omitted from inline responses, bytes not retained in the file (`discarded_bytes`), and retention limit.
+These counts describe separate projections: text not retained in the file may still have been delivered inline.
+The Markdown projection links to the file when either projection omitted text.
 The source-only Quarto projection ignores cell output events.
 
 Images remain ordinary MCP image content for the client.

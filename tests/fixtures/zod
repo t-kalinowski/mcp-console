@@ -697,6 +697,22 @@ def main() -> None:
         if source == "exit unexpectedly":
             os._exit(86)
 
+        if source == "overflow cell retention limit":
+            for _ in range(128):
+                send_output(writer, "x" * PENDING_TEXT_BUDGET)
+            send_output(writer, "tail\n")
+            send(writer, {"kind": "completed"})
+            continue
+
+        if source == "overflow cell output file":
+            send_output(writer, "x" * (3 * PENDING_TEXT_BUDGET + 7))
+            send(writer, {"kind": "input_requested", "prompt": "continue> "})
+            assert input() == "continue"
+            send(writer, {"kind": "input_received"})
+            send_output(writer, "y" * (PENDING_TEXT_BUDGET + 7))
+            send(writer, {"kind": "completed"})
+            continue
+
         if source == "overflow console output":
             send_output(writer, "x" * (PENDING_TEXT_BUDGET + 7))
             send(writer, {"kind": "completed"})

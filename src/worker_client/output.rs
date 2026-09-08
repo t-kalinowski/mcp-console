@@ -123,6 +123,7 @@ struct Truncation {
     image_metadata_bytes: usize,
     events: usize,
     output_path: Option<Box<str>>,
+    retained_text_bytes: usize,
 }
 
 pub(super) struct DirectOutput {
@@ -469,8 +470,10 @@ impl ResponseBuilder {
             )
         };
         if let Some(path) = truncated.output_path {
-            message.push_str("; retained text: ");
-            message.push_str(&path);
+            message.push_str(&format!(
+                "; retained text: {path} ({} of {} omitted text bytes)",
+                truncated.retained_text_bytes, truncated.text_bytes
+            ));
         }
         self.notice(message);
     }
@@ -718,8 +721,8 @@ impl OutputTape {
             state.cell_output.is_none(),
             "only one cell output file can be active"
         );
+        state.seal_truncation();
         let response = if capture_prelude {
-            state.seal_truncation();
             let cut = OutputCut(state.next_event);
             drain_through(&mut state, cut, true)
         } else {
@@ -798,12 +801,13 @@ impl OutputTapeState {
 
     fn push_console_text(&mut self, channel: crate::worker_protocol::ConsoleChannel, text: String) {
         let original_length = text.len();
-        let cell_output_notice = self
+        let (spooled, cell_output_notice) = self
             .cell_output
             .as_mut()
-            .and_then(|output| output.append(text.as_bytes()));
+            .map(|output| output.append(text.as_bytes()))
+            .unwrap_or_default();
         if self.budget.dropping_ordinary_output {
-            self.omit_cell_text(original_length, 1);
+            self.omit_cell_text(original_length, spooled);
             self.push_cell_output_notice(cell_output_notice);
             return;
         }
@@ -834,7 +838,7 @@ impl OutputTapeState {
             );
         }
         if retained < original_length {
-            self.omit_cell_text(original_length - retained, 1);
+            self.omit_cell_text(original_length - retained, spooled.saturating_sub(retained));
         }
         self.push_cell_output_notice(cell_output_notice);
     }
@@ -857,7 +861,7 @@ impl OutputTapeState {
                 0,
             );
         } else {
-            self.omit(rendered_length, 0, 0, 1, None);
+            self.omit(rendered_length, 0, 0, 1, None, 0);
         }
     }
 
@@ -897,7 +901,7 @@ impl OutputTapeState {
                 metadata_length,
             );
         } else {
-            self.omit(0, length, metadata_length, 1, None);
+            self.omit(0, length, metadata_length, 1, None, 0);
         }
         Ok(())
     }
@@ -906,12 +910,13 @@ impl OutputTapeState {
         if bytes.is_empty() {
             return;
         }
-        let cell_output_notice = self
+        let (spooled, cell_output_notice) = self
             .cell_output
             .as_mut()
-            .and_then(|output| output.append(bytes));
+            .map(|output| output.append(bytes))
+            .unwrap_or_default();
         if self.budget.dropping_ordinary_output {
-            self.omit_cell_text(bytes.len(), 1);
+            self.omit_cell_text(bytes.len(), spooled);
             self.push_cell_output_notice(cell_output_notice);
             return;
         }
@@ -934,7 +939,7 @@ impl OutputTapeState {
             );
         }
         if retained < bytes.len() {
-            self.omit_cell_text(bytes.len() - retained, 1);
+            self.omit_cell_text(bytes.len() - retained, spooled.saturating_sub(retained));
         }
         self.push_cell_output_notice(cell_output_notice);
     }
@@ -973,6 +978,7 @@ impl OutputTapeState {
         image_metadata_bytes: usize,
         events: usize,
         output_path: Option<Box<str>>,
+        retained_text_bytes: usize,
     ) {
         self.budget.dropping_ordinary_output = true;
         if let Some(sequence) = self.active_truncation {
@@ -989,6 +995,9 @@ impl OutputTapeState {
                 .image_metadata_bytes
                 .saturating_add(image_metadata_bytes);
             truncation.events = truncation.events.saturating_add(events);
+            truncation.retained_text_bytes = truncation
+                .retained_text_bytes
+                .saturating_add(retained_text_bytes);
             if truncation.output_path.is_none() {
                 truncation.output_path = output_path;
             }
@@ -1002,17 +1011,18 @@ impl OutputTapeState {
                 image_metadata_bytes,
                 events,
                 output_path,
+                retained_text_bytes,
             }));
             self.active_truncation = Some(sequence);
         }
     }
 
-    fn omit_cell_text(&mut self, text_bytes: usize, events: usize) {
-        let output_path = self.cell_output.as_mut().map(|output| {
+    fn omit_cell_text(&mut self, text_bytes: usize, retained_text_bytes: usize) {
+        let output_path = self.cell_output.as_mut().and_then(|output| {
             output.note_inline_omission(text_bytes);
-            Box::<str>::from(output.public_path())
+            (retained_text_bytes > 0).then(|| Box::<str>::from(output.public_path()))
         });
-        self.omit(text_bytes, 0, 0, events, output_path);
+        self.omit(text_bytes, 0, 0, 1, output_path, retained_text_bytes);
     }
 
     fn push_cell_output_notice(&mut self, notice: Option<String>) {
