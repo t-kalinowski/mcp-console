@@ -51,45 +51,6 @@ def test_captures_worker_stdout(binary: Path, execution: Execution) -> Transcrip
 
 
 @executions(DIRECT, SANDBOXED)
-def test_compacts_split_terminal_redraws(
-    binary: Path, execution: Execution
-) -> Transcript:
-    zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
-    client = McpClient(
-        binary,
-        execution.serve("--worker", str(zod)),
-    )
-    client.initialize_and_list_tools()
-
-    client.send(r="emit terminal redraws")
-    assert last_tool_text(client) == "ordinary stdout\r\nol\nnew\nold\x1b[2Knew\n"
-    return client.finish()
-
-
-@executions(DIRECT, SANDBOXED)
-def test_compacts_stdout_and_stderr_independently(
-    binary: Path, execution: Execution
-) -> Transcript:
-    zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
-    client = McpClient(
-        binary,
-        execution.serve("--worker", str(zod)),
-    )
-    client.initialize_and_list_tools()
-
-    client.send(r="emit independent stdout stderr redraws")
-    output = last_tool_text(client)
-    lines = sorted(output.splitlines(keepends=True))
-    assert lines == ["stderr final\n", "stdout final\n"], output
-    client.transcript[-1]["result"]["content"][0]["text"] = "".join(lines)
-    client.transcript[-1]["transcript_normalization"] = {
-        "target": "result.content[0].text",
-        "cross_source_position": "omitted",
-    }
-    return client.finish()
-
-
-@executions(DIRECT, SANDBOXED)
 @requires(PROCESS_EVENTS)
 def test_compacts_each_polled_output_segment(
     binary: Path,

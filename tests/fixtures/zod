@@ -738,24 +738,6 @@ def main() -> None:
             send(writer, {"kind": "completed"})
             continue
 
-        if source == "emit terminal redraws":
-            write_all(1, b"ordinary stdout\r\r\n")
-            write_all(1, b"old\r\b\n")
-            write_all(1, b"old\r\b")
-            write_all(1, b"newx\b\n")
-            write_all(1, b"old\x1b[")
-            write_all(1, b"2Knew\n")
-            send(writer, {"kind": "completed"})
-            continue
-
-        if source == "emit independent stdout stderr redraws":
-            # A different stream ends the current redraw run, so keep each
-            # stream's sequence in one atomic pipe write.
-            write_all(1, b"\rstdout old\rstdout final\n")
-            write_all(2, b"\rstderr old\rstderr final\n")
-            send(writer, {"kind": "completed"})
-            continue
-
         if source == "redraw across polls":
             send_output(writer, "output 10%\r")
             wait_for_server_to_process_sideband(reader, writer)

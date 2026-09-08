@@ -280,6 +280,32 @@ def run_raw_output(relay: ScriptedRelay) -> None:
     relay.retire()
 
 
+def run_split_terminal_redraws(relay: ScriptedRelay) -> None:
+    relay.ready()
+    relay.expect(EVALUATION)
+    for chunk in (
+        "ordinary stdout\r\r\n",
+        "old\r\b\n",
+        "old\r\b",
+        "newx\b\n",
+        "old\x1b[",
+        "2Knew\n",
+    ):
+        relay.send({"kind": "stdout", "data": chunk})
+    relay.complete()
+    relay.retire()
+
+
+def run_independent_stream_redraws(relay: ScriptedRelay) -> None:
+    relay.ready()
+    relay.expect(EVALUATION)
+    for stream in ("stdout", "stderr"):
+        relay.send({"kind": stream, "data": f"\r{stream} old"})
+        relay.send({"kind": stream, "data": f"\r{stream} final\n"})
+    relay.complete()
+    relay.retire()
+
+
 def run_interleaved_stream_redraws(relay: ScriptedRelay) -> None:
     relay.ready()
     relay.expect(EVALUATION)
@@ -1164,6 +1190,8 @@ def main() -> None:
         "ready": run_ready,
         "evaluate": run_evaluate,
         "raw_output": run_raw_output,
+        "split_terminal_redraws": run_split_terminal_redraws,
+        "independent_stream_redraws": run_independent_stream_redraws,
         "interleaved_stream_redraws": run_interleaved_stream_redraws,
         "raw_malformed_redraw": run_raw_malformed_redraw,
         "empty_raw_close_between_redraws": run_empty_raw_close_between_redraws,
