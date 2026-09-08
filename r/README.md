@@ -27,6 +27,9 @@ chat$chat(
 The console keeps its R, Python, and DuckDB state between calls.
 When using `chat$chat_async()`, set `tool_mode = "sequential"` when later calls depend on earlier ones.
 
+When the tool is garbage collected, it closes the server's input to request shutdown and waits up to 15 seconds before forcibly stopping the server.
+The sandbox manager owns cleanup of worker descendants; the R wrapper's fallback targets only the server process.
+
 With neither `path` nor `version` supplied, `console_tool()` uses the first `mcp-console` executable on `PATH`.
 If none is found, it resolves the latest published release with `reticulate::uv_run_tool()`.
 

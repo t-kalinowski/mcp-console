@@ -9,6 +9,10 @@ base::local({
     base::quit(save = "no", status = 43L, runLast = FALSE)
   }
 
+  if (base::identical(base::commandArgs(trailingOnly = TRUE), "--probe")) {
+    base::quit(save = "no", status = 0L, runLast = FALSE)
+  }
+
   uv <- base::get("uv_binary", envir = namespace, inherits = FALSE)()
   if (
     !base::is.character(uv) ||

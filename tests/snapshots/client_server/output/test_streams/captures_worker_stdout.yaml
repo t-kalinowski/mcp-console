@@ -1,0 +1,12 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  r: emit stdout
+result:
+  content:
+    - type: text
+      text: |
+        zod stdout 👩🏽‍💻
+        <large output>
+  isError: false

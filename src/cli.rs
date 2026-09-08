@@ -29,11 +29,15 @@ pub struct Cli {
 pub enum Command {
     /// Run the MCP server over standard input and output
     Serve {
+        /// Run evaluated code with server permissions, without sandbox isolation or descendant cleanup
+        #[arg(long)]
+        no_sandbox: bool,
+
         /// Replace the runtime worker during development
         #[arg(long, hide = true, value_name = "PATH")]
         worker: Option<PathBuf>,
 
-        /// Replace the sandboxed worker relay during development
+        /// Replace the worker relay during development
         #[arg(long, hide = true, value_name = "PATH", requires = "worker")]
         relay: Option<PathBuf>,
     },
@@ -45,7 +49,7 @@ pub enum Command {
     /// Run the internal worker relay
     #[command(hide = true)]
     WorkerRelay {
-        /// Worker command to launch inside the relay sandbox
+        /// Worker command to launch through the relay
         #[arg(
             value_name = "COMMAND",
             required = true,
@@ -58,14 +62,26 @@ pub enum Command {
 
     /// Run the internal sandbox lifetime manager
     #[command(hide = true)]
-    SandboxManager,
+    SandboxManager {
+        /// Direct sandbox root to supervise
+        #[arg(long, value_name = "PID")]
+        root_pid: u32,
 
-    /// Hold a sandbox target until host supervision is ready
+        /// Maximum process-cleanup interval
+        #[arg(long, value_name = "MILLISECONDS")]
+        cleanup_timeout_millis: u64,
+
+        /// Private directory owned by the sandbox lifetime
+        #[arg(long, value_name = "PATH")]
+        temporary_directory: PathBuf,
+    },
+
+    /// Restore the target signal mask and execute its command
     #[command(hide = true)]
     SandboxTarget {
-        /// Inherited descriptor that releases target execution
-        #[arg(long, value_name = "FD")]
-        gate_fd: i32,
+        /// Original macOS signal mask, encoded as an unsigned decimal integer
+        #[arg(long, value_name = "MASK")]
+        signal_mask: u32,
 
         /// Command and arguments to run after host supervision is ready
         #[arg(
@@ -81,6 +97,10 @@ pub enum Command {
     /// Run a command with the MCP Console sandbox policy
     #[command(after_help = SANDBOX_EXAMPLES)]
     Sandbox {
+        /// Retire the sandbox when this parent process exits
+        #[arg(long, hide = true, value_name = "PID")]
+        exit_with_parent: Option<u32>,
+
         /// Command and arguments to run
         #[arg(
             value_name = "COMMAND",

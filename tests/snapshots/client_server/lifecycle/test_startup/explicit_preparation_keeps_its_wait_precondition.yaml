@@ -1,0 +1,26 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  requirements:
+    r:
+      - DBI
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+input:
+  method: ping
+result: {}
+---
+send:
+  r: 42L
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false

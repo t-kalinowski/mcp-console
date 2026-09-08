@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 
 use base64::Engine as _;
 use chrono::{DateTime, SecondsFormat, Utc};
+use event::{Envelope, Event, Outcome, RecordedContent, RecordedResult};
 use rmcp::{
     ErrorData,
     model::{
@@ -14,7 +15,8 @@ use rmcp::{
         RequestMetaObject,
     },
 };
-use serde_json::{Value, json};
+
+mod event;
 
 mod markdown;
 mod output;
@@ -87,12 +89,11 @@ impl Transcript {
                 request.meta = Some(request_meta.clone());
             }
             active.append(
-                json!({
-                    "event": "tool_call",
-                    "call_id": call_id,
-                    "request_id": request_id,
-                    "request": request,
-                }),
+                Event::ToolCall {
+                    call_id,
+                    request_id,
+                    request: &request,
+                },
                 Utc::now(),
             )?;
             Ok(call)
@@ -265,6 +266,7 @@ impl ActiveTranscript {
                 markdown,
                 quarto_path,
                 working_directory,
+                dynamic_resolution,
             ))
         })();
         let (projections, pending_projection_failure) = match projections {
@@ -283,12 +285,11 @@ impl ActiveTranscript {
             next_artifact_id: 0,
         };
         transcript.append(
-            json!({
-                "event": "session_started",
-                "session": "default",
-                "working_directory": working_directory_text,
-                "dynamic_resolution": dynamic_resolution,
-            }),
+            Event::SessionStarted {
+                session: "default",
+                working_directory: &working_directory_text,
+                dynamic_resolution,
+            },
             started_at,
         )?;
         Ok(transcript)
@@ -333,15 +334,15 @@ impl Call {
 }
 
 impl ActiveTranscript {
-    fn append(&mut self, mut event: Value, at: DateTime<Utc>) -> Result<(), String> {
+    fn append(&mut self, event: Event<'_>, at: DateTime<Utc>) -> Result<(), String> {
         let sequence = self.sequence + 1;
-        let fields = event
-            .as_object_mut()
-            .ok_or_else(|| "transcript event must be a JSON object".to_string())?;
-        fields.insert("schema_version".to_string(), json!(SCHEMA_VERSION));
-        fields.insert("run_id".to_string(), json!(self.run_id));
-        fields.insert("sequence".to_string(), json!(sequence));
-        fields.insert("at".to_string(), json!(timestamp(at)));
+        let event = Envelope {
+            event,
+            schema_version: SCHEMA_VERSION,
+            run_id: &self.run_id,
+            sequence,
+            at: timestamp(at),
+        };
 
         let mut record = serde_json::to_vec(&event)
             .map_err(|error| format!("failed to serialize transcript event: {error}"))?;
@@ -370,12 +371,10 @@ impl ActiveTranscript {
         result_images: Vec<Artifact>,
         response: &Result<CallToolResponse, ErrorData>,
     ) -> Result<(), String> {
-        let event = match response {
-            Ok(CallToolResponse::Complete(result)) => json!({
-                "event": "tool_result",
-                "call_id": call_id,
-                "result": self.project_result(call_id, result_images, result)?,
-            }),
+        let outcome = match response {
+            Ok(CallToolResponse::Complete(result)) => Outcome::Result {
+                result: Self::project_result(call_id, result_images, result)?,
+            },
             Ok(_) => {
                 return Err(
                     "console tool unexpectedly returned a non-final MCP response".to_string(),
@@ -385,14 +384,10 @@ impl ActiveTranscript {
                 if !result_images.is_empty() {
                     return Err("tool error unexpectedly retained result images".to_string());
                 }
-                json!({
-                    "event": "tool_result",
-                    "call_id": call_id,
-                    "error": error,
-                })
+                Outcome::Error { error }
             }
         };
-        self.append(event, Utc::now())
+        self.append(Event::ToolResult { call_id, outcome }, Utc::now())
     }
 
     fn persist_image(
@@ -410,14 +405,13 @@ impl ActiveTranscript {
         let relative_path = format!("artifacts/{filename}");
         write_new(&self.directory.join(&relative_path), bytes)?;
         self.append(
-            json!({
-                "event": "artifact_created",
-                "artifact_id": artifact_id,
-                "call_id": call_id,
-                "path": relative_path,
-                "mime_type": mime_type,
-                "bytes": bytes.len(),
-            }),
+            Event::ArtifactCreated {
+                artifact_id,
+                call_id,
+                path: &relative_path,
+                mime_type,
+                bytes: bytes.len(),
+            },
             Utc::now(),
         )?;
         self.next_artifact_id = artifact_id;
@@ -429,51 +423,46 @@ impl ActiveTranscript {
     }
 
     fn project_result(
-        &mut self,
         call_id: u64,
         result_images: Vec<Artifact>,
         result: &CallToolResult,
-    ) -> Result<Value, String> {
-        let mut value = serde_json::to_value(result)
-            .map_err(|error| format!("failed to serialize tool result: {error}"))?;
-        let recorded_result = value
-            .as_object_mut()
-            .ok_or_else(|| "serialized tool result is not an object".to_string())?;
-        // The transcript schema records the stable tool payload rather than
-        // protocol-version-specific MCP response-envelope fields.
-        recorded_result.remove("resultType");
-        let recorded_content = recorded_result
-            .get_mut("content")
-            .and_then(Value::as_array_mut)
-            .ok_or_else(|| "serialized tool result has no content array".to_string())?;
+    ) -> Result<RecordedResult<'_>, String> {
         let mut result_images = result_images.into_iter();
-
-        for (index, content) in result.content.iter().enumerate() {
-            let ContentBlock::Image(image) = content else {
-                continue;
-            };
-            let artifact = result_images.next().ok_or_else(|| {
-                format!("tool call {call_id} returned an image without a retained artifact")
-            })?;
-            if image.mime_type != artifact.mime_type {
-                return Err(format!(
-                    "tool call {call_id} returned an image with a different MIME type than its artifact"
-                ));
-            }
-
-            let recorded_image = recorded_content[index]
-                .as_object_mut()
-                .ok_or_else(|| "serialized image content is not an object".to_string())?;
-            recorded_image.remove("data");
-            recorded_image.insert("artifactId".to_string(), json!(artifact.id));
-            recorded_image.insert("path".to_string(), json!(artifact.path));
+        let mut content = Vec::with_capacity(result.content.len());
+        for item in &result.content {
+            content.push(match item {
+                ContentBlock::Text(text) => RecordedContent::Text(text),
+                ContentBlock::Image(image) => {
+                    let artifact = result_images.next().ok_or_else(|| {
+                        format!("tool call {call_id} returned an image without a retained artifact")
+                    })?;
+                    if image.mime_type != artifact.mime_type {
+                        return Err(format!(
+                            "tool call {call_id} returned an image with a different MIME type than its artifact"
+                        ));
+                    }
+                    RecordedContent::Image {
+                        mime_type: &image.mime_type,
+                        meta: image.meta.as_ref(),
+                        annotations: image.annotations.as_ref(),
+                        artifact_id: artifact.id,
+                        path: artifact.path,
+                    }
+                }
+                other => RecordedContent::Other(other),
+            });
         }
         if result_images.next().is_some() {
             return Err(format!(
                 "tool call {call_id} retained more artifacts than it returned"
             ));
         }
-        Ok(value)
+        Ok(RecordedResult {
+            content,
+            structured_content: result.structured_content.as_ref(),
+            is_error: result.is_error,
+            meta: result.meta.as_ref(),
+        })
     }
 }
 

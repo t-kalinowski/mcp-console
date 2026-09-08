@@ -11,7 +11,7 @@ use super::requirements::{RequirementDelta, Requirements, push_duckdb_r_target};
 use super::resolution::EnvironmentResolutionFailure;
 use super::state::{Environment, commit_managed_r};
 
-pub(crate) enum PrepareResult {
+pub(in crate::worker_client) enum PrepareResult {
     Prepared,
     RestartRequired,
     Failed(Response),
@@ -26,7 +26,7 @@ pub(in crate::worker_client) enum PreparationIntent {
 
 impl Client {
     /// Adds requirements to the managed environment.
-    pub(crate) async fn prepare(
+    pub(in crate::worker_client) async fn prepare(
         &self,
         requirements: Requirements,
     ) -> Result<PrepareResult, String> {
@@ -182,7 +182,7 @@ impl Client {
                 r_changed,
             } = delta;
             let managed_r = if r_changed {
-                match self.resolve_managed_r(generation, r_requirements) {
+                match self.resolve_managed_r(generation, &environment.r_resolver, r_requirements) {
                     Ok(managed_r) => Some(managed_r),
                     Err(failure) => {
                         return self
@@ -248,15 +248,7 @@ impl Client {
         match lifecycle.state {
             LifecycleState::Ready if lifecycle.generation.is(generation) => {
                 lifecycle.processes.resolver = None;
-                if let Some(managed_python) = resolved.managed_python {
-                    environment
-                        .python
-                        .as_mut()
-                        .ok_or_else(|| "managed Python environment is unavailable".to_string())?
-                        .replace_managed(managed_python)?;
-                }
-                environment.r = resolved.managed_r;
-                environment.duckdb_extensions = resolved.duckdb_extensions;
+                *environment = resolved;
                 Ok(PrepareResult::Prepared)
             }
             LifecycleState::Ready => {

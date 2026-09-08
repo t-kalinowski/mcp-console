@@ -1,0 +1,42 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  r: |
+    answer <- 42
+    answer + (
+result:
+  content:
+    - type: text
+      text: |
+        Error: Incomplete code
+  isError: false
+---
+send:
+  r: answer
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false
+---
+send:
+  r: |
+    answer <- 43
+    )
+result:
+  content:
+    - type: text
+      text: |
+        Error: unexpected ')' in ")"
+  isError: false
+---
+send:
+  r: answer
+result:
+  content:
+    - type: text
+      text: |
+        [1] 43
+  isError: false

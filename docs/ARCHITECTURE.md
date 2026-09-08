@@ -9,7 +9,7 @@ The material under `design-sketches/` is future or exploratory design, not evide
 
 ## Process layout
 
-MCP Console has three runtime communication boundaries, one reusable crash-ownership handoff, and one host-only resolver path:
+By default, MCP Console has three runtime communication boundaries, a one-shot runner setup pipe and a launcher-private manager channel for lifetime ownership of each sandbox, and one host-only resolver path:
 
 ```text
 MCP client
@@ -20,47 +20,60 @@ mcp-console server                         host, outside the sandbox
     ├── retained environments and output
     ├── transcript and image artifacts
     │
-    ├──── sandbox manager                  host, outside the sandbox
-    │     independent crash observer for one committed generation
-    │
     ├──── host resolver processes          outside the sandbox
     │     R, Python, and DuckDB setup
     │
-    │ private startup gate
+    │ relay stdin and stdout; inherited stderr
     ▼
-sandbox-exec root / hidden wrapper         macOS sandbox
-    │ closes the gate and execs after both host observers are ready
-    │ private JSONL over relay fd 0 and 1
+mcp-console sandbox launcher               host, outside the sandbox
+    ├── direct-root status and manager monitor
+    ├──── sandbox manager                  host, outside the sandbox
+    │     primary lifetime observer and private-directory owner
+    │
+    │ setup pipe: one frame after manager readiness
     ▼
-worker relay                               macOS sandbox
+private sandbox runner                     host, process-group leader
+    │ native sandbox setup
+    ▼
+hidden target wrapper → worker relay        macOS sandbox
+    │ original fd 0 inherited from process creation
     │ worker sideband plus fd 0, 1, and 2
     ▼
 worker                                     same sandbox and process group
     └── built-in R, Python, and DuckDB runtime
 ```
 
-The standalone development command uses the same manager handoff without a relay or worker protocol:
+With `serve --no-sandbox`, the server launches the relay directly, omitting the sandbox launcher, manager, private executable, and hidden wrapper.
+The relay and worker run with host permissions and inherit the host temporary-directory environment; no sandbox-owned private directory is created.
+
+The direct development command uses the same launcher implementation without a relay or worker protocol:
 
 ```text
 mcp-console sandbox launcher               host, outside the sandbox
-    ├── direct-root status and normal lifetime owner
+    ├── direct-root status, terminal, and manager monitor
     ├──── sandbox manager                  host, outside the sandbox
-    │     independent crash observer for this command
+    │     primary lifetime observer for this command
     ▼
-sandbox-exec root                          macOS sandbox
-    └── command and observed descendants
+private sandbox runner                     host, process-group leader
+    └── command and observed descendants    macOS sandbox
 ```
 
 The server is the MCP stdio process.
-It starts one `sandbox-exec` root as its direct child for each worker lifetime and retains that process identity as the root of the generation's cleanup lifetime.
-The sandboxed root first runs a hidden wrapper blocked on a private release channel.
-The server attaches its normal descendant observer, starts the independent sandbox manager, and waits for manager readiness before releasing the wrapper into either the built-in or a configured custom relay.
-While that generation is live, both host observers follow the relay's process tree.
-The relay is the sandbox process-group leader and starts the configured worker inside the same sandbox and process group.
+For each sandboxed worker lifetime, it constructs either the built-in relay command line or a configured custom relay command line, then starts the current executable as `mcp-console sandbox` in hidden parent-owned mode with that relay as the target.
+The launcher is the server's direct child and the sole host-side sandbox owner.
+It retains the private sandbox executable and manager as waitable children.
+After the manager reports readiness and manager-failure recovery is installed, the launcher sends the executable one setup frame specifying the command, environment, filesystem permissions, network policy, and macOS policy additions.
+The runner applies the native sandbox to a hidden target wrapper, which restores the original signal mask from a private argument and replaces itself with the relay.
+The runner inherits the original stdin at process creation; setup never uses fd 0.
+The server's piped launcher input and output and inherited error stream pass through to that relay without a data proxy.
+After spawning the runner, the owned launcher detaches nonterminal stdin by replacing its own copy with `/dev/null`.
+The runner drops its owned stdin immediately after spawning the target, so relay input closure remains observable to the server's writer.
+The private executable leads the process group and waits for its direct child; the relay and worker inherit that group.
+The relay also works below a wrapper process and does not inspect or manage the surrounding process group.
 Submitted R, Python, and SQL cells run in the worker, not in the server or a host resolver.
 
-The standalone launcher retains its direct `sandbox-exec` child, observes that root and its descendants on the host, and commits the same kind of independent manager after its local observer attaches.
-The sandboxed child first runs a hidden wrapper blocked on a private release channel; the launcher releases it into the requested command only after manager readiness.
+For a direct `mcp-console sandbox` invocation, the launcher retains the same private executable as its direct child and starts the same primary manager while a root-only waiter supplies exit and signal wakeups.
+It releases the requested command by sending the same setup frame after manager readiness and failure monitoring.
 It has no MCP, relay, worker, resolver, recording, or retained-session responsibilities.
 
 R, Python, and DuckDB dependency resolution follows a separate path.
@@ -72,31 +85,56 @@ Resolver inputs are restricted and may execute trusted installation or build cod
 ### MCP client and server
 
 The client and server exchange MCP JSON-RPC over the server's standard input and output.
-The server registers only the `send` tool, validates calls, and turns server-owned responses into MCP text and image content.
+The server registers only the `send` tool.
+The MCP adapter in `src/server.rs` decodes arguments, applies language filtering, and translates responses into MCP text and image content.
+The session coordinator in `src/worker_client.rs` validates requirements and interprets every `send` combination, including standalone preparation.
 One `send` can poll, provide stdin, prepare requirements, evaluate a cell, interrupt, restart, or combine compatible parts under one ordered operation.
-[`TOOL_DESCRIPTIONS.md`](TOOL_DESCRIPTIONS.md) is a human-readable mirror of the registered descriptions; `src/server.rs` and the actual `tools/list` result are authoritative.
+[`TOOL_DESCRIPTIONS.md`](TOOL_DESCRIPTIONS.md) gives editorial guidance, and the [canonical handshake snapshot](../tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml) records the registered descriptions; `src/server.rs` and the actual `tools/list` result are authoritative.
 
 This is the only public protocol boundary.
 The client does not communicate directly with a relay, worker, or resolver.
 
-### Sandbox owner and sandbox manager
+### Sandbox launcher and private runner
 
-The server initializes one sandbox manager per worker generation, which may evaluate multiple cells before restart or replacement.
-The standalone launcher initializes one manager per invocation of `mcp-console sandbox`, which runs one direct child command.
-Initialization travels over the manager's standard input and waits for a one-byte readiness response.
-The fixed private initialization carries the owner and sandbox-root PIDs, cleanup timeout, and private temporary-directory path.
-The manager snapshots their process start times and validates the resulting exact identities before reporting readiness.
-The same private stream carries a bounded normal-retirement handoff: the owner marks retirement, the manager acknowledges cleanup of its observed identities, and the owner reaps the direct root before committing the final remove-or-preserve disposition.
-Outside that handoff, the manager observes owner exit and its own view of the root process tree directly on the host.
+The private `mcp-console-sandbox` executable contains the extracted native sandbox implementation and is pinned by source revision in `sandbox-runner.json`.
+macOS wheels install it under the installation prefix's `libexec` directory; only `mcp-console` is exposed on PATH.
+MCP Console resolves that private path relative to the canonical public executable and verifies the artifact digest embedded at build time.
+Cargo builds copy the verified staged artifact into the target prefix's `libexec` directory and use the same executable-relative lookup as installed wheels.
+A missing or mismatched artifact is an installation error.
 
-This is a crash-ownership handoff rather than part of the relay protocol or the public interface.
-The manager supplies crash-independent protection and participates in the bounded retirement handoff; the server or standalone launcher retains normal lifetime ownership.
+The runner accepts `--bootstrap-fd <N>` with an inherited readable descriptor greater than 2.
+Protocol 2 carries one four-byte big-endian length followed by 1 through 1,048,576 bytes of UTF-8 JSON on that descriptor.
+The runner reads exactly the frame and closes the descriptor before native setup; startup does not wait for EOF.
+The launcher starts the runner before writing, closes its unused read end after spawn, and closes the writer after sending the frame.
+Setup writes share the launcher's event-driven lifetime wait, so pipe backpressure cannot block owned cancellation or failure recovery.
+Only the designated setup descriptor is inherited beyond stdio at runner exec; the parent keeps both pipe ends close-on-exec.
+The setup pipe does not reach the manager, target, or relay.
+The runner launches one sandboxed command and returns its status.
+It has no console, relay, descendant-retirement, or private-directory-cleanup responsibilities.
+The launcher supplies a small macOS policy extension that preserves host-terminal restrictions, runtime allowances, and full mutability of its private temporary directory.
+The native implementation owns the base policy.
+Signals sent to the target group before the runner creates its child are not replayed to that child; this remains a documented startup limitation.
+The [supervision guide](SANDBOX_SUPERVISION.md) describes startup and signal handling across this boundary.
+
+### Sandbox launcher and sandbox manager
+
+The launcher starts one manager per invocation of `mcp-console sandbox` and is the sole host-side owner of that sandbox lifetime.
+One parent-owned invocation runs each sandboxed worker generation, which may evaluate multiple cells before restart or replacement; an ordinary invocation runs one direct command.
+The manager reports readiness over a private inherited Unix socket before configured sandbox code may run.
+Readiness confirms process observation and adoption of the private-directory guard.
+The launcher relinquishes its duplicate guard after installing manager-failure recovery.
+The socket then carries no messages: the launcher holds it open as the lifetime ownership token, and EOF requests retirement.
+Successful manager process exit is the primary process-cleanup barrier; the launcher retains the direct root waitably through manager exit and any fallback cleanup, then reaps it.
+Directory removal is best effort, so successful process retirement does not prove that the directory was deleted.
+
+This is a private lifetime-management boundary rather than part of the relay protocol or public interface.
+The [supervision guide](SANDBOX_SUPERVISION.md) owns startup sequencing, retirement, manager failure, and directory-removal semantics.
 
 ### Server and relay
 
 The server sends commands to the relay's standard input and receives JSONL events from the relay's standard output.
 Relay standard error is inherited separately and is not part of that protocol.
-The transport is private and currently exists to keep worker connections and direct-worker supervision inside the sandbox.
+The transport is private and keeps worker connections and direct-worker supervision in the relay, inside the sandbox by default.
 [`RELAY_PROTOCOL.md`](RELAY_PROTOCOL.md) defines its commands, events, framing, and retirement behavior.
 
 ### Relay and worker
@@ -114,7 +152,7 @@ The server owns the logical console session and all state that must survive a wo
 
 - MCP tool admission and validation;
 - worker lifecycle and generation ownership;
-- host-side relay lifetime observation and retirement;
+- relay-generation launch and retirement through an ordinary child process;
 - retained R, Python, and DuckDB requirements;
 - host resolver launch, interruption, cancellation, and result commits;
 - evaluation, preparation, stdin, inline control, restart, and replacement admission;
@@ -124,51 +162,73 @@ The server owns the logical console session and all state that must survive a wo
 
 These responsibilities remain on the host side of the sandbox boundary.
 The server does not execute submitted cells or ask the relay to interpret MCP calls.
-At generation retirement, it stops descendants observed across process-group and session changes, closes the original relay process group as a race backstop, and then reaps the direct relay.
-On macOS, the dedicated host observer blocks in `kevent()` on its `kqueue` for descendant process events and an explicit user event used for stop.
-The wait has a one-second maintenance deadline for pruning stale identities; lifecycle control triggers the user event instead of polling a shared stop flag.
+It configures the child's piped standard input and output and inherited standard error, closes unrelated inherited descriptors before exec, and knows normal child exit and signaling, but no private directory, startup gate, sandbox root, manager, or manager monitor.
+At generation retirement, it first requests graceful shutdown through the relay protocol and waits through the applicable relay deadline.
+In sandboxed mode, it then sends `SIGTERM` to the launcher to request managed retirement and uses a hard launcher kill only as the final fail-safe.
+On normal and owned-retirement paths, successful managed launcher exit is the synchronous cleanup barrier before the server reaps it.
+With `--no-sandbox`, the server owns and reaps the relay directly; no manager supplies descendant cleanup.
 
-### Standalone launcher
+### Sandbox launcher
 
-The standalone launcher owns normal observation and retirement for one direct sandbox command.
-It inherits the command's standard streams, closes every unrelated inherited descriptor before exec, retains the direct root as a waitable child, and returns that root's exit status when cleanup succeeds.
-It keeps the root blocked on a private descriptor while attaching its observer and committing manager crash ownership, then releases the root into the requested command.
-After root exit it marks normal retirement before terminating observed descendants, waits for manager cleanup, reaps the root, and supplies the final temporary-directory disposition.
-It does not own console state, dependency resolution, recording, relay transport, or worker protocol behavior.
-It also does not add terminal job-control or signal-relay semantics beyond the inherited process relationships.
+The sandbox launcher preserves the requested command's status after natural completion and owns the complete host-side sandbox lifetime.
+It inherits only the three documented streams from the server, independently closes every unrelated inherited descriptor before target exec, places the target in a dedicated process group, and retains the direct root as a waitable child.
+After cleanup succeeds, natural root completion returns that root's exit status; a handled retirement request in hidden parent-owned mode returns success as the cleanup acknowledgment.
+It owns runner setup, exact parent-exit observation in owned mode, manager-failure recovery, and ordinary-mode terminal and signal handling.
+It does not own descendant tracking, console state, dependency resolution, recording, relay transport, or worker protocol behavior.
+It does not implement stopped/continued job state or general shell-pipeline job control.
+The launcher itself never writes to standard output because that stream carries relay JSONL in a worker generation.
+In parent-owned mode it relinquishes its copy of the relay input pipe after transferring that stream to the target; it retains standard output until cleanup finishes, so target output closure and launcher cleanup completion share one observable boundary.
+If the launcher is killed or crashes, manager-control EOF still requests cleanup, but the server can no longer wait synchronously for that manager.
 
 ### Sandbox manager
 
-The sandbox manager owns only crash-independent cleanup for one committed sandbox lifetime.
-It records descendants by PID and process start time, observes the exact server or standalone owner identity, and adopts the private temporary-directory path.
-After owner loss it retires only identities its tracker observed and attempts to remove the directory after successful cleanup.
-It does not own session state, operation admission, relay transport, command exit status, or process-group signaling.
+The sandbox manager owns primary observed-descendant cleanup for one sandbox lifetime.
+It records descendants by PID and process start time, validates the exact root identity, and adopts the private temporary-directory path.
+It retires only identities its tracker observed, uses the still-pinned root process group as a race backstop, and attempts directory removal only after successful process cleanup.
+Its single thread uses one `kqueue` for descendant and root events plus control-socket readability.
+It does not own session state, operation admission, relay transport, command exit status, or terminal semantics.
 
-On normal root exit, the manager preserves the directory for the owner's normal success-or-error disposition.
-It remains alive until the owner explicitly commits that disposition; loss of owner control before retirement starts instead selects crash cleanup.
-If the manager itself fails while its owner remains live, every owner monitor signals the exact root identity.
-The standalone monitor also wakes its local tracker so it can complete retirement even if that signal fails.
+If the manager itself fails while the launcher retains a live, waitable root, the launcher monitor reconstructs the root's current ancestry and performs bounded process cleanup.
+That fallback has no directory-cleanup state, so the directory remains if the manager exits before completing its own cleanup and removal attempt.
+That fallback cannot recover a descendant that had already detached from the root's ancestry.
 
 ### Relay
 
 The relay is a thin ordered transport and worker supervisor.
 It owns the worker's local descriptors, translates applicable relay commands to worker-sideband messages, forwards worker observations, delivers signals, bounds shutdown, drains streams, and reaps the direct worker.
-Its producers preserve their own order, and one relay writer serializes their observations for the server.
-That serialization does not reconstruct chronology across the independent sideband, stdout, and stderr transports.
+Each producer encodes its observations as JSONL frames before enqueueing them, and one relay writer emits those frames in queue order.
+Its FIFO bounds admitted encoded payload bytes and event count, including the write in progress, and reserves space for supervisor events.
+It accepts an oversized frame alone on the ordinary budget and pauses output readers until capacity is available.
+This preserves each producer's order without reconstructing chronology across the independent sideband, stdout, and stderr transports.
 
-The relay does not own the logical session, retained requirements, evaluation admission, output budgets, response assembly, or MCP delivery.
+The relay does not own the logical session, retained requirements, evaluation admission, server pending-output budgets, response assembly, or MCP delivery.
 It exits with the worker lifetime it supervises.
+In sandboxed mode, remaining descendants, including those retaining worker streams, are retired by the sandbox launcher after the target exits or retirement is requested.
+Its cancellable local transports share a 100-millisecond allowance for additional nonblocking reads during retirement.
+They attempt to queue complete buffered sideband frames but may abandon incomplete frames and further descendant output, so draining does not depend on those descendants becoming quiet or closing their descriptors.
+After direct-worker retirement, the relay gives pipe and socket output one shared second to flush, starting before local I/O joins.
+That deadline also wakes readers waiting for queue space; abandoned output fails the transport.
+Blocked downstream pipe or socket output can therefore fail retirement without delaying worker shutdown; [the relay protocol](RELAY_PROTOCOL.md#retirement-and-failure) defines delivery and descriptor limits.
+
+The internal `worker-relay` command uses the same stream protocol when launched directly without a sandbox or below another process wrapper.
+Such a direct invocation owns only its direct worker; it supplies no sandbox policy or descendant-cleanup guarantee.
+`serve --no-sandbox` selects this direct launch while retaining the relay protocol and direct-worker shutdown behavior.
+A replacement sandbox launcher must provide the process-lifetime contract described in [sandbox supervision](SANDBOX_SUPERVISION.md), including cleanup before successful owned retirement.
+Any future sandbox-specific control plane ends at that launcher, without reaching the relay or changing its protocol.
 
 ### Worker
 
 The worker owns language-runtime state and implements the worker protocol.
 It reports readiness, accepts complete cells and supported preparation operations, consumes interactive stdin, publishes console events and images, and reports completion or failure through the sideband.
 
+The built-in worker's `worker::core` owns shared sideband state, deferred operation messages, resolver exchanges, output publication, and shutdown and failure state.
+The `worker::embedded_r` backend owns interpreter initialization, event handling, interactive input, interrupts, and language dispatch, including suppression of R resolution during SQL callbacks.
+
 The built-in worker embeds R on its main thread.
 Its language adapters provide persistent Python and SQL within that worker process.
 The SQL router uses a DBI provider in embedded R or a DB-API provider in CPython.
 The R provider owns a managed DuckDB connection by default and can retain a user-selected DBI connection; the Python provider retains a user-selected DB-API connection without converting it or its result rows through reticulate.
-Its private R environment bridge conditionally wraps `base::library` and `base::loadNamespace`, applies accepted managed libraries, and reports activation outcomes.
+Its private R environment bridge conditionally wraps `base::library` and runs R's unchanged `base::loadNamespace` body in a private lexical environment that intercepts its retry restart; it applies accepted managed libraries and reports activation outcomes.
 The Rust Python facade loads, retains, and initializes the selected file-backed `libpython`, or attaches its own handle if CPython was already initialized.
 It embeds and installs the private evaluator and DB-API adapter through that CPython API; reticulate attaches to the interpreter and continues to own object conversion, Python-cell evaluation dispatch, its manifest, event handling, and interrupts.
 Its private Python runtime conditionally appends a last-chance import finder, while the R Python bridge owns the reticulate manifest and the callback into the existing managed-Python resolver.
@@ -197,35 +257,24 @@ The server reports the failed operation and does not replay its cell or stdin ag
 
 ### Server and worker startup
 
-The built-in server first selects a stable host resolver configuration.
-It prefers `ir` on `PATH`, otherwise uses `uv` on `PATH` to run `ir`, and can obtain `uv` from reticulate when only `ir` or an ambient R installation is available.
-With that configuration, it constructs its retained environment before accepting MCP input, resolving the default R and DuckDB environment and managed Python when selected.
+The built-in server first captures a stable host resolver configuration and detects its capability without installing an environment.
+It prefers `ir` on `PATH`, otherwise selects `uv` on `PATH` or an explicit `uv` path, and can obtain `uv` from reticulate when only `ir` or an ambient R installation is available.
+It retains the selected bootstrap as pending setup and accepts MCP input before invoking it or resolving the default R, DuckDB, and managed Python environments.
+An operation that first needs an environment resolves the defaults through the normal generation-owned resolver lifecycle and commits the complete candidate only after all preparation succeeds.
+For an ordinary cell, this happens after evaluation admission, so the client can poll or interrupt preparation.
+Explicit requirements remain preconditions of evaluation and combine their additions with the pending defaults.
 If no resolver bootstrap is available, it accepts MCP input with an empty retained environment and a fixed bare capability that disables later dynamic resolution.
 The worker itself starts lazily when an operation first needs it; preparing retained requirements can happen without launching a worker.
 An explicit restart starts its replacement eagerly, including when the session had not started a worker before.
 
-For each worker start, the server configures a sandboxed relay from the retained environment.
-The direct sandbox root blocks in a hidden wrapper while the server attaches its normal descendant observer, starts the independent sandbox manager, and waits for manager readiness.
-The server then releases that same root process into the configured relay.
-Configured relay and worker code cannot run before both observers are attached.
-Darwin can still miss a later descendant that becomes orphaned before an observer resolves its fork event.
+For each worker start, the server first constructs the relay target independently of sandboxing.
+The built-in target is the current executable's `worker-relay` command followed by the worker command line; a configured relay is followed directly by the same worker command line.
+By default, the server then constructs an ordinary current-executable command for `sandbox --exit-with-parent <server-pid> -- <relay-target>`; with `--no-sandbox`, it uses the relay target directly.
+It applies the retained environment and configures piped input and output plus inherited error in either mode.
+In sandboxed mode, the launcher inherits that environment and those streams and releases the configured relay only after sandbox observation and failure recovery are installed.
 The relay creates the worker sideband and standard streams, launches the worker, and forwards its startup events.
 The server admits the worker only after the required readiness exchange succeeds.
-
-### Standalone command startup and retirement
-
-The standalone launcher creates a private temporary directory, configures `sandbox-exec`, closes unrelated nonstandard inherited descriptors, and asks it to run a hidden wrapper with inherited standard streams plus one private release descriptor.
-The wrapper blocks on that descriptor before requested command code executes.
-While retaining that root as a waitable child, the launcher attaches its local descendant tracker, starts the independent manager, and waits for the manager to adopt the directory and report readiness.
-It then writes one release byte; the same root closes the descriptor and replaces itself with the requested command.
-An abrupt launcher exit before readiness and a descendant that later escapes before an observer sees its fork remain outside crash cleanup.
-
-The launcher blocks in its local tracker until root exit or observation failure.
-Before its first local termination pass it marks normal retirement on the manager control stream.
-It then retires observed descendants, waits for the manager's cleanup acknowledgement, reaps the direct root, and commits remove after success or preserve after any cleanup error.
-If the launcher exits after the retirement marker but before final disposition, the manager preserves the directory; owner loss before that marker selects crash cleanup and removal after successful manager retirement.
-If the manager is killed while the launcher remains live, its monitor signals the exact root and wakes the local tracker.
-The tracker completes descendant retirement even if the root signal fails; otherwise the launcher returns the root's signal-derived status.
+If sandbox setup fails before relay readiness, the launcher writes the detailed infrastructure error to inherited standard error and exits; the server reports a stable relay-startup failure from the closed transport.
 
 ### Evaluation
 
@@ -238,30 +287,20 @@ One exclusive environment transition covers requirement-delta calculation, host 
 No other send or environment-changing operation can enter that boundary, and a failed or superseded transition cannot dispatch the cell.
 The server releases the environment transition after launch; the active evaluation continues to own stdin, waiting, output cuts, response delivery, and restart handoff.
 
-Without inline control, the externally observable order is requirement preparation, nonempty stdin enqueue, then evaluation.
-The wait timeout begins only after the cell is dispatched.
+The [send operation-order reference](SEND_OPERATIONS.md) defines user-visible ordering, validation, and wait timing for all call combinations.
 
 ### Controlled send
 
 Control, stdin, interrupt grace, requirement preparation, and reservation of the optional new cell form one lifecycle operation.
 
-For interrupt, the server first uses the existing resolver-first, otherwise-worker routing and waits for delivery acknowledgement.
-It then enqueues nonempty stdin immediately, waits the full 100-millisecond grace period, and settles the previous evaluation's response ownership.
-Only after the previous evaluation has stopped does it validate and prepare requirements and reserve the new cell against the still-current generation.
-If delivery fails, no later step runs; if the evaluation remains active after the grace, a supplied cell is not dispatched.
-A validation or explicit preparation failure also prevents the cell from running, but does not undo the completed interrupt or stdin enqueue.
-
-For restart, declared requirements enter the existing restart transaction.
-The server resolves and retains them before it closes the old generation; a failure leaves the worker in place and sends neither stdin nor code.
-After successful replacement startup, the server queues nonempty same-call stdin and reserves the cell against that exact replacement before it releases admission.
-The old generation's unread stdin is discarded and cannot consume the new bytes.
-
-Control delivery, interrupt grace, restart, and explicit requirement preparation happen before dispatch and do not consume the new cell's wait timeout.
+Interrupt routes to an active resolver first, otherwise to the worker, and preserves ownership of the interrupted evaluation's response through handoff.
+Restart resolves and commits declared requirements before retirement; a resolution failure leaves the old worker in place, while later replacement failure does not roll back the retained commit.
+After successful replacement startup, admission remains reserved through same-call stdin and cell dispatch, so another generation cannot receive them.
 
 ### Worker-originated R resolution
 
 Automatic R resolution is a callback from the running built-in worker, not an idle preparation operation.
-The `library()` and `loadNamespace()` wrappers issue callbacks only when evaluation reaches a missing package load; the worker does not inspect the cell in advance.
+The `library()` wrapper and the managed `loadNamespace()` retry handler issue callbacks only when evaluation reaches a missing package load; the worker does not inspect the cell in advance.
 The relay only translates the callback messages and preserves their transport order.
 
 The server atomically assigns environment-change ownership to either an idle runtime R callback or explicit environment preparation.
@@ -314,9 +353,6 @@ These checks keep R callbacks on the embedded-R thread and prevent nested resolv
 
 An interrupt targets the active host resolver when one is registered; otherwise it targets the live worker through its relay.
 It stays associated with that resolver or worker and is not retried against a replacement.
-A control-only `send(control = "interrupt")` uses the same routing as an interrupt followed by a cell, then applies its stdin enqueue and 100-millisecond settling grace before it returns the current state.
-A control-only call that attaches to an evaluation after the grace uses its requested wait timeout; a call whose supplied cell was rejected observes the active evaluation without another wait.
-With `timeout_ms = 0`, the call returns the state and output visible immediately after the grace.
 Resolver interruption and lifecycle cancellation are tracked as typed outcomes for the affected operation.
 
 ### Explicit restart
@@ -352,7 +388,7 @@ The resulting delivery owner covers prior-operation output, restart lifecycle no
 If MCP response delivery is cancelled or its write fails, the complete combined response returns to its delivery owner and can be delivered exactly once.
 
 Each relay producer preserves its own order.
-The serialized event stream gives the server one observation order, but it does not establish chronology between independent worker sideband, stdout, and stderr transports.
+The ordered event stream gives the server one observation order, but it does not establish chronology between independent worker sideband, stdout, and stderr transports.
 The [relay protocol](RELAY_PROTOCOL.md) owns that ordering guarantee, and the [built-in runtime guide](BUILTIN_RUNTIME.md) describes the resulting console behavior.
 
 ## Recording, cell output, and image artifacts
@@ -374,14 +410,22 @@ The Markdown document presents R, Python, and SQL source as syntax-highlighted c
 Fences expand when literal content contains backticks.
 It is a chronological call ledger: a timed-out cell, later polls, and eventual results remain separate calls because the journal does not infer evaluation-level grouping.
 The executable Quarto document contains the source from calls with exactly one submitted R, Python, or SQL field in call order; it omits stdin, options, results, errors, polls, and artifacts.
-It retains source even when another argument later makes the call fail, so it is source material rather than an execution ledger.
+It includes qualifying source from rejected calls and failed evaluations.
 Its `ir` front matter declares the managed built-in R and Python requirements followed by cumulative explicit declarations from recorded calls.
 Bare sessions omit both managed defaults and rejected requirement payloads.
 It does not declare a Python version, so `ir render transcript.qmd` uses reticulate's default managed Python selection.
 The declarations are submitted inputs, not a lockfile or an exact record of successful retained and automatically inferred requirements.
 Rendering executes the captured client-authored cells in order in a fresh Quarto/knitr runtime outside the MCP Console worker sandbox and exports their new output.
-This is intended to reproduce the analysis represented by the Markdown ledger, but it does not replay recorded output or artifacts.
-It does not yet reconstruct every MCP Console runtime detail; in particular, SQL chunks require a DBI connection supplied by the document user.
+Rendering does not reconstruct session control, stdin, recorded results, or artifacts.
+SQL chunks require a DBI connection supplied by the document user.
+
+From the recording directory, render the source projection with:
+
+```sh
+uv tool run --from r-lib-ir ir render transcript.qmd
+```
+
+When `ir` is installed on `PATH`, `ir render transcript.qmd` is equivalent.
 
 Each admitted evaluation also owns `outputs/call-NNNNNN.log` beneath the run directory.
 The server attaches that file to the ordered output tape at the same boundary as the worker operation, appends console text and direct stdout and stderr before pending-output admission can discard it, and detaches it at the evaluation's completion or restart cut.

@@ -8,11 +8,20 @@ record = {
     name: os.environ.get(name)
     for name in ("UV_CACHE_DIR", "UV_DEFAULT_INDEX", "UV_OFFLINE")
 }
+arguments = sys.argv[1:]
+uv = os.environ["MCP_CONSOLE_TEST_REAL_UV"]
+if arguments[:3] == ["pip", "install", "--dry-run"]:
+    # Reticulate's worker-side environment diagnostic is separate from host
+    # resolution. Preserve it without mixing it into resolver observations.
+    diagnostic_path = os.environ["MCP_CONSOLE_TEST_UV_RECORD"] + ".diagnostics"
+    with open(diagnostic_path, "a", encoding="utf-8") as stream:
+        json.dump({"arguments": arguments, "environment": record}, stream)
+        stream.write("\n")
+    os.execv(uv, [uv, *arguments])
+
 with open(os.environ["MCP_CONSOLE_TEST_UV_RECORD"], "a", encoding="utf-8") as stream:
     json.dump(record, stream, sort_keys=True)
     stream.write("\n")
-
-arguments = sys.argv[1:]
 
 if arguments_record := os.environ.get("MCP_CONSOLE_TEST_UV_ARGUMENTS_RECORD"):
     with open(arguments_record, "a", encoding="utf-8") as stream:
@@ -75,7 +84,6 @@ if intercept and arguments[:2] == ["tool", "run"] and "--" in arguments:
         if python := os.environ.get("MCP_CONSOLE_TEST_UV_PYTHON"):
             os.execv(python, [python, *command[1:]])
 
-uv = os.environ["MCP_CONSOLE_TEST_REAL_UV"]
 substitute = os.environ.get("MCP_CONSOLE_TEST_UV_SUBSTITUTE_REQUIREMENT")
 replacement = os.environ.get("MCP_CONSOLE_TEST_UV_REPLACEMENT_REQUIREMENT")
 assert (substitute is None) == (replacement is None)

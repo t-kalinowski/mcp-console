@@ -1,0 +1,242 @@
+#!/bin/sh
+""":"
+exec "${MCP_CONSOLE_TEST_PYTHON:?}" "$0" "$@"
+":"""
+
+import codecs
+import errno
+import json
+import os
+import select
+import socket
+import subprocess
+import tempfile
+from pathlib import Path
+from typing import Any, BinaryIO, TextIO
+
+SIDEBAND_FD_ENV = "MCP_CONSOLE_SIDEBAND_FD"
+WORKER_ENV = "MCP_CONSOLE_MITM_WORKER"
+CAPTURE_STDIN_CLOSE_ENV = "MCP_CONSOLE_MITM_CAPTURE_STDIN_CLOSE"
+CAPTURE_WORKER_SIDEBAND_CLOSE_ENV = "MCP_CONSOLE_MITM_CAPTURE_WORKER_SIDEBAND_CLOSE"
+SHUTDOWN_ENOTCONN_ENV = "MCP_CONSOLE_MITM_SHUTDOWN_ENOTCONN"
+CAPTURE_NAME = "mcp-console-worker-wire.jsonl"
+BUFFER_SIZE = 64 * 1024
+
+
+def take_sideband() -> socket.socket:
+    assert "MCP_CONSOLE_SIDEBAND_READ_FD" not in os.environ
+    assert "MCP_CONSOLE_SIDEBAND_WRITE_FD" not in os.environ
+    descriptor = int(os.environ.pop(SIDEBAND_FD_ENV))
+    os.set_inheritable(descriptor, False)
+    endpoint = socket.socket(fileno=descriptor)
+    assert endpoint.family == socket.AF_UNIX
+    assert endpoint.type == socket.SOCK_STREAM
+    return endpoint
+
+
+def write_all(descriptor: int, data: bytes) -> None:
+    remaining = memoryview(data)
+    while remaining:
+        remaining = remaining[os.write(descriptor, remaining) :]
+
+
+def send(endpoint: socket.socket, message: dict[str, Any]) -> None:
+    frame = json.dumps(message, separators=(",", ":")).encode("utf-8")
+    endpoint.sendall(frame + b"\n")
+
+
+def record(stream: TextIO, event: dict[str, Any]) -> None:
+    stream.write(json.dumps(event, separators=(",", ":")) + "\n")
+    stream.flush()
+
+
+def shutdown_write(
+    endpoint: socket.socket,
+    direction: str,
+    injected_direction: str | None,
+    capture: TextIO,
+) -> None:
+    try:
+        if direction == injected_direction:
+            try:
+                endpoint.shutdown(socket.SHUT_WR)
+            except OSError as error:
+                if error.errno != errno.ENOTCONN:
+                    raise
+            record(capture, {"shutdown_enotconn": {"direction": direction}})
+            raise OSError(errno.ENOTCONN, os.strerror(errno.ENOTCONN))
+        endpoint.shutdown(socket.SHUT_WR)
+    except OSError as error:
+        if error.errno != errno.ENOTCONN:
+            raise
+
+
+def proxy(
+    relay: socket.socket,
+    worker: socket.socket,
+    stdout: BinaryIO,
+    stderr: BinaryIO,
+    capture: TextIO,
+    capture_stdin_close: bool,
+    capture_worker_sideband_close: bool,
+    injected_shutdown_direction: str | None,
+) -> None:
+    streams = {
+        stdout.fileno(): ("stdout", 1),
+        stderr.fileno(): ("stderr", 2),
+    }
+    decoders = {
+        descriptor: codecs.getincrementaldecoder("utf-8")(errors="replace")
+        for descriptor in streams
+    }
+    pending: dict[str, list[str]] = {"stdout": [], "stderr": []}
+    relay_descriptor = relay.fileno()
+    worker_descriptor = worker.fileno()
+    active = {relay_descriptor, worker_descriptor, *streams}
+    buffers = {"relay": bytearray(), "worker": bytearray()}
+
+    def read_stream(descriptor: int) -> None:
+        chunk = os.read(descriptor, BUFFER_SIZE)
+        name, destination = streams[descriptor]
+        if chunk:
+            write_all(destination, chunk)
+            text = decoders[descriptor].decode(chunk)
+        else:
+            active.remove(descriptor)
+            text = decoders[descriptor].decode(b"", final=True)
+        if text:
+            pending[name].append(text)
+
+    def read_ready_streams() -> None:
+        descriptors = [descriptor for descriptor in streams if descriptor in active]
+        if not descriptors:
+            return
+        ready, _, _ = select.select(descriptors, [], [], 0)
+        for descriptor in streams:
+            if descriptor in ready:
+                read_stream(descriptor)
+
+    def flush_streams() -> None:
+        event = {
+            name: "".join(pending[name])
+            for name in ("stdout", "stderr")
+            if pending[name]
+        }
+        if event:
+            record(capture, event)
+            for name in event:
+                pending[name].clear()
+
+    def forward_frames(direction: str, destination: socket.socket) -> bool:
+        buffer = buffers[direction]
+        shutdown = False
+        while b"\n" in buffer:
+            frame, _, remainder = buffer.partition(b"\n")
+            buffers[direction] = buffer = bytearray(remainder)
+            message = json.loads(frame.decode("utf-8"))
+            assert isinstance(message, dict), message
+            if direction == "worker":
+                read_ready_streams()
+                flush_streams()
+            record(capture, {direction: message})
+            frame_is_shutdown = direction == "relay" and message == {"kind": "shutdown"}
+            if frame_is_shutdown and capture_stdin_close:
+                assert os.read(0, 1) == b"", "worker stdin contained data at shutdown"
+                record(capture, {"stdin": {"closed": True}})
+            send(destination, message)
+            shutdown = shutdown or frame_is_shutdown
+        return shutdown
+
+    while worker_descriptor in active or any(
+        descriptor in active for descriptor in streams
+    ):
+        ready, _, _ = select.select(active, [], [])
+        for descriptor in streams:
+            if descriptor in ready:
+                read_stream(descriptor)
+
+        if worker_descriptor in ready:
+            read_ready_streams()
+            chunk = worker.recv(BUFFER_SIZE)
+            if chunk:
+                buffers["worker"].extend(chunk)
+                forward_frames("worker", relay)
+            else:
+                active.remove(worker_descriptor)
+                if capture_worker_sideband_close:
+                    record(capture, {"worker_sideband": {"closed": True}})
+                shutdown_write(
+                    relay,
+                    "relay",
+                    injected_shutdown_direction,
+                    capture,
+                )
+
+        if relay_descriptor in ready:
+            chunk = relay.recv(BUFFER_SIZE)
+            if chunk:
+                buffers["relay"].extend(chunk)
+                shutdown = forward_frames("relay", worker)
+            else:
+                shutdown = True
+            if shutdown:
+                active.remove(relay_descriptor)
+                shutdown_write(
+                    worker,
+                    "worker",
+                    injected_shutdown_direction,
+                    capture,
+                )
+
+    assert not buffers["relay"], "relay stopped during a sideband frame"
+    assert not buffers["worker"], "worker stopped during a sideband frame"
+    flush_streams()
+    relay.close()
+    worker.close()
+
+
+def main() -> None:
+    relay = take_sideband()
+    proxy_endpoint, worker_endpoint = socket.socketpair()
+    environment = os.environ.copy()
+    program = environment.pop(WORKER_ENV)
+    capture_stdin_close = environment.pop(CAPTURE_STDIN_CLOSE_ENV, None) == "1"
+    capture_worker_sideband_close = (
+        environment.pop(CAPTURE_WORKER_SIDEBAND_CLOSE_ENV, None) == "1"
+    )
+    injected_shutdown_direction = environment.pop(SHUTDOWN_ENOTCONN_ENV, None)
+    environment[SIDEBAND_FD_ENV] = str(worker_endpoint.fileno())
+    process = subprocess.Popen(
+        [program, "worker"],
+        env=environment,
+        pass_fds=(worker_endpoint.fileno(),),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    worker_endpoint.close()
+    assert process.stdout is not None
+    assert process.stderr is not None
+
+    with (
+        tempfile.TemporaryDirectory(
+            prefix="worker-wire-", dir=os.environ["TMPDIR"]
+        ) as directory,
+        Path(directory, CAPTURE_NAME).open("w", encoding="utf-8") as capture,
+    ):
+        proxy(
+            relay,
+            proxy_endpoint,
+            process.stdout,
+            process.stderr,
+            capture,
+            capture_stdin_close,
+            capture_worker_sideband_close,
+            injected_shutdown_direction,
+        )
+    process.stdout.close()
+    process.stderr.close()
+    raise SystemExit(process.wait())
+
+
+if __name__ == "__main__":
+    main()

@@ -553,7 +553,10 @@ def _mcp_console_apply_psutil_process_group(
 def _mcp_console_configure_psutil(
     _Exception=_builtins.Exception,
     _apply=_mcp_console_apply_psutil_process_group,
+    _sandboxed=_os.environ.get("MCP_CONSOLE_SANDBOX") == "1",
 ):
+    if not _sandboxed:
+        return None
     # This adapter may run after reticulate has activated an environment, so
     # its optional probe and setup must not abort activation.
     try:

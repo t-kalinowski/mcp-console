@@ -1,10 +1,8 @@
 use std::fs::File;
 use std::io::Write;
 
+use super::{Event, Transcript, create_private_file};
 use chrono::Utc;
-use serde_json::json;
-
-use super::{Transcript, create_private_file};
 
 pub(super) const MAX_CELL_OUTPUT_BYTES: u64 = 1024 * 1024 * 1024;
 
@@ -69,15 +67,14 @@ impl Transcript {
     fn record_cell_output(&self, call_id: u64, path: &str, summary: CellOutputSummary) {
         self.update(|state| {
             state.active()?.append(
-                json!({
-                    "event": "cell_output",
-                    "call_id": call_id,
-                    "path": path,
-                    "retained_bytes": summary.retained_bytes,
-                    "inline_omitted_bytes": summary.inline_omitted_bytes,
-                    "discarded_bytes": summary.discarded_bytes,
-                    "retention_limit_bytes": MAX_CELL_OUTPUT_BYTES,
-                }),
+                Event::CellOutput {
+                    call_id,
+                    path,
+                    retained_bytes: summary.retained_bytes,
+                    inline_omitted_bytes: summary.inline_omitted_bytes,
+                    discarded_bytes: summary.discarded_bytes,
+                    retention_limit_bytes: MAX_CELL_OUTPUT_BYTES,
+                },
                 Utc::now(),
             )
         });

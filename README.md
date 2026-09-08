@@ -24,11 +24,9 @@ Linux and Windows are not supported yet.
 A working R installation is required.
 Set `R_HOME` or make `R` discoverable on `PATH`.
 Dynamic environment resolution normally starts from either `ir` 0.4.0 or later or `uv` on `PATH`.
-When only `uv` is available, the server runs `uv tool run --from r-lib-ir ir`.
-When only `ir` is available, the resolved reticulate installation supplies `uv` for managed Python.
-If neither command is available, an ambient reticulate installation may bootstrap `uv` and supply `ir`.
-Otherwise the server starts a bare runtime without automatic or explicit dependency resolution.
 The first managed server start may download and install the default R and Python requirements.
+If no resolver bootstrap is available, the server starts a bare runtime using installed packages.
+See [Requirements and environments](https://github.com/t-kalinowski/mcp-console/blob/main/docs/REQUIREMENTS.md) for bootstrap options, managed defaults, and bare runtime behavior.
 
 Run the published command without installing it persistently:
 
@@ -49,33 +47,15 @@ mcp-console serve
 `mcp-console serve` communicates with its MCP client over standard input and output.
 It waits for MCP protocol input rather than presenting an interactive terminal prompt.
 
-## What it is useful for
-
-MCP Console is intended for iterative computational work: inspecting and transforming data, fitting models, running simulations, making plots, debugging code, and checking exact results.
-
-An agent can load data once, build useful objects, inspect an intermediate result in another language, and continue without reconstructing its environment or passing every intermediate value through files and model context.
-
 ## Working with the console
 
 The MCP interface exposes one tool: `send`.
 It runs one complete R, Python, or SQL cell, supplies interactive input, prepares additive requirements, applies an optional interrupt or restart, or collects pending output.
 
 Code-bearing calls to `send` are sequential.
-A control-only interrupt may overlap a pending `send` while that call resolves or prepares requirements, including for restart.
-Requirements alone perform standalone preparation without starting an initial worker.
-With a cell, requirements are its preconditions; without control, preparation precedes nonempty standard input and evaluation.
-`control = "interrupt"` preserves in-memory state and orders signal delivery, same-call input, and a 100-millisecond grace period; when a cell follows, its requirements are then prepared before evaluation, and the cell is not run if the interrupted evaluation remains active.
-`control = "restart"` resolves requirements before replacing the worker, then queues same-call input and runs an optional cell only in the replacement.
-Polling and stdin remain code-free `send` calls.
-Control, interrupt grace, and explicit requirement preparation do not consume the wait timeout, which starts after cell dispatch or attachment to an active evaluation.
-R and Python global state and the in-memory DuckDB catalog remain available until the worker is restarted, replaced after failure, or the server exits.
-Prepared requirements remain available across worker restarts, but in-memory language, database, debugger, and unread-input state does not.
-Requirements declared on `send` are prepared before its cell runs and remain available to later cells.
-Preparation makes packages and extensions available; it does not import, attach, or load them.
-When dynamic environment resolution is available, the built-in worker resolves missing plain R packages and managed Python imports on demand.
-Use packages directly; declare an explicit Python requirement when exact distribution metadata is needed or automatic inference asks for it.
-Successful package additions survive restart, while attached packages, imported modules, and other in-memory state do not.
-A bare runtime uses only packages already installed in its ambient R and Python environments and does not expose the `requirements` field.
+The current interface has one implicit session, with no named-session management.
+The [send operation reference](https://github.com/t-kalinowski/mcp-console/blob/main/docs/SEND_OPERATIONS.md) defines validation, preparation, control, input, and timeout ordering.
+The [built-in runtime guide](https://github.com/t-kalinowski/mcp-console/blob/main/docs/BUILTIN_RUNTIME.md) covers language state, output, graphics, and interoperability.
 
 ## Example workflow
 
@@ -114,80 +94,37 @@ plt.scatter(frame["temperature"], frame[".residual"])
 plt.axhline(0)
 ```
 
-The data, model, Python imports, and DuckDB catalog remain available for later calls until the runtime is restarted or replaced.
+The data, model, Python imports, and DuckDB catalog remain available for later calls until the worker is restarted, replaced, or the server exits.
 
-## Current status
-
-The repository contains a working Rust MCP server, sandboxed worker relay, built-in mixed-language worker, host dependency resolvers, session recording, and public process-boundary transcript tests.
-The registered MCP surface contains only `send`.
-
-The core console and its initial PyPI distribution currently support only macOS.
-Linux and Windows support is not implemented.
-The project remains under active construction.
-
-The server records a JSONL journal of tool calls and results together with image artifacts.
-It projects each journal event into a Yamark-formatted, append-only `transcript.md` with syntax-highlighted R, Python, and SQL source, text results, and relative artifact links.
-Alongside it, the server regenerates a Yamark-formatted `transcript.qmd` from incremental source and requirement state when submitted code or declared R or Python requirements change.
-The QMD contains only submitted executable code cells and `ir` front matter with the managed built-in requirements and cumulative declarations.
-Bare sessions omit the managed defaults.
-Run `uv tool run --from r-lib-ir ir render transcript.qmd` to execute those client-authored cells in order and export a fresh report using reticulate's default managed Python selection.
-When `ir` is installed on `PATH`, `ir render transcript.qmd` is equivalent.
-The projection is intended to reproduce the analysis represented by `transcript.md`, but it does not include recorded output or artifacts and does not yet reconstruct every runtime detail.
-Human-facing tools for following and inspecting an agent's work remain future design.
-
-Other current limitations include:
-
-- there is one implicit session and no named-session management;
-- cells run sequentially, while lifecycle control may overlap the operation it interrupts or replaces; and
-- restart and worker replacement discard R, Python, DuckDB, debugger, and unread-input state.
+The server records tool calls and results in a JSONL journal with image artifacts and a Markdown transcript.
+It also produces a Quarto source projection, `transcript.qmd`.
+Rejected or failed submissions may appear in that file, and rendering it does not reconstruct session control.
+See [Recording and artifacts](https://github.com/t-kalinowski/mcp-console/blob/main/docs/ARCHITECTURE.md#recording-and-image-artifacts) for the file formats and rendering behavior.
 
 ## Security boundary
 
-Submitted R, Python, and SQL have shell-class capability inside the worker sandbox.
+By default, submitted R, Python, and SQL have shell-class capability inside the worker sandbox.
 The worker can read host files, but direct network access and regular-file writes outside its private temporary directory are denied.
 This is a process boundary, not a safe evaluator for untrusted code with access to sensitive readable files.
+
+`mcp-console serve --no-sandbox` launches the relay directly with host permissions.
+The worker inherits the host temporary-directory environment, and no sandbox manager tracks or cleans up descendants.
+The relay still shuts down and reaps its direct worker normally.
 
 The server installs automatically inferred or explicitly declared R and Python packages and DuckDB extensions outside the worker sandbox with server permissions.
 Those operations may access the network and execute installation or build code, so only trusted requirements should be supplied.
 See [Requirements and environments](https://github.com/t-kalinowski/mcp-console/blob/main/docs/REQUIREMENTS.md) for the accepted inputs and trust model.
 
-Session journals and the Markdown projection record submitted source, standard input, declared requirements, result text, and artifact paths without redaction.
-Image bytes are stored in separate artifact files linked from those records.
-The source-only Quarto document contains submitted code and declared R and Python requirements without redaction.
-Rendering it executes that source outside the MCP Console worker sandbox with the permissions of the `ir` and Quarto processes.
+Session records contain submitted source, standard input, requirements, results, and artifacts without redaction.
+Rendering the Quarto source projection executes submitted code outside the worker sandbox with the permissions of the `ir` and Quarto processes.
 Render only code you trust.
-See [Implemented architecture](https://github.com/t-kalinowski/mcp-console/blob/main/docs/ARCHITECTURE.md) for recording and process placement.
 
 ## Development
-
-The implemented commands are:
-
-```text
-mcp-console serve
-mcp-console sandbox -- COMMAND [ARG]...
-mcp-console --help
-mcp-console help [COMMAND]
-mcp-console --version
-```
-
-`mcp-console serve` communicates with its MCP client over standard input and output.
-Normal restart, automatic worker replacement, and orderly server shutdown retire descendants observed from each worker generation, including descendants that entered another process group or session.
-On macOS, each worker generation also commits an independent host manager that retires the descendants it observed and attempts to remove the private temporary directory after an abrupt server exit outside an in-progress normal retirement.
-The built-in or configured relay starts only after the server observer is attached and that manager has adopted the private temporary directory and reported readiness.
-A later descendant that becomes orphaned before the manager resolves its fork event remains outside crash cleanup.
-The standalone `sandbox` command is available for development.
-Its launcher owns normal retirement and preserves the direct command's exit status while retiring descendants observed from that root, including descendants that entered another process group or session.
-On macOS, it also commits an independent manager after the launcher observer attaches.
-The requested command starts only after the manager has adopted the private temporary directory and reported readiness.
-After readiness, abrupt launcher loss retires the descendants the manager observed and removes the directory after successful cleanup; unexpected manager loss wakes the still-live launcher observer to finish retirement, even if the manager monitor cannot terminate the root itself.
-A descendant that later becomes orphaned before either observer sees its fork remains outside that observer's guarantee, and an abrupt launcher exit before manager readiness remains outside crash cleanup.
-The command inherits standard input, output, and error while closing other inherited file descriptors before the target runs.
-It does not add terminal job-control or signal-relay semantics beyond the inherited process relationships.
-Use the MCP server for the supported worker-generation lifecycle.
 
 Run development commands from the repository root:
 
 ```text
+scripts/stage-sandbox-runner /path/to/pinned-source-checkout
 scripts/format
 scripts/check
 scripts/test [BOUNDARY/SUITE[::CASE]]
@@ -195,20 +132,22 @@ scripts/test --list
 scripts/test --update BOUNDARY/SUITE[::CASE]
 ```
 
-`scripts/format` attempts each installed formatter and leaves failures visible while continuing with the remaining formatters.
-`scripts/check` validates extracted runtime sources, checks Rust formatting and Clippy, runs Rust tests, and runs the complete transcript suite.
+Stage the private sandbox executable before the first macOS build or after changing the source pin; [RELEASE.md](RELEASE.md) describes the required checkout and toolchain.
+See [AGENTS.md](https://github.com/t-kalinowski/mcp-console/blob/main/AGENTS.md) for development rules and the repository map, and the [boundary test guide](https://github.com/t-kalinowski/mcp-console/blob/main/tests/boundaries/README.md) for test selection and snapshot updates.
+The standalone `mcp-console sandbox -- COMMAND [ARG]...` command is also available for development; [macOS sandbox supervision](https://github.com/t-kalinowski/mcp-console/blob/main/docs/SANDBOX_SUPERVISION.md) defines its lifecycle, terminal behavior, and limitations.
 
 ## Documentation
 
 The [documentation index](https://github.com/t-kalinowski/mcp-console/blob/main/docs/README.md) maps current documents by audience.
 
 - [Implemented architecture](https://github.com/t-kalinowski/mcp-console/blob/main/docs/ARCHITECTURE.md) explains current process boundaries, ownership, lifecycle, recording, and artifacts.
-- [macOS sandbox supervision](https://github.com/t-kalinowski/mcp-console/blob/main/docs/SANDBOX_SUPERVISION.md) explains normal observed-descendant retirement, independent manager cleanup, and post-spawn limitations.
+- [macOS sandbox supervision](https://github.com/t-kalinowski/mcp-console/blob/main/docs/SANDBOX_SUPERVISION.md) explains standalone terminal and signal ownership, manager-owned observed-descendant retirement, fallback cleanup, and remaining tracking limitations.
 - [Built-in runtime](https://github.com/t-kalinowski/mcp-console/blob/main/docs/BUILTIN_RUNTIME.md) describes user-visible R, Python, SQL, input, output, and graphics behavior.
+- [Send operations](https://github.com/t-kalinowski/mcp-console/blob/main/docs/SEND_OPERATIONS.md) defines validation and execution order for each `send` combination.
 - [Requirements and environments](https://github.com/t-kalinowski/mcp-console/blob/main/docs/REQUIREMENTS.md) describes dependency preparation and its trust boundary.
 - [Worker protocol](https://github.com/t-kalinowski/mcp-console/blob/main/docs/WORKER_PROTOCOL.md) and [relay protocol](https://github.com/t-kalinowski/mcp-console/blob/main/docs/RELAY_PROTOCOL.md) define the exact transport contracts.
-  [Registered tool descriptions](https://github.com/t-kalinowski/mcp-console/blob/main/docs/TOOL_DESCRIPTIONS.md) is a human-readable mirror of the current agent-facing wording.
-- [Transcript test guide](https://github.com/t-kalinowski/mcp-console/blob/main/tests/transcripts/README.md) explains selectors, normalization, and golden updates.
+  [Tool description guidance](https://github.com/t-kalinowski/mcp-console/blob/main/docs/TOOL_DESCRIPTIONS.md) covers editorial rules; the [canonical handshake snapshot](https://github.com/t-kalinowski/mcp-console/blob/main/tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml) records the registered wording.
+- [Boundary test guide](https://github.com/t-kalinowski/mcp-console/blob/main/tests/boundaries/README.md) explains selectors, normalization, and snapshot updates.
 - The [release guide](https://github.com/t-kalinowski/mcp-console/blob/main/RELEASE.md) describes PyPI setup, publication, verification, and recovery.
 
 The [project vision](https://github.com/t-kalinowski/mcp-console/blob/main/design-sketches/VISION.md) and other documents under [`design-sketches/`](https://github.com/t-kalinowski/mcp-console/blob/main/design-sketches/README.md) describe intended or exploratory future design, not the implemented system.

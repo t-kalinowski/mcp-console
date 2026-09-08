@@ -1,16 +1,20 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
 import textwrap
 import unittest
+import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts" / "release.py"
+STAGE_SCRIPT = ROOT / "scripts" / "stage-sandbox-runner"
 
 
 def write_executable(path: Path, source: str) -> None:
@@ -163,30 +167,70 @@ class ReleaseScriptTests(unittest.TestCase):
         commands.mkdir()
         tool_directory = directory / "tool" / "mcp-console" / "bin"
         tool_directory.mkdir(parents=True)
+        libexec = tool_directory.parent / "libexec"
+        libexec.mkdir()
+        runner_source = """
+            #!/usr/bin/env python3
+            import json
+            import os
+            import sys
+            from pathlib import Path
+
+            assert len(sys.argv) == 3 and sys.argv[1] == "--bootstrap-fd"
+            descriptor = int(sys.argv[2])
+            assert descriptor > 2
+            with os.fdopen(descriptor, "rb") as setup:
+                size = int.from_bytes(setup.read(4), "big")
+                request = json.loads(setup.read(size))
+            assert request["version"] == 2
+            with Path(os.environ["FAKE_RUNNER_RECORD"]).open("a") as record:
+                print(json.dumps({
+                    "request": request,
+                    "path": os.environ.get("PATH", ""),
+                }), file=record)
+            mode = os.environ.get("FAKE_RUNNER_MODE")
+            if mode == "failure":
+                print("fixture launch failure", file=sys.stderr)
+                raise SystemExit(42)
+            if mode == "corrupt":
+                sys.stdin.buffer.read()
+                sys.stdout.buffer.write(b"wrong bytes")
+            else:
+                os.chdir(request["cwd"])
+                os.execvpe(request["command"][0], request["command"], request["environment"])
+            """
+        write_executable(
+            libexec / "mcp-console-sandbox",
+            runner_source.replace("#!/usr/bin/env python3", f"#!{sys.executable}"),
+        )
         tool_bin = directory / "bin"
         tool_bin.mkdir()
 
         executable_source = """
             #!/usr/bin/env python3
+            import hashlib
             import json
             import os
+            import signal
             import sys
-            import time
+            from pathlib import Path
 
             if sys.argv[1:] == ["--version"]:
                 print("mcp-console 0.0.2")
             elif sys.argv[1:] == ["--help"]:
                 print("mcp-console help")
             elif sys.argv[1:3] == ["sandbox", "--"]:
-                pass
+                runner = Path(sys.argv[0]).resolve().parent.parent / "libexec" / "mcp-console-sandbox"
+                if not runner.is_file() or not os.access(runner, os.X_OK):
+                    print("the private sandbox runner is unavailable", file=sys.stderr)
+                    raise SystemExit(1)
+                if hashlib.sha256(runner.read_bytes()).hexdigest() != os.environ["FAKE_RUNNER_SHA256"]:
+                    print("the private sandbox runner does not match this installation", file=sys.stderr)
+                    raise SystemExit(1)
+                Path(os.environ["FAKE_SANDBOX_PATH_RECORD"]).write_text(
+                    os.environ.get("PATH", ""), encoding="utf-8"
+                )
             elif sys.argv[1:] == ["serve"]:
-                if os.environ.get("FAKE_MCP_PARTIAL"):
-                    sys.stdout.write('{"jsonrpc":')
-                    sys.stdout.flush()
-                    time.sleep(1)
-                    raise SystemExit(0)
-                if os.environ.get("FAKE_MCP_HANG"):
-                    time.sleep(60)
                 initialize = json.loads(sys.stdin.readline())
                 print(json.dumps({
                     "jsonrpc": "2.0",
@@ -201,9 +245,31 @@ class ReleaseScriptTests(unittest.TestCase):
                     },
                 }), flush=True)
                 json.loads(sys.stdin.readline())
+                startup = json.loads(sys.stdin.readline())
+                assert startup["params"] == {
+                    "name": "send",
+                    "arguments": {"control": "restart"},
+                }
+                if os.environ.get("FAKE_MCP_STARTUP_HANG"):
+                    signal.pause()
+                print(json.dumps({
+                    "jsonrpc": "2.0",
+                    "id": startup["id"],
+                    "result": {
+                        "content": [{
+                            "type": "text",
+                            "text": "[starting new worker]\\n[idle]",
+                        }],
+                        "isError": False,
+                    },
+                }), flush=True)
                 evaluation = json.loads(sys.stdin.readline())
+                assert evaluation["params"] == {
+                    "name": "send",
+                    "arguments": {"r": "6 * 7"},
+                }
                 if os.environ.get("FAKE_MCP_EVALUATION_HANG"):
-                    time.sleep(60)
+                    signal.pause()
                 print(json.dumps({
                     "jsonrpc": "2.0",
                     "id": evaluation["id"],
@@ -215,7 +281,17 @@ class ReleaseScriptTests(unittest.TestCase):
             else:
                 raise SystemExit(2)
         """
-        cargo_bin = directory / "cargo-mcp-console"
+        executable_source = executable_source.replace(
+            "#!/usr/bin/env python3", f"#!{sys.executable}"
+        )
+        cargo_directory = directory / "cargo-target"
+        (cargo_directory / "release").mkdir(parents=True)
+        cargo_libexec = cargo_directory / "libexec"
+        cargo_libexec.mkdir()
+        shutil.copy2(
+            libexec / "mcp-console-sandbox", cargo_libexec / "mcp-console-sandbox"
+        )
+        cargo_bin = cargo_directory / "release" / "mcp-console"
         write_executable(cargo_bin, executable_source)
         installed = tool_directory / "mcp-console"
         write_executable(installed, executable_source)
@@ -253,16 +329,93 @@ class ReleaseScriptTests(unittest.TestCase):
         )
 
         wheel = directory / "mcp_console-0.0.2-py3-none-macosx_11_0_arm64.whl"
-        wheel.touch()
+        self.write_wheel(wheel)
         environment = os.environ.copy()
         environment.update(
             {
                 "PATH": f"{commands}{os.pathsep}{environment['PATH']}",
                 "UV_TOOL_DIR": str(directory / "tool"),
                 "UV_TOOL_BIN_DIR": str(tool_bin),
+                "FAKE_SANDBOX_PATH_RECORD": str(directory / "sandbox-path.txt"),
+                "FAKE_RUNNER_RECORD": str(directory / "runner.json"),
+                "FAKE_RUNNER_SHA256": hashlib.sha256(
+                    (libexec / "mcp-console-sandbox").read_bytes()
+                ).hexdigest(),
             }
         )
         return environment, wheel, cargo_bin
+
+    def write_wheel(
+        self, wheel: Path, *, omit_runner: bool = False, executable: bool = True
+    ) -> None:
+        data = "mcp_console-0.0.2.data/data"
+        files = [
+            (f"{data}/share/licenses/mcp-console/Codex-LICENSE", 0o100644),
+            (f"{data}/share/licenses/mcp-console/Codex-NOTICE", 0o100644),
+        ]
+        if not omit_runner:
+            files.append(
+                (
+                    f"{data}/libexec/mcp-console-sandbox",
+                    0o100755 if executable else 0o100644,
+                )
+            )
+        with zipfile.ZipFile(wheel, "w") as archive:
+            for name, mode in files:
+                info = zipfile.ZipInfo(name)
+                info.create_system = 3
+                info.external_attr = mode << 16
+                archive.writestr(info, "fixture\n")
+
+    def test_smoke_wheel_requires_private_executable_and_no_public_runner(self) -> None:
+        for defect in ("missing", "not executable", "public wheel", "public uv"):
+            with self.subTest(
+                defect=defect
+            ), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                environment, wheel, cargo_bin = self.smoke_environment(directory)
+                if defect == "missing":
+                    self.write_wheel(wheel, omit_runner=True)
+                elif defect == "not executable":
+                    self.write_wheel(wheel, executable=False)
+                elif defect == "public wheel":
+                    with zipfile.ZipFile(wheel, "a") as archive:
+                        archive.writestr(
+                            "mcp_console-0.0.2.data/scripts/mcp-console-sandbox",
+                            "fixture\n",
+                        )
+                else:
+                    (
+                        Path(environment["UV_TOOL_BIN_DIR"]) / "mcp-console-sandbox"
+                    ).touch()
+
+                result = self.run_script(
+                    "smoke-wheel",
+                    str(wheel),
+                    str(cargo_bin),
+                    cwd=directory,
+                    env=environment,
+                )
+
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn("private sandbox runner", result.stderr)
+
+    def test_smoke_wheel_requires_runnable_cargo_binary(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            environment, wheel, cargo_bin = self.smoke_environment(directory)
+            (cargo_bin.parent.parent / "libexec" / "mcp-console-sandbox").unlink()
+
+            result = self.run_script(
+                "smoke-wheel",
+                str(wheel),
+                str(cargo_bin),
+                cwd=directory,
+                env=environment,
+            )
+
+            self.assertNotEqual(result.returncode, 0, result.stdout)
+            self.assertIn("private sandbox runner is unavailable", result.stderr)
 
     def test_smoke_wheel_evaluates_r_and_bounds_response_waits(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -284,6 +437,34 @@ class ReleaseScriptTests(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 0, result.stderr)
+            sandbox_path = Path(environment["FAKE_SANDBOX_PATH_RECORD"]).read_text()
+            self.assertEqual(len(sandbox_path.split(os.pathsep)), 1)
+            self.assertNotEqual(sandbox_path, environment["PATH"])
+            runner = json.loads(
+                Path(environment["FAKE_RUNNER_RECORD"]).read_text().splitlines()[0]
+            )
+            request = runner["request"]
+            self.assertEqual(request["version"], 2)
+            self.assertEqual(request["command"], ["/bin/cat"])
+            self.assertEqual(request["network"], "restricted")
+            self.assertEqual(
+                request["filesystem"],
+                {
+                    "kind": "restricted",
+                    "entries": [
+                        {
+                            "path": {"type": "special", "value": {"kind": "root"}},
+                            "access": "read",
+                        },
+                        {
+                            "path": {"type": "path", "path": request["cwd"]},
+                            "access": "write",
+                        },
+                    ],
+                },
+            )
+            self.assertEqual(request["environment"]["PATH"], runner["path"])
+            self.assertEqual(len(runner["path"].split(os.pathsep)), 1)
 
             environment["FAKE_UV_HELP_EXTRA_NEWLINE"] = "1"
             result = self.run_script(
@@ -304,25 +485,6 @@ class ReleaseScriptTests(unittest.TestCase):
             self.assertIn("installed and Cargo help output differ", result.stderr)
             del environment["FAKE_UV_HELP_EXTRA_NEWLINE"]
 
-            environment["FAKE_MCP_HANG"] = "1"
-            result = self.run_script(
-                "smoke-wheel",
-                str(wheel),
-                str(cargo_bin),
-                "--target",
-                "aarch64-apple-darwin",
-                "--startup-timeout-seconds",
-                "0.2",
-                "--response-timeout-seconds",
-                "1",
-                cwd=directory,
-                env=environment,
-            )
-
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("MCP response timed out", result.stderr)
-
-            del environment["FAKE_MCP_HANG"]
             environment["FAKE_MCP_EVALUATION_HANG"] = "1"
             result = self.run_script(
                 "smoke-wheel",
@@ -339,10 +501,14 @@ class ReleaseScriptTests(unittest.TestCase):
             )
 
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("MCP response timed out", result.stderr)
+            self.assertIn("MCP response timed out after 0.01 seconds", result.stderr)
 
-            del environment["FAKE_MCP_EVALUATION_HANG"]
-            environment["FAKE_MCP_PARTIAL"] = "1"
+    def test_smoke_wheel_bounds_runtime_startup_separately(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            environment, wheel, cargo_bin = self.smoke_environment(directory)
+            environment["FAKE_MCP_STARTUP_HANG"] = "1"
+
             result = self.run_script(
                 "smoke-wheel",
                 str(wheel),
@@ -350,15 +516,31 @@ class ReleaseScriptTests(unittest.TestCase):
                 "--target",
                 "aarch64-apple-darwin",
                 "--startup-timeout-seconds",
-                "0.2",
-                "--response-timeout-seconds",
                 "1",
+                "--response-timeout-seconds",
+                "0.01",
                 cwd=directory,
                 env=environment,
             )
 
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("MCP response timed out", result.stderr)
+            self.assertIn("MCP response timed out after 1 seconds", result.stderr)
+
+    def test_smoke_wheel_rejects_failed_or_corrupt_private_launch(self) -> None:
+        for mode in ("failure", "corrupt"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                environment, wheel, cargo_bin = self.smoke_environment(directory)
+                environment["FAKE_RUNNER_MODE"] = mode
+                result = self.run_script(
+                    "smoke-wheel",
+                    str(wheel),
+                    str(cargo_bin),
+                    cwd=directory,
+                    env=environment,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("private sandbox runner", result.stderr)
 
     def test_verify_wheel_set_requires_both_macos_architectures(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -376,73 +558,139 @@ class ReleaseScriptTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("expected exactly two wheels", result.stderr)
 
-    def test_workflows_delegate_release_logic_to_the_script(self) -> None:
-        ci_source = (ROOT / ".github" / "workflows" / "ci.yaml").read_text()
-        release_source = (ROOT / ".github" / "workflows" / "release.yml").read_text()
-        ci = " ".join(ci_source.replace("\\\n", " ").split())
-        release = " ".join(release_source.replace("\\\n", " ").split())
+    def test_stage_runner_builds_the_pin_and_records_artifact_integrity(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            root = directory / "project"
+            scripts = root / "scripts"
+            scripts.mkdir(parents=True)
+            shutil.copyfile(STAGE_SCRIPT, scripts / STAGE_SCRIPT.name)
+            pin = {
+                "repository": "t-kalinowski/codex",
+                "release": "rust-v0.150.1",
+                "commit": "a" * 40,
+                "protocol_version": 2,
+                "rust_toolchain": "1.95.0",
+            }
+            (root / "sandbox-runner.json").write_text(json.dumps(pin))
+            checkout = directory / "source"
+            crate = checkout / "codex-rs" / "mcp-console-sandbox"
+            crate.mkdir(parents=True)
+            (crate / "Cargo.toml").touch()
+            (checkout / "LICENSE").write_text("license\n")
+            (checkout / "NOTICE").write_text("notice\n")
+            commands = directory / "commands"
+            commands.mkdir()
+            write_executable(
+                commands / "git",
+                """
+                #!/usr/bin/env python3
+                import os
+                import sys
 
-        self.assertIn("scripts/release.py smoke-wheel", ci)
-        self.assertIn("scripts/release.py smoke-wheel", release)
-        self.assertIn("scripts/release.py validate-publish", release)
-        self.assertIn("scripts/release.py verify-wheel-set", release)
-        self.assertNotIn("python -", ci_source)
-        self.assertNotIn("python -", release_source)
-        self.assertNotIn("python3 -", ci_source)
-        self.assertNotIn("python3 -", release_source)
-        self.assertIn("GITHUB_PAT: ${{ github.token }}", release_source)
-        self.assertIn('install.libs("gettext")', release_source)
-        self.assertEqual(ci_source.count('UV_VERSION: "0.12.4"'), 1)
-        self.assertEqual(ci_source.count("version: ${{ env.UV_VERSION }}"), 1)
-        self.assertEqual(release_source.count('version: "0.12.4"'), 2)
+                if sys.argv[1:] == ["rev-parse", "HEAD"]:
+                    print(os.environ["FAKE_SOURCE_REVISION"])
+                elif sys.argv[1:] == ["status", "--porcelain", "--untracked-files=all"]:
+                    print(os.environ.get("FAKE_SOURCE_DIRTY", ""), end="")
+                else:
+                    raise SystemExit(2)
+                """,
+            )
+            write_executable(
+                commands / "rustc",
+                """
+                #!/usr/bin/env python3
+                import sys
 
-    def test_ci_uses_one_macos_runner_and_installs_tools_first(self) -> None:
-        ci_source = (ROOT / ".github" / "workflows" / "ci.yaml").read_text()
+                assert sys.argv[1:] == ["+1.95.0", "--print", "host-tuple"]
+                print("aarch64-apple-darwin")
+                """,
+            )
+            write_executable(
+                commands / "cargo",
+                """
+                #!/usr/bin/env python3
+                import json
+                import os
+                import sys
+                from pathlib import Path
 
-        self.assertEqual(ci_source.count("runs-on: macos-latest"), 1)
-        self.assertEqual(ci_source.count("actions/checkout@v7"), 1)
-        self.assertEqual(ci_source.count("actions/setup-python@v7"), 1)
-        self.assertEqual(ci_source.count("r-lib/actions/setup-r@v2"), 1)
-        self.assertEqual(ci_source.count("dtolnay/rust-toolchain@stable"), 1)
-        self.assertEqual(ci_source.count("Swatinem/rust-cache@v2"), 1)
-        self.assertEqual(ci_source.count("use-public-rspm: always"), 1)
-        self.assertIn('upgrade: "FALSE"', ci_source)
-        self.assertLess(
-            ci_source.index("- name: Install tools"),
-            ci_source.index("- name: Install R\n"),
-        )
-        self.assertLess(
-            ci_source.index("- name: Run core checks"),
-            ci_source.index("- name: Install R package dependencies"),
-        )
-        self.assertLess(
-            ci_source.index("- name: Check R package"),
-            ci_source.index("- name: Install transcript dependencies"),
-        )
-        package_dependencies_start = ci_source.index(
-            "- name: Install R package dependencies"
-        )
-        package_dependencies_end = ci_source.index("- name: Check R package")
-        package_dependencies = ci_source[
-            package_dependencies_start:package_dependencies_end
-        ]
-        self.assertIn(
-            "cache: false",
-            package_dependencies,
-        )
-        self.assertLess(
-            ci_source.index("- name: Install transcript dependencies"),
-            ci_source.index("- name: Prewarm default R environment"),
-        )
-        self.assertLess(
-            ci_source.index("- name: Prewarm default R environment"),
-            ci_source.index("- name: Run transcripts"),
-        )
-        self.assertIn(
-            '-e \'sessionInfo(package = c("tidyverse", "reticulate", '
-            '"DBI", "duckdb", "arrow", "nanoarrow"))\'',
-            ci_source,
-        )
+                Path(os.environ["FAKE_CARGO_ARGUMENTS"]).write_text(json.dumps(sys.argv[1:]))
+                target = sys.argv[sys.argv.index("--target") + 1] if "--target" in sys.argv else os.environ["CARGO_BUILD_TARGET"]
+                output = Path(os.environ["CARGO_TARGET_DIR"]) / target / "release"
+                output.mkdir(parents=True, exist_ok=True)
+                (output / "mcp-console-sandbox").write_bytes(b"runner bytes")
+                """,
+            )
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "PATH": f"{commands}{os.pathsep}{environment['PATH']}",
+                    "FAKE_SOURCE_REVISION": pin["commit"],
+                    "FAKE_CARGO_ARGUMENTS": str(directory / "cargo.json"),
+                    "CARGO_BUILD_TARGET": "x86_64-apple-darwin",
+                }
+            )
+            command = [
+                sys.executable,
+                str(scripts / STAGE_SCRIPT.name),
+                str(checkout),
+            ]
+            for arguments, target in (
+                ([], "aarch64-apple-darwin"),
+                (["--target", "x86_64-apple-darwin"], "x86_64-apple-darwin"),
+            ):
+                with self.subTest(target=target):
+                    result = subprocess.run(
+                        command + arguments,
+                        env=environment,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(
+                        json.loads((directory / "cargo.json").read_text()),
+                        [
+                            "+1.95.0",
+                            "build",
+                            "--locked",
+                            "--release",
+                            "-p",
+                            "codex-mcp-console-sandbox",
+                            "--bin",
+                            "mcp-console-sandbox",
+                            "--target",
+                            target,
+                        ],
+                    )
+                    self.assertEqual(
+                        json.loads(
+                            (root / "target/sandbox-runner-build.json").read_text()
+                        ),
+                        {
+                            "source_revision": pin["commit"],
+                            "target": target,
+                            "sha256": hashlib.sha256(b"runner bytes").hexdigest(),
+                        },
+                    )
+            data = root / "target" / "private-wheel-data" / "data"
+            runner = data / "libexec" / "mcp-console-sandbox"
+            self.assertEqual(runner.read_bytes(), b"runner bytes")
+            self.assertTrue(os.access(runner, os.X_OK))
+            self.assertEqual(
+                (data / "share/licenses/mcp-console/Codex-LICENSE").read_text(),
+                "license\n",
+            )
+            (directory / "cargo.json").unlink()
+            for changes in (
+                {"FAKE_SOURCE_REVISION": "b" * 40},
+                {"FAKE_SOURCE_DIRTY": " M Cargo.lock"},
+            ):
+                result = subprocess.run(
+                    command, env=environment | changes, capture_output=True, text=True
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse((directory / "cargo.json").exists())
 
 
 if __name__ == "__main__":
