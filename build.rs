@@ -1,5 +1,6 @@
 use sha2::{Digest as _, Sha256};
 use std::path::PathBuf;
+use std::process::Command;
 
 fn main() {
     println!("cargo:rerun-if-changed=src/r_graphics.c");
@@ -16,68 +17,56 @@ fn main() {
 
 fn bind_private_runner() {
     let root = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
-    let pin_path = root.join("sandbox-runner.json");
-    let build_path = root.join("target/sandbox-runner-build.json");
-    let runner_path = root.join("target/private-wheel-data/data/libexec/mcp-console-sandbox");
-    for path in [&pin_path, &build_path, &runner_path] {
-        println!("cargo:rerun-if-changed={}", path.display());
-    }
-    let pin: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(pin_path).expect("failed to read sandbox-runner.json"),
-    )
-    .expect("invalid sandbox-runner.json");
-    let build: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(build_path)
-            .expect("private sandbox runner is not staged; run scripts/stage-sandbox-runner"),
-    )
-    .expect("invalid private sandbox runner build manifest");
-    let revision = pin["commit"]
-        .as_str()
-        .expect("sandbox-runner.json must contain a source commit");
-    assert_eq!(
-        build["source_revision"].as_str(),
-        Some(revision),
-        "private sandbox runner source pin changed; run scripts/stage-sandbox-runner"
-    );
-    let target = std::env::var("TARGET").expect("Cargo did not provide its build target");
-    assert_eq!(
-        build["target"].as_str(),
-        Some(target.as_str()),
-        "private sandbox runner target does not match Cargo TARGET; run scripts/stage-sandbox-runner --target {target}"
-    );
-    let bytes = std::fs::read(&runner_path)
-        .expect("private sandbox runner is unavailable; run scripts/stage-sandbox-runner");
-    let digest = Sha256::digest(bytes);
-    let actual_digest: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
-    assert_eq!(
-        build["sha256"].as_str(),
-        Some(actual_digest.as_str()),
-        "private sandbox runner artifact changed; run scripts/stage-sandbox-runner"
-    );
-    let protocol = u32::try_from(
-        pin["protocol_version"]
-            .as_u64()
-            .expect("sandbox-runner.json must contain a protocol version"),
-    )
-    .expect("sandbox runner protocol version exceeds u32");
     let output = PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
-    // Cargo places OUT_DIR under <prefix>/<profile>/build/<package>/out.
-    // Match the installed bin/../libexec layout for every Cargo profile.
-    let prefix = output
+    let stage = output.join("sandbox-runner");
+    // OUT_DIR is <target prefix>/<profile>/build/<package>/out.
+    let cache = output
         .ancestors()
         .nth(4)
-        .expect("Cargo OUT_DIR is missing its target prefix");
-    let private_directory = prefix.join("libexec");
-    std::fs::create_dir_all(&private_directory)
-        .expect("failed to create the private sandbox runner directory");
-    std::fs::copy(&runner_path, private_directory.join("mcp-console-sandbox"))
-        .expect("failed to install the private sandbox runner beside the Cargo output");
+        .unwrap()
+        .join("sandbox-runner-cache");
+    println!("cargo:rerun-if-changed=sandbox-runner.json");
+    println!("cargo:rerun-if-changed=scripts/stage-sandbox-runner");
+    println!("cargo:rerun-if-env-changed=MCP_CONSOLE_SANDBOX_SOURCE");
+    let target = std::env::var("TARGET").expect("Cargo did not provide its build target");
+    let status = Command::new("python3")
+        .arg(root.join("scripts/stage-sandbox-runner"))
+        .arg("--target")
+        .arg(&target)
+        .arg("--cache-dir")
+        .arg(cache)
+        .arg("--output-dir")
+        .arg(&stage)
+        .status()
+        .expect("building the private sandbox runner requires Python 3, Git, and rustup");
+    assert!(status.success(), "private sandbox runner build failed");
+
+    let pin: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(root.join("sandbox-runner.json")).unwrap()).unwrap();
+    let build: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(stage.join("build.json")).unwrap()).unwrap();
+    assert_eq!(build["source_revision"], pin["commit"]);
+    assert_eq!(build["target"].as_str(), Some(target.as_str()));
+    let digest = Sha256::digest(std::fs::read(stage.join("mcp-console-sandbox")).unwrap());
+    let digest_hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    assert_eq!(build["sha256"].as_str(), Some(digest_hex.as_str()));
+    let mut bundle = Sha256::new();
+    for name in ["mcp-console-sandbox", "LICENSE", "NOTICE"] {
+        let bytes = std::fs::read(stage.join(name)).unwrap();
+        bundle.update((bytes.len() as u64).to_be_bytes());
+        bundle.update(bytes);
+    }
+    let bundle_hex: String = bundle
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let protocol = pin["protocol_version"].as_u64().unwrap();
     std::fs::write(
         output.join("sandbox_runner_installation.rs"),
         format!(
             "pub(super) const PROTOCOL_VERSION: u32 = {protocol};\n\
-             const EXPECTED_RUNNER_SHA256: [u8; 32] = {:?};\n",
-            digest.as_slice()
+             const BUNDLE_SHA256: &str = {bundle_hex:?};\n",
         ),
     )
     .expect("failed to bind private sandbox runner installation");

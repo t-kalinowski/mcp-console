@@ -4,3 +4,4 @@ set -eu
 
 scripts/check-core
 scripts/test
+python3 tests/cargo_install.py

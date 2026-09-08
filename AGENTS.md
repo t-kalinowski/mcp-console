@@ -33,7 +33,7 @@ Linux and Windows are not supported yet.
 Retain platform conditionals for modules that use OS-specific APIs and for selecting different implementations or unsupported-platform stubs; avoid redundant gates on shared code.
 CI runs the complete check on macOS.
 
-Build the pinned private sandbox executable with `scripts/stage-sandbox-runner` before the first macOS Cargo build or after changing `sandbox-runner.json` or the Cargo target; see `RELEASE.md` for the source checkout and toolchain.
+macOS Cargo builds automatically prepare and embed the pinned sandbox executable using an isolated checkout under the target directory; see `RELEASE.md` for prerequisites, caches, and the explicit source-checkout override.
 Run commands from the repository root:
 
 ```text
@@ -46,7 +46,7 @@ scripts/test --update BOUNDARY/SUITE[::CASE]
 
 `scripts/format` attempts Ruff, Yamark, rustfmt, and Air in sequence.
 A missing or failing formatter does not prevent the remaining formatters from running or make the script fail, so review its output and resulting changes.
-`scripts/check` validates extracted runtime sources, checks Rust formatting and Clippy, runs Rust tests, and runs the complete transcript suite.
+`scripts/check` validates extracted runtime sources, checks Rust formatting and Clippy, runs Rust tests, runs the complete transcript suite, and checks Cargo and uv installation from unstaged sources.
 
 ### Boundary snapshots
 
@@ -121,7 +121,7 @@ Keep these invariants intact:
 - `src/resolver.rs`, `src/resolver/` — retained host environments, direct Python-version selection, validation, platform implementations, and resolver process-group lifecycle.
 - `src/resolver/programs/` — compile-time R programs for DuckDB extension preparation, R-library resolution, and `uv` discovery.
 - `src/sandbox/runner.rs`, `src/sandbox/policy_extensions.sbpl`, `src/process_descriptors.rs` — one-shot runner setup, macOS policy additions, and inherited-descriptor boundary.
-- `sandbox-runner.json`, `scripts/stage-sandbox-runner`, `src/sandbox/installation.rs` — pinned source, private artifact staging, and installed artifact verification.
+- `sandbox-runner.json`, `scripts/stage-sandbox-runner`, `build.rs`, `src/sandbox/installation.rs` — pinned source preparation, embedded runner packaging, and runtime cache verification.
 
 ### Tests and development scripts
 
@@ -138,6 +138,7 @@ Keep these invariants intact:
 - `tests/snapshots/` — generated YAML 1.2 snapshots, parallel to the boundary test hierarchy.
 - `r/tests/testthat/` — R package protocol and ellmer adapter tests.
 - `scripts/release.py`, `tests/release.py` — release validation and installed-wheel acceptance.
+- `tests/cargo_install.py`, `tests/sandbox_installation.py` — unstaged Cargo and uv installation, relocated executable acceptance, and the private runner cache.
 - `scripts/test` — binary build and selected transcript execution.
 - `scripts/validate_runtime_sources.py` — extracted R/Python inventory and syntax validation.
 - `scripts/format`, `scripts/check-core`, `scripts/check` — formatting, core checks, and repository-wide checks.

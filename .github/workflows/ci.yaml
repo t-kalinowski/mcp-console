@@ -22,6 +22,8 @@ jobs:
   macos:
     name: macOS (macos-latest)
     runs-on: macos-latest
+    env:
+      MCP_CONSOLE_SANDBOX_SOURCE: ${{ github.workspace }}/.sandbox-runner-source
 
     steps:
       - name: Check out repository
@@ -113,13 +115,13 @@ jobs:
             .sandbox-runner-source/codex-rs -> target
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Stage private sandbox runner
-        run: scripts/stage-sandbox-runner .sandbox-runner-source
-
       - name: Run core checks
         env:
           GITHUB_PAT: ${{ github.token }}
         run: scripts/check-core
+
+      - name: Install from unstaged sources with Cargo and uv
+        run: python3 tests/cargo_install.py
 
       - name: Build and smoke-test Python package
         shell: bash
@@ -145,6 +147,7 @@ jobs:
             smoke-wheel \
             dist/*.whl \
             target/debug/mcp-console
+          python3 tests/sandbox_installation.py "$UV_TOOL_BIN_DIR/mcp-console"
 
       - name: Install R package dependencies
         uses: r-lib/actions/setup-r-dependencies@v2

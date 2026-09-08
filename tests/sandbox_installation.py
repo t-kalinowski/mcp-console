@@ -15,7 +15,6 @@ from pathlib import Path
 
 class SandboxInstallationTests(unittest.TestCase):
     binary_source: Path
-    runner_source: Path
 
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory(prefix="mcp-console-installation-")
@@ -23,11 +22,10 @@ class SandboxInstallationTests(unittest.TestCase):
         self.root = Path(temporary.name)
         prefix = self.root / "installation"
         (prefix / "bin").mkdir(parents=True)
-        (prefix / "libexec").mkdir()
         self.binary = prefix / "bin" / "mcp-console"
-        self.runner = prefix / "libexec" / "mcp-console-sandbox"
         shutil.copy2(self.binary_source, self.binary)
-        shutil.copy2(self.runner_source, self.runner)
+        self.home = self.root / "home"
+        self.home.mkdir()
         self.path = self.root / "path"
         self.path.mkdir()
         decoy = self.path / "mcp-console-sandbox"
@@ -35,6 +33,15 @@ class SandboxInstallationTests(unittest.TestCase):
             "#!/bin/sh\nprintf 'PATH runner was used\\n'\n", encoding="utf-8"
         )
         decoy.chmod(0o755)
+        self.environment = os.environ | {"PATH": str(self.path), "HOME": str(self.home)}
+
+    @property
+    def runner(self) -> Path:
+        runners = list(
+            self.home.glob("Library/Caches/mcp-console/sandbox/*/mcp-console-sandbox")
+        )
+        self.assertEqual(len(runners), 1)
+        return runners[0]
 
     def run_sandbox(
         self, binary: Path | None = None
@@ -44,7 +51,7 @@ class SandboxInstallationTests(unittest.TestCase):
             input=b"",
             capture_output=True,
             cwd=self.root,
-            env=os.environ | {"PATH": str(self.path)},
+            env=self.environment,
             timeout=30,
             check=False,
         )
@@ -62,6 +69,8 @@ class SandboxInstallationTests(unittest.TestCase):
         self.assertEqual((result.stdout, result.stderr), (b"", b""))
 
     def test_setup_is_one_shot_with_idle_stdin(self) -> None:
+        result = self.run_sandbox()
+        self.assertEqual(result.returncode, 0, result.stderr)
         request = {
             "version": 2,
             "command": ["/bin/sh", "-c", "printf 'ready\\n'; exec /bin/cat"],
@@ -116,14 +125,68 @@ class SandboxInstallationTests(unittest.TestCase):
                 for stream in (process.stdin, process.stdout, process.stderr):
                     stream.close()
 
-    def test_missing_private_runner_does_not_use_path(self) -> None:
-        self.runner.unlink()
+    def test_runs_without_companion_files_or_path_lookup(self) -> None:
         result = self.run_sandbox()
+        self.assertEqual(
+            (result.returncode, result.stdout, result.stderr), (0, b"", b"")
+        )
+        self.assertEqual(
+            {path.name for path in self.runner.parent.iterdir()},
+            {"mcp-console-sandbox", "LICENSE", "NOTICE"},
+        )
+        self.assertTrue((self.runner.parent / "LICENSE").read_text())
+        self.assertTrue((self.runner.parent / "NOTICE").read_text())
+
+    def test_recreates_a_removed_cache(self) -> None:
+        result = self.run_sandbox()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        original = self.runner.read_bytes()
+        shutil.rmtree(self.runner.parent)
+        result = self.run_sandbox()
+        self.assertEqual(
+            (result.returncode, result.stdout, result.stderr), (0, b"", b"")
+        )
+        self.assertEqual(self.runner.read_bytes(), original)
+
+    def test_concurrent_first_launches(self) -> None:
+        processes = [
+            subprocess.Popen(
+                [str(self.binary), "sandbox", "--", "/usr/bin/true"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=self.environment,
+            )
+            for _ in range(4)
+        ]
+        try:
+            for process in processes:
+                stdout, stderr = process.communicate(timeout=30)
+                self.assertEqual((process.returncode, stdout, stderr), (0, b"", b""))
+        finally:
+            for process in processes:
+                if process.poll() is None:
+                    process.kill()
+                process.communicate(timeout=30)
+        self.assertEqual(len(list(self.runner.parent.iterdir())), 3)
+
+    def test_sandbox_cannot_write_to_the_runner_cache(self) -> None:
+        result = self.run_sandbox()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        marker = self.runner.parent / "modified"
+        result = subprocess.run(
+            [str(self.binary), "sandbox", "--", "/usr/bin/touch", str(marker)],
+            capture_output=True,
+            env=self.environment,
+            timeout=30,
+        )
         self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(result.stdout, b"")
-        self.assertIn(b"private sandbox runner", result.stderr)
+        self.assertFalse(marker.exists())
 
     def test_rejects_a_different_private_executable(self) -> None:
+        result = self.run_sandbox()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.runner.chmod(0o700)
         self.runner.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         result = self.run_sandbox()
         self.assertNotEqual(result.returncode, 0)
@@ -134,8 +197,6 @@ class SandboxInstallationTests(unittest.TestCase):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("binary", type=Path)
-    parser.add_argument("runner", type=Path)
     args = parser.parse_args()
     SandboxInstallationTests.binary_source = args.binary.resolve()
-    SandboxInstallationTests.runner_source = args.runner.resolve()
     unittest.main(argv=[sys.argv[0]])

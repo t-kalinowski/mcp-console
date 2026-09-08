@@ -97,10 +97,12 @@ The client does not communicate directly with a relay, worker, or resolver.
 ### Sandbox launcher and private runner
 
 The private `mcp-console-sandbox` executable contains the extracted native sandbox implementation and is pinned by source revision in `sandbox-runner.json`.
-macOS wheels install it under the installation prefix's `libexec` directory; only `mcp-console` is exposed on PATH.
-MCP Console resolves that private path relative to the canonical public executable and verifies the artifact digest embedded at build time.
-Cargo builds copy the verified staged artifact into the target prefix's `libexec` directory and use the same executable-relative lookup as installed wheels.
-A missing or mismatched artifact is an installation error.
+The build prepares the pinned source in a dedicated checkout under Cargo's target prefix and embeds the runner, its license, and its notice into `mcp-console`.
+Cargo and wheel installations use the same executable without companion files.
+On sandbox launch, MCP Console publishes these embedded files into a private cache under `$HOME/Library/Caches/mcp-console/sandbox/<sha256>/` and verifies their contents before use.
+Concurrent first launches publish complete files atomically.
+The worker cannot write to the cache; a missing cache is recreated, while mismatched cached files are an installation error.
+The runtime does not access the source checkout or download the runner.
 
 The runner accepts `--bootstrap-fd <N>` with an inherited readable descriptor greater than 2.
 Protocol 2 carries one four-byte big-endian length followed by 1 through 1,048,576 bytes of UTF-8 JSON on that descriptor.

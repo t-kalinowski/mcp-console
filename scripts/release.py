@@ -6,7 +6,6 @@ import os
 import re
 import select
 import shutil
-import stat
 import subprocess
 import sys
 import tempfile
@@ -21,11 +20,6 @@ TARGET_ARCHITECTURES = {
     "aarch64-apple-darwin": "arm64",
     "x86_64-apple-darwin": "x86_64",
 }
-PRIVATE_DATA = (
-    "libexec/mcp-console-sandbox",
-    "share/licenses/mcp-console/Codex-LICENSE",
-    "share/licenses/mcp-console/Codex-NOTICE",
-)
 
 
 class ReleaseError(RuntimeError):
@@ -218,89 +212,13 @@ def smoke_mcp(
     require(not standard_error, f"MCP server wrote to stderr: {standard_error}")
 
 
-def inspect_private_wheel_data(wheel: Path, version: str) -> None:
-    data_root = f"mcp_console-{version}.data/data"
+def inspect_wheel_commands(wheel: Path) -> None:
     with zipfile.ZipFile(wheel) as archive:
-        members = {member.filename: member for member in archive.infolist()}
-    for relative_path in PRIVATE_DATA:
-        require(
-            f"{data_root}/{relative_path}" in members,
-            f"wheel is missing private sandbox runner data: {relative_path}",
-        )
-    runner_mode = (
-        members[f"{data_root}/libexec/mcp-console-sandbox"].external_attr >> 16
-    )
+        members = archive.namelist()
     require(
-        stat.S_ISREG(runner_mode) and runner_mode & 0o111,
-        "private sandbox runner in wheel is not executable",
+        not any(Path(name).name == "mcp-console-sandbox" for name in members),
+        "wheel contains a separate private sandbox runner instead of the embedded artifact",
     )
-    require(
-        not any(
-            name.endswith(".data/scripts/mcp-console-sandbox")
-            or name == "mcp-console-sandbox"
-            for name in members
-        ),
-        "wheel installs the private sandbox runner as a public command",
-    )
-
-
-def smoke_private_runner(runner: Path, env: dict[str, str], timeout: float) -> None:
-    with tempfile.TemporaryDirectory(prefix="mcp-console-runner-smoke-") as directory:
-        temporary = str(Path(directory).resolve())
-        request = {
-            "version": 2,
-            "command": ["/bin/cat"],
-            "cwd": temporary,
-            "environment": {"PATH": env["PATH"], "TMPDIR": temporary},
-            "filesystem": {
-                "kind": "restricted",
-                "entries": [
-                    {
-                        "path": {"type": "special", "value": {"kind": "root"}},
-                        "access": "read",
-                    },
-                    {"path": {"type": "path", "path": temporary}, "access": "write"},
-                ],
-            },
-            "network": "restricted",
-            "proxy": None,
-        }
-        payload = json.dumps(request).encode("utf-8")
-        sentinel = bytes(range(256)) * 64
-        read, write = os.pipe()
-        with os.fdopen(read, "rb", buffering=0) as setup_read, os.fdopen(
-            write, "wb", buffering=0
-        ) as setup_write:
-            with subprocess.Popen(
-                [str(runner), "--bootstrap-fd", str(read)],
-                pass_fds=(read,),
-                env=env,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            ) as child:
-                setup_read.close()
-                try:
-                    setup_write.write(len(payload).to_bytes(4, "big") + payload)
-                    setup_write.close()
-                    stdout, stderr = child.communicate(sentinel, timeout=timeout)
-                except BaseException:
-                    setup_write.close()
-                    child.kill()
-                    child.wait()
-                    raise
-                result = subprocess.CompletedProcess(
-                    child.args, child.returncode, stdout, stderr
-                )
-        require(
-            result.returncode == 0,
-            f"private sandbox runner failed with status {result.returncode}: "
-            f"{result.stderr.decode(errors='replace').strip()}",
-        )
-        require(
-            result.stdout == sentinel and result.stderr == b"",
-            "private sandbox runner changed the target streams",
-        )
 
 
 def smoke_wheel(args: argparse.Namespace) -> None:
@@ -319,7 +237,7 @@ def smoke_wheel(args: argparse.Namespace) -> None:
     )
     require("-macosx_" in wheel.name, f"wheel must be macOS-specific: {wheel.name}")
     require(not wheel.name.endswith("-none-any.whl"), "wheel must be platform-specific")
-    inspect_private_wheel_data(wheel, version)
+    inspect_wheel_commands(wheel)
 
     if args.target is not None:
         architecture = TARGET_ARCHITECTURES[args.target]
@@ -358,13 +276,6 @@ def smoke_wheel(args: argparse.Namespace) -> None:
         command_output([str(installed), "--help"], strip=False) == cargo_help,
         "`uv` tool and Cargo help output differ",
     )
-    private_runner = (
-        installed.resolve().parent.parent / "libexec" / "mcp-console-sandbox"
-    )
-    require(
-        private_runner.is_file() and os.access(private_runner, os.X_OK),
-        f"installed private sandbox runner is missing or not executable: {private_runner}",
-    )
     public_runner = tool_bin / "mcp-console-sandbox"
     require(
         not public_runner.exists(),
@@ -373,21 +284,8 @@ def smoke_wheel(args: argparse.Namespace) -> None:
     with tempfile.TemporaryDirectory(prefix="mcp-console-empty-path-") as directory:
         sandbox_env = os.environ.copy()
         sandbox_env["PATH"] = directory
-        smoke_private_runner(private_runner, sandbox_env, args.startup_timeout_seconds)
         run_command([str(cargo_bin), "sandbox", "--", "/usr/bin/true"], env=sandbox_env)
         run_command([str(installed), "sandbox", "--", "/usr/bin/true"], env=sandbox_env)
-    run_command(
-        [
-            sys.executable,
-            str(
-                Path(__file__).resolve().parent.parent
-                / "tests"
-                / "sandbox_installation.py"
-            ),
-            str(installed),
-            str(private_runner),
-        ]
-    )
 
     internal_ir = installed.resolve().with_name("ir")
     require(not internal_ir.exists(), f"wheel contains sibling `ir`: {internal_ir}")

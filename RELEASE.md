@@ -10,20 +10,25 @@ Keep the root `mcp-console` entry in `Cargo.lock` synchronized with it.
 ## Private sandbox executable
 
 `sandbox-runner.json` pins the runner source repository, release, commit, protocol, and Rust toolchain.
-Build and stage it from a clean checkout at that commit before building MCP Console:
+Cargo builds prepare it automatically with `scripts/stage-sandbox-runner`, including when invoked by `cargo install --path .` or `uv tool install --reinstall .`.
+The script fetches the exact source revision into `sandbox-runner-cache/<commit>` under Cargo's target prefix and builds it with the pinned toolchain and lockfile.
+Source builds require Python 3, Git, and rustup; rustup installs the pinned toolchain if needed.
+The runner has its own Cargo build directory and jobserver, so the nested build also works when the outer Cargo uses `--jobs 1` or a custom target directory.
+Normal Cargo and rustup dependency caches still apply.
 
-```sh
-scripts/stage-sandbox-runner ~/github/t-kalinowski/codex
-```
+The source checkout and runner build stay under the selected target prefix.
+To reuse a dedicated clean checkout at the pin, explicitly set `MCP_CONSOLE_SANDBOX_SOURCE`; CI uses a checkout within its own workspace.
+The default build does not inspect or change other working checkouts.
+For a standalone runner build, run `scripts/stage-sandbox-runner`; its output is `target/sandbox-runner/`.
+Use `--target aarch64-apple-darwin` or `--target x86_64-apple-darwin` for an explicit target.
+Without that option, the standalone script selects the pinned compiler's native target.
 
-The script builds with the pinned toolchain and lockfile, stages the executable at `target/private-wheel-data/data/libexec/mcp-console-sandbox`, and records its source revision, target triple, and SHA-256 in `target/sandbox-runner-build.json`.
-By default it builds for the pinned compiler's native target, passing that target explicitly to Cargo.
-Use `--target aarch64-apple-darwin` or `--target x86_64-apple-darwin` when building for an explicit target; inherited Cargo default-target settings do not change this selection.
-The source checkout remains unchanged.
-MCP Console's build verifies the staged revision, target, and digest and binds the runner's digest and protocol version into the executable.
-Stage the runner again for the intended target before changing MCP Console's build target.
-Cargo builds also copy the verified executable into the target prefix's `libexec` directory, so binaries in `debug`, `release`, and custom profile directories use the same relative lookup as installed wheels.
-Sandbox launches reject a missing or mismatched private runner.
+MCP Console verifies the runner's source revision, target, and SHA-256 before embedding the executable, upstream license, and notice.
+Cargo and wheel installations both contain one public executable with no companion-file requirement.
+On first sandbox launch, it publishes the embedded files atomically under `$HOME/Library/Caches/mcp-console/sandbox/<sha256>/`, keyed by the complete bundle's digest, and verifies cached contents before use.
+The worker sandbox cannot write to this cache.
+The cache can be removed and will be recreated from the installed binary; mismatched cached files produce an error.
+Sandbox launches do not download anything or search PATH for the runner.
 
 The current pin uses protocol 2: invoke the runner with `--bootstrap-fd <N>` and inherit a readable descriptor greater than 2.
 Send one four-byte big-endian length followed by UTF-8 JSON on that setup descriptor after spawning; leave the target's original stdin attached to fd 0.
@@ -31,9 +36,9 @@ The runner consumes exactly the frame and closes setup before native launch with
 When advancing the pin, inspect the package's `PROTOCOL.md`, implementation, executable contract tests, and `rust-toolchain.toml`; update all callers together.
 Release smoke exercises the installed runner directly with a non-default descriptor and open, idle stdin, then checks the public launcher and artifact verification.
 
-Maturin includes the staged executable under the installation's private `libexec` directory, with the upstream license and notice under `share/licenses/mcp-console/`.
-Only `mcp-console` is installed as a public command.
-CI and the release workflow build the pinned source before packaging and verify the private layout, executable permissions, and sandbox launches from both the Cargo binary and installed command with an empty `PATH`.
+Maturin packages the same executable without requiring generated data during metadata preparation.
+CI installs unstaged sources with both Cargo and uv, hides their build artifacts, and checks the installed commands with a decoy runner on PATH.
+Wheel verification also checks sandbox launches with an empty PATH, the embedded license notices, concurrent cache creation, and rejection of modified cached artifacts.
 
 ## One-time PyPI setup
 
