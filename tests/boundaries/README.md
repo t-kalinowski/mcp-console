@@ -39,7 +39,12 @@ Map each non-generic sandbox allowance to the real workflow that requires it and
 | POSIX semaphores            | Python spawn multiprocessing                      | `client_server/python/test_environment::runs_spawn_process_after_live_resolution`          |
 | PTYs and `kern.boottime`    | `processx`                                        | `cli/command/test_execution::allows_processx_pty_processes` and MCP process-lifetime cases |
 | Quarto device/sysctl access | Render generated `ir` document inside the sandbox | `client_server/recording/test_quarto::renders_generated_document`                          |
-| `__KMP_REGISTERED_LIB_*`    | PyTorch/libomp                                    | Add a PyTorch workflow test, or remove the allowance                                       |
+
+`cli/command/test_pytorch::matches_unsandboxed_autograd` runs one CPU autograd script outside and inside the default sandbox with the same freshly resolved PyTorch environment.
+It compares the loss, full gradient, and thread count against the live unsandboxed run; the snapshot records that comparison without dependency warnings or fixed numerical values.
+This is an intentional exception to exact-output snapshots: warnings and other non-result output may change across releases, while nonzero exits and numerical differences still fail with captured stdout and stderr.
+The `__KMP_REGISTERED_LIB_*` registration allowance remains an unverified compatibility exception.
+This comparison does not establish a need for that permission.
 
 When reviewing deletion candidates, separate tests may replace a combined test only when the interaction between those behaviors is not itself a plausible failure mode.
 
