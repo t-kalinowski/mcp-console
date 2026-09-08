@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.assertions import last_tool_text
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.r import r_test_environment
@@ -17,6 +18,8 @@ from support.records import Transcript, TranscriptWithCompanions
 from support.requirements import PROCESS_EVENTS, requires
 from support.resolvers import record_resolved_r_library
 from support.suites import run_this_suite
+
+CELL_OUTPUT_RETENTION_LIMIT = 1024 * 1024 * 1024
 
 PNG_1X1 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42Y"
@@ -79,6 +82,7 @@ def test_materializes_records_only_for_console_use(
         assert [event["event"] for event in events] == [
             "session_started",
             "tool_call",
+            "cell_output",
             "tool_result",
         ], events
         assert events[1]["request"]["name"] == "send", events[1]
@@ -244,6 +248,7 @@ def test_records_tool_calls_and_images(
             "session_started",
             "tool_call",
             "artifact_created",
+            "cell_output",
             "tool_result",
             "tool_call",
             "tool_result",
@@ -257,8 +262,9 @@ def test_records_tool_calls_and_images(
         assert Path(events[0]["working_directory"]).samefile(workspace), events[0]
         assert all(event["run_id"] == run_id for event in events), events
         assert all(event["schema_version"] == 1 for event in events), events
-        assert [event["sequence"] for event in events] == list(range(1, 9)), events
+        assert [event["sequence"] for event in events] == list(range(1, 10)), events
         assert events[1]["call_id"] == events[2]["call_id"] == 1, events
+        assert events[3]["call_id"] == events[2]["call_id"], events
         assert events[1]["request_id"] == image_request_id, events[1]
         assert events[1]["request"] == {
             "name": "send",
@@ -278,7 +284,23 @@ def test_records_tool_calls_and_images(
             "mime_type": "image/png",
             "bytes": len(base64.b64decode(PNG_1X1)),
         }, events[2]
-        assert events[3]["result"] == {
+        assert {
+            key: events[3][key]
+            for key in (
+                "path",
+                "retained_bytes",
+                "inline_omitted_bytes",
+                "discarded_bytes",
+                "retention_limit_bytes",
+            )
+        } == {
+            "path": "outputs/call-000001.log",
+            "retained_bytes": len("before image\nafter image\n"),
+            "inline_omitted_bytes": 0,
+            "discarded_bytes": 0,
+            "retention_limit_bytes": CELL_OUTPUT_RETENTION_LIMIT,
+        }, events[3]
+        assert events[4]["result"] == {
             "content": [
                 {"type": "text", "text": "before image\n"},
                 {
@@ -290,15 +312,15 @@ def test_records_tool_calls_and_images(
                 {"type": "text", "text": "after image\n"},
             ],
             "isError": False,
-        }, events[3]
-        assert events[4]["call_id"] == events[5]["call_id"] == 2, events
-        assert events[4]["request_id"] == invalid["id"], events[4]
-        assert events[4]["request"] == {
+        }, events[4]
+        assert events[5]["call_id"] == events[6]["call_id"] == 2, events
+        assert events[5]["request_id"] == invalid["id"], events[5]
+        assert events[5]["request"] == {
             "name": "send",
             "arguments": {"r": "1", "python": "1"},
             "_meta": {"progressToken": "record-me"},
-        }, events[4]
-        assert events[5]["result"] == {
+        }, events[5]
+        assert events[6]["result"] == {
             "content": [
                 {
                     "type": "text",
@@ -306,16 +328,16 @@ def test_records_tool_calls_and_images(
                 }
             ],
             "isError": True,
-        }, events[5]
-        assert events[6]["call_id"] == events[7]["call_id"] == 3, events
-        assert events[6]["request_id"] == preparation_request_id, events[6]
-        assert events[6]["request"] == {
+        }, events[6]
+        assert events[7]["call_id"] == events[8]["call_id"] == 3, events
+        assert events[7]["request_id"] == preparation_request_id, events[7]
+        assert events[7]["request"] == {
             "name": "send",
             "arguments": {
                 "requirements": {"python": ["transcript-fixture"]},
             },
-        }, events[6]
-        assert events[7]["result"] == preparation_result, events[7]
+        }, events[7]
+        assert events[8]["result"] == preparation_result, events[8]
         assert [event["request"]["name"] for event in events if "request" in event] == [
             "send",
             "send",
@@ -325,9 +347,11 @@ def test_records_tool_calls_and_images(
             event.get("request", {}).get("name") != "missing" for event in events
         ), events
 
-        image_path = session / events[3]["result"]["content"][1]["path"]
+        image_path = session / events[4]["result"]["content"][1]["path"]
+        output_path = session / events[3]["path"]
         image_bytes = image_path.read_bytes()
         assert image_bytes == base64.b64decode(PNG_1X1), image_path
+        assert output_path.read_text(encoding="utf-8") == "before image\nafter image\n"
         directory_modes = {
             path.relative_to(workspace).as_posix(): path.stat().st_mode & 0o777
             for path in (
@@ -336,6 +360,7 @@ def test_records_tool_calls_and_images(
                 session,
                 session / "artifacts",
                 session / "internal",
+                session / "outputs",
             )
         }
         assert set(directory_modes.values()) == {0o700}, directory_modes
@@ -346,6 +371,7 @@ def test_records_tool_calls_and_images(
                 markdown_path,
                 quarto_path,
                 image_path,
+                output_path,
             )
         }
         assert set(file_modes.values()) == {0o600}, file_modes
@@ -390,6 +416,7 @@ def test_records_tool_calls_and_images(
                                 "transcript.md",
                                 "transcript.qmd",
                                 "artifacts/call-000001-image-000001.png",
+                                "outputs/call-000001.log",
                             ],
                         }
                     },
@@ -434,6 +461,7 @@ def test_disables_recording_after_transcript_failure(
         assert [event["event"] for event in events] == [
             "session_started",
             "tool_call",
+            "cell_output",
             "tool_result",
             "tool_call",
         ], events
@@ -460,6 +488,78 @@ def test_disables_recording_after_transcript_failure(
             }
         )
         return transcript
+
+
+@executions(DIRECT, SANDBOXED)
+def test_keeps_recording_after_cell_output_failure(
+    binary: Path, execution: Execution
+) -> Transcript:
+    zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        workspace = Path(temporary_directory)
+        client = McpClient(
+            binary,
+            execution.serve("--worker", str(zod)),
+            current_directory=workspace,
+        )
+        client.initialize_and_list_tools()
+        client.send(r="echo first")
+
+        session = next((workspace / ".mcp-console" / "sessions").iterdir())
+        outputs = session / "outputs"
+        retained_outputs = session / "retained-outputs"
+        outputs.rename(retained_outputs)
+        outputs.write_text("not a directory", encoding="utf-8")
+
+        client.send(r="echo second")
+        failure = last_tool_text(client)
+        public_output = f".mcp-console/sessions/{session.name}/outputs/call-000002.log"
+        assert "cell output file was not created" in failure, failure
+        assert public_output in failure, failure
+        assert str(workspace) not in failure, failure
+        assert (
+            "text omitted from inline responses will be permanently discarded"
+            in failure
+        )
+        assert failure.endswith("zod: second\n"), failure
+        client.transcript[-1]["result"]["content"][0]["text"] = (
+            "[cell output file was not created: <output path is not a directory>; "
+            "text omitted from inline responses will be permanently discarded]\n"
+            "zod: second\n"
+        )
+
+        outputs.unlink()
+        retained_outputs.rename(outputs)
+        client.send(r="echo third")
+        assert last_tool_text(client) == "zod: third\n"
+        assert (outputs / "call-000003.log").read_text(encoding="utf-8") == (
+            "zod: third\n"
+        )
+
+        events = [
+            json.loads(line)
+            for line in (session / "internal" / "events.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ]
+        assert [event["event"] for event in events] == [
+            "session_started",
+            "tool_call",
+            "cell_output",
+            "tool_result",
+            "tool_call",
+            "tool_result",
+            "tool_call",
+            "cell_output",
+            "tool_result",
+        ], events
+        assert [
+            event["call_id"] for event in events if event["event"] == "cell_output"
+        ] == [
+            1,
+            3,
+        ], events
+        return client.finish()
 
 
 @executions(DIRECT, SANDBOXED)
@@ -518,6 +618,7 @@ def test_flushes_calls_and_keeps_unpolled_images(
         assert [event["event"] for event in after_release] == [
             "session_started",
             "tool_call",
+            "cell_output",
             "tool_result",
         ], after_release
         after_release_markdown = markdown.read_text(encoding="utf-8")
@@ -557,6 +658,7 @@ def test_flushes_calls_and_keeps_unpolled_images(
         assert [event["event"] for event in final_events] == [
             "session_started",
             "tool_call",
+            "cell_output",
             "tool_result",
             "tool_call",
             "tool_result",
@@ -597,8 +699,9 @@ def test_flushes_calls_and_keeps_unpolled_images(
             json.loads(line)
             for line in journal.read_text(encoding="utf-8").splitlines()
         ]
-        assert [event["event"] for event in polled_events[-2:]] == [
+        assert [event["event"] for event in polled_events[-3:]] == [
             "tool_call",
+            "cell_output",
             "tool_result",
         ], polled_events
         assert polled_events[-1]["call_id"] == 3, polled_events[-1]
