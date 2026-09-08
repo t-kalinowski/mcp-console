@@ -127,8 +127,21 @@ jobs:
             .sandbox-runner-source/codex-rs -> target
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Stage private sandbox runner
+      - name: Restore private sandbox runner
         if: runner.os == 'macOS'
+        id: sandbox-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            target/private-wheel-data
+            target/sandbox-runner-build.json
+          # The pin includes the source revision and compiler. Bump v1 if CI
+          # changes runner build flags or the macOS deployment target.
+          key: >-
+            sandbox-runner-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('sandbox-runner.json', 'scripts/stage-sandbox-runner') }}
+
+      - name: Stage private sandbox runner
+        if: runner.os == 'macOS' && steps.sandbox-cache.outputs.cache-hit != 'true'
         run: scripts/stage-sandbox-runner .sandbox-runner-source
 
       - name: Run core checks
@@ -210,6 +223,18 @@ jobs:
         env:
           GITHUB_PAT: ${{ github.token }}
         run: scripts/test --jobs 6
+
+      # Save before rust-cache's post-job cleanup removes non-Cargo artifacts.
+      - name: Save private sandbox runner
+        if: >-
+          runner.os == 'macOS' && github.ref == 'refs/heads/main' &&
+          steps.sandbox-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            target/private-wheel-data
+            target/sandbox-runner-build.json
+          key: ${{ steps.sandbox-cache.outputs.cache-primary-key }}
 
       - name: Save R environments
         if: >-
