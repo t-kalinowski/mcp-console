@@ -1,10 +1,7 @@
-#[cfg(target_os = "macos")]
 mod reticulate;
 
-#[cfg(target_os = "macos")]
 const RUNTIME_SOURCE: &str = include_str!("python/runtime.py");
 
-#[cfg(target_os = "macos")]
 #[derive(serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum PreparationOutcome {
@@ -20,23 +17,19 @@ pub(crate) enum PreparationOutcome {
 /// Rust owns the selected interpreter library, initialization, and private
 /// evaluator source, while the current backend delegates object conversion and
 /// evaluation dispatch to reticulate.
-#[cfg(target_os = "macos")]
 pub(crate) struct Runtime(reticulate::Runtime);
 
-#[cfg(target_os = "macos")]
 pub(crate) enum SqlProvider {
     R,
     Managed,
     Handled,
 }
 
-#[cfg(target_os = "macos")]
 pub(crate) fn configure_worker_environment() -> std::io::Result<()> {
     platform::configure_worker_environment()?;
     reticulate::configure_worker_environment()
 }
 
-#[cfg(target_os = "macos")]
 impl Runtime {
     pub(crate) fn initialize() -> Result<Self, String> {
         reticulate::Runtime::initialize().map(Self)
@@ -51,22 +44,19 @@ impl Runtime {
     }
 }
 
-#[cfg(target_os = "macos")]
 pub(crate) fn install_sql_runtime(source: &str) -> Result<(), String> {
     library::install_sql_runtime(source)
 }
 
-#[cfg(target_os = "macos")]
 pub(crate) fn dispatch_sql(source: &str) -> Result<SqlProvider, String> {
     library::dispatch_sql(source)
 }
 
-#[cfg(target_os = "macos")]
 pub(crate) fn use_r_sql() -> Result<(), String> {
     library::use_r_sql()
 }
 
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(test)]
 mod tests {
     use super::PreparationOutcome;
 
@@ -82,10 +72,8 @@ mod tests {
     }
 }
 
-#[cfg(target_os = "macos")]
 mod library;
 
-#[cfg(target_os = "macos")]
 mod platform {
     use std::ffi::{CStr, CString};
     use std::fs;
@@ -208,5 +196,4 @@ mod platform {
     }
 }
 
-#[cfg(target_os = "macos")]
 pub(crate) use platform::link_matplotlib_caches;

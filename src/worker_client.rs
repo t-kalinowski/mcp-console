@@ -8,19 +8,11 @@ mod evaluation;
 mod lifecycle;
 mod output;
 
-#[cfg(target_os = "macos")]
 mod child_exit;
-#[cfg(target_os = "macos")]
 mod events;
-#[cfg(target_os = "macos")]
 mod startup;
 
-#[cfg(target_os = "macos")]
 #[path = "worker_client/macos.rs"]
-mod platform;
-
-#[cfg(not(target_os = "macos"))]
-#[path = "worker_client/unsupported.rs"]
 mod platform;
 
 pub(crate) use environment::Requirements;
@@ -354,10 +346,7 @@ impl Client {
     }
 
     pub(crate) fn builtin(no_sandbox: bool) -> Result<Self, String> {
-        #[cfg(target_os = "macos")]
-        return startup::with_input_owner(|on_started| Self::builtin_with(no_sandbox, on_started));
-        #[cfg(not(target_os = "macos"))]
-        Self::builtin_with(no_sandbox, &|_| Ok(()))
+        startup::with_input_owner(|on_started| Self::builtin_with(no_sandbox, on_started))
     }
 
     fn builtin_with(
@@ -368,8 +357,7 @@ impl Client {
         let configured_python = std::env::var_os("RETICULATE_PYTHON");
         let program = std::env::current_exe()
             .map_err(|error| format!("failed to locate the R worker executable: {error}"))?;
-        #[cfg(target_os = "macos")]
-        let (r, duckdb_extensions, python, r_resolver) = {
+        let (r, duckdb_extensions, python, r_resolver) =
             match crate::resolver::detect_r_bootstrap(&mut python_resolver, on_started)? {
                 Some(bootstrap) => (
                     None,
@@ -387,20 +375,7 @@ impl Client {
                     Some(PythonEnvironment::bare(configured_python)),
                     RResolver::Disabled,
                 ),
-            }
-        };
-        #[cfg(not(target_os = "macos"))]
-        let (r, duckdb_extensions, python, r_resolver) = (
-            Option::<crate::resolver::ManagedR>::None,
-            Default::default(),
-            Some(PythonEnvironment::builtin(
-                configured_python,
-                python_resolver,
-                None,
-                on_started,
-            )?),
-            RResolver::Discover,
-        );
+            };
         Ok(Self::with_arguments(
             program,
             vec![OsString::from("worker")],
