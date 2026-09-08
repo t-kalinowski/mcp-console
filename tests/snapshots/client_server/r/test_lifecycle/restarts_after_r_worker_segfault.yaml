@@ -19,7 +19,7 @@ result:
       text: |2-
 
          *** caught segfault ***
-        address <unmapped-address>, cause 'invalid permissions'
+        address 0x1, cause 'invalid permissions'
 
         Traceback:
          1: .C("mcp_test_segfault")
@@ -32,9 +32,6 @@ result:
         [input requested: "Selection: "]
         [waiting for stdin]
   isError: false
-transcript_normalization:
-  target: result.content[0].text
-  unmapped_address: replaced with <unmapped-address>
 ---
 send:
   stdin: |

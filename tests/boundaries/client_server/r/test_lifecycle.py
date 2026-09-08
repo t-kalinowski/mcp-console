@@ -1,6 +1,5 @@
 #!/usr/bin/env -S uv run --script
 
-import re
 import subprocess
 import sys
 import tempfile
@@ -106,15 +105,9 @@ def test_restarts_after_r_worker_segfault(
                 """)
             client.send(r=r)
             fatal_output = last_tool_text(client)
-            fatal_output, address_count = re.subn(
-                r"(?m)^address 0x[0-9a-f]+(?=, cause 'invalid permissions'\n)",
-                "address <unmapped-address>",
-                fatal_output,
-            )
-            assert address_count == 1, repr(fatal_output)
             assert fatal_output.startswith(
                 "\n *** caught segfault ***\n"
-                "address <unmapped-address>, cause 'invalid permissions'\n"
+                "address 0x1, cause 'invalid permissions'\n"
                 '\nTraceback:\n 1: .C("mcp_test_segfault")\n'
             ), repr(fatal_output)
             assert (
@@ -124,12 +117,6 @@ def test_restarts_after_r_worker_segfault(
             assert fatal_output.endswith(
                 '[input requested: "Selection: "]\n[waiting for stdin]'
             ), repr(fatal_output)
-            client.transcript[-1]["result"]["content"][0]["text"] = fatal_output
-            client.transcript[-1]["transcript_normalization"] = {
-                "target": "result.content[0].text",
-                "unmapped_address": "replaced with <unmapped-address>",
-            }
-
             wait_for_evaluation_output(
                 client,
                 "R is aborting now ...\n"
