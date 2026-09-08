@@ -10,7 +10,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import large_output, last_tool_text
-from support.checkpoints import FifoCheckpoint, release_fixture_checkpoint
+from support.checkpoints import (
+    FifoCheckpoint,
+    release_fixture_checkpoint,
+    release_partial_sideband,
+)
 from support.client import McpClient, stop_client
 from support.processes import (
     process_exists,
@@ -32,6 +36,7 @@ PNG_1X1 = (
 )
 
 from boundaries.client_server._harness import (
+    ZodFixtureControl,
     expose_idle_sideband_output,
     wait_for_marker,
 )
@@ -797,6 +802,53 @@ def test_restarts_after_worker_exit(binary: Path) -> Transcript:
     client.send(r="input without request")
     assert last_tool_text(client) == "zod stdin: replacement\n"
     return client.finish()
+
+
+def test_restarts_after_worker_exit_with_partial_sideband(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
+    with (
+        tempfile.TemporaryDirectory() as temporary_directory,
+        ZodFixtureControl(Path(temporary_directory)) as control,
+    ):
+        temporary_path = Path(temporary_directory)
+        environment = os.environ.copy()
+        control.configure(environment)
+        descendant_group = None
+        try:
+            with McpClient(
+                binary,
+                ("serve", "--worker", str(zod)),
+                environment,
+            ) as client:
+                client.initialize_and_list_tools()
+                failed = client.start_send(
+                    r="exit after partial sideband descendant",
+                    timeout_ms=15_000,
+                )
+                marker = wait_for_marker(
+                    temporary_path,
+                    "zod-sideband-descendant-pid",
+                    client,
+                )
+                descendant_group = int(marker.read_text(encoding="utf-8"))
+                # Keep the event channel open before exit removes the directory.
+                control.connect(client)
+                release_partial_sideband(marker)
+                control.wait_for(0, "partial_sideband_written")
+
+                client.receive(failed)
+                result = failed["result"]
+                assert result["isError"] is True, result
+                assert not process_group_exists(descendant_group), (
+                    "partial-sideband descendant outlived sandbox retirement"
+                )
+                descendant_group = None
+
+                client.send(r="echo echo")
+                assert last_tool_text(client) == "zod: echo\n"
+                return client.finish()
+        finally:
+            stop_process_group(descendant_group)
 
 
 def test_reports_unexpected_worker_exit_zero(binary: Path) -> Transcript:

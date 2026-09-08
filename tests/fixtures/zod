@@ -846,7 +846,10 @@ def main() -> None:
             assert os.waitstatus_to_exitcode(status) == 0
             continue
 
-        if source == "start partial sideband descendant":
+        if source in {
+            "start partial sideband descendant",
+            "exit after partial sideband descendant",
+        }:
             release = temporary / "zod-release-partial-sideband"
             os.mkfifo(release)
             child = os.fork()
@@ -866,6 +869,9 @@ def main() -> None:
             writer.write('{"kind":"console_output"')
             writer.flush()
             emit_test_event(0, "partial_sideband_written")
+            if source == "start partial sideband descendant":
+                # Requested retirement closes stdin before the worker exits.
+                assert os.read(0, 1) == b""
             os._exit(86)
 
         if source == "wait after readable frame and partial tail":
