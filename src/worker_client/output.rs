@@ -123,13 +123,11 @@ struct Truncation {
     events: usize,
 }
 
-#[cfg(target_os = "macos")]
 pub(super) struct DirectOutput {
     output: OutputTape,
     stream: DirectOutputStream,
 }
 
-#[cfg(target_os = "macos")]
 #[derive(Clone, Copy)]
 enum DirectOutputStream {
     Stdout,
@@ -598,17 +596,14 @@ impl OutputTape {
         state.recovered = Some(response);
     }
 
-    #[cfg(target_os = "macos")]
     pub(super) fn direct_stdout(&self) -> DirectOutput {
         self.direct_output(DirectOutputStream::Stdout)
     }
 
-    #[cfg(target_os = "macos")]
     pub(super) fn direct_stderr(&self) -> DirectOutput {
         self.direct_output(DirectOutputStream::Stderr)
     }
 
-    #[cfg(target_os = "macos")]
     fn direct_output(&self, stream: DirectOutputStream) -> DirectOutput {
         DirectOutput {
             output: self.clone(),
@@ -715,7 +710,6 @@ impl OutputTape {
     }
 }
 
-#[cfg(target_os = "macos")]
 impl DirectOutput {
     pub(super) fn push(&self, bytes: &[u8]) {
         self.output.lock().push_direct_output(self.stream, bytes);
@@ -728,7 +722,6 @@ impl DirectOutput {
     }
 }
 
-#[cfg(target_os = "macos")]
 impl DirectOutputStream {
     fn event(self, event: DirectOutputEvent) -> OutputEvent {
         match self {
@@ -852,7 +845,6 @@ impl OutputTapeState {
         Ok(())
     }
 
-    #[cfg(target_os = "macos")]
     fn push_direct_output(&mut self, stream: DirectOutputStream, bytes: &[u8]) {
         if bytes.is_empty() {
             return;
@@ -1546,7 +1538,6 @@ mod tests {
         assert_text(output.take(), "new");
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn direct_utf8_obeys_truncation_and_stream_order() {
         let output = OutputTape::with_limits(limits(2, 100, 100));
@@ -1569,7 +1560,6 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn direct_utf8_respects_cut_and_prelude_boundaries() {
         let output = OutputTape::with_limits(limits(100, 100, 100));
@@ -1597,7 +1587,6 @@ mod tests {
         assert!(matches!(&content[1], Content::Image { data, .. } if data == "image"));
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn mixed_text_channels_direct_streams_images_and_notices_keep_order() {
         let output = OutputTape::with_limits(limits(100, 100, 100));

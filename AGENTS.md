@@ -9,6 +9,7 @@ The documents under `design-sketches/` describe intended behavior, not the curre
 ## Sources of truth
 
 - `README.md` describes the current user-facing project status.
+- `RELEASE.md` defines release preparation, wheel rehearsal, publication, verification, and recovery.
 - `docs/README.md` maps the implemented documentation by audience.
 - `docs/ARCHITECTURE.md` describes the implemented process structure, ownership, and lifecycle.
 - `docs/SANDBOX_SUPERVISION.md` describes macOS sandbox lifetime supervision, setup-FD ownership, policy exceptions, and standalone terminal and signal ownership.
@@ -29,6 +30,7 @@ Do not treat `design-sketches/` as evidence of implemented behavior.
 
 The sandbox command, worker relay, and built-in worker are supported on macOS.
 Linux and Windows are not supported yet.
+Retain platform conditionals for modules that use OS-specific APIs and for selecting different implementations or unsupported-platform stubs; avoid redundant gates on shared code.
 CI runs the complete check on macOS.
 
 Build the pinned private sandbox executable with `scripts/stage-sandbox-runner` before the first macOS Cargo build or after changing `sandbox-runner.json` or the Cargo target; see `RELEASE.md` for the source checkout and toolchain.
@@ -136,6 +138,10 @@ Keep these invariants intact:
 
 ## Working rules
 
+- Before merging any PR, require passing CI and a verified thumbs-up reaction from the GPT connector reviewer for the current PR head.
+  Check the actual GitHub reaction; a completed review or absence of findings is not approval.
+- Follow `RELEASE.md` before pushing a release tag.
+  Never yank or remove published PyPI files.
 - Keep PRs coherent and easy to review.
   For behavior-changing implementation, aim for fewer than 200 added and deleted lines as a heuristic.
   Mechanical moves, internal-only reorganization, tests, snapshots, and documentation do not count toward it.

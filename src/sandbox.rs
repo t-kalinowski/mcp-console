@@ -15,6 +15,7 @@ const MANAGER_CLEANUP_TIMEOUT: Duration = Duration::from_secs(1);
 mod child;
 #[cfg(target_os = "macos")]
 mod installation;
+#[cfg(target_os = "macos")]
 #[path = "sandbox/macos.rs"]
 mod platform;
 #[cfg(target_os = "macos")]

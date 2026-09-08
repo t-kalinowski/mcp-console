@@ -330,7 +330,6 @@ impl Evaluation {
         Ok(())
     }
 
-    #[cfg(target_os = "macos")]
     pub(super) fn output(
         &self,
         channel: crate::worker_protocol::ConsoleChannel,
@@ -340,13 +339,11 @@ impl Evaluation {
         Ok(())
     }
 
-    #[cfg(target_os = "macos")]
     pub(super) fn bounded_notice(&self, message: String) -> Result<(), String> {
         self.output.push_bounded_notice_line(message);
         Ok(())
     }
 
-    #[cfg(target_os = "macos")]
     pub(super) fn image(&self, data: String, mime_type: String) -> Result<(), String> {
         crate::transcript::validate_image_data(&data)?;
         self.output
@@ -355,7 +352,6 @@ impl Evaluation {
             })
     }
 
-    #[cfg(target_os = "macos")]
     pub(super) fn input_requested(&self, prompt: String) -> Result<(), String> {
         let mut state = self
             .state
@@ -373,7 +369,6 @@ impl Evaluation {
         Ok(())
     }
 
-    #[cfg(target_os = "macos")]
     pub(super) fn resume_input_request(&self) -> Result<(), String> {
         let mut state = self
             .state
@@ -392,7 +387,6 @@ impl Evaluation {
         Ok(())
     }
 
-    #[cfg(target_os = "macos")]
     pub(super) fn input_received(&self) -> Result<(), String> {
         let mut state = self
             .state
@@ -406,7 +400,6 @@ impl Evaluation {
         Ok(())
     }
 
-    #[cfg(target_os = "macos")]
     pub(super) fn input_complete(&self) -> Result<(), String> {
         let state = self
             .state
