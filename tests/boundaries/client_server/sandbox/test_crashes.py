@@ -13,6 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.client import McpClient, stop_client
+from support.execution import SANDBOXED
 from support.macos import (
     DarwinProcessIdentity,
     capture_darwin_process_identity,
@@ -22,9 +23,9 @@ from support.macos import (
 )
 from support.normalization import code
 from support.records import Transcript
+from support.requirements import PROCESS_EVENTS, SANDBOX, requires
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
 TIMEOUT = 10
 # Python's select module omits Darwin's deprecated process-reaping flag.
 _KQ_NOTE_REAP = 0x10000000
@@ -185,11 +186,12 @@ def _close_client_streams(client: McpClient) -> None:
             pass
 
 
+@requires(SANDBOX, PROCESS_EVENTS)
 def test_server_crash_retires_the_worker_generation(binary: Path) -> Transcript:
     # The owned launcher must treat loss of the server as retirement of the
     # entire worker generation. A detached child must not survive merely because
     # the server received an uncatchable signal before its normal shutdown path.
-    client = McpClient(binary, ("serve",))
+    client = McpClient(binary, SANDBOXED.serve())
     generation: Generation | None = None
     manager_identity: DarwinProcessIdentity | None = None
     manager_exit = select.kqueue()
@@ -257,10 +259,11 @@ def test_server_crash_retires_the_worker_generation(binary: Path) -> Transcript:
         generation_reaping.close()
 
 
+@requires(SANDBOX, PROCESS_EVENTS)
 def test_manager_crash_retires_the_worker_generation(binary: Path) -> Transcript:
     # While the relay root remains live and pinned, the launcher must take over
     # bounded cleanup if the ready manager exits.
-    client = McpClient(binary, ("serve",))
+    client = McpClient(binary, SANDBOXED.serve())
     generation: Generation | None = None
     manager_identity: DarwinProcessIdentity | None = None
     try:

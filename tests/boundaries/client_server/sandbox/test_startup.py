@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient, stop_client
+from support.execution import SANDBOXED
 from support.macos import (
     DarwinProcessIdentity,
     capture_darwin_process_identity,
@@ -24,9 +25,9 @@ from support.macos import (
     live_darwin_processes,
 )
 from support.records import Transcript
+from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, SANDBOX, requires
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
 TIMEOUT = 10
 MARKER_NAME = "mcp-console-startup-marker"
 
@@ -128,6 +129,7 @@ def _assert_zod_echo(entry: dict[str, object]) -> None:
     }, result
 
 
+@requires(SANDBOX, PROCESS_EVENTS)
 def test_sandbox_setup_failure_is_reported_and_retryable(binary: Path) -> Transcript:
     worker = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as directory:
@@ -135,7 +137,9 @@ def test_sandbox_setup_failure_is_reported_and_retryable(binary: Path) -> Transc
         temporary_parent.write_text("not a directory", encoding="utf-8")
         environment = os.environ.copy()
         environment["TMPDIR"] = str(temporary_parent)
-        client = McpClient(binary, ("serve", "--worker", str(worker)), environment)
+        client = McpClient(
+            binary, SANDBOXED.serve("--worker", str(worker)), environment
+        )
         try:
             server = capture_darwin_process_identity(client.process.pid)
             client.initialize_and_list_tools()
@@ -168,6 +172,7 @@ def test_sandbox_setup_failure_is_reported_and_retryable(binary: Path) -> Transc
             stop_client(client)
 
 
+@requires(SANDBOX, PROCESS_EVENTS, NATIVE_FIXTURES)
 def test_manager_failure_before_readiness_keeps_custom_relay_gated(
     binary: Path,
 ) -> Transcript:
@@ -190,13 +195,7 @@ def test_manager_failure_before_readiness_keeps_custom_relay_gated(
 
         client = McpClient(
             binary,
-            (
-                "serve",
-                "--worker",
-                str(worker),
-                "--relay",
-                str(marker_relay),
-            ),
+            SANDBOXED.serve("--worker", str(worker), "--relay", str(marker_relay)),
             environment,
         )
         identities: tuple[DarwinProcessIdentity, ...] = ()

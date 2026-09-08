@@ -10,20 +10,22 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.assertions import assert_exact_interleaving
-from support.assertions import last_result_text
+from support.assertions import assert_exact_interleaving, last_result_text
 from support.client import McpClient
+from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript
+from support.requirements import OLD_PYTHON, SYSTEM_PYTHON, requires
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
 
-
-def test_preserves_configured_python_environment(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_preserves_configured_python_environment(
+    binary: Path, execution: Execution
+) -> Transcript:
     environment = os.environ.copy()
     environment["RETICULATE_PYTHON"] = "configured-by-user"
-    client = McpClient(binary, ("serve",), environment)
+    client = McpClient(binary, execution.serve(), environment)
     client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
@@ -102,10 +104,13 @@ def test_preserves_configured_python_environment(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_preserves_empty_python_environment(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_preserves_empty_python_environment(
+    binary: Path, execution: Execution
+) -> Transcript:
     environment = os.environ.copy()
     environment["RETICULATE_PYTHON"] = ""
-    client = McpClient(binary, ("serve",), environment)
+    client = McpClient(binary, execution.serve(), environment)
     client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
@@ -116,8 +121,12 @@ def test_preserves_empty_python_environment(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_rejects_python_older_than_3_10(binary: Path) -> Transcript:
-    interpreter = Path("/usr/bin/python3")
+@executions(DIRECT, SANDBOXED)
+@requires(OLD_PYTHON)
+def test_rejects_python_older_than_3_10(
+    binary: Path, execution: Execution
+) -> Transcript:
+    interpreter = SYSTEM_PYTHON
     version = subprocess.run(
         (interpreter, "-c", "import sys; print(sys.version_info[:2])"),
         check=True,
@@ -128,7 +137,7 @@ def test_rejects_python_older_than_3_10(binary: Path) -> Transcript:
 
     environment = os.environ.copy()
     environment["RETICULATE_PYTHON"] = str(interpreter)
-    client = McpClient(binary, ("serve",), environment)
+    client = McpClient(binary, execution.serve(), environment)
     client.initialize_and_list_tools()
     client.send(python="6 * 7")
     result = client.transcript[-1]["result"]
@@ -156,7 +165,9 @@ def test_rejects_python_older_than_3_10(binary: Path) -> Transcript:
     return client.finish()
 
 
-def managed_python_transcript(binary: Path, configured: bool) -> Transcript:
+def managed_python_transcript(
+    binary: Path, execution: Execution, configured: bool
+) -> Transcript:
     environment = os.environ.copy()
     if configured:
         environment["RETICULATE_PYTHON"] = "managed"
@@ -167,7 +178,7 @@ def managed_python_transcript(binary: Path, configured: bool) -> Transcript:
     environment.pop("RETICULATE_UV", None)
     environment["UV_OFFLINE"] = "1"
 
-    client = McpClient(binary, ("serve",), environment)
+    client = McpClient(binary, execution.serve(), environment)
     client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
@@ -202,250 +213,24 @@ def managed_python_transcript(binary: Path, configured: bool) -> Transcript:
     return client.finish()
 
 
-def test_evaluates_with_default_managed_python(binary: Path) -> Transcript:
-    return managed_python_transcript(binary, configured=False)
-
-
-def test_evaluates_with_explicit_managed_python(binary: Path) -> Transcript:
-    return managed_python_transcript(binary, configured=True)
-
-
-def test_runs_joblib_process_backend(binary: Path) -> Transcript:
-    environment = os.environ.copy()
-    environment.pop("RETICULATE_PYTHON", None)
-    client = McpClient(binary, ("serve",), environment)
-    client.initialize_and_list_tools()
-    # fmt: python
-    python = code("""
-        from joblib import Parallel, delayed
-
-        Parallel(n_jobs=2)(delayed(abs)(value) for value in range(-2, 3))
-        """)
-    client.send(
-        python=python,
-        requirements={"python": ["joblib"]},
-    )
-    output = last_result_text(client)
-    assert output == "[2, 1, 0, 1, 2]\n", repr(output)
-    return client.finish()
-
-
-def test_runs_joblib_process_backend_after_live_resolution(binary: Path) -> Transcript:
-    environment = os.environ.copy()
-    environment.pop("RETICULATE_PYTHON", None)
-    client = McpClient(binary, ("serve",), environment)
-    client.initialize_and_list_tools()
-    client.send(python="import sys")
-    assert last_result_text(client) == "[done]"
-    # fmt: python
-    python = code("""
-        from joblib import Parallel, delayed
-
-        Parallel(n_jobs=2)(delayed(abs)(value) for value in range(-2, 3))
-        """)
-    client.send(python=python)
-    output = last_result_text(client)
-    assert output == "[2, 1, 0, 1, 2]\n", repr(output)
-    return client.finish()
-
-
-def test_runs_spawn_process_after_live_resolution(binary: Path) -> Transcript:
-    environment = os.environ.copy()
-    environment.pop("RETICULATE_PYTHON", None)
-    client = McpClient(binary, ("serve",), environment)
-    client.initialize_and_list_tools()
-    # fmt: python
-    python = code("""
-        import multiprocessing.spawn
-        import sys
-
-        initial_executable = sys.executable
-        """)
-    client.send(python=python)
-    assert last_result_text(client) == "[done]"
-    # fmt: python
-    python = code("""
-        import multiprocessing
-        import sys
-
-        import joblib
-
-        context = multiprocessing.get_context("spawn")
-        with context.Pool(1) as pool:
-            child_executable = pool.apply(
-                eval,
-                ("__import__('sys').executable",),
-            )
-
-        (
-            initial_executable != sys.executable,
-            child_executable == sys.executable,
-        )
-        """)
-    client.send(python=python)
-    output = last_result_text(client)
-    assert output == "(True, True)\n", repr(output)
-    return client.finish()
-
-
-def test_inspects_sandbox_child_processes_with_psutil(binary: Path) -> Transcript:
-    environment = os.environ.copy()
-    environment.pop("RETICULATE_PYTHON", None)
-    client = McpClient(binary, ("serve",), environment)
-    client.initialize_and_list_tools()
-    # fmt: python
-    python = code("""
-        import sys
-
-        initial_executable = sys.executable
-        """)
-    client.send(python=python)
-    assert last_result_text(client) == "[done]"
-    # fmt: python
-    python = code("""
-        import ctypes
-        import errno
-        import os
-        import subprocess
-        import sys
-
-        import psutil
-
-        mib = (ctypes.c_int * 3)(1, 14, 0)
-        size = ctypes.c_size_t()
-        ctypes.set_errno(0)
-        result = ctypes.CDLL(None, use_errno=True).sysctl(
-            mib,
-            len(mib),
-            None,
-            ctypes.byref(size),
-            None,
-            0,
-        )
-        denied = result == -1 and ctypes.get_errno() == errno.EPERM
-
-        command = [sys.executable, "-c", "import time; time.sleep(30)"]
-        child = subprocess.Popen(command)
-        try:
-            visible = psutil.pids()
-            descendants = psutil.Process().children(recursive=True)
-            observed = [process.pid for process in descendants]
-            process_group = os.getpgrp()
-            visible_groups = [os.getpgid(pid) for pid in visible]
-        finally:
-            child.terminate()
-            child.wait()
-
-        (
-            initial_executable != sys.executable,
-            denied,
-            1 not in visible,
-            visible == sorted(visible),
-            all(group == process_group for group in visible_groups),
-            child.pid in visible,
-            child.pid in observed,
-        )
-        """)
-    client.send(python=python)
-    output = last_result_text(client)
-    assert output == "(True, True, True, True, True, True, True)\n", repr(output)
-    return client.finish()
-
-
-def test_retains_environment_when_optional_psutil_setup_fails(
-    binary: Path,
+@executions(DIRECT, SANDBOXED)
+def test_evaluates_with_default_managed_python(
+    binary: Path, execution: Execution
 ) -> Transcript:
-    environment = os.environ.copy()
-    environment.pop("RETICULATE_PYTHON", None)
-    client = McpClient(binary, ("serve",), environment)
-    client.initialize_and_list_tools()
-    # fmt: python
-    python = code("""
-        import importlib.machinery
-        import os
-        import sys
-
-        live_pid = os.getpid()
-        live_sentinel = 42
+    return managed_python_transcript(binary, execution, configured=False)
 
 
-        class FailingPsutilFinder:
-            def __init__(self):
-                self.visible_lookups = 0
-
-            def find_spec(self, fullname, path=None, target=None):
-                if fullname != "psutil":
-                    return None
-                specification = importlib.machinery.PathFinder.find_spec(
-                    fullname,
-                    path,
-                )
-                if specification is None:
-                    return None
-                self.visible_lookups += 1
-                sys.meta_path.remove(self)
-                raise ImportError("synthetic psutil probe failure")
+@executions(DIRECT, SANDBOXED)
+def test_evaluates_with_explicit_managed_python(
+    binary: Path, execution: Execution
+) -> Transcript:
+    return managed_python_transcript(binary, execution, configured=True)
 
 
-        failing_psutil_finder = FailingPsutilFinder()
-        sys.meta_path.insert(0, failing_psutil_finder)
-        """)
-    client.send(python=python)
-    assert last_result_text(client) == "[done]"
-
-    # fmt: python
-    python = code("""
-        import os
-        import subprocess
-        import sys
-
-        import psutil
-
-        command = [sys.executable, "-c", "import time; time.sleep(30)"]
-        child = subprocess.Popen(command)
-        try:
-            visible = psutil.pids()
-            descendants = psutil.Process().children(recursive=True)
-            observed = [process.pid for process in descendants]
-            process_group = os.getpgrp()
-            visible_groups = [os.getpgid(pid) for pid in visible]
-        finally:
-            child.terminate()
-            child.wait()
-
-        (
-            psutil.__name__,
-            failing_psutil_finder.visible_lookups,
-            live_sentinel,
-            os.getpid() == live_pid,
-            1 not in visible,
-            visible == sorted(visible),
-            all(group == process_group for group in visible_groups),
-            child.pid in visible,
-            child.pid in observed,
-        )
-        """)
-    client.send(python=python)
-    output = last_result_text(client)
-    assert output == ("('psutil', 1, 42, True, True, True, True, True, True)\n"), repr(
-        output
-    )
-
-    client.send(r='"psutil" %in% reticulate::py_require()$packages')
-    assert last_result_text(client) == "[1] TRUE\n"
-
-    client.send(control="restart")
-    assert last_result_text(client) == (
-        "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
-    )
-    client.send(r='"psutil" %in% reticulate::py_require()$packages')
-    assert last_result_text(client) == "[1] TRUE\n"
-    client.send(python="import psutil; psutil.__name__")
-    assert last_result_text(client) == "'psutil'\n"
-    return client.finish()
-
-
-def test_does_not_import_local_psutil_during_bootstrap(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_does_not_import_local_psutil_during_bootstrap(
+    binary: Path, execution: Execution
+) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
         (directory / "psutil.py").write_text(
@@ -458,7 +243,7 @@ def test_does_not_import_local_psutil_during_bootstrap(binary: Path) -> Transcri
         environment.pop("RETICULATE_PYTHON", None)
         client = McpClient(
             binary,
-            ("serve",),
+            execution.serve(),
             environment,
             current_directory=directory,
         )
@@ -482,8 +267,11 @@ def test_does_not_import_local_psutil_during_bootstrap(binary: Path) -> Transcri
         return client.finish()
 
 
-def test_sends_python_cell_with_initial_requirements(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_sends_python_cell_with_initial_requirements(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     # fmt: python
     python = code("""
@@ -499,8 +287,11 @@ def test_sends_python_cell_with_initial_requirements(binary: Path) -> Transcript
     return client.finish()
 
 
-def test_compacts_native_duckdb_progress_bar(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_compacts_native_duckdb_progress_bar(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     # fmt: python
     python = code(r"""
@@ -571,8 +362,9 @@ def test_compacts_native_duckdb_progress_bar(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_uses_200_column_default(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_uses_200_column_default(binary: Path, execution: Execution) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     # fmt: python
     python = code("""
@@ -601,10 +393,12 @@ def test_uses_200_column_default(binary: Path) -> Transcript:
     return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_uses_200_column_default_after_r_initializes_python(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
-    client = McpClient(binary, ("serve",))
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
@@ -630,7 +424,10 @@ def test_uses_200_column_default_after_r_initializes_python(
     return client.finish()
 
 
-def test_prints_requirements_with_host_uv_cache(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_prints_requirements_with_host_uv_cache(
+    binary: Path, execution: Execution
+) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
         environment = os.environ.copy()
@@ -650,7 +447,7 @@ def test_prints_requirements_with_host_uv_cache(binary: Path) -> Transcript:
         environment["UV_OFFLINE"] = "1"
         client = McpClient(
             binary,
-            ("serve",),
+            execution.serve(),
             environment,
             current_directory=temporary,
         )
@@ -687,7 +484,39 @@ def test_prints_requirements_with_host_uv_cache(binary: Path) -> Transcript:
             "UV_OFFLINE": None,
         }
         assert all(record == expected for record in records), records
-        assert not worker_cache.exists(), worker_cache
+        if execution == DIRECT:
+            # Reticulate also checks the activated environment with a local
+            # dry-run, which inherits worker settings and may create its cache.
+            diagnostics = [
+                json.loads(line)
+                for line in Path(str(uv_record) + ".diagnostics")
+                .read_text()
+                .splitlines()
+            ]
+            assert len(diagnostics) == 1, diagnostics
+            diagnostic = diagnostics[0]
+            assert diagnostic["arguments"][:10] == [
+                "pip",
+                "install",
+                "--dry-run",
+                "--no-deps",
+                "--color",
+                "never",
+                "--no-progress",
+                "--no-build",
+                "--no-config",
+                "--python",
+            ], diagnostic
+            assert diagnostic["arguments"][11:] == ["numpy", "pandas", "py-yaml12"], (
+                diagnostic
+            )
+            assert diagnostic["environment"] == {
+                "UV_CACHE_DIR": str(worker_cache),
+                "UV_DEFAULT_INDEX": "file:///worker-selected-index",
+                "UV_OFFLINE": "1",
+            }, diagnostic
+        else:
+            assert not worker_cache.exists(), worker_cache
         return client.finish()
 
 

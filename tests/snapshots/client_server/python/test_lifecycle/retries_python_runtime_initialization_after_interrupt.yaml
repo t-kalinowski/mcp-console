@@ -1,5 +1,5 @@
 ---
-!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+!same-as MCP initialization for this execution mode
 ---
 send:
   r: |
@@ -10,13 +10,7 @@ send:
           identical(name, "operation") &&
             identical(value, "configure_import_resolution")
         ) {
-          invisible(file.create(file.path(
-            tempdir(),
-            "python-runtime-configuring"
-          )))
-          repeat {
-            Sys.sleep(60)
-          }
+          invisible(readline("python runtime configuring> "))
         }
       }),
       print = FALSE,
@@ -30,13 +24,12 @@ result:
 ---
 send:
   python: "42"
-  timeout_ms: 0
 result:
   content:
     - type: text
       text: |-
-
-        [running; poll with an empty send]
+        [input requested: "python runtime configuring> "]
+        [waiting for stdin]
   isError: false
 ---
 send:

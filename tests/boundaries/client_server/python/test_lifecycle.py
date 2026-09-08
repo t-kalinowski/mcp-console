@@ -15,16 +15,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from support.assertions import last_result_text, wait_for_evaluation_output
 from support.checkpoints import FifoCheckpoint, wait_for_worker_file
 from support.client import McpClient, stop_client
+from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript
+from support.requirements import NATIVE_FIXTURES, requires
 from support.resolvers import checkpoint_uv_environment, named_requirement_error
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
 
-
+@executions(DIRECT, SANDBOXED)
 def test_rejects_python_preparation_while_evaluation_is_running(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
@@ -38,7 +40,7 @@ def test_rejects_python_preparation_while_evaluation_is_running(
         )
         environment["MCP_CONSOLE_TEST_REAL_UV"] = real_uv
         environment["MCP_CONSOLE_TEST_UV_RECORD"] = str(uv_record)
-        client = McpClient(binary, ("serve",), environment)
+        client = McpClient(binary, execution.serve(), environment)
         client.initialize_and_list_tools()
         python = code("""
             runtime_generation_marker = "original runtime retained"
@@ -97,7 +99,11 @@ def test_rejects_python_preparation_while_evaluation_is_running(
         return client.finish()
 
 
-def test_interrupts_running_python_evaluation(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+@requires(NATIVE_FIXTURES)
+def test_interrupts_running_python_evaluation(
+    binary: Path, execution: Execution
+) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
         library = temporary_path / "python-interrupt-checkpoint.dylib"
@@ -126,7 +132,7 @@ def test_interrupts_running_python_evaluation(binary: Path) -> Transcript:
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
         environment["MCP_CONSOLE_PYTHON_INTERRUPT_LIBRARY"] = str(library)
-        client = McpClient(binary, ("serve",), environment)
+        client = McpClient(binary, execution.serve(), environment)
         checkpoints: list[FifoCheckpoint] = []
         release = None
         passed = False
@@ -281,10 +287,12 @@ def test_interrupts_running_python_evaluation(binary: Path) -> Transcript:
                 stop_client(client)
 
 
+@executions(DIRECT, SANDBOXED)
 def test_initializes_private_runtime_once_on_first_python_cell(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
-    client = McpClient(binary, ("serve",))
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
@@ -303,14 +311,15 @@ def test_initializes_private_runtime_once_on_first_python_cell(
     return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_retries_python_runtime_initialization_after_interrupt(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
-        temporary_path = Path(temporary_directory)
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
-        client = McpClient(binary, ("serve",), environment)
+        client = McpClient(binary, execution.serve(), environment)
         passed = False
         try:
             client.initialize_and_list_tools()
@@ -323,13 +332,7 @@ def test_retries_python_runtime_initialization_after_interrupt(
                       identical(name, "operation") &&
                         identical(value, "configure_import_resolution")
                     ) {
-                      invisible(file.create(file.path(
-                        tempdir(),
-                        "python-runtime-configuring"
-                      )))
-                      repeat {
-                        Sys.sleep(60)
-                      }
+                      invisible(readline("python runtime configuring> "))
                     }
                   }),
                   print = FALSE,
@@ -339,12 +342,11 @@ def test_retries_python_runtime_initialization_after_interrupt(
             client.send(r=r)
             assert last_result_text(client) == "[done]"
 
-            client.send(python="42", timeout_ms=0)
-            assert last_result_text(client) == "\n[running; poll with an empty send]"
-            wait_for_worker_file(
-                temporary_path,
-                "python-runtime-configuring",
-                client,
+            # The input request proves runtime configuration has started before
+            # interrupting it, after any first-use Python preparation completes.
+            client.send(python="42")
+            assert last_result_text(client) == (
+                '[input requested: "python runtime configuring> "]\n[waiting for stdin]'
             )
 
             client.send(control="interrupt", timeout_ms=0)
@@ -394,8 +396,11 @@ def test_retries_python_runtime_initialization_after_interrupt(
                 stop_client(client)
 
 
-def test_dispatch_does_not_mutate_python_globals(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_dispatch_does_not_mutate_python_globals(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     # fmt: python
     python = code("""
@@ -436,7 +441,10 @@ def test_dispatch_does_not_mutate_python_globals(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_interrupts_live_python_resolver(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_interrupts_live_python_resolver(
+    binary: Path, execution: Execution
+) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
         environment, uv_started, uv_release = checkpoint_uv_environment(
@@ -452,7 +460,7 @@ def test_interrupts_live_python_resolver(binary: Path) -> Transcript:
         previous_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
         previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
         try:
-            client = McpClient(binary, ("serve",), environment)
+            client = McpClient(binary, execution.serve(), environment)
         finally:
             signal.signal(signal.SIGINT, previous_handler)
             signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
@@ -521,13 +529,16 @@ def test_interrupts_live_python_resolver(binary: Path) -> Transcript:
                 stop_client(client)
 
 
-def test_restart_cancels_live_python_preparation(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_restart_cancels_live_python_preparation(
+    binary: Path, execution: Execution
+) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
         environment, uv_started, uv_release = checkpoint_uv_environment(
             temporary, "mcp-console-blocked-live-preparation"
         )
-        client = McpClient(binary, ("serve",), environment)
+        client = McpClient(binary, execution.serve(), environment)
         passed = False
         try:
             client.initialize_and_list_tools()
@@ -617,7 +628,10 @@ def test_restart_cancels_live_python_preparation(binary: Path) -> Transcript:
                 stop_client(client)
 
 
-def test_does_not_parse_requirements_as_rscript_options(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_does_not_parse_requirements_as_rscript_options(
+    binary: Path, execution: Execution
+) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         marker = Path(temporary_directory) / "host-r-code-ran"
         expression = (
@@ -626,7 +640,7 @@ def test_does_not_parse_requirements_as_rscript_options(binary: Path) -> Transcr
         environment = os.environ.copy()
         environment.pop("RETICULATE_PYTHON", None)
         environment["MCP_CONSOLE_HOST_MARKER"] = str(marker)
-        client = McpClient(binary, ("serve",), environment)
+        client = McpClient(binary, execution.serve(), environment)
         client.initialize_and_list_tools()
         client.send(
             requirements={"python": ["-e", expression]},
@@ -638,11 +652,14 @@ def test_does_not_parse_requirements_as_rscript_options(binary: Path) -> Transcr
         return client.finish()
 
 
-def test_forces_uv_offline_in_builtin_worker(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_forces_uv_offline_in_builtin_worker(
+    binary: Path, execution: Execution
+) -> Transcript:
     environment = os.environ.copy()
     environment.pop("RETICULATE_PYTHON", None)
     environment["UV_OFFLINE"] = "0"
-    client = McpClient(binary, ("serve",), environment)
+    client = McpClient(binary, execution.serve(), environment)
     client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""

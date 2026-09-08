@@ -18,10 +18,12 @@ from support.assertions import (
 )
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient, stop_client
+from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.processes import process_group_exists, stop_process_group
 from support.r import r_test_environment
 from support.records import Transcript
+from support.requirements import PROCESS_EVENTS, requires
 from support.resolvers import (
     checkpoint_uv_environment,
     matplotlib_test_environment,
@@ -29,13 +31,14 @@ from support.resolvers import (
 )
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
 
-
-def test_prepares_initial_python_requirements(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_prepares_initial_python_requirements(
+    binary: Path, execution: Execution
+) -> Transcript:
     environment = os.environ.copy()
     environment.pop("RETICULATE_PYTHON", None)
-    client = McpClient(binary, ("serve",), environment)
+    client = McpClient(binary, execution.serve(), environment)
     client.initialize_and_list_tools()
     client.send(
         requirements={"python": ["py-yaml12"]},
@@ -91,8 +94,11 @@ def test_prepares_initial_python_requirements(binary: Path) -> Transcript:
     return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS)
 def test_retires_python_resolver_descendant_after_leader_exit(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
@@ -152,7 +158,7 @@ def test_retires_python_resolver_descendant_after_leader_exit(
         environment["MCP_CONSOLE_TEST_LEADER_RELEASE"] = str(leader_release.path)
         environment["MCP_CONSOLE_TEST_DESCENDANT_LIFETIME"] = str(lifetime.path)
 
-        client = McpClient(binary, ("serve",), environment)
+        client = McpClient(binary, execution.serve(), environment)
         resolver_group = None
         exit_events = select.kqueue()
         try:
@@ -206,10 +212,13 @@ def test_retires_python_resolver_descendant_after_leader_exit(
             lifetime.close()
 
 
-def test_prepares_explicit_numpy_requirement(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_prepares_explicit_numpy_requirement(
+    binary: Path, execution: Execution
+) -> Transcript:
     environment = os.environ.copy()
     environment.pop("RETICULATE_PYTHON", None)
-    client = McpClient(binary, ("serve",), environment)
+    client = McpClient(binary, execution.serve(), environment)
     client.initialize_and_list_tools()
     client.send(
         requirements={"python": ["numpy"]},
@@ -224,8 +233,10 @@ def test_prepares_explicit_numpy_requirement(binary: Path) -> Transcript:
     return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_does_not_fail_resolution_when_matplotlib_cache_cannot_be_written(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
@@ -235,7 +246,7 @@ def test_does_not_fail_resolution_when_matplotlib_cache_cannot_be_written(
         environment["MPL_IGNORE_SYSTEM_FONTS"] = "1"
         client = McpClient(
             binary,
-            ("serve",),
+            execution.serve(),
             environment,
             current_directory=temporary,
         )
@@ -264,10 +275,12 @@ def test_does_not_fail_resolution_when_matplotlib_cache_cannot_be_written(
         return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_restart_loses_state_and_retains_python_requirements(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
-    client = McpClient(binary, ("serve",))
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     client.send(
         requirements={"python": ["py-yaml12"]},
@@ -292,7 +305,10 @@ def test_restart_loses_state_and_retains_python_requirements(
     return client.finish()
 
 
-def test_restart_discards_pre_marker_python_activation(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_restart_discards_pre_marker_python_activation(
+    binary: Path, execution: Execution
+) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
         replacement_requirement = "mcp-console-restart-fixture"
@@ -304,7 +320,7 @@ def test_restart_discards_pre_marker_python_activation(binary: Path) -> Transcri
         environment["TMPDIR"] = temporary_directory
         reuse_record = Path(environment["MCP_CONSOLE_TEST_UV_REUSE_RECORD"])
 
-        client = McpClient(binary, ("serve",), environment)
+        client = McpClient(binary, execution.serve(), environment)
         passed = False
         worker_checkpoints: list[FifoCheckpoint] = []
         try:
@@ -430,8 +446,11 @@ def test_restart_discards_pre_marker_python_activation(binary: Path) -> Transcri
             uv_release.close()
 
 
-def test_prepares_python_requirements_after_worker_startup(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_prepares_python_requirements_after_worker_startup(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     python = code("""
         import importlib.util; import os; import sys
@@ -482,8 +501,11 @@ def test_prepares_python_requirements_after_worker_startup(binary: Path) -> Tran
     return client.finish()
 
 
-def test_failed_live_python_requirements_do_not_run_cell(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_failed_live_python_requirements_do_not_run_cell(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     client.send(python="import os; live_sentinel = 42; live_worker_pid = os.getpid()")
     assert last_tool_text(client) == "[done]"
@@ -544,8 +566,11 @@ def test_failed_live_python_requirements_do_not_run_cell(binary: Path) -> Transc
     return client.finish()
 
 
-def test_prepares_after_idle_python_resolution(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_prepares_after_idle_python_resolution(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     client.send(requirements={"r": ["later"]})
 
@@ -579,10 +604,12 @@ def test_prepares_after_idle_python_resolution(binary: Path) -> Transcript:
     return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_retains_idle_python_activation_during_continuous_collection(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
-    client = McpClient(binary, ("serve",))
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     client.send(requirements={"r": ["later"]})
     client.send(r="invisible(reticulate::py_config())")
@@ -635,8 +662,11 @@ def test_retains_idle_python_activation_during_continuous_collection(
     return client.finish()
 
 
-def test_does_not_retain_stale_python_materialization(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_does_not_retain_stale_python_materialization(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     client.send(r="invisible(reticulate::py_config())")
     assert last_tool_text(client) == "[done]"
@@ -680,8 +710,11 @@ def test_does_not_retain_stale_python_materialization(binary: Path) -> Transcrip
     return client.finish()
 
 
-def test_failed_restart_requirements_preserve_worker(binary: Path) -> Transcript:
-    client = McpClient(binary, ("serve",))
+@executions(DIRECT, SANDBOXED)
+def test_failed_restart_requirements_preserve_worker(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     client.send(python="restart_marker = 42")
     assert last_tool_text(client) == "[done]"
@@ -700,8 +733,10 @@ def test_failed_restart_requirements_preserve_worker(binary: Path) -> Transcript
     return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_layers_python_requirements_declared_by_r_packages(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     environment, rscript = r_test_environment()
     fixture = Path(__file__).parents[3] / "fixtures" / "py_require"
@@ -722,7 +757,7 @@ def test_layers_python_requirements_declared_by_r_packages(
         environment["R_LIBS"] = os.pathsep.join(
             filter(None, (library, environment.get("R_LIBS")))
         )
-        client = McpClient(binary, ("serve",), environment)
+        client = McpClient(binary, execution.serve(), environment)
         client.initialize_and_list_tools()
         # fmt: python
         python = code("""
@@ -786,8 +821,10 @@ def test_layers_python_requirements_declared_by_r_packages(
         return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_does_not_retain_package_requirements_before_python_initializes(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     environment, rscript = r_test_environment()
     fixture = Path(__file__).parents[3] / "fixtures" / "py_require"
@@ -808,7 +845,7 @@ def test_does_not_retain_package_requirements_before_python_initializes(
         environment["R_LIBS"] = os.pathsep.join(
             filter(None, (library, environment.get("R_LIBS")))
         )
-        client = McpClient(binary, ("serve",), environment)
+        client = McpClient(binary, execution.serve(), environment)
         client.initialize_and_list_tools()
         # fmt: r
         r = code(r"""
@@ -850,10 +887,12 @@ def test_does_not_retain_package_requirements_before_python_initializes(
         return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_retains_python_activation_before_later_cell_failure(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
-    client = McpClient(binary, ("serve",))
+    client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""

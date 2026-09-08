@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from support.assertions import collect_running_output, last_tool_text
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
+from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.macos import (
     DarwinProcessIdentity,
     capture_darwin_process_identity,
@@ -27,10 +28,9 @@ from support.macos import (
 from support.normalization import code
 from support.r import r_test_environment
 from support.records import Transcript
+from support.requirements import PROCESS_EVENTS, requires
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
-REQUIRED_COMMANDS = {"ir", "uv"}
 RUNNING = "\n[running; poll with an empty send]"
 
 
@@ -82,7 +82,7 @@ class StartupFixture:
 
 @contextmanager
 def startup_fixture(
-    binary: Path, *, bootstrap: str = "ir", phase: str = "all"
+    binary: Path, execution: Execution, *, bootstrap: str = "ir", phase: str = "all"
 ) -> Iterator[StartupFixture]:
     with tempfile.TemporaryDirectory() as directory, closing(select.kqueue()) as exits:
         temporary = Path(directory)
@@ -128,7 +128,7 @@ def startup_fixture(
         )
         client = McpClient(
             binary,
-            ("serve",),
+            execution.serve(),
             environment,
             response_timeout=5,
         )
@@ -151,8 +151,12 @@ def startup_fixture(
                 release.close()
 
 
-def test_preserves_initialize_buffered_during_startup(binary: Path) -> Transcript:
-    with startup_fixture(binary) as fixture:
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS)
+def test_preserves_initialize_buffered_during_startup(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with startup_fixture(binary, execution) as fixture:
         client = fixture.client
         client.initialize_and_list_tools()
         assert fixture.invocations() == [], "initialization started a resolver"
@@ -165,17 +169,24 @@ def test_preserves_initialize_buffered_during_startup(binary: Path) -> Transcrip
         return client.finish()
 
 
-def test_initializes_before_uv_bootstrap_installation(binary: Path) -> Transcript:
-    with startup_fixture(binary, bootstrap="uv") as fixture:
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS)
+def test_initializes_before_uv_bootstrap_installation(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with startup_fixture(binary, execution, bootstrap="uv") as fixture:
         fixture.client.initialize_and_list_tools()
         assert fixture.invocations() == [], "initialization started a resolver"
         return fixture.client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS)
 def test_first_cell_prepares_defaults_after_running_response(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
-    with startup_fixture(binary, phase="preparation") as fixture:
+    with startup_fixture(binary, execution, phase="preparation") as fixture:
         client = fixture.client
         client.initialize_and_list_tools()
         # fmt: r
@@ -252,8 +263,12 @@ def test_first_cell_prepares_defaults_after_running_response(
         return client.finish()
 
 
-def test_explicit_preparation_keeps_its_wait_precondition(binary: Path) -> Transcript:
-    with startup_fixture(binary, phase="preparation") as fixture:
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS)
+def test_explicit_preparation_keeps_its_wait_precondition(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with startup_fixture(binary, execution, phase="preparation") as fixture:
         client = fixture.client
         client.initialize_and_list_tools()
         preparation = client.start_send(requirements={"r": ["DBI"]}, timeout_ms=0)
@@ -277,8 +292,12 @@ def test_explicit_preparation_keeps_its_wait_precondition(binary: Path) -> Trans
         return client.finish()
 
 
-def test_cancels_resolver_discovery_when_stdin_closes(binary: Path) -> Transcript:
-    with startup_fixture(binary, phase="discovery") as fixture:
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS)
+def test_cancels_resolver_discovery_when_stdin_closes(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with startup_fixture(binary, execution, phase="discovery") as fixture:
         client = fixture.client
         client.initialize_and_list_tools()
         client.send(r="42L", timeout_ms=0)
@@ -297,8 +316,12 @@ def test_cancels_resolver_discovery_when_stdin_closes(binary: Path) -> Transcrip
         ]
 
 
-def test_cancels_default_preparation_when_stdin_closes(binary: Path) -> Transcript:
-    with startup_fixture(binary, phase="preparation") as fixture:
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS)
+def test_cancels_default_preparation_when_stdin_closes(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with startup_fixture(binary, execution, phase="preparation") as fixture:
         client = fixture.client
         client.initialize_and_list_tools()
         client.send(r="42L", timeout_ms=0)
@@ -317,10 +340,13 @@ def test_cancels_default_preparation_when_stdin_closes(binary: Path) -> Transcri
         ]
 
 
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS)
 def test_interrupts_first_use_preparation_without_running_cell(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
-    with startup_fixture(binary, phase="preparation") as fixture:
+    with startup_fixture(binary, execution, phase="preparation") as fixture:
         client = fixture.client
         client.initialize_and_list_tools()
         client.send(r="startup_cell_ran <- TRUE", timeout_ms=0)
@@ -336,8 +362,12 @@ def test_interrupts_first_use_preparation_without_running_cell(
         return client.finish()
 
 
-def test_restart_replaces_first_use_cell_and_stdin(binary: Path) -> Transcript:
-    with startup_fixture(binary, phase="preparation") as fixture:
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS)
+def test_restart_replaces_first_use_cell_and_stdin(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with startup_fixture(binary, execution, phase="preparation") as fixture:
         client = fixture.client
         client.initialize_and_list_tools()
         client.send(python="startup_cell_ran = True", stdin="old input\n", timeout_ms=0)

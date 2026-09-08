@@ -17,6 +17,7 @@ from support.macos import (
     capture_darwin_process_identity,
     signal_darwin_process,
 )
+from support.requirements import POSIX, PROCESS_EVENTS
 
 ROOT = Path(__file__).resolve().parent.parent
 RUNNER = ROOT / "tests" / "boundaries" / "_run.py"
@@ -193,7 +194,7 @@ def check_recording(*arguments: object, **keywords: object) -> object:
 """.lstrip()
 
 
-@unittest.skipUnless(os.name == "posix", "requires POSIX process and FIFO APIs")
+@unittest.skipUnless(POSIX.available, POSIX.reason)
 class TranscriptRunnerTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -214,7 +215,14 @@ class TranscriptRunnerTests(unittest.TestCase):
             directory.mkdir(parents=True, exist_ok=True)
 
         shutil.copy2(RUNNER, self.boundaries / "_run.py")
-        for name in ("__init__.py", "cases.py", "records.py", "snapshots.py"):
+        for name in (
+            "__init__.py",
+            "cases.py",
+            "records.py",
+            "snapshots.py",
+            "requirements.py",
+            "execution.py",
+        ):
             shutil.copy2(ROOT / "tests" / "support" / name, support / name)
         self.suite.write_text(PUBLIC_SUITE, encoding="utf-8")
         binary.touch()
@@ -249,6 +257,174 @@ class TranscriptRunnerTests(unittest.TestCase):
         return subprocess.CompletedProcess(
             arguments, process.returncode, stdout, stderr
         )
+
+    def test_case_requirements_and_skip_reporting(self) -> None:
+        self.suite.write_text(
+            PUBLIC_SUITE
+            + """
+from support.requirements import Requirement, command, requires
+
+available = Requirement("available fixture", True, "fixture is available")
+missing = Requirement("missing fixture", False, "fixture deliberately unavailable")
+test_selected = requires(available)(test_selected)
+test_unselected = requires(available, missing, command("mcp-console-deliberately-missing-test-command"))(test_unselected)
+""",
+            encoding="utf-8",
+        )
+        listed = self.run_runner("--list")
+        self.assertEqual(listed.returncode, 0, listed.stderr)
+        self.assertIn("::unselected", listed.stdout)
+        result = self.run_runner("--jobs", "1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.root / "selected.marker").exists())
+        self.assertFalse((self.root / "unselected.marker").exists())
+        self.assertIn(
+            "::unselected: skipped; missing fixture: fixture deliberately unavailable",
+            result.stdout,
+        )
+        self.assertIn(
+            "mcp-console-deliberately-missing-test-command is missing from PATH",
+            result.stdout,
+        )
+        selected_skip = self.run_runner("client_server/server/test_tools::unselected")
+        self.assertEqual(selected_skip.returncode, 0, selected_skip.stderr)
+        self.assertIn("fixture deliberately unavailable", selected_skip.stdout)
+
+    def test_full_update_preserves_skipped_case_and_companions(self) -> None:
+        self.suite.write_text(
+            PUBLIC_SUITE
+            + """
+from support.requirements import Requirement, requires
+
+test_unselected = requires(
+    Requirement("unavailable", False, "deliberate skip")
+)(test_unselected)
+""",
+            encoding="utf-8",
+        )
+        companion = self.snapshots / "unselected.md"
+        companion.write_text("retained companion", encoding="utf-8")
+        stale = self.snapshots / "selected.md"
+        stale.write_text("obsolete companion", encoding="utf-8")
+        before = (self.snapshots / "unselected.yaml").read_bytes()
+        result = self.run_runner("--update", "--jobs", "1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.snapshots / "unselected.yaml").read_bytes(), before)
+        self.assertEqual(companion.read_text(), "retained companion")
+        self.assertFalse(stale.exists())
+
+    def test_execution_requirements_share_one_behavior_snapshot(self) -> None:
+        self.suite.write_text(
+            PUBLIC_SUITE
+            + """
+from support.execution import Execution, executions
+from support.requirements import Requirement
+
+first = Execution("first")
+second = Execution("second")
+missing = Execution("missing", (Requirement("mode", False, "unavailable mode"),))
+
+@executions(first, missing, second)
+def test_selected(binary, execution):
+    record(binary, execution.name)
+    return [{"runner": "selected"}]
+""",
+            encoding="utf-8",
+        )
+        result = self.run_runner("--update", "--jobs", "1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.root / "first.marker").exists())
+        self.assertTrue((self.root / "second.marker").exists())
+        self.assertFalse((self.root / "missing.marker").exists())
+        self.assertIn(
+            "::selected[missing]: skipped; mode: unavailable mode", result.stdout
+        )
+        self.assertFalse(list(self.snapshots.glob("selected.*.yaml")))
+        # Updating must compare subsequent modes, never overwrite the first one.
+        self.suite.write_text(
+            self.suite.read_text().replace(
+                'return [{"runner": "selected"}]',
+                'return [{"runner": execution.name}]',
+            )
+        )
+        differing = self.run_runner("--update", "--jobs", "1")
+        self.assertNotEqual(differing.returncode, 0)
+        self.assertIn("second", differing.stderr)
+
+    def test_compacts_each_complete_session_and_preserves_differences(self) -> None:
+        handshake = [
+            {"input": {"method": "initialize"}, "result": {"protocolVersion": "test"}},
+            {"notification": {"method": "notifications/initialized"}},
+            {"input": {"method": "tools/list"}, "result": {"tools": []}},
+        ]
+        changed = [
+            *handshake[:-1],
+            {"input": {"method": "tools/list"}, "result": {"tools": ["different"]}},
+        ]
+        self.suite.write_text(
+            PUBLIC_SUITE
+            + f"""
+def test_initializes_and_lists_tools(binary):
+    return {handshake!r}
+
+def test_selected(binary):
+    return [{{"runner": "before"}}] + {handshake!r} + [{{"runner": "between"}}] + {handshake!r} + {changed!r} + {handshake[:-1]!r}
+""",
+            encoding="utf-8",
+        )
+        result = self.run_runner("--update", "--jobs", "1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        snapshot = (self.snapshots / "selected.yaml").read_text()
+        self.assertEqual(snapshot.count("!same-as"), 2, snapshot)
+        self.assertIn("different", snapshot)
+        # The differing complete session and incomplete session remain visible.
+        self.assertEqual(snapshot.count("method: initialize"), 2, snapshot)
+
+    def test_sessions_use_the_reference_for_their_execution(self) -> None:
+        self.suite.write_text(
+            PUBLIC_SUITE
+            + """
+from support.execution import Execution, executions
+from support.records import TranscriptWithCompanions
+
+sandbox = [{"input": {"method": "initialize"}, "result": "sandbox"}]
+direct = [{"input": {"method": "initialize"}, "result": "direct"}]
+bare_sandbox = [{"input": {"method": "initialize"}, "result": "bare sandbox"}]
+bare_direct = [{"input": {"method": "initialize"}, "result": "bare direct"}]
+
+def test_initializes_and_lists_tools(binary):
+    return TranscriptWithCompanions(sandbox, {
+        "direct.yaml": direct,
+        "bare.yaml": bare_sandbox,
+        "bare.direct.yaml": bare_direct,
+    })
+
+@executions(Execution("sandbox"), Execution("direct"))
+def test_selected(binary, execution):
+    handshake = sandbox if execution.name == "sandbox" else direct
+    bare = bare_sandbox if execution.name == "sandbox" else bare_direct
+    return handshake + [{"runner": "between sessions"}] + handshake + bare
+
+def test_unselected(binary):
+    return sandbox + direct
+""",
+            encoding="utf-8",
+        )
+        result = self.run_runner("--update", "--jobs", "1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        selected = (self.snapshots / "selected.yaml").read_text()
+        self.assertEqual(selected.count("!same-as"), 3, selected)
+        self.assertIn("bare MCP initialization for this execution mode", selected)
+        mixed = (self.snapshots / "unselected.yaml").read_text()
+        self.assertIn("initializes_and_lists_tools.yaml", mixed)
+        self.assertIn("initializes_and_lists_tools.direct.yaml", mixed)
+        self.suite.write_text(
+            self.suite.read_text().replace("else direct", "else sandbox")
+        )
+        differing = self.run_runner("--jobs", "1")
+        self.assertNotEqual(differing.returncode, 0)
+        self.assertIn("result: sandbox", differing.stderr)
+        self.assertIn("::selected[direct] differs", differing.stderr)
 
     @contextmanager
     def hanging_runner(
@@ -542,7 +718,7 @@ class TranscriptRunnerTests(unittest.TestCase):
             finally:
                 os.close(cleaned)
 
-    @unittest.skipUnless(sys.platform == "darwin", "requires macOS process exit events")
+    @unittest.skipUnless(PROCESS_EVENTS.available, PROCESS_EVENTS.reason)
     def test_runner_loss_retires_case_holding_the_gil(self) -> None:
         self.suite.write_text(PUBLIC_SUITE + GIL_HOLDING_SUITE, encoding="utf-8")
         (self.snapshots / "holds_gil.yaml").write_text(

@@ -13,15 +13,16 @@ from boundaries.server_relay._harness import (
     ServerRelayClient,
 )
 from support.assertions import tool_text as _tool_text
+from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.records import Transcript
 from support.suites import run_this_suite
 
 
-PLATFORMS = {"darwin"}
-
-
-def test_forwards_raw_stdout_and_stderr(binary: Path) -> Transcript:
-    client = ServerRelayClient(binary, "raw_output")
+@executions(DIRECT, SANDBOXED)
+def test_forwards_raw_stdout_and_stderr(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = ServerRelayClient(binary, "raw_output", execution=execution)
     assert _tool_text(client.send(r="42")) == (
         "stdout text 👩🏽‍💻\nstderr text\n�stdout bytes\n�stderr bytes\n"
     )
@@ -45,42 +46,62 @@ def test_forwards_raw_stdout_and_stderr(binary: Path) -> Transcript:
     return transcript
 
 
+@executions(DIRECT, SANDBOXED)
 def test_interleaved_stream_ends_prior_redraw_run(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
-    client = ServerRelayClient(binary, "interleaved_stream_redraws")
+    client = ServerRelayClient(
+        binary, "interleaved_stream_redraws", execution=execution
+    )
     assert _tool_text(client.send(r="42")) == ("stderr oldstdout final\nstderr final\n")
     return client.finish_active()
 
 
-def test_malformed_byte_completes_pending_redraw(binary: Path) -> Transcript:
-    client = ServerRelayClient(binary, "raw_malformed_redraw")
+@executions(DIRECT, SANDBOXED)
+def test_malformed_byte_completes_pending_redraw(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = ServerRelayClient(binary, "raw_malformed_redraw", execution=execution)
     assert _tool_text(client.send(r="42")) == "�\n"
     return client.finish_active()
 
 
-def test_empty_raw_close_does_not_split_console_redraw(binary: Path) -> Transcript:
-    client = ServerRelayClient(binary, "empty_raw_close_between_redraws")
+@executions(DIRECT, SANDBOXED)
+def test_empty_raw_close_does_not_split_console_redraw(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = ServerRelayClient(
+        binary, "empty_raw_close_between_redraws", execution=execution
+    )
     assert _tool_text(client.send(r="42")) == "new\n"
     return client.finish_active()
 
 
-def test_forwards_stdin(binary: Path) -> Transcript:
-    client = ServerRelayClient(binary, "stdin")
+@executions(DIRECT, SANDBOXED)
+def test_forwards_stdin(binary: Path, execution: Execution) -> Transcript:
+    client = ServerRelayClient(binary, "stdin", execution=execution)
     assert _tool_text(client.send(r="42", stdin="answer\n")) == "[done]"
     return client.finish_active()
 
 
-def test_empty_stdin_sends_no_relay_command(binary: Path) -> Transcript:
-    client = ServerRelayClient(binary, "evaluate")
+@executions(DIRECT, SANDBOXED)
+def test_empty_stdin_sends_no_relay_command(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = ServerRelayClient(binary, "evaluate", execution=execution)
     assert _tool_text(client.send(r="42", stdin="")) == "[done]"
     return client.finish_active()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_orders_cross_source_output_by_serialized_observation(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
-    client = ServerRelayClient(binary, "serialized_cross_source_order")
+    client = ServerRelayClient(
+        binary, "serialized_cross_source_order", execution=execution
+    )
     evaluation = client.client.start_send(r="42")
     checkpoint = client._wait_for(CHECKPOINT_NAME)
     try:

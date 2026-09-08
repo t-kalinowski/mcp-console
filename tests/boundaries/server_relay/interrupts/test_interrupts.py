@@ -11,8 +11,8 @@ from boundaries.server_relay._harness import (
     CONTROLLED_COMPLETION_RELEASE_NAME,
     CONTROLLED_COMPLETION_SENT_NAME,
     EVALUATING_NAME,
-    INTERRUPT_ACKNOWLEDGED_NAME,
     INTERRUPT_ACK_RELEASE_NAME,
+    INTERRUPT_ACKNOWLEDGED_NAME,
     INTERRUPT_ACTIVE_RELEASE_NAME,
     INTERRUPT_RECEIVED_NAME,
     PREPARATION_RECEIVED_NAME,
@@ -25,16 +25,18 @@ from boundaries.server_relay._harness import (
 from support.assertions import tool_text as _tool_text
 from support.checkpoints import FifoCheckpoint
 from support.client import stop_client
+from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.records import Transcript
+from support.requirements import PROCESS_EVENTS, requires
 from support.resolvers import fake_ir_environment as _fake_ir_environment
 from support.suites import run_this_suite
 
 
-PLATFORMS = {"darwin"}
-
-
-def test_interrupts_and_reports_result(binary: Path) -> Transcript:
-    client = ServerRelayClient(binary, "interrupt")
+@executions(DIRECT, SANDBOXED)
+def test_interrupts_and_reports_result(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = ServerRelayClient(binary, "interrupt", execution=execution)
     assert _tool_text(client.send(r="42", timeout_ms=0)) == (
         "\n[running; poll with an empty send]"
     )
@@ -44,10 +46,12 @@ def test_interrupts_and_reports_result(binary: Path) -> Transcript:
     return client.finish_active()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_interrupt_requirements_without_cell_is_rejected_before_signal(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
-    client = ServerRelayClient(binary, "ready")
+    client = ServerRelayClient(binary, "ready", execution=execution)
     client.start_worker()
 
     result = client.send(
@@ -72,8 +76,11 @@ def test_interrupt_requirements_without_cell_is_rejected_before_signal(
     return transcript
 
 
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS)
 def test_control_only_interrupt_targets_blocked_controlled_restart_resolver(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
@@ -92,7 +99,7 @@ def test_control_only_interrupt_targets_blocked_controlled_restart_resolver(
         environment["MCP_CONSOLE_TEST_IR_INTERRUPT_RELEASE"] = str(
             resolver_interrupt_release.path
         )
-        client = ServerRelayClient(binary, "ready", environment)
+        client = ServerRelayClient(binary, "ready", environment, execution=execution)
         client.start_worker()
         capture = (client.relay_root() / CAPTURE_NAME).open(encoding="utf-8")
         resolver_released = False
@@ -170,10 +177,14 @@ def test_control_only_interrupt_targets_blocked_controlled_restart_resolver(
     return transcript
 
 
+@executions(DIRECT, SANDBOXED)
 def test_control_only_interrupt_preserves_controlled_completion_marker(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
-    client = ServerRelayClient(binary, "controlled_completion_then_interrupt")
+    client = ServerRelayClient(
+        binary, "controlled_completion_then_interrupt", execution=execution
+    )
     result = client.send(
         control="restart",
         r="controlled cell completed before later interrupt",
@@ -221,10 +232,14 @@ def test_control_only_interrupt_preserves_controlled_completion_marker(
     return transcript
 
 
+@executions(DIRECT, SANDBOXED)
 def test_controlled_interrupt_orders_stdin_before_new_evaluation(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
-    client = ServerRelayClient(binary, "controlled_interrupt_stdin_evaluate")
+    client = ServerRelayClient(
+        binary, "controlled_interrupt_stdin_evaluate", execution=execution
+    )
     client.send(r="old evaluation", timeout_ms=0)
     assert _tool_text(client.client.transcript[-1]["result"]) == (
         "\n[running; poll with an empty send]"
@@ -264,8 +279,10 @@ def test_controlled_interrupt_orders_stdin_before_new_evaluation(
     return transcript
 
 
+@executions(DIRECT, SANDBOXED)
 def test_controlled_interrupt_orders_stdin_preparation_and_new_evaluation(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
@@ -276,6 +293,7 @@ def test_controlled_interrupt_orders_stdin_preparation_and_new_evaluation(
             binary,
             "controlled_interrupt_stdin_requirements_evaluate",
             environment,
+            execution=execution,
         )
         client.send(
             r="old evaluation before successful requirements",
@@ -327,8 +345,10 @@ def test_controlled_interrupt_orders_stdin_preparation_and_new_evaluation(
     return transcript
 
 
+@executions(DIRECT, SANDBOXED)
 def test_controlled_interrupt_stdin_precedes_failing_requirements_without_new_cell(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
@@ -339,6 +359,7 @@ def test_controlled_interrupt_stdin_precedes_failing_requirements_without_new_ce
             binary,
             "controlled_interrupt_stdin_requirement_failure",
             environment,
+            execution=execution,
         )
         client.send(
             r="old evaluation before failing requirements",
@@ -386,12 +407,13 @@ def test_controlled_interrupt_stdin_precedes_failing_requirements_without_new_ce
     return transcript
 
 
+@executions(DIRECT, SANDBOXED)
 def test_controlled_interrupt_stdin_precedes_invalid_requirements_without_new_cell(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     client = ServerRelayClient(
-        binary,
-        "controlled_interrupt_stdin_invalid_requirements",
+        binary, "controlled_interrupt_stdin_invalid_requirements", execution=execution
     )
     client.send(
         r="old evaluation before invalid requirements",
@@ -433,10 +455,14 @@ def test_controlled_interrupt_stdin_precedes_invalid_requirements_without_new_ce
     return transcript
 
 
+@executions(DIRECT, SANDBOXED)
 def test_controlled_interrupt_does_not_run_cell_while_evaluation_remains_active(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
-    client = ServerRelayClient(binary, "controlled_interrupt_still_active")
+    client = ServerRelayClient(
+        binary, "controlled_interrupt_still_active", execution=execution
+    )
     client.send(r="old evaluation", timeout_ms=0)
     assert _tool_text(client.client.transcript[-1]["result"]) == (
         "\n[running; poll with an empty send]"
@@ -488,10 +514,14 @@ def test_controlled_interrupt_does_not_run_cell_while_evaluation_remains_active(
     return transcript
 
 
+@executions(DIRECT, SANDBOXED)
 def test_control_only_interrupt_timeout_zero_returns_after_grace_then_poll_collects(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
-    client = ServerRelayClient(binary, "controlled_interrupt_still_active")
+    client = ServerRelayClient(
+        binary, "controlled_interrupt_still_active", execution=execution
+    )
     client.send(r="old evaluation", timeout_ms=0)
     assert _tool_text(client.client.transcript[-1]["result"]) == (
         "\n[running; poll with an empty send]"
@@ -533,10 +563,14 @@ def test_control_only_interrupt_timeout_zero_returns_after_grace_then_poll_colle
     return transcript
 
 
+@executions(DIRECT, SANDBOXED)
 def test_control_only_interrupt_honors_timeout_after_attachment(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
-    client = ServerRelayClient(binary, "controlled_interrupt_still_active")
+    client = ServerRelayClient(
+        binary, "controlled_interrupt_still_active", execution=execution
+    )
     client.send(r="old evaluation", timeout_ms=0)
     assert _tool_text(client.client.transcript[-1]["result"]) == (
         "\n[running; poll with an empty send]"
@@ -583,10 +617,14 @@ def test_control_only_interrupt_honors_timeout_after_attachment(
     return transcript
 
 
+@executions(DIRECT, SANDBOXED)
 def test_controlled_interrupt_does_not_wait_for_an_existing_poll(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
-    client = ServerRelayClient(binary, "controlled_interrupt_with_waiting_poll")
+    client = ServerRelayClient(
+        binary, "controlled_interrupt_with_waiting_poll", execution=execution
+    )
     client.send(r="waiter-owned evaluation", timeout_ms=0)
     assert _tool_text(client.client.transcript[-1]["result"]) == (
         "\n[running; poll with an empty send]"
@@ -669,8 +707,11 @@ def test_controlled_interrupt_does_not_wait_for_an_existing_poll(
     return transcript
 
 
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS)
 def test_cancelled_interrupt_during_live_preparation_does_not_recover_running(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
@@ -681,6 +722,7 @@ def test_cancelled_interrupt_during_live_preparation_does_not_recover_running(
             binary,
             "cancelled_interrupt_during_live_r_preparation",
             environment,
+            execution=execution,
         )
         client.start_worker()
         relay_root = client.relay_root()

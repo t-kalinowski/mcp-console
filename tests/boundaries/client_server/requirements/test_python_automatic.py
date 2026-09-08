@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import last_result_text
 from support.client import McpClient
+from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import (
     code,
     normalize_python_resolution_error,
@@ -24,16 +25,17 @@ from support.resolvers import (
 )
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
 PENDING_TEXT_BUDGET = 8 * 1024 * 1024
 
 
+@executions(DIRECT, SANDBOXED)
 def test_resolves_missing_python_import_without_replaying_cell(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     environment = os.environ.copy()
     environment.pop("RETICULATE_PYTHON", None)
-    client = McpClient(binary, ("serve",), environment)
+    client = McpClient(binary, execution.serve(), environment)
     client.initialize_and_list_tools()
 
     client.send(r="automatic_python_r_state <- 42L")
@@ -82,12 +84,14 @@ def test_resolves_missing_python_import_without_replaying_cell(
     return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_keeps_mapped_resolution_notice_atomic_at_output_limit(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     environment = os.environ.copy()
     environment.pop("RETICULATE_PYTHON", None)
-    client = McpClient(binary, ("serve",), environment)
+    client = McpClient(binary, execution.serve(), environment)
     client.initialize_and_list_tools()
 
     retained = PENDING_TEXT_BUDGET - 8
@@ -111,8 +115,10 @@ def test_keeps_mapped_resolution_notice_atomic_at_output_limit(
     return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_retries_new_meta_path_finders_after_automatic_resolution(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     module = "mcp_console_activated_finder"
     with tempfile.TemporaryDirectory() as temporary:
@@ -121,7 +127,7 @@ def test_retries_new_meta_path_finders_after_automatic_resolution(
             directory,
             substitute_requirement=(module, "pydash"),
         )
-        client = McpClient(binary, ("serve",), environment)
+        client = McpClient(binary, execution.serve(), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
@@ -194,13 +200,15 @@ def test_retries_new_meta_path_finders_after_automatic_resolution(
         return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_infers_python_distributions_for_normal_import_forms(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
         environment, record = recording_uv_environment(directory)
-        client = McpClient(binary, ("serve",), environment)
+        client = McpClient(binary, execution.serve(), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
@@ -240,8 +248,10 @@ def test_infers_python_distributions_for_normal_import_forms(
         return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_does_not_resolve_unreached_or_available_python_imports(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
@@ -256,7 +266,7 @@ def test_does_not_resolve_unreached_or_available_python_imports(
         environment, record = recording_uv_environment(directory)
         client = McpClient(
             binary,
-            ("serve",),
+            execution.serve(),
             environment,
             current_directory=directory,
         )
@@ -320,8 +330,10 @@ def test_does_not_resolve_unreached_or_available_python_imports(
         return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_does_not_resolve_missing_python_imports_from_sql(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     prefix = "mcp_console_sql_missing_"
     with tempfile.TemporaryDirectory() as temporary:
@@ -330,7 +342,7 @@ def test_does_not_resolve_missing_python_imports_from_sql(
             directory,
             fail_requirement=prefix,
         )
-        client = McpClient(binary, ("serve",), environment)
+        client = McpClient(binary, execution.serve(), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
         client.send(sql="CREATE TABLE managed_restore_value AS SELECT 42 AS answer")
@@ -457,12 +469,15 @@ def test_does_not_resolve_missing_python_imports_from_sql(
         return client.finish()
 
 
-def test_does_not_reenter_automatic_python_resolution(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_does_not_reenter_automatic_python_resolution(
+    binary: Path, execution: Execution
+) -> Transcript:
     nested = "mcp_console_nested_resolution_missing"
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
         environment, record = recording_uv_environment(directory)
-        client = McpClient(binary, ("serve",), environment)
+        client = McpClient(binary, execution.serve(), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
@@ -529,13 +544,15 @@ def test_does_not_reenter_automatic_python_resolution(binary: Path) -> Transcrip
         return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_retains_automatic_python_requirement_after_error_and_restart(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
         environment, record = recording_uv_environment(directory)
-        client = McpClient(binary, ("serve",), environment)
+        client = McpClient(binary, execution.serve(), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
@@ -564,7 +581,10 @@ def test_retains_automatic_python_requirement_after_error_and_restart(
         return client.finish()
 
 
-def test_reports_automatic_python_resolution_failure(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_reports_automatic_python_resolution_failure(
+    binary: Path, execution: Execution
+) -> Transcript:
     requirement = "scikit-learn"
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
@@ -572,7 +592,7 @@ def test_reports_automatic_python_resolution_failure(binary: Path) -> Transcript
             directory,
             fail_requirement=requirement,
         )
-        client = McpClient(binary, ("serve",), environment)
+        client = McpClient(binary, execution.serve(), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
@@ -604,8 +624,10 @@ def test_reports_automatic_python_resolution_failure(binary: Path) -> Transcript
         return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_retains_inferred_distribution_that_does_not_provide_import(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     inferred = "mcp_console_distribution_without_module"
     with tempfile.TemporaryDirectory() as temporary:
@@ -614,7 +636,7 @@ def test_retains_inferred_distribution_that_does_not_provide_import(
             directory,
             substitute_requirement=(inferred, "py-yaml12"),
         )
-        client = McpClient(binary, ("serve",), environment)
+        client = McpClient(binary, execution.serve(), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
@@ -652,13 +674,15 @@ def test_retains_inferred_distribution_that_does_not_provide_import(
         return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_explicit_python_requirements_preempt_automatic_resolution(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
         environment, record = recording_uv_environment(directory)
-        client = McpClient(binary, ("serve",), environment)
+        client = McpClient(binary, execution.serve(), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
@@ -673,8 +697,10 @@ def test_explicit_python_requirements_preempt_automatic_resolution(
         return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_requires_explicit_python_requirements_for_ambiguous_or_installed_roots(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
@@ -696,7 +722,7 @@ except ModuleNotFoundError as error:
         environment, record = recording_uv_environment(directory)
         client = McpClient(
             binary,
-            ("serve",),
+            execution.serve(),
             environment,
             current_directory=directory,
         )
@@ -747,13 +773,15 @@ except ModuleNotFoundError as error:
         return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_reports_unavailable_standard_library_module_without_resolution(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
         environment, record = recording_uv_environment(directory)
-        client = McpClient(binary, ("serve",), environment)
+        client = McpClient(binary, execution.serve(), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
@@ -779,17 +807,19 @@ def test_reports_unavailable_standard_library_module_without_resolution(
         return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_disables_automatic_resolution_for_user_selected_python(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     missing = "mcp_console_user_selected_missing"
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
-        managed_python = resolve_managed_python(binary, directory)
+        managed_python = resolve_managed_python(binary, execution, directory)
         environment, record = recording_uv_environment(directory)
         environment["RETICULATE_PYTHON"] = str(managed_python)
         environment["PYTHONNODEBUGRANGES"] = "1"
-        client = McpClient(binary, ("serve",), environment)
+        client = McpClient(binary, execution.serve(), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 

@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from support.assertions import tool_text as _tool_text
 from support.capture import read_jsonl, read_jsonl_path
 from support.client import McpClient, stop_client
+from support.execution import Execution
 from support.records import ToolResult, Transcript
 
 SCENARIO_ENV = "MCP_CONSOLE_TEST_RELAY_SCENARIO"
@@ -118,6 +119,8 @@ class ServerRelayClient:
         binary: Path,
         scenario: str,
         environment: dict[str, str] | None = None,
+        *,
+        execution: Execution,
     ) -> None:
         self._temporary = tempfile.TemporaryDirectory()
         self.root = Path(self._temporary.name)
@@ -136,8 +139,7 @@ class ServerRelayClient:
         )
         self.client = McpClient(
             binary,
-            (
-                "serve",
+            execution.serve(
                 "--worker",
                 str(binary),
                 "--relay",
@@ -212,7 +214,7 @@ class ServerRelayClient:
         return transcript
 
     def _capture_path(self) -> Path:
-        paths = list(self.root.glob(f"mcp-console-tmp-*/{CAPTURE_NAME}"))
+        paths = list(self.root.rglob(CAPTURE_NAME))
         assert len(paths) == 1, paths
         return paths[0]
 
@@ -222,7 +224,7 @@ class ServerRelayClient:
     def _wait_for(self, name: str) -> Path:
         deadline = time.monotonic() + 10
         while True:
-            paths = list(self.root.glob(f"mcp-console-tmp-*/{name}"))
+            paths = list(self.root.rglob(name))
             assert len(paths) <= 1, paths
             if paths:
                 return paths[0]

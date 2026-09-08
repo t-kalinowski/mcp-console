@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from support.client import McpClient
+from support.execution import Execution
 
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
@@ -107,7 +108,9 @@ def reference_plots(
 
 
 @contextmanager
-def r_input_handler_client(binary: Path) -> Iterator[tuple[McpClient, Path]]:
+def r_input_handler_client(
+    binary: Path, execution: Execution
+) -> Iterator[tuple[McpClient, Path]]:
     with tempfile.TemporaryDirectory() as temporary_directory:
         directory = Path(temporary_directory)
         environment, rscript = r_test_environment()
@@ -115,7 +118,7 @@ def r_input_handler_client(binary: Path) -> Iterator[tuple[McpClient, Path]]:
         build_r_input_handler(directory, environment, rscript)
         with McpClient(
             binary,
-            ("serve",),
+            execution.serve(),
             environment=environment,
             current_directory=directory,
         ) as client:

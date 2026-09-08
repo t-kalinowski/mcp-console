@@ -11,12 +11,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.client import McpClient, stop_client
+from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.r import r_test_environment
 from support.records import Transcript, TranscriptWithCompanions
+from support.requirements import PROCESS_EVENTS, requires
 from support.resolvers import record_resolved_r_library
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
 PNG_1X1 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42Y"
     "AAAAASUVORK5CYII="
@@ -25,7 +26,10 @@ PNG_1X1 = (
 from boundaries.client_server._harness import wait_for_marker
 
 
-def test_materializes_records_only_for_console_use(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_materializes_records_only_for_console_use(
+    binary: Path, execution: Execution
+) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
@@ -33,7 +37,7 @@ def test_materializes_records_only_for_console_use(binary: Path) -> Transcript:
         unused_workspace.mkdir()
         client = McpClient(
             binary,
-            ("serve", "--worker", str(zod)),
+            execution.serve("--worker", str(zod)),
             {**os.environ, "TMPDIR": str(unused_workspace)},
             current_directory=unused_workspace,
         )
@@ -57,7 +61,7 @@ def test_materializes_records_only_for_console_use(binary: Path) -> Transcript:
         workspace.mkdir()
         client = McpClient(
             binary,
-            ("serve", "--worker", str(zod)),
+            execution.serve("--worker", str(zod)),
             current_directory=workspace,
         )
         client.initialize_and_list_tools()
@@ -91,8 +95,10 @@ def test_materializes_records_only_for_console_use(binary: Path) -> Transcript:
         return transcript
 
 
+@executions(DIRECT, SANDBOXED)
 def test_continues_without_record_when_record_cannot_be_created(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
@@ -100,7 +106,7 @@ def test_continues_without_record_when_record_cannot_be_created(
         (workspace / ".mcp-console").write_text("occupied", encoding="utf-8")
         client = McpClient(
             binary,
-            ("serve", "--worker", str(zod)),
+            execution.serve("--worker", str(zod)),
             current_directory=workspace,
         )
         client.initialize_and_list_tools()
@@ -131,13 +137,16 @@ def test_continues_without_record_when_record_cannot_be_created(
         return transcript
 
 
-def test_updates_quarto_without_rereading_journal(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_updates_quarto_without_rereading_journal(
+    binary: Path, execution: Execution
+) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         workspace = Path(temporary_directory)
         client = McpClient(
             binary,
-            ("serve", "--worker", str(zod)),
+            execution.serve("--worker", str(zod)),
             current_directory=workspace,
         )
         finished = False
@@ -177,7 +186,10 @@ def test_updates_quarto_without_rereading_journal(binary: Path) -> Transcript:
                 stop_client(client)
 
 
-def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanions:
+@executions(DIRECT, SANDBOXED)
+def test_records_tool_calls_and_images(
+    binary: Path, execution: Execution
+) -> TranscriptWithCompanions:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         workspace = Path(temporary_directory)
@@ -186,7 +198,7 @@ def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanions
         record_resolved_r_library(environment, workspace)
         client = McpClient(
             binary,
-            ("serve", "--worker", str(zod)),
+            execution.serve("--worker", str(zod)),
             environment,
             current_directory=workspace,
             umask=0,
@@ -386,13 +398,16 @@ def test_records_tool_calls_and_images(binary: Path) -> TranscriptWithCompanions
         )
 
 
-def test_disables_recording_after_transcript_failure(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_disables_recording_after_transcript_failure(
+    binary: Path, execution: Execution
+) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         workspace = Path(temporary_directory)
         client = McpClient(
             binary,
-            ("serve", "--worker", str(zod)),
+            execution.serve("--worker", str(zod)),
             current_directory=workspace,
         )
         client.initialize_and_list_tools()
@@ -447,7 +462,11 @@ def test_disables_recording_after_transcript_failure(binary: Path) -> Transcript
         return transcript
 
 
-def test_flushes_calls_and_keeps_unpolled_images(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS)
+def test_flushes_calls_and_keeps_unpolled_images(
+    binary: Path, execution: Execution
+) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
@@ -457,7 +476,7 @@ def test_flushes_calls_and_keeps_unpolled_images(binary: Path) -> Transcript:
         environment["TMPDIR"] = temporary_directory
         client = McpClient(
             binary,
-            ("serve", "--worker", str(zod)),
+            execution.serve("--worker", str(zod)),
             environment,
             current_directory=workspace,
         )

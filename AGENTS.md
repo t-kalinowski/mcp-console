@@ -47,6 +47,11 @@ A missing or failing formatter does not prevent the remaining formatters from ru
 
 ### Boundary snapshots
 
+Cases run by default; declare capability requirements beside affected cases with `@requires(...)` from `tests/support/requirements.py`.
+Keep platform availability in test support.
+Use `@executions(DIRECT, SANDBOXED)` and `execution.serve(...)` to reuse ordinary cases across applicable execution modes with a shared snapshot.
+Sandbox contracts use explicit sandbox fixtures and requirements.
+
 Never hand-edit files under `tests/snapshots/`.
 They may change only through `scripts/test --update ...` or Yamark via `scripts/format`.
 If regeneration produces an incorrect snapshot, fix the code or serializer and regenerate it.
@@ -116,12 +121,13 @@ Keep these invariants intact:
 
 ### Tests and development scripts
 
-- `tests/support/` — shared transcript records, snapshots, normalization, checkpoints, capture, process, macOS, assertion, R, resolver, client, and direct-suite helpers.
+- `tests/support/` — shared capability requirements, explicit execution fixtures, transcript records, snapshots, normalization, checkpoints, capture, process, macOS, assertion, R, resolver, client, and direct-suite helpers.
 - `tests/fixtures/` — deterministic workers, resolvers, package fixtures, searchable native interposers, and boundary-specific relay and worker programs.
 - `tests/boundaries/client_server/` — public MCP client-server behavior.
 - `tests/boundaries/server_relay/` — private server-relay wire behavior.
 - `tests/boundaries/relay_worker/` — worker sideband and standard-stream behavior through the relay.
 - `tests/boundaries/cli/` — direct CLI behavior.
+- `tests/boundaries/*/sandbox/` — sandbox-specific contracts within their owning boundary; ordinary cases remain under their runtime, protocol, or lifecycle subject.
 - `tests/boundaries/*/_harness.py` — boundary-specific process launch and capture mechanics.
 - `tests/boundaries/_run.py`, `tests/transcript_runner.py` — recursive transcript discovery, selection, location, snapshot checking, progress reporting, and runner regressions.
 - `tests/architecture.py` — sandbox dependency-direction checks and their command-line regressions.

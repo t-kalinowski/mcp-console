@@ -7,18 +7,19 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.client import McpClient
+from support.execution import SANDBOXED
 from support.records import Transcript
+from support.requirements import NO_WORKER, requires
 from support.suites import run_this_suite
 
-PLATFORMS = {"linux"}
 
-
+@requires(NO_WORKER)
 def test_keeps_the_public_interface_without_starting_workers(
     binary: Path,
 ) -> Transcript:
     environment = os.environ.copy()
     environment.pop("MCP_CONSOLE_LANGUAGES", None)
-    client = McpClient(binary, ("serve",), environment)
+    client = McpClient(binary, SANDBOXED.serve(), environment)
     assert client.temporary_directory is not None
     workspace = Path(client.temporary_directory.name)
     client.initialize_and_list_tools()

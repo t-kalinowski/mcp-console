@@ -13,23 +13,23 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from boundaries.client_server.lifecycle._fixtures import build_interposer
 from support.assertions import last_tool_text
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
+from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.macos import build_interposer
 from support.normalization import code
 from support.r import r_test_environment
 from support.records import Transcript
+from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, requires
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
-REQUIRED_COMMANDS = {"ir", "uv"}
 RUNNING = "\n[running; poll with an empty send]"
 
 
 @contextmanager
 def before_resolver_spawn(
-    binary: Path, ordinal: int
+    binary: Path, execution: Execution, ordinal: int
 ) -> Iterator[tuple[McpClient, FifoCheckpoint, FifoCheckpoint, Path]]:
     # fmt: python
     server = code("""
@@ -73,7 +73,7 @@ def before_resolver_spawn(
         client = resources.enter_context(
             McpClient(
                 Path(sys.executable),
-                ("-c", server, str(binary), "serve"),
+                ("-c", server, str(binary), *execution.serve()),
                 environment,
                 response_timeout=5,
             )
@@ -88,8 +88,17 @@ def before_resolver_spawn(
             release.release()
 
 
-def test_interrupts_first_cell_before_resolver_registration(binary: Path) -> Transcript:
-    with before_resolver_spawn(binary, 1) as (client, started, release, root):
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS, NATIVE_FIXTURES)
+def test_interrupts_first_cell_before_resolver_registration(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with before_resolver_spawn(binary, execution, 1) as (
+        client,
+        started,
+        release,
+        root,
+    ):
         client.send(r="startup_cell_ran <- TRUE", timeout_ms=0)
         assert last_tool_text(client) == RUNNING
         started.wait("first resolver has not been spawned")
@@ -106,8 +115,17 @@ def test_interrupts_first_cell_before_resolver_registration(binary: Path) -> Tra
         return client.finish()
 
 
-def test_interrupts_first_cell_between_resolver_phases(binary: Path) -> Transcript:
-    with before_resolver_spawn(binary, 2) as (client, started, release, root):
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS, NATIVE_FIXTURES)
+def test_interrupts_first_cell_between_resolver_phases(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with before_resolver_spawn(binary, execution, 2) as (
+        client,
+        started,
+        release,
+        root,
+    ):
         client.send(r="startup_cell_ran <- TRUE", timeout_ms=0)
         assert last_tool_text(client) == RUNNING
         started.wait("default preparation has not been spawned")
@@ -128,10 +146,18 @@ def test_interrupts_first_cell_between_resolver_phases(binary: Path) -> Transcri
         return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS, NATIVE_FIXTURES)
 def test_interrupts_first_cell_admitted_during_stdin_startup(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
-    with before_resolver_spawn(binary, 1) as (client, started, release, root):
+    with before_resolver_spawn(binary, execution, 1) as (
+        client,
+        started,
+        release,
+        root,
+    ):
         stdin = client.start_send(stdin="old input\n", timeout_ms=0)
         started.wait("stdin startup has not spawned its first resolver")
         assert not (root / "resolver.jsonl").exists()

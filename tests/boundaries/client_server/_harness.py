@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from support.assertions import last_result_text
 from support.checkpoints import release_fixture_checkpoint
 from support.client import McpClient, TextReader
+from support.execution import SANDBOXED, Execution
 from support.processes import (
     process_group_exists,
     stop_process_group,
@@ -628,10 +629,11 @@ def wait_for_stopped_worker(
     previous_process_ids: set[int],
     recorded_workers: list[tuple[int, int]],
     client: McpClient,
+    execution: Execution,
 ) -> tuple[Path, int, int]:
     deadline = time.monotonic() + FIXTURE_CHECKPOINT_TIMEOUT_SECONDS
     while True:
-        for marker in root.glob("mcp-console-tmp-*/zod-stop-continue-worker"):
+        for marker in root.rglob("zod-stop-continue-worker"):
             try:
                 contents = marker.read_text(encoding="utf-8")
             except FileNotFoundError:
@@ -647,15 +649,17 @@ def wait_for_stopped_worker(
             worker = (process_id, process_group)
             if worker not in recorded_workers:
                 recorded_workers.append(worker)
-            assert parent_id == process_group, (
-                "stopped worker is not the relay's direct child"
-            )
-            assert process_id != process_group, (
-                "stopped worker unexpectedly leads the relay process group"
-            )
-            assert process_group != os.getpgrp(), (
-                "stopped worker shares the test process group"
-            )
+            if execution == SANDBOXED:
+                assert parent_id == process_group, (
+                    "stopped worker is not the relay's direct child"
+                )
+                assert process_id != process_group
+                assert process_group != os.getpgrp()
+            else:
+                parent = read_process_status(parent_id)
+                assert parent is not None and parent[0] == client.process.pid, (
+                    "stopped worker is not the server relay's direct child"
+                )
             status = read_process_status(process_id)
             if status is not None and status[2].startswith("T"):
                 assert status[:2] == (parent_id, process_group), (
@@ -739,23 +743,24 @@ def wait_for_worker_retirement(
     process_id: int,
     process_group: int,
     client: McpClient,
+    execution: Execution,
 ) -> None:
     deadline = time.monotonic() + FIXTURE_CHECKPOINT_TIMEOUT_SECONDS
-    while read_process_status(process_id) is not None or process_group_exists(
-        process_group
+    while read_process_status(process_id) is not None or (
+        execution == SANDBOXED and process_group_exists(process_group)
     ):
         assert client.process.poll() is None, (
             "mcp-console stopped while retiring the old worker generation"
         )
-        assert time.monotonic() < deadline, (
-            "restart did not retire the old worker and relay process group"
-        )
+        assert time.monotonic() < deadline, "restart did not retire the old worker"
         time.sleep(0.01)
 
 
-def stop_recorded_worker(process_id: int, process_group: int) -> None:
-    assert process_group != os.getpgrp(), "refusing to stop the test process group"
-    stop_process_group(process_group)
+def stop_recorded_worker(
+    process_id: int, process_group: int, execution: Execution
+) -> None:
+    if execution == SANDBOXED:
+        stop_process_group(process_group)
     status = read_process_status(process_id)
     if status is not None and status[1] == process_group:
         stop_process_id(process_id)

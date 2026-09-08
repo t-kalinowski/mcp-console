@@ -7,25 +7,25 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.assertions import last_tool_text
-from support.client import McpClient
-from support.processes import stop_process
-from support.records import Transcript
-from support.suites import run_this_suite
-
-PLATFORMS = {"darwin"}
-
 from boundaries.client_server._harness import (
     submit_prompted_stdin,
     wait_for_marker,
 )
+from support.assertions import last_tool_text
+from support.client import McpClient
+from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.processes import stop_process
+from support.records import Transcript
+from support.requirements import PROCESS_EVENTS, requires
+from support.suites import run_this_suite
 
 
-def test_accepts_idle_stdin(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_accepts_idle_stdin(binary: Path, execution: Execution) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     client = McpClient(
         binary,
-        ("serve", "--worker", str(zod)),
+        execution.serve("--worker", str(zod)),
     )
     client.initialize_and_list_tools()
 
@@ -41,7 +41,11 @@ def test_accepts_idle_stdin(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_idle_stdin_startup_blocks_preparation(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS)
+def test_idle_stdin_startup_blocks_preparation(
+    binary: Path, execution: Execution
+) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
@@ -54,7 +58,7 @@ def test_idle_stdin_startup_blocks_preparation(binary: Path) -> Transcript:
         environment["ZOD_STARTUP_RELEASE"] = str(startup_release)
         client = McpClient(
             binary,
-            ("serve", "--worker", str(zod)),
+            execution.serve("--worker", str(zod)),
             environment,
         )
         passed = False
@@ -99,7 +103,11 @@ def test_idle_stdin_startup_blocks_preparation(binary: Path) -> Transcript:
                 stop_process(client.process)
 
 
-def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS)
+def test_routes_combined_and_followup_stdin(
+    binary: Path, execution: Execution
+) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
@@ -107,7 +115,7 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
         environment["TMPDIR"] = temporary_directory
         client = McpClient(
             binary,
-            ("serve", "--worker", str(zod)),
+            execution.serve("--worker", str(zod)),
             environment,
         )
         client.initialize_and_list_tools()
@@ -164,11 +172,14 @@ def test_routes_combined_and_followup_stdin(binary: Path) -> Transcript:
         return client.finish()
 
 
-def test_routes_same_call_stdin_to_direct_fd0(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_routes_same_call_stdin_to_direct_fd0(
+    binary: Path, execution: Execution
+) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     client = McpClient(
         binary,
-        ("serve", "--worker", str(zod)),
+        execution.serve("--worker", str(zod)),
     )
     client.initialize_and_list_tools()
 
@@ -177,7 +188,11 @@ def test_routes_same_call_stdin_to_direct_fd0(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_preserves_unexposed_input_output(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS)
+def test_preserves_unexposed_input_output(
+    binary: Path, execution: Execution
+) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
@@ -185,7 +200,7 @@ def test_preserves_unexposed_input_output(binary: Path) -> Transcript:
         environment["TMPDIR"] = temporary_directory
         client = McpClient(
             binary,
-            ("serve", "--worker", str(zod)),
+            execution.serve("--worker", str(zod)),
             environment,
         )
         client.initialize_and_list_tools()

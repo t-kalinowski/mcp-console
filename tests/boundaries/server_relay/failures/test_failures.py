@@ -7,19 +7,18 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from boundaries.server_relay._harness import ServerRelayClient
+from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.records import Transcript
 from support.suites import run_this_suite
 
 
-PLATFORMS = {"darwin"}
-
-
 def _reports_worker_outcome(
     binary: Path,
+    execution: Execution,
     scenario: str,
     diagnostic: str,
 ) -> tuple[Transcript, str]:
-    client = ServerRelayClient(binary, scenario)
+    client = ServerRelayClient(binary, scenario, execution=execution)
     failed = client.client.start_send(r="42")
     transcript = client.release_failure(failed, diagnostic)
     result = failed["result"]
@@ -35,8 +34,9 @@ def _reports_worker_outcome(
     return transcript, output
 
 
-def test_reports_fatal_failure(binary: Path) -> Transcript:
-    client = ServerRelayClient(binary, "fatal")
+@executions(DIRECT, SANDBOXED)
+def test_reports_fatal_failure(binary: Path, execution: Execution) -> Transcript:
+    client = ServerRelayClient(binary, "fatal", execution=execution)
     failed = client.client.start_send(r="42")
     transcript = client.release_failure(failed, "scripted relay failure")
     output = failed["result"]["content"][0]["text"]
@@ -48,18 +48,9 @@ def test_reports_fatal_failure(binary: Path) -> Transcript:
     return transcript
 
 
-def test_rejects_unsolicited_status_137_after_fatal(binary: Path) -> Transcript:
-    client = ServerRelayClient(binary, "fatal_status_137")
-    failed = client.client.start_send(r="42")
-    transcript = client.release_terminal_failure(failed, "scripted relay failure")
-    output = failed["result"]["content"][0]["text"]
-    assert "worker launcher exited with status 137" in output, output
-    assert "[starting new worker]" not in output, output
-    return transcript
-
-
-def test_rejects_truncated_output(binary: Path) -> Transcript:
-    client = ServerRelayClient(binary, "truncated")
+@executions(DIRECT, SANDBOXED)
+def test_rejects_truncated_output(binary: Path, execution: Execution) -> Transcript:
+    client = ServerRelayClient(binary, "truncated", execution=execution)
     failed = client.client.start_send(r="42")
     transcript = client.release_failure(
         failed,
@@ -71,9 +62,13 @@ def test_rejects_truncated_output(binary: Path) -> Transcript:
     return transcript
 
 
-def test_reports_unexpected_worker_exit_zero(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_reports_unexpected_worker_exit_zero(
+    binary: Path, execution: Execution
+) -> Transcript:
     transcript, _ = _reports_worker_outcome(
         binary,
+        execution,
         "exit_zero",
         "[worker exited with status 0]",
     )
@@ -81,11 +76,14 @@ def test_reports_unexpected_worker_exit_zero(binary: Path) -> Transcript:
     return transcript
 
 
+@executions(DIRECT, SANDBOXED)
 def test_reports_unexpected_worker_exit_nonzero_and_drains_output(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     transcript, output = _reports_worker_outcome(
         binary,
+        execution,
         "exit_nonzero",
         "[worker exited with status 33]",
     )
@@ -105,9 +103,13 @@ def test_reports_unexpected_worker_exit_nonzero_and_drains_output(
     return transcript
 
 
-def test_reports_unexpected_worker_signal(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_reports_unexpected_worker_signal(
+    binary: Path, execution: Execution
+) -> Transcript:
     transcript, _ = _reports_worker_outcome(
         binary,
+        execution,
         "signaled",
         "[worker terminated by signal 15]",
     )

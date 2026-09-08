@@ -1,7 +1,7 @@
-#!/usr/bin/env -S UV_CACHE_DIR=${TMPDIR}/uv-cache uv run --script
-# /// script
-# requires-python = ">=3.11"
-# ///
+#!/bin/sh
+""":"
+exec "${MCP_CONSOLE_TEST_PYTHON:?}" "$0" "$@"
+":"""
 
 import array
 import fcntl
@@ -349,6 +349,8 @@ def main() -> None:
         publish_marker(temporary / "zod-sigint-received")
 
     signal.signal(signal.SIGINT, handle_sigint)
+    if os.environ.get("ZOD_REPORT_PID") == "1":
+        publish_marker(temporary / "zod-worker-pid", str(os.getpid()))
     if os.environ.get("ZOD_REPORT_PROCESS_GROUP") == "1":
         publish_marker(
             temporary / "zod-process-group",
@@ -613,9 +615,10 @@ def main() -> None:
 
         if source == "stall with stopped relay":
             relay_pid = os.getpgrp()
-            launcher_pid = os.getppid()
-            assert relay_pid != launcher_pid
-            assert os.getpgid(launcher_pid) == relay_pid
+            worker_pid = os.getpid()
+            assert os.getppid() == relay_pid
+            assert relay_pid != worker_pid
+            assert os.getpgid(worker_pid) == relay_pid
             helper = os.fork()
             if helper == 0:
                 os.setsid()
@@ -628,7 +631,7 @@ def main() -> None:
                 )
                 publish_marker(
                     temporary / "zod-relay-stop-target",
-                    f"{relay_pid} {launcher_pid}",
+                    f"{relay_pid} {worker_pid}",
                 )
                 os.kill(relay_pid, signal.SIGSTOP)
                 while True:
@@ -711,15 +714,13 @@ def main() -> None:
             with release.open("rb", buffering=0) as checkpoint:
                 assert checkpoint.read(1) == b"1"
             worker_pid = os.getpid()
-            launcher_pid = os.getppid()
             relay_pid = os.getpgrp()
-            assert len({worker_pid, launcher_pid, relay_pid}) == 3
-            assert os.getpgid(launcher_pid) == relay_pid
+            assert worker_pid != relay_pid
+            assert os.getppid() == relay_pid
             send_output(
                 writer,
                 (
                     f"zod worker pid: {worker_pid}; "
-                    f"launcher pid: {launcher_pid}; "
                     f"relay process group: {relay_pid}\n"
                 ),
             )

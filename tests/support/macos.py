@@ -8,7 +8,6 @@ import time
 from pathlib import Path
 from typing import Sequence
 
-
 DarwinProcessIdentity = tuple[int, int, int]
 
 
@@ -319,3 +318,25 @@ def wait_for_darwin_startup_release(
             f"{description} did not block at its private startup gate"
         )
         time.sleep(0.01)
+
+
+def build_interposer(directory: Path, name: str) -> Path:
+    source = Path(__file__).resolve().parents[1] / "fixtures" / "native" / f"{name}.c"
+    library = directory / f"{name.replace('_', '-')}.dylib"
+    subprocess.run(
+        [
+            "cc",
+            "-dynamiclib",
+            "-std=c11",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-o",
+            library,
+            source,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return library

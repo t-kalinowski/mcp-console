@@ -9,8 +9,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from boundaries.server_relay._harness import (
     CAPTURE_NAME,
-    RESTART_REQUIREMENTS_CHECKED_NAME,
     RESTART_REQUIREMENTS_CHECK_NAME,
+    RESTART_REQUIREMENTS_CHECKED_NAME,
     RESTART_REQUIREMENTS_EVALUATION_RECEIVED_NAME,
     RESTART_REQUIREMENTS_EVALUATION_RELEASE_NAME,
     RESTART_REQUIREMENTS_RESOLVED_NAME,
@@ -21,18 +21,18 @@ from boundaries.server_relay._harness import (
 from support.assertions import tool_text as _tool_text
 from support.checkpoints import FifoCheckpoint
 from support.client import stop_client
+from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.records import Transcript
 from support.resolvers import fake_ir_environment as _fake_ir_environment
 from support.suites import run_this_suite
 
 
-PLATFORMS = {"darwin"}
-
-
+@executions(DIRECT, SANDBOXED)
 def test_controlled_restart_routes_stdin_and_cell_to_replacement(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
-    client = ServerRelayClient(binary, "controlled_restart_stdin")
+    client = ServerRelayClient(binary, "controlled_restart_stdin", execution=execution)
     finished = False
     old_capture = None
     try:
@@ -88,8 +88,10 @@ def test_controlled_restart_routes_stdin_and_cell_to_replacement(
     return old_transcript + replacement_transcript
 
 
+@executions(DIRECT, SANDBOXED)
 def test_controlled_restart_with_requirements_and_stdin_only_reports_replacement_idle(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
@@ -97,9 +99,7 @@ def test_controlled_restart_with_requirements_and_stdin_only_reports_replacement
         library.mkdir()
         environment = _fake_ir_environment(root, [library])
         client = ServerRelayClient(
-            binary,
-            "controlled_restart_stdin_only",
-            environment,
+            binary, "controlled_restart_stdin_only", environment, execution=execution
         )
         result = client.send(
             control="restart",
@@ -115,8 +115,10 @@ def test_controlled_restart_with_requirements_and_stdin_only_reports_replacement
     return transcript
 
 
+@executions(DIRECT, SANDBOXED)
 def test_controlled_restart_resolves_requirements_before_replacement_and_timeout(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
@@ -136,9 +138,7 @@ def test_controlled_restart_resolves_requirements_before_replacement_and_timeout
             resolver_finish_release.path
         )
         client = ServerRelayClient(
-            binary,
-            "controlled_restart_requirements",
-            environment,
+            binary, "controlled_restart_requirements", environment, execution=execution
         )
         client.start_worker()
         old_root = client.relay_root()
@@ -273,8 +273,10 @@ def test_controlled_restart_resolves_requirements_before_replacement_and_timeout
     return old_transcript + replacement_transcript
 
 
+@executions(DIRECT, SANDBOXED)
 def test_controlled_restart_requirement_failure_preserves_old_worker(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
@@ -284,7 +286,7 @@ def test_controlled_restart_requirement_failure_preserves_old_worker(
         environment["MCP_CONSOLE_TEST_IR_FAILURE"] = (
             "synthetic controlled restart requirement failure"
         )
-        client = ServerRelayClient(binary, "ready", environment)
+        client = ServerRelayClient(binary, "ready", environment, execution=execution)
         client.start_worker()
         old_capture = (client.relay_root() / CAPTURE_NAME).open(encoding="utf-8")
         finished = False

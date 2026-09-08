@@ -9,15 +9,16 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.client import McpClient
+from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.r import r_test_environment
 from support.records import Transcript
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
 
-
+@executions(DIRECT, SANDBOXED)
 def test_probes_ambient_reticulate_before_first_use_bootstrap(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     environment, rscript = r_test_environment()
     fixture = Path(__file__).resolve().parents[3] / "fixtures" / "ambient_reticulate"
@@ -48,7 +49,7 @@ def test_probes_ambient_reticulate_before_first_use_bootstrap(
         environment.pop("RETICULATE_PYTHON", None)
 
         with McpClient(
-            binary, ("serve",), environment, current_directory=temporary
+            binary, execution.serve(), environment, current_directory=temporary
         ) as client:
             client.initialize_and_list_tools()
             tools = client.transcript[-1]["result"]["tools"]
@@ -68,6 +69,7 @@ def test_probes_ambient_reticulate_before_first_use_bootstrap(
 
             listed_again = client.request("tools/list")
             assert listed_again["result"]["tools"] == tools, listed_again
+            listed_again["result"]["tools"] = "<unchanged from initialization>"
             return client.finish()
 
 

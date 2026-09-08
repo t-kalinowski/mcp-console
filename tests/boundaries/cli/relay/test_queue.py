@@ -19,9 +19,9 @@ from boundaries.cli.relay.test_backpressure import send, stdout_backpressure_env
 from support.capture import read_lines
 from support.checkpoints import FifoCheckpoint
 from support.records import Transcript
+from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, WORKER, requires
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
 MEBIBYTE = 1024 * 1024
 READY = b'{"kind":"ready"}\n'
 
@@ -162,6 +162,7 @@ def interrupt_and_shutdown(relay: QueuedRelay, first_size: int) -> Transcript:
     ]
 
 
+@requires(WORKER, NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_backpressures_worker_when_relay_event_bytes_are_full(
     binary: Path,
 ) -> Transcript:
@@ -171,6 +172,7 @@ def test_backpressures_worker_when_relay_event_bytes_are_full(
         return interrupt_and_shutdown(relay, MEBIBYTE)
 
 
+@requires(WORKER, NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_backpressures_worker_when_relay_event_count_is_full(
     binary: Path,
 ) -> Transcript:
@@ -180,6 +182,7 @@ def test_backpressures_worker_when_relay_event_count_is_full(
         return interrupt_and_shutdown(relay, MEBIBYTE)
 
 
+@requires(WORKER, NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_preserves_oversized_frames_when_relay_output_resumes(
     binary: Path,
 ) -> Transcript:

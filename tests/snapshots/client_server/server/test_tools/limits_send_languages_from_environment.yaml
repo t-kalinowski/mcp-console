@@ -48,10 +48,10 @@ result:
         ordering.
 
 
-        Evaluated code can read host files, cannot directly access the network,
-        and can write only in the worker's private temporary directory.
-        Dependency resolution, when available, runs outside the sandbox and may
-        execute installation or build code; use only trusted dependencies.
+        Evaluated code runs without a sandbox, with the server's permissions,
+        including filesystem and network access. Dependency resolution, when
+        available, may execute installation or build code; use only trusted
+        dependencies.
       inputSchema:
         $schema: https://json-schema.org/draft/2020-12/schema
         additionalProperties: false

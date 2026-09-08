@@ -19,10 +19,10 @@ from boundaries.server_relay._harness import (
     PREPARATION_RECEIVED_NAME,
     PREPARATION_RESULT_RELEASE_NAME,
     PREPARATION_RESULT_SENT_NAME,
-    RELEASE_NAME,
-    RETIREMENT_RELEASE_NAME,
     R_PREPARATION_RESOLVE_CHECKPOINT_NAME,
     R_PREPARATION_RESOLVE_RELEASE_NAME,
+    RELEASE_NAME,
+    RETIREMENT_RELEASE_NAME,
     SHUTDOWN_RECEIVED_NAME,
     STDIN_FAILURE_RELEASED_NAME,
     ServerRelayClient,
@@ -33,16 +33,17 @@ from boundaries.server_relay._harness import (
 from support.assertions import tool_text as _tool_text
 from support.checkpoints import FifoCheckpoint
 from support.client import stop_client
+from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.records import Transcript
+from support.requirements import POSIX, requires
 from support.resolvers import fake_ir_environment as _fake_ir_environment
 from support.suites import run_this_suite
 
 
-PLATFORMS = {"darwin"}
-
-
+@executions(DIRECT, SANDBOXED)
 def test_prepares_initial_requirements_before_stdin_and_skips_retained_resolution(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
@@ -53,6 +54,7 @@ def test_prepares_initial_requirements_before_stdin_and_skips_retained_resolutio
             binary,
             "initial_requirements_stdin_idempotent",
             environment,
+            execution=execution,
         )
 
         assert (
@@ -90,8 +92,10 @@ def test_prepares_initial_requirements_before_stdin_and_skips_retained_resolutio
     return transcript
 
 
+@executions(DIRECT, SANDBOXED)
 def test_send_timeout_starts_after_blocked_requirements_resolver(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
@@ -106,6 +110,7 @@ def test_send_timeout_starts_after_blocked_requirements_resolver(
             binary,
             "live_r_requirements_then_evaluate",
             environment,
+            execution=execution,
         )
         client.start_worker()
         finished = False
@@ -162,10 +167,13 @@ def test_send_timeout_starts_after_blocked_requirements_resolver(
     return transcript
 
 
+@executions(DIRECT, SANDBOXED)
+@requires(POSIX)
 def test_stdin_forwarding_failure_does_not_execute_cell(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
-    client = ServerRelayClient(binary, "stdin_forwarding_failure")
+    client = ServerRelayClient(binary, "stdin_forwarding_failure", execution=execution)
     client.start_worker()
     relay_root = client.relay_root()
     capture_path = relay_root / CAPTURE_NAME
@@ -199,7 +207,7 @@ def test_stdin_forwarding_failure_does_not_execute_cell(
             )
 
             assert _tool_text(client.send(r="42")) == "[done]"
-            captures = list(client.root.glob(f"mcp-console-tmp-*/{CAPTURE_NAME}"))
+            captures = list(client.root.rglob(CAPTURE_NAME))
             assert len(captures) == 1 and captures[0] != capture_path, (
                 capture_path,
                 captures,
@@ -217,8 +225,10 @@ def test_stdin_forwarding_failure_does_not_execute_cell(
             client._temporary.cleanup()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_restart_consumes_late_r_preparation_retirement_events(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
@@ -227,9 +237,7 @@ def test_restart_consumes_late_r_preparation_retirement_events(
             library.mkdir()
         environment = _fake_ir_environment(root, libraries)
         client = ServerRelayClient(
-            binary,
-            "late_r_prepared_retirement",
-            environment,
+            binary, "late_r_prepared_retirement", environment, execution=execution
         )
         client.start_worker()
         old_root = client.relay_root()
@@ -329,8 +337,10 @@ def test_restart_consumes_late_r_preparation_retirement_events(
     return transcript
 
 
+@executions(DIRECT, SANDBOXED)
 def test_restart_discards_pre_marker_r_preparation_result(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
@@ -358,6 +368,7 @@ def test_restart_discards_pre_marker_r_preparation_result(
             binary,
             "pre_marker_r_prepared_replacement",
             environment,
+            execution=execution,
         )
         client.start_worker()
         old_root = client.relay_root()
@@ -473,8 +484,10 @@ def test_restart_discards_pre_marker_r_preparation_result(
     return transcript
 
 
+@executions(DIRECT, SANDBOXED)
 def test_r_preparation_failure_requires_restart_and_preserves_worker(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
@@ -482,9 +495,7 @@ def test_r_preparation_failure_requires_restart_and_preserves_worker(
         library.mkdir()
         environment = _fake_ir_environment(root, [library])
         client = ServerRelayClient(
-            binary,
-            "r_preparation_failure",
-            environment,
+            binary, "r_preparation_failure", environment, execution=execution
         )
         client.start_worker()
 
@@ -539,8 +550,10 @@ def test_r_preparation_failure_requires_restart_and_preserves_worker(
     return transcript
 
 
+@executions(DIRECT, SANDBOXED)
 def test_rejects_runtime_r_resolution_during_r_preparation(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
@@ -552,6 +565,7 @@ def test_rejects_runtime_r_resolution_during_r_preparation(
             binary,
             "r_resolution_during_r_preparation",
             environment,
+            execution=execution,
         )
         client.start_worker()
         old_root = client.relay_root()
@@ -610,8 +624,10 @@ def test_rejects_runtime_r_resolution_during_r_preparation(
     return transcript
 
 
+@executions(DIRECT, SANDBOXED)
 def test_idle_runtime_r_resolution_owns_environment_until_activation(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
@@ -627,6 +643,7 @@ def test_idle_runtime_r_resolution_owns_environment_until_activation(
             binary,
             "idle_r_resolution_owns_environment",
             environment,
+            execution=execution,
         )
         client.start_worker()
         relay_root = client.relay_root()
@@ -696,8 +713,10 @@ def test_idle_runtime_r_resolution_owns_environment_until_activation(
     return transcript
 
 
+@executions(DIRECT, SANDBOXED)
 def test_explicit_r_preparation_owns_environment_before_host_resolution(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
@@ -712,6 +731,7 @@ def test_explicit_r_preparation_owns_environment_before_host_resolution(
             binary,
             "explicit_r_preparation_owns_environment",
             environment,
+            execution=execution,
         )
         client.start_worker()
         relay_root = client.relay_root()
@@ -804,8 +824,10 @@ def test_explicit_r_preparation_owns_environment_before_host_resolution(
     return transcript
 
 
+@executions(DIRECT, SANDBOXED)
 def test_rejects_completion_before_runtime_r_activation(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
@@ -813,9 +835,7 @@ def test_rejects_completion_before_runtime_r_activation(
         library.mkdir()
         environment = _fake_ir_environment(root, [library])
         client = ServerRelayClient(
-            binary,
-            "completion_before_r_activation",
-            environment,
+            binary, "completion_before_r_activation", environment, execution=execution
         )
         client.start_worker()
         old_root = client.relay_root()

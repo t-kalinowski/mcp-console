@@ -1,5 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
+import re
 import signal
 import sys
 import tempfile
@@ -7,10 +8,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.assertions import entry_result_text
-from support.assertions import last_result_text
+from support.assertions import entry_result_text, last_result_text
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient, stop_client
+from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.macos import (
     capture_darwin_process_identity,
     darwin_child_process_identities,
@@ -18,6 +19,7 @@ from support.macos import (
 )
 from support.normalization import code, normalize_python_resolution_error
 from support.records import Transcript
+from support.requirements import PROCESS_EVENTS, requires
 from support.resolvers import (
     checkpoint_uv_environment,
     initialize_python_and_record_baseline,
@@ -26,16 +28,16 @@ from support.resolvers import (
 )
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
 
-
+@executions(DIRECT, SANDBOXED)
 def test_rejects_automatic_resolution_from_background_thread(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
         environment, record = recording_uv_environment(directory)
-        client = McpClient(binary, ("serve",), environment)
+        client = McpClient(binary, execution.serve(), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
@@ -79,11 +81,14 @@ def test_rejects_automatic_resolution_from_background_thread(
         return client.finish()
 
 
-def test_rejects_automatic_resolution_from_fork_child(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_rejects_automatic_resolution_from_fork_child(
+    binary: Path, execution: Execution
+) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
         environment, record = recording_uv_environment(directory)
-        client = McpClient(binary, ("serve",), environment)
+        client = McpClient(binary, execution.serve(), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
@@ -93,6 +98,13 @@ def test_rejects_automatic_resolution_from_fork_child(binary: Path) -> Transcrip
             import os
             import select
             import signal
+            import threading
+
+            # Make CPython's thread-count warning deterministic even when the
+            # sandbox prevents native thread enumeration.
+            release_thread = threading.Event()
+            thread = threading.Thread(target=release_thread.wait)
+            thread.start()
 
             read_descriptor, write_descriptor = os.pipe()
             child = os.fork()
@@ -107,6 +119,8 @@ def test_rejects_automatic_resolution_from_fork_child(binary: Path) -> Transcrip
                 os.write(write_descriptor, payload.encode())
                 os._exit(0)
 
+            release_thread.set()
+            thread.join()
             os.close(write_descriptor)
             chunks = []
             while True:
@@ -125,7 +139,7 @@ def test_rejects_automatic_resolution_from_fork_child(binary: Path) -> Transcrip
             assert os.waitstatus_to_exitcode(status) == 0
             print(payload)
             """)
-        client.send(python=python)
+        result = client.send(python=python)
         output = last_result_text(client)
         for expected in (
             "fork-child name: mcp_console_fork_child_missing",
@@ -135,6 +149,13 @@ def test_rejects_automatic_resolution_from_fork_child(binary: Path) -> Transcrip
             "requirements.python",
         ):
             assert expected in output, (expected, output)
+        normalized, count = re.subn(
+            r"(This process \(pid=)\d+(\) is multi-threaded)",
+            r"\1<pid>\2",
+            output,
+        )
+        assert count == 1, output
+        result["content"][0]["text"] = normalized
         assert len(uv_tool_run_requirements(record)) == baseline
 
         client.send(python="6 * 7")
@@ -142,8 +163,10 @@ def test_rejects_automatic_resolution_from_fork_child(binary: Path) -> Transcrip
         return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_times_out_and_polls_automatic_python_resolution(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
@@ -152,7 +175,7 @@ def test_times_out_and_polls_automatic_python_resolution(
             "py-yaml12",
         )
         environment.pop("RETICULATE_PYTHON", None)
-        client = McpClient(binary, ("serve",), environment)
+        client = McpClient(binary, execution.serve(), environment)
         resolver_released = False
         finished = False
         try:
@@ -198,8 +221,11 @@ def test_times_out_and_polls_automatic_python_resolution(
                 stop_client(client)
 
 
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS)
 def test_interrupts_automatic_python_resolver_and_preserves_worker(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     requirement = "mcp_console_blocked_automatic_import"
     with tempfile.TemporaryDirectory() as temporary:
@@ -213,7 +239,7 @@ def test_interrupts_automatic_python_resolver_and_preserves_worker(
         previous_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
         previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
         try:
-            client = McpClient(binary, ("serve",), environment)
+            client = McpClient(binary, execution.serve(), environment)
         finally:
             signal.signal(signal.SIGINT, previous_handler)
             signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
@@ -281,8 +307,10 @@ def test_interrupts_automatic_python_resolver_and_preserves_worker(
                 stop_client(client)
 
 
+@executions(DIRECT, SANDBOXED)
 def test_restart_discards_unactivated_automatic_python_candidate(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
@@ -296,7 +324,7 @@ def test_restart_discards_unactivated_automatic_python_candidate(
         environment.pop("RETICULATE_PYTHON", None)
         environment["TMPDIR"] = temporary
         reuse_record = Path(environment["MCP_CONSOLE_TEST_UV_REUSE_RECORD"])
-        client = McpClient(binary, ("serve",), environment)
+        client = McpClient(binary, execution.serve(), environment)
         passed = False
         worker_checkpoints: list[FifoCheckpoint] = []
         try:

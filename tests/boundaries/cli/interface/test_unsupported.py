@@ -8,11 +8,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.normalization import code
 from support.records import Transcript
+from support.requirements import NO_SANDBOX, requires
 from support.suites import run_this_suite
 
-PLATFORMS = {"linux"}
 
-
+@requires(NO_SANDBOX)
 def test_reports_that_the_sandbox_is_unsupported(binary: Path) -> Transcript:
     # fmt: python
     script = code(r"""

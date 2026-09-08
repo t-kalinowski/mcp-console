@@ -13,13 +13,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from support.assertions import last_tool_text
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient, stop_client
+from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.r import r_test_environment
 from support.records import Transcript
+from support.requirements import PROCESS_EVENTS, requires
 from support.resolvers import record_resolved_r_library
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
 PNG_1X1 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42Y"
     "AAAAASUVORK5CYII="
@@ -32,14 +33,17 @@ from boundaries.client_server._harness import (
 )
 
 
-def test_custom_worker_skips_managed_python_preflight(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_custom_worker_skips_managed_python_preflight(
+    binary: Path, execution: Execution
+) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     environment = os.environ.copy()
     environment.pop("RETICULATE_PYTHON", None)
     environment["R_HOME"] = "/mcp-console-custom-worker-must-not-run-rscript"
     client = McpClient(
         binary,
-        ("serve", "--worker", str(zod)),
+        execution.serve("--worker", str(zod)),
         environment,
     )
     client.initialize_and_list_tools()
@@ -76,8 +80,10 @@ def test_custom_worker_skips_managed_python_preflight(binary: Path) -> Transcrip
     return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_standalone_preparation_before_worker_startup_is_causal_and_idempotent(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     relay = (
@@ -111,13 +117,7 @@ def test_standalone_preparation_before_worker_startup_is_causal_and_idempotent(
         environment["MCP_CONSOLE_TEST_ZOD_STARTED"] = str(worker_started)
         client = McpClient(
             binary,
-            (
-                "serve",
-                "--worker",
-                str(zod),
-                "--relay",
-                str(relay),
-            ),
+            execution.serve("--worker", str(zod), "--relay", str(relay)),
             environment,
         )
         finished = False
@@ -155,9 +155,7 @@ def test_standalone_preparation_before_worker_startup_is_causal_and_idempotent(
             }, invalid
             assert not resolver_counter.exists(), resolver_counter
             assert not worker_started.exists(), worker_started
-            assert not list(
-                temporary.glob("mcp-console-tmp-*/mcp-console-server-relay-wire.jsonl")
-            )
+            assert not list(temporary.rglob("mcp-console-server-relay-wire.jsonl"))
 
             preparation = client.start_send(
                 requirements={"r": ["standalone-requirement"]},
@@ -165,9 +163,7 @@ def test_standalone_preparation_before_worker_startup_is_causal_and_idempotent(
             )
             resolver_started.wait("standalone requirement resolver")
             assert not worker_started.exists(), worker_started
-            assert not list(
-                temporary.glob("mcp-console-tmp-*/mcp-console-server-relay-wire.jsonl")
-            )
+            assert not list(temporary.rglob("mcp-console-server-relay-wire.jsonl"))
             readable, _, _ = select.select([client.stdout], [], [], 0.25)
             assert not readable, "timeout_ms applied to standalone preparation"
 
@@ -180,9 +176,7 @@ def test_standalone_preparation_before_worker_startup_is_causal_and_idempotent(
             }, preparation
             assert resolver_counter.read_text(encoding="utf-8") == "1"
             assert not worker_started.exists(), worker_started
-            assert not list(
-                temporary.glob("mcp-console-tmp-*/mcp-console-server-relay-wire.jsonl")
-            )
+            assert not list(temporary.rglob("mcp-console-server-relay-wire.jsonl"))
 
             repeated = client.send(
                 requirements={"r": ["standalone-requirement"]},
@@ -194,9 +188,7 @@ def test_standalone_preparation_before_worker_startup_is_causal_and_idempotent(
             }, repeated
             assert resolver_counter.read_text(encoding="utf-8") == "1"
             assert not worker_started.exists(), worker_started
-            assert not list(
-                temporary.glob("mcp-console-tmp-*/mcp-console-server-relay-wire.jsonl")
-            )
+            assert not list(temporary.rglob("mcp-console-server-relay-wire.jsonl"))
             transcript = client.finish()
             finished = True
             return transcript
@@ -209,13 +201,16 @@ def test_standalone_preparation_before_worker_startup_is_causal_and_idempotent(
                 stop_client(client)
 
 
-def test_custom_worker_starts_without_home(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+def test_custom_worker_starts_without_home(
+    binary: Path, execution: Execution
+) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     environment = os.environ.copy()
     environment.pop("HOME", None)
     client = McpClient(
         binary,
-        ("serve", "--worker", str(zod)),
+        execution.serve("--worker", str(zod)),
         environment,
     )
     client.initialize_and_list_tools()
@@ -228,7 +223,11 @@ def test_custom_worker_starts_without_home(binary: Path) -> Transcript:
     return client.finish()
 
 
-def test_custom_worker_prepares_r_and_duckdb_requirements(binary: Path) -> Transcript:
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS)
+def test_custom_worker_prepares_r_and_duckdb_requirements(
+    binary: Path, execution: Execution
+) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
@@ -243,7 +242,7 @@ def test_custom_worker_prepares_r_and_duckdb_requirements(binary: Path) -> Trans
         record_resolved_r_library(environment, temporary_path)
         client = McpClient(
             binary,
-            ("serve", "--worker", str(zod)),
+            execution.serve("--worker", str(zod)),
             environment,
         )
         client.initialize_and_list_tools()
@@ -366,8 +365,11 @@ def test_custom_worker_prepares_r_and_duckdb_requirements(binary: Path) -> Trans
         return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS)
 def test_custom_worker_reports_idle_input_before_preparation_failure(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     environment, _ = r_test_environment()
@@ -383,7 +385,7 @@ def test_custom_worker_reports_idle_input_before_preparation_failure(
         record_resolved_r_library(environment, temporary_path)
         client = McpClient(
             binary,
-            ("serve", "--worker", str(zod)),
+            execution.serve("--worker", str(zod)),
             environment,
         )
         client.initialize_and_list_tools()
@@ -405,8 +407,10 @@ def test_custom_worker_reports_idle_input_before_preparation_failure(
         return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_custom_worker_resolves_idle_activity_before_preparation(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     environment, _ = r_test_environment()
@@ -421,7 +425,7 @@ def test_custom_worker_resolves_idle_activity_before_preparation(
         record_resolved_r_library(environment, temporary_path)
         client = McpClient(
             binary,
-            ("serve", "--worker", str(zod)),
+            execution.serve("--worker", str(zod)),
             environment,
         )
         client.initialize_and_list_tools()
@@ -435,8 +439,11 @@ def test_custom_worker_resolves_idle_activity_before_preparation(
         return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS)
 def test_combined_requirements_keep_idle_output_as_one_prelude(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     environment, _ = r_test_environment()
@@ -449,7 +456,7 @@ def test_combined_requirements_keep_idle_output_as_one_prelude(
         record_resolved_r_library(environment, temporary_path)
         client = McpClient(
             binary,
-            ("serve", "--worker", str(zod)),
+            execution.serve("--worker", str(zod)),
             environment,
         )
         client.initialize_and_list_tools()
@@ -499,8 +506,11 @@ def test_combined_requirements_keep_idle_output_as_one_prelude(
         return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS)
 def test_custom_worker_resolves_idle_activity_before_evaluation(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     environment, _ = r_test_environment()
@@ -510,7 +520,7 @@ def test_custom_worker_resolves_idle_activity_before_evaluation(
         environment["TMPDIR"] = temporary
         client = McpClient(
             binary,
-            ("serve", "--worker", str(zod)),
+            execution.serve("--worker", str(zod)),
             environment,
         )
         client.initialize_and_list_tools()
@@ -541,8 +551,10 @@ def test_custom_worker_resolves_idle_activity_before_evaluation(
         return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
 def test_custom_worker_restart_prepares_r_and_duckdb_requirements(
     binary: Path,
+    execution: Execution,
 ) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     environment, _ = r_test_environment()
@@ -557,7 +569,7 @@ def test_custom_worker_restart_prepares_r_and_duckdb_requirements(
         record_resolved_r_library(environment, temporary_path)
         client = McpClient(
             binary,
-            ("serve", "--worker", str(zod)),
+            execution.serve("--worker", str(zod)),
             environment,
         )
         client.initialize_and_list_tools()

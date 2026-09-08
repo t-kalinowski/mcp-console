@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import last_tool_text
 from support.client import McpClient, stop_client
+from support.execution import SANDBOXED
 from support.macos import (
     capture_darwin_process_identity,
     kill_darwin_processes,
@@ -16,11 +17,11 @@ from support.macos import (
 )
 from support.normalization import code
 from support.records import Transcript
+from support.requirements import PROCESS_EVENTS, SANDBOX, requires
 from support.suites import run_this_suite
 
-PLATFORMS = {"darwin"}
 
-
+@requires(SANDBOX, PROCESS_EVENTS)
 def test_restart_and_shutdown_with_relay_below_sandbox_root(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         wrapper = Path(directory) / "relay-wrapper"
@@ -57,7 +58,7 @@ def test_restart_and_shutdown_with_relay_below_sandbox_root(binary: Path) -> Tra
         environment["MCP_CONSOLE_TEST_BINARY"] = str(binary)
         client = McpClient(
             binary,
-            ("serve", "--worker", str(worker), "--relay", str(wrapper)),
+            SANDBOXED.serve("--worker", str(worker), "--relay", str(wrapper)),
             environment,
         )
         identities = []
