@@ -155,10 +155,30 @@ def smoke_mcp(
         )
 
         send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        # Runtime preparation is lazy; start the worker under the startup deadline.
         send(
             {
                 "jsonrpc": "2.0",
                 "id": 2,
+                "method": "tools/call",
+                "params": {"name": "send", "arguments": {"control": "restart"}},
+            }
+        )
+        startup = receive(process, buffer, startup_timeout)
+        require(startup.get("id") == 2, "unexpected startup response ID")
+        require(
+            startup.get("result")
+            == {
+                "content": [{"type": "text", "text": "[starting new worker]\n[idle]"}],
+                "isError": False,
+            },
+            "unexpected runtime startup response",
+        )
+
+        send(
+            {
+                "jsonrpc": "2.0",
+                "id": 3,
                 "method": "tools/call",
                 "params": {
                     "name": "send",
@@ -167,7 +187,7 @@ def smoke_mcp(
             }
         )
         evaluation = receive(process, buffer, response_timeout)
-        require(evaluation.get("id") == 2, "unexpected evaluation response ID")
+        require(evaluation.get("id") == 3, "unexpected evaluation response ID")
         require(
             evaluation.get("result")
             == {
