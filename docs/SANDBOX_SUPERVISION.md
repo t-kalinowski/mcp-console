@@ -40,7 +40,8 @@ After receiving readiness, the launcher installs manager-failure recovery while 
 An owned `SIGTERM` already pending at this point requests retirement without sending setup.
 Otherwise the launcher writes the complete protocol-2 frame: a four-byte unsigned big-endian length followed by 1 through 1,048,576 bytes of UTF-8 JSON.
 The runner is spawned before writing because a valid frame can exceed pipe capacity.
-The launcher writes only available pipe capacity and waits for writability alongside owner exit, launcher signals, root exit, and manager recovery on the existing event queue.
+The launcher makes one nonblocking write per event-loop iteration and checks owner exit, launcher signals, root exit, and manager recovery between writes, even when the reader keeps the pipe writable.
+Level-triggered write readiness lets partial writes continue while capacity remains and blocks the event loop when the pipe is full.
 An owned retirement request remains observable while a setup reader is stopped or unresponsive; the setup channel adds no writer thread or separate control message.
 The runner consumes exactly that frame, closes its setup descriptor before native setup, and starts the target without waiting for EOF.
 The launcher closes its writer after sending; there is no later release payload, descriptor transfer, acknowledgment, or persistent runner control channel.

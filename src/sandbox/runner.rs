@@ -109,21 +109,30 @@ impl Setup {
             .as_raw_fd()
     }
 
-    pub(super) fn write_available(&mut self) -> io::Result<()> {
+    pub(super) fn write_once(&mut self) -> io::Result<()> {
         let Some(writer) = &mut self.writer else {
             return Ok(());
         };
-        // The launcher waits on pipe writability alongside lifetime events.
-        // Never block cancellation on a stopped or unresponsive setup reader.
-        while self.written < self.frame.len() {
-            match writer.write(&self.frame[self.written..]) {
-                Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
-                Ok(count) => self.written += count,
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(()),
-                Err(error) if error.kind() == io::ErrorKind::BrokenPipe => break,
-                Err(error) => return Err(error),
+        // Return to lifetime events after every write, even when the reader
+        // drains fast enough that successive writes would all succeed.
+        match writer.write(&self.frame[self.written..]) {
+            Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
+            Ok(count) => {
+                self.written += count;
+                if self.written < self.frame.len() {
+                    return Ok(());
+                }
             }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::Interrupted | io::ErrorKind::WouldBlock
+                ) =>
+            {
+                return Ok(());
+            }
+            Err(error) if error.kind() == io::ErrorKind::BrokenPipe => {}
+            Err(error) => return Err(error),
         }
         // Closing the completed channel also removes its kqueue write watch.
         // Native setup starts at the complete frame, without requiring EOF.

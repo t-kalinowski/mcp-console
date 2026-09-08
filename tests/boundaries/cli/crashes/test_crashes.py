@@ -398,7 +398,13 @@ def test_sigterm_before_setup_retires_without_releasing_target(
 
 def test_cancels_owned_launch_during_setup(binary: Path) -> Transcript:
     transcript = []
-    for cancellation in ("SIGTERM", "owner exit"):
+    for reader, cancellation in (
+        ("stopped reader", "SIGTERM"),
+        ("stopped reader", "owner exit"),
+        ("writable pipe", "SIGTERM"),
+        ("writable pipe", "owner exit"),
+        ("writable pipe", None),
+    ):
         with tempfile.TemporaryDirectory() as directory:
             temporary = Path(directory)
             checkpoints = {
@@ -408,11 +414,11 @@ def test_cancels_owned_launch_during_setup(binary: Path) -> Transcript:
                     "manager-release",
                     "write-started",
                     "write-release",
+                    "write-continued",
                 )
             }
             environment = os.environ | {
                 "TMPDIR": directory,
-                "LARGE_SETUP": "x" * (96 * 1024),
                 "MCP_CONSOLE_TEST_MANAGER_START": str(
                     checkpoints["manager-started"].path
                 ),
@@ -434,6 +440,12 @@ def test_cancels_owned_launch_during_setup(binary: Path) -> Transcript:
                     )
                 ),
             }
+            if reader == "stopped reader":
+                environment["LARGE_SETUP"] = "x" * (96 * 1024)
+            else:
+                environment["MCP_CONSOLE_TEST_SETUP_WRITE_CONTINUED"] = str(
+                    checkpoints["write-continued"].path
+                )
             owner = _start_owned_echo_owner(binary, environment)
             identities = []
             try:
@@ -443,28 +455,39 @@ def test_cancels_owned_launch_during_setup(binary: Path) -> Transcript:
                 root = capture_darwin_process_identity(_sandbox_root_pid(launcher[0]))
                 manager = capture_darwin_process_identity(_manager_pid(launcher[0]))
                 identities = [launcher, root, manager]
-                assert signal_darwin_process(root, signal.SIGSTOP)
+                if reader == "stopped reader":
+                    assert signal_darwin_process(root, signal.SIGSTOP)
                 checkpoints["manager-release"].release()
                 checkpoints["write-started"].wait("first setup byte queued")
                 if cancellation == "SIGTERM":
                     assert signal_darwin_process(launcher, signal.SIGTERM)
-                else:
+                elif cancellation == "owner exit":
                     owner.kill()
+                    assert owner.wait(timeout=TIMEOUT) == -signal.SIGKILL
                 checkpoints["write-release"].release()
                 assert owner.wait(timeout=TIMEOUT) == (
-                    0 if cancellation == "SIGTERM" else -signal.SIGKILL
+                    -signal.SIGKILL if cancellation == "owner exit" else 0
                 )
                 _wait_for_process_exit(
                     tuple(identities), "setup cancellation leaked a process"
                 )
+                if reader == "writable pipe":
+                    readable, _, _ = select.select(
+                        [checkpoints["write-continued"].descriptor], [], [], 0
+                    )
+                    assert bool(readable) == (cancellation is None), (
+                        "setup writing continued after cancellation"
+                    )
                 stdout, stderr = owner.communicate()
-                assert (stdout, stderr) == (b"", b""), (stdout, stderr)
+                expected_stdout = b"target ran\n" if cancellation is None else b""
+                assert (stdout, stderr) == (expected_stdout, b""), (stdout, stderr)
                 assert not list(temporary.glob("mcp-console-tmp-*"))
                 transcript.append(
                     {
-                        "scenario": cancellation
-                        + " after setup writing begins with a stopped reader",
-                        "stdout": "",
+                        "scenario": (cancellation or "no cancellation")
+                        + " after setup writing begins with a "
+                        + reader,
+                        "stdout": stdout.decode(),
                         "stderr": "",
                         "verified_cleanup": "launcher, runner, manager, and private directory",
                     }

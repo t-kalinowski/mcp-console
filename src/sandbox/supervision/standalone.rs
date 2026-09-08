@@ -231,7 +231,7 @@ fn wait_for_root_exit(
             return Ok(RootCompletion::RetirementRequested);
         }
         setup
-            .write_available()
+            .write_once()
             .map_err(|error| format!("failed to send sandbox setup: {error}"))?;
         match root_waiter.wait_for_events(None) {
             Ok(RootWait::RootExited) => return Ok(RootCompletion::RootExited),
