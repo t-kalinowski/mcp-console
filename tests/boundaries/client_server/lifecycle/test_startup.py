@@ -366,10 +366,12 @@ def test_restart_replaces_first_use_cell_and_stdin(
 ) -> Transcript:
     with ExitStack() as resources:
         root = Path(resources.enter_context(tempfile.TemporaryDirectory()))
+        contended = FifoCheckpoint.create(root / "contended")
+        cancel_release = FifoCheckpoint.create(root / "cancel-release")
         unlocked = FifoCheckpoint.create(root / "unlocked")
         release = FifoCheckpoint.create(root / "release")
         parked = FifoCheckpoint.create(root / "parked")
-        for checkpoint in (unlocked, release, parked):
+        for checkpoint in (contended, cancel_release, unlocked, release, parked):
             resources.callback(checkpoint.close)
         armed = root / "armed"
         environment = {
@@ -377,6 +379,8 @@ def test_restart_replaces_first_use_cell_and_stdin(
                 build_interposer(root, "evaluation_return_interposer")
             ),
             "MCP_CONSOLE_TEST_COMPLETION_ARMED": str(armed),
+            "MCP_CONSOLE_TEST_COMPLETION_CONTENDED": str(contended.path),
+            "MCP_CONSOLE_TEST_COMPLETION_CANCEL_RELEASE": str(cancel_release.path),
             "MCP_CONSOLE_TEST_COMPLETION_UNLOCKED": str(unlocked.path),
             "MCP_CONSOLE_TEST_COMPLETION_RELEASE": str(release.path),
             "MCP_CONSOLE_TEST_COMPLETION_PARKED": str(parked.path),
@@ -387,6 +391,7 @@ def test_restart_replaces_first_use_cell_and_stdin(
             )
         )
         resources.callback(release.release)
+        resources.callback(cancel_release.release)
         client = fixture.client
         client.initialize_and_list_tools()
         client.send(python="startup_cell_ran = True", stdin="old input\n", timeout_ms=0)
@@ -406,6 +411,8 @@ def test_restart_replaces_first_use_cell_and_stdin(
             stdin="replacement input\n",
             timeout_ms=600_000,
         )
+        contended.wait("restart waits for the cancelling evaluation's worker lock")
+        cancel_release.release()
         unlocked.wait("old evaluation released the worker lock")
         client.receive(replacement)
         assert last_tool_text(client).count("replacement only\n") == 1, (
