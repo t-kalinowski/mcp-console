@@ -1,54 +1,47 @@
-use std::fs::{self, DirBuilder};
-use std::io::{self, Write as _};
-use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
+use sha2::{Digest as _, Sha256};
+use std::fs::File;
+use std::io::{self, Read as _};
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::PathBuf;
 
 include!(concat!(env!("OUT_DIR"), "/sandbox_runner_installation.rs"));
 
-const RUNNER: &[u8] = include_bytes!(concat!(
-    env!("OUT_DIR"),
-    "/sandbox-runner/mcp-console-sandbox"
-));
-const LICENSE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sandbox-runner/LICENSE"));
-const NOTICE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sandbox-runner/NOTICE"));
-
 pub(super) fn private_runner() -> Result<PathBuf, String> {
-    let prepare = || -> io::Result<PathBuf> {
-        let home = std::env::home_dir().ok_or_else(|| {
-            io::Error::other("could not locate the home directory for the runner cache")
-        })?;
-        let directory = home
-            .join("Library/Caches/mcp-console/sandbox")
-            .join(BUNDLE_SHA256);
-        DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(&directory)?;
-        for (name, bytes, mode) in [
-            ("LICENSE", LICENSE, 0o400),
-            ("NOTICE", NOTICE, 0o400),
-            ("mcp-console-sandbox", RUNNER, 0o500),
-        ] {
-            let path = directory.join(name);
-            if !path.try_exists()? {
-                let mut file = tempfile::NamedTempFile::new_in(&directory)?;
-                file.write_all(bytes)?;
-                file.as_file()
-                    .set_permissions(fs::Permissions::from_mode(mode))?;
-                // Concurrent first launches may publish the same embedded bytes.
-                if let Err(error) = file.persist_noclobber(&path)
-                    && error.error.kind() != io::ErrorKind::AlreadyExists
-                {
-                    return Err(error.error);
-                }
-            }
-            if fs::read(&path)? != bytes || path.metadata()?.permissions().mode() & mode != mode {
+    let verify = || -> io::Result<PathBuf> {
+        let executable = std::env::current_exe()?.canonicalize()?;
+        let prefix = executable
+            .parent()
+            .and_then(|directory| directory.parent())
+            .ok_or_else(|| io::Error::other("executable has no installation prefix"))?;
+        for (relative, expected) in ARTIFACTS {
+            let mut file = File::open(prefix.join(relative))?;
+            let metadata = file.metadata()?;
+            if !metadata.is_file()
+                || (relative.starts_with("libexec/") && metadata.permissions().mode() & 0o111 == 0)
+            {
                 return Err(io::Error::other(
-                    "cached artifact does not match this installation",
+                    "private artifact is not a readable file or executable",
+                ));
+            }
+            let mut digest = Sha256::new();
+            let mut buffer = [0; 64 * 1024];
+            loop {
+                let count = match file.read(&mut buffer) {
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    result => result?,
+                };
+                if count == 0 {
+                    break;
+                }
+                digest.update(&buffer[..count]);
+            }
+            if digest.finalize().as_slice() != expected {
+                return Err(io::Error::other(
+                    "private artifact does not match this installation",
                 ));
             }
         }
-        Ok(directory.join("mcp-console-sandbox"))
+        Ok(prefix.join("libexec/mcp-console-sandbox"))
     };
-    prepare().map_err(|error| format!("failed to prepare the private sandbox runner: {error}"))
+    verify().map_err(|error| format!("failed to verify the private sandbox runner: {error}"))
 }

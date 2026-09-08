@@ -213,12 +213,24 @@ def smoke_mcp(
 
 
 def inspect_wheel_commands(wheel: Path) -> None:
+    data = f"mcp_console-{package_version()}.data/data"
+    runner = f"{data}/libexec/mcp-console-sandbox"
     with zipfile.ZipFile(wheel) as archive:
         members = archive.namelist()
-    require(
-        not any(Path(name).name == "mcp-console-sandbox" for name in members),
-        "wheel contains a separate private sandbox runner instead of the embedded artifact",
-    )
+        require(
+            [name for name in members if Path(name).name == "mcp-console-sandbox"]
+            == [runner],
+            "wheel must contain exactly one private sandbox runner under libexec",
+        )
+        require(
+            archive.getinfo(runner).external_attr >> 16 & 0o111 != 0,
+            "private sandbox runner is not executable",
+        )
+        for name in ("LICENSE", "NOTICE"):
+            require(
+                f"{data}/share/licenses/mcp-console/{name}" in members,
+                f"private sandbox runner is missing {name}",
+            )
 
 
 def smoke_wheel(args: argparse.Namespace) -> None:

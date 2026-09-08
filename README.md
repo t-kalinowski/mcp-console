@@ -121,7 +121,7 @@ Render only code you trust.
 
 ## Development
 
-Install the current checkout on macOS with `cargo install --path .` or `uv tool install --reinstall .`.
+Install the current checkout on macOS with `uv tool install --reinstall .`.
 Source builds require Python 3, Git, and rustup in addition to the Rust compiler and native build tools.
 The first build fetches and compiles the pinned sandbox runner automatically, using a dedicated checkout under Cargo's target directory.
 It installs the pinned Rust toolchain if needed and uses the usual Cargo dependency cache.
@@ -138,7 +138,10 @@ scripts/test --list
 scripts/test --update BOUNDARY/SUITE[::CASE]
 ```
 
-The installed executable embeds the private runner and its license notices; [RELEASE.md](RELEASE.md) describes the build and runtime caches.
+The installation contains `bin/mcp-console`, a private runner under `libexec`, and its license notices under `share/licenses/mcp-console`.
+Move the whole bundle to relocate it; copying only `mcp-console` leaves the runner behind.
+`cargo build` prepares a runnable development bundle under `target`, but `cargo install` installs only the main binary and is not a complete installation.
+[RELEASE.md](RELEASE.md) describes the bundle and build caches.
 See [AGENTS.md](https://github.com/t-kalinowski/mcp-console/blob/main/AGENTS.md) for development rules and the repository map, and the [boundary test guide](https://github.com/t-kalinowski/mcp-console/blob/main/tests/boundaries/README.md) for test selection and snapshot updates.
 The standalone `mcp-console sandbox -- COMMAND [ARG]...` command is also available for development; [macOS sandbox supervision](https://github.com/t-kalinowski/mcp-console/blob/main/docs/SANDBOX_SUPERVISION.md) defines its lifecycle, terminal behavior, and limitations.
 

@@ -114,13 +114,13 @@ jobs:
           scripts/check-core
           cargo build --locked --bin mcp-console
 
-      - name: Check Cargo, uv, and wheel installations
+      - name: Check uv source and wheel installations
         env:
           GITHUB_PAT: ${{ github.token }}
           UV_CACHE_DIR: ${{ runner.temp }}/mcp-console-cache
           UV_PYTHON_DOWNLOADS: never
           UV_NO_CONFIG: "1"
-        run: python3 tests/cargo_install.py
+        run: python3 tests/install.py
 
       - name: Install R package dependencies
         uses: r-lib/actions/setup-r-dependencies@v2

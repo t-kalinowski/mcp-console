@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -296,24 +297,52 @@ class ReleaseScriptTests(unittest.TestCase):
         )
         return environment, wheel, cargo_bin
 
-    def write_wheel(self, wheel: Path) -> None:
+    def write_wheel(
+        self, wheel: Path, *, omit: str | None = None, executable: bool = True
+    ) -> None:
         with zipfile.ZipFile(wheel, "w") as archive:
             archive.writestr("mcp_console-0.0.2.data/scripts/mcp-console", "fixture\n")
+            for name in ("mcp-console-sandbox", "LICENSE", "NOTICE"):
+                if name == omit:
+                    continue
+                directory = (
+                    "libexec"
+                    if name == "mcp-console-sandbox"
+                    else "share/licenses/mcp-console"
+                )
+                info = zipfile.ZipInfo(
+                    f"mcp_console-0.0.2.data/data/{directory}/{name}"
+                )
+                mode = 0o755 if name == "mcp-console-sandbox" and executable else 0o644
+                info.external_attr = (stat.S_IFREG | mode) << 16
+                archive.writestr(info, "fixture\n")
 
-    def test_smoke_wheel_rejects_separate_runner_commands(self) -> None:
-        for defect in ("private wheel", "public wheel", "public uv"):
+    def test_smoke_wheel_requires_a_private_companion_bundle(self) -> None:
+        for defect in (
+            "missing runner",
+            "missing notice",
+            "not executable",
+            "public wheel",
+            "public uv",
+        ):
             with self.subTest(
                 defect=defect
             ), tempfile.TemporaryDirectory() as temporary:
                 directory = Path(temporary)
                 environment, wheel, cargo_bin = self.smoke_environment(directory)
-                if defect in {"private wheel", "public wheel"}:
-                    location = (
-                        "data/libexec" if defect == "private wheel" else "scripts"
+                if defect in {"missing runner", "missing notice", "not executable"}:
+                    self.write_wheel(
+                        wheel,
+                        omit={
+                            "missing runner": "mcp-console-sandbox",
+                            "missing notice": "NOTICE",
+                        }.get(defect),
+                        executable=defect != "not executable",
                     )
+                elif defect == "public wheel":
                     with zipfile.ZipFile(wheel, "a") as archive:
                         archive.writestr(
-                            f"mcp_console-0.0.2.data/{location}/mcp-console-sandbox",
+                            "mcp_console-0.0.2.data/scripts/mcp-console-sandbox",
                             "fixture\n",
                         )
                 else:
@@ -509,7 +538,20 @@ class ReleaseScriptTests(unittest.TestCase):
                 target = sys.argv[sys.argv.index("--target") + 1] if "--target" in sys.argv else os.environ["CARGO_BUILD_TARGET"]
                 output = Path(os.environ["CARGO_TARGET_DIR"]) / target / "release"
                 output.mkdir(parents=True, exist_ok=True)
-                (output / "mcp-console-sandbox").write_bytes(b"runner bytes")
+                (output / "mcp-console-sandbox").write_bytes(b"runner bytes with debug symbols")
+                """,
+            )
+            write_executable(
+                commands / "xcrun",
+                """
+                #!/usr/bin/env python3
+                import sys
+                from pathlib import Path
+
+                assert sys.argv[1:4] == ["strip", "-S", "-x"], sys.argv
+                runner = Path(sys.argv[4])
+                assert runner.read_bytes() == b"runner bytes with debug symbols"
+                runner.write_bytes(b"runner bytes")
                 """,
             )
             write_executable(
@@ -640,6 +682,13 @@ class ReleaseScriptTests(unittest.TestCase):
             runner = data / "mcp-console-sandbox"
             self.assertEqual(runner.read_bytes(), b"runner bytes")
             self.assertTrue(os.access(runner, os.X_OK))
+            self.assertEqual(
+                (
+                    checkout
+                    / "codex-rs/target/x86_64-apple-darwin/release/mcp-console-sandbox"
+                ).read_bytes(),
+                b"runner bytes with debug symbols",
+            )
             self.assertEqual(
                 (data / "LICENSE").read_text(),
                 "license\n",

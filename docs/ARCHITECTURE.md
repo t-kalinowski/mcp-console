@@ -97,11 +97,11 @@ The client does not communicate directly with a relay, worker, or resolver.
 ### Sandbox launcher and private runner
 
 The private `mcp-console-sandbox` executable contains the extracted native sandbox implementation and is pinned by source revision in `sandbox-runner.json`.
-The build prepares the pinned source in a dedicated checkout under Cargo's target prefix and embeds the runner, its license, and its notice into `mcp-console`.
-Cargo and wheel installations use the same executable without companion files.
-On sandbox launch, MCP Console publishes these embedded files into a private cache under `$HOME/Library/Caches/mcp-console/sandbox/<sha256>/` and verifies their contents before use.
-Concurrent first launches publish complete files atomically.
-The worker cannot write to the cache; a missing cache is recreated, while mismatched cached files are an installation error.
+The build prepares the pinned source in a dedicated checkout under Cargo's target prefix, strips the distributed runner, and records the runner, license, and notice digests.
+Wheels install a relocatable bundle with `bin/mcp-console`, `libexec/mcp-console-sandbox`, and notices under `share/licenses/mcp-console`.
+The launcher resolves these companions relative to its canonical executable path and verifies their SHA-256 digests with a bounded buffer on every sandbox launch.
+Missing or modified companions are an installation error.
+The main executable has no embedded runner payload, extraction step, or runtime runner cache.
 The runtime does not access the source checkout or download the runner.
 
 The runner accepts `--bootstrap-fd <N>` with an inherited readable descriptor greater than 2.

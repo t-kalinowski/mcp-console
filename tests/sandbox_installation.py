@@ -12,6 +12,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from support.macos import build_interposer
+
 
 class SandboxInstallationTests(unittest.TestCase):
     binary_source: Path
@@ -24,6 +26,9 @@ class SandboxInstallationTests(unittest.TestCase):
         (prefix / "bin").mkdir(parents=True)
         self.binary = prefix / "bin" / "mcp-console"
         shutil.copy2(self.binary_source, self.binary)
+        source_prefix = self.binary_source.parent.parent
+        for relative in ("libexec", "share/licenses/mcp-console"):
+            shutil.copytree(source_prefix / relative, prefix / relative)
         self.home = self.root / "home"
         self.home.mkdir()
         self.path = self.root / "path"
@@ -37,11 +42,7 @@ class SandboxInstallationTests(unittest.TestCase):
 
     @property
     def runner(self) -> Path:
-        runners = list(
-            self.home.glob("Library/Caches/mcp-console/sandbox/*/mcp-console-sandbox")
-        )
-        self.assertEqual(len(runners), 1)
-        return runners[0]
+        return self.binary.parent.parent / "libexec/mcp-console-sandbox"
 
     def run_sandbox(
         self, binary: Path | None = None
@@ -125,54 +126,18 @@ class SandboxInstallationTests(unittest.TestCase):
                 for stream in (process.stdin, process.stdout, process.stderr):
                     stream.close()
 
-    def test_runs_without_companion_files_or_path_lookup(self) -> None:
+    def test_relocates_the_bundle_without_a_writable_home_or_path_lookup(self) -> None:
+        relocated = self.root / "relocated"
+        self.binary.parent.parent.rename(relocated)
+        self.binary = relocated / "bin/mcp-console"
+        self.home.rmdir()
+        self.home.touch()
         result = self.run_sandbox()
         self.assertEqual(
             (result.returncode, result.stdout, result.stderr), (0, b"", b"")
         )
-        self.assertEqual(
-            {path.name for path in self.runner.parent.iterdir()},
-            {"mcp-console-sandbox", "LICENSE", "NOTICE"},
-        )
-        self.assertTrue((self.runner.parent / "LICENSE").read_text())
-        self.assertTrue((self.runner.parent / "NOTICE").read_text())
 
-    def test_recreates_a_removed_cache(self) -> None:
-        result = self.run_sandbox()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        original = self.runner.read_bytes()
-        shutil.rmtree(self.runner.parent)
-        result = self.run_sandbox()
-        self.assertEqual(
-            (result.returncode, result.stdout, result.stderr), (0, b"", b"")
-        )
-        self.assertEqual(self.runner.read_bytes(), original)
-
-    def test_concurrent_first_launches(self) -> None:
-        processes = [
-            subprocess.Popen(
-                [str(self.binary), "sandbox", "--", "/usr/bin/true"],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                env=self.environment,
-            )
-            for _ in range(4)
-        ]
-        try:
-            for process in processes:
-                stdout, stderr = process.communicate(timeout=30)
-                self.assertEqual((process.returncode, stdout, stderr), (0, b"", b""))
-        finally:
-            for process in processes:
-                if process.poll() is None:
-                    process.kill()
-                process.communicate(timeout=30)
-        self.assertEqual(len(list(self.runner.parent.iterdir())), 3)
-
-    def test_sandbox_cannot_write_to_the_runner_cache(self) -> None:
-        result = self.run_sandbox()
-        self.assertEqual(result.returncode, 0, result.stderr)
+    def test_sandbox_cannot_write_to_the_installed_runner(self) -> None:
         marker = self.runner.parent / "modified"
         result = subprocess.run(
             [str(self.binary), "sandbox", "--", "/usr/bin/touch", str(marker)],
@@ -183,15 +148,42 @@ class SandboxInstallationTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(marker.exists())
 
-    def test_rejects_a_different_private_executable(self) -> None:
-        result = self.run_sandbox()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.runner.chmod(0o700)
-        self.runner.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    def test_rejects_a_non_executable_private_runner(self) -> None:
+        self.runner.chmod(0o644)
         result = self.run_sandbox()
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(result.stdout, b"")
         self.assertIn(b"private sandbox runner", result.stderr)
+
+    def test_rejects_missing_or_modified_bundle_files(self) -> None:
+        prefix = self.binary.parent.parent
+        for relative in (
+            "libexec/mcp-console-sandbox",
+            "share/licenses/mcp-console/LICENSE",
+            "share/licenses/mcp-console/NOTICE",
+        ):
+            artifact = prefix / relative
+            original = artifact.read_bytes()
+            for defect in ("missing", "modified"):
+                with self.subTest(artifact=relative, defect=defect):
+                    if defect == "missing":
+                        artifact.unlink()
+                    else:
+                        artifact.write_bytes(b"modified")
+                    result = self.run_sandbox()
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(result.stdout, b"")
+                    self.assertIn(b"private sandbox runner", result.stderr)
+            artifact.write_bytes(original)
+            artifact.chmod(0o755 if relative.startswith("libexec/") else 0o644)
+
+    def test_first_and_repeated_launches_use_bounded_allocations(self) -> None:
+        interposer = build_interposer(self.root, "bounded_allocation")
+        self.environment["DYLD_INSERT_LIBRARIES"] = str(interposer)
+        for launch in ("first", "repeated"):
+            with self.subTest(launch=launch):
+                result = self.run_sandbox()
+                self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == "__main__":

@@ -20,11 +20,8 @@ fn bind_private_runner() {
     let output = PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
     let stage = output.join("sandbox-runner");
     // OUT_DIR is <target prefix>/<profile>/build/<package>/out.
-    let cache = output
-        .ancestors()
-        .nth(4)
-        .unwrap()
-        .join("sandbox-runner-cache");
+    let prefix = output.ancestors().nth(4).unwrap();
+    let cache = prefix.join("sandbox-runner-cache");
     println!("cargo:rerun-if-changed=sandbox-runner.json");
     println!("cargo:rerun-if-changed=scripts/stage-sandbox-runner");
     println!("cargo:rerun-if-env-changed=MCP_CONSOLE_SANDBOX_SOURCE");
@@ -47,26 +44,35 @@ fn bind_private_runner() {
         serde_json::from_slice(&std::fs::read(stage.join("build.json")).unwrap()).unwrap();
     assert_eq!(build["source_revision"], pin["commit"]);
     assert_eq!(build["target"].as_str(), Some(target.as_str()));
-    let mut bundle = Sha256::new();
-    for name in ["mcp-console-sandbox", "LICENSE", "NOTICE"] {
-        let bytes = std::fs::read(stage.join(name)).unwrap();
+    let mut artifacts = String::new();
+    for (name, relative) in [
+        ("mcp-console-sandbox", "libexec/mcp-console-sandbox"),
+        ("LICENSE", "share/licenses/mcp-console/LICENSE"),
+        ("NOTICE", "share/licenses/mcp-console/NOTICE"),
+    ] {
+        let source = stage.join(name);
+        let bytes = std::fs::read(&source).unwrap();
         let digest = Sha256::digest(&bytes);
         let digest_hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
         assert_eq!(build["sha256"][name].as_str(), Some(digest_hex.as_str()));
-        bundle.update((bytes.len() as u64).to_be_bytes());
-        bundle.update(bytes);
+        artifacts.push_str(&format!("({relative:?}, {:?}),\n", digest.as_slice()));
+        // Cargo's native layout and Maturin's wheel data use the same bundle.
+        for destination in [
+            prefix.join(relative),
+            root.join("wheel-data/data").join(relative),
+        ] {
+            std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+            std::fs::copy(&source, &destination).unwrap();
+            // Restore removed data even when Cargo can reuse the compiled binary.
+            println!("cargo:rerun-if-changed={}", destination.display());
+        }
     }
-    let bundle_hex: String = bundle
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
     let protocol = pin["protocol_version"].as_u64().unwrap();
     std::fs::write(
         output.join("sandbox_runner_installation.rs"),
         format!(
             "pub(super) const PROTOCOL_VERSION: u32 = {protocol};\n\
-             const BUNDLE_SHA256: &str = {bundle_hex:?};\n",
+             const ARTIFACTS: &[(&str, [u8; 32])] = &[{artifacts}];\n",
         ),
     )
     .expect("failed to bind private sandbox runner installation");

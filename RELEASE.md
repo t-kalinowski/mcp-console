@@ -10,7 +10,7 @@ Keep the root `mcp-console` entry in `Cargo.lock` synchronized with it.
 ## Private sandbox executable
 
 `sandbox-runner.json` pins the runner source repository, release, commit, protocol, and Rust toolchain.
-Cargo builds prepare it automatically with `scripts/stage-sandbox-runner`, including when invoked by `cargo install --path .` or `uv tool install --reinstall .`.
+Cargo builds prepare it automatically with `scripts/stage-sandbox-runner`, including when invoked by `uv tool install --reinstall .`.
 The script fetches the exact source revision into `sandbox-runner-cache/<commit>` under Cargo's target prefix and builds it with the pinned toolchain and lockfile.
 Source builds require Python 3, Git, and rustup; rustup installs the pinned toolchain if needed.
 The runner has its own Cargo build directory and jobserver, so the nested build also works when the outer Cargo uses `--jobs 1` or a custom target directory.
@@ -26,12 +26,24 @@ For a standalone runner build, run `scripts/stage-sandbox-runner`; its output is
 Use `--target aarch64-apple-darwin` or `--target x86_64-apple-darwin` for an explicit target.
 Without that option, the standalone script selects the pinned compiler's native target.
 
-MCP Console verifies the runner's source revision, target, and SHA-256 of each bundled file before embedding the executable, upstream license, and notice.
-Cargo and wheel installations both contain one public executable with no companion-file requirement.
-On first sandbox launch, it publishes the embedded files atomically under `$HOME/Library/Caches/mcp-console/sandbox/<sha256>/`, keyed by the complete bundle's digest, and verifies cached contents before use.
-The worker sandbox cannot write to this cache.
-The cache can be removed and will be recreated from the installed binary; mismatched cached files produce an error.
+Staging strips the distributed runner with `xcrun strip -S -x` before computing its digest; the original executable remains in the nested Cargo build directory for debugging.
+MCP Console verifies the runner's source revision, target, and SHA-256 of each bundled file before packaging the executable, upstream license, and notice.
+The wheel installs this relocatable layout:
+
+```text
+bin/mcp-console
+libexec/mcp-console-sandbox
+share/licenses/mcp-console/LICENSE
+share/licenses/mcp-console/NOTICE
+```
+
+The main executable resolves the runner relative to its own canonical path and verifies all three companion files using streaming SHA-256 with a bounded buffer on every sandbox launch.
+Missing or modified files produce an installation error.
+Move the complete bundle when relocating it; a symlink to `bin/mcp-console` also works.
+There is no embedded payload, extraction step, or runtime runner cache.
 Sandbox launches do not download anything or search PATH for the runner.
+Native Cargo builds put the companions under the target prefix, alongside the `debug` and `release` directories.
+Use `uv tool install --reinstall .` to install a development checkout: `cargo install` copies only the main executable and cannot install the companion bundle.
 
 The current pin uses protocol 2: invoke the runner with `--bootstrap-fd <N>` and inherit a readable descriptor greater than 2.
 Send one four-byte big-endian length followed by UTF-8 JSON on that setup descriptor after spawning; leave the target's original stdin attached to fd 0.
@@ -39,13 +51,14 @@ The runner consumes exactly the frame and closes setup before native launch with
 When advancing the pin, inspect the package's `PROTOCOL.md`, implementation, executable contract tests, and `rust-toolchain.toml`; update all callers together.
 Release smoke exercises the installed runner directly with a non-default descriptor and open, idle stdin, then checks the public launcher and artifact verification.
 
-Maturin packages the same executable without requiring generated data during metadata preparation.
+The tracked `wheel-data/data` directory lets Maturin prepare metadata before the first build; Cargo fills it with verified companion files during compilation.
+Source distributions retain the directory marker and omit generated companions so they can build for the destination machine.
 CI caches the completed runner independently of the application's dependencies, so ordinary changes do not rebuild the runner or restore its source and dependency graph.
 Successful main-branch checks save this cache before the Rust cache action removes non-Cargo artifacts.
-Cargo installation, uv source installation, and wheel construction share the application's Cargo target directory and use Cargo's normal parallelism.
+uv source installation and wheel construction share the application's Cargo target directory and use Cargo's normal parallelism.
 The small staging-script fixture checks isolation from the outer jobserver and compiler environment.
 Installation checks use unstaged sources, hide the build artifacts, and check the installed commands with a decoy runner on PATH.
-Wheel verification also checks sandbox launches with an empty PATH, the embedded license notices, concurrent cache creation, and rejection of modified cached artifacts.
+Wheel verification also checks sandbox launches with an empty PATH, bundled license notices, relocation without a writable home directory, bounded verification allocations, and rejection of missing or modified companions.
 
 ## One-time PyPI setup
 

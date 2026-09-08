@@ -14,11 +14,9 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 @unittest.skipUnless(sys.platform == "darwin", "the sandbox requires macOS")
-class CargoInstallationTests(unittest.TestCase):
-    def test_install_from_unstaged_sources_is_self_contained(self) -> None:
-        with tempfile.TemporaryDirectory(
-            prefix="mcp-console-cargo-install-"
-        ) as temporary:
+class InstallationTests(unittest.TestCase):
+    def test_uv_installs_a_relocatable_bundle_from_unstaged_sources(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="mcp-console-install-") as temporary:
             directory = Path(temporary)
             source = directory / "source"
             target = ROOT / "target"
@@ -30,35 +28,26 @@ class CargoInstallationTests(unittest.TestCase):
                 "UV_TOOL_BIN_DIR": str(directory / "uv-bin"),
             }
             tracked = (
-                subprocess.check_output(["git", "ls-files", "-z"], cwd=ROOT)
+                subprocess.check_output(
+                    [
+                        "git",
+                        "ls-files",
+                        "--cached",
+                        "--others",
+                        "--exclude-standard",
+                        "-z",
+                    ],
+                    cwd=ROOT,
+                )
                 .decode()
                 .split("\0")
             )
             for name in filter(None, tracked):
+                if not (ROOT / name).is_file():
+                    continue
                 destination = source / name
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(ROOT / name, destination)
-            result = subprocess.run(
-                [
-                    "cargo",
-                    "install",
-                    "--path",
-                    ".",
-                    "--locked",
-                    "--root",
-                    str(directory / "installation"),
-                    "--target-dir",
-                    str(target),
-                ],
-                cwd=source,
-                env=environment,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                timeout=1800,
-            )
-            self.assertEqual(result.returncode, 0, result.stdout)
-            print(result.stdout, flush=True)
             result = subprocess.run(
                 ["uv", "tool", "install", "--reinstall", "."],
                 cwd=source,
@@ -70,6 +59,10 @@ class CargoInstallationTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stdout)
             print(result.stdout, flush=True)
+            # Metadata must also work after deleting staged data when Cargo
+            # already has a compiled executable for this exact source tree.
+            for relative in ("libexec", "share"):
+                shutil.rmtree(source / "wheel-data/data" / relative)
             # Build the distributable wheel from the same source and target
             # directory, so its Rust compilation is already complete.
             result = subprocess.run(
@@ -93,10 +86,13 @@ class CargoInstallationTests(unittest.TestCase):
             print(result.stdout, flush=True)
             wheels = list((directory / "dist").glob("*.whl"))
             self.assertEqual(len(wheels), 1)
-            binary = directory / "mcp-console"
-            shutil.move(directory / "installation" / "bin" / "mcp-console", binary)
+            bundle = directory / "relocated"
+            (bundle / "bin").mkdir(parents=True)
+            binary = bundle / "bin/mcp-console"
+            shutil.copy2(target / "release/mcp-console", binary)
+            for relative in ("libexec", "share/licenses/mcp-console"):
+                shutil.copytree(target / relative, bundle / relative)
             shutil.rmtree(source)
-            shutil.rmtree(directory / "installation")
             # Make every compiled-in build path unavailable during runtime checks.
             hidden = directory / "build-artifacts"
             target.rename(hidden)
