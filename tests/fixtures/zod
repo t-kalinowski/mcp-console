@@ -642,7 +642,15 @@ def main() -> None:
             continue
 
         if source == "violate protocol after stdout":
+            observed = os.open(
+                os.environ["MCP_CONSOLE_TEST_RELAY_READ_BLOCKED"], os.O_RDWR
+            )
             emit_large_output(1, b"zod old stdout\n")
+            write_all(1, b"zod stdout tail\n")
+            # The relay has read the complete payload, but the interposer holds
+            # its final read until retirement joins the stdout reader.
+            assert os.read(observed, 1) == b"1"
+            os.close(observed)
             send(writer, {"kind": "ready"})
             continue
 

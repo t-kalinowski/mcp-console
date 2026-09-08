@@ -94,19 +94,21 @@ static ssize_t delayed_read(int descriptor, void *buffer, size_t length) {
         return result;
     }
 
-    atomic_store(&blocked_thread, (uintptr_t)pthread_self());
-    notify("MCP_CONSOLE_TEST_RELAY_READ_BLOCKED");
     const char *release = getenv("MCP_CONSOLE_TEST_RELAY_READ_RELEASE");
     if (release == NULL) {
         return result;
     }
     int release_descriptor;
     do {
-        release_descriptor = open(release, O_RDONLY);
+        release_descriptor = open(release, O_RDWR);
     } while (release_descriptor < 0 && errno == EINTR);
     if (release_descriptor < 0) {
         return result;
     }
+    // Establish the release reader before publishing the blocked thread, so
+    // join can release it even if the read thread is immediately descheduled.
+    atomic_store(&blocked_thread, (uintptr_t)pthread_self());
+    notify("MCP_CONSOLE_TEST_RELAY_READ_BLOCKED");
     char token;
     while (read_next(release_descriptor, &token, 1) < 0 && errno == EINTR) {
     }
