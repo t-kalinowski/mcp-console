@@ -640,7 +640,15 @@ def main() -> None:
             continue
 
         if source == "violate protocol after stdout":
+            observed = os.open(
+                os.environ["MCP_CONSOLE_TEST_RELAY_READ_BLOCKED"], os.O_RDWR
+            )
             emit_large_output(1, b"zod old stdout\n")
+            write_all(1, b"zod stdout tail\n")
+            # The relay has read the complete payload, but the interposer holds
+            # its final read until retirement joins the stdout reader.
+            assert os.read(observed, 1) == b"1"
+            os.close(observed)
             send(writer, {"kind": "ready"})
             continue
 
@@ -841,7 +849,10 @@ def main() -> None:
             assert os.waitstatus_to_exitcode(status) == 0
             continue
 
-        if source == "start partial sideband descendant":
+        if source in {
+            "start partial sideband descendant",
+            "exit after partial sideband descendant",
+        }:
             release = temporary / "zod-release-partial-sideband"
             os.mkfifo(release)
             child = os.fork()
@@ -861,6 +872,9 @@ def main() -> None:
             writer.write('{"kind":"console_output"')
             writer.flush()
             emit_test_event(0, "partial_sideband_written")
+            if source == "start partial sideband descendant":
+                # Requested retirement closes stdin before the worker exits.
+                assert os.read(0, 1) == b""
             os._exit(86)
 
         if source == "wait after readable frame and partial tail":

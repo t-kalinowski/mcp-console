@@ -499,8 +499,13 @@ def test_interrupts_managed_console_input(binary: Path) -> Transcript:
         assert last_tool_text(client) == (
             '[input requested: "R interrupt> "]\n[waiting for stdin]'
         )
-        client.send(control="interrupt", timeout_ms=0)
-        assert last_tool_text(client) == "R input interrupted\n"
+        wait_for_evaluation_output(
+            client,
+            "R input interrupted\n",
+            "interrupted R console input",
+            control="interrupt",
+            timeout_ms=0,
+        )
         wait_for_evaluation_output(
             client,
             '[input requested: "R replay> "]\n[1] "R partial!"\n',
@@ -545,8 +550,13 @@ def test_interrupts_managed_console_input(binary: Path) -> Transcript:
         assert last_tool_text(client) == (
             '[input requested: "Python interrupt> "]\n[waiting for stdin]'
         )
-        client.send(control="interrupt", timeout_ms=0)
-        assert last_tool_text(client) == "Python input interrupted\n"
+        wait_for_evaluation_output(
+            client,
+            "Python input interrupted\n",
+            "interrupted Python console input",
+            control="interrupt",
+            timeout_ms=0,
+        )
         wait_for_evaluation_output(
             client,
             "[input requested: \"Python replay> \"]\n'Python partial!'\n",

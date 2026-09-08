@@ -45,6 +45,12 @@ Map each non-generic sandbox allowance to the real workflow that requires it and
 The [policy audit](../../docs/SANDBOX_SUPERVISION.md#policy-extensions-and-compatibility) distinguishes redundant base-policy rules from local exceptions whose current necessity or precise caller is unconfirmed.
 Runner protocol parsing belongs to the extraction's executable tests; `tests/sandbox_installation.py` covers the installed caller boundary, one-shot resource closure, and startup without setup EOF.
 
+`cli/command/test_pytorch::matches_unsandboxed_autograd` runs one CPU autograd script outside and inside the default sandbox with the same freshly resolved PyTorch environment.
+It compares the loss, full gradient, and thread count against the live unsandboxed run; the snapshot records that comparison without dependency warnings or fixed numerical values.
+This is an intentional exception to exact-output snapshots: warnings and other non-result output may change across releases, while nonzero exits and numerical differences still fail with captured stdout and stderr.
+The native base policy's `__KMP_REGISTERED_LIB_*` registration allowance remains an unverified compatibility exception.
+This comparison does not establish a need for that permission.
+
 When reviewing deletion candidates, separate tests may replace a combined test only when the interaction between those behaviors is not itself a plausible failure mode.
 
 Each `test_` function in a suite is a transcript case.

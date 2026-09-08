@@ -49,9 +49,10 @@ Before the first release:
 
 The publication job is the only job granted an OpenID Connect token.
 
-## Publish 0.0.2
+## Publish 0.0.3
 
-Merge the release metadata with `Cargo.toml` and `Cargo.lock` both at `0.0.2`, then confirm CI passes on `main`.
+Version `0.0.3` records the final release with the in-project sandbox implementation.
+Merge the release metadata with `Cargo.toml` and `Cargo.lock` both at `0.0.3`, then confirm push CI passes on `main` for that exact commit.
 
 A manual run of the Release workflow builds and smoke-tests both wheels for inspection but does not publish them.
 
@@ -63,8 +64,8 @@ git pull --ff-only
 scripts/format
 scripts/check
 
-git tag -a v0.0.2 -m "Release v0.0.2"
-git push origin v0.0.2
+git tag -a v0.0.3 -m "Release v0.0.3"
+git push origin v0.0.3
 ```
 
 The tag-triggered Release workflow verifies that the tag matches `Cargo.toml`, builds both native wheels, install-tests them with `uv`, and publishes them through PyPI Trusted Publishing.
@@ -81,17 +82,17 @@ bin_dir="$(mktemp -d)"
 UV_CACHE_DIR="$cache_dir" \
 UV_TOOL_DIR="$tool_dir" \
 UV_TOOL_BIN_DIR="$bin_dir" \
-  uvx mcp-console@0.0.2 --version
+  uvx mcp-console@0.0.3 --version
 
 UV_CACHE_DIR="$cache_dir" \
 UV_TOOL_DIR="$tool_dir" \
 UV_TOOL_BIN_DIR="$bin_dir" \
-  uvx mcp-console@0.0.2 --help
+  uvx mcp-console@0.0.3 --help
 
 UV_CACHE_DIR="$cache_dir" \
 UV_TOOL_DIR="$tool_dir" \
 UV_TOOL_BIN_DIR="$bin_dir" \
-  uv tool install 'mcp-console==0.0.2'
+  uv tool install 'mcp-console==0.0.3'
 
 "$bin_dir/mcp-console" --version
 "$bin_dir/mcp-console" --help
@@ -102,7 +103,7 @@ Verify these commands on both Apple Silicon and Intel macOS.
 Also start
 
 ```sh
-uvx mcp-console@0.0.2 serve
+uvx mcp-console@0.0.3 serve
 ```
 
 through an MCP client.
@@ -115,7 +116,7 @@ uvx mcp-console --help
 uv tool install mcp-console
 ```
 
-Leave PyPI release `0.0.1` unchanged and unyanked.
+Leave PyPI releases `0.0.1` and `0.0.2` unchanged and unyanked.
 
 ## Recover from a failed release
 
@@ -124,5 +125,5 @@ PyPI versions and filenames are immutable.
 If publication fails, rerun the failed job from the same workflow run while its original wheel artifacts remain available.
 Do not start a fresh build and expect it to replace an uploaded wheel with the same filename.
 
-If `0.0.2` is defective after publication, fix the defect and publish a new version such as `0.0.3`.
-Do not move, delete, or reuse `v0.0.2`.
+If `0.0.3` is defective after publication, fix the defect and publish a new version such as `0.0.4`.
+Do not move, delete, or reuse `v0.0.3`.
