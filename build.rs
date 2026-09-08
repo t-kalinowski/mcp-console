@@ -8,6 +8,18 @@ fn main() {
 
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
         bind_private_runner();
+    } else {
+        let data =
+            PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("wheel-data/data");
+        // A macOS build can repopulate these files after Cargo caches this build.
+        println!("cargo:rerun-if-changed={}", data.display());
+        for directory in ["libexec", "share"] {
+            match std::fs::remove_dir_all(data.join(directory)) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => panic!("failed to remove stale {directory} wheel data: {error}"),
+            }
+        }
     }
     if std::env::var_os("CARGO_CFG_UNIX").is_some() {
         cc::Build::new()

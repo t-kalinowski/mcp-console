@@ -9,6 +9,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -49,6 +50,19 @@ class InstallationTests(unittest.TestCase):
                 destination = source / name
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(ROOT / name, destination)
+
+            def stage_stale_macos_data() -> None:
+                for relative in (
+                    "libexec/mcp-console-sandbox",
+                    "share/licenses/mcp-console/LICENSE",
+                    "share/licenses/mcp-console/NOTICE",
+                ):
+                    destination = source / "wheel-data/data" / relative
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    destination.write_bytes(b"stale macOS wheel data\n")
+
+            if sys.platform == "linux":
+                stage_stale_macos_data()
             result = subprocess.run(
                 ["uv", "tool", "install", "--reinstall", "."],
                 cwd=source,
@@ -60,11 +74,19 @@ class InstallationTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stdout)
             print(result.stdout, flush=True)
+            if sys.platform == "linux":
+                prefix = (directory / "uv-bin/mcp-console").resolve().parent.parent
+                for relative in ("libexec", "share"):
+                    self.assertFalse((prefix / relative).exists())
             # Metadata must also work after deleting staged data when Cargo
             # already has a compiled executable for this exact source tree.
             if sys.platform == "darwin":
                 for relative in ("libexec", "share"):
                     shutil.rmtree(source / "wheel-data/data" / relative)
+            else:
+                # A later macOS build can repopulate data even when Cargo has
+                # cached the Linux executable and its build-script output.
+                stage_stale_macos_data()
             # Build the distributable wheel from the same source and target
             # directory, so its Rust compilation is already complete.
             result = subprocess.run(
@@ -88,6 +110,12 @@ class InstallationTests(unittest.TestCase):
             print(result.stdout, flush=True)
             wheels = list((directory / "dist").glob("*.whl"))
             self.assertEqual(len(wheels), 1)
+            if sys.platform == "linux":
+                with zipfile.ZipFile(wheels[0]) as archive:
+                    self.assertEqual(
+                        [name for name in archive.namelist() if ".data/data/" in name],
+                        [],
+                    )
             result = subprocess.run(
                 ["uv", "build", "--sdist", "--out-dir", str(directory / "dist")],
                 cwd=source,
