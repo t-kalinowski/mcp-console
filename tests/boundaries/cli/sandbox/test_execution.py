@@ -2,6 +2,7 @@
 
 import os
 import pty
+import select
 import selectors
 import shutil
 import socket
@@ -552,6 +553,65 @@ def test_denies_network_access(binary: Path) -> Transcript:
         "listener_port": "omitted",
     }
     return [entry]
+
+
+@requires(SANDBOX)
+def test_frontend_exec_preserves_pid_and_standard_streams(binary: Path) -> Transcript:
+    # fmt: python
+    script = code(r"""
+        import os
+        import sys
+
+        assert "MCP_CONSOLE_SANDBOX_CONFIG" not in os.environ
+        print("ready", flush=True)
+        data = sys.stdin.buffer.read()
+        os.write(1, data)
+        os.write(2, data[::-1])
+        sys.exit(23)
+        """)
+    process = subprocess.Popen(
+        [
+            binary,
+            "sandbox",
+            "--exit-with-parent",
+            str(os.getpid()),
+            "--",
+            sys.executable,
+            "-c",
+            script,
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        assert select.select([process.stdout], [], [], 10)[0]
+        assert process.stdout.readline() == b"ready\n"
+        if sys.platform == "linux":
+            executable = os.readlink(f"/proc/{process.pid}/exe")
+        else:
+            executable = subprocess.check_output(
+                ["/bin/ps", "-p", str(process.pid), "-o", "comm="], text=True
+            ).strip()
+        sentinel = bytes(range(256))
+        stdout, stderr = process.communicate(sentinel, timeout=10)
+        assert (process.returncode, stdout, stderr) == (23, sentinel, sentinel[::-1])
+        runner = binary.parent.parent / "libexec" / "mcp-console-sandbox"
+        assert Path(executable).resolve() == runner.resolve(), executable
+        return [
+            {
+                "scenario": "frontend exec with original PID and binary standard streams",
+                "verified_executable": "private mcp-console-sandbox",
+                "stdout_hex": stdout.hex(),
+                "stderr_hex": stderr.hex(),
+                "exit_code": process.returncode,
+            }
+        ]
+    finally:
+        if process.poll() is None:
+            process.communicate(timeout=10)
+        for stream in (process.stdin, process.stdout, process.stderr):
+            stream.close()
 
 
 if __name__ == "__main__":

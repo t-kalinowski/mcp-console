@@ -62,29 +62,11 @@ from boundaries.client_server.sandbox._fixtures import (
 
 
 def _manager_pid(server_pid: int) -> int:
-    processes = subprocess.check_output(
-        ["/bin/ps", "-axo", "pid=,ppid=,command="],
-        text=True,
+    # Historical recovery tests refer to the sole supervisor as the manager.
+    (supervisor,) = darwin_child_process_identities(
+        capture_darwin_process_identity(server_pid)
     )
-    records = []
-    for process in processes.splitlines():
-        fields = process.strip().split(None, 2)
-        if len(fields) == 3:
-            records.append((int(fields[0]), int(fields[1]), fields[2]))
-
-    descendants = {server_pid}
-    while True:
-        discovered = {pid for pid, parent, _ in records if parent in descendants}
-        if discovered.issubset(descendants):
-            break
-        descendants.update(discovered)
-    managers = [
-        pid
-        for pid, _, command in records
-        if pid in descendants and "sandbox-manager" in command.split()
-    ]
-    assert len(managers) == 1, managers
-    return managers[0]
+    return supervisor[0]
 
 
 @requires(SANDBOX)
@@ -332,7 +314,10 @@ def test_restart_allows_accepted_relay_shutdown_to_finish(
             helper_pid = host_process_id(helper_namespace_pid, client.process.pid)
             relay_target = host_process_id(relay_namespace_pid, client.process.pid)
             relay_group = os.getpgid(relay_target)
-            assert relay_group != relay_target
+            if sys.platform == "darwin":
+                assert relay_group == relay_target
+            else:
+                assert relay_group != relay_target
 
             restarted = client.start_send(control="restart")
             stopped_marker = wait_for_marker(
@@ -431,7 +416,10 @@ def _restart_outer_force_stops_unresponsive_relay(
                 wait_for_marker(temporary_path, "zod-process-group", client)
             )
             assert os.getpgid(relay_target) == worker_group
-            assert relay_target != worker_group, "helper targeted the sandbox runner"
+            (supervisor,) = darwin_child_process_identities(
+                capture_darwin_process_identity(client.process.pid)
+            )
+            assert relay_target != supervisor[0], "helper targeted the sandbox runner"
             assert worker_pid != relay_target, (
                 "Zod worker unexpectedly identified the relay"
             )
@@ -457,7 +445,7 @@ def _restart_outer_force_stops_unresponsive_relay(
 
             relay = capture_darwin_process_identity(relay_target)
             root = capture_darwin_process_identity(worker_group)
-            assert darwin_child_process_identities(root) == (relay,)
+            assert root == relay
             descendants = [root]
             for process in descendants:
                 descendants.extend(darwin_child_process_identities(process))

@@ -65,6 +65,8 @@ def _build_startup_interposer(
             "-Werror",
             *compiler_flags,
             "-dynamiclib",
+            "-I",
+            fixture.parent,
             "-o",
             library,
             source,
@@ -111,8 +113,8 @@ def _start_owned_echo_owner(
 
 @requires(MACOS_SANDBOX, PROCESS_EVENTS, NATIVE_FIXTURES)
 def test_owner_loss_before_exit_watch_cleans_startup(binary: Path) -> Transcript:
-    # Gate the launcher's first kqueue after the root is spawned but before the
-    # owner watch is registered. The target remains behind its startup gate.
+    # Gate runner parent capture before it can create storage or a native root.
+    # Caller loss here must leave no target or private storage behind.
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
         waiter_started = FifoCheckpoint.create(temporary / "waiter-started")
@@ -143,12 +145,11 @@ def test_owner_loss_before_exit_watch_cleans_startup(binary: Path) -> Transcript
             )
             waiter_started.wait("root waiter startup")
             launcher = capture_darwin_process_identity(int(launcher_pid))
-            root = capture_darwin_process_identity(_sandbox_root_pid(launcher[0]))
-            identities = [launcher, root]
+            identities = [launcher]
             exit_events.close()
-            exit_events, watches = _watch_process_exits((root, launcher))
-            private_directories = list(temporary.glob("mcp-console-tmp-*"))
-            assert len(private_directories) == 1, private_directories
+            exit_events, watches = _watch_process_exits((launcher,))
+            private_directories = list(temporary.glob("sandbox-*"))
+            assert private_directories == [], private_directories
 
             owner_identity = capture_darwin_process_identity(owner.pid)
             assert signal_darwin_process(owner_identity, signal.SIGKILL), (
@@ -158,15 +159,9 @@ def test_owner_loss_before_exit_watch_cleans_startup(binary: Path) -> Transcript
             waiter_release.release()
             released = True
 
-            observed_exits = _assert_launcher_cleanup_barrier(
-                exit_events,
-                watches,
-                launcher,
-                (root,),
-                private_directories[0],
-                "startup",
-            )
-            assert observed_exits == {root[0], launcher[0]}, observed_exits
+            events = exit_events.control(None, 1, TIMEOUT)
+            assert len(events) == 1 and events[0].ident == launcher[0], events
+            assert events[0].fflags & select.KQ_NOTE_EXIT
             _wait_for_process_exit(
                 tuple(identities),
                 "owned sandbox startup survived owner loss",
@@ -179,7 +174,7 @@ def test_owner_loss_before_exit_watch_cleans_startup(binary: Path) -> Transcript
                 f"sandbox owner {owner.pid} exited before exit observation\n"
             ), stderr
             assert target_stdout == "", target_stdout
-            assert not list(temporary.glob("mcp-console-tmp-*")), (
+            assert not list(temporary.glob("sandbox-*")), (
                 "owned sandbox startup preserved its private directory"
             )
             return [
@@ -223,8 +218,8 @@ def test_owner_loss_before_exit_watch_cleans_startup(binary: Path) -> Transcript
 
 @requires(MACOS_SANDBOX, PROCESS_EVENTS, NATIVE_FIXTURES)
 def test_owner_loss_before_target_release_cancels_startup(binary: Path) -> Transcript:
-    # The manager reaches its own startup entry point only after the launcher
-    # has registered the owner watch. Hold readiness there, then remove the
+    # The native readiness checkpoint is reached only after the runner
+    # has captured its caller identity. Hold readiness there, then remove the
     # owner so the final identity check must keep the target gated.
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
@@ -258,7 +253,7 @@ def test_owner_loss_before_target_release_cancels_startup(binary: Path) -> Trans
             exit_events.close()
             cleanup = (root, manager)
             exit_events, watches = _watch_process_exits((*cleanup, launcher))
-            private_directories = list(temporary.glob("mcp-console-tmp-*"))
+            private_directories = list(temporary.glob("sandbox-*"))
             assert len(private_directories) == 1, private_directories
 
             owner_identity = capture_darwin_process_identity(owner.pid)
@@ -290,7 +285,7 @@ def test_owner_loss_before_target_release_cancels_startup(binary: Path) -> Trans
                 f"sandbox owner {owner.pid} changed before target release\n"
             ), stderr
             assert target_stdout == "", target_stdout
-            assert not list(temporary.glob("mcp-console-tmp-*")), (
+            assert not list(temporary.glob("sandbox-*")), (
                 "owned sandbox startup preserved its private directory"
             )
             return [
@@ -379,7 +374,7 @@ def test_sigterm_before_setup_retires_without_releasing_target(
             stdout, stderr = process.communicate()
             assert (stdout, stderr) == (b"", b""), (stdout, stderr)
             _wait_for_process_exit(tuple(identities), "cancelled startup survived")
-            assert not list(temporary.glob("mcp-console-tmp-*"))
+            assert not list(temporary.glob("sandbox-*"))
         finally:
             release.release()
             # Killing the stopped reader also unblocks an incorrect pipe write.
@@ -488,7 +483,7 @@ def test_cancels_owned_launch_during_setup(binary: Path) -> Transcript:
                 stdout, stderr = owner.communicate()
                 expected_stdout = b"target ran\n" if cancellation is None else b""
                 assert (stdout, stderr) == (expected_stdout, b""), (stdout, stderr)
-                assert not list(temporary.glob("mcp-console-tmp-*"))
+                assert not list(temporary.glob("sandbox-*"))
                 transcript.append(
                     {
                         "scenario": (cancellation or "no cancellation")
@@ -656,7 +651,7 @@ def test_owner_loss_retires_the_sandbox_lifetime(binary: Path) -> Transcript:
                 "owned sandbox cleanup did not stop all processes",
             )
         if temporary_directory is not None:
-            shutil.rmtree(temporary_directory, ignore_errors=True)
+            shutil.rmtree(temporary_directory.parent, ignore_errors=True)
         exit_events.close()
         owner.stdout.close()
         owner.stderr.close()

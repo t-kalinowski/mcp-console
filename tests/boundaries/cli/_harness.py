@@ -51,7 +51,7 @@ def _watch_process_exits(
             flags=select.KQ_EV_ADD | select.KQ_EV_CLEAR,
             fflags=select.KQ_NOTE_EXIT,
         )
-        for identity in identities
+        for identity in dict.fromkeys(identities)
     ]
     assert exit_events.control(watches, 0, 0) == []
     return exit_events, watches
@@ -66,7 +66,7 @@ def _assert_launcher_cleanup_barrier(
     action: str,
 ) -> set[int]:
     observed_exits = set()
-    cleanup_processes = {identity[0] for identity in cleanup}
+    cleanup_processes = {identity[0] for identity in cleanup} - {launcher[0]}
     for _ in watches:
         events = exit_events.control(None, 1, TIMEOUT)
         assert len(events) == 1, "owned sandbox lifetime did not exit"
@@ -117,50 +117,24 @@ def _start_with_controlling_terminal(
 
 
 def _sandbox_root_pid(launcher_pid: int) -> int:
-    processes = subprocess.run(
-        ["/bin/ps", "-axo", "pid=,ppid=,comm="],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=TIMEOUT,
-    ).stdout
-    roots = []
-    for process in processes.splitlines():
-        fields = process.strip().split(maxsplit=2)
-        if (
-            len(fields) == 3
-            and int(fields[1]) == launcher_pid
-            and Path(fields[2]).name == "mcp-console-sandbox"
-        ):
-            roots.append(int(fields[0]))
-    assert len(roots) == 1, roots
-    return roots[0]
+    # The frontend execs the supervisor. Its native child leads a separate
+    # group and execs the target in the same PID; an inherited terminal peer
+    # remains in the caller group.
+    roots = [
+        identity
+        for identity in darwin_child_process_identities(
+            capture_darwin_process_identity(launcher_pid)
+        )
+        if os.getpgid(identity[0]) == identity[0]
+    ]
+    (root,) = roots
+    return root[0]
 
 
 def _manager_pid(launcher_pid: int) -> int:
-    deadline = time.monotonic() + TIMEOUT
-    while True:
-        result = subprocess.run(
-            ["/bin/ps", "-axo", "pid=,ppid=,command="],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=TIMEOUT,
-        )
-        matches = []
-        for line in result.stdout.splitlines():
-            fields = line.strip().split(maxsplit=2)
-            if (
-                len(fields) == 3
-                and int(fields[1]) == launcher_pid
-                and "sandbox-manager" in fields[2]
-            ):
-                matches.append(int(fields[0]))
-        assert len(matches) <= 1, (launcher_pid, matches)
-        if matches:
-            return matches[0]
-        assert time.monotonic() < deadline, "sandbox manager did not start"
-        time.sleep(0.01)
+    # Historical transcript labels call the cleanup owner the manager.
+    # That role is now the runner at the original frontend PID.
+    return launcher_pid
 
 
 def _start_lifetime(
@@ -237,7 +211,7 @@ def _start_lifetime(
         identities.append(target)
         root = capture_darwin_process_identity(_sandbox_root_pid(process.pid))
         identities.append(root)
-        assert darwin_child_process_identities(root) == (target,)
+        assert root == target
         assert os.getpgid(target[0]) == root[0]
         descendant = capture_darwin_process_identity(int(descendant_pid))
         identities.append(descendant)
@@ -276,7 +250,7 @@ def _start_lifetime(
         )
         kill_darwin_processes(identities)
         if temporary_directory is not None:
-            shutil.rmtree(temporary_directory, ignore_errors=True)
+            shutil.rmtree(temporary_directory.parent, ignore_errors=True)
         for stream in (process.stdin, process.stdout, process.stderr):
             stream.close()
         raise
@@ -315,7 +289,7 @@ def _cleanup(lifetime: _SandboxLifetime) -> None:
     identities = (lifetime.root, lifetime.target, lifetime.descendant, lifetime.manager)
     kill_darwin_processes(identities)
     _wait_for_process_exit(identities, "sandbox cleanup did not stop all processes")
-    shutil.rmtree(lifetime.temporary_directory, ignore_errors=True)
+    shutil.rmtree(lifetime.temporary_directory.parent, ignore_errors=True)
     for stream in (
         lifetime.process.stdin,
         lifetime.process.stdout,

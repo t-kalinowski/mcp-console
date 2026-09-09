@@ -61,7 +61,7 @@ cargo build --release
 target/release/mcp-console serve
 ```
 
-See [release preparation](RELEASE.md#private-sandbox-executable) for build dependencies and [Linux sandbox behavior](docs/LINUX_SANDBOX.md) for policy and process-lifetime details.
+See [release preparation](RELEASE.md#private-sandbox-executable) for build dependencies and [sandbox integration](docs/SANDBOX.md) for policy and process-lifetime details.
 
 `mcp-console serve` communicates with its MCP client over standard input and output.
 It waits for MCP protocol input rather than presenting an interactive terminal prompt.
@@ -128,7 +128,7 @@ The worker can read host files, but direct network access and regular-file write
 This is a process boundary, not a safe evaluator for untrusted code with access to sensitive readable files.
 
 `mcp-console serve --no-sandbox` launches the relay directly with host permissions.
-The worker inherits the host temporary-directory environment, and no sandbox manager tracks or cleans up descendants.
+The worker inherits the host temporary-directory environment, and no sandbox runner tracks or cleans up descendants.
 The relay still shuts down and reaps its direct worker normally.
 
 The server installs automatically inferred or explicitly declared R and Python packages and DuckDB extensions outside the worker sandbox with server permissions.
@@ -155,15 +155,14 @@ scripts/test --update BOUNDARY/SUITE[::CASE]
 Stage the private sandbox executable before the first build or after changing the source pin; [RELEASE.md](RELEASE.md) describes the required checkout and toolchain.
 See [AGENTS.md](https://github.com/t-kalinowski/mcp-console/blob/main/AGENTS.md) for development rules and the repository map, and the [boundary test guide](https://github.com/t-kalinowski/mcp-console/blob/main/tests/boundaries/README.md) for test selection and snapshot updates.
 The standalone `mcp-console sandbox -- COMMAND [ARG]...` command is also available for development on macOS and Linux.
-[macOS sandbox supervision](docs/SANDBOX_SUPERVISION.md) and [Linux sandboxing](docs/LINUX_SANDBOX.md) define its lifecycle, terminal behavior, and limitations.
+[Sandbox integration](docs/SANDBOX.md) defines its policy, executable handoff, terminal behavior, and lifetime limits.
 
 ## Documentation
 
 The [documentation index](https://github.com/t-kalinowski/mcp-console/blob/main/docs/README.md) maps current documents by audience.
 
 - [Implemented architecture](https://github.com/t-kalinowski/mcp-console/blob/main/docs/ARCHITECTURE.md) explains current process boundaries, ownership, lifecycle, recording, and artifacts.
-- [macOS sandbox supervision](https://github.com/t-kalinowski/mcp-console/blob/main/docs/SANDBOX_SUPERVISION.md) explains standalone terminal and signal ownership, manager-owned observed-descendant retirement, fallback cleanup, and remaining tracking limitations.
-- [Linux sandboxing](docs/LINUX_SANDBOX.md) describes namespace policy, prerequisites, subreaper cleanup, and signal delivery.
+- [Sandbox integration](docs/SANDBOX.md) explains Console policy, verified runner selection, macOS and Linux prerequisites, signals, and cleanup guarantees.
 - [Built-in runtime](https://github.com/t-kalinowski/mcp-console/blob/main/docs/BUILTIN_RUNTIME.md) describes user-visible R, Python, SQL, input, output, and graphics behavior.
 - [Send operations](https://github.com/t-kalinowski/mcp-console/blob/main/docs/SEND_OPERATIONS.md) defines validation and execution order for each `send` combination.
 - [Requirements and environments](https://github.com/t-kalinowski/mcp-console/blob/main/docs/REQUIREMENTS.md) describes dependency preparation and its trust boundary.

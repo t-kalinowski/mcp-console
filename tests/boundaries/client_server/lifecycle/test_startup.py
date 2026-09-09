@@ -162,7 +162,7 @@ def test_preserves_initialize_buffered_during_startup(
         client.send(r="must not run", requirements={"r": [""]})
         assert client.transcript[-1]["result"]["isError"] is True
         assert fixture.invocations() == [], "poll or invalid input started a resolver"
-        assert not list(fixture.root.glob("mcp-console-tmp-*"))
+        assert not list(fixture.root.glob("sandbox-*"))
         return client.finish()
 
 
@@ -203,7 +203,7 @@ def test_first_cell_prepares_defaults_after_running_response(
         client.send(r=r, timeout_ms=0)
         assert last_tool_text(client) == RUNNING
         fixture.wait_for_resolver()
-        assert not list(fixture.root.glob("mcp-console-tmp-*"))
+        assert not list(fixture.root.glob("sandbox-*"))
         preparation = fixture.invocations()[-1]["arguments"]
         assert isinstance(preparation, list)
         assert {
@@ -274,7 +274,7 @@ def test_explicit_preparation_keeps_its_wait_precondition(
         assert "result" not in preparation, (
             "explicit preparation returned before resolution"
         )
-        assert not list(fixture.root.glob("mcp-console-tmp-*"))
+        assert not list(fixture.root.glob("sandbox-*"))
         fixture.release.release()
         client.response_timeout = 600
         client.receive(preparation)
@@ -283,7 +283,7 @@ def test_explicit_preparation_keeps_its_wait_precondition(
             "isError": False,
         }
         fixture.wait_for_resolver_exit()
-        assert not list(fixture.root.glob("mcp-console-tmp-*"))
+        assert not list(fixture.root.glob("sandbox-*"))
         client.send(r="42L")
         assert last_tool_text(client) == "[1] 42\n"
         return client.finish()

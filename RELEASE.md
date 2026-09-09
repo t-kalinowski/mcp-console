@@ -27,9 +27,12 @@ Stage the runner again for the intended target before changing MCP Console's bui
 Cargo builds also copy the verified executables into the target prefix's `libexec` directory, so binaries in `debug`, `release`, and custom profile directories use the same relative lookup as installed wheels.
 Sandbox launches reject a missing or mismatched private runner or bundled Linux helper.
 
-The current pin uses protocol 2: invoke the runner with `--bootstrap-fd <N>` and inherit a readable descriptor greater than 2.
-Send one four-byte big-endian length followed by UTF-8 JSON on that setup descriptor after spawning; leave the target's original stdin attached to fd 0.
-The runner consumes exactly the frame and closes setup before native launch without waiting for EOF.
+The current protocol-2 pin also supplies standalone supervision.
+Console selects application policy in one immutable environment value and execs `mcp-console-sandbox --config-env MCP_CONSOLE_SANDBOX_CONFIG -- COMMAND [ARG]...`.
+The runner consumes and removes that variable; ordinary arguments, cwd, environment, and standard streams carry the target inputs.
+No writer process or path-based setup handoff is needed.
+The runner also retains `--bootstrap-fd <N>` for direct executable callers: a readable descriptor greater than 2 carries one four-byte big-endian length and UTF-8 JSON frame.
+That interface closes setup after the frame without waiting for EOF or reading target stdin.
 When advancing the pin, inspect the package's `PROTOCOL.md`, implementation, executable contract tests, and `rust-toolchain.toml`; update all callers together.
 Release smoke exercises the installed runner directly with a non-default descriptor and open, idle stdin, then checks the public launcher and artifact verification.
 

@@ -95,7 +95,9 @@ def _spawn_detached_generation(client: McpClient) -> Generation:
         "sandbox_temporary_directory": "omitted",
     }
     relay_identity = capture_darwin_process_identity(relay_pid)
-    runner_identity = capture_darwin_process_identity(os.getpgid(relay_pid))
+    (runner_identity,) = darwin_child_process_identities(
+        capture_darwin_process_identity(client.process.pid)
+    )
     assert darwin_child_process_identities(runner_identity) == (relay_identity,)
     worker_identity = capture_darwin_process_identity(worker_pid)
     child_identity = capture_darwin_process_identity(child_pid)
@@ -160,32 +162,10 @@ def _wait_for_generation_failure(client: McpClient) -> None:
 
 
 def _manager_pid(server_pid: int) -> int:
-    processes = subprocess.check_output(
-        ["/bin/ps", "-axo", "pid=,ppid=,command="],
-        text=True,
+    (runner,) = darwin_child_process_identities(
+        capture_darwin_process_identity(server_pid)
     )
-    records = []
-    for process in processes.splitlines():
-        fields = process.strip().split(None, 2)
-        if len(fields) == 3:
-            records.append((int(fields[0]), int(fields[1]), fields[2]))
-
-    # The CLI launcher is the sandbox owner. Locate its manager by ancestry and
-    # its internal executable role.
-    descendants = {server_pid}
-    while True:
-        discovered = {pid for pid, parent, _ in records if parent in descendants}
-        if discovered.issubset(descendants):
-            break
-        descendants.update(discovered)
-
-    managers = [
-        pid
-        for pid, _, command in records
-        if pid in descendants and "sandbox-manager" in command.split()
-    ]
-    assert len(managers) == 1, managers
-    return managers[0]
+    return runner[0]
 
 
 def _close_client_streams(client: McpClient) -> None:
@@ -261,7 +241,7 @@ def test_server_crash_retires_the_worker_generation(binary: Path) -> Transcript:
         stop_client(client)
         if generation is not None:
             kill_darwin_processes(generation[:4])
-            shutil.rmtree(generation[4], ignore_errors=True)
+            shutil.rmtree(generation[4].parent, ignore_errors=True)
         if manager_identity is not None:
             kill_darwin_processes((manager_identity,))
         _close_client_streams(client)
@@ -309,7 +289,7 @@ def test_manager_crash_retires_the_worker_generation(binary: Path) -> Transcript
         stop_client(client)
         if generation is not None:
             kill_darwin_processes(generation[:4])
-            shutil.rmtree(generation[4], ignore_errors=True)
+            shutil.rmtree(generation[4].parent, ignore_errors=True)
         if manager_identity is not None:
             kill_darwin_processes((manager_identity,))
         _close_client_streams(client)

@@ -16,8 +16,7 @@ Source and public acceptance tests remain the final authority when prose disagre
 ## Implementers and protocol reviewers
 
 - [Implemented architecture](ARCHITECTURE.md) is the source of truth for the current process structure, responsibility boundaries, worker-generation ownership, and lifecycle at an architectural level.
-- [Linux sandboxing](LINUX_SANDBOX.md) describes native policy, namespace prerequisites, child adoption, cleanup, and signals.
-- [macOS sandbox supervision](SANDBOX_SUPERVISION.md) describes primary host-side lifetime ownership, standalone terminal and signal ownership, manager failure recovery, and the remaining post-spawn boundary.
+- [Sandbox integration](SANDBOX.md) describes Console policy defaults, the verified executable handoff, native platform requirements, and lifetime limits.
 - [Worker protocol](WORKER_PROTOCOL.md) is the exact relay-worker wire protocol and custom-worker contract.
 - [Relay protocol](RELAY_PROTOCOL.md) is the exact private server-relay JSONL protocol.
 - [MCP tool description guidance](TOOL_DESCRIPTIONS.md) covers editorial rules and links to the canonical `tools/list` snapshot.
@@ -30,6 +29,7 @@ Source and public acceptance tests remain the final authority when prose disagre
 ## Maintainers
 
 - The [release guide](../RELEASE.md) describes PyPI setup, publication, verification, and recovery.
+- The [runner integration record](SANDBOX_RUNNER_INTEGRATION.md) records the baseline, validation, changed fixtures and guarantees, and runner-only blockers for the standalone-supervisor migration.
 
 ## Future design
 

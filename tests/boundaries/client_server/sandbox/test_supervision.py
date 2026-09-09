@@ -208,7 +208,7 @@ def test_restart_retires_descendants_outside_the_worker_group(
         stop_client(client)
         if generation is not None:
             _kill_generation(generation)
-            shutil.rmtree(generation[3], ignore_errors=True)
+            shutil.rmtree(generation[3].parent, ignore_errors=True)
 
 
 @requires(MACOS_SANDBOX, NATIVE_FIXTURES, PROCESS_EVENTS)
@@ -257,7 +257,7 @@ def test_failure_replacement_retires_descendants_outside_the_worker_group(
         stop_client(client)
         if generation is not None:
             _kill_generation(generation)
-            shutil.rmtree(generation[3], ignore_errors=True)
+            shutil.rmtree(generation[3].parent, ignore_errors=True)
         observations.close()
         temporary_owner.cleanup()
 
@@ -278,7 +278,7 @@ def test_server_shutdown_retires_descendants_outside_the_worker_group(
         stop_client(client)
         if generation is not None:
             _kill_generation(generation)
-            shutil.rmtree(generation[3], ignore_errors=True)
+            shutil.rmtree(generation[3].parent, ignore_errors=True)
 
 
 if __name__ == "__main__":

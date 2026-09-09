@@ -56,6 +56,8 @@ def _build_manager_start_interposer(directory: Path) -> Path:
             "-Wpedantic",
             "-Werror",
             "-dynamiclib",
+            "-I",
+            fixture.parent,
             "-o",
             library,
             source,
@@ -68,51 +70,11 @@ def _build_manager_start_interposer(directory: Path) -> Path:
 
 
 def _worker_generation_processes(server_pid: int) -> tuple[int, int]:
-    deadline = time.monotonic() + TIMEOUT
-    while True:
-        processes = subprocess.run(
-            ["/bin/ps", "-axo", "pid=,ppid=,comm="],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=TIMEOUT,
-        ).stdout
-        records = []
-        for process in processes.splitlines():
-            fields = process.strip().split(maxsplit=2)
-            if len(fields) == 3:
-                records.append((int(fields[0]), int(fields[1]), fields[2]))
-
-        # At this checkpoint the server owns a launcher, whose only children
-        # are the gated runner and manager. Preserve full executable paths,
-        # including spaces, instead of tokenizing the process's arguments.
-        server_executable = next(
-            executable for pid, _, executable in records if pid == server_pid
-        )
-        launchers = {
-            pid
-            for pid, parent, executable in records
-            if parent == server_pid and executable == server_executable
-        }
-
-        managers = [
-            pid
-            for pid, parent, executable in records
-            if parent in launchers and executable == server_executable
-        ]
-        roots = [
-            pid
-            for pid, parent, executable in records
-            if parent in launchers and Path(executable).name == "mcp-console-sandbox"
-        ]
-        assert len(managers) <= 1, managers
-        assert len(roots) <= 1, roots
-        if managers and roots:
-            return roots[0], managers[0]
-        assert time.monotonic() < deadline, (
-            "worker generation did not start its root and manager"
-        )
-        time.sleep(0.01)
+    (supervisor,) = darwin_child_process_identities(
+        capture_darwin_process_identity(server_pid)
+    )
+    (root,) = darwin_child_process_identities(supervisor)
+    return root[0], supervisor[0]
 
 
 def _wait_for_startup_cleanup(

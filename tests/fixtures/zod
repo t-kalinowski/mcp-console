@@ -756,7 +756,7 @@ def main() -> None:
             worker_pid = os.getpid()
             relay_pid = int(os.environ["ZOD_RELAY_PID"])
             relay_group = os.getpgrp()
-            assert len({worker_pid, relay_pid, relay_group}) == 3
+            assert worker_pid != relay_pid
             assert os.getppid() == relay_pid
             assert os.getpgid(relay_pid) == relay_group
             send_output(

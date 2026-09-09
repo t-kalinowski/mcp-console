@@ -505,7 +505,7 @@ The [implemented architecture](ARCHITECTURE.md) describes the session record and
   On macOS, the guarantee covers descendants observed by the launcher-owned manager; a later descendant that becomes orphaned before its fork event is resolved remains outside this guarantee.
   The configured relay starts only after host cleanup ownership and manager-failure recovery are established.
 - With `serve --no-sandbox`, the worker runs with host permissions and no manager tracks or retires its descendants; normal relay shutdown still reaps the direct worker.
-- Linux sandboxing requires kernel 5.11 or later, procfs, and permission for namespace setup; see [Linux sandboxing](LINUX_SANDBOX.md).
+- Linux sandboxing requires kernel 5.11 or later, procfs, and permission for namespace setup; see [Linux sandboxing](SANDBOX.md).
 - Windows is not supported.
 
 The [architecture](ARCHITECTURE.md) explains lifecycle and process ownership.

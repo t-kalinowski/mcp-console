@@ -442,8 +442,8 @@ impl RelayProcess {
         self.exited = true;
         self.reaped = true;
         // A direct relay's exit is redundant when its EOF established the
-        // worker failure. A launcher still owes cleanup; only its documented
-        // status 137 recovery is redundant after that same relay failure.
+        // worker failure. The sandbox runner still owes cleanup; status 137
+        // records a target SIGKILL already reported by that same relay failure.
         // A direct relay also terminates normally under our own SIGTERM request.
         if !self.ready_committed
             || status.success()
