@@ -51,18 +51,27 @@ class InstallationTests(unittest.TestCase):
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(ROOT / name, destination)
 
-            def stage_stale_macos_data() -> None:
-                for relative in (
-                    "libexec/mcp-console-sandbox",
-                    "share/licenses/mcp-console/LICENSE",
-                    "share/licenses/mcp-console/NOTICE",
-                ):
+            private_files = (
+                "libexec/mcp-console-sandbox",
+                "share/licenses/mcp-console/LICENSE",
+                "share/licenses/mcp-console/NOTICE",
+            )
+
+            def stage_stale_wheel_data() -> None:
+                stale = (
+                    "libexec/obsolete-runner",
+                    "share/licenses/mcp-console/Codex-LICENSE",
+                    "share/licenses/mcp-console/Codex-NOTICE",
+                )
+                if sys.platform == "linux":
+                    stale += private_files
+                for relative in stale:
                     destination = source / "wheel-data/data" / relative
                     destination.parent.mkdir(parents=True, exist_ok=True)
                     destination.write_bytes(b"stale macOS wheel data\n")
 
             if sys.platform == "linux":
-                stage_stale_macos_data()
+                stage_stale_wheel_data()
             result = subprocess.run(
                 ["uv", "tool", "install", "--reinstall", "."],
                 cwd=source,
@@ -78,44 +87,43 @@ class InstallationTests(unittest.TestCase):
                 prefix = (directory / "uv-bin/mcp-console").resolve().parent.parent
                 for relative in ("libexec", "share"):
                     self.assertFalse((prefix / relative).exists())
-            # Metadata must also work after deleting staged data when Cargo
-            # already has a compiled executable for this exact source tree.
-            if sys.platform == "darwin":
-                for relative in ("libexec", "share"):
-                    shutil.rmtree(source / "wheel-data/data" / relative)
-            else:
-                # A later macOS build can repopulate data even when Cargo has
-                # cached the Linux executable and its build-script output.
-                stage_stale_macos_data()
-            # Build the distributable wheel from the same source and target
-            # directory, so its Rust compilation is already complete.
-            result = subprocess.run(
-                [
-                    "uv",
-                    "build",
-                    "--wheel",
-                    "--config-setting",
-                    "maturin.build-args=--compatibility pypi",
-                    "--out-dir",
-                    str(directory / "dist"),
-                ],
-                cwd=source,
-                env=environment,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                timeout=1800,
-            )
-            self.assertEqual(result.returncode, 0, result.stdout)
-            print(result.stdout, flush=True)
-            wheels = list((directory / "dist").glob("*.whl"))
-            self.assertEqual(len(wheels), 1)
-            if sys.platform == "linux":
+            for remove_companions in (True, False):
+                # Check both missing companions and stale additions after Cargo
+                # has cached a build with all current companions still present.
+                if sys.platform == "darwin" and remove_companions:
+                    for relative in ("libexec", "share"):
+                        shutil.rmtree(source / "wheel-data/data" / relative)
+                stage_stale_wheel_data()
+                # Reuse the source and target directory for wheel construction.
+                result = subprocess.run(
+                    [
+                        "uv",
+                        "build",
+                        "--wheel",
+                        "--config-setting",
+                        "maturin.build-args=--compatibility pypi",
+                        "--out-dir",
+                        str(directory / "dist"),
+                    ],
+                    cwd=source,
+                    env=environment,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    timeout=1800,
+                )
+                self.assertEqual(result.returncode, 0, result.stdout)
+                print(result.stdout, flush=True)
+                wheels = list((directory / "dist").glob("*.whl"))
+                self.assertEqual(len(wheels), 1)
                 with zipfile.ZipFile(wheels[0]) as archive:
-                    self.assertEqual(
-                        [name for name in archive.namelist() if ".data/data/" in name],
-                        [],
+                    actual = sorted(
+                        name.split(".data/data/", 1)[1]
+                        for name in archive.namelist()
+                        if ".data/data/" in name
                     )
+                expected = private_files if sys.platform == "darwin" else ()
+                self.assertEqual(actual, sorted(expected))
             result = subprocess.run(
                 ["uv", "build", "--sdist", "--out-dir", str(directory / "dist")],
                 cwd=source,

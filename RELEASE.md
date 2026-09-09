@@ -67,7 +67,8 @@ uv source installation and wheel construction share the application's Cargo targ
 The small staging-script fixture checks isolation from the outer jobserver and compiler environment.
 Installation checks use unstaged sources, hide the build artifacts, and check the installed commands with a decoy runner on PATH.
 Wheel verification also checks sandbox launches with an empty PATH, bundled license notices, relocation without a writable home directory, bounded verification allocations, and rejection of missing or modified companions.
-Linux builds remove generated macOS companion data before packaging and require no sandbox runner.
+Each build clears the generated wheel data before staging, removing stale files from previous targets or staging recipes, including cached builds.
+Linux builds require no sandbox runner and leave the generated wheel data empty.
 The Linux installation smoke test evaluates R through `serve --no-sandbox`.
 
 ## One-time PyPI setup
