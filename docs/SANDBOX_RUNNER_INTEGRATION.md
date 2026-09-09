@@ -380,4 +380,35 @@ Logs and inventories are under `/tmp/mcp-console-pr266-restored-cases`.
 
 The full Linux Console suite, nested-procfs container case, Linux installed-pair checks, upstream native suites, debug runner suites, separate release rehearsal, and R-package checks were not rerun at this final pin.
 The final macOS aggregate ran before the Linux-only scenario was restored; that case is unavailable on macOS and was validated on Linux.
-The preceding hosted failures remain unexplained; local results do not establish a passing hosted run for the updated PR head.
+At this validation cutoff, the preceding hosted failures remained unexplained; the subsequent evidence and fixture corrections follow below.
+
+## CI fixture corrections
+
+[Run 34416068195](https://github.com/t-kalinowski/mcp-console/actions/runs/34416068195) at `ded5da6b` completed with Ubuntu passing and macOS failing.
+The added status diagnostic identifies the macOS failure as the writable-pipe scenario without cancellation: status 134, empty stdout, and a dyld error loading `setup_write_interposer.dylib` into the arm64e target from an arm64 library.
+The preceding cancellation scenarios passed.
+The test library was reinjected at the frontend exec boundary and then copied into the target environment by the runner.
+Local System Integrity Protection is enabled, and the unchanged `/bin/echo` case did not reproduce that loader error locally.
+A separate public sandbox invocation with a Python target did reproduce the leaked loader variable before the fix and passed after it.
+
+The earlier Linux failure in [run 34410478115](https://github.com/t-kalinowski/mcp-console/actions/runs/34410478115) came from an unordered fixture exchange.
+Receiving MCP `[prepared]` does not establish that the server has processed the scripted relay's subsequent runtime R callback on its separate stream.
+A controlled short write between `r_prepared` and `resolve_r` reproduced the exact CI failure: the relay expected `r_resolved`, received `evaluate`, and exited with status 1.
+The server then reported relay-stdout closure and unsuccessful launcher retirement.
+
+| Changed fixture or case                                                                                     | Change and preserved behavior                                                                                                                                                                                                                                                                                                                                                                                     |
+| ----------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `server_relay/requirements/test_resolution::explicit_r_preparation_owns_environment_before_host_resolution` | Wait for the existing callback-reply checkpoint before submitting the next cell. `scripted_relay.py` sends a second token on that checkpoint after `r_resolved` and `r_activated`. Keep the busy-callback rejection, explicit-environment ownership, resolver-call count, `[prepared]`, `[done]`, and exact wire transcript assertions.                                                                           |
+| `fixtures/native/runner_interposer.h`                                                                       | Remove `DYLD_INSERT_LIBRARIES` in the runner's library constructor, after the interposer has loaded and before target-environment capture. Keep reinjection at the frontend exec boundary. This shared fix applies to startup, parent-capture, setup-write, and descendant-observation fixtures; their process checkpoints, target commands, cancellation, status, streams, and cleanup assertions are unchanged. |
+
+The new callback wait first failed deterministically because its second checkpoint token was absent, then passed with the matching fixture notification.
+These corrections change no production code, runner pin, supported guarantee, transcript expectation, or snapshot file.
+
+After the corrections, macOS core checks, all 47 Rust tests, and all 412 applicable public transcript cases passed; ten cases remain unavailable (11 mode-level skip records).
+The installation step initially failed because the local invocation supplied a relative `MCP_CONSOLE_SANDBOX_SOURCE`, which resolved inside the installation fixture's temporary source copy.
+Rerunning `python3 tests/install.py` with the absolute checkout path passed both installation tests.
+The requirements-resolution and restart suites passed all 14 cases on both macOS and Linux with six concurrent cases, preserving both applicable execution modes and all snapshots.
+All 430 snapshot files remain byte-identical to `ded5da6b`, and all 73 existing assertions in the edited requirements suite are unchanged.
+The full Linux suite, runner executable suites, separate release rehearsal, and R-package acceptance were not rerun for these fixture-only corrections.
+Fresh hosted CI is not awaited; the completed hosted results above apply to their recorded heads.
+Logs, the controlled reproductions, and the assertion/snapshot audit are under `/tmp/mcp-console-pr266-ci-fix`.

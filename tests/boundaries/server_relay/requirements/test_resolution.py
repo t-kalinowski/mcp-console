@@ -761,6 +761,8 @@ def test_explicit_r_preparation_owns_environment_before_host_resolution(
             resolver_released = True
             client.client.receive(preparation)
             assert _tool_text(preparation["result"]) == "[prepared]"
+            # MCP preparation completion does not order the relay's next callback.
+            callback_reply.wait("runtime R callback reply before evaluation")
             assert _tool_text(client.send(r="42")) == "[done]"
             transcript = client.finish_active()
             finished = True

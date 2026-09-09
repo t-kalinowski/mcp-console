@@ -19,6 +19,11 @@ __attribute__((constructor)) static void capture_runner_test_library(void) {
     if (library != NULL) {
         runner_test_library = strdup(library);
     }
+    /* The library is already loaded. Keep its injection out of the target
+     * environment captured by the runner, including arm64e system targets. */
+    if (runner_is_supervisor() && unsetenv("DYLD_INSERT_LIBRARIES") != 0) {
+        _exit(125);
+    }
 }
 
 /* Console strips host interposers at its production exec boundary. Reinsert
