@@ -173,12 +173,11 @@ jobs:
 
       - name: Restore private sandbox build data
         id: sandbox-build-cache
-        if: steps.sandbox-cache.outputs.cache-hit != 'true'
         uses: actions/cache/restore@v6
         with:
           path: .sandbox-runner-source/codex-rs/target
-          # Ordinary PR pushes need only the staged runner. Restore intermediates
-          # when rebuilding it, including workspace crates from the preceding pin.
+          # Source-install checks need intermediates even with a staged runner.
+          # Reuse workspace crates from the preceding pin when rebuilding it.
           # Keep every restore prefix within the current UTC week.
           key: >-
             sandbox-build-v1-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.sandbox-pin.outputs.rust_toolchain }}-${{ hashFiles('.sandbox-runner-source/codex-rs/Cargo.toml', '.sandbox-runner-source/codex-rs/Cargo.lock', '.sandbox-runner-source/codex-rs/.cargo/**', 'scripts/stage-sandbox-runner') }}-${{ steps.sandbox-pin.outputs.commit }}
@@ -187,7 +186,9 @@ jobs:
             sandbox-build-v1-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.sandbox-pin.outputs.rust_toolchain }}-
 
       - name: Stage private sandbox runner
-        if: steps.sandbox-cache.outputs.cache-hit != 'true'
+        if: >-
+          steps.sandbox-cache.outputs.cache-hit != 'true' ||
+          steps.sandbox-build-cache.outputs.cache-hit != 'true'
         env:
           CARGO_INCREMENTAL: "0"
         run: scripts/stage-sandbox-runner .sandbox-runner-source
@@ -203,9 +204,7 @@ jobs:
           key: ${{ steps.sandbox-cache.outputs.cache-primary-key }}
 
       - name: Save private sandbox build data
-        if: >-
-          steps.sandbox-cache.outputs.cache-hit != 'true' &&
-          steps.sandbox-build-cache.outputs.cache-hit != 'true'
+        if: steps.sandbox-build-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
           path: .sandbox-runner-source/codex-rs/target
@@ -273,6 +272,16 @@ jobs:
             dist/*.whl \
             target/release/mcp-console
 
+      - name: Check uv source installations
+        env:
+          # Match the release wheel and companion builds above.
+          CARGO_INCREMENTAL: "0"
+          MCP_CONSOLE_SANDBOX_SOURCE: ${{ github.workspace }}/.sandbox-runner-source
+          UV_CACHE_DIR: ${{ runner.temp }}/mcp-console-cache
+          UV_PYTHON_DOWNLOADS: never
+          UV_NO_CONFIG: "1"
+        run: python3 tests/install.py
+
       - name: Install R package dependencies
         uses: r-lib/actions/setup-r-dependencies@v2
         with:
@@ -285,9 +294,13 @@ jobs:
 
       - name: Check R package
         env:
+          CARGO_INCREMENTAL: "0"
           MCP_CONSOLE_TEST_BINARY: ${{ github.workspace }}/target/release/mcp-console
+          _R_CHECK_TESTS_NLINES_: "0"
         working-directory: r
         run: |
+          # Source-install checks share target and can replace its companions.
+          cargo build --release --locked --bin mcp-console --manifest-path ../Cargo.toml
           R CMD build .
           R CMD check --no-manual mcp.console_*.tar.gz
 

@@ -12,7 +12,6 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-STAGE_ROOT = ROOT / "wheel-data"
 TARGETS = (
     "aarch64-apple-darwin",
     "x86_64-apple-darwin",
@@ -42,7 +41,7 @@ def main() -> None:
         "checkout",
         nargs="?",
         type=Path,
-        default=Path.home() / "github" / "t-kalinowski" / "codex",
+        default=os.environ.get("MCP_CONSOLE_SANDBOX_SOURCE"),
     )
     parser.add_argument("--target", choices=TARGETS)
     parser.add_argument("--github-output", type=Path)
@@ -58,9 +57,25 @@ def main() -> None:
     if sys.platform not in {"darwin", "linux"}:
         fail(f"building private runner artifacts is unsupported on {sys.platform}")
 
-    checkout = args.checkout.resolve()
+    checkout = args.checkout
+    if checkout is None:
+        checkout = ROOT / "target/sandbox-runner-cache" / pin["commit"]
+        checkout.mkdir(parents=True, exist_ok=True)
+        if not (checkout / ".git").exists():
+            git_output(checkout, "init")
+        if not (checkout / "codex-rs/Cargo.toml").exists():
+            git_output(
+                checkout,
+                "fetch",
+                "--depth",
+                "1",
+                f"https://github.com/{pin['repository']}.git",
+                pin["commit"],
+            )
+            git_output(checkout, "checkout", "--detach", pin["commit"])
+    checkout = checkout.resolve()
     workspace = checkout / "codex-rs"
-    if not (workspace / "mcp-console-sandbox" / "Cargo.toml").is_file():
+    if not (workspace / "mcp-console-sandbox/Cargo.toml").is_file():
         fail(f"not a sandbox-runner source checkout: {checkout}")
     head = git_output(checkout, "rev-parse", "HEAD")
     if head != pin["commit"]:
@@ -68,63 +83,73 @@ def main() -> None:
     if git_output(checkout, "status", "--porcelain", "--untracked-files=all"):
         fail("source checkout is not clean")
 
+    toolchain = ["rustup", "run", "--install", pin["rust_toolchain"]]
     target = args.target
     if target is None:
-        target = subprocess.run(
-            ["rustc", f"+{pin['rust_toolchain']}", "--print", "host-tuple"],
+        target = subprocess.check_output(
+            [*toolchain, "rustc", "--print", "host-tuple"],
             cwd=workspace,
-            capture_output=True,
             text=True,
-            check=True,
-        ).stdout.strip()
+        ).strip()
         if target not in TARGETS:
             fail(f"unsupported native target: {target}")
 
+    # Invoke Cargo on every source build and use its normal freshness checks.
+    # Changes to external tools selected through PATH can require cleaning the
+    # runner's target directory; see RELEASE.md. No local completed-runner cache
+    # bypasses Cargo.
     environment = os.environ.copy()
     environment["CARGO_TARGET_DIR"] = str(workspace / "target")
-    command = [
-        "cargo",
-        f"+{pin['rust_toolchain']}",
-        "build",
-        "--locked",
-        "--release",
-        "-p",
-        "codex-mcp-console-sandbox",
-        "--bin",
-        "mcp-console-sandbox",
-        *(["-p", "codex-bwrap", "--bin", "bwrap"] if "linux" in target else []),
-        "--target",
-        target,
-    ]
-    result = subprocess.run(command, cwd=workspace, env=environment, check=False)
-    if result.returncode != 0:
-        fail(f"runner build failed with status {result.returncode}")
-    runner = workspace / "target" / target / "release" / "mcp-console-sandbox"
-
-    for generated in (STAGE_ROOT / "data/libexec", STAGE_ROOT / "data/share"):
-        if generated.exists():
-            shutil.rmtree(generated)
-    libexec = STAGE_ROOT / "data" / "libexec"
-    licenses = STAGE_ROOT / "data" / "share" / "licenses" / "mcp-console"
+    subprocess.run(
+        [
+            *toolchain,
+            "cargo",
+            "build",
+            "--locked",
+            "--release",
+            "-p",
+            "codex-mcp-console-sandbox",
+            "--bin",
+            "mcp-console-sandbox",
+            *(["-p", "codex-bwrap", "--bin", "bwrap"] if "linux" in target else []),
+            "--target",
+            target,
+        ],
+        cwd=workspace,
+        env=environment,
+        check=True,
+    )
+    binaries = workspace / "target" / target / "release"
+    data = ROOT / "wheel-data/data"
+    for name in ("libexec", "share"):
+        if (data / name).exists():
+            shutil.rmtree(data / name)
+    libexec = data / "libexec"
+    licenses = data / "share/licenses/mcp-console"
     libexec.mkdir(parents=True)
     licenses.mkdir(parents=True)
-    staged_runner = libexec / "mcp-console-sandbox"
-    shutil.copyfile(runner, staged_runner)
-    staged_runner.chmod(0o755)
-    artifacts = [staged_runner]
-    for name in ("LICENSE", "NOTICE"):
-        destination = licenses / f"Codex-{name}"
-        shutil.copyfile(checkout / name, destination)
-        destination.chmod(0o644)
-    if "linux" in target:
-        staged_bwrap = libexec / "bwrap"
-        shutil.copyfile(runner.with_name("bwrap"), staged_bwrap)
-        staged_bwrap.chmod(0o755)
-        artifacts.append(staged_bwrap)
-        shutil.copyfile(
-            workspace / "vendor/bubblewrap/COPYING", licenses / "bubblewrap-COPYING"
+    artifacts = []
+    for name in ("mcp-console-sandbox", *(["bwrap"] if "linux" in target else [])):
+        staged = libexec / name
+        shutil.copyfile(binaries / name, staged)
+        staged.chmod(0o755)
+        # Preserve the symbolicateable original in Cargo's build directory.
+        strip = (
+            ["strip", "--strip-unneeded"]
+            if "linux" in target
+            else ["xcrun", "strip", "-S", "-x"]
         )
-    build_record = ROOT / "target" / "sandbox-runner-build.json"
+        subprocess.run([*strip, str(staged)], check=True)
+        artifacts.append(staged)
+    notices = [(checkout / name, name) for name in ("LICENSE", "NOTICE")]
+    if "linux" in target:
+        notices.append((workspace / "vendor/bubblewrap/COPYING", "bubblewrap-COPYING"))
+    for source, name in notices:
+        destination = licenses / name
+        shutil.copyfile(source, destination)
+        destination.chmod(0o644)
+        artifacts.append(destination)
+    build_record = ROOT / "target/sandbox-runner-build.json"
     build_record.parent.mkdir(exist_ok=True)
     build_record.write_text(
         json.dumps(

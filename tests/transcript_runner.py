@@ -1,3 +1,9 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["py-yaml12>=0.2.0"]
+# ///
+
 from __future__ import annotations
 
 import os
@@ -239,7 +245,7 @@ class TranscriptRunnerTests(unittest.TestCase):
 
     def start_runner(self, *arguments: str) -> subprocess.Popen[str]:
         return subprocess.Popen(
-            ["uv", "run", "--script", self.boundaries / "_run.py", *arguments],
+            [sys.executable, self.boundaries / "_run.py", *arguments],
             cwd=self.root,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -357,8 +363,6 @@ test_unselected = requires(available, missing, command("mcp-console-deliberately
                 "uv",
             ),
         }
-        uv = shutil.which("uv")
-        assert uv is not None
         for selector, commands in selectors.items():
             suite = selector.partition("::")[0] + ".py"
             destination = self.boundaries / "client_server" / suite
@@ -373,9 +377,7 @@ test_unselected = requires(available, missing, command("mcp-console-deliberately
                             executable.chmod(0o755)
                         result = subprocess.run(
                             [
-                                uv,
-                                "run",
-                                "--script",
+                                sys.executable,
                                 self.boundaries / "_run.py",
                                 "--jobs",
                                 "1",
