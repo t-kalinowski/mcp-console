@@ -23,7 +23,8 @@ from support.processes import (
     stop_process_id,
 )
 from support.records import Transcript
-from support.requirements import PROCESS_EVENTS, SANDBOX, requires
+from support.sandbox_observation import observed_sandbox_descendants
+from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, SANDBOX, requires
 from support.suites import run_this_suite
 
 
@@ -96,15 +97,18 @@ def test_restarts_after_unexpected_sideband_message(binary: Path) -> Transcript:
                 stop_process(client.process)
 
 
-@requires(SANDBOX, PROCESS_EVENTS)
+@requires(SANDBOX, PROCESS_EVENTS, NATIVE_FIXTURES)
 def test_restarts_after_worker_exit_with_partial_sideband(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
+    environment = os.environ.copy()
     with (
         tempfile.TemporaryDirectory() as temporary_directory,
         ZodFixtureControl(Path(temporary_directory)) as control,
+        observed_sandbox_descendants(
+            Path(temporary_directory), environment
+        ) as wait_for_descendant,
     ):
         temporary_path = Path(temporary_directory)
-        environment = os.environ.copy()
         control.configure(environment)
         descendant_group = None
         try:
@@ -126,6 +130,7 @@ def test_restarts_after_worker_exit_with_partial_sideband(binary: Path) -> Trans
                 descendant_group = host_process_id(
                     int(marker.read_text(encoding="utf-8")), client.process.pid
                 )
+                wait_for_descendant(descendant_group, client.process)
                 # Keep the event channel open before exit removes the directory.
                 control.connect(client)
                 release_partial_sideband(marker)

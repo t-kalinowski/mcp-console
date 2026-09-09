@@ -345,11 +345,29 @@ impl RelayProcess {
         collected_errors(errors)
     }
 
-    fn force_stop(&mut self) -> Result<(), String> {
+    fn retire_launcher(&mut self) -> Result<(), String> {
         if self.reaped {
             return self.retirement.clone().unwrap_or(Ok(()));
         }
-        let cleanup = self.force_stop_inner();
+        // Startup cancellation can reach the I/O join before the shutdown
+        // thread takes this lock. Give the direct child its retirement request
+        // and grace period here too; killing the runner bypasses its cleanup.
+        let requested = self.request_retirement();
+        let cleanup = match self.wait_timeout_without_reaping(LAUNCHER_RETIREMENT_GRACE) {
+            Ok(true) => self.reap(),
+            outcome => {
+                let error = match outcome {
+                    Ok(false) => format!(
+                        "worker launcher did not retire within {} ms",
+                        LAUNCHER_RETIREMENT_GRACE.as_millis()
+                    ),
+                    Err(error) => error,
+                    Ok(true) => unreachable!(),
+                };
+                combine_shutdown_results(Err(error), self.force_stop_inner())
+            }
+        };
+        let cleanup = combine_shutdown_results(requested, cleanup);
         let prior = self.retirement.take();
         let result = match (prior, cleanup) {
             (None | Some(Ok(())), cleanup) => cleanup,
@@ -1177,7 +1195,7 @@ impl RelayConnection {
             if child.is_reaped() {
                 Ok(())
             } else {
-                child.force_stop()
+                child.retire_launcher()
             }
         };
         let tasks = self.tasks.take();

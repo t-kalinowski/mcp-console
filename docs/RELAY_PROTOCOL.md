@@ -226,13 +226,14 @@ Clean relay-stdin EOF does not emit `shutdown_started`; it performs the same wor
 EOF midway through a command frame is a transport failure instead.
 
 In sandboxed mode, the sandbox launcher owns retirement of the whole target lifetime after target exit, a managed-retirement request, or parent loss.
-The runner implements that contract; see [sandbox integration](SANDBOX.md) for its guarantees and limits and the [validation record](SANDBOX_RUNNER_INTEGRATION.md) for current compatibility blockers.
+The runner implements that contract; see [sandbox integration](SANDBOX.md) for its guarantees and limits and the [validation record](SANDBOX_RUNNER_INTEGRATION.md) for baseline results and changed guarantees.
 The server retains the launcher as its ordinary waitable child.
 It waits through the worker deadline and uses the additional two-second allowance only after timely `shutdown_started` acceptance or a pre-retirement failure.
 If the launcher has not exited by the applicable relay deadline, the server sends it `SIGTERM` to request managed retirement.
 A launcher that consumes the owned-retirement request returns status 0 only after cleanup, using its existing exit status as the acknowledgment.
 The server allows six seconds for managed retirement before forcing launcher exit, followed by one second to observe that exit.
 The server does not start the replacement sandbox lifetime until the launcher-exit barrier completes.
+Cancellation before worker readiness uses the same SIGTERM request and grace period when the startup I/O join reaches the launcher before the shutdown thread.
 A nonzero launcher exit fails the restart instead of admitting a replacement.
 Signal-derived status 137 is redundant only when relay EOF itself established the generation failure; it remains an error after an earlier independent protocol, worker, or transport failure.
 The server uses a hard runner kill only as the final fail-safe.

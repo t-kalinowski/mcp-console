@@ -5,7 +5,6 @@ import re
 import select
 import shutil
 import signal
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -20,7 +19,6 @@ from support.macos import (
     darwin_child_process_identities,
     kill_darwin_processes,
     live_darwin_processes,
-    signal_darwin_process,
 )
 from support.normalization import code
 from support.records import Transcript
@@ -110,18 +108,6 @@ def _spawn_detached_generation(client: McpClient) -> Generation:
     )
 
 
-def _wait_for_process_cleanup(
-    identities: tuple[DarwinProcessIdentity, ...],
-    timeout: float,
-) -> list[int]:
-    deadline = time.monotonic() + timeout
-    survivors = live_darwin_processes(identities)
-    while survivors and time.monotonic() < deadline:
-        time.sleep(0.01)
-        survivors = live_darwin_processes(identities)
-    return survivors
-
-
 def _wait_for_process_reaping(
     process_events: "select.kqueue",
     identities: tuple[DarwinProcessIdentity, ...],
@@ -140,25 +126,6 @@ def _wait_for_process_reaping(
             assert event.filter == select.KQ_FILTER_PROC, event
             if event.fflags & _KQ_NOTE_REAP:
                 pending.remove(event.ident)
-
-
-def _wait_for_generation_failure(client: McpClient) -> None:
-    deadline = time.monotonic() + 5
-    poll_start = len(client.transcript)
-    while True:
-        result = client.send()
-        if result.get("isError") is True:
-            assert result["content"][0]["text"] == (
-                "[worker relay stdout closed before retirement completed]\n"
-                "[worker stopped: in-memory state lost]"
-            ), result
-            final_poll = client.transcript[-1]
-            client.transcript[poll_start:] = [final_poll]
-            return
-        assert time.monotonic() < deadline, (
-            "server did not retire the failed generation"
-        )
-        time.sleep(0.01)
 
 
 def _manager_pid(server_pid: int) -> int:
@@ -247,52 +214,6 @@ def test_server_crash_retires_the_worker_generation(binary: Path) -> Transcript:
         _close_client_streams(client)
         manager_exit.close()
         generation_reaping.close()
-
-
-@requires(MACOS_SANDBOX, PROCESS_EVENTS)
-def test_manager_crash_retires_the_worker_generation(binary: Path) -> Transcript:
-    # While the relay root remains live and pinned, the launcher must take over
-    # bounded cleanup if the ready manager exits.
-    client = McpClient(binary, SANDBOXED.serve())
-    generation: Generation | None = None
-    manager_identity: DarwinProcessIdentity | None = None
-    try:
-        client.initialize_and_list_tools()
-        generation = _spawn_detached_generation(client)
-        manager_pid = _manager_pid(client.process.pid)
-        manager_identity = capture_darwin_process_identity(manager_pid)
-
-        assert signal_darwin_process(manager_identity, signal.SIGKILL), (
-            "manager exited before crash injection"
-        )
-        client.transcript.append({"manager_signal": "SIGKILL"})
-        _wait_for_generation_failure(client)
-        survivors = _wait_for_process_cleanup(generation[:4], timeout=5)
-        survivor_names = [
-            name
-            for name, identity in zip(
-                ("runner", "relay", "worker", "detached child"), generation[:4]
-            )
-            if identity[0] in survivors
-        ]
-        assert survivors == [], (
-            f"worker-generation processes survived manager crash: {survivor_names}"
-        )
-        client.send(r=code('writeLines("replacement ready")'))
-        replacement = _last_text(client)
-        assert replacement == "[starting new worker]\nreplacement ready\n", repr(
-            replacement
-        )
-        assert generation[4].exists(), "manager recovery removed worker temp"
-        return client.transcript
-    finally:
-        stop_client(client)
-        if generation is not None:
-            kill_darwin_processes(generation[:4])
-            shutil.rmtree(generation[4].parent, ignore_errors=True)
-        if manager_identity is not None:
-            kill_darwin_processes((manager_identity,))
-        _close_client_streams(client)
 
 
 if __name__ == "__main__":

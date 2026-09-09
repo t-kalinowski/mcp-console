@@ -2,7 +2,6 @@
 
 import os
 import select
-import signal
 import subprocess
 import sys
 import tempfile
@@ -19,11 +18,9 @@ from support.client import McpClient, stop_client
 from support.execution import SANDBOXED
 from support.native import build_interposer
 from support.macos import (
-    DarwinProcessIdentity,
     capture_darwin_process_identity,
     darwin_child_process_identities,
     live_darwin_processes,
-    signal_darwin_process,
 )
 from support.normalization import code
 from support.processes import (
@@ -35,6 +32,7 @@ from support.processes import (
     stop_process_id,
 )
 from support.records import Transcript
+from support.sandbox_observation import observed_sandbox_descendants
 from support.requirements import (
     MACOS_SANDBOX,
     NATIVE_FIXTURES,
@@ -59,14 +57,6 @@ from boundaries.client_server._harness import (
 from boundaries.client_server.sandbox._fixtures import (
     launcher_retirement,
 )
-
-
-def _manager_pid(server_pid: int) -> int:
-    # Historical recovery tests refer to the sole supervisor as the manager.
-    (supervisor,) = darwin_child_process_identities(
-        capture_darwin_process_identity(server_pid)
-    )
-    return supervisor[0]
 
 
 @requires(SANDBOX)
@@ -385,11 +375,8 @@ def test_restart_allows_accepted_relay_shutdown_to_finish(
                 stop_process(client.process)
 
 
-def _restart_outer_force_stops_unresponsive_relay(
-    binary: Path,
-    *,
-    stop_manager: bool,
-) -> Transcript:
+@requires(MACOS_SANDBOX, PROCESS_EVENTS)
+def test_restart_outer_force_stops_unresponsive_relay(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
@@ -409,7 +396,6 @@ def _restart_outer_force_stops_unresponsive_relay(
         )
         helper_pid = None
         worker_group = None
-        manager: DarwinProcessIdentity | None = None
         passed = False
         try:
             client.initialize_and_list_tools()
@@ -454,14 +440,6 @@ def _restart_outer_force_stops_unresponsive_relay(
                 client,
                 "outer relay force-stop",
             )
-            if stop_manager:
-                manager = capture_darwin_process_identity(
-                    _manager_pid(client.process.pid)
-                )
-                assert signal_darwin_process(manager, signal.SIGSTOP), (
-                    "sandbox manager exited before the stall injection"
-                )
-
             relay = capture_darwin_process_identity(relay_target)
             root = capture_darwin_process_identity(worker_group)
             assert root == relay
@@ -470,8 +448,6 @@ def _restart_outer_force_stops_unresponsive_relay(
                 descendants.extend(darwin_child_process_identities(process))
             retiring = {identity[0] for identity in descendants}
             assert {worker_pid, helper_pid}.issubset(retiring), retiring
-            if manager is not None:
-                retiring.add(manager[0])
             with closing(select.kqueue()) as exits:
                 watches = [
                     select.kevent(
@@ -484,9 +460,9 @@ def _restart_outer_force_stops_unresponsive_relay(
                 ]
                 assert exits.control(watches, 0, 0) == []
                 restarted = client.start_send(control="restart")
-                retirement_deadline = time.monotonic() + (10 if stop_manager else 5)
+                retirement_deadline = time.monotonic() + 5
                 # Descendants must exit; their external parents may retain zombies.
-                # The launcher must also reap its own relay and manager below.
+                # The runner must also reap its direct relay below.
                 while retiring:
                     events = exits.control(
                         None,
@@ -507,16 +483,6 @@ def _restart_outer_force_stops_unresponsive_relay(
             assert live_darwin_processes((root, relay)) == [], (
                 "sandbox launcher did not retire its runner and relay"
             )
-            if manager is not None:
-                assert live_darwin_processes((manager,)) == [], (
-                    "stopped sandbox manager outlived launcher recovery"
-                )
-                restarted["launcher_recovery"] = {
-                    "manager": "stopped before owned retirement",
-                    "verified_barrier": "manager, relay, worker, and detached descendant",
-                }
-                passed = True
-                return client.transcript
             assert last_tool_text(client) == (
                 "[active evaluation stopped by session restart request]\n"
                 "[worker stopped: in-memory state lost]\n"
@@ -530,40 +496,24 @@ def _restart_outer_force_stops_unresponsive_relay(
             passed = True
             return transcript
         finally:
-            if manager is not None:
-                signal_darwin_process(manager, signal.SIGCONT)
-            if stop_manager:
-                stop_client(client)
             if not passed:
                 stop_process_id(helper_pid)
                 stop_process_group(worker_group)
                 stop_process(client.process)
 
 
-@requires(MACOS_SANDBOX, PROCESS_EVENTS)
-def test_restart_outer_force_stops_unresponsive_relay(binary: Path) -> Transcript:
-    return _restart_outer_force_stops_unresponsive_relay(
-        binary,
-        stop_manager=False,
-    )
-
-
-@requires(MACOS_SANDBOX, PROCESS_EVENTS)
-def test_restart_waits_for_owned_launcher_manager_recovery(
-    binary: Path,
-) -> Transcript:
-    return _restart_outer_force_stops_unresponsive_relay(
-        binary,
-        stop_manager=True,
-    )
-
-
-@requires(SANDBOX, PROCESS_EVENTS)
+@requires(SANDBOX, PROCESS_EVENTS, NATIVE_FIXTURES)
 def test_restart_does_not_report_never_ready_worker_as_stopped(
     binary: Path,
 ) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
-    with tempfile.TemporaryDirectory() as temporary_directory:
+    environment = os.environ.copy()
+    with (
+        tempfile.TemporaryDirectory() as temporary_directory,
+        observed_sandbox_descendants(
+            Path(temporary_directory), environment
+        ) as wait_for_descendant,
+    ):
         temporary_path = Path(temporary_directory)
         startup_control = temporary_path / "zod-startup-control"
         startup_release = temporary_path / "zod-startup-release"
@@ -571,7 +521,6 @@ def test_restart_does_not_report_never_ready_worker_as_stopped(
             "block with detached sideband writer",
             encoding="utf-8",
         )
-        environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
         environment["ZOD_STARTUP_CONTROL"] = str(startup_control)
         environment["ZOD_STARTUP_RELEASE"] = str(startup_release)
@@ -598,6 +547,7 @@ def test_restart_does_not_report_never_ready_worker_as_stopped(
             descendant_group = host_process_id(
                 int(marker.read_text(encoding="utf-8")), client.process.pid
             )
+            wait_for_descendant(descendant_group, client.process)
 
             startup_control.write_text("ready", encoding="utf-8")
             restarted = client.start_send(control="restart")

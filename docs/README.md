@@ -29,7 +29,7 @@ Source and public acceptance tests remain the final authority when prose disagre
 ## Maintainers
 
 - The [release guide](../RELEASE.md) describes PyPI setup, publication, verification, and recovery.
-- The [runner integration record](SANDBOX_RUNNER_INTEGRATION.md) records the baseline, validation, changed fixtures and guarantees, and runner-only blockers for the standalone-supervisor migration.
+- The [runner integration record](SANDBOX_RUNNER_INTEGRATION.md) records the baseline, validation, changed fixtures and guarantees for the standalone-supervisor migration.
 
 ## Future design
 

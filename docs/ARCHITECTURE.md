@@ -42,7 +42,7 @@ A standalone `mcp-console sandbox -- COMMAND [ARG]...` uses the same frontend-to
 No waiting Console adapter remains.
 The runner sees the original caller as its direct parent and inherits the original standard streams.
 The [sandbox integration](SANDBOX.md) defines Console policy defaults, installation verification, supported hosts, and lifetime limits.
-The [migration record](SANDBOX_RUNNER_INTEGRATION.md) tracks unresolved acceptance failures at the current pin.
+The [migration record](SANDBOX_RUNNER_INTEGRATION.md) records the baseline, validation, and changed lifetime guarantees.
 
 With `serve --no-sandbox`, the server launches the relay directly with host permissions and the host temporary-directory environment.
 R, Python, and DuckDB dependency resolution always runs in separate host processes; [requirements and environments](REQUIREMENTS.md) defines its trust boundary.
@@ -106,7 +106,8 @@ The server does not execute submitted cells or ask the relay to interpret MCP ca
 It configures the child's piped standard input and output and inherited standard error, closes unrelated inherited descriptors before exec, and knows normal child exit and signaling, but no private directory, startup gate, sandbox root, manager, or manager monitor.
 At generation retirement, it first requests graceful shutdown through the relay protocol and waits through the applicable relay deadline.
 In sandboxed mode, it then sends `SIGTERM` to the launcher to request managed retirement and uses a hard launcher kill only as the final fail-safe.
-On normal and owned-retirement paths, the server treats successful managed launcher exit as the synchronous cleanup barrier before reaping; the [migration record](SANDBOX_RUNNER_INTEGRATION.md) identifies where the current pin fails that contract.
+On normal and owned-retirement paths, the server treats successful managed launcher exit as the synchronous cleanup barrier before reaping.
+Cancellation before worker readiness follows the same runner-retirement request and grace period, including when the startup I/O join reaches the child first.
 With `--no-sandbox`, the server owns and reaps the relay directly; no runner supplies descendant cleanup.
 After the relay deadline, the server accepts termination from its own successful `SIGTERM` request as completed direct retirement.
 
@@ -115,7 +116,7 @@ After the relay deadline, the server accepts termination from its own successful
 The frontend selects application policy and verifies the installation, then execs the runner.
 It never writes protocol data to stdout or waits for a target process.
 The runner captures configured caller identity, applies native enforcement, releases the target, restores its inherited signal state, and owns descendant and directory retirement.
-A successful runner exit is the server's intended synchronous cleanup barrier; the migration record documents the remaining failures of that contract.
+A successful runner exit is the server's synchronous cleanup barrier.
 Supervisor death has no independent recovery guarantee.
 The server retains only ordinary child signaling, exit observation, and reaping around this boundary.
 

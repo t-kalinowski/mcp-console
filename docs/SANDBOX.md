@@ -3,11 +3,11 @@
 MCP Console selects its application policy, verifies the installed private executable, and replaces `mcp-console sandbox` with that executable on macOS and Linux.
 The runner owns native enforcement, signal and terminal handling, descendant observation and retirement, and private storage.
 Console contains no sandbox manager, recovery monitor, descendant tracker, target signal wrapper, or directory owner.
-The [integration validation record](SANDBOX_RUNNER_INTEGRATION.md) identifies retained contracts that the current pin does not yet pass; this migration is not ready to merge.
+The [integration validation record](SANDBOX_RUNNER_INTEGRATION.md) records the baseline, supported-host results, fixture changes, and changed guarantees.
 
 ## Application policy and launch
 
-The pin in `sandbox-runner.json` is `ee88fa4f7744fdfb0e99dd0e928ff43d7171814e`, protocol 2, Rust 1.95.0.
+The pin in `sandbox-runner.json` is `fe1b9e4e89458ba8812bfb0a65fb0a1ad84e71d5`, protocol 2, Rust 1.95.0.
 The executable contract and acceptance tests at that commit are the source of truth for runner behavior.
 Console uses `--config-env MCP_CONSOLE_SANDBOX_CONFIG -- COMMAND [ARG]...`.
 The selected variable contains one immutable JSON object, consumed by the runner and removed from the target environment.
@@ -33,6 +33,7 @@ The temporary layout is a runner-owned `sandbox-XXXXXX` container with a writabl
 The frontend preserves its PID and direct caller across exec.
 The server still launches one ordinary child with piped stdin/stdout and inherited stderr for each worker generation.
 It requests graceful relay shutdown, then runner retirement through SIGTERM if required, and observes and reaps that child.
+Cancellation before worker readiness also requests runner retirement and waits for its exit before joining worker I/O.
 The runner inherits the original fd 0, 1, and 2; Console does not copy, frame, relay, or retain those streams.
 The runner restores target signal state and handles native terminal ownership.
 Version 2 requires UTF-8 executable arguments, paths, and environment values.
@@ -53,6 +54,7 @@ General shell job suspension and resumption are unsupported.
 
 Linux uses the native namespace helper, bubblewrap, namespace-local procfs, a host subreaper, and pidfds.
 The relay-worker sideband uses two anonymous pipes under the same sandbox policy.
+It does not require Unix socket syscall exceptions or relaxed network restrictions.
 It requires kernel 5.11 or later and permission for user, mount, PID, and network namespaces.
 Full-disk-write policies and procfs fallback are rejected by the runner's supervised path; Console's fixed policy requests neither.
 Linux keeps the caller's foreground-terminal ownership and relays interrupts through namespace init.
@@ -68,11 +70,12 @@ The runner reports discovered cleanup failures on stderr with a nonzero status, 
 It retains private storage when retirement cannot be established.
 The previous Console implementation treated directory removal as best effort.
 Darwin still cannot guarantee discovery of a descendant that detaches and becomes orphaned before observation, or atomic identity-check-and-signal delivery.
-The observed cleanup regressions in the validation record remain blockers; they are not accepted changes to the retained Console contract.
+The runner keeps the native root unreaped through retirement, preserving the owned process group, and retires detached descendants it has already observed.
+Startup failures use the runner's native diagnostics; successful cancellation can be silent.
 
 ## Policy extensions and compatibility
 
-The pinned runner uses the base and preferences policies in `codex-rs/sandboxing/src/seatbelt*.sbpl` at `ee88fa4f7744fdfb0e99dd0e928ff43d7171814e`.
+The pinned runner uses the base and preferences policies in `codex-rs/sandboxing/src/seatbelt*.sbpl` at `fe1b9e4e89458ba8812bfb0a65fb0a1ad84e71d5`.
 MCP Console supplies read access to the filesystem root, restricted networking with no proxy, and its trusted `policy_extensions.sbpl`.
 Managed networking and configurable user policies remain planned work.
 

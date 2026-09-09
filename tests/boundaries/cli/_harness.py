@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import termios
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,6 +25,10 @@ from support.macos import (
     live_darwin_processes,
 )
 from support.normalization import code
+from support.sandbox_observation import (
+    RunnerObservations,
+    build_runner_observation_interposer,
+)
 
 TIMEOUT = 10
 
@@ -38,6 +43,8 @@ class _SandboxLifetime:
     descendant: DarwinProcessIdentity
     manager: DarwinProcessIdentity
     temporary_directory: Path
+    observations: RunnerObservations
+    observation_directory: tempfile.TemporaryDirectory
 
 
 def _watch_process_exits(
@@ -188,11 +195,20 @@ def _start_lifetime(
             binary,
             *recorded_arguments,
         ]
+    observation_directory = tempfile.TemporaryDirectory()
+    observation_path = Path(observation_directory.name)
+    observations = RunnerObservations(observation_path / "runner-observations")
+    environment = os.environ.copy()
+    environment["MCP_CONSOLE_TEST_MANAGER_OBSERVATIONS"] = str(observations.path)
+    environment["DYLD_INSERT_LIBRARIES"] = str(
+        build_runner_observation_interposer(observation_path)
+    )
     process = subprocess.Popen(
         launch_arguments,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        env=environment,
     )
     assert process.stdin is not None
     assert process.stdout is not None
@@ -221,6 +237,10 @@ def _start_lifetime(
         )
         manager = capture_darwin_process_identity(_manager_pid(process.pid))
         identities.append(manager)
+        # This case requires retirement of an observed detached descendant.
+        # Keep its parent alive until the runner has registered that identity;
+        # otherwise immediate root exit can orphan it before discovery.
+        observations.wait_for(descendant[0], process)
         lifetime = _SandboxLifetime(
             process=process,
             arguments=recorded_arguments,
@@ -230,6 +250,8 @@ def _start_lifetime(
             descendant=descendant,
             manager=manager,
             temporary_directory=temporary_directory,
+            observations=observations,
+            observation_directory=observation_directory,
         )
         return lifetime
     except BaseException as error:
@@ -253,6 +275,8 @@ def _start_lifetime(
             shutil.rmtree(temporary_directory.parent, ignore_errors=True)
         for stream in (process.stdin, process.stdout, process.stderr):
             stream.close()
+        observations.close()
+        observation_directory.cleanup()
         raise
 
 
@@ -297,6 +321,8 @@ def _cleanup(lifetime: _SandboxLifetime) -> None:
     ):
         if not stream.closed:
             stream.close()
+    lifetime.observations.close()
+    lifetime.observation_directory.cleanup()
 
 
 def _command_record(lifetime: _SandboxLifetime) -> dict[str, object]:

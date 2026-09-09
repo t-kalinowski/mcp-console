@@ -33,7 +33,7 @@ Ordinary runtime, protocol, and lifecycle cases stay with those subjects, includ
 Direct-launch host access and recovery live under `client_server/lifecycle`; plot-session isolation lives under `client_server/r`.
 
 The direct CLI sandbox cases own setup cancellation, large-frame startup, original-stdin identity and closure, argument and standard-stream fidelity, job control, signal and exit status, security policy, and runner-owned retirement.
-The public MCP sandbox cases cover sandbox-dependent runtime workflows, startup failure and gating, worker replacement, supervisor loss, restart, and shutdown.
+The public MCP sandbox cases cover sandbox-dependent runtime workflows, startup failure and gating, worker replacement, caller loss, restart, and shutdown.
 The lifecycle suites own the inherited-descriptor launch matrix in direct and sandboxed modes.
 The relay wrapper workflow verifies MCP restart and shutdown when the relay is below the sandbox root and a worker descendant retains its streams.
 The direct relay CLI case compares the complete protocol through ordinary direct launch and the public sandbox command, without requiring the relay to be a process-group leader.

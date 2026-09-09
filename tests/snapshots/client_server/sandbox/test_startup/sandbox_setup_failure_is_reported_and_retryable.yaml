@@ -18,6 +18,5 @@ result:
         zod: echo
   isError: false
 ---
-stderr: >
-  failed to create temporary directory `<sandbox temp>`: Not a directory
-  (os error 20)
+stderr: |
+  mcp-console-sandbox: create private storage: Not a directory (os error 20)

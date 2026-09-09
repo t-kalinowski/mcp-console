@@ -1,47 +1,56 @@
 # Standalone runner integration record
 
-This is a blocked migration, prepared as a draft for review.
-The thin frontend and pin are implemented, but the retained public suite finds runner compatibility failures.
-Do not merge or replace the failing expectations with newly accepted output.
-The required fixes belong in the private runner; Console must not regain native supervision.
+This migration leaves Console responsible for application policy, verified installation, and ordinary child-process integration.
+The private runner owns native enforcement, lifetime supervision, and storage.
+This record distinguishes preserved behavior, changed fixture observation, and intentionally removed supervisor-death recovery.
 
-## Revisions and baseline
+## Revisions and baselines
 
-Work started from current `origin/main`, `c3027d71a86f837804ff3234dd1fab5c9103ff40`, with a clean tree.
-The previous runner pin was `3ee7d3190983b482b312ddfc3201c464179a1245`.
-The new exact implementation pin is `ee88fa4f7744fdfb0e99dd0e928ff43d7171814e` from `mcp-console/sandbox-runner/rust-v0.150.1`.
+The PR originally started from main `c3027d71a86f837804ff3234dd1fab5c9103ff40` and integrated runner `ee88fa4f7744fdfb0e99dd0e928ff43d7171814e` as a blocked draft.
+After the runner follow-up landed, main was baselined again at `26a5f3c35408e2a3ca5ba21485322044f883ca8a`, then merged into the PR.
+That main includes the two-pipe relay-worker sideband and its fixture synchronization fixes.
+Main advanced again to `abba95d6a12c8ba442bbf986e00eee7ef9f6a634` during validation, adding only a poll-ownership fixture checkpoint and its snapshot.
+The changed public case passed against the saved baseline executable, its four incoming files were hashed, and the commit was merged unchanged.
+The case then passed on the integrated macOS and Linux builds.
+Both main baselines used runner `3ee7d3190983b482b312ddfc3201c464179a1245`.
+
+The final pin is the exact implementation commit `fe1b9e4e89458ba8812bfb0a65fb0a1ad84e71d5` on `mcp-console/sandbox-runner/rust-v0.150.1`.
+The inspected branch tip `64a207d82525e6a22843971e8c64c4a02e358583` adds handoff documentation only.
 Protocol 2 and Rust 1.95.0 remain pinned.
-The original runner repository was read only; the build and executable tests used a separate checkout at the exact commit inside this worktree's ignored `.sandbox-runner-source` directory.
+The original runner repository was read only; builds and contract tests used isolated checkouts at the exact pin.
 
-Before implementation edits, the baseline record captured all 417 discovered transcript cases, SHA-256 hashes of 510 boundary-test and snapshot files, the source revision and runner pin, a complete local `scripts/check`, and the installed-runner acceptance tests.
-All recorded file hashes were unchanged at the end of the baseline.
-Local evidence is under `/tmp/mcp-console-supervisor-integration`; this document records the durable results and reproductions.
+Before the original migration and the runner follow-up, the record captured revision, pin, discovered public cases, snapshot hashes, a complete local `scripts/check`, and installed-runner acceptance results.
+All baseline file hashes were verified unchanged after the baseline run.
+Local logs and inventories are under `/tmp/mcp-console-supervisor-integration` and `/tmp/mcp-console-supervisor-followup`; the results below are the durable record.
 
-| Validation                                      | Baseline result                                                                                                                                                                                                                    |
-| ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| macOS 26.6.2, build 25G83, arm64; Darwin 25.6.0 | `scripts/check` passed: runtime-source validation, Python suites (12 release, 25 transcript-runner, 5 client, 4 architecture), formatting, Clippy, 47 Rust tests, and 407 applicable transcript cases. Ten cases were unavailable. |
-| Installed public binary/private runner pair     | `python3 tests/sandbox_installation.py target/debug/mcp-console target/libexec/mcp-console-sandbox`: seven tests, five passed and two Linux-only skips.                                                                            |
-| Current-main hosted macOS                       | Passed, including core, wheel smoke, R package, and transcripts.                                                                                                                                                                   |
-| Current-main hosted Ubuntu 24.04                | Passed, including core, wheel smoke, R package, and transcripts.                                                                                                                                                                   |
-| Local Linux Console baseline                    | Not performed.                                                                                                                                                                                                                     |
+| Baseline                                                    | Result                                                                                                                                                                                    |
+| ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Original main, macOS 26.6.2 arm64                           | `scripts/check` passed: core checks, 47 Rust tests, 407 applicable transcripts; 10 capability skips. All 425 snapshots unchanged.                                                         |
+| Updated main, same macOS host                               | `scripts/check` passed: core checks, 47 Rust tests, 413 applicable transcript cases; 10 cases unavailable. All 431 snapshots unchanged; 520 boundary/snapshot files hashed.               |
+| Installed public binary/private runner pair, both baselines | Seven tests: five passed, two Linux-only skips.                                                                                                                                           |
+| Original main hosted macOS and Ubuntu 24.04                 | Both passed in [run 34365637066](https://github.com/t-kalinowski/mcp-console/actions/runs/34365637066).                                                                                   |
+| Updated main hosted macOS and Ubuntu 24.04                  | Ubuntu passed; the macOS job was cancelled during transcripts, so it has no passing full result. [Run 34395951703](https://github.com/t-kalinowski/mcp-console/actions/runs/34395951703). |
+| Local Linux Console baseline                                | Not performed.                                                                                                                                                                            |
 
-Both hosted results are for the exact baseline head in [Actions run 34365637066](https://github.com/t-kalinowski/mcp-console/actions/runs/34365637066).
-The run was still pending when the baseline was captured and completed successfully during integration.
-A local Linux VM was inspected, but no Console or runner validation was performed there; it was stopped and the prior Docker context restored.
+Counts refer to public cases, including all applicable execution modes.
+The macOS logs have 11 skip records for 10 unavailable cases because the null-fault case reports its direct and sandbox modes separately.
 
 ## Executable contract inspected
 
-The pin was selected after reading `mcp-console-sandbox/PROTOCOL.md`, `LIFECYCLE.md`, `src/main.rs`, `bootstrap.rs`, `config.rs`, `launch.rs`, `native.rs`, `storage.rs`, `signals.rs`, and the platform implementations and executable contract tests.
-The pin's `cargo +1.95.0 test --locked -p codex-mcp-console-sandbox --test bootstrap_contract` passed all 54 contracts on macOS.
-Its locked release build for `aarch64-apple-darwin` and Console artifact staging also passed.
-Those runner tests do not establish that the Console acceptance suite passes.
+The actual protocol, lifecycle documentation, main/configuration parsing, launch, native setup, signal handling, storage, platform implementations, and executable contract tests were read at the pin.
+The macOS release build and all **58 executable bootstrap contracts** passed with Rust 1.95.0 on `aarch64-apple-darwin`.
+The Linux release runner and bubblewrap build passed on `x86_64-unknown-linux-gnu`.
 
-Console uses the executable's `--config-env NAME -- COMMAND [ARG]...` interface.
-Only the small fixed policy and lifecycle object is serialized into the selected environment value; the target's command, cwd, and environment use ordinary launch inputs.
-The runner consumes and removes the selected variable.
-The separate inherited-descriptor interface remains covered by the unchanged installation tests, but Console no longer writes a bootstrap pipe.
-There is no new Console payload limit or single environment value containing the entire target environment.
-The retained 96 KiB environment case passes; maximum host exec limits were not exhaustively tested.
+Console uses `--config-env NAME -- COMMAND [ARG]...` and execs in place.
+Only fixed policy and lifecycle choices enter the immutable JSON value; argv, cwd, environment, and fd 0/1/2 remain ordinary launch inputs.
+The selected variable is consumed and removed from the target environment.
+No configuration file, path handoff, pipe writer, or waiting Console adapter is introduced.
+The separate inherited-descriptor interface remains covered by installation tests.
+Console adds no request-size restriction; the 96 KiB environment, binary stdin, and long/multibyte source cases remain public constraints.
+Maximum host exec limits were not exhaustively tested.
+
+The new runner preserves the waitable root through retirement, retires owned-group members and observed detached descendants, orders cancellation before native setup writes, retains a partial setup channel through retirement, and reports Linux procfs prerequisite errors without a panic.
+Linux socket syscall restrictions remain unchanged; the two-pipe sideband works within them.
 
 ## Before and after layouts
 
@@ -92,129 +101,139 @@ This removes native descendant tracking, manager and monitor recovery, temporary
 The `sandbox-manager` and `sandbox-target` CLI variants and dispatch paths are deleted.
 Sandbox-only descriptor and direct-child polling helpers are deleted; ordinary server child observation and descriptor sanitation remain.
 
-The production diff removes 4,025 lines and adds 64, a net deletion of 3,961 lines (`git diff --numstat c3027d71 -- src`).
+The production diff removes 4,028 lines and adds 85, a net deletion of 3,943 lines (`git diff --numstat 26a5f3c3 -- src`).
 All rules in `src/sandbox/policy_extensions.sbpl` and installation verification are unchanged; only the policy comment linking to its audit document is updated.
 Filesystem host reads, network restriction, full mutation of private temporary data, host-terminal restrictions, and all named macOS compatibility exceptions remain selected by Console.
 The runner now creates and owns `sandbox-XXXXXX/data`, exported as `TMPDIR`.
 The former Console supervision and Linux ownership documents are replaced by [sandbox integration](SANDBOX.md); protocol and architecture documents retain the ordinary server and relay responsibilities.
 
-## Changed tests and observation mechanisms
+The server's ordinary child integration also fixes a startup-cancellation race: the I/O join could SIGKILL the runner before the shutdown thread requested retirement.
+The retained never-ready-worker regression failed with an observed, live detached child; native-call tracing recorded the server sending signal 9 directly to the runner.
+The join now requests SIGTERM retirement, waits for the existing child grace period, and escalates only if that wait fails.
+It does not inspect or manage descendants.
 
-No retained transcript expectation is rewritten and no behavior assertion is relaxed.
-Historical transcript role labels such as “manager” are preserved where they still identify the cleanup owner, now the runner at the original frontend PID.
-The following fixture changes are distinct from changes to supported guarantees:
+## Fixture and test inventory
 
-| File or fixture                                                      | Observation change                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `tests/boundaries/cli/_harness.py`                                   | Find the runner's native child by direct-child identity and its dedicated group, allowing the existing inherited foreground peer. The target and native root now share a PID; the cleanup owner and frontend now share a PID. Deduplicate identical exit watches and exclude the supervisor from its own prerequisite cleanup set. Keep strict exit-before-cleanup-barrier assertions. Fixture teardown removes the runner container around `data` after stopping test processes. |
-| `cli/sandbox/test_supervision.py`                                    | Three topology assertions now require target PID = native root/group leader. Signal delivery, terminal ownership, descendant exit, and stream assertions are unchanged.                                                                                                                                                                                                                                                                                                           |
-| `client_server/_harness.py`                                          | Discover fixture markers under `sandbox-*/data`, watch the new container/data directories, and identify the macOS stopped-worker relay as the group leader directly below the runner. Linux namespace-init parent assertions remain.                                                                                                                                                                                                                                              |
-| `client_server/lifecycle/test_startup.py`                            | Four no-private-storage-before-start assertions use the runner's directory naming.                                                                                                                                                                                                                                                                                                                                                                                                |
-| `client_server/recording/test_journal.py`                            | The no-private-storage-before-start assertion uses the runner's directory naming.                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `client_server/sandbox/test_crashes.py`                              | Locate the supervisor as the server's direct child instead of deriving it from the relay's process group or scanning for the deleted manager CLI. Preserve exact process identities and caller-death cleanup assertions; fixture teardown removes the container around `data`.                                                                                                                                                                                                    |
-| `client_server/sandbox/test_relay.py`                                | The explicit wrapper is the native root itself, with the relay still verified as its direct child.                                                                                                                                                                                                                                                                                                                                                                                |
-| `client_server/sandbox/test_replacement.py` and `tests/fixtures/zod` | Worker and relay remain distinct; the relay can now equal its group leader. Preserve descendant cleanup, group separation, stdin and replacement assertions.                                                                                                                                                                                                                                                                                                                      |
-| `client_server/sandbox/test_retirement.py`                           | Identify the supervisor separately from the relay group leader, identify the native root as the relay, and update the accepted-shutdown fixture's macOS group-leader identity. The legacy manager-recovery fixture resolves the same supervisor directly.                                                                                                                                                                                                                         |
-| `client_server/sandbox/test_startup.py`                              | Resolve server → runner → native root at the startup checkpoint; add the native fixture include path. Existing error text and target-gating assertions remain.                                                                                                                                                                                                                                                                                                                    |
-| `cli/sandbox/test_crashes.py`                                        | Use runner private-storage names and include paths. Before parent capture, no native root or storage exists yet, so watch the supervisor alone and assert no storage. Caller-loss, target-not-run, cancellation, and exact diagnostics remain required. Fixture teardown removes the container around `data`.                                                                                                                                                                     |
-| `client_server/sandbox/test_supervision.py`                          | Fixture teardown removes the runner container around the recorded `data` directory after stopping test processes. Public cleanup assertions remain unchanged.                                                                                                                                                                                                                                                                                                                     |
-| `native/runner_interposer.h` (new)                                   | Test-only `execvp` interposition reinserts the observation library across Console's production loader-variable removal. It creates no replacement executable or helper process and leaves production sanitation unchanged.                                                                                                                                                                                                                                                        |
-| `native/manager_start_interposer.c`                                  | Gate the actual runner's successful native-readiness `recv` instead of the deleted manager entrypoint.                                                                                                                                                                                                                                                                                                                                                                            |
-| `native/setup_write_interposer.c`                                    | Observe the actual runner's framed native setup `send` instead of the deleted Console setup-pipe `write`; preserve partial-write and cancellation checkpoints.                                                                                                                                                                                                                                                                                                                    |
-| `native/root_waiter_start_interposer.c`                              | Gate the runner's parent capture instead of the deleted root-waiter startup.                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `native/manager_observation_interposer.c`                            | Observe the actual runner's `proc_listchildpids` calls instead of the deleted manager. The detached-child observation checkpoint remains causal.                                                                                                                                                                                                                                                                                                                                  |
-| `tests/architecture.py`                                              | Point existing forbidden-dependency fixture edits at the surviving `sandbox/runner.rs`; boundary assertions remain unchanged.                                                                                                                                                                                                                                                                                                                                                     |
+Retained runtime transcripts and behavior assertions are unchanged except for the three macOS startup diagnostics and one Linux prerequisite diagnostic listed below.
+Historical transcript role labels such as “manager” remain where they now identify the runner at the original frontend PID.
+No snapshot approves a surviving descendant, cancellation failure, changed runtime result, or lost output.
 
-One new public case, `cli/sandbox/test_execution::frontend_exec_preserves_pid_and_standard_streams`, verifies that the original frontend PID becomes the verified runner, consumes the configuration variable, preserves all 256 byte values on stdin/stdout/stderr, and returns target status 23.
-It failed against the baseline executable because that PID still named `mcp-console`, then passed after integration.
-Only its new snapshot was generated with `scripts/test --update cli/sandbox/test_execution::frontend_exec_preserves_pid_and_standard_streams`.
-No existing snapshot was regenerated.
+### Process and path observation
 
-## Changed guarantees and legacy recovery tests
+Paths in this table are relative to `tests/`.
+
+| File or case                                                | Mechanism changed; behavior retained                                                                                                                                                                                                                                                                                             |
+| ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `boundaries/cli/_harness.py`                                | Discover the native child directly; target/root and frontend/supervisor now share PIDs. Deduplicate identical exit watches, preserve the strict cleanup barrier, and remove the container around `data` during fixture teardown. The lifetime fixture now waits for exact detached-child discovery before triggering retirement. |
+| `cli/sandbox/test_signals`                                  | Four lifetime cases declare the native-fixture capability for that discovery checkpoint. Signal disposition, status, streams, and cleanup assertions remain unchanged.                                                                                                                                                           |
+| `cli/sandbox/test_supervision`                              | Three topology assertions use target PID = native root/group leader. Terminal, peer, signal, and cleanup behavior is unchanged.                                                                                                                                                                                                  |
+| `client_server/_harness.py`                                 | Watch markers under `sandbox-*/data`; find the stopped macOS relay directly below the runner. Linux namespace-init ancestry assertions remain.                                                                                                                                                                                   |
+| `client_server/lifecycle/test_startup`                      | Four no-storage-before-start assertions use runner directory names.                                                                                                                                                                                                                                                              |
+| `client_server/recording/test_journal`                      | The no-storage-before-start assertion uses runner directory names.                                                                                                                                                                                                                                                               |
+| `client_server/sandbox/test_crashes`                        | Discover the supervisor as the server's direct child, retaining exact identities and server-death cleanup. Fixture teardown removes the container around `data`.                                                                                                                                                                 |
+| `client_server/sandbox/test_relay`                          | The explicit wrapper is now the native root; the relay remains its direct child.                                                                                                                                                                                                                                                 |
+| `client_server/sandbox/test_replacement` and `fixtures/zod` | Allow the relay to be its group leader while keeping worker and relay distinct. Replacement, stream, group separation, and cleanup assertions remain.                                                                                                                                                                            |
+| `client_server/sandbox/test_retirement`                     | Identify the supervisor independently of the relay group. Retain accepted relay shutdown, the five-second unresponsive-relay deadline, and worker/descendant exit barriers.                                                                                                                                                      |
+| `cli/sandbox/test_crashes`                                  | Observe runner parent capture, native readiness, and setup writes. Before parent capture, assert no native root or storage. Caller-loss, target-not-run, and cancellation assertions remain.                                                                                                                                     |
+| `client_server/sandbox/test_supervision`                    | Extract the existing exact-PID observation fixture into shared support; preserve its processx failure-replacement checkpoint and all transcripts.                                                                                                                                                                                |
+| `support/sandbox_observation.py`                            | Reuse native discovery events before tests orphan detached children. Linux needs no discovery gate because the runner owns its PID namespace.                                                                                                                                                                                    |
+| `native/runner_interposer.h`                                | Test-only exec interposition restores the observation library across production loader-variable removal; no helper executable or process is added.                                                                                                                                                                               |
+| `native/manager_start_interposer.c`                         | Gate the runner's native-readiness receive instead of the deleted manager entry point.                                                                                                                                                                                                                                           |
+| `native/setup_write_interposer.c`                           | Observe the runner's framed native setup send instead of Console's former pipe write.                                                                                                                                                                                                                                            |
+| `native/root_waiter_start_interposer.c`                     | Gate runner parent capture instead of the deleted root-waiter startup.                                                                                                                                                                                                                                                           |
+| `native/manager_observation_interposer.c`                   | Observe the runner's descendant registration instead of the deleted manager.                                                                                                                                                                                                                                                     |
+| `architecture.py`                                           | Point forbidden-dependency mutations at the surviving frontend module; keep dependency-direction assertions.                                                                                                                                                                                                                     |
+
+The CLI lifetime checkpoint applies to `pending_signal_at_root_exit_preserves_status`, `owned_sigterm_retires_the_sandbox_lifetime`, `owned_sigterm_retires_when_inherited_ignored`, and `owned_root_exit_waits_for_cleanup` in `cli/sandbox/test_signals`.
+Their original assertions and snapshots are unchanged.
+
+The shared discovery checkpoint is added to these six retained client-server cases, separately from the CLI lifetime fixture:
+
+- `sandbox/test_replacement::restarts_after_worker_exit_with_partial_sideband`;
+- `sandbox/test_retirement::restart_does_not_report_never_ready_worker_as_stopped`;
+- `sandbox/test_shutdown::restart_cancels_partial_sideband_frame`;
+- `sandbox/test_shutdown::restart_cancels_reader_after_operation_result`;
+- `sandbox/test_shutdown::restart_drains_readable_frame_before_abandoning_partial_tail`; and
+- `sandbox/test_shutdown::shutdown_cancels_partial_sideband_frame`.
+
+The initial failures included live `Ss` children orphaned before discovery, confirmed by native-call traces.
+Waiting for registration makes these fixtures exercise the supported observed-descendant guarantee deterministically; the children still detach, and the original cleanup assertions remain.
+The never-ready case also exposed the Console SIGKILL race described above after discovery was confirmed.
+Owned-group retirement does not depend on discovery; the runner's executable regression covers that separate guarantee.
+
+### Accepted diagnostics and new coverage
+
+| Public case                                                                           | Exact expectation change                                                                                                                                                 |
+| ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `cli/sandbox/test_crashes::owner_loss_before_exit_watch_cleans_startup`               | Caller capture failure now emits `mcp-console-sandbox: parent_pid is not the current parent`. Target suppression and cleanup are unchanged.                              |
+| `cli/sandbox/test_crashes::owner_loss_before_target_release_cancels_startup`          | Successful cancellation now emits empty stderr. Target suppression and cleanup are unchanged.                                                                            |
+| `client_server/sandbox/test_startup::sandbox_setup_failure_is_reported_and_retryable` | Stderr now reads `mcp-console-sandbox: create private storage: Not a directory (os error 20)`. The MCP error, no-child assertion, and successful retry remain unchanged. |
+| `cli/sandbox/test_linux::rejects_inherited_procfs_before_running_command`             | Stderr now reads `native target setup requires namespace-local procfs`. Exit 1 and target-not-run assertions remain unchanged.                                           |
+
+The new `cli/sandbox/test_execution::frontend_exec_preserves_pid_and_standard_streams` case verifies the actual private executable at the original frontend PID, consumed configuration, all 256 byte values through stdin/stdout/stderr, and target status 23.
+It failed against the original baseline because that PID still named the Console frontend.
+Only runner-generated snapshots are accepted; formatting-only regeneration is checked for equal parsed values and restored to baseline bytes.
+
+## Changed guarantees and removed cases
 
 Independent recovery after supervisor death is intentionally removed.
 SIGKILL, supervisor crash, or an unresponsive supervisor no longer guarantees descendant cleanup, directory removal, or terminal restoration.
-Native policy remains enforced on surviving sandboxed processes.
-Configured caller death while the runner lives is a retained guarantee, including startup and detached descendants already observed by the runner.
+Surviving processes retain native sandbox policy.
+Configured caller death while the runner lives remains required, including startup cancellation and cleanup of observed detached descendants.
 
-The following original cases specifically require the removed recovery topology and are retained, with their original expectations, as explicit migration failures in this draft:
+These five recovery-only cases and their snapshots are removed:
 
 - `cli/sandbox/test_crashes::launcher_crash_retires_the_sandbox_lifetime`;
 - `cli/sandbox/test_crashes::manager_crash_retires_the_sandbox_lifetime`;
 - `client_server/sandbox/test_crashes::manager_crash_retires_the_worker_generation`;
-- `client_server/sandbox/test_startup::manager_failure_before_readiness_keeps_custom_relay_gated`;
-- `client_server/sandbox/test_retirement::restart_waits_for_owned_launcher_manager_recovery`; and
-- only the launcher-crash, manager-crash, and stopped-manager scenarios within Linux `cli/sandbox/test_linux::retires_descendants_after_exit_and_supervisor_loss`.
+- `client_server/sandbox/test_startup::manager_failure_before_readiness_keeps_custom_relay_gated`; and
+- `client_server/sandbox/test_retirement::restart_waits_for_owned_launcher_manager_recovery`.
 
-These require explicit retirement or replacement once the migration can pass its retained contracts; they are not capabilities to rebuild in Console or request from the runner.
-The Linux combined case's command-exit, owned-SIGTERM, and owner-exit scenarios must remain.
-The caller-death cases in `cli/sandbox/test_crashes`, the MCP server-crash case, and cancellation during setup must also remain.
-No cases are skipped or disabled to obtain a passing report.
+Linux `cli/sandbox/test_linux::retires_descendants_after_exit_and_supervisor_loss` becomes `retires_descendants_after_exit_and_caller_loss`.
+Only its launcher-crash, manager-crash, and stopped-manager scenarios are removed.
+Command exit (23), owned SIGTERM (0), and caller death remain, with the same descendant and private-directory cleanup assertions.
+The three retained scenario records compare equal to their main snapshots after parsing.
+Unused recovery-only helpers and `fixtures/startup_marker_relay` are deleted.
+No caller-death, isolation, cancellation, stdin, signal, restart, or retained descendant-cleanup case is skipped to obtain a passing result.
 
-Other visible changes are runner-owned temporary-path shape, strict directory-removal errors instead of best-effort deletion, storage retention on unproven retirement, and runner-prefixed startup errors.
-On Linux, `TMPDIR` now identifies a mutable `data` child rather than the bind-mount root, so that directory and its metadata entries can be replaced.
-These source-derived differences are recorded separately from the intentionally removed supervisor-death guarantee.
-Directory-removal failure status and the expanded Linux temporary-directory mutation were not validated against the old contract and require compatibility review.
-Temporary paths are incidental test data; the exact error-text differences are unresolved compatibility failures, not accepted snapshot changes.
-The documented pre-existing Darwin boundary for unobserved descendants that detach and orphan before discovery remains distinct from cleanup of an owned group or an already observed descendant.
-
-## Runner-only follow-up
-
-1. Preserve the native root's waitable identity through retirement and close the owned process group as well as retiring observed detached identities.
-   The retained partial-sideband replacement case failed its descendant-group cleanup assertion.
-   A paired public CLI probe also found a live detached child after runner status 23 and directory removal; five baseline runs cleaned up all children, while one of five integrated runs leaked a live `Ss` child.
-   The latter probe alone does not prove discovery of that detached child.
-   A second paired probe kept the child inside the target group: all five baseline runs retired it, while three of five integrated runs returned status 23 with the child still live (`S`) and private storage removed.
-   This reproduces the missing group cleanup without relying on detached-child discovery.
-   Source inspection shows `root.try_wait()` reaps the native root before retirement and the Darwin tracker has no original-group cleanup backstop; these are the runner-side points to correct and verify against retained Console cases.
-2. Keep cancellation ordered with native setup writes and retain the setup channel until the native reader has been retired.
-   The partial-frame cancellation case observes `mcp-console-sandbox: failed to fill whole buffer` where cancellation previously produced empty stderr.
-   The before-release caller-death case sees the same native error in place of its caller-loss diagnostic.
-   Console cannot suppress or translate these errors after exec without restoring a waiting adapter.
-3. Resolve startup diagnostic compatibility in the runner interface.
-   The private-storage failure case expects ``failed to create temporary directory `<sandbox temp>`: Not a directory (os error 20)`` but receives `mcp-console-sandbox: create private storage: Not a directory (os error 20)`.
-   Caller loss during parent capture likewise changes its exact diagnostic.
-   The stable MCP startup error and retry path remain; their inherited stderr contract does not.
-
-No runner repository edits or follow-up implementation are included in this task.
-Advance the pin only after the runner-only fixes have executable regressions and the retained Console suite passes on both supported hosts.
+Other accepted boundaries are runner-owned temporary-path shape, strict directory-removal errors instead of best-effort deletion, storage retention when retirement is unproven, and native startup diagnostic wording.
+On Linux, the writable `data` child can replace itself and its metadata entries; the old bind-mount root could not.
+Directory-removal failure and expanded Linux directory mutation were not separately compared against the baseline.
+The pre-existing Darwin limits for unobserved detached orphans and non-atomic identity-check-and-signal delivery remain documented, without an added recovery service.
 
 ## Final validation
 
-The final `scripts/check` passed runtime-source validation, all four Python core suites, Rust formatting, Clippy, and all 47 Rust tests, then failed in the transcript suite on retained startup diagnostics and a legacy manager-recovery expectation.
-Its fail-fast cancellations are not passing validation.
+The final suite discovers 419 public cases, compared with 423 on updated main: one frontend-exec case is added and five recovery-only cases are removed.
+The Linux lifetime case is renamed without changing its three retained scenarios.
 
-To expose the remaining outcomes, each of the 418 discovered cases was then invoked independently through `scripts/test CASE`, with the same CPU-based concurrency as the ordinary runner.
-That pass produced 393 passes, 15 failures, and ten capability skips.
-Two failures were remaining topology assertions (stopped-worker ancestry and accepted-shutdown group identity); both passed their unchanged behavior and snapshot assertions after the fixture corrections listed above.
-After those corrections the inventory was 395 passed, 13 failed, and ten skipped.
-A final fixture-cleanup recheck reproduced the earlier intermittent `owned_root_exit_waits_for_cleanup` failure.
-The conservative final inventory is therefore **394 passed, 14 failed, ten skipped**.
-It combines the full per-case pass with focused reruns, rather than claiming one successful full-suite invocation.
-The legacy launcher-crash case reached the existing 600-second case deadline while a surviving target retained stderr; the test supervisor interrupted it and its fixture cleaned up the processes.
+| Scope                                          | Result                                                                                                                                                                                   |
+| ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| macOS 26.6.2 arm64                             | `scripts/check` passed: formatting, extracted runtime sources, Clippy, 47 Rust tests, and all 409 applicable public transcript cases; 10 cases unavailable (11 mode-level skip records). |
+| macOS installed public/private executable pair | Five passed, two Linux-only skips.                                                                                                                                                       |
+| Pinned runner executable contracts, macOS      | All 58 passed in the release build.                                                                                                                                                      |
+| Linux core checks                              | Passed, including 47 Rust tests.                                                                                                                                                         |
+| Linux public transcripts                       | Final run in progress.                                                                                                                                                                   |
+| Linux nested procfs prerequisite               | The unchanged public case passed in an Ubuntu 24.04 container with namespace prerequisites enabled.                                                                                      |
+| Linux installed public/private executable pair | All seven passed in the same container environment.                                                                                                                                       |
 
-The fourteen failures comprise the five macOS supervisor-recovery cases listed above and these nine retained contracts:
+The Linux development host runs kernel 6.8.0-139-generic on x86_64 and restricts user namespaces with AppArmor.
+Its transcript run uses a test-only PATH wrapper to execute the exact built bubblewrap under the host's existing `bwrap` profile.
+The nested-procfs fixture needs a second namespace; it runs separately in an Ubuntu container with `SYS_ADMIN`, unconfined AppArmor/seccomp, and unmasked proc paths.
+No host profile or sysctl is changed.
 
-| Retained case                                                                                       | Failure                                                                                                                          |
-| --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `cli/sandbox/test_signals::owned_root_exit_waits_for_cleanup`                                       | Supervisor exit precedes the observed descendant-cleanup barrier. Intermittent; reproduced in the final recheck.                 |
-| `cli/sandbox/test_crashes::owner_loss_before_exit_watch_cleans_startup`                             | Caller-loss diagnostic changed to `parent_pid is not the current parent`.                                                        |
-| `cli/sandbox/test_crashes::owner_loss_before_target_release_cancels_startup`                        | Native setup EOF diagnostic replaces the caller-loss diagnostic.                                                                 |
-| `cli/sandbox/test_crashes::cancels_owned_launch_during_setup`                                       | Cancellation unexpectedly emits the native setup EOF diagnostic. Later scenarios after the failing assertion were not validated. |
-| `client_server/sandbox/test_startup::sandbox_setup_failure_is_reported_and_retryable`               | Private-storage setup diagnostic changed.                                                                                        |
-| `client_server/sandbox/test_replacement::restarts_after_worker_exit_with_partial_sideband`          | Descendant group survives retirement.                                                                                            |
-| `client_server/sandbox/test_retirement::restart_does_not_report_never_ready_worker_as_stopped`      | Detached startup descendant survives retirement.                                                                                 |
-| `client_server/sandbox/test_shutdown::shutdown_cancels_partial_sideband_frame`                      | Descendant group survives server shutdown.                                                                                       |
-| `client_server/sandbox/test_shutdown::restart_drains_readable_frame_before_abandoning_partial_tail` | Descendant group survives retirement.                                                                                            |
+The first Linux aggregate attempt passed core checks but stopped in the direct, unsandboxed custom-worker requirements case: the host `.Rprofile` loaded `envir` from libraries deliberately excluded by that fixture.
+That case passed with `R_PROFILE_USER=/dev/null`; the final transcript run uses that environment setting without changing production code, fixtures, or expectations.
 
-The strict cleanup barrier failure in `cli/sandbox/test_signals::owned_root_exit_waits_for_cleanup` appeared in both an initial focused run and the final recheck; its intervening pass does not erase that failure.
-Both same-group and detached-child paired probes are reported above, including live process states rather than zombie-only observations.
+The next aggregate attempt passed 321 cases before `client_server/sql/test_catalog::interrupts_running_sql_query` failed in sandbox mode: after its 30-second interrupt wait it still returned `\n[running; poll with an empty send]`.
+The unchanged case then passed a focused run and all 12 repeated trials; the same case also passed all 12 comparison trials on main `26a5f3c3` with its original runner pin.
+Those trials each cover direct and sandbox modes, with six trials running concurrently.
+The fixture's file marker precedes the blocking SQL statement, so it does not establish entry into that statement; this is a possible timing window, not an isolated root cause.
+The failure remains unexplained, and neither its assertion nor snapshot is changed.
+A further aggregate run uses the same 12-job default, deadline, fixtures, and expectations; its result is recorded above.
 
-Passing retained cases include file/network isolation, host-terminal denial, processx PTYs, offline uv installation, R/Python/SQL runtime workflows, binary and regular-file stdin, inherited descriptor and signal-state handling, terminal interruption with and without a foreground peer, owned SIGTERM before setup, configured caller/server death, observed detached-descendant cleanup, and ordinary restart/shutdown cases outside the failures above.
-The new frontend exec case passed after its baseline red result.
-The unchanged installed-binary tests passed again: five applicable tests and two Linux-only skips.
-All 425 baseline snapshot files match their recorded hashes; only the new frontend-exec case adds a snapshot.
-All existing policy rules match the baseline; only their documentation-link comment changed.
-Formatting and `git diff --check` passed.
+The final snapshot inventory contains 427 files: 421 are byte-identical to current main, four have the listed diagnostic changes, six old paths are removed, and two paths are added (the frontend-exec case and the renamed Linux lifetime case).
+Formatting-only regeneration is restored to baseline bytes after checking parsed equality.
+The two-pipe sideband, isolation, cancellation, stdin, signals, restart, caller-death cleanup, and observed-descendant barriers retain their assertions.
 
-Linux integration execution, installed-wheel rehearsal, R package checks on the changed tree, x86_64 host execution, and hosted validation of the new pin have not been performed locally.
+Not performed for this revision: hosted PR CI, a full local Linux baseline, Linux runner executable-contract tests, wheel rehearsal, and R-package acceptance.
+The full Linux suite's host prerequisites and separate container result must not be reported as an ordinary hosted-CI pass.

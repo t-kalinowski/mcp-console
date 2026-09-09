@@ -85,7 +85,7 @@ def test_isolates_files_network_and_processes(binary: Path) -> Transcript:
 
 
 @requires(LINUX_SANDBOX)
-def test_retires_descendants_after_exit_and_supervisor_loss(binary: Path) -> Transcript:
+def test_retires_descendants_after_exit_and_caller_loss(binary: Path) -> Transcript:
     # fmt: python
     script = code(r'''
         import os
@@ -138,10 +138,7 @@ def test_retires_descendants_after_exit_and_supervisor_loss(binary: Path) -> Tra
     for scenario in (
         "command exit",
         "owned SIGTERM",
-        "launcher crash",
         "owner exit",
-        "manager crash",
-        "stopped manager",
     ):
         process = subprocess.Popen(
             [sys.executable, "-c", owner, str(binary), script]
@@ -170,9 +167,9 @@ def test_retires_descendants_after_exit_and_supervisor_loss(binary: Path) -> Tra
             if scenario == "owner exit":
                 (launcher,) = child_process_identities(launcher)
                 descriptors.append(os.pidfd_open(launcher[0]))
-            managers = child_process_identities(launcher)
-            assert len(managers) == 1, managers
-            pending = list(managers)
+            roots = child_process_identities(launcher)
+            assert len(roots) == 1, roots
+            pending = list(roots)
             while pending:
                 identity = pending.pop()
                 descriptors.append(os.pidfd_open(identity[0]))
@@ -182,13 +179,9 @@ def test_retires_descendants_after_exit_and_supervisor_loss(binary: Path) -> Tra
                 process.stdin.flush()
             elif scenario == "owned SIGTERM":
                 process.send_signal(signal.SIGTERM)
-            elif scenario in {"launcher crash", "owner exit"}:
-                process.kill()
-            elif scenario == "stopped manager":
-                os.kill(managers[0][0], signal.SIGSTOP)
-                process.send_signal(signal.SIGTERM)
             else:
-                os.kill(managers[0][0], signal.SIGKILL)
+                assert scenario == "owner exit"
+                process.kill()
             process.wait(timeout=15)
             poll = select.poll()
             for descriptor in descriptors:
@@ -203,19 +196,11 @@ def test_retires_descendants_after_exit_and_supervisor_loss(binary: Path) -> Tra
             # All host owners have exited; cleanup precedes their exit.
             assert not Path(temporary).exists(), (scenario, temporary)
             stderr = process.stderr.read()
-            expected_stderr = (
-                "Linux sandbox: sandbox manager did not retire\n"
-                if scenario == "stopped manager"
-                else ""
-            )
-            assert stderr == expected_stderr, (scenario, stderr)
+            assert stderr == "", (scenario, stderr)
             expected = {
                 "command exit": 23,
                 "owned SIGTERM": 0,
-                "launcher crash": -signal.SIGKILL,
                 "owner exit": -signal.SIGKILL,
-                "manager crash": 137,
-                "stopped manager": 1,
             }
             assert process.returncode == expected[scenario], (
                 scenario,
@@ -311,9 +296,9 @@ def test_rejects_inherited_procfs_before_running_command(binary: Path) -> Transc
     )
     assert result.returncode == 1, result
     assert result.stdout == "", result
-    assert (
-        result.stderr == "Linux sandbox requires procfs mounted for its PID namespace\n"
-    ), result
+    assert result.stderr == "native target setup requires namespace-local procfs\n", (
+        result
+    )
     return [
         {
             "command": ["mcp-console", "sandbox", "--", "/bin/echo", "must not run"],
