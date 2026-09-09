@@ -285,6 +285,7 @@ jobs:
       - name: Check R package
         env:
           MCP_CONSOLE_TEST_BINARY: ${{ github.workspace }}/target/debug/mcp-console
+          _R_CHECK_TESTS_NLINES_: "0"
         working-directory: r
         run: |
           R CMD build .
