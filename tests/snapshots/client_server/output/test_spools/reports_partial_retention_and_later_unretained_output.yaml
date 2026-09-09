@@ -3,7 +3,17 @@
 ---
 send:
   r: overflow cell output file
-  timeout_ms: 120000
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running; poll with an empty send]
+  isError: false
+---
+send:
+  timeout_ms: 0
 result:
   content:
     - type: text
@@ -11,14 +21,12 @@ result:
         <retained 8388608 text bytes>
         [output truncated: omitted 16777223 text bytes and 0 encoded image bytes across 1 event; retained text: .mcp-console/sessions/<run ID>/outputs/call-000001.log (16777219 of 16777223 omitted text bytes)]
         [cell output file .mcp-console/sessions/<run ID>/outputs/call-000001.log stopped after 25165827 retained bytes: File too large (os error 27); later text is not retained in this file]
-        [input requested: "continue> "]
-        [waiting for stdin]
+
+        [running; poll with an empty send]
   isError: false
 ---
 send:
-  stdin: |
-    continue
-  timeout_ms: 120000
+  timeout_ms: 0
 result:
   content:
     - type: text

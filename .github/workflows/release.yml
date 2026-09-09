@@ -63,6 +63,15 @@ jobs:
           ref: ${{ steps.sandbox-pin.outputs.commit }}
           path: .sandbox-runner-source
 
+      # Chrome is unused here; its repository can block apt with inconsistent metadata.
+      - name: Disable unused Chrome apt repository
+        if: runner.os == 'Linux'
+        run: |
+          sudo find /etc/apt/sources.list.d -type f \
+            \( -name '*.list' -o -name '*.sources' \) \
+            -exec grep -qF 'dl.google.com/linux/chrome' {} \; \
+            -print -delete
+
       - name: Set up R
         uses: r-lib/actions/setup-r@d3c5be51b12e724e68f33216ca3c148b66d5f0b6 # v2.12.1
 

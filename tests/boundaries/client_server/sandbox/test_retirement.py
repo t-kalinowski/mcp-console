@@ -294,23 +294,49 @@ def test_restart_preserves_relay_retirement_failure(binary: Path) -> Transcript:
         stop_client(client)
 
 
-@requires(SANDBOX, PROCESS_EVENTS)
+@requires(SANDBOX, PROCESS_EVENTS, NATIVE_FIXTURES)
 def test_restart_allows_accepted_relay_shutdown_to_finish(
     binary: Path,
 ) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
+    # fmt: python
+    server = code(r"""
+        import os
+        import sys
+
+        os.environ["MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_PID"] = str(os.getpid())
+        loader = "DYLD_INSERT_LIBRARIES" if sys.platform == "darwin" else "LD_PRELOAD"
+        os.environ[loader] = os.environ.pop("MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_DYLIB")
+        os.execv(sys.argv[1], sys.argv[1:])
+        """)
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
+        signaled = FifoCheckpoint.create(temporary_path / "launcher-signaled")
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
-        environment["MCP_CONSOLE_TEST_BINARY"] = str(binary)
+        environment["MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_DYLIB"] = str(
+            build_interposer(temporary_path, "launcher_retirement_interposer")
+        )
+        environment["MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_RETURNED"] = str(signaled.path)
+        environment["MCP_CONSOLE_TEST_RELAY_BINARY"] = str(binary)
+        environment["MCP_CONSOLE_TEST_RELAY_READ_DYLIB"] = str(
+            build_interposer(temporary_path, "relay_stdout_read_interposer")
+        )
+        environment["MCP_CONSOLE_TEST_RELAY_READ_MATCH"] = (
+            "zod output during relay retirement\n"
+        )
         client = McpClient(
-            binary,
-            SANDBOXED.serve(
-                "--worker",
-                str(zod),
-                "--relay",
-                str(zod.with_name("identified_relay")),
+            Path(sys.executable),
+            (
+                "-c",
+                server,
+                str(binary),
+                *SANDBOXED.serve(
+                    "--worker",
+                    str(zod),
+                    "--relay",
+                    str(zod.with_name("retirement_read_relay")),
+                ),
             ),
             environment,
         )
@@ -322,7 +348,7 @@ def test_restart_allows_accepted_relay_shutdown_to_finish(
             assert last_tool_text(client) == "\n[running; poll with an empty send]"
             helper_marker = wait_for_marker(
                 temporary_path,
-                "zod-relay-resume-helper",
+                "zod-relay-retirement-processes",
                 client,
             )
             helper_namespace_pid, relay_namespace_pid = map(
@@ -334,30 +360,22 @@ def test_restart_allows_accepted_relay_shutdown_to_finish(
             relay_group = os.getpgid(relay_target)
             assert relay_group != relay_target
 
-            restarted = client.start_send(control="restart")
-            stopped_marker = wait_for_marker(
-                temporary_path,
-                "zod-relay-stopped-after-shutdown",
-                client,
+            with closing(
+                FifoCheckpoint.attach(
+                    helper_marker.parent / f"relay-read-{relay_namespace_pid}-blocked"
+                )
+            ) as blocked:
+                restarted = client.start_send(control="restart")
+                blocked.wait("relay read retirement output")
+                # The reader returns only when relay retirement joins it, after
+                # the worker grace expires. Leave shutdown acknowledgment free
+                # to reach the server while this one read is held.
+                client.receive(restarted)
+            assert not select.select([signaled.descriptor], [], [], 0)[0], (
+                "server signaled the launcher before accepted relay shutdown finished"
             )
-            wait_for_stopped_process(
-                relay_target,
-                relay_group,
-                client,
-                "accepted worker relay shutdown",
-            )
-            wait_for_marker(
-                temporary_path,
-                "zod-relay-retirement-output-written",
-                client,
-            )
-            with stopped_marker.with_name("zod-accepted-relay-stop-observed").open(
-                "wb", buffering=0
-            ) as checkpoint:
-                assert checkpoint.write(b"1") == 1
-            client.receive(restarted)
             assert not process_exists(helper_pid), (
-                "detached relay-resume helper outlived sandbox retirement"
+                "detached helper outlived sandbox retirement"
             )
             assert not process_exists(relay_target), "retired relay survived restart"
             assert not process_exists(relay_group), "sandbox runner survived restart"
@@ -376,6 +394,7 @@ def test_restart_allows_accepted_relay_shutdown_to_finish(
             passed = True
             return transcript
         finally:
+            signaled.close()
             if not passed:
                 stop_process_id(helper_pid)
                 stop_process(client.process)
