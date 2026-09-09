@@ -15,6 +15,7 @@ from boundaries.server_relay._harness import (
     INTERRUPT_ACKNOWLEDGED_NAME,
     INTERRUPT_ACTIVE_RELEASE_NAME,
     INTERRUPT_RECEIVED_NAME,
+    POLL_STDIN_RECEIVED_NAME,
     PREPARATION_RECEIVED_NAME,
     PREPARATION_RESULT_RELEASE_NAME,
     PREPARATION_RESULT_SENT_NAME,
@@ -631,6 +632,7 @@ def test_controlled_interrupt_does_not_wait_for_an_existing_poll(
     )
     client._wait_for(EVALUATING_NAME)
     relay_root = client.relay_root()
+    poll_stdin_received = FifoCheckpoint.attach(relay_root / POLL_STDIN_RECEIVED_NAME)
     interrupt_received = FifoCheckpoint.attach(relay_root / INTERRUPT_RECEIVED_NAME)
     interrupt_ack_release = FifoCheckpoint.attach(
         relay_root / INTERRUPT_ACK_RELEASE_NAME
@@ -642,7 +644,11 @@ def test_controlled_interrupt_does_not_wait_for_an_existing_poll(
     evaluation_released = False
     finished = False
     try:
-        waiting = client.client.start_send(timeout_ms=5_000)
+        waiting = client.client.start_send(
+            stdin="poll ownership checkpoint\n", timeout_ms=5_000
+        )
+        # Stdin reaches the relay only after this send claims the evaluation.
+        poll_stdin_received.wait()
         ownership = client.send(timeout_ms=0)
         assert ownership == {
             "content": [
@@ -688,6 +694,7 @@ def test_controlled_interrupt_does_not_wait_for_an_existing_poll(
             interrupt_ack_release.release()
         if not evaluation_released:
             evaluation_release.release()
+        poll_stdin_received.close()
         interrupt_received.close()
         interrupt_ack_release.close()
         evaluation_release.close()
@@ -702,6 +709,7 @@ def test_controlled_interrupt_does_not_wait_for_an_existing_poll(
             "language": "r",
             "source": "waiter-owned evaluation",
         },
+        {"kind": "stdin", "data": "poll ownership checkpoint\n"},
         {"kind": "interrupt", "request_id": 0},
     ], commands
     return transcript
