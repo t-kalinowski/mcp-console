@@ -134,6 +134,29 @@ class SandboxInstallationTests(unittest.TestCase):
         self.assertEqual(result.stdout, b"")
         self.assertIn(b"private sandbox runner", result.stderr)
 
+    @unittest.skipUnless(sys.platform == "linux", "Linux bundles bwrap")
+    def test_rejects_a_different_bundled_helper(self) -> None:
+        self.runner.with_name("bwrap").write_text(
+            "#!/bin/sh\nprintf 'replaced helper executed\\n'\n", encoding="utf-8"
+        )
+        result = self.run_sandbox()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, b"")
+        self.assertIn(
+            b"private sandbox runner artifact bwrap does not match this installation",
+            result.stderr,
+        )
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux bundles bwrap")
+    def test_rejects_a_missing_bundled_helper(self) -> None:
+        self.runner.with_name("bwrap").unlink()
+        result = self.run_sandbox()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, b"")
+        self.assertIn(
+            b"private sandbox runner artifact bwrap is unavailable", result.stderr
+        )
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

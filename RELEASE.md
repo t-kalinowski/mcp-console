@@ -18,14 +18,14 @@ On macOS and Linux, build and stage it from a clean checkout at that commit befo
 scripts/stage-sandbox-runner ~/github/t-kalinowski/codex
 ```
 
-The script builds with the pinned toolchain and lockfile, stages the executable at `wheel-data/data/libexec/mcp-console-sandbox`, and records its source revision, target triple, and SHA-256 in `target/sandbox-runner-build.json`.
+The script builds with the pinned toolchain and lockfile, stages the executable at `wheel-data/data/libexec/mcp-console-sandbox`, and records its source revision, target triple, and each staged executable's SHA-256 in `target/sandbox-runner-build.json`.
 By default it builds for the pinned compiler's native target, passing that target explicitly to Cargo.
 Use `--target` with `aarch64-apple-darwin`, `x86_64-apple-darwin`, `aarch64-unknown-linux-gnu`, or `x86_64-unknown-linux-gnu` when building for an explicit target; inherited Cargo default-target settings do not change this selection.
 The source checkout remains unchanged.
-MCP Console's build verifies the staged revision, target, and digest and binds the runner's digest and protocol version into the executable.
+MCP Console's build verifies the staged revision, target, and artifact digests and binds those digests and the runner's protocol version into the executable.
 Stage the runner again for the intended target before changing MCP Console's build target.
-Cargo builds also copy the verified executable into the target prefix's `libexec` directory, so binaries in `debug`, `release`, and custom profile directories use the same relative lookup as installed wheels.
-Sandbox launches reject a missing or mismatched private runner.
+Cargo builds also copy the verified executables into the target prefix's `libexec` directory, so binaries in `debug`, `release`, and custom profile directories use the same relative lookup as installed wheels.
+Sandbox launches reject a missing or mismatched private runner or bundled Linux helper.
 
 The current pin uses protocol 2: invoke the runner with `--bootstrap-fd <N>` and inherit a readable descriptor greater than 2.
 Send one four-byte big-endian length followed by UTF-8 JSON on that setup descriptor after spawning; leave the target's original stdin attached to fd 0.

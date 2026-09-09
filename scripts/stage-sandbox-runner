@@ -100,7 +100,6 @@ def main() -> None:
     if result.returncode != 0:
         fail(f"runner build failed with status {result.returncode}")
     runner = workspace / "target" / target / "release" / "mcp-console-sandbox"
-    digest = hashlib.sha256(runner.read_bytes()).hexdigest()
 
     for generated in (STAGE_ROOT / "data/libexec", STAGE_ROOT / "data/share"):
         if generated.exists():
@@ -112,6 +111,7 @@ def main() -> None:
     staged_runner = libexec / "mcp-console-sandbox"
     shutil.copyfile(runner, staged_runner)
     staged_runner.chmod(0o755)
+    artifacts = [staged_runner]
     for name in ("LICENSE", "NOTICE"):
         destination = licenses / f"Codex-{name}"
         shutil.copyfile(checkout / name, destination)
@@ -120,6 +120,7 @@ def main() -> None:
         staged_bwrap = libexec / "bwrap"
         shutil.copyfile(runner.with_name("bwrap"), staged_bwrap)
         staged_bwrap.chmod(0o755)
+        artifacts.append(staged_bwrap)
         shutil.copyfile(
             workspace / "vendor/bubblewrap/COPYING", licenses / "bubblewrap-COPYING"
         )
@@ -127,7 +128,15 @@ def main() -> None:
     build_record.parent.mkdir(exist_ok=True)
     build_record.write_text(
         json.dumps(
-            {"source_revision": head, "target": target, "sha256": digest}, indent=2
+            {
+                "source_revision": head,
+                "target": target,
+                "artifacts": {
+                    path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+                    for path in artifacts
+                },
+            },
+            indent=2,
         )
         + "\n",
         encoding="utf-8",

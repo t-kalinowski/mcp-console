@@ -23,8 +23,7 @@ fn bind_private_runner() {
     let root = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let pin_path = root.join("sandbox-runner.json");
     let build_path = root.join("target/sandbox-runner-build.json");
-    let runner_path = root.join("wheel-data/data/libexec/mcp-console-sandbox");
-    for path in [&pin_path, &build_path, &runner_path] {
+    for path in [&pin_path, &build_path] {
         println!("cargo:rerun-if-changed={}", path.display());
     }
     let pin: serde_json::Value = serde_json::from_slice(
@@ -50,15 +49,6 @@ fn bind_private_runner() {
         Some(target.as_str()),
         "private sandbox runner target does not match Cargo TARGET; run scripts/stage-sandbox-runner --target {target}"
     );
-    let bytes = std::fs::read(&runner_path)
-        .expect("private sandbox runner is unavailable; run scripts/stage-sandbox-runner");
-    let digest = Sha256::digest(bytes);
-    let actual_digest: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
-    assert_eq!(
-        build["sha256"].as_str(),
-        Some(actual_digest.as_str()),
-        "private sandbox runner artifact changed; run scripts/stage-sandbox-runner"
-    );
     let protocol = u32::try_from(
         pin["protocol_version"]
             .as_u64()
@@ -75,26 +65,38 @@ fn bind_private_runner() {
     let private_directory = prefix.join("libexec");
     std::fs::create_dir_all(&private_directory)
         .expect("failed to create the private sandbox runner directory");
-    let mut artifacts = vec![runner_path];
+    let mut artifacts = vec!["mcp-console-sandbox"];
     if target.contains("linux") {
-        let helper = root.join("wheel-data/data/libexec/bwrap");
-        println!("cargo:rerun-if-changed={}", helper.display());
-        artifacts.push(helper);
+        artifacts.push("bwrap");
     }
-    for artifact in artifacts {
-        let name = artifact.file_name().unwrap().to_str().unwrap();
+    let mut expected_artifacts = Vec::new();
+    for name in artifacts {
+        let artifact = root.join("wheel-data/data/libexec").join(name);
+        println!("cargo:rerun-if-changed={}", artifact.display());
+        let bytes = std::fs::read(&artifact)
+            .expect("private sandbox artifact is unavailable; run scripts/stage-sandbox-runner");
+        let digest: [u8; 32] = Sha256::digest(&bytes).into();
+        let actual_digest: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+        assert_eq!(
+            build["artifacts"][name].as_str(),
+            Some(actual_digest.as_str()),
+            "private sandbox runner artifact {name} changed; run scripts/stage-sandbox-runner"
+        );
         let staged = private_directory.join(format!(".{name}-{}", std::process::id()));
         // Rebuilding must not overwrite an executable used by an active sandbox.
-        std::fs::copy(&artifact, &staged).expect("failed to stage private sandbox artifact");
+        // Install the verified bytes, without reopening the source for copying.
+        std::fs::write(&staged, bytes).expect("failed to stage private sandbox artifact");
+        std::fs::set_permissions(&staged, artifact.metadata().unwrap().permissions())
+            .expect("failed to set private sandbox artifact permissions");
         std::fs::rename(staged, private_directory.join(name))
             .expect("failed to install private sandbox artifact beside the Cargo output");
+        expected_artifacts.push((name, digest));
     }
     std::fs::write(
         output.join("sandbox_runner_installation.rs"),
         format!(
             "pub(super) const PROTOCOL_VERSION: u32 = {protocol};\n\
-             const EXPECTED_RUNNER_SHA256: [u8; 32] = {:?};\n",
-            digest.as_slice()
+             const EXPECTED_ARTIFACTS: &[(&str, [u8; 32])] = &{expected_artifacts:?};\n"
         ),
     )
     .expect("failed to bind private sandbox runner installation");
