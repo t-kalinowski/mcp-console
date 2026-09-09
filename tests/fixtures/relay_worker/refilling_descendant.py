@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 
 root = Path(os.environ["TMPDIR"])
-sideband = int(os.environ["MCP_CONSOLE_SIDEBAND_FD"])
+sideband = int(os.environ["MCP_CONSOLE_SIDEBAND_WRITE_FD"])
 assert os.write(sideband, b'{"kind":"ready"}\n') > 0
 assert sys.stdin.readline() == "start\n"
 if os.fork() != 0:

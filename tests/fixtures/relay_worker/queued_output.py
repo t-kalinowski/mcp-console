@@ -1,16 +1,21 @@
 import json
 import os
 import signal
-import socket
 import sys
 import threading
 from pathlib import Path
 
 
 root = Path(os.environ["TMPDIR"])
-endpoint = socket.socket(fileno=int(os.environ["MCP_CONSOLE_SIDEBAND_FD"]))
+reader = os.fdopen(int(os.environ.pop("MCP_CONSOLE_SIDEBAND_READ_FD")), "rb")
+writer = os.fdopen(int(os.environ.pop("MCP_CONSOLE_SIDEBAND_WRITE_FD")), "wb")
 interrupted = os.open(root / "worker-interrupted", os.O_WRONLY)
 shutdown = os.open(root / "worker-shutdown", os.O_WRONLY)
+
+
+def send(frame: bytes) -> None:
+    writer.write(frame)
+    writer.flush()
 
 
 def acknowledge_interrupts() -> None:
@@ -20,12 +25,11 @@ def acknowledge_interrupts() -> None:
 
 
 # All threads inherit the mask. Receive SIGINT independently of the main
-# thread's blocking socket reads and Python's deferred signal callbacks.
+# thread's blocking pipe reads and Python's deferred signal callbacks.
 signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
 threading.Thread(target=acknowledge_interrupts, daemon=True).start()
 (root / "worker-pid").write_text(str(os.getpid()))
-endpoint.sendall(b'{"kind":"ready"}\n')
-reader = endpoint.makefile("rb")
+send(b'{"kind":"ready"}\n')
 assert json.loads(reader.readline())["kind"] == "evaluate"
 first_size, frame_size, frame_count = map(int, sys.argv[1:4])
 
@@ -43,7 +47,7 @@ def produce_output() -> None:
             + b"\n"
         )
         assert len(frame) == size
-        endpoint.sendall(frame)
+        send(frame)
         if index == 0:
             with (root / "continue-output").open("rb", buffering=0) as release:
                 assert release.read(1) == b"1"
