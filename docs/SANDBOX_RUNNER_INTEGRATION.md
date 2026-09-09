@@ -14,6 +14,11 @@ The changed public case passed against the saved baseline executable, its four i
 The case then passed on the integrated macOS and Linux builds.
 Both main baselines used runner `3ee7d3190983b482b312ddfc3201c464179a1245`.
 
+The subsequent main refresh merges `e37f8ab0af7acc8df3b6e787e648b9e24ce55d4f` in merge commit `0f2710035b56c7b6e5da3edbdf9a17053563a99c`.
+It retains main's automatic companion preparation for source installations, streaming verification of the companion bundle, release executable for integration tests, and CPU-only PyTorch wheels on Linux.
+Conflicts in `AGENTS.md` and `docs/ARCHITECTURE.md` combine main's packaging behavior with this PR's frontend and runner responsibilities.
+No snapshot or integration-specific behavior assertion changes in this merge.
+
 The final pin is the exact implementation commit `fe1b9e4e89458ba8812bfb0a65fb0a1ad84e71d5` on `mcp-console/sandbox-runner/rust-v0.150.1`.
 The inspected branch tip `64a207d82525e6a22843971e8c64c4a02e358583` adds handoff documentation only.
 Protocol 2 and Rust 1.95.0 remain pinned.
@@ -105,8 +110,9 @@ This removes native descendant tracking, manager and monitor recovery, temporary
 The `sandbox-manager` and `sandbox-target` CLI variants and dispatch paths are deleted.
 Sandbox-only descriptor and direct-child polling helpers are deleted; ordinary server child observation and descriptor sanitation remain.
 
-The production diff removes 4,028 lines and adds 85, a net deletion of 3,943 lines (`git diff --numstat 26a5f3c3 -- src`).
-All rules in `src/sandbox/policy_extensions.sbpl` and installation verification are unchanged; only the policy comment linking to its audit document is updated.
+The production diff removes 4,028 lines and adds 85, a net deletion of 3,943 lines (`git diff --numstat e37f8ab0 -- src`).
+All rules in `src/sandbox/policy_extensions.sbpl` are unchanged; only the policy comment linking to its audit document is updated.
+The integration retains current main's companion installation verification.
 Filesystem host reads, network restriction, full mutation of private temporary data, host-terminal restrictions, and all named macOS compatibility exceptions remain selected by Console.
 The runner now creates and owns `sandbox-XXXXXX/data`, exported as `TMPDIR`.
 The former Console supervision and Linux ownership documents are replaced by [sandbox integration](SANDBOX.md); protocol and architecture documents retain the ordinary server and relay responsibilities.
@@ -205,7 +211,9 @@ On Linux, the writable `data` child can replace itself and its metadata entries;
 Directory-removal failure and expanded Linux directory mutation were not separately compared against the baseline.
 The pre-existing Darwin limits for unobserved detached orphans and non-atomic identity-check-and-signal delivery remain documented, without an added recovery service.
 
-## Final validation
+## Runner-follow-up validation
+
+These local results precede the latest-main refresh and were recorded at PR head `5e4a5ccc85c304feeeedff119b622aa1412a6ca3`.
 
 The final suite discovers 419 public cases, compared with 423 on updated main: one frontend-exec case is added and five recovery-only cases are removed.
 The Linux lifetime case is renamed without changing its three retained scenarios.
@@ -247,5 +255,38 @@ The final snapshot inventory contains 427 files: 421 are byte-identical to curre
 Formatting-only regeneration is restored to baseline bytes after checking parsed equality.
 The two-pipe sideband, isolation, cancellation, stdin, signals, restart, caller-death cleanup, and observed-descendant barriers retain their assertions.
 
-Not performed for this revision: hosted PR CI, a full local Linux baseline, Linux runner executable-contract tests, wheel rehearsal, and R-package acceptance.
+At that local validation cutoff, hosted PR CI had not completed.
+A full local Linux baseline, Linux runner executable-contract tests, wheel rehearsal, and R-package acceptance were not performed.
 The full Linux suite's host prerequisites and separate container result must not be reported as an ordinary hosted-CI pass.
+
+## Hosted CI diagnosis
+
+[Run 34405825302](https://github.com/t-kalinowski/mcp-console/actions/runs/34405825302), for head `5e4a5ccc`, completed on September 9, 2026.
+Ubuntu passed, including its aggregate transcript run.
+That hosted job also passed wheel smoke and R-package checks.
+The macOS job failed in `cli/sandbox/test_crashes::cancels_owned_launch_during_setup`, at the assertion checking the fixture owner's exit code.
+The assertion did not include the scenario or actual status in its diagnostic, so the hosted log alone does not identify which cancellation path failed.
+
+The apparent stall was successful work before the result: the macOS private-runner build took 8 minutes 44 seconds, then its transcript step failed after about 10 seconds.
+Ubuntu's passing transcript step took 17 minutes 39 seconds; its longest reported case, `client_server/output/test_spools::reports_omitted_bytes_retained_at_the_file_limit`, took 5 minutes 27 seconds.
+The logs contain no timeout or deadlock for the failed macOS case.
+The latest-main merge leaves that case, its assertions, and the runner implementation pin unchanged.
+
+The unchanged five-scenario selector passed all 13 focused local trials against an isolated copy of the merged release executable and its matching companion bundle: 65 scenarios, about three seconds per trial.
+These trials used a temporary Python trace for failure diagnostics without modifying the case or its assertions; no failure was reproduced.
+The hosted failure therefore remains unexplained.
+The next useful observation is the active reader/cancellation scenario, actual owner status, and captured stdout/stderr from a failing hosted invocation.
+There is no evidence here to justify changing cancellation behavior or weakening its test.
+
+## Latest-main validation
+
+The full local `scripts/check` passed on macOS after merge `0f271003`, using the existing isolated runner checkout at the unchanged pin.
+It passed all core checks and 47 Rust tests, all 409 applicable public transcript cases against the release executable, and both source/wheel installation tests.
+Ten public cases were unavailable on this host, producing 11 mode-level skip records.
+The installation checks cover native-flag rebuilds, editable and ordinary source installations, source archives, wheel smoke, relocation, and companion verification across three installed bundles.
+All 427 snapshot files remain byte-identical to the preceding PR head.
+The merge adds no integration-specific test or guarantee change beyond the inventory above.
+
+Logs and the revision/snapshot audit are under `/tmp/mcp-console-pr266-main-refresh`; the focused CI investigation is under `/tmp/mcp-console-pr266-ci-diagnosis`.
+No new local Linux run, runner executable-contract run, release wheel rehearsal, or R-package acceptance run was performed for this refresh.
+Hosted checks for the new PR head remain separate from the completed preceding-head results above.
