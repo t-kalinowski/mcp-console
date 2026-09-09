@@ -2,6 +2,7 @@
 
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -10,6 +11,7 @@ from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript
+from support.resolvers import resolve_managed_python
 from support.suites import run_this_suite
 
 
@@ -23,6 +25,11 @@ def test_worker_adopts_both_pipes_and_isolates_fork_and_exec(
     environment["MCP_CONSOLE_TEST_CLOSED_PROBE"] = str(
         wrapper.with_name("sideband_closed.py")
     )
+    # Custom workers do not receive the built-in dependency preparation.
+    with tempfile.TemporaryDirectory() as temporary:
+        environment["RETICULATE_PYTHON"] = str(
+            resolve_managed_python(binary, execution, Path(temporary))
+        )
     with McpClient(
         binary, execution.serve("--worker", str(wrapper)), environment
     ) as client:
