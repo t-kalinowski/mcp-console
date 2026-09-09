@@ -5,13 +5,12 @@ import re
 import sys
 import tempfile
 import time
-from contextlib import closing
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import last_tool_text, wait_for_evaluation_output
-from support.checkpoints import FifoCheckpoint, wait_for_worker_file
+from support.checkpoints import wait_for_worker_file
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
@@ -704,17 +703,15 @@ def test_replays_console_prefix_after_operation_boundary_interrupt(
         r = code(r"""
             tryCatch(
               {
-                checkpoint <- fifo(
-                  file.path(tempdir(), "between-console-callbacks-started"),
-                  open = "w+b"
-                )
                 partial <- .Call(
                   "mcp_test_read_console_once",
                   "between callbacks> "
                 )
                 stopifnot(nchar(partial, type = "bytes") == 3L)
-                writeBin(as.raw(49), checkpoint)
-                close(checkpoint)
+                invisible(file.create(file.path(
+                  tempdir(),
+                  "between-console-callbacks-started"
+                )))
                 repeat {
                   Sys.sleep(60)
                 }
@@ -728,20 +725,13 @@ def test_replays_console_prefix_after_operation_boundary_interrupt(
         assert last_tool_text(client) == (
             '[input requested: "between callbacks> "]\n[waiting for stdin]'
         )
-        checkpoint = wait_for_worker_file(
-            directory, "between-console-callbacks-started", client
+        client.send(stdin="x" * 6, timeout_ms=50)
+        assert last_tool_text(client) == "\n[running; poll with an empty send]"
+        wait_for_worker_file(
+            directory,
+            "between-console-callbacks-started",
+            client,
         )
-        with closing(FifoCheckpoint.attach(checkpoint)) as started:
-            # Writing stdin does not acknowledge its consumption. Collect through
-            # the worker's running state, then wait for the completed callback.
-            wait_for_evaluation_output(
-                client,
-                "\n[running; poll with an empty send]",
-                "console callback to consume stdin",
-                stdin="x" * 6,
-                timeout_ms=50,
-            )
-            started.wait()
 
         wait_for_evaluation_output(
             client,

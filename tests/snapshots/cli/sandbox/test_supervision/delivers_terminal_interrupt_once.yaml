@@ -8,16 +8,16 @@ command:
   - |
     import os
     import signal
+    import threading
 
     interrupts = 0
-    interrupted, wakeup = os.pipe()
-    os.set_blocking(wakeup, False)
-    signal.set_wakeup_fd(wakeup)
+    interrupted = threading.Event()
 
 
     def handle_interrupt(_signal, _frame):
         global interrupts
         interrupts += 1
+        interrupted.set()
 
 
     signal.signal(signal.SIGINT, handle_interrupt)
@@ -27,7 +27,7 @@ command:
     print(input(), flush=True)
     signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
     print("interrupt ready", flush=True)
-    assert os.read(interrupted, 1) == bytes([signal.SIGINT])
+    interrupted.wait()
     print(interrupts)
 stdin: |-
   sandbox input

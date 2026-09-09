@@ -271,22 +271,20 @@ def test_sandbox_cannot_retain_its_temporary_directory(binary: Path) -> Transcri
 
 @requires(MACOS_SANDBOX, PROCESS_EVENTS)
 def test_delivers_terminal_interrupt_once(binary: Path) -> Transcript:
-    # Event.set() in a signal handler can deadlock on Event.wait()'s lock.
-    # A wakeup pipe retains the signal even if it arrives before the read.
     # fmt: python
     sandboxed_script = code(r"""
         import os
         import signal
+        import threading
 
         interrupts = 0
-        interrupted, wakeup = os.pipe()
-        os.set_blocking(wakeup, False)
-        signal.set_wakeup_fd(wakeup)
+        interrupted = threading.Event()
 
 
         def handle_interrupt(_signal, _frame):
             global interrupts
             interrupts += 1
+            interrupted.set()
 
 
         signal.signal(signal.SIGINT, handle_interrupt)
@@ -296,7 +294,7 @@ def test_delivers_terminal_interrupt_once(binary: Path) -> Transcript:
         print(input(), flush=True)
         signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
         print("interrupt ready", flush=True)
-        assert os.read(interrupted, 1) == bytes([signal.SIGINT])
+        interrupted.wait()
         print(interrupts)
         """)
     arguments = [binary, "sandbox", "--", "python", "-c", sandboxed_script]

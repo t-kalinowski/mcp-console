@@ -49,17 +49,15 @@ send:
   r: |
     tryCatch(
       {
-        checkpoint <- fifo(
-          file.path(tempdir(), "between-console-callbacks-started"),
-          open = "w+b"
-        )
         partial <- .Call(
           "mcp_test_read_console_once",
           "between callbacks> "
         )
         stopifnot(nchar(partial, type = "bytes") == 3L)
-        writeBin(as.raw(49), checkpoint)
-        close(checkpoint)
+        invisible(file.create(file.path(
+          tempdir(),
+          "between-console-callbacks-started"
+        )))
         repeat {
           Sys.sleep(60)
         }

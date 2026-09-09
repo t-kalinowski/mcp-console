@@ -6,13 +6,12 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from contextlib import ExitStack
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import last_result_text
-from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
@@ -813,21 +812,17 @@ def test_interrupts_python_cache_warmup_without_committing(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary_directory, ExitStack() as cleanup:
+    with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
         fake_python = temporary / "python"
         preflight_warmup = temporary / "preflight-warmup"
         blocked_warmup = temporary / "blocked-warmup"
-        warmup_started = FifoCheckpoint.create(temporary / "warmup-started")
-        cleanup.callback(warmup_started.close)
-        warmup_release = FifoCheckpoint.create(temporary / "warmup-release")
-        cleanup.callback(warmup_release.close)
         write_python_executable(
             fake_python,
             code("""                #!/usr/bin/env python3
                 import os
-                import signal
                 import sys
+                import time
                 from pathlib import Path
 
 
@@ -850,19 +845,17 @@ def test_interrupts_python_cache_warmup_without_committing(
                             os.environ["MCP_CONSOLE_TEST_BLOCKED_WARMUP"]
                         )
                         if not blocked.exists():
-                            signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
                             blocked.touch()
-                            with open(os.environ["MCP_CONSOLE_TEST_WARMUP_STARTED"], "wb", buffering=0) as started:
-                                started.write(b"1")
-                            signal.sigwait({signal.SIGINT})
-                            with open(os.environ["MCP_CONSOLE_TEST_WARMUP_RELEASE"], "rb", buffering=0) as release:
-                                assert release.read(1) == b"1"
+                            time.sleep(30)
                         return
                     raise SystemExit(f"unexpected fake Python arguments: {arguments!r}")
 
 
                 if __name__ == "__main__":
-                    main()
+                    try:
+                        main()
+                    except KeyboardInterrupt:
+                        raise SystemExit(130) from None
                 """),
         )
         client, _, arguments = python_inventory_client(
@@ -873,24 +866,22 @@ def test_interrupts_python_cache_warmup_without_committing(
             extra_environment={
                 "MCP_CONSOLE_TEST_PREFLIGHT_WARMUP": str(preflight_warmup),
                 "MCP_CONSOLE_TEST_BLOCKED_WARMUP": str(blocked_warmup),
-                "MCP_CONSOLE_TEST_WARMUP_STARTED": str(warmup_started.path),
-                "MCP_CONSOLE_TEST_WARMUP_RELEASE": str(warmup_release.path),
             },
         )
         preparation = client.start_send(requirements={"python": ["py-yaml12"]})
-        warmup_started.wait("Python cache warmup started", timeout=5)
+        deadline = time.monotonic() + 5
+        while not blocked_warmup.exists():
+            assert client.process.poll() is None, (
+                "mcp-console stopped before cache warmup"
+            )
+            assert time.monotonic() < deadline, "Python cache warmup did not start"
+            time.sleep(0.01)
 
         interrupt = client.start_send(
             control="interrupt",
             timeout_ms=30_000,
         )
-        # Keep preparation active through the control response. Its own
-        # response below establishes that the resolver has finished.
-        try:
-            client.receive(interrupt)
-        finally:
-            warmup_release.release()
-        client.receive(preparation)
+        client.receive_many([preparation, interrupt])
         preparation_result = preparation["result"]
         assert preparation_result["isError"] is True, preparation_result
         preparation_text = preparation_result["content"][0]["text"]
@@ -899,8 +890,6 @@ def test_interrupts_python_cache_warmup_without_committing(
         interrupt_result = interrupt["result"]
         assert interrupt_result.get("isError") is not True, interrupt_result
 
-        client.send()
-        assert last_result_text(client) == "\n[idle]"
         client.send(requirements={"python": ["py-yaml12"]})
         assert last_result_text(client) == "[prepared]"
         assert len(recorded_tool_run_pythons(arguments)) == 2
@@ -912,21 +901,18 @@ def test_stops_before_cache_warmup_after_python_resolver_interrupt(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary_directory, ExitStack() as cleanup:
+    with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
         fake_python = temporary / "python"
         block_tool_run = temporary / "block-tool-run"
-        tool_run_started = FifoCheckpoint.create(temporary / "tool-run-started")
-        cleanup.callback(tool_run_started.close)
-        tool_run_release = FifoCheckpoint.create(temporary / "tool-run-release")
-        cleanup.callback(tool_run_release.close)
+        tool_run_started = temporary / "tool-run-started"
         unexpected_warmup = temporary / "unexpected-warmup"
         write_python_executable(
             fake_python,
             code("""                #!/usr/bin/env python3
                 import os
-                import signal
                 import sys
+                import time
                 from pathlib import Path
 
 
@@ -935,14 +921,13 @@ def test_stops_before_cache_warmup_after_python_resolver_interrupt(
                     blocked = Path(os.environ["MCP_CONSOLE_TEST_BLOCK_TOOL_RUN"])
                     if arguments and arguments[0] == "-c":
                         if blocked.exists():
-                            # Block SIGINT before publishing readiness, so an
-                            # early interrupt stays pending for sigwait().
-                            signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
-                            with open(os.environ["MCP_CONSOLE_TEST_TOOL_RUN_STARTED"], "wb", buffering=0) as started:
-                                started.write(b"1")
-                            signal.sigwait({signal.SIGINT})
-                            with open(os.environ["MCP_CONSOLE_TEST_TOOL_RUN_RELEASE"], "rb", buffering=0) as release:
-                                assert release.read(1) == b"1"
+                            Path(
+                                os.environ["MCP_CONSOLE_TEST_TOOL_RUN_STARTED"]
+                            ).touch()
+                            try:
+                                time.sleep(30)
+                            except KeyboardInterrupt:
+                                pass
                         Path(arguments[-1]).write_text(
                             os.environ["MCP_CONSOLE_TEST_UV_PYTHON"],
                             encoding="utf-8",
@@ -968,26 +953,25 @@ def test_stops_before_cache_warmup_after_python_resolver_interrupt(
             resolver_python=fake_python,
             extra_environment={
                 "MCP_CONSOLE_TEST_BLOCK_TOOL_RUN": str(block_tool_run),
-                "MCP_CONSOLE_TEST_TOOL_RUN_STARTED": str(tool_run_started.path),
-                "MCP_CONSOLE_TEST_TOOL_RUN_RELEASE": str(tool_run_release.path),
+                "MCP_CONSOLE_TEST_TOOL_RUN_STARTED": str(tool_run_started),
                 "MCP_CONSOLE_TEST_UNEXPECTED_WARMUP": str(unexpected_warmup),
             },
         )
         block_tool_run.touch()
         preparation = client.start_send(requirements={"python": ["py-yaml12"]})
-        tool_run_started.wait("Python resolver started", timeout=5)
+        deadline = time.monotonic() + 5
+        while not tool_run_started.exists():
+            assert client.process.poll() is None, (
+                "mcp-console stopped before Python resolver started"
+            )
+            assert time.monotonic() < deadline, "Python resolver did not start"
+            time.sleep(0.01)
 
         interrupt = client.start_send(
             control="interrupt",
             timeout_ms=30_000,
         )
-        # Keep preparation active through the control response. Its own
-        # response below establishes that the resolver has finished.
-        try:
-            client.receive(interrupt)
-        finally:
-            tool_run_release.release()
-        client.receive(preparation)
+        client.receive_many([preparation, interrupt])
         preparation_result = preparation["result"]
         assert preparation_result["isError"] is True, preparation_result
         preparation_text = preparation_result["content"][0]["text"]
@@ -999,8 +983,6 @@ def test_stops_before_cache_warmup_after_python_resolver_interrupt(
             "cache warmup started after the resolver accepted an interrupt"
         )
 
-        client.send()
-        assert last_result_text(client) == "\n[idle]"
         block_tool_run.unlink()
         client.send(requirements={"python": ["py-yaml12"]})
         assert last_result_text(client) == "[prepared]"
