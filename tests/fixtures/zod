@@ -10,7 +10,7 @@ import json
 import os
 import select
 import signal
-import socket
+import stat
 import sys
 import termios
 import time
@@ -19,7 +19,8 @@ import tempfile
 from pathlib import Path
 from typing import Any, TextIO
 
-SIDEBAND_FD_ENV = "MCP_CONSOLE_SIDEBAND_FD"
+READ_FD_ENV = "MCP_CONSOLE_SIDEBAND_READ_FD"
+WRITE_FD_ENV = "MCP_CONSOLE_SIDEBAND_WRITE_FD"
 TEST_FIXTURE_CONTROL_ENV = "ZOD_TEST_FIXTURE_CONTROL"
 TEST_EVENT_FIFO_NAME = "zod-test-events"
 TEST_CONTROL_FIFO_NAME = "zod-test-control"
@@ -29,7 +30,6 @@ TEST_RESPONSE_RESULT_FIFO_NAME = "zod-test-response-result"
 TEST_CONTROL_READY_NAME = "zod-test-control-ready"
 LARGE_OUTPUT_SIZE = 2 * 1024 * 1024
 PENDING_TEXT_BUDGET = 8 * 1024 * 1024
-WORKER_SHUTDOWN_GRACE_SECONDS = 1
 PNG_1X1 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42Y"
     "AAAAASUVORK5CYII="
@@ -189,27 +189,24 @@ def probe_pending_stdin(expected_bytes: int, consumed_bytes: int) -> tuple[int, 
     return consumed_bytes, queued_bytes
 
 
-def open_sideband() -> tuple[socket.socket, TextIO, TextIO]:
-    assert "MCP_CONSOLE_SIDEBAND_READ_FD" not in os.environ
-    assert "MCP_CONSOLE_SIDEBAND_WRITE_FD" not in os.environ
-    descriptor = int(os.environ.pop(SIDEBAND_FD_ENV))
-    os.set_inheritable(descriptor, False)
-    endpoint = socket.socket(fileno=descriptor)
-    assert endpoint.family == socket.AF_UNIX
-    assert endpoint.type == socket.SOCK_STREAM
-    reader = endpoint.makefile("r", encoding="utf-8")
-    writer = endpoint.makefile("w", encoding="utf-8")
-    return endpoint, reader, writer
+def open_sideband() -> tuple[TextIO, TextIO]:
+    assert "MCP_CONSOLE_SIDEBAND_FD" not in os.environ
+    read_fd = int(os.environ.pop(READ_FD_ENV))
+    write_fd = int(os.environ.pop(WRITE_FD_ENV))
+    assert read_fd != write_fd and min(read_fd, write_fd) > 2
+    for descriptor, direction in ((read_fd, os.O_RDONLY), (write_fd, os.O_WRONLY)):
+        assert stat.S_ISFIFO(os.fstat(descriptor).st_mode)
+        assert fcntl.fcntl(descriptor, fcntl.F_GETFL) & os.O_ACCMODE == direction
+        os.set_inheritable(descriptor, False)
+    return (
+        os.fdopen(read_fd, "r", encoding="utf-8"),
+        os.fdopen(write_fd, "w", encoding="utf-8"),
+    )
 
 
-def close_sideband(
-    endpoint: socket.socket,
-    reader: TextIO,
-    writer: TextIO,
-) -> None:
+def close_sideband(reader: TextIO, writer: TextIO) -> None:
     reader.close()
     writer.close()
-    endpoint.close()
 
 
 def send(stream: TextIO, message: dict[str, Any]) -> None:
@@ -294,7 +291,6 @@ def wait_for_server_to_process_sideband(reader: TextIO, writer: TextIO) -> None:
 
 def configure_startup(
     root: Path,
-    endpoint: socket.socket,
     reader: TextIO,
     writer: TextIO,
 ) -> tuple[bool, bool]:
@@ -313,8 +309,8 @@ def configure_startup(
         child = os.fork()
         if child == 0:
             os.setsid()
-            sideband_writer = os.dup(endpoint.fileno())
-            close_sideband(endpoint, reader, writer)
+            sideband_writer = os.dup(writer.fileno())
+            close_sideband(reader, writer)
             for descriptor in (0, 1, 2):
                 os.close(descriptor)
             publish_marker(
@@ -339,7 +335,7 @@ def configure_startup(
 
 def main() -> None:
     """Run the deterministic sideband fixture until the server shuts it down."""
-    endpoint, reader, writer = open_sideband()
+    reader, writer = open_sideband()
     temporary = Path(tempfile.gettempdir())
     configure_test_fixture_control(temporary)
     if started_marker := os.environ.get("MCP_CONSOLE_TEST_ZOD_STARTED"):
@@ -361,7 +357,6 @@ def main() -> None:
         )
     startup_callback, startup_ready_sent = configure_startup(
         temporary,
-        endpoint,
         reader,
         writer,
     )
@@ -565,58 +560,37 @@ def main() -> None:
             while os.read(0, 8192) != b"":
                 pass
             expected = b'{"kind":"shutdown"}\n'
-            # A stream peek can return a partial write even with MSG_WAITALL.
-            # Read the frame prefix, leaving its newline queued to cause a reset.
+            # Leave the shutdown newline unread when both pipe directions close.
             queued = bytearray()
             while len(queued) < len(expected) - 1:
-                chunk = endpoint.recv(len(expected) - 1 - len(queued))
+                chunk = os.read(reader.fileno(), len(expected) - 1 - len(queued))
                 assert chunk, queued
                 queued.extend(chunk)
-            queued.extend(endpoint.recv(1, socket.MSG_PEEK))
-            assert queued == expected, queued
-            endpoint.shutdown(socket.SHUT_WR)
-            close_sideband(endpoint, reader, writer)
-            reset_marker = Path(os.environ["MCP_CONSOLE_TEST_RESET_SIDEBAND_EOF"])
-            while not reset_marker.exists():
-                time.sleep(0.01)
+            assert queued == expected[:-1], queued
+            assert select.select([reader], [], [], 10)[0]
+            close_sideband(reader, writer)
             return
 
         if source == "stall accepted relay shutdown":
-            relay_pid = int(os.environ["ZOD_RELAY_PID"])
-            stop_observed = temporary / "zod-accepted-relay-stop-observed"
-            os.mkfifo(stop_observed)
+            relay_pid = os.getppid()
             helper = os.fork()
             if helper == 0:
                 os.setsid()
-                close_sideband(endpoint, reader, writer)
-                for descriptor in (1, 2):
+                close_sideband(reader, writer)
+                for descriptor in (0, 1, 2):
                     os.close(descriptor)
                 publish_marker(
-                    temporary / "zod-relay-resume-helper",
+                    temporary / "zod-relay-retirement-processes",
                     f"{os.getpid()} {relay_pid}",
                 )
-                while os.read(0, 1) != b"":
-                    pass
-                os.close(0)
-                os.kill(relay_pid, signal.SIGSTOP)
-                resume_at = time.monotonic() + WORKER_SHUTDOWN_GRACE_SECONDS
-                publish_marker(temporary / "zod-relay-stopped-after-shutdown")
-                with stop_observed.open("rb", buffering=0) as checkpoint:
-                    assert checkpoint.read(1) == b"1"
-                while (remaining := resume_at - time.monotonic()) > 0:
-                    time.sleep(remaining)
-                try:
-                    os.kill(relay_pid, signal.SIGCONT)
-                except ProcessLookupError:
-                    pass
-                os._exit(0)
-            stopped = temporary / "zod-relay-stopped-after-shutdown"
-            while not stopped.exists():
-                time.sleep(0.01)
+                while True:
+                    signal.pause()
+            assert os.read(0, 1) == b""
+            # The relay's read checkpoint holds this output until reader join.
+            # Keep the worker alive so shutdown must consume its grace period.
             write_all(1, b"zod output during relay retirement\n")
-            publish_marker(temporary / "zod-relay-retirement-output-written")
             while True:
-                time.sleep(60)
+                signal.pause()
 
         if source == "stall with stopped relay":
             relay_pid = int(os.environ["ZOD_RELAY_PID"])
@@ -627,7 +601,7 @@ def main() -> None:
             helper = os.fork()
             if helper == 0:
                 os.setsid()
-                close_sideband(endpoint, reader, writer)
+                close_sideband(reader, writer)
                 for descriptor in (0, 1, 2):
                     os.close(descriptor)
                 publish_marker(
@@ -728,12 +702,22 @@ def main() -> None:
             continue
 
         if source == "overflow cell output file":
-            send_output(writer, "x" * (3 * PENDING_TEXT_BUDGET + 7))
-            send(writer, {"kind": "input_requested", "prompt": "continue> "})
-            assert input() == "continue"
-            send(writer, {"kind": "input_received"})
-            send_output(writer, "y" * (PENDING_TEXT_BUDGET + 7))
-            send(writer, {"kind": "completed"})
+            release = temporary / "zod-release-spooled-output"
+            processed = temporary / "zod-spooled-output-processed"
+            os.mkfifo(processed)
+            os.mkfifo(release)
+            for character, length in (
+                ("x", 3 * PENDING_TEXT_BUDGET + 7),
+                ("y", PENDING_TEXT_BUDGET + 7),
+            ):
+                with release.open("rb", buffering=0) as checkpoint:
+                    assert checkpoint.read(1) == b"1"
+                send_output(writer, character * length)
+                if character == "y":
+                    send(writer, {"kind": "completed"})
+                wait_for_server_to_process_sideband(reader, writer)
+                with processed.open("wb", buffering=0) as checkpoint:
+                    assert checkpoint.write(b"1") == 1
             continue
 
         if source == "overflow console output":
@@ -920,7 +904,6 @@ def main() -> None:
                 assert os.read(cleanup, 1) in {b"", b"1"}
                 os.close(cleanup)
                 writer.close()
-                endpoint.close()
                 os._exit(0)
             os.close(cleanup_source)
             close_test_cleanup_gate()
@@ -964,7 +947,7 @@ def main() -> None:
                 cleanup = duplicate_test_cleanup_gate()
                 close_test_cleanup_gate()
                 close_test_control_channel()
-                close_sideband(endpoint, reader, writer)
+                close_sideband(reader, writer)
                 os.close(1)
                 os.close(2)
                 emit_test_event(

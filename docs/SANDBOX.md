@@ -52,6 +52,7 @@ With a foreground peer, it keeps the caller group in control and forwards termin
 General shell job suspension and resumption are unsupported.
 
 Linux uses the native namespace helper, bubblewrap, namespace-local procfs, a host subreaper, and pidfds.
+The relay-worker sideband uses two anonymous pipes under the same sandbox policy.
 It requires kernel 5.11 or later and permission for user, mount, PID, and network namespaces.
 Full-disk-write policies and procfs fallback are rejected by the runner's supervised path; Console's fixed policy requests neither.
 Linux keeps the caller's foreground-terminal ownership and relays interrupts through namespace init.

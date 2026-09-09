@@ -7,17 +7,14 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include <sys/socket.h>
-#include <sys/un.h>
+#include <string.h>
 #include <unistd.h>
 
 static atomic_bool claimed = false;
-static atomic_bool reset_claimed = false;
 static atomic_int sideband_descriptor = -1;
 
 typedef int (*poll_function)(struct pollfd *, nfds_t, int);
 typedef ssize_t (*read_function)(int, void *, size_t);
-typedef ssize_t (*recv_function)(int, void *, size_t, int);
 
 static poll_function next_poll(void) {
 #ifdef __APPLE__
@@ -35,14 +32,6 @@ static read_function next_read(void) {
 #endif
 }
 
-static recv_function next_recv(void) {
-#ifdef __APPLE__
-  return recv;
-#else
-  return (recv_function)dlsym(RTLD_NEXT, "recv");
-#endif
-}
-
 static bool target_process(void) {
   const char *value = getenv("MCP_CONSOLE_TEST_POLL_PID");
   if (value == NULL) {
@@ -56,17 +45,6 @@ static bool target_process(void) {
 static bool armed(void) {
   const char *path = getenv("MCP_CONSOLE_TEST_POLL_ARM");
   return path != NULL && access(path, F_OK) == 0;
-}
-
-static bool unix_stream(int descriptor) {
-  struct sockaddr_un address;
-  socklen_t address_length = sizeof(address);
-  int type = 0;
-  socklen_t type_length = sizeof(type);
-  return getsockname(descriptor, (struct sockaddr *)&address, &address_length) == 0 &&
-         address.sun_family == AF_UNIX &&
-         getsockopt(descriptor, SOL_SOCKET, SO_TYPE, &type, &type_length) == 0 &&
-         type == SOCK_STREAM;
 }
 
 static void mark(const char *name) {
@@ -98,18 +76,14 @@ static int delayed_poll(struct pollfd *descriptors, nfds_t count, int timeout) {
     errno = ENOSYS;
     return -1;
   }
-  if (target_process() && count == 2 && timeout == -1 &&
-      unix_stream(descriptors[0].fd)) {
-    atomic_store(&sideband_descriptor, descriptors[0].fd);
-  }
   int result = poll_next(descriptors, count, timeout);
   if (result <= 0 || !target_process() || count != 2 || timeout != -1 ||
       !armed() || (descriptors[0].revents & POLLIN) == 0 ||
-      !unix_stream(descriptors[0].fd) || atomic_exchange(&claimed, true)) {
+      descriptors[0].fd != atomic_load(&sideband_descriptor) || atomic_exchange(&claimed, true)) {
     return result;
   }
 
-  mark("MCP_CONSOLE_TEST_POLL_SOCKET_READY");
+  mark("MCP_CONSOLE_TEST_POLL_SIDEBAND_READY");
   if (descriptors[1].revents == 0) {
     struct pollfd cancellation = descriptors[1];
     do {
@@ -125,39 +99,21 @@ static int delayed_poll(struct pollfd *descriptors, nfds_t count, int timeout) {
   return (descriptors[0].revents != 0) + (descriptors[1].revents != 0);
 }
 
-static bool reset_sideband_eof(int descriptor, ssize_t result) {
-  // Linux can already report ECONNRESET when the peer closes with unread data.
-  // Acknowledge that result through the same checkpoint as an injected reset.
-  if ((result != 0 && !(result == -1 && errno == ECONNRESET)) || !target_process() ||
-      descriptor != atomic_load(&sideband_descriptor) ||
-      getenv("MCP_CONSOLE_TEST_RESET_SIDEBAND_EOF") == NULL ||
-      atomic_exchange(&reset_claimed, true)) {
-    return false;
-  }
-  mark("MCP_CONSOLE_TEST_RESET_SIDEBAND_EOF");
-  errno = ECONNRESET;
-  return true;
-}
-
-static ssize_t reset_read(int descriptor, void *buffer, size_t length) {
+static ssize_t observed_read(int descriptor, void *buffer, size_t length) {
   read_function read_next = next_read();
   if (read_next == NULL) {
     errno = ENOSYS;
     return -1;
   }
   ssize_t result = read_next(descriptor, buffer, length);
-  return reset_sideband_eof(descriptor, result) ? -1 : result;
-}
-
-static ssize_t reset_recv(int descriptor, void *buffer, size_t length,
-                          int flags) {
-  recv_function recv_next = next_recv();
-  if (recv_next == NULL) {
-    errno = ENOSYS;
-    return -1;
+  const char ready[] = "{\"kind\":\"ready\"}\n";
+  // Learn the sideband from its ready frame, then gate that reader's next
+  // armed poll. Ordinary stdout/stderr and cancellation are also pipes.
+  if (target_process() && result >= (ssize_t)(sizeof(ready) - 1) &&
+      memcmp(buffer, ready, sizeof(ready) - 1) == 0) {
+    atomic_store(&sideband_descriptor, descriptor);
   }
-  ssize_t result = recv_next(descriptor, buffer, length, flags);
-  return reset_sideband_eof(descriptor, result) ? -1 : result;
+  return result;
 }
 
 __attribute__((constructor)) static void prevent_worker_injection(void) {
@@ -178,17 +134,13 @@ __attribute__((constructor)) static void prevent_worker_injection(void) {
       (const void *)(uintptr_t)&replacee};
 
 DYLD_INTERPOSE(delayed_poll, poll)
-DYLD_INTERPOSE(reset_read, read)
-DYLD_INTERPOSE(reset_recv, recv)
+DYLD_INTERPOSE(observed_read, read)
 
 #else
 int poll(struct pollfd *descriptors, nfds_t count, int timeout) {
   return delayed_poll(descriptors, count, timeout);
 }
 ssize_t read(int descriptor, void *buffer, size_t length) {
-  return reset_read(descriptor, buffer, length);
-}
-ssize_t recv(int descriptor, void *buffer, size_t length, int flags) {
-  return reset_recv(descriptor, buffer, length, flags);
+  return observed_read(descriptor, buffer, length);
 }
 #endif

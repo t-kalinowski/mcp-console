@@ -2,7 +2,7 @@
 
 #include <pthread.h>
 #include <stdio.h>
-#include <sys/socket.h>
+#include <string.h>
 #ifdef __linux__
 #include <linux/futex.h>
 #include <stdarg.h>
@@ -10,20 +10,12 @@
 #endif
 
 #ifdef __linux__
-static int (*next_socketpair)(int domain, int type, int protocol, int pair[2]);
-#define socketpair next_socketpair
 static ssize_t (*next_read)(int descriptor, void *buffer, size_t length);
 #define read next_read
-static ssize_t (*next_recv)(int descriptor, void *buffer, size_t length, int flags);
-#define recv next_recv
 static long (*next_syscall)(long, ...);
 __attribute__((constructor)) static void initialize_queue_interposition(void) {
-    next_socketpair = dlsym(RTLD_NEXT, "socketpair");
-    if (next_socketpair == NULL) _exit(90);
     next_read = dlsym(RTLD_NEXT, "read");
     if (next_read == NULL) _exit(90);
-    next_recv = dlsym(RTLD_NEXT, "recv");
-    if (next_recv == NULL) _exit(90);
     next_syscall = dlsym(RTLD_NEXT, "syscall");
     if (next_syscall == NULL) _exit(90);
 }
@@ -36,19 +28,12 @@ static _Thread_local bool capacity_reported = false;
 static _Thread_local size_t consumed_bytes = 0;
 static _Thread_local size_t consumed_frames = 0;
 
-static int observed_socketpair(int domain, int type, int protocol, int pair[2]) {
-    int result = socketpair(domain, type, protocol, pair);
-#ifdef __linux__
-    type &= ~(SOCK_CLOEXEC | SOCK_NONBLOCK);
-#endif
-    if (result == 0 && domain == AF_UNIX && type == SOCK_STREAM) {
-        int unassigned = -1;
-        atomic_compare_exchange_strong(&sideband_descriptor, &unassigned, pair[0]);
-    }
-    return result;
-}
-
 static ssize_t record_read(int descriptor, const void *buffer, ssize_t result) {
+    const char ready[] = "{\"kind\":\"ready\"}\n";
+    if (result >= (ssize_t)(sizeof(ready) - 1) &&
+        memcmp(buffer, ready, sizeof(ready) - 1) == 0) {
+        atomic_store(&sideband_descriptor, descriptor);
+    }
     if (result > 0 && descriptor == atomic_load(&sideband_descriptor)) {
         is_sideband_reader = true;
         consumed_bytes += (size_t)result;
@@ -62,10 +47,6 @@ static ssize_t record_read(int descriptor, const void *buffer, ssize_t result) {
 
 static ssize_t observed_read(int descriptor, void *buffer, size_t length) {
     return record_read(descriptor, buffer, read(descriptor, buffer, length));
-}
-
-static ssize_t observed_recv(int descriptor, void *buffer, size_t length, int flags) {
-    return record_read(descriptor, buffer, recv(descriptor, buffer, length, flags));
 }
 
 // READY may briefly occupy the budget before the first output frame. The worker
@@ -106,24 +87,14 @@ static int observed_cond_timedwait(pthread_cond_t *condition, pthread_mutex_t *m
     return pthread_cond_timedwait(condition, mutex, deadline);
 }
 
-DYLD_INTERPOSE(observed_socketpair, socketpair)
 DYLD_INTERPOSE(observed_read, read)
-DYLD_INTERPOSE(observed_recv, recv)
 DYLD_INTERPOSE(observed_cond_wait, pthread_cond_wait)
 DYLD_INTERPOSE(observed_cond_timedwait, pthread_cond_timedwait)
 
 #else
-#undef socketpair
-int socketpair(int domain, int type, int protocol, int pair[2]) {
-    return observed_socketpair(domain, type, protocol, pair);
-}
 #undef read
 ssize_t read(int descriptor, void *buffer, size_t length) {
     return observed_read(descriptor, buffer, length);
-}
-#undef recv
-ssize_t recv(int descriptor, void *buffer, size_t length, int flags) {
-    return observed_recv(descriptor, buffer, length, flags);
 }
 long syscall(long number, ...) {
     // Rust's Linux condition variable waits directly on a futex. Forward the

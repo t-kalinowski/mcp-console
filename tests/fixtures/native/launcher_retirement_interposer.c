@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -7,12 +8,20 @@
 #include <stdlib.h>
 #include <unistd.h>
 
+#ifdef __linux__
+#include <dlfcn.h>
+#endif
+
 static atomic_bool claimed = false;
 
 typedef int (*kill_function)(pid_t, int);
 
 static kill_function next_kill(void) {
+#ifdef __APPLE__
     return kill;
+#else
+    return (kill_function)dlsym(RTLD_NEXT, "kill");
+#endif
 }
 
 static bool configured(const char *variable) {
@@ -101,9 +110,11 @@ static int delayed_retirement_signal(pid_t process_id, int signal_number) {
 __attribute__((constructor)) static void prevent_child_injection(void) {
     if (target_process()) {
         unsetenv("DYLD_INSERT_LIBRARIES");
+        unsetenv("LD_PRELOAD");
     }
 }
 
+#ifdef __APPLE__
 #define DYLD_INTERPOSE(replacement, replacee)                                  \
     __attribute__((used)) static struct {                                      \
         const void *replacement;                                               \
@@ -114,3 +125,9 @@ __attribute__((constructor)) static void prevent_child_injection(void) {
     };
 
 DYLD_INTERPOSE(delayed_retirement_signal, kill)
+
+#else
+int kill(pid_t process_id, int signal_number) {
+    return delayed_retirement_signal(process_id, signal_number);
+}
+#endif

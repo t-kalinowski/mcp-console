@@ -49,8 +49,8 @@ The private runner enforces the target descriptor boundary and owns native setup
 Console supplies immutable launch-time policy and lifecycle configuration; see [sandbox integration](SANDBOX.md).
 Any future sandbox-specific control plane must terminate at the sandbox process; its bootstrap and transport do not belong in the relay protocol.
 
-The relay creates the worker's full-duplex sideband socket pair and its standard-input, standard-output, and standard-error pipes.
-It passes one worker sideband endpoint through `MCP_CONSOLE_SIDEBAND_FD` together with the fd-0/1/2 contract documented in [the worker protocol](WORKER_PROTOCOL.md).
+The relay creates two anonymous sideband pipes and the worker's standard-input, standard-output, and standard-error pipes.
+It passes the worker's sideband endpoints through `MCP_CONSOLE_SIDEBAND_READ_FD` and `MCP_CONSOLE_SIDEBAND_WRITE_FD` together with the fd-0/1/2 contract documented in [the worker protocol](WORKER_PROTOCOL.md).
 It owns the direct worker, local transports, sideband translation, direct-worker signals, bounded termination, and direct-worker reaping.
 In sandboxed mode, successful managed launcher exit is the server's sandbox-cleanup barrier.
 In direct mode, the server waits for and reaps the relay; its exit supplies no descendant-cleanup guarantee.

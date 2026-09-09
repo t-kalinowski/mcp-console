@@ -16,18 +16,17 @@ from boundaries.relay_worker._harness import RelayWorkerClient
 from support.assertions import tool_text as _tool_text
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
-from support.native import SHARED_LIBRARY_FLAG
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, WORKER, requires
+from support.requirements import WORKER, requires
 from support.suites import run_this_suite
 
 
 @executions(DIRECT, SANDBOXED)
-def test_tolerates_enotconn_during_directional_shutdown(
+def test_closes_each_pipe_direction_on_restart(
     binary: Path, execution: Execution
 ) -> Transcript:
     client = RelayWorkerClient(
-        binary, inject_shutdown_enotconn=True, execution=execution
+        binary, capture_worker_sideband_close=True, execution=execution
     )
     assert _tool_text(client.send(r="invisible(NULL)")) == "[done]"
     old_path, old_capture = client._open_capture()
@@ -39,51 +38,20 @@ def test_tolerates_enotconn_during_directional_shutdown(
         "replacement ready\n"
     )
     transcript = client._finish_replacement(old_path, old_capture)
-    assert {"shutdown_enotconn": {"direction": "relay"}} in transcript
+    assert {"worker_sideband": {"closed": True}} in transcript
     return transcript
 
 
-@requires(WORKER, NATIVE_FIXTURES)
-def test_tolerates_connection_reset_with_unread_shutdown(
+@requires(WORKER)
+def test_closes_pipes_with_unread_shutdown(
     binary: Path,
 ) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
-    relay = Path(__file__).resolve().parents[3] / "fixtures" / "delayed_sideband_relay"
-    interposer_source = (
-        Path(__file__).resolve().parents[3] / "fixtures" / "delay_sideband_poll.c"
-    )
     with tempfile.TemporaryDirectory() as temporary_directory:
-        temporary = Path(temporary_directory)
-        interposer = temporary / "reset-sideband-eof.dylib"
-        subprocess.run(
-            [
-                "cc",
-                SHARED_LIBRARY_FLAG,
-                "-fPIC",
-                "-std=c11",
-                "-Wall",
-                "-Wextra",
-                "-Werror",
-                "-o",
-                interposer,
-                interposer_source,
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        reset_marker = temporary / "reset-sideband-eof-observed"
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
-        environment["MCP_CONSOLE_TEST_RELAY_BINARY"] = str(binary)
-        environment["MCP_CONSOLE_TEST_POLL_DYLIB"] = str(interposer)
-        environment["MCP_CONSOLE_TEST_POLL_LOADED_NAME"] = "poll-loaded"
-        environment["MCP_CONSOLE_TEST_POLL_ARM_NAME"] = "poll-arm"
-        environment["MCP_CONSOLE_TEST_POLL_SOCKET_READY_NAME"] = "socket-ready"
-        environment["MCP_CONSOLE_TEST_POLL_CANCEL_READY_NAME"] = "cancel-ready"
-        environment["MCP_CONSOLE_TEST_RESET_SIDEBAND_EOF"] = str(reset_marker)
         process = subprocess.Popen(
-            [relay, zod],
+            [binary, "worker-relay", zod],
             env=environment,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -141,7 +109,6 @@ def test_tolerates_connection_reset_with_unread_shutdown(
             events.extend(json.loads(line) for line in process.stdout)
             standard_error = process.stderr.read()
 
-            assert reset_marker.exists(), events
             assert process.returncode == 0, standard_error
             assert standard_error == ""
             assert not any(event.get("kind") == "fatal" for event in events), events

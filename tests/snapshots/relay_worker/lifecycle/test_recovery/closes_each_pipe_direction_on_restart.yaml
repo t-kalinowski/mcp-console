@@ -13,8 +13,8 @@ worker:
 relay:
   kind: shutdown
 ---
-shutdown_enotconn:
-  direction: relay
+worker_sideband:
+  closed: true
 ---
 worker:
   kind: ready

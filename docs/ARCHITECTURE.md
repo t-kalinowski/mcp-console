@@ -123,6 +123,8 @@ The server retains only ordinary child signaling, exit observation, and reaping 
 
 The relay is a thin ordered transport and worker supervisor.
 It owns the worker's local descriptors, translates applicable relay commands to worker-sideband messages, forwards worker observations, delivers signals, bounds shutdown, drains streams, and reaps the direct worker.
+Two anonymous pipes carry the sideband in opposite directions, separately from stdin, stdout, and stderr.
+Their nonblocking reads and writes use readiness waits with explicit cancellation wakeups.
 Each producer encodes its observations as JSONL frames before enqueueing them, and one relay writer emits those frames in queue order.
 Its FIFO bounds admitted encoded payload bytes and event count, including the write in progress, and reserves space for supervisor events.
 It accepts an oversized frame alone on the ordinary budget and pauses output readers until capacity is available.
