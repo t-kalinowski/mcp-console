@@ -5,14 +5,19 @@ from __future__ import annotations
 import fcntl
 import subprocess
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 import maturin
-from maturin import build_sdist as build_sdist
-from maturin import get_requires_for_build_sdist as get_requires_for_build_sdist
-from maturin import get_requires_for_build_wheel as get_requires_for_build_wheel
-from maturin import prepare_metadata_for_build_wheel as prepare_metadata_for_build_wheel
+
+build_sdist = maturin.build_sdist
+get_requires_for_build_editable = maturin.get_requires_for_build_editable
+get_requires_for_build_sdist = maturin.get_requires_for_build_sdist
+get_requires_for_build_wheel = maturin.get_requires_for_build_wheel
+prepare_metadata_for_build_editable = maturin.prepare_metadata_for_build_editable
+prepare_metadata_for_build_wheel = maturin.prepare_metadata_for_build_wheel
 
 
 def build_wheel(
@@ -20,6 +25,23 @@ def build_wheel(
     config_settings: dict[str, Any] | None = None,
     metadata_directory: str | None = None,
 ) -> str:
+    with _staged_companion():
+        return maturin.build_wheel(wheel_directory, config_settings, metadata_directory)
+
+
+def build_editable(
+    wheel_directory: str,
+    config_settings: dict[str, Any] | None = None,
+    metadata_directory: str | None = None,
+) -> str:
+    with _staged_companion():
+        return maturin.build_editable(
+            wheel_directory, config_settings, metadata_directory
+        )
+
+
+@contextmanager
+def _staged_companion() -> Iterator[None]:
     root = Path(__file__).resolve().parent
     target = root / "target"
     target.mkdir(exist_ok=True)
@@ -30,4 +52,4 @@ def build_wheel(
         subprocess.run(
             [sys.executable, str(root / "scripts/stage-sandbox-runner")], check=True
         )
-        return maturin.build_wheel(wheel_directory, config_settings, metadata_directory)
+        yield

@@ -164,12 +164,20 @@ class InstallationTests(unittest.TestCase):
                     "GIT_CONFIG_VALUE_0": "https://github.com/fixture/runner.git",
                 }
             )
-            for value in (42, 84):
-                with self.subTest(value=value):
+            for editable, value in ((True, 42), (True, 84), (False, 126), (False, 168)):
+                with self.subTest(editable=editable, value=value):
                     result = subprocess.run(
-                        ["uv", "tool", "install", "--reinstall", "."],
+                        [
+                            "uv",
+                            "tool",
+                            "install",
+                            "--reinstall",
+                            *(["--editable"] if editable else []),
+                            ".",
+                        ],
                         cwd=source,
                         env=environment | {"CFLAGS": f"-DFIXTURE_VALUE={value}"},
+                        check=False,
                         capture_output=True,
                         text=True,
                         timeout=180,
@@ -191,6 +199,7 @@ class InstallationTests(unittest.TestCase):
                 ["uv", "build", "--sdist", "--out-dir", str(directory / "dist")],
                 cwd=source,
                 env=environment,
+                check=False,
                 capture_output=True,
                 text=True,
                 timeout=60,
@@ -201,7 +210,8 @@ class InstallationTests(unittest.TestCase):
             result = subprocess.run(
                 ["uv", "tool", "install", "--reinstall", str(archives[0])],
                 cwd=source,
-                env=environment | {"CFLAGS": "-DFIXTURE_VALUE=126"},
+                env=environment | {"CFLAGS": "-DFIXTURE_VALUE=210"},
+                check=False,
                 capture_output=True,
                 text=True,
                 timeout=180,
@@ -209,7 +219,7 @@ class InstallationTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual(
                 subprocess.check_output([directory / "bin/mcp-console"], text=True),
-                "126\n",
+                "210\n",
             )
 
     def test_uv_installs_a_relocatable_bundle_from_unstaged_sources(self) -> None:
@@ -276,19 +286,44 @@ class InstallationTests(unittest.TestCase):
                     destination.parent.mkdir(parents=True, exist_ok=True)
                     destination.write_bytes(b"stale macOS wheel data\n")
 
-            if sys.platform == "linux":
-                stage_stale_wheel_data()
-            result = subprocess.run(
-                ["uv", "tool", "install", "--reinstall", "."],
-                cwd=source,
-                env=environment,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                timeout=1800,
-            )
-            self.assertEqual(result.returncode, 0, result.stdout)
-            print(result.stdout, flush=True)
+            for editable in (True, False):
+                if not editable:
+                    for relative in ("libexec", "share"):
+                        shutil.rmtree(source / "wheel-data/data" / relative)
+                if sys.platform == "linux":
+                    stage_stale_wheel_data()
+                result = subprocess.run(
+                    [
+                        "uv",
+                        "tool",
+                        "install",
+                        "--reinstall",
+                        *(["--editable"] if editable else []),
+                        ".",
+                    ],
+                    cwd=source,
+                    env=environment,
+                    check=False,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    timeout=1800,
+                )
+                self.assertEqual(result.returncode, 0, result.stdout)
+                print(result.stdout, flush=True)
+                result = subprocess.run(
+                    [
+                        directory / "uv-bin/mcp-console",
+                        "sandbox",
+                        "--",
+                        "/usr/bin/true",
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             for remove_companions in (True, False):
                 # Check both missing companions and stale additions after Cargo
                 # has cached a build with all current companions still present.
@@ -309,6 +344,7 @@ class InstallationTests(unittest.TestCase):
                     ],
                     cwd=source,
                     env=environment,
+                    check=False,
                     text=True,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
@@ -329,6 +365,7 @@ class InstallationTests(unittest.TestCase):
                 ["uv", "build", "--sdist", "--out-dir", str(directory / "dist")],
                 cwd=source,
                 env=environment,
+                check=False,
                 text=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
@@ -369,6 +406,7 @@ class InstallationTests(unittest.TestCase):
                         "UV_TOOL_DIR": str(directory / "wheel-tools"),
                         "UV_TOOL_BIN_DIR": str(directory / "wheel-bin"),
                     },
+                    check=False,
                     text=True,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
@@ -388,6 +426,7 @@ class InstallationTests(unittest.TestCase):
                                 str(ROOT / "tests" / "sandbox_installation.py"),
                                 str(installed),
                             ],
+                            check=False,
                             capture_output=True,
                             text=True,
                             timeout=180,

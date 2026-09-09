@@ -13,6 +13,7 @@ Keep the root `mcp-console` entry in `Cargo.lock` synchronized with it.
 
 `sandbox-runner.json` pins the runner source repository, release, commit, protocol, and Rust toolchain.
 `uv tool install --reinstall .` prepares the native companion automatically before Maturin compiles MCP Console and assembles the wheel.
+Editable source installations (`uv tool install --reinstall --editable .`) use the same preparation and packaging lock.
 Source builds require Python 3, Git, and rustup; rustup installs the pinned toolchain if needed.
 The packaging backend calls `scripts/stage-sandbox-runner`, which fetches the exact revision into `target/sandbox-runner-cache/<commit>` within the source checkout.
 The default build does not inspect or change other working checkouts.
