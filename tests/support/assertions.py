@@ -178,6 +178,9 @@ def wait_for_evaluation_output(
         if output.endswith(running):
             assert result.get("isError") is not True, result
             collected += output.removesuffix(running)
+            if collected + running == expected:
+                collected += running
+                break
         elif output.endswith(waiting):
             assert result.get("isError") is not True, result
             # Empty input requests add a separator; prompt notices already
