@@ -10,14 +10,25 @@ use std::process::Command;
 #[cfg(target_os = "macos")]
 const POLICY_EXTENSION: &str = include_str!("policy_extensions.sbpl");
 
-pub(super) fn ignored_signals() -> io::Result<u64> {
+pub(super) fn catchable_signals() -> impl Iterator<Item = libc::c_int> {
+    // Darwin's sigfillset includes bit 32, but sigaction accepts only 1..=31.
+    // Its last signal is SIGUSR2; Linux also has real-time signals.
+    #[cfg(target_os = "macos")]
+    let last = libc::SIGUSR2;
+    #[cfg(target_os = "linux")]
+    let last = libc::SIGRTMAX();
     let mut valid = unsafe { std::mem::zeroed() };
     unsafe { libc::sigfillset(&mut valid) };
+    // Darwin rejects even queries for SIGKILL/SIGSTOP. Neither platform can
+    // catch or block them. Also omit libc-reserved Linux thread signals.
+    (1..=last)
+        .filter(|signal| !matches!(*signal, libc::SIGKILL | libc::SIGSTOP))
+        .filter(move |signal| unsafe { libc::sigismember(&valid, *signal) } == 1)
+}
+
+pub(super) fn ignored_signals() -> io::Result<u64> {
     let mut ignored = 0;
-    for signal in 1..=64 {
-        if unsafe { libc::sigismember(&valid, signal) } != 1 {
-            continue;
-        }
+    for signal in catchable_signals() {
         let mut action = unsafe { std::mem::zeroed() };
         if unsafe { libc::sigaction(signal, std::ptr::null(), &mut action) } < 0 {
             return Err(io::Error::last_os_error());
@@ -65,7 +76,7 @@ impl Setup {
             utf8(executable.as_os_str())?,
             "sandbox-target".to_string(),
             "--signal-mask".to_string(),
-            (1..=64)
+            catchable_signals()
                 .filter(|signal| unsafe { libc::sigismember(&original_mask, *signal) } == 1)
                 .fold(0u64, |mask, signal| mask | (1 << (signal - 1)))
                 .to_string(),

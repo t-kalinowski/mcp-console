@@ -292,6 +292,7 @@ def test_preserves_inherited_ignored_signals(binary: Path) -> Transcript:
 
         for name in ("SIGHUP", "SIGINT", "SIGTERM", "SIGCHLD"):
             signal.signal(getattr(signal, name), signal.SIG_IGN)
+        signal.signal(max(signal.valid_signals()), signal.SIG_IGN)
         os.execv(sys.argv[1], sys.argv[1:])
         """)
     # fmt: python
@@ -304,6 +305,10 @@ def test_preserves_inherited_ignored_signals(binary: Path) -> Transcript:
             assert signal.getsignal(number) == signal.SIG_IGN, name
             os.kill(os.getpid(), number)
             print(name, "ignored")
+        highest = max(signal.valid_signals())
+        assert signal.getsignal(highest) == signal.SIG_IGN
+        os.kill(os.getpid(), highest)
+        print("highest signal ignored")
         """)
     result = subprocess.run(
         [
@@ -326,7 +331,7 @@ def test_preserves_inherited_ignored_signals(binary: Path) -> Transcript:
     assert result.stderr == "", result.stderr
     assert result.stdout.splitlines() == [
         f"{name} ignored" for name in ("SIGHUP", "SIGINT", "SIGTERM", "SIGCHLD")
-    ], result.stdout
+    ] + ["highest signal ignored"], result.stdout
     return [{"inherited_signals": "ignored", "stdout": result.stdout, "exit_code": 0}]
 
 

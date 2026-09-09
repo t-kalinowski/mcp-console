@@ -80,7 +80,7 @@ pub(crate) fn run_target(
     }
     let mut mask = unsafe { std::mem::zeroed() };
     unsafe { libc::sigemptyset(&mut mask) };
-    for signal in 1..=64 {
+    for signal in runner::catchable_signals() {
         // Supervisors need waitable children and observable retirement signals.
         // Restore the target's ignored dispositions before unblocking delivery.
         if ignored_signals & (1 << (signal - 1)) != 0
