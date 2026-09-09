@@ -28,6 +28,9 @@ def test_matches_unsandboxed_autograd(binary: Path) -> Transcript:
             "run",
             "--isolated",
             "--upgrade",
+            # The fixture uses CPU tensors; avoid Linux's CUDA dependencies.
+            "--torch-backend",
+            "cpu",
             "--with",
             "torch",
             "--",
