@@ -118,6 +118,7 @@ Keep these invariants intact:
 - `src/worker_relay.rs`, `src/worker_relay/event_writer.rs` — worker launch, I/O forwarding, ordered event output, direct-worker signaling, termination, and reaping.
 - `src/worker_client.rs`, `src/worker_client/` — session coordination and send planning, server-owned environment, evaluation, lifecycle, ordinary launcher child ownership, ordered event dispatch, output tape, shared Unix relay transport, and platform-specific startup observation.
 - `src/process_exit.rs` — ordinary direct-child exit observation without reaping, used by server launcher ownership.
+- `src/worker_client/relay_output.rs` — relay output draining bounded by ordinary launcher exit, including a surviving inherited writer.
 - `src/sandbox.rs`, `src/sandbox/{installation,runner,unsupported}.rs` — thin sandbox frontend, verified runner selection, application policy, and unsupported-platform errors.
 - `src/worker.rs`, `src/worker/core.rs`, `src/worker/embedded_r.rs`, `src/r_repl.c` — worker-facing facade, shared process services, current embedded-R backend, cell dispatch, console callbacks, and the C-owned DLL-REPL boundary.
 

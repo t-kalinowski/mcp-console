@@ -2,6 +2,7 @@
 
 import os
 import select
+import shutil
 import signal
 import socket
 import subprocess
@@ -85,7 +86,7 @@ def test_isolates_files_network_and_processes(binary: Path) -> Transcript:
 
 
 @requires(LINUX_SANDBOX)
-def test_retires_descendants_after_exit_and_caller_loss(binary: Path) -> Transcript:
+def test_retires_descendants_after_exit_and_supervisor_loss(binary: Path) -> Transcript:
     # fmt: python
     script = code(r'''
         import os
@@ -138,6 +139,7 @@ def test_retires_descendants_after_exit_and_caller_loss(binary: Path) -> Transcr
     for scenario in (
         "command exit",
         "owned SIGTERM",
+        "launcher crash",
         "owner exit",
     ):
         process = subprocess.Popen(
@@ -159,6 +161,7 @@ def test_retires_descendants_after_exit_and_caller_loss(binary: Path) -> Transcr
             text=True,
         )
         descriptors: list[int] = []
+        temporary: str | None = None
         try:
             assert select.select([process.stdout], [], [], 15)[0], scenario
             temporary = process.stdout.readline().strip()
@@ -180,7 +183,7 @@ def test_retires_descendants_after_exit_and_caller_loss(binary: Path) -> Transcr
             elif scenario == "owned SIGTERM":
                 process.send_signal(signal.SIGTERM)
             else:
-                assert scenario == "owner exit"
+                assert scenario in {"launcher crash", "owner exit"}
                 process.kill()
             process.wait(timeout=15)
             poll = select.poll()
@@ -193,13 +196,18 @@ def test_retires_descendants_after_exit_and_caller_loss(binary: Path) -> Transcr
                     poll.unregister(descriptor)
                     descriptors.remove(descriptor)
                     os.close(descriptor)
-            # All host owners have exited; cleanup precedes their exit.
-            assert not Path(temporary).exists(), (scenario, temporary)
+            # Native death links retire descendants after runner SIGKILL,
+            # but only a living runner can remove private storage.
+            if scenario == "launcher crash":
+                assert Path(temporary).is_dir(), (scenario, temporary)
+            else:
+                assert not Path(temporary).exists(), (scenario, temporary)
             stderr = process.stderr.read()
             assert stderr == "", (scenario, stderr)
             expected = {
                 "command exit": 23,
                 "owned SIGTERM": 0,
+                "launcher crash": -signal.SIGKILL,
                 "owner exit": -signal.SIGKILL,
             }
             assert process.returncode == expected[scenario], (
@@ -212,7 +220,7 @@ def test_retires_descendants_after_exit_and_caller_loss(binary: Path) -> Transcr
                     "exit_code": process.returncode,
                     "stderr": stderr,
                     "descendants_exited": True,
-                    "temporary_directory_removed": True,
+                    "temporary_directory_removed": scenario != "launcher crash",
                 }
             )
         finally:
@@ -224,6 +232,8 @@ def test_retires_descendants_after_exit_and_caller_loss(binary: Path) -> Transcr
             process.wait(timeout=15)
             for stream in (process.stdin, process.stdout, process.stderr):
                 stream.close()
+            if temporary:
+                shutil.rmtree(Path(temporary).parent, ignore_errors=True)
     return transcript
 
 

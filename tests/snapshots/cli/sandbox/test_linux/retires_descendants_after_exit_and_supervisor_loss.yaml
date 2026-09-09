@@ -11,6 +11,12 @@ stderr: ""
 descendants_exited: true
 temporary_directory_removed: true
 ---
+scenario: launcher crash
+exit_code: -9
+stderr: ""
+descendants_exited: true
+temporary_directory_removed: false
+---
 scenario: owner exit
 exit_code: -9
 stderr: ""

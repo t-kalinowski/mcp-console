@@ -179,11 +179,13 @@ impl WorkerRuntime {
         crate::process_descriptors::close_unlisted_from_multithreaded_parent(&mut command)?;
 
         let (worker_events, worker_event_receiver) = mpsc::channel();
+        let (output_exit, notify_output_exit) = std::io::pipe()
+            .map_err(|error| format!("failed to create launcher exit notification: {error}"))?;
 
         let child = command
             .spawn()
             .map_err(|error| format!("failed to launch worker relay: {error}"))?;
-        let mut child = RelayProcess::new(child, no_sandbox)
+        let mut child = RelayProcess::new(child, no_sandbox, notify_output_exit)
             .map_err(|error| format!("failed to monitor worker relay: {error}"))?;
         let relay_stdin = child
             .take_stdin()
@@ -206,7 +208,7 @@ impl WorkerRuntime {
 
         let (commands, command_writer) =
             start_relay_command_writer(relay_stdin, worker_events.clone());
-        let event_reader = start_relay_event_reader(relay_stdout, worker_events);
+        let event_reader = start_relay_event_reader(relay_stdout, output_exit, worker_events);
         let dispatcher = WorkerEventDispatcher::start(
             worker_event_receiver,
             operation.clone(),
@@ -287,13 +289,20 @@ fn relay_command_line(
 }
 
 impl RelayProcess {
-    fn new(child: Child, no_sandbox: bool) -> Result<Self, String> {
-        let exit = match super::child_exit::ChildExitWaiter::start(child.id()) {
-            Ok(exit) => exit,
-            Err(error) => {
-                return Err(retire_after_exit_observer_failure(child, error));
-            }
-        };
+    fn new(
+        child: Child,
+        no_sandbox: bool,
+        notify_output_exit: std::io::PipeWriter,
+    ) -> Result<Self, String> {
+        let exit =
+            match super::child_exit::ChildExitWaiter::start_notifying(child.id(), move || {
+                drop(notify_output_exit);
+            }) {
+                Ok(exit) => exit,
+                Err(error) => {
+                    return Err(retire_after_exit_observer_failure(child, error));
+                }
+            };
         Ok(Self {
             child,
             no_sandbox,
@@ -707,7 +716,9 @@ impl Worker {
             shutdown.finish_shutdown(deadline, RelayRetirementAllowance::Always),
         );
         let retirement = self.finish_retirement();
-        match (process, retirement) {
+        let can_replace =
+            retirement.is_ok() && self.relay.child.lock().is_ok_and(|child| child.is_reaped());
+        let result = match (process, retirement) {
             (Ok(()), Ok(outcome)) => Ok(outcome),
             (Err(error), Ok(outcome)) => Err(super::WorkerRetirementFailure::new(error, outcome)),
             (Ok(()), Err(error)) => Err(super::WorkerRetirementFailure::new(error, None)),
@@ -715,7 +726,11 @@ impl Worker {
                 format!("{error}; additionally failed to retire worker I/O: {retirement_error}"),
                 None,
             )),
-        }
+        };
+        result.map_err(|mut error| {
+            error.can_replace = can_replace;
+            error
+        })
     }
 
     pub(super) fn finish_retirement(&mut self) -> Result<Option<WorkerProcessOutcome>, String> {
@@ -802,10 +817,12 @@ fn start_relay_command_writer(
 
 fn start_relay_event_reader(
     relay_stdout: std::process::ChildStdout,
+    output_exit: std::io::PipeReader,
     events: mpsc::Sender<WorkerEvent>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
-        let mut reader = JsonlReader::new(BufReader::new(relay_stdout));
+        let output = super::relay_output::RelayOutput::new(relay_stdout, output_exit);
+        let mut reader = JsonlReader::new(BufReader::new(output));
         let result = (|| -> Result<(), String> {
             while let Some(event) = reader
                 .receive::<RelayEvent>()
@@ -1185,24 +1202,30 @@ impl RelayConnection {
     }
 
     fn finish_tasks(&mut self) -> Result<Option<WorkerProcessOutcome>, String> {
-        // Join only after HUP proves that neither the launcher nor a surviving
-        // sandbox descendant can keep the relay protocol stream open.
-        let cleanup = {
+        // Launcher exit wakes the reader even if a descendant retains stdout.
+        // A writer still needs HUP before joining: it may be in a blocking write.
+        let (cleanup, reaped) = {
             let mut child = self
                 .child
                 .lock()
                 .map_err(|_| "worker child lock poisoned".to_string())?;
-            if child.is_reaped() {
+            let cleanup = if child.is_reaped() {
                 Ok(())
             } else {
                 child.retire_launcher()
-            }
+            };
+            (cleanup, child.is_reaped())
         };
         let tasks = self.tasks.take();
         let output_closed = tasks.as_ref().map_or(Ok(false), |tasks| {
             relay_stdout_closed(&tasks.relay_stdout_observer)
         });
         let tasks = match (tasks, output_closed) {
+            (Some(tasks), Ok(false)) if reaped => {
+                drop(tasks.command_writer.stop());
+                let event_reader = join_worker_thread(tasks.event_reader, "relay event reader");
+                event_reader.and(tasks.dispatcher.join())
+            }
             (Some(tasks), Ok(false)) => {
                 let RelayTasks {
                     dispatcher,

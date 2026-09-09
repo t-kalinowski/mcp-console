@@ -2,6 +2,7 @@
 
 import os
 import select
+import signal
 import subprocess
 import sys
 import tempfile
@@ -21,6 +22,8 @@ from support.macos import (
     capture_darwin_process_identity,
     darwin_child_process_identities,
     live_darwin_processes,
+    kill_darwin_processes,
+    signal_darwin_process,
 )
 from support.normalization import code
 from support.processes import (
@@ -500,6 +503,116 @@ def test_restart_outer_force_stops_unresponsive_relay(binary: Path) -> Transcrip
                 stop_process_id(helper_pid)
                 stop_process_group(worker_group)
                 stop_process(client.process)
+
+
+@requires(MACOS_SANDBOX, PROCESS_EVENTS)
+def test_restart_reports_stalled_sandbox_supervisor(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        environment["ZOD_REPORT_PROCESS_GROUP"] = "1"
+        environment["MCP_CONSOLE_TEST_BINARY"] = str(binary)
+        client = McpClient(
+            binary,
+            SANDBOXED.serve(
+                "--worker",
+                str(zod),
+                "--relay",
+                str(zod.with_name("identified_relay")),
+            ),
+            environment,
+        )
+        helper_pid = None
+        worker_group = None
+        identities = ()
+        try:
+            client.initialize_and_list_tools()
+            client.send(r="stall with stopped relay", timeout_ms=0)
+            assert last_tool_text(client) == "\n[running; poll with an empty send]"
+            helper_marker = wait_for_marker(
+                temporary_path,
+                "zod-relay-stop-helper",
+                client,
+            )
+            helper_pid = int(helper_marker.read_text(encoding="utf-8"))
+            relay_target, worker_pid = map(
+                int,
+                wait_for_marker(
+                    temporary_path,
+                    "zod-relay-stop-target",
+                    client,
+                )
+                .read_text(encoding="utf-8")
+                .split(),
+            )
+            worker_group = read_worker_group(
+                wait_for_marker(temporary_path, "zod-process-group", client)
+            )
+            assert os.getpgid(relay_target) == worker_group
+            (supervisor,) = darwin_child_process_identities(
+                capture_darwin_process_identity(client.process.pid)
+            )
+            assert relay_target != supervisor[0], "helper targeted the sandbox runner"
+            assert worker_pid != relay_target, (
+                "Zod worker unexpectedly identified the relay"
+            )
+            assert os.getpgid(worker_pid) == worker_group, (
+                "Zod worker did not inherit the relay process group"
+            )
+            assert os.getpgid(helper_pid) == helper_pid, (
+                "relay-stop helper did not detach from the relay process group"
+            )
+            wait_for_stopped_process(
+                relay_target,
+                worker_group,
+                client,
+                "outer relay force-stop",
+            )
+            relay = capture_darwin_process_identity(relay_target)
+            root = capture_darwin_process_identity(worker_group)
+            assert root == relay
+            descendants = [root]
+            for process in descendants:
+                descendants.extend(darwin_child_process_identities(process))
+            identities = (supervisor, *descendants)
+            assert signal_darwin_process(supervisor, signal.SIGSTOP), (
+                "sandbox supervisor exited before the stall injection"
+            )
+            restarted = client.start_send(control="restart")
+            readable, _, _ = select.select([client.stdout], [], [], 10)
+            assert readable, (
+                "restart did not report the stalled supervisor within 10 seconds"
+            )
+            client.receive(restarted)
+            assert client.process.poll() is None, (
+                "server exited during failed retirement"
+            )
+            assert live_darwin_processes((supervisor,)) == [], (
+                "server did not reap the unresponsive direct child"
+            )
+            assert restarted["result"]["isError"] is True, restarted
+            assert restarted["result"]["content"][0]["text"] == (
+                "[active evaluation stopped by session restart request]\n"
+                "[worker stopped: in-memory state lost]\n"
+                "[worker launcher did not retire within 6000 ms; additionally "
+                "worker launcher terminated by signal 9]"
+            ), restarted
+            restarted["launcher_failure"] = {
+                "supervisor": "stopped before owned retirement",
+                "verified_barrier": "direct launcher reaped; descendant cleanup is not guaranteed",
+            }
+            return client.transcript
+        finally:
+            # The fixture owns survivors after intentionally disabling the sole
+            # native supervisor. This is not a production cleanup guarantee.
+            if identities:
+                kill_darwin_processes(identities)
+            else:
+                stop_process_id(helper_pid)
+                stop_process_group(worker_group)
+            stop_client(client)
 
 
 @requires(SANDBOX, PROCESS_EVENTS, NATIVE_FIXTURES)

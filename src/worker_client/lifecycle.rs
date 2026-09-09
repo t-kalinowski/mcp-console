@@ -1027,9 +1027,15 @@ impl Client {
                 unreachable!("a running failed worker should retire")
             }
             Err(error) => {
-                lifecycle.state = LifecycleState::ShuttingDown {
-                    deadline: Instant::now(),
-                };
+                if error.can_replace {
+                    // A failed cleanup remains an error, but the old launcher's
+                    // exit and retired I/O permit a new logical generation.
+                    lifecycle.processes.worker = None;
+                } else {
+                    lifecycle.state = LifecycleState::ShuttingDown {
+                        deadline: Instant::now(),
+                    };
+                }
                 return Err(error);
             }
         };

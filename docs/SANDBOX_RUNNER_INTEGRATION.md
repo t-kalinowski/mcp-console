@@ -19,8 +19,8 @@ It retains main's automatic companion preparation for source installations, stre
 Conflicts in `AGENTS.md` and `docs/ARCHITECTURE.md` combine main's packaging behavior with this PR's frontend and runner responsibilities.
 No snapshot or integration-specific behavior assertion changes in this merge.
 
-The final pin is the exact implementation commit `fe1b9e4e89458ba8812bfb0a65fb0a1ad84e71d5` on `mcp-console/sandbox-runner/rust-v0.150.1`.
-The inspected branch tip `64a207d82525e6a22843971e8c64c4a02e358583` adds handoff documentation only.
+The final pin is the exact implementation commit `b5a1c9f76a9c6ca2909105aecbc78555a26fda01` on `mcp-console/sandbox-runner/rust-v0.150.1`.
+It supersedes `fe1b9e4e89458ba8812bfb0a65fb0a1ad84e71d5` after the acceptance-test restoration below, adding owned-stdio process-group isolation and Linux native parent-death links.
 Protocol 2 and Rust 1.95.0 remain pinned.
 The original runner repository was read only; builds and contract tests used isolated checkouts at the exact pin.
 
@@ -46,9 +46,10 @@ The macOS logs have 11 skip records for 10 unavailable cases because the null-fa
 
 ## Executable contract inspected
 
-The actual protocol, lifecycle documentation, main/configuration parsing, launch, native setup, signal handling, storage, platform implementations, and executable contract tests were read at the pin.
-The macOS release build and all **58 executable bootstrap contracts** passed with Rust 1.95.0 on `aarch64-apple-darwin`.
+The actual protocol, lifecycle documentation, main/configuration parsing, launch, native setup, signal handling, storage, platform implementations, and executable contract tests were read at `fe1b9e4e`.
+The macOS release build and all **58 executable bootstrap contracts** passed at that revision with Rust 1.95.0 on `aarch64-apple-darwin`.
 The Linux release runner and bubblewrap build passed on `x86_64-unknown-linux-gnu`.
+The subsequent implementation and test changes at the final pin were read separately; their contract and validation are recorded at the end of this document.
 
 Console uses `--config-env NAME -- COMMAND [ARG]...` and execs in place.
 Only fixed policy and lifecycle choices enter the immutable JSON value; argv, cwd, environment, and fd 0/1/2 remain ordinary launch inputs.
@@ -110,7 +111,7 @@ This removes native descendant tracking, manager and monitor recovery, temporary
 The `sandbox-manager` and `sandbox-target` CLI variants and dispatch paths are deleted.
 Sandbox-only descriptor and direct-child polling helpers are deleted; ordinary server child observation and descriptor sanitation remain.
 
-The production diff removes 4,028 lines and adds 85, a net deletion of 3,943 lines (`git diff --numstat e37f8ab0 -- src`).
+The production diff removes 4,049 lines and adds 228, a net deletion of 3,821 lines (`git diff --numstat e37f8ab0 -- src`).
 All rules in `src/sandbox/policy_extensions.sbpl` are unchanged; only the policy comment linking to its audit document is updated.
 The integration retains current main's companion installation verification.
 Filesystem host reads, network restriction, full mutation of private temporary data, host-terminal restrictions, and all named macOS compatibility exceptions remain selected by Console.
@@ -124,7 +125,7 @@ It does not inspect or manage descendants.
 
 ## Fixture and test inventory
 
-Retained runtime transcripts and behavior assertions are unchanged except for the three macOS startup diagnostics and one Linux prerequisite diagnostic listed below.
+Retained runtime transcripts and behavior assertions are unchanged except for the startup/prerequisite diagnostics and supervisor-loss cases listed below.
 Historical transcript role labels such as “manager” remain where they now identify the runner at the original frontend PID.
 No snapshot approves a surviving descendant, cancellation failure, changed runtime result, or lost output.
 
@@ -187,23 +188,33 @@ Only runner-generated snapshots are accepted; formatting-only regeneration is ch
 ## Changed guarantees and removed cases
 
 Independent recovery after supervisor death is intentionally removed.
-SIGKILL, supervisor crash, or an unresponsive supervisor no longer guarantees descendant cleanup, directory removal, or terminal restoration.
+The final pin supplies Linux workload termination after native readiness through native parent-death links, but not directory removal, terminal restoration, or complete native-startup coverage after supervisor death.
+macOS still has no descendant-termination guarantee after supervisor death, and neither platform recovers from a stopped or hung supervisor.
 Surviving processes retain native sandbox policy.
 Configured caller death while the runner lives remains required, including startup cancellation and cleanup of observed detached descendants.
 
-These five recovery-only cases and their snapshots are removed:
+These two cases and their snapshots are removed because their assertions require independent cleanup after supervisor death:
 
 - `cli/sandbox/test_crashes::launcher_crash_retires_the_sandbox_lifetime`;
-- `cli/sandbox/test_crashes::manager_crash_retires_the_sandbox_lifetime`;
-- `client_server/sandbox/test_crashes::manager_crash_retires_the_worker_generation`;
-- `client_server/sandbox/test_startup::manager_failure_before_readiness_keeps_custom_relay_gated`; and
-- `client_server/sandbox/test_retirement::restart_waits_for_owned_launcher_manager_recovery`.
+- `cli/sandbox/test_crashes::manager_crash_retires_the_sandbox_lifetime`.
 
-Linux `cli/sandbox/test_linux::retires_descendants_after_exit_and_supervisor_loss` becomes `retires_descendants_after_exit_and_caller_loss`.
-Only its launcher-crash, manager-crash, and stopped-manager scenarios are removed.
-Command exit (23), owned SIGTERM (0), and caller death remain, with the same descendant and private-directory cleanup assertions.
-The three retained scenario records compare equal to their main snapshots after parsing.
-Unused recovery-only helpers and `fixtures/startup_marker_relay` are deleted.
+Three MCP cases also covered supported application behavior and are retained:
+
+| Case                                                                                                                                      | Retained assertions and explicit changes                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ----------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `client_server/sandbox/test_crashes::manager_crash_retires_the_worker_generation`                                                         | Kill the actual runner, require a failure within the original five-second deadline, then run a replacement with the unchanged `replacement ready` transcript. Keep private-directory retention after the failure. Remove only the descendant cleanup assertion after supervisor death. The failure now includes `worker launcher terminated by signal 9`; it does not claim that native workers stopped.                                   |
+| `client_server/sandbox/test_startup::manager_failure_before_readiness_keeps_custom_relay_gated`                                           | Keep target nonexecution, gated-root/runner exit, the exact MCP failure, successful retry, and the marker proving only the replacement executed. Observe the server's direct runner and its native child at the existing readiness checkpoint. Only stderr changes to `mcp-console-sandbox: failed to fill whole buffer`. Restore `fixtures/startup_marker_relay`. The native child exits on setup-channel EOF without a recovery monitor. |
+| `client_server/sandbox/test_retirement::restart_waits_for_owned_launcher_manager_recovery` → `restart_reports_stalled_sandbox_supervisor` | Keep the stopped relay, active evaluation, stopped supervisor, ten-second response deadline, server survival, and error response. Require the server to reap its direct launcher. Replace the former status-1 diagnostic with the six-second launcher timeout and signal-9 diagnostic. Remove the descendant cleanup barrier after disabling the sole supervisor; teardown explicitly owns survivors.                                      |
+
+Linux `cli/sandbox/test_linux::retires_descendants_after_exit_and_supervisor_loss` retains its original case and snapshot path at the final pin.
+Command exit (23), owned SIGTERM (0), and caller death retain the same descendant and private-directory cleanup assertions and transcript records.
+The launcher-crash scenario is restored: all observed native processes and detached descendants must exit within the original deadline after runner SIGKILL, with the original status -9 and empty stderr.
+Its sole changed expectation is retained private storage (`temporary_directory_removed: false`); the fixture removes that storage after the assertion.
+The former manager-crash injection now addresses the same PID as launcher crash, so it has no separate scenario.
+The stopped-manager recovery scenario remains removed because a stopped sole supervisor cannot perform retirement.
+The three always-retained scenario records compare equal to their main snapshots after parsing; the launcher-crash record differs only in the explicit storage guarantee.
+Unused recovery-only helpers are deleted.
+The CLI startup-cancellation case now includes the reader scenario, cancellation, exit code, stdout, and stderr in a failure diagnostic; its assertions and five transcript records are unchanged.
 No caller-death, isolation, cancellation, stdin, signal, restart, or retained descendant-cleanup case is skipped to obtain a passing result.
 
 Other accepted boundaries are runner-owned temporary-path shape, strict directory-removal errors instead of best-effort deletion, storage retention when retirement is unproven, and native startup diagnostic wording.
@@ -215,8 +226,9 @@ The pre-existing Darwin limits for unobserved detached orphans and non-atomic id
 
 These local results precede the latest-main refresh and were recorded at PR head `5e4a5ccc85c304feeeedff119b622aa1412a6ca3`.
 
-The final suite discovers 419 public cases, compared with 423 on updated main: one frontend-exec case is added and five recovery-only cases are removed.
-The Linux lifetime case is renamed without changing its three retained scenarios.
+That earlier suite discovered 419 public cases, compared with 423 on updated main: one frontend-exec case was added and five cases were removed.
+The later audit restores the three MCP cases listed above, bringing discovery to 422 cases; only the two CLI recovery cases remain removed.
+At that earlier head, the Linux lifetime case was renamed without changing its three retained scenarios; the final pin restores its original name and launcher-crash process assertions.
 
 | Scope                                          | Result                                                                                                                                                                                   |
 | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -251,7 +263,7 @@ All 383 applicable host cases passed in that inventory, including both cases tha
 Together with the separately passing procfs case, this covers all 384 applicable Linux cases.
 This does not establish a passing aggregate run or resolve the two intermittent failures.
 
-The final snapshot inventory contains 427 files: 421 are byte-identical to current main, four have the listed diagnostic changes, six old paths are removed, and two paths are added (the frontend-exec case and the renamed Linux lifetime case).
+The snapshot inventory at that earlier head contains 427 files: 421 are byte-identical to current main, four have the listed diagnostic changes, six old paths are removed, and two paths are added (the frontend-exec case and the renamed Linux lifetime case).
 Formatting-only regeneration is restored to baseline bytes after checking parsed equality.
 The two-pipe sideband, isolation, cancellation, stdin, signals, restart, caller-death cleanup, and observed-descendant barriers retain their assertions.
 
@@ -290,3 +302,82 @@ The merge adds no integration-specific test or guarantee change beyond the inven
 Logs and the revision/snapshot audit are under `/tmp/mcp-console-pr266-main-refresh`; the focused CI investigation is under `/tmp/mcp-console-pr266-ci-diagnosis`.
 No new local Linux run, runner executable-contract run, release wheel rehearsal, or R-package acceptance run was performed for this refresh.
 Hosted checks for the new PR head remain separate from the completed preceding-head results above.
+
+## Restored MCP acceptance coverage
+
+The audit started from PR head `90b7399e471e87b5d47fe086f9c14752128a7a6d`, with the complete local check recorded above and the hosted failures below.
+Snapshot hashes, restored baseline case sources, the runner pin, and the current hosted failures were saved before edits under `/tmp/mcp-console-pr266-restored-cases`.
+The restored crash test first failed because the server continued using a generation after its launcher was killed; the surviving relay retained stdout.
+After connecting child exit to the reader, the test exposed a second failure: the session remained permanently `shutting down` after reporting the reaped launcher.
+
+The existing direct-child exit observer now wakes the relay reader.
+The reader drains the bytes already queued when it observes launcher exit, then closes its generation even if an unsupervised descendant retains the pipe.
+The server joins that reader and its event dispatcher before replacement; this preserves buffered output and prevents the old generation from publishing afterward.
+A reaped launcher permits logical replacement while its cleanup error remains visible.
+This adds no process-tree observation, signal propagation, native cleanup, or supervisor process to Console.
+
+The restored startup case retained every behavioral assertion and differed only in its native diagnostic.
+The stalled-supervisor case retained bounded MCP failure and direct-child reaping; independent descendant cleanup after the supervisor is disabled remains explicitly unsupported.
+At `fe1b9e4e`, only these three restored snapshots were generated for the new expectations, and all 427 pre-existing snapshot files remained byte-identical to the audit baseline.
+That stage had 430 snapshot files: against main, 421 were byte-identical, six had the documented diagnostic changes, four old paths were removed, and three paths were added (including the two renamed cases).
+The final pin's Linux scenario restoration is recorded separately below.
+
+The hosted audit baseline at `90b7399e` failed on both platforms in [run 34410478115](https://github.com/t-kalinowski/mcp-console/actions/runs/34410478115).
+macOS repeated the startup-cancellation exit-code failure; Linux failed `server_relay/requirements/test_resolution::explicit_r_preparation_owns_environment_before_host_resolution` with a relay-stdout closure and launcher status 1.
+These are recorded separately from the deterministic restored-test failures above.
+The macOS fixture now reports its exact cancellation scenario, status, stdout, and stderr on a status mismatch; its expected behavior and snapshot are unchanged.
+
+| Audit validation at `fe1b9e4e`      | Result                                                                                                                                                                                                                                                                                                         |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| macOS 26.6.2 arm64                  | `scripts/check` passed: core checks, 47 Rust tests, all 412 applicable transcript cases, and both source/wheel installation tests. Ten cases are unavailable (11 mode-level skip records).                                                                                                                     |
+| Final Rust and focused macOS checks | Clippy and all 47 Rust tests passed again. All 18 selected transcript cases passed, including the three restored cases, the retained storage assertion, the complete retirement suite, and the five-scenario startup-cancellation case.                                                                        |
+| Linux x86_64                        | Core checks, all 47 Rust tests, and the release build passed. All 16 applicable selected transcript cases passed; four macOS-only cases were unavailable. Selection covers launcher retirement/output draining, descriptor inheritance, restart, and the explicit R preparation case that failed in hosted CI. |
+| Snapshot audit                      | All 427 pre-audit snapshot files remain byte-identical. The restored startup marker executable also matches main byte-for-byte.                                                                                                                                                                                |
+
+Linux uses the same host prerequisites as the preceding validation: the exact staged helper under the existing AppArmor profile and `R_PROFILE_USER=/dev/null`.
+The full Linux transcript suite, Linux installation checks, native runner contracts, separate release rehearsal, and R-package checks were not rerun at that stage.
+The full macOS check and focused Linux pass do not explain or resolve the preceding hosted intermittent failures; fresh hosted results remain separate.
+One initial aggregate macOS attempt was interrupted while the deterministic restored-test failures were still being fixed; the final aggregate above completed successfully.
+
+## Final runner pin update
+
+After the restoration passed at `fe1b9e4e`, implementation commit `b5a1c9f76a9c6ca2909105aecbc78555a26fda01` was published and pinned.
+Its launch parsing and protocol are unchanged.
+The launch/native implementation, lifecycle contract, and changed executable fixtures and assertions were read before using it.
+The original runner repository remains unmodified by this task.
+
+Owned launches with nonterminal stdin and stdout now place the runner in its own process group, including when stderr is a terminal.
+This preserves the original PID, parent, session, and standard-stream descriptions while allowing the runner to clean up after caller-group SIGKILL.
+Interactive input/output and unowned launches retain their group behavior; explicit signals to the runner remain supported.
+Linux adds parent-death links through the native chain and re-arms namespace-init termination before readiness.
+The native helper restores signal delivery needed by its death links; the final target still receives the caller's original signal state.
+Post-readiness runner death terminates the tested Linux native chain and detached workload descendants.
+Storage deletion after runner death, macOS descendant termination after runner death, and retirement throughout earlier bubblewrap fork/credential startup windows remain unsupported.
+The target-release gate still prevents execution of an unreleased target after runner death.
+
+This pin update introduces no Console process layer or fixture-topology change.
+It restores the Linux lifetime case's original name and launcher-crash process assertions, using the existing native-child traversal and pidfd exit barriers.
+The snapshot is generated only for the explicit storage-retention change and restored scenario; the other three records are unchanged.
+It does not restore independent directory cleanup or stopped-supervisor recovery.
+
+The final snapshot inventory contains 430 files: 421 are byte-identical to main, six contain the documented diagnostic changes, and the Linux lifetime snapshot contains the explicit scenario and storage changes.
+Three old paths are removed (the two recovery-only CLI cases and the renamed stalled-supervisor case); two new paths are added (the frontend-exec case and the renamed stalled-supervisor case).
+Against the pre-audit PR head, 426 snapshot files remain byte-identical; the remaining Linux file returns to its original name with its three existing records unchanged, and the three MCP snapshots are restored.
+
+
+| Validation at `b5a1c9f76`   | Result                                                                                                                                                                                                                                                                                                       |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| macOS 26.6.2 arm64          | Full `scripts/check` passed: core checks, 47 Rust tests, all 412 applicable public transcript cases, and both source/wheel installation tests. Ten cases were unavailable (11 mode-level skip records).                                                                                                      |
+| Linux x86_64                | Release build and all 19 selected public transcript cases passed, with four macOS-only cases unavailable. Selection includes the restored Linux supervisor-loss scenario, isolation, signals, caller death, retirement, descriptor inheritance, restart, and the explicit R preparation case from hosted CI. |
+| Runner executable contracts | Release suites passed all 61 tests on macOS and all 62 on Linux, including owned process groups, caller-group death, Linux supervisor death, inherited signals, standard streams, and gated startup.                                                                                                         |
+| Snapshot comparison         | 426 pre-audit files are byte-identical; all three existing Linux records are unchanged. The restored launcher-crash record differs from main only in private-storage retention. All 422 public cases are discovered.                                                                                         |
+
+The Linux Console runs use the exact staged helper through the existing AppArmor profile.
+The Linux runner contracts use a compiled test-only trampoline that execs `aa-exec -p bwrap -- <exact staged helper>`; it accommodates helper copying in those fixtures without changing the shipped helper or host policy.
+An attempted old-executable negative comparison failed installation verification before target launch, so it supplies no runner behavior result.
+The restored Linux case then passed both snapshot generation and a separate check against the final pin.
+Logs and inventories are under `/tmp/mcp-console-pr266-restored-cases`.
+
+The full Linux Console suite, nested-procfs container case, Linux installed-pair checks, upstream native suites, debug runner suites, separate release rehearsal, and R-package checks were not rerun at this final pin.
+The final macOS aggregate ran before the Linux-only scenario was restored; that case is unavailable on macOS and was validated on Linux.
+The preceding hosted failures remain unexplained; local results do not establish a passing hosted run for the updated PR head.

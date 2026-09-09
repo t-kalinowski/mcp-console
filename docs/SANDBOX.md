@@ -7,7 +7,7 @@ The [integration validation record](SANDBOX_RUNNER_INTEGRATION.md) records the b
 
 ## Application policy and launch
 
-The pin in `sandbox-runner.json` is `fe1b9e4e89458ba8812bfb0a65fb0a1ad84e71d5`, protocol 2, Rust 1.95.0.
+The pin in `sandbox-runner.json` is `b5a1c9f76a9c6ca2909105aecbc78555a26fda01`, protocol 2, Rust 1.95.0.
 The executable contract and acceptance tests at that commit are the source of truth for runner behavior.
 Console uses `--config-env MCP_CONSOLE_SANDBOX_CONFIG -- COMMAND [ARG]...`.
 The selected variable contains one immutable JSON object, consumed by the runner and removed from the target environment.
@@ -62,8 +62,18 @@ Linux keeps the caller's foreground-terminal ownership and relays interrupts thr
 Windows and other operating systems remain unsupported.
 
 Configured caller death must retire the workload while the runner lives.
-This is distinct from loss of the supervisor itself.
-The sole runner has no independent recovery process: SIGKILL, a crash, or an unresponsive runner does not guarantee descendant cleanup, directory removal, or terminal restoration.
+When neither stdin nor stdout is a terminal, a runner with a configured caller enters its own process group before native setup.
+This includes the server's piped launch with inherited terminal stderr.
+The runner preserves its PID, parent, session, and stream descriptions, and survives signals addressed to the caller's group so it can retire the workload on caller death.
+To interrupt that workload without killing the caller, direct the signal to the runner.
+Unowned launches and launches with terminal stdin or stdout retain their previous group behavior.
+
+Caller death is distinct from loss of the supervisor itself.
+The sole runner has no independent recovery process.
+On Linux, native parent-death links terminate the workload after native readiness if the runner receives SIGKILL.
+Earlier bubblewrap startup windows remain outside that termination guarantee; the release gate still prevents an unreleased target from executing after runner death.
+On macOS, supervisor death does not guarantee descendant termination.
+Neither platform guarantees directory removal or terminal restoration after runner death, or recovery from a stopped or hung runner.
 Surviving processes retain native sandbox enforcement.
 The server's final forced child termination cannot establish a successful cleanup barrier.
 
@@ -76,7 +86,7 @@ Startup failures use the runner's native diagnostics; successful cancellation ca
 
 ## Policy extensions and compatibility
 
-The pinned runner uses the base and preferences policies in `codex-rs/sandboxing/src/seatbelt*.sbpl` at `fe1b9e4e89458ba8812bfb0a65fb0a1ad84e71d5`.
+The pinned runner uses the base and preferences policies in `codex-rs/sandboxing/src/seatbelt*.sbpl` at `b5a1c9f76a9c6ca2909105aecbc78555a26fda01`.
 MCP Console supplies read access to the filesystem root, restricted networking with no proxy, and its trusted `policy_extensions.sbpl`.
 Managed networking and configurable user policies remain planned work.
 

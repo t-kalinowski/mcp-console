@@ -83,6 +83,9 @@ Console has no setup pipe, target wrapper, manager socket, recovery monitor, or 
 
 The server sends commands to the relay's standard input and receives JSONL events from the relay's standard output.
 Relay standard error is inherited separately and is not part of that protocol.
+The server's ordinary child-exit observer also wakes the relay reader.
+On launcher exit, that reader drains already-queued bytes and ends the generation even if an unsupervised descendant retains stdout.
+The server joins the reader and dispatcher before replacement; a reaped launcher permits replacement while any cleanup failure is still reported.
 The transport is private and keeps worker connections and direct-worker supervision in the relay, inside the sandbox by default.
 [`RELAY_PROTOCOL.md`](RELAY_PROTOCOL.md) defines its commands, events, framing, and retirement behavior.
 

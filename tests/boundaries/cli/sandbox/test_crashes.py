@@ -459,9 +459,15 @@ def test_cancels_owned_launch_during_setup(binary: Path) -> Transcript:
                     owner.kill()
                     assert owner.wait(timeout=TIMEOUT) == -signal.SIGKILL
                 checkpoints["write-release"].release()
-                assert owner.wait(timeout=TIMEOUT) == (
+                returncode = owner.wait(timeout=TIMEOUT)
+                expected_returncode = (
                     -signal.SIGKILL if cancellation == "owner exit" else 0
                 )
+                if returncode != expected_returncode:
+                    stdout, stderr = owner.communicate(timeout=TIMEOUT)
+                    raise AssertionError(
+                        (reader, cancellation, returncode, stdout, stderr)
+                    )
                 _wait_for_process_exit(
                     tuple(identities), "setup cancellation leaked a process"
                 )

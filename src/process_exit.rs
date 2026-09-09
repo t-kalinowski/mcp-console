@@ -18,6 +18,13 @@ pub(crate) struct ChildExitWaiter {
 
 impl ChildExitWaiter {
     pub(crate) fn start(process_id: u32) -> Result<Self, String> {
+        Self::start_notifying(process_id, || {})
+    }
+
+    pub(crate) fn start_notifying(
+        process_id: u32,
+        notify: impl FnOnce() + Send + 'static,
+    ) -> Result<Self, String> {
         let process_id =
             valid_process_id(process_id).map_err(|_| "child process ID is invalid".to_string())?;
         let (sender, completion) = mpsc::sync_channel(1);
@@ -25,6 +32,7 @@ impl ChildExitWaiter {
             .name("worker launcher exit".to_string())
             .spawn(move || {
                 let _ = sender.send(wait_for_direct_child_exit(process_id));
+                notify();
             })
             .map_err(|error| format!("failed to start child exit observer: {error}"))?;
         Ok(Self {
