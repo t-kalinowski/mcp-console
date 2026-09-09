@@ -2,6 +2,7 @@
 
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -66,8 +67,23 @@ def test_workers_keep_plot_files_separate(
             assert directories[0] != directories[1], directories
 
             for client, image in ((second, expected[1]), (first, expected[0])):
+                poll_start = len(client.transcript)
                 client.send(stdin="\n")
+                # Stdin submission can return before the worker consumes it.
+                # Wait through that exact state without discarding plot output.
+                deadline = time.monotonic() + 3
+                while client.transcript[-1]["result"]["content"] == [
+                    {"type": "text", "text": "\n[waiting for stdin]"}
+                ]:
+                    assert client.transcript[-1]["result"].get("isError") is not True
+                    assert time.monotonic() < deadline, (
+                        "plot worker did not consume stdin"
+                    )
+                    client.send()
                 assert_result_content(client, [image])
+                submitted = client.transcript[poll_start]
+                submitted["result"] = client.transcript[-1]["result"]
+                client.transcript[poll_start:] = [submitted]
             return first.finish() + second.finish()
 
 
