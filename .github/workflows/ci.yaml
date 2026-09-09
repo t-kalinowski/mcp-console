@@ -211,8 +211,8 @@ jobs:
           path: .sandbox-runner-source/codex-rs/target
           key: ${{ steps.sandbox-build-cache.outputs.cache-primary-key }}
 
-      - name: Build Rust targets
-        run: cargo build --locked --all-targets --all-features
+      - name: Build Rust test targets
+        run: cargo test --locked --no-run --all-targets --all-features
 
       - name: Build Python package
         shell: bash
@@ -271,7 +271,7 @@ jobs:
           python3 scripts/release.py \
             smoke-wheel \
             dist/*.whl \
-            target/debug/mcp-console
+            target/release/mcp-console
 
       - name: Install R package dependencies
         uses: r-lib/actions/setup-r-dependencies@v2
@@ -285,7 +285,7 @@ jobs:
 
       - name: Check R package
         env:
-          MCP_CONSOLE_TEST_BINARY: ${{ github.workspace }}/target/debug/mcp-console
+          MCP_CONSOLE_TEST_BINARY: ${{ github.workspace }}/target/release/mcp-console
         working-directory: r
         run: |
           R CMD build .
@@ -320,6 +320,7 @@ jobs:
 
       - name: Run transcripts
         env:
+          CARGO_INCREMENTAL: "0"
           GITHUB_PAT: ${{ github.token }}
         run: scripts/test --jobs 6
 
