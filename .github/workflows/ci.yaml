@@ -65,6 +65,15 @@ jobs:
           uv tool dir --bin >> "$GITHUB_PATH"
           printf 'ir_version=%s\n' "$(ir --version | tr ' ' '-')" >> "$GITHUB_OUTPUT"
 
+      # Chrome is unused here; its repository can block apt with inconsistent metadata.
+      - name: Disable unused Chrome apt repository
+        if: runner.os == 'Linux'
+        run: |
+          sudo find /etc/apt/sources.list.d -type f \
+            \( -name '*.list' -o -name '*.sources' \) \
+            -exec grep -qF 'dl.google.com/linux/chrome' {} \; \
+            -print -delete
+
       - name: Install R
         id: setup-r
         uses: r-lib/actions/setup-r@v2
