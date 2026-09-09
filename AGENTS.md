@@ -37,7 +37,14 @@ Other Unix operating systems are not supported build or runtime targets; shared 
 Retain platform conditionals for modules that use OS-specific APIs and for selecting different implementations or unsupported-platform stubs; avoid redundant gates on shared code.
 CI runs core checks and all capability-applicable transcript modes on macOS and Linux.
 
-Build the pinned private sandbox executable with `scripts/stage-sandbox-runner` before the first Cargo build or after changing `sandbox-runner.json` or the Cargo target; see `RELEASE.md` for the source checkout and toolchain.
+macOS and Linux uv source installations prepare the pinned sandbox companion before invoking the application's Cargo build, using a dedicated checkout under `target`.
+Direct Cargo or Maturin builds require `scripts/stage-sandbox-runner` first; `scripts/check` performs this preparation.
+Install development checkouts with `uv tool install --reinstall .`; bare `cargo install` does not install the companion bundle.
+Build reuse follows Cargo's tracked inputs; external tool changes through `PATH` can require cleaning the affected Cargo build directories, as described in `RELEASE.md`.
+Native Cargo bundles require the default shared build/target layout; a separate intermediate build directory is unsupported for running the Cargo output.
+The Python packaging backend holds a checkout-local lock from staging through wheel creation.
+Direct staging, Cargo, and Maturin commands require exclusive use of their source checkout.
+See `RELEASE.md` for prerequisites, bundle layout, build caches, and the explicit source-checkout override.
 Run commands from the repository root:
 
 ```text
@@ -50,7 +57,7 @@ scripts/test --update BOUNDARY/SUITE[::CASE]
 
 `scripts/format` attempts Ruff, Yamark, rustfmt, and Air in sequence.
 A missing or failing formatter does not prevent the remaining formatters from running or make the script fail, so review its output and resulting changes.
-`scripts/check` validates extracted runtime sources, checks Rust formatting and Clippy, runs Rust tests, and runs the complete transcript suite.
+`scripts/check` validates extracted runtime sources, checks Rust formatting and Clippy, runs Rust tests, runs the complete transcript suite, and checks uv source and wheel installations with a shared Cargo target directory.
 
 ### Boundary snapshots
 
@@ -125,7 +132,7 @@ Keep these invariants intact:
 - `src/resolver.rs`, `src/resolver/` — retained host environments, direct Python-version selection, validation, platform implementations, and resolver process-group lifecycle.
 - `src/resolver/programs/` — compile-time R programs for DuckDB extension preparation, R-library resolution, and `uv` discovery.
 - `src/sandbox/runner.rs`, `src/sandbox/policy_extensions.sbpl`, `src/process_descriptors.rs` — one-shot runner setup, macOS policy additions, and inherited-descriptor boundary.
-- `sandbox-runner.json`, `scripts/stage-sandbox-runner`, `src/sandbox/installation.rs` — pinned source, private artifact staging, and installed artifact verification.
+- `sandbox-runner.json`, `scripts/stage-sandbox-runner`, `build_backend.py`, `build.rs`, `src/sandbox/installation.rs` — pinned source preparation, companion bundle packaging, and streaming artifact verification.
 
 ### Tests and development scripts
 
@@ -142,6 +149,7 @@ Keep these invariants intact:
 - `tests/snapshots/` — generated YAML 1.2 snapshots, parallel to the boundary test hierarchy.
 - `r/tests/testthat/` — R package protocol and ellmer adapter tests.
 - `scripts/release.py`, `tests/release.py` — release validation and installed-wheel acceptance.
+- `tests/install.py`, `tests/sandbox_installation.py` — unstaged uv installation, relocated bundle acceptance, and private companion verification.
 - `scripts/test` — binary build and selected transcript execution.
 - `scripts/validate_runtime_sources.py` — extracted R/Python inventory and syntax validation.
 - `scripts/format`, `scripts/check-core`, `scripts/check` — formatting, core checks, and repository-wide checks.

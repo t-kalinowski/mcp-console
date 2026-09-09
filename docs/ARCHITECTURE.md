@@ -105,10 +105,14 @@ The client does not communicate directly with a relay, worker, or resolver.
 ### Sandbox launcher and private runner
 
 The private `mcp-console-sandbox` executable contains the extracted native sandbox implementation and is pinned by source revision in `sandbox-runner.json`.
-macOS and Linux wheels install it under the installation prefix's `libexec` directory; only `mcp-console` is exposed on PATH.
-MCP Console resolves that private path relative to the canonical public executable and verifies the artifact digest embedded at build time.
-Cargo builds copy the verified staged artifact into the target prefix's `libexec` directory and use the same executable-relative lookup as installed wheels.
-A missing or mismatched artifact is an installation error.
+The Python packaging backend prepares the pinned source in a dedicated checkout under `target`, strips the distributed runner, and records companion digests before invoking the application's Cargo build.
+Cargo consumes that prepared bundle; source installations invoke the runner's Cargo build on each run and reuse its normal build intermediates.
+macOS and Linux wheels install a relocatable bundle with `bin/mcp-console`, `libexec/mcp-console-sandbox`, and notices under `share/licenses/mcp-console`.
+Linux bundles also include `libexec/bwrap` and its license.
+The launcher resolves these companions relative to its canonical executable path and verifies their SHA-256 digests with a bounded buffer on every sandbox launch.
+Missing or modified companions are an installation error.
+The main executable has no embedded runner payload, extraction step, or runtime runner cache.
+The runtime does not access the source checkout or download the runner.
 
 The runner accepts `--bootstrap-fd <N>` with an inherited readable descriptor greater than 2.
 Protocol 2 carries one four-byte big-endian length followed by 1 through 1,048,576 bytes of UTF-8 JSON on that descriptor.

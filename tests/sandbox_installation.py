@@ -12,10 +12,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from support.native import build_interposer
 
+
+@unittest.skipUnless(sys.platform in ("darwin", "linux"), "requires macOS or Linux")
 class SandboxInstallationTests(unittest.TestCase):
     binary_source: Path
-    runner_source: Path
 
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory(prefix="mcp-console-installation-")
@@ -23,15 +25,13 @@ class SandboxInstallationTests(unittest.TestCase):
         self.root = Path(temporary.name)
         prefix = self.root / "installation"
         (prefix / "bin").mkdir(parents=True)
-        (prefix / "libexec").mkdir()
         self.binary = prefix / "bin" / "mcp-console"
-        self.runner = prefix / "libexec" / "mcp-console-sandbox"
         shutil.copy2(self.binary_source, self.binary)
-        shutil.copy2(self.runner_source, self.runner)
-        if sys.platform == "linux":
-            shutil.copy2(
-                self.runner_source.with_name("bwrap"), self.runner.with_name("bwrap")
-            )
+        source_prefix = self.binary_source.parent.parent
+        for relative in ("libexec", "share/licenses/mcp-console"):
+            shutil.copytree(source_prefix / relative, prefix / relative)
+        self.home = self.root / "home"
+        self.home.mkdir()
         self.path = self.root / "path"
         self.path.mkdir()
         decoy = self.path / "mcp-console-sandbox"
@@ -39,6 +39,11 @@ class SandboxInstallationTests(unittest.TestCase):
             "#!/bin/sh\nprintf 'PATH runner was used\\n'\n", encoding="utf-8"
         )
         decoy.chmod(0o755)
+        self.environment = os.environ | {"PATH": str(self.path), "HOME": str(self.home)}
+
+    @property
+    def runner(self) -> Path:
+        return self.binary.parent.parent / "libexec/mcp-console-sandbox"
 
     def run_sandbox(
         self, binary: Path | None = None
@@ -48,7 +53,7 @@ class SandboxInstallationTests(unittest.TestCase):
             input=b"",
             capture_output=True,
             cwd=self.root,
-            env=os.environ | {"PATH": str(self.path)},
+            env=self.environment,
             timeout=30,
             check=False,
         )
@@ -66,6 +71,8 @@ class SandboxInstallationTests(unittest.TestCase):
         self.assertEqual((result.stdout, result.stderr), (b"", b""))
 
     def test_setup_is_one_shot_with_idle_stdin(self) -> None:
+        result = self.run_sandbox()
+        self.assertEqual(result.returncode, 0, result.stderr)
         request = {
             "version": 2,
             "command": ["/bin/sh", "-c", "printf 'ready\\n'; exec /bin/cat"],
@@ -120,49 +127,84 @@ class SandboxInstallationTests(unittest.TestCase):
                 for stream in (process.stdin, process.stdout, process.stderr):
                     stream.close()
 
-    def test_missing_private_runner_does_not_use_path(self) -> None:
-        self.runner.unlink()
+    def test_relocates_the_bundle_without_a_writable_home_or_path_lookup(self) -> None:
+        relocated = self.root / "relocated"
+        self.binary.parent.parent.rename(relocated)
+        self.binary = relocated / "bin/mcp-console"
+        self.home.rmdir()
+        self.home.touch()
+        result = self.run_sandbox()
+        self.assertEqual(
+            (result.returncode, result.stdout, result.stderr), (0, b"", b"")
+        )
+
+    def test_sandbox_cannot_write_to_the_installed_runner(self) -> None:
+        marker = self.runner.parent / "modified"
+        result = subprocess.run(
+            [str(self.binary), "sandbox", "--", "/usr/bin/touch", str(marker)],
+            capture_output=True,
+            env=self.environment,
+            timeout=30,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(marker.exists())
+
+    def test_rejects_a_non_executable_private_runner(self) -> None:
+        self.runner.chmod(0o644)
         result = self.run_sandbox()
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(result.stdout, b"")
         self.assertIn(b"private sandbox runner", result.stderr)
 
-    def test_rejects_a_different_private_executable(self) -> None:
-        self.runner.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-        result = self.run_sandbox()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(result.stdout, b"")
-        self.assertIn(b"private sandbox runner", result.stderr)
+    def test_rejects_invalid_bundle_files(self) -> None:
+        prefix = self.binary.parent.parent
+        for relative in (
+            "libexec/mcp-console-sandbox",
+            "share/licenses/mcp-console/LICENSE",
+            "share/licenses/mcp-console/NOTICE",
+            *(
+                ("libexec/bwrap", "share/licenses/mcp-console/bubblewrap-COPYING")
+                if sys.platform == "linux"
+                else ()
+            ),
+        ):
+            artifact = prefix / relative
+            original = artifact.read_bytes()
+            for defect in ("missing", "modified", "fifo"):
+                with self.subTest(artifact=relative, defect=defect):
+                    artifact.unlink(missing_ok=True)
+                    if defect == "modified":
+                        artifact.write_bytes(b"modified")
+                    elif defect == "fifo":
+                        os.mkfifo(artifact)
+                    result = self.run_sandbox()
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(result.stdout, b"")
+                    self.assertIn(b"private sandbox runner", result.stderr)
+                    if defect == "fifo":
+                        self.assertIn(
+                            b"private artifact is not a readable file or executable",
+                            result.stderr,
+                        )
+            artifact.unlink()
+            artifact.write_bytes(original)
+            artifact.chmod(0o755 if relative.startswith("libexec/") else 0o644)
 
-    @unittest.skipUnless(sys.platform == "linux", "Linux bundles bwrap")
-    def test_rejects_a_different_bundled_helper(self) -> None:
-        self.runner.with_name("bwrap").write_text(
-            "#!/bin/sh\nprintf 'replaced helper executed\\n'\n", encoding="utf-8"
-        )
-        result = self.run_sandbox()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(result.stdout, b"")
-        self.assertIn(
-            b"private sandbox runner artifact bwrap does not match this installation",
-            result.stderr,
-        )
-
-    @unittest.skipUnless(sys.platform == "linux", "Linux bundles bwrap")
-    def test_rejects_a_missing_bundled_helper(self) -> None:
-        self.runner.with_name("bwrap").unlink()
-        result = self.run_sandbox()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(result.stdout, b"")
-        self.assertIn(
-            b"private sandbox runner artifact bwrap is unavailable", result.stderr
-        )
+    @unittest.skipUnless(
+        sys.platform == "darwin", "requires the macOS allocator interposer"
+    )
+    def test_first_and_repeated_launches_use_bounded_allocations(self) -> None:
+        interposer = build_interposer(self.root, "bounded_allocation")
+        self.environment["DYLD_INSERT_LIBRARIES"] = str(interposer)
+        for launch in ("first", "repeated"):
+            with self.subTest(launch=launch):
+                result = self.run_sandbox()
+                self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("binary", type=Path)
-    parser.add_argument("runner", type=Path)
     args = parser.parse_args()
     SandboxInstallationTests.binary_source = args.binary.resolve()
-    SandboxInstallationTests.runner_source = args.runner.resolve()
     unittest.main(argv=[sys.argv[0]])
