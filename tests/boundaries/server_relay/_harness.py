@@ -75,6 +75,8 @@ INTERRUPT_ACKNOWLEDGED_NAME = "mcp-console-interrupt-acknowledged"
 
 INTERRUPT_RECEIVED_NAME = "mcp-console-interrupt-received"
 
+POLL_STDIN_RECEIVED_NAME = "mcp-console-poll-stdin-received"
+
 CONTROLLED_COMPLETION_RELEASE_NAME = "mcp-console-controlled-completion-release"
 
 CONTROLLED_COMPLETION_SENT_NAME = "mcp-console-controlled-completion-sent"
