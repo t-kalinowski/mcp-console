@@ -2,13 +2,11 @@
 
 import sys
 import tempfile
-from contextlib import ExitStack
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import assert_result_content, last_tool_text
-from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
@@ -39,30 +37,10 @@ def test_workers_keep_plot_files_separate(
         with (
             McpClient(binary, execution.serve(), environment) as first,
             McpClient(binary, execution.serve(), environment) as second,
-            ExitStack() as checkpoints,
         ):
             directories = []
-            releases = []
             for client, values in ((first, "1:3"), (second, "3:1")):
                 client.initialize_and_list_tools()
-                # Create checkpoints inside each worker's writable directory.
-                # fmt: r
-                r = code(r"""
-                    plot_checkpoint <- tempfile("plot-checkpoint-")
-                    cat(plot_checkpoint)
-                    """)
-                client.send(r=r)
-                checkpoint = Path(last_tool_text(client))
-                client.transcript[-1]["result"]["content"][0]["text"] = (
-                    "<plot checkpoint directory>"
-                )
-                checkpoint.mkdir()
-                ready = FifoCheckpoint.create(checkpoint / "ready")
-                release = FifoCheckpoint.create(checkpoint / "release")
-                checkpoints.callback(ready.close)
-                checkpoints.callback(release.close)
-                checkpoints.callback(release.release)
-                releases.append(release)
                 # Keep both devices open under the same inherited TMPDIR.
                 # fmt: r
                 r = code(r"""
@@ -73,43 +51,22 @@ def test_workers_keep_plot_files_separate(
                     )
                     plot(VALUES)
                     path <- attr(.Devices[[dev.cur()]], "filepath")
-                    writeLines(dirname(path), file.path(plot_checkpoint, "directory"))
-                    ready <- fifo(
-                      file.path(plot_checkpoint, "ready"),
-                      open = "wb",
-                      blocking = TRUE
-                    )
-                    writeBin(charToRaw("1"), ready)
-                    close(ready)
-                    release <- fifo(
-                      file.path(plot_checkpoint, "release"),
-                      open = "rb",
-                      blocking = TRUE
-                    )
-                    stopifnot(identical(
-                      readBin(release, "raw", n = 1L),
-                      charToRaw("1")
-                    ))
-                    close(release)
+                    cat(dirname(path), "\n", sep = "")
+                    invisible(readline("finish plot> "))
                     """).replace("VALUES", values)
-                evaluation = client.start_send(r=r, timeout_ms=0)
-                ready.wait("plot device is open")
-                client.receive(evaluation)
-                assert evaluation["result"] == {
-                    "content": [
-                        {"type": "text", "text": "\n[running; poll with an empty send]"}
-                    ],
-                    "isError": False,
-                }, evaluation
-                directories.append(Path((checkpoint / "directory").read_text().strip()))
+                client.send(r=r)
+                path, prompt = last_tool_text(client).split("\n", 1)
+                assert (
+                    prompt == '[input requested: "finish plot> "]\n[waiting for stdin]'
+                )
+                directories.append(Path(path))
+                client.transcript[-1]["result"]["content"][0]["text"] = (
+                    "<managed plot directory>\n" + prompt
+                )
             assert directories[0] != directories[1], directories
 
-            for client, image, release in (
-                (second, expected[1], releases[1]),
-                (first, expected[0], releases[0]),
-            ):
-                release.release()
-                client.send()
+            for client, image in ((second, expected[1]), (first, expected[0])):
+                client.send(stdin="\n")
                 assert_result_content(client, [image])
             return first.finish() + second.finish()
 
