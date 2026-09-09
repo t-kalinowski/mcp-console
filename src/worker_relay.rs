@@ -50,7 +50,7 @@ mod platform {
         let failures = FailureReporter::new(controls.clone());
         let stopping = Arc::new(AtomicBool::new(false));
 
-        let (sideband_reader, sideband_writer, child_endpoint) = match crate::sideband::bind() {
+        let (sideband_reader, sideband_writer, child_endpoints) = match crate::sideband::bind() {
             Ok(sideband) => sideband,
             Err(error) => {
                 return report_startup_failure(
@@ -66,7 +66,7 @@ mod platform {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        child_endpoint.configure_process(&mut command);
+        child_endpoints.configure_process(&mut command);
         let child = match command.spawn() {
             Ok(child) => child,
             Err(error) => {
@@ -77,7 +77,7 @@ mod platform {
                 );
             }
         };
-        drop(child_endpoint);
+        drop(child_endpoints);
 
         let mut worker = WorkerLifecycle::new(child, sideband_reader);
         let setup = worker.start_io(sideband_writer, &events, &failures, &controls, &stopping);
@@ -519,7 +519,7 @@ mod platform {
                 sideband_writer,
                 failures.clone(),
                 stopping.clone(),
-            ));
+            )?);
 
             self.stdout.start(|stdout| {
                 OutputReader::start(
@@ -904,7 +904,7 @@ mod platform {
 
     struct SidebandWriter {
         sender: mpsc::Sender<SidebandWrite>,
-        cancellation: crate::sideband::Writer,
+        cancel: Cancellation,
         thread: thread::JoinHandle<()>,
     }
 
@@ -918,14 +918,15 @@ mod platform {
             writer: crate::sideband::Writer,
             failures: FailureReporter,
             stopping: Arc<AtomicBool>,
-        ) -> Self {
+        ) -> Result<Self, String> {
             let (sender, receiver) = mpsc::channel();
-            let cancellation = writer.clone();
+            let (cancelled, cancel) = cancellation_pipe("worker sideband writer")?;
             let thread = thread::spawn(move || {
                 for message in receiver {
                     match message {
                         SidebandWrite::Message(message) => {
-                            if let Err(error) = writer.send(&message) {
+                            if let Err(error) = writer.send_cancellable(&message, Some(&cancelled))
+                            {
                                 if !stopping.load(Ordering::SeqCst) {
                                     failures
                                         .report(format!("worker sideband write failed: {error}"));
@@ -937,11 +938,11 @@ mod platform {
                     }
                 }
             });
-            Self {
+            Ok(Self {
                 sender,
-                cancellation,
+                cancel,
                 thread,
-            }
+            })
         }
 
         fn sender(&self) -> mpsc::Sender<SidebandWrite> {
@@ -950,15 +951,15 @@ mod platform {
 
         fn cancel_and_join(self) -> Result<(), String> {
             let _ = self.sender.send(SidebandWrite::Close);
-            let _ = self.cancellation.shutdown();
+            self.cancel.cancel();
             self.thread
                 .join()
                 .map_err(|_| "worker sideband writer task failed".to_string())
         }
     }
 
-    // Keep this blocking reader cancellable through retirement. A worker
-    // descendant can retain the socket after writing only part of a frame, so
+    // Keep readiness waits cancellable through retirement. A worker
+    // descendant can retain the pipe after writing only part of a frame, so
     // cancellation bounds additional reads, forwards complete buffered frames,
     // and abandons any incomplete tail.
     struct SidebandReader {
@@ -1017,7 +1018,11 @@ mod platform {
                     let had_buffered_data = reader.has_buffered_data();
                     match reader.read_chunk() {
                         Ok(()) => {}
-                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                        Err(error)
+                            if matches!(
+                                error.kind(),
+                                std::io::ErrorKind::Interrupted | std::io::ErrorKind::WouldBlock
+                            ) => {}
                         Err(error)
                             if error.kind() == std::io::ErrorKind::UnexpectedEof
                                 && !had_buffered_data =>
@@ -1074,7 +1079,7 @@ mod platform {
             if !forward_buffered_sideband(reader, events)? || Instant::now() >= deadline {
                 return Ok(());
             }
-            match reader.read_chunk_nonblocking() {
+            match reader.read_chunk() {
                 Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
                 Err(error)

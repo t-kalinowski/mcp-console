@@ -46,23 +46,21 @@ With `serve --no-sandbox`, the server launches the relay directly, and both rela
 The built-in command is `mcp-console worker`.
 The hidden `serve --worker PATH` option uses `PATH` as one executable name or path, without arguments or shell parsing.
 
-Before spawning the worker, the relay creates one unnamed Unix-domain stream socket pair and places the worker endpoint number in its environment:
+Before spawning the worker, the relay creates two anonymous pipes and places the worker endpoint numbers in its environment:
 
 ```yaml
-MCP_CONSOLE_SIDEBAND_FD: <worker reads and writes sideband messages here>
+MCP_CONSOLE_SIDEBAND_READ_FD: <worker reads relay messages here>
+MCP_CONSOLE_SIDEBAND_WRITE_FD: <worker writes messages to the relay here>
 ```
 
-The relay clears `FD_CLOEXEC` on the worker endpoint for the spawn, then drops its local copy of that endpoint immediately after spawning.
-The worker takes ownership of the inherited file descriptor.
+The relay clears `FD_CLOEXEC` only on the worker's two endpoints for the spawn, then drops its local copies immediately after spawning.
+The worker takes ownership of both inherited file descriptors.
 
 Before executing descendants or evaluated code, a worker must:
 
-1. remove the sideband environment variable;
-2. set `FD_CLOEXEC` on the descriptor or otherwise prevent exec descendants from inheriting it; and
-3. close the descriptor in fork-only descendants.
-
-A fork child must close its inherited descriptor rather than call `shutdown()`.
-Shutdown would affect the socket endpoint shared with the parent process.
+1. remove both sideband environment variables;
+2. set `FD_CLOEXEC` on both descriptors or otherwise prevent exec descendants from inheriting them; and
+3. close both descriptors in fork-only descendants, leaving the parent's endpoints usable.
 
 Keeping a sideband endpoint open in a descendant can prevent the relay from observing closure and is outside the contract.
 Descendants may retain fd 1 or fd 2; their bytes remain part of the worker generation's captured standard streams.
@@ -71,14 +69,19 @@ Descendants may retain fd 1 or fd 2; their bytes remain part of the worker gener
 
 ### Sideband framing
 
-The sideband is one full-duplex ordered byte connection with separate logical reader and writer halves in each process:
+Each sideband direction has its own ordered byte pipe:
 
 ```text
 relay writer  ──>  worker reader
 relay reader  <──  worker writer
 ```
 
-Reads and writes proceed independently and remain blocking during normal operation.
+Reads and writes proceed independently.
+The built-in endpoints use nonblocking descriptor I/O and readiness polling, while message sends and receives wait for progress.
+Relay reader and writer waits also poll explicit cancellation pipes, so full pipes or descendants retaining endpoints cannot prevent their threads from joining.
+Cancellation does not close a descriptor being used by another thread.
+Pipe writes suppress their own `SIGPIPE` using a temporary thread-local signal mask, preserve a previously pending signal, and restore the caller's mask.
+They report `EPIPE` without changing the process-wide signal disposition installed by R or Python.
 
 Each frame is one UTF-8 JSON object followed by line feed (`\n`).
 A sender flushes every frame.
@@ -445,8 +448,8 @@ Public failure and replacement behavior is described in [`BUILTIN_RUNTIME.md`](B
 
 A conforming custom worker:
 
-- accepts the inherited full-duplex sideband endpoint and fd-0/1/2 launch contract;
-- removes the sideband bootstrap variable and prevents descendants from inheriting the descriptor;
+- accepts the two inherited sideband pipe endpoints and fd-0/1/2 launch contract;
+- removes both sideband bootstrap variables and prevents descendants from inheriting the descriptors;
 - sends `ready` first and exactly once;
 - accepts complete `evaluate` cells for the declared `r`, `python`, and `sql` language values and ends ordinary outcomes with `completed`;
 - uses console, image, and managed-input frames with the exact schemas and ordering above;

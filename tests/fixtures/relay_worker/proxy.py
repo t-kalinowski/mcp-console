@@ -4,34 +4,33 @@ exec "${MCP_CONSOLE_TEST_PYTHON:?}" "$0" "$@"
 ":"""
 
 import codecs
-import errno
 import json
 import os
 import select
-import socket
+import stat
 import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any, BinaryIO, TextIO
 
-SIDEBAND_FD_ENV = "MCP_CONSOLE_SIDEBAND_FD"
+READ_FD_ENV = "MCP_CONSOLE_SIDEBAND_READ_FD"
+WRITE_FD_ENV = "MCP_CONSOLE_SIDEBAND_WRITE_FD"
 WORKER_ENV = "MCP_CONSOLE_MITM_WORKER"
 CAPTURE_STDIN_CLOSE_ENV = "MCP_CONSOLE_MITM_CAPTURE_STDIN_CLOSE"
 CAPTURE_WORKER_SIDEBAND_CLOSE_ENV = "MCP_CONSOLE_MITM_CAPTURE_WORKER_SIDEBAND_CLOSE"
-SHUTDOWN_ENOTCONN_ENV = "MCP_CONSOLE_MITM_SHUTDOWN_ENOTCONN"
 CAPTURE_NAME = "mcp-console-worker-wire.jsonl"
 BUFFER_SIZE = 64 * 1024
 
 
-def take_sideband() -> socket.socket:
-    assert "MCP_CONSOLE_SIDEBAND_READ_FD" not in os.environ
-    assert "MCP_CONSOLE_SIDEBAND_WRITE_FD" not in os.environ
-    descriptor = int(os.environ.pop(SIDEBAND_FD_ENV))
-    os.set_inheritable(descriptor, False)
-    endpoint = socket.socket(fileno=descriptor)
-    assert endpoint.family == socket.AF_UNIX
-    assert endpoint.type == socket.SOCK_STREAM
-    return endpoint
+def take_sideband() -> tuple[BinaryIO, BinaryIO]:
+    assert "MCP_CONSOLE_SIDEBAND_FD" not in os.environ
+    read_fd = int(os.environ.pop(READ_FD_ENV))
+    write_fd = int(os.environ.pop(WRITE_FD_ENV))
+    assert read_fd != write_fd
+    for descriptor in (read_fd, write_fd):
+        assert stat.S_ISFIFO(os.fstat(descriptor).st_mode)
+        os.set_inheritable(descriptor, False)
+    return os.fdopen(read_fd, "rb", buffering=0), os.fdopen(write_fd, "wb", buffering=0)
 
 
 def write_all(descriptor: int, data: bytes) -> None:
@@ -40,9 +39,9 @@ def write_all(descriptor: int, data: bytes) -> None:
         remaining = remaining[os.write(descriptor, remaining) :]
 
 
-def send(endpoint: socket.socket, message: dict[str, Any]) -> None:
+def send(endpoint: BinaryIO, message: dict[str, Any]) -> None:
     frame = json.dumps(message, separators=(",", ":")).encode("utf-8")
-    endpoint.sendall(frame + b"\n")
+    write_all(endpoint.fileno(), frame + b"\n")
 
 
 def record(stream: TextIO, event: dict[str, Any]) -> None:
@@ -50,36 +49,14 @@ def record(stream: TextIO, event: dict[str, Any]) -> None:
     stream.flush()
 
 
-def shutdown_write(
-    endpoint: socket.socket,
-    direction: str,
-    injected_direction: str | None,
-    capture: TextIO,
-) -> None:
-    try:
-        if direction == injected_direction:
-            try:
-                endpoint.shutdown(socket.SHUT_WR)
-            except OSError as error:
-                if error.errno != errno.ENOTCONN:
-                    raise
-            record(capture, {"shutdown_enotconn": {"direction": direction}})
-            raise OSError(errno.ENOTCONN, os.strerror(errno.ENOTCONN))
-        endpoint.shutdown(socket.SHUT_WR)
-    except OSError as error:
-        if error.errno != errno.ENOTCONN:
-            raise
-
-
 def proxy(
-    relay: socket.socket,
-    worker: socket.socket,
+    relay: tuple[BinaryIO, BinaryIO],
+    worker: tuple[BinaryIO, BinaryIO],
     stdout: BinaryIO,
     stderr: BinaryIO,
     capture: TextIO,
     capture_stdin_close: bool,
     capture_worker_sideband_close: bool,
-    injected_shutdown_direction: str | None,
 ) -> None:
     streams = {
         stdout.fileno(): ("stdout", 1),
@@ -90,8 +67,8 @@ def proxy(
         for descriptor in streams
     }
     pending: dict[str, list[str]] = {"stdout": [], "stderr": []}
-    relay_descriptor = relay.fileno()
-    worker_descriptor = worker.fileno()
+    relay_descriptor = relay[0].fileno()
+    worker_descriptor = worker[0].fileno()
     active = {relay_descriptor, worker_descriptor, *streams}
     buffers = {"relay": bytearray(), "worker": bytearray()}
 
@@ -127,7 +104,7 @@ def proxy(
             for name in event:
                 pending[name].clear()
 
-    def forward_frames(direction: str, destination: socket.socket) -> bool:
+    def forward_frames(direction: str, destination: BinaryIO) -> bool:
         buffer = buffers[direction]
         shutdown = False
         while b"\n" in buffer:
@@ -157,63 +134,59 @@ def proxy(
 
         if worker_descriptor in ready:
             read_ready_streams()
-            chunk = worker.recv(BUFFER_SIZE)
+            chunk = worker[0].read(BUFFER_SIZE)
             if chunk:
                 buffers["worker"].extend(chunk)
-                forward_frames("worker", relay)
+                forward_frames("worker", relay[1])
             else:
                 active.remove(worker_descriptor)
                 if capture_worker_sideband_close:
                     record(capture, {"worker_sideband": {"closed": True}})
-                shutdown_write(
-                    relay,
-                    "relay",
-                    injected_shutdown_direction,
-                    capture,
-                )
+                relay[1].close()
 
         if relay_descriptor in ready:
-            chunk = relay.recv(BUFFER_SIZE)
+            chunk = relay[0].read(BUFFER_SIZE)
             if chunk:
                 buffers["relay"].extend(chunk)
-                shutdown = forward_frames("relay", worker)
+                shutdown = forward_frames("relay", worker[1])
             else:
                 shutdown = True
             if shutdown:
                 active.remove(relay_descriptor)
-                shutdown_write(
-                    worker,
-                    "worker",
-                    injected_shutdown_direction,
-                    capture,
-                )
+                worker[1].close()
 
     assert not buffers["relay"], "relay stopped during a sideband frame"
     assert not buffers["worker"], "worker stopped during a sideband frame"
     flush_streams()
-    relay.close()
-    worker.close()
+    for stream in (*relay, *worker):
+        stream.close()
 
 
 def main() -> None:
     relay = take_sideband()
-    proxy_endpoint, worker_endpoint = socket.socketpair()
+    worker_read, proxy_write = os.pipe()
+    proxy_read, worker_write = os.pipe()
+    proxy_endpoint = (
+        os.fdopen(proxy_read, "rb", buffering=0),
+        os.fdopen(proxy_write, "wb", buffering=0),
+    )
     environment = os.environ.copy()
     program = environment.pop(WORKER_ENV)
     capture_stdin_close = environment.pop(CAPTURE_STDIN_CLOSE_ENV, None) == "1"
     capture_worker_sideband_close = (
         environment.pop(CAPTURE_WORKER_SIDEBAND_CLOSE_ENV, None) == "1"
     )
-    injected_shutdown_direction = environment.pop(SHUTDOWN_ENOTCONN_ENV, None)
-    environment[SIDEBAND_FD_ENV] = str(worker_endpoint.fileno())
+    environment[READ_FD_ENV] = str(worker_read)
+    environment[WRITE_FD_ENV] = str(worker_write)
     process = subprocess.Popen(
         [program, "worker"],
         env=environment,
-        pass_fds=(worker_endpoint.fileno(),),
+        pass_fds=(worker_read, worker_write),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
-    worker_endpoint.close()
+    os.close(worker_read)
+    os.close(worker_write)
     assert process.stdout is not None
     assert process.stderr is not None
 
@@ -231,7 +204,6 @@ def main() -> None:
             capture,
             capture_stdin_close,
             capture_worker_sideband_close,
-            injected_shutdown_direction,
         )
     process.stdout.close()
     process.stderr.close()

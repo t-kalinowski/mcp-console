@@ -20,7 +20,8 @@ The native policy also protects metadata anchors at writable roots; the temporar
 Ordinary nested temporary files and directories remain writable.
 Host process IDs are hidden by the PID namespace; IDs printed by evaluated code are namespace-local.
 The target cannot create IP sockets or connect, bind, or listen on sockets.
-Local Unix socket pairs support interpreter IPC and the relay-worker sideband without granting access to host services.
+Local Unix socket pairs support interpreter IPC without granting access to host services.
+The relay-worker sideband uses two anonymous pipes under the same sandbox policy.
 R, Python, and DuckDB resolution still runs on the host and returns readable installed paths to the sandbox.
 
 ## Ownership and startup
