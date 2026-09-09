@@ -125,7 +125,6 @@ jobs:
             .sandbox-runner-source/codex-rs -> target
           # Preserve compiled dependencies when later checks fail.
           cache-on-failure: true
-          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Restore private sandbox runner
         id: sandbox-cache
@@ -146,9 +145,7 @@ jobs:
 
       # Save the completed build before tests or post-job cache cleanup.
       - name: Save private sandbox runner
-        if: >-
-          github.ref == 'refs/heads/main' &&
-          steps.sandbox-cache.outputs.cache-hit != 'true'
+        if: steps.sandbox-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
           path: |
