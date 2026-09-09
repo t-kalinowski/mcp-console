@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["py-yaml12>=0.2.0"]
+# ///
+
 from __future__ import annotations
 
 import os
@@ -175,7 +180,7 @@ class McpClientTests(unittest.TestCase):
                 os.mkfifo(root / name)
                 checkpoints.append(os.open(root / name, os.O_RDWR | os.O_NONBLOCK))
             process = subprocess.Popen(
-                ["uv", "run", "--script", runner, "--jobs", "1", *arguments],
+                [sys.executable, runner, "--jobs", "1", *arguments],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,

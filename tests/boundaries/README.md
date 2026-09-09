@@ -243,3 +243,6 @@ Each suite is also directly runnable:
 
 Suite files use an `uv run --script` shebang.
 Their `__main__` blocks delegate to `scripts/test`, so direct runs build the binary and run every case in that suite.
+
+Run the runner and MCP client regressions with `uv run --script tests/transcript_runner.py` and `uv run --script tests/mcp_client.py`, or together through `scripts/check-core`.
+These scripts prepare their Python dependencies before tests begin, then launch fixture runners with the same interpreter so package resolution does not consume test deadlines.
