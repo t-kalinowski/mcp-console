@@ -98,7 +98,7 @@ jobs:
           "${{ steps.sandbox-pin.outputs.rust_toolchain }}"
           --profile minimal
 
-      - name: Select R cache epoch
+      - name: Select weekly cache epoch
         id: cache-epoch
         run: printf 'value=%s\n' "$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
 
@@ -119,23 +119,35 @@ jobs:
             ir-v3-${{ runner.os }}-${{ runner.arch }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ steps.tools.outputs.ir_version }}-${{ hashFiles('src/worker_client.rs', 'src/resolver/managed_r.rs', 'tests/boundaries/client_server/requirements/test_r_automatic.py', 'tests/boundaries/client_server/requirements/test_r.py') }}-
             ir-v3-${{ runner.os }}-${{ runner.arch }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ steps.tools.outputs.ir_version }}-
 
-      - name: Restore Rust build data
-        id: rust-cache
+      - name: Restore Cargo downloads
+        id: cargo-downloads
         uses: actions/cache/restore@v6
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
+          # Downloads survive the weekly build-cache reset.
+          key: >-
+            cargo-downloads-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '.sandbox-runner-source/codex-rs/Cargo.lock') }}
+          restore-keys: |
+            cargo-downloads-v1-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Restore Rust build data
+        id: rust-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
             target/debug
             target/release
             target/libexec
           # Refresh on compiled-source changes; transcript-only pushes reuse it.
-          # Restore preceding incremental state. Bump v1 for build flag changes.
+          # Every restore prefix includes the UTC week to start fresh on Monday.
+          # Bump v1 for build flag changes.
           key: >-
-            cargo-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/**', 'sandbox-runner.json', 'scripts/stage-sandbox-runner') }}-${{ hashFiles('src/**', 'build.rs') }}
+            cargo-build-v1-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/**', 'sandbox-runner.json', 'scripts/stage-sandbox-runner') }}-${{ hashFiles('src/**', 'build.rs') }}
           restore-keys: |
-            cargo-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/**', 'sandbox-runner.json', 'scripts/stage-sandbox-runner') }}-
-            cargo-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.setup-r.outputs.installed-r-version }}-
+            cargo-build-v1-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/**', 'sandbox-runner.json', 'scripts/stage-sandbox-runner') }}-
+            cargo-build-v1-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.setup-r.outputs.installed-r-version }}-
 
       - name: Restore private sandbox runner
         id: sandbox-cache
@@ -158,11 +170,12 @@ jobs:
           path: .sandbox-runner-source/codex-rs/target
           # Ordinary PR pushes need only the staged runner. Restore intermediates
           # when rebuilding it, including workspace crates from the preceding pin.
+          # Keep every restore prefix within the current UTC week.
           key: >-
-            sandbox-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.sandbox-pin.outputs.rust_toolchain }}-${{ hashFiles('.sandbox-runner-source/codex-rs/Cargo.toml', '.sandbox-runner-source/codex-rs/Cargo.lock', '.sandbox-runner-source/codex-rs/.cargo/**', 'scripts/stage-sandbox-runner') }}-${{ steps.sandbox-pin.outputs.commit }}
+            sandbox-build-v1-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.sandbox-pin.outputs.rust_toolchain }}-${{ hashFiles('.sandbox-runner-source/codex-rs/Cargo.toml', '.sandbox-runner-source/codex-rs/Cargo.lock', '.sandbox-runner-source/codex-rs/.cargo/**', 'scripts/stage-sandbox-runner') }}-${{ steps.sandbox-pin.outputs.commit }}
           restore-keys: |
-            sandbox-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.sandbox-pin.outputs.rust_toolchain }}-${{ hashFiles('.sandbox-runner-source/codex-rs/Cargo.toml', '.sandbox-runner-source/codex-rs/Cargo.lock', '.sandbox-runner-source/codex-rs/.cargo/**', 'scripts/stage-sandbox-runner') }}-
-            sandbox-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.sandbox-pin.outputs.rust_toolchain }}-
+            sandbox-build-v1-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.sandbox-pin.outputs.rust_toolchain }}-${{ hashFiles('.sandbox-runner-source/codex-rs/Cargo.toml', '.sandbox-runner-source/codex-rs/Cargo.lock', '.sandbox-runner-source/codex-rs/.cargo/**', 'scripts/stage-sandbox-runner') }}-
+            sandbox-build-v1-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.sandbox-pin.outputs.rust_toolchain }}-
 
       - name: Stage private sandbox runner
         if: steps.sandbox-cache.outputs.cache-hit != 'true'
@@ -213,13 +226,20 @@ jobs:
             --compatibility pypi \
             --out dist
 
-      - name: Save Rust build data
-        if: steps.rust-cache.outputs.cache-hit != 'true'
+      - name: Save Cargo downloads
+        if: steps.cargo-downloads.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
+          key: ${{ steps.cargo-downloads.outputs.cache-primary-key }}
+
+      - name: Save Rust build data
+        if: steps.rust-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
             target/debug
             target/release
             target/libexec
