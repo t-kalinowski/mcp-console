@@ -15,8 +15,11 @@ command:
   - --
   - --help
 environment:
-  PATH: .
+  PATH: .:<inherited PATH>
 stdout: ""
+transcript_normalization:
+  target: environment.PATH
+  inherited_path: omitted
 ---
 scenario: literal arguments and standard output
 command:

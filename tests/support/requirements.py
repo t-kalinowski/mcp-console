@@ -22,7 +22,19 @@ WORKER = Requirement(
     "worker", sys.platform in {"darwin", "linux"}, "workers require macOS or Linux"
 )
 SANDBOX = Requirement(
-    "sandbox", sys.platform == "darwin", "the sandbox is implemented only on macOS"
+    "sandbox",
+    sys.platform in {"darwin", "linux"},
+    "the sandbox requires macOS or Linux",
+)
+MACOS_SANDBOX = Requirement(
+    "macOS sandbox",
+    sys.platform == "darwin",
+    "requires Seatbelt policy or kqueue supervision",
+)
+LINUX_SANDBOX = Requirement(
+    "Linux sandbox",
+    sys.platform == "linux",
+    "requires Linux namespace isolation",
 )
 POSIX = Requirement(
     "POSIX", os.name == "posix", "requires POSIX processes and descriptors"

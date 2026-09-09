@@ -18,11 +18,11 @@ from support.macos import (
 )
 from support.normalization import code
 from support.records import Transcript
-from support.requirements import PROCESS_EVENTS, SANDBOX, requires
+from support.requirements import MACOS_SANDBOX, PROCESS_EVENTS, requires
 from support.suites import run_this_suite
 
 
-@requires(SANDBOX, PROCESS_EVENTS)
+@requires(MACOS_SANDBOX, PROCESS_EVENTS)
 def test_restart_and_shutdown_with_relay_below_sandbox_root(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         wrapper = Path(directory) / "relay-wrapper"

@@ -19,7 +19,7 @@ R plots made with the default device and open Matplotlib figures are returned as
 ## Install
 
 MCP Console runs on macOS and Linux.
-Linux currently requires `serve --no-sandbox`; Windows is not supported.
+Both platforms sandbox evaluated code by default; Windows is not supported.
 The release workflow builds native wheels for Apple Silicon and Intel macOS and for ARM64 and x86-64 Linux.
 Linux wheels require glibc 2.39 or later; building from source uses the host glibc.
 On older Linux kernels or when seccomp denies `close_range` with `EPERM`, inherited-descriptor cleanup requires `/proc` to be mounted.
@@ -47,18 +47,21 @@ mcp-console --help
 mcp-console serve
 ```
 
-On Linux, add `--no-sandbox` to the `serve` command:
+Linux sandboxing requires kernel 5.11 or later, mounted `/proc`, and permission to create user, mount, PID, and network namespaces.
+Host AppArmor policy or container restrictions can prevent namespace setup.
+The wheel includes a private bubblewrap helper; a suitable `bwrap` on `PATH` takes precedence.
+There is no automatic unsandboxed fallback.
+Use `mcp-console serve --no-sandbox` to explicitly run with host permissions and without descendant cleanup.
+
+To build from source, stage the pinned private runner before Cargo:
 
 ```sh
-mcp-console serve --no-sandbox
-```
-
-To build and run the current source on Linux:
-
-```sh
+scripts/stage-sandbox-runner ~/github/t-kalinowski/codex
 cargo build --release
-target/release/mcp-console serve --no-sandbox
+target/release/mcp-console serve
 ```
+
+See [release preparation](RELEASE.md#private-sandbox-executable) for build dependencies and [Linux sandbox behavior](docs/LINUX_SANDBOX.md) for policy and process-lifetime details.
 
 `mcp-console serve` communicates with its MCP client over standard input and output.
 It waits for MCP protocol input rather than presenting an interactive terminal prompt.
@@ -120,7 +123,7 @@ See [Recording and artifacts](https://github.com/t-kalinowski/mcp-console/blob/m
 ## Security boundary
 
 Submitted R, Python, and SQL have shell-class capability.
-On macOS, the worker sandbox is enabled by default.
+On macOS and Linux, the worker sandbox is enabled by default.
 The worker can read host files, but direct network access and regular-file writes outside its private temporary directory are denied.
 This is a process boundary, not a safe evaluator for untrusted code with access to sensitive readable files.
 
@@ -149,9 +152,10 @@ scripts/test --list
 scripts/test --update BOUNDARY/SUITE[::CASE]
 ```
 
-Stage the private sandbox executable before the first macOS build or after changing the source pin; [RELEASE.md](RELEASE.md) describes the required checkout and toolchain.
+Stage the private sandbox executable before the first build or after changing the source pin; [RELEASE.md](RELEASE.md) describes the required checkout and toolchain.
 See [AGENTS.md](https://github.com/t-kalinowski/mcp-console/blob/main/AGENTS.md) for development rules and the repository map, and the [boundary test guide](https://github.com/t-kalinowski/mcp-console/blob/main/tests/boundaries/README.md) for test selection and snapshot updates.
-The standalone `mcp-console sandbox -- COMMAND [ARG]...` command is also available for development on macOS; [macOS sandbox supervision](https://github.com/t-kalinowski/mcp-console/blob/main/docs/SANDBOX_SUPERVISION.md) defines its lifecycle, terminal behavior, and limitations.
+The standalone `mcp-console sandbox -- COMMAND [ARG]...` command is also available for development on macOS and Linux.
+[macOS sandbox supervision](docs/SANDBOX_SUPERVISION.md) and [Linux sandboxing](docs/LINUX_SANDBOX.md) define its lifecycle, terminal behavior, and limitations.
 
 ## Documentation
 
@@ -159,6 +163,7 @@ The [documentation index](https://github.com/t-kalinowski/mcp-console/blob/main/
 
 - [Implemented architecture](https://github.com/t-kalinowski/mcp-console/blob/main/docs/ARCHITECTURE.md) explains current process boundaries, ownership, lifecycle, recording, and artifacts.
 - [macOS sandbox supervision](https://github.com/t-kalinowski/mcp-console/blob/main/docs/SANDBOX_SUPERVISION.md) explains standalone terminal and signal ownership, manager-owned observed-descendant retirement, fallback cleanup, and remaining tracking limitations.
+- [Linux sandboxing](docs/LINUX_SANDBOX.md) describes namespace policy, prerequisites, subreaper cleanup, and signal delivery.
 - [Built-in runtime](https://github.com/t-kalinowski/mcp-console/blob/main/docs/BUILTIN_RUNTIME.md) describes user-visible R, Python, SQL, input, output, and graphics behavior.
 - [Send operations](https://github.com/t-kalinowski/mcp-console/blob/main/docs/SEND_OPERATIONS.md) defines validation and execution order for each `send` combination.
 - [Requirements and environments](https://github.com/t-kalinowski/mcp-console/blob/main/docs/REQUIREMENTS.md) describes dependency preparation and its trust boundary.

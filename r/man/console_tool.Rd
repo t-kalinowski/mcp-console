@@ -15,7 +15,7 @@ console_tool(..., path = NULL, version = NULL, no_sandbox = FALSE)
 \code{"0.0.2"}.}
 
 \item{no_sandbox}{Run evaluated code with the server's filesystem and
-network permissions. Required on Linux.}
+network permissions.}
 }
 \value{
 An \link[ellmer:ToolDef]{ellmer::ToolDef} to pass to an ellmer chat's

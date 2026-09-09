@@ -28,6 +28,10 @@ class SandboxInstallationTests(unittest.TestCase):
         self.runner = prefix / "libexec" / "mcp-console-sandbox"
         shutil.copy2(self.binary_source, self.binary)
         shutil.copy2(self.runner_source, self.runner)
+        if sys.platform == "linux":
+            shutil.copy2(
+                self.runner_source.with_name("bwrap"), self.runner.with_name("bwrap")
+            )
         self.path = self.root / "path"
         self.path.mkdir()
         decoy = self.path / "mcp-console-sandbox"
@@ -129,6 +133,29 @@ class SandboxInstallationTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(result.stdout, b"")
         self.assertIn(b"private sandbox runner", result.stderr)
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux bundles bwrap")
+    def test_rejects_a_different_bundled_helper(self) -> None:
+        self.runner.with_name("bwrap").write_text(
+            "#!/bin/sh\nprintf 'replaced helper executed\\n'\n", encoding="utf-8"
+        )
+        result = self.run_sandbox()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, b"")
+        self.assertIn(
+            b"private sandbox runner artifact bwrap does not match this installation",
+            result.stderr,
+        )
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux bundles bwrap")
+    def test_rejects_a_missing_bundled_helper(self) -> None:
+        self.runner.with_name("bwrap").unlink()
+        result = self.run_sandbox()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, b"")
+        self.assertIn(
+            b"private sandbox runner artifact bwrap is unavailable", result.stderr
+        )
 
 
 if __name__ == "__main__":

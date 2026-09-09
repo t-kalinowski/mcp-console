@@ -29,6 +29,7 @@ from support.client import McpClient, TextReader
 from support.events import Events
 from support.execution import SANDBOXED, Execution
 from support.processes import (
+    host_process_id,
     process_group_exists,
     stop_process_group,
     stop_process_id,
@@ -557,7 +558,6 @@ def find_marker(root: Path, name: str) -> Path | None:
 
 def wait_for_stopped_worker(
     root: Path,
-    previous_process_ids: set[int],
     recorded_workers: list[tuple[int, int]],
     client: McpClient,
     execution: Execution,
@@ -565,18 +565,15 @@ def wait_for_stopped_worker(
     deadline = time.monotonic() + FIXTURE_CHECKPOINT_TIMEOUT_SECONDS
     while True:
         for marker in root.rglob("zod-stop-continue-worker"):
-            try:
-                contents = marker.read_text(encoding="utf-8")
-            except FileNotFoundError:
-                # Restart may remove the old generation's directory between
-                # enumeration and opening while this waits for its replacement.
-                continue
             process_id, parent_id, process_group = map(
                 int,
-                contents.split(),
+                marker.read_text(encoding="utf-8").split(),
             )
-            if process_id in previous_process_ids:
-                continue
+            if execution == SANDBOXED:
+                process_id, parent_id, process_group = (
+                    host_process_id(pid, client.process.pid)
+                    for pid in (process_id, parent_id, process_group)
+                )
             worker = (process_id, process_group)
             if worker not in recorded_workers:
                 recorded_workers.append(worker)
@@ -602,6 +599,9 @@ def wait_for_stopped_worker(
                 assert status[:2] == (parent_id, process_group), (
                     "stopped worker changed its process boundary"
                 )
+                # Consume this generation's checkpoint before its PIDs can
+                # retire or be reused in the replacement's PID namespace.
+                marker.unlink()
                 return marker, process_id, process_group
         assert client.process.poll() is None, (
             "mcp-console stopped before its direct worker reached SIGSTOP"

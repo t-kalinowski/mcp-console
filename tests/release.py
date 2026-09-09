@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import tomllib
 import unittest
 import zipfile
 from pathlib import Path
@@ -203,6 +204,7 @@ class ReleaseScriptTests(unittest.TestCase):
             libexec / "mcp-console-sandbox",
             runner_source.replace("#!/usr/bin/env python3", f"#!{sys.executable}"),
         )
+        write_executable(libexec / "bwrap", "#!/bin/sh\nexit 0\n")
         tool_bin = directory / "bin"
         tool_bin.mkdir()
 
@@ -224,13 +226,15 @@ class ReleaseScriptTests(unittest.TestCase):
             elif sys.argv[1:] == ["--help"]:
                 print("mcp-console help")
             elif sys.argv[1:3] == ["sandbox", "--"]:
-                runner = Path(sys.argv[0]).resolve().parent.parent / "libexec" / "mcp-console-sandbox"
-                if not runner.is_file() or not os.access(runner, os.X_OK):
-                    print("the private sandbox runner is unavailable", file=sys.stderr)
-                    raise SystemExit(1)
-                if hashlib.sha256(runner.read_bytes()).hexdigest() != os.environ["FAKE_RUNNER_SHA256"]:
-                    print("the private sandbox runner does not match this installation", file=sys.stderr)
-                    raise SystemExit(1)
+                libexec = Path(sys.argv[0]).resolve().parent.parent / "libexec"
+                for name, digest in json.loads(os.environ["FAKE_ARTIFACT_SHA256"]).items():
+                    artifact = libexec / name
+                    if not artifact.is_file() or not os.access(artifact, os.X_OK):
+                        print(f"the private sandbox runner artifact {name} is unavailable", file=sys.stderr)
+                        raise SystemExit(1)
+                    if hashlib.sha256(artifact.read_bytes()).hexdigest() != digest:
+                        print(f"the private sandbox runner artifact {name} does not match this installation", file=sys.stderr)
+                        raise SystemExit(1)
                 Path(os.environ["FAKE_SANDBOX_PATH_RECORD"]).write_text(
                     os.environ.get("PATH", ""), encoding="utf-8"
                 )
@@ -292,9 +296,11 @@ class ReleaseScriptTests(unittest.TestCase):
         (cargo_directory / "release").mkdir(parents=True)
         cargo_libexec = cargo_directory / "libexec"
         cargo_libexec.mkdir()
-        shutil.copy2(
-            libexec / "mcp-console-sandbox", cargo_libexec / "mcp-console-sandbox"
-        )
+        artifacts = ["mcp-console-sandbox"]
+        if sys.platform == "linux":
+            artifacts.append("bwrap")
+        for name in artifacts:
+            shutil.copy2(libexec / name, cargo_libexec / name)
         cargo_bin = cargo_directory / "release" / "mcp-console"
         write_executable(cargo_bin, executable_source)
         installed = tool_directory / "mcp-console"
@@ -342,9 +348,12 @@ class ReleaseScriptTests(unittest.TestCase):
                 "UV_TOOL_BIN_DIR": str(tool_bin),
                 "FAKE_SANDBOX_PATH_RECORD": str(directory / "sandbox-path.txt"),
                 "FAKE_RUNNER_RECORD": str(directory / "runner.json"),
-                "FAKE_RUNNER_SHA256": hashlib.sha256(
-                    (libexec / "mcp-console-sandbox").read_bytes()
-                ).hexdigest(),
+                "FAKE_ARTIFACT_SHA256": json.dumps(
+                    {
+                        name: hashlib.sha256((libexec / name).read_bytes()).hexdigest()
+                        for name in artifacts
+                    }
+                ),
             }
         )
         return environment, wheel, cargo_bin
@@ -363,6 +372,13 @@ class ReleaseScriptTests(unittest.TestCase):
                     f"{data}/libexec/mcp-console-sandbox",
                     0o100755 if executable else 0o100644,
                 )
+            )
+        if "linux" in wheel.name:
+            files.extend(
+                [
+                    (f"{data}/libexec/bwrap", 0o100755),
+                    (f"{data}/share/licenses/mcp-console/bubblewrap-COPYING", 0o100644),
+                ]
             )
         with zipfile.ZipFile(wheel, "w") as archive:
             for name, mode in files:
@@ -419,7 +435,10 @@ class ReleaseScriptTests(unittest.TestCase):
             )
 
             self.assertNotEqual(result.returncode, 0, result.stdout)
-            self.assertIn("private sandbox runner is unavailable", result.stderr)
+            self.assertIn(
+                "private sandbox runner artifact mcp-console-sandbox is unavailable",
+                result.stderr,
+            )
 
     def test_smoke_wheel_evaluates_r_and_bounds_response_waits(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -546,14 +565,14 @@ class ReleaseScriptTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("private sandbox runner", result.stderr)
 
-    def test_smoke_linux_wheel_uses_no_sandbox(self) -> None:
+    def test_smoke_linux_wheel_requires_sandbox_and_bundled_helper(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)
             environment, wheel, cargo_bin = self.smoke_environment(directory)
             linux_wheel = wheel.with_name(
                 "mcp_console-0.0.2-py3-none-manylinux_2_34_x86_64.whl"
             )
-            self.write_wheel(linux_wheel, omit_runner=True)
+            self.write_wheel(linux_wheel)
             wheel.unlink()
             record = directory / "arguments.jsonl"
             environment["FAKE_MCP_ARGUMENTS"] = str(record)
@@ -571,19 +590,17 @@ class ReleaseScriptTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             invocations = [json.loads(line) for line in record.read_text().splitlines()]
-            self.assertIn(["serve", "--no-sandbox"], invocations)
-            self.assertFalse(any(call[:1] == ["sandbox"] for call in invocations))
+            self.assertIn(["serve"], invocations)
+            self.assertTrue(any(call[:1] == ["sandbox"] for call in invocations))
 
-            self.write_wheel(linux_wheel)
+            self.write_wheel(linux_wheel, omit_runner=True)
             result = self.run_script(
                 *command,
                 cwd=directory,
                 env=environment,
             )
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn(
-                "Linux wheel contains a macOS sandbox executable", result.stderr
-            )
+            self.assertIn("wheel is missing private sandbox runner data", result.stderr)
 
     def test_verify_wheel_set_requires_macos_and_linux_architectures(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -644,6 +661,9 @@ class ReleaseScriptTests(unittest.TestCase):
             (crate / "Cargo.toml").touch()
             (checkout / "LICENSE").write_text("license\n")
             (checkout / "NOTICE").write_text("notice\n")
+            vendor = checkout / "codex-rs/vendor/bubblewrap"
+            vendor.mkdir(parents=True)
+            (vendor / "COPYING").write_text("bwrap license\n")
             commands = directory / "commands"
             commands.mkdir()
             write_executable(
@@ -685,6 +705,7 @@ class ReleaseScriptTests(unittest.TestCase):
                 output = Path(os.environ["CARGO_TARGET_DIR"]) / target / "release"
                 output.mkdir(parents=True, exist_ok=True)
                 (output / "mcp-console-sandbox").write_bytes(b"runner bytes")
+                (output / "bwrap").write_bytes(b"bwrap bytes")
                 """,
             )
             environment = os.environ.copy()
@@ -704,6 +725,7 @@ class ReleaseScriptTests(unittest.TestCase):
             ]
             for arguments, target in (
                 ([], "aarch64-apple-darwin"),
+                (["--target", "x86_64-unknown-linux-gnu"], "x86_64-unknown-linux-gnu"),
                 (["--target", "x86_64-apple-darwin"], "x86_64-apple-darwin"),
             ):
                 with self.subTest(target=target):
@@ -726,6 +748,11 @@ class ReleaseScriptTests(unittest.TestCase):
                             "codex-mcp-console-sandbox",
                             "--bin",
                             "mcp-console-sandbox",
+                            *(
+                                ["-p", "codex-bwrap", "--bin", "bwrap"]
+                                if "linux" in target
+                                else []
+                            ),
                             "--target",
                             target,
                         ],
@@ -737,7 +764,20 @@ class ReleaseScriptTests(unittest.TestCase):
                         {
                             "source_revision": pin["commit"],
                             "target": target,
-                            "sha256": hashlib.sha256(b"runner bytes").hexdigest(),
+                            "artifacts": {
+                                "mcp-console-sandbox": hashlib.sha256(
+                                    b"runner bytes"
+                                ).hexdigest(),
+                                **(
+                                    {
+                                        "bwrap": hashlib.sha256(
+                                            b"bwrap bytes"
+                                        ).hexdigest()
+                                    }
+                                    if "linux" in target
+                                    else {}
+                                ),
+                            },
                         },
                     )
             data = root / "wheel-data" / "data"
@@ -758,6 +798,76 @@ class ReleaseScriptTests(unittest.TestCase):
                 )
                 self.assertNotEqual(result.returncode, 0)
                 self.assertFalse((directory / "cargo.json").exists())
+
+    def test_cargo_rejects_changed_staged_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "src").mkdir()
+            (root / "src/main.rs").write_text("fn main() {}\n")
+            for name in ("r_graphics.c", "r_repl.c"):
+                (root / "src" / name).touch()
+            shutil.copyfile(ROOT / "build.rs", root / "build.rs")
+            dependencies = tomllib.loads((ROOT / "Cargo.toml").read_text())[
+                "build-dependencies"
+            ]
+            (root / "Cargo.toml").write_text(
+                '[package]\nname = "sandbox-artifact-build"\nversion = "0.0.0"\n'
+                'edition = "2024"\n[build-dependencies]\n'
+                + "".join(
+                    f"{name} = {json.dumps(version)}\n"
+                    for name, version in dependencies.items()
+                )
+            )
+            shutil.copyfile(ROOT / "Cargo.lock", root / "Cargo.lock")
+            target = subprocess.check_output(
+                ["rustc", "--print", "host-tuple"], text=True
+            ).strip()
+            pin = json.loads((ROOT / "sandbox-runner.json").read_text())
+            (root / "sandbox-runner.json").write_text(json.dumps(pin))
+            artifacts = {"mcp-console-sandbox": b"runner bytes"}
+            if sys.platform == "linux":
+                artifacts["bwrap"] = b"bwrap bytes"
+            staged = root / "wheel-data/data/libexec"
+            staged.mkdir(parents=True)
+            for name, contents in artifacts.items():
+                (staged / name).write_bytes(contents)
+                (staged / name).chmod(0o755)
+            (root / "target").mkdir()
+            (root / "target/sandbox-runner-build.json").write_text(
+                json.dumps(
+                    {
+                        "source_revision": pin["commit"],
+                        "target": target,
+                        "artifacts": {
+                            name: hashlib.sha256(contents).hexdigest()
+                            for name, contents in artifacts.items()
+                        },
+                    }
+                )
+            )
+            arguments = [
+                "cargo",
+                "build",
+                "--target",
+                target,
+                "--target-dir",
+                str(root / "target"),
+            ]
+            result = subprocess.run(arguments, cwd=root, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            installed = root / "target" / target / "libexec"
+            for name, contents in artifacts.items():
+                with self.subTest(artifact=name):
+                    self.assertEqual((installed / name).read_bytes(), contents)
+                    self.assertTrue(os.access(installed / name, os.X_OK))
+                    (staged / name).write_bytes(b"replaced executable")
+                    result = subprocess.run(
+                        arguments, cwd=root, capture_output=True, text=True
+                    )
+                    self.assertNotEqual(result.returncode, 0, result.stderr)
+                    self.assertIn(f"artifact {name} changed", result.stderr)
+                    self.assertEqual((installed / name).read_bytes(), contents)
+                    (staged / name).write_bytes(contents)
 
 
 if __name__ == "__main__":

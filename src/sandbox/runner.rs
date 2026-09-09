@@ -7,7 +7,38 @@ use std::io::{self, PipeWriter, Write as _};
 use std::os::fd::{AsRawFd as _, RawFd};
 use std::process::Command;
 
+#[cfg(target_os = "macos")]
 const POLICY_EXTENSION: &str = include_str!("policy_extensions.sbpl");
+
+pub(super) fn catchable_signals() -> impl Iterator<Item = libc::c_int> {
+    // Darwin's sigfillset includes bit 32, but sigaction accepts only 1..=31.
+    // Its last signal is SIGUSR2; Linux also has real-time signals.
+    #[cfg(target_os = "macos")]
+    let last = libc::SIGUSR2;
+    #[cfg(target_os = "linux")]
+    let last = libc::SIGRTMAX();
+    let mut valid = unsafe { std::mem::zeroed() };
+    unsafe { libc::sigfillset(&mut valid) };
+    // Darwin rejects even queries for SIGKILL/SIGSTOP. Neither platform can
+    // catch or block them. Also omit libc-reserved Linux thread signals.
+    (1..=last)
+        .filter(|signal| !matches!(*signal, libc::SIGKILL | libc::SIGSTOP))
+        .filter(move |signal| unsafe { libc::sigismember(&valid, *signal) } == 1)
+}
+
+pub(super) fn ignored_signals() -> io::Result<u64> {
+    let mut ignored = 0;
+    for signal in catchable_signals() {
+        let mut action = unsafe { std::mem::zeroed() };
+        if unsafe { libc::sigaction(signal, std::ptr::null(), &mut action) } < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if action.sa_sigaction == libc::SIG_IGN {
+            ignored |= 1 << (signal - 1);
+        }
+    }
+    Ok(ignored)
+}
 
 pub(super) struct Setup {
     writer: Option<PipeWriter>,
@@ -22,6 +53,7 @@ impl Setup {
         program: &OsStr,
         arguments: &[OsString],
         original_mask: libc::sigset_t,
+        original_ignored: u64,
     ) -> Result<Self, String> {
         let (reader, writer) =
             io::pipe().map_err(|error| format!("failed to create sandbox setup pipe: {error}"))?;
@@ -44,7 +76,12 @@ impl Setup {
             utf8(executable.as_os_str())?,
             "sandbox-target".to_string(),
             "--signal-mask".to_string(),
-            original_mask.to_string(),
+            catchable_signals()
+                .filter(|signal| unsafe { libc::sigismember(&original_mask, *signal) } == 1)
+                .fold(0u64, |mask, signal| mask | (1 << (signal - 1)))
+                .to_string(),
+            "--ignored-signals".to_string(),
+            original_ignored.to_string(),
             "--".to_string(),
             utf8(program)?,
         ];
@@ -66,21 +103,35 @@ impl Setup {
             }
         }
         environment.insert("TMPDIR".to_string(), utf8(temporary.path().as_os_str())?);
-        // This directory is disposable data, not a native writable workspace
-        // anchor: its metadata directories and the root itself may be replaced.
-        let temporary_literal = utf8(temporary.path().as_os_str())?
-            .replace('\\', "\\\\")
-            .replace('"', "\\\"");
-        let extension =
-            format!("{POLICY_EXTENSION}\n(allow file-write* (subpath \"{temporary_literal}\"))\n");
+        let entries = vec![serde_json::json!({
+            "path": {"type": "special", "value": {"kind": "root"}}, "access": "read"
+        })];
+        let extension: Option<String>;
+        #[cfg(target_os = "macos")]
+        {
+            // Disposable data is allowed to replace its own metadata and root.
+            let temporary_literal = utf8(temporary.path().as_os_str())?
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"");
+            extension = Some(format!(
+                "{POLICY_EXTENSION}\n(allow file-write* (subpath \"{temporary_literal}\"))\n"
+            ));
+        }
+        #[cfg(target_os = "linux")]
+        let entries = {
+            let mut entries = entries;
+            entries.push(serde_json::json!({
+                "path": {"type": "path", "path": temporary.path()}, "access": "write"
+            }));
+            extension = None;
+            entries
+        };
         let payload = serde_json::to_vec(&serde_json::json!({
             "version": installation::PROTOCOL_VERSION,
             "command": target,
             "cwd": std::env::current_dir().map_err(|error| format!("failed to read sandbox working directory: {error}"))?,
             "environment": environment,
-            "filesystem": {"kind": "restricted", "entries": [
-                {"path": {"type": "special", "value": {"kind": "root"}}, "access": "read"}
-            ]},
+            "filesystem": {"kind": "restricted", "entries": entries},
             "network": "restricted",
             "proxy": null,
             "macos_seatbelt_profile_extension": extension,
@@ -109,6 +160,11 @@ impl Setup {
             .as_raw_fd()
     }
 
+    #[cfg(target_os = "linux")]
+    pub(super) fn pending(&self) -> bool {
+        self.writer.is_some()
+    }
+
     pub(super) fn write_once(&mut self) -> io::Result<()> {
         let Some(writer) = &mut self.writer else {
             return Ok(());
@@ -134,7 +190,7 @@ impl Setup {
             Err(error) if error.kind() == io::ErrorKind::BrokenPipe => {}
             Err(error) => return Err(error),
         }
-        // Closing the completed channel also removes its kqueue write watch.
+        // Closing the completed channel removes its descriptor watch.
         // Native setup starts at the complete frame, without requiring EOF.
         self.writer = None;
         Ok(())

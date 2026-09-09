@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.normalization import code
 from support.records import Transcript, TranscriptEntry
-from support.requirements import SANDBOX, requires
+from support.requirements import MACOS_SANDBOX, SANDBOX, requires
 from support.suites import run_this_suite
 
 
@@ -80,10 +80,15 @@ def test_preserves_arguments_and_executable_names(binary: Path) -> Transcript:
             "sandbox",
             "--",
             "--help",
-            environment={"PATH": "."},
+            environment={"PATH": os.pathsep.join((".", os.environ["PATH"]))},
             current_directory=current_directory,
         )
 
+    entry["environment"] = {"PATH": ".:<inherited PATH>"}
+    entry["transcript_normalization"] = {
+        "target": "environment.PATH",
+        "inherited_path": "omitted",
+    }
     assert "exit_code" not in entry, (
         "the executable name was parsed as a launcher option"
     )
@@ -151,6 +156,7 @@ def test_forwards_interactive_standard_streams(binary: Path) -> Transcript:
     script = code(r"""
         import sys
 
+        print("ready", flush=True)
         for line in sys.stdin:
             if line == "EXIT\n":
                 break
@@ -177,6 +183,9 @@ def test_forwards_interactive_standard_streams(binary: Path) -> Transcript:
     timeout = 5
 
     try:
+        # Time the interactive exchange after target startup, which can contend
+        # with other parallel cases. The case supervisor bounds startup itself.
+        assert stdout.readline() == b"ready\n"
         input_line = b"echo exactly: $(literal)\n"
         stdin.write(input_line)
         stdin.flush()
@@ -228,7 +237,7 @@ def test_forwards_interactive_standard_streams(binary: Path) -> Transcript:
         {
             "command": ["mcp-console", *arguments],
             "stdin": input_text,
-            "stdout": echoed_output,
+            "stdout": "ready\n" + echoed_output,
             "stderr": echoed_error,
         },
         {
@@ -238,7 +247,7 @@ def test_forwards_interactive_standard_streams(binary: Path) -> Transcript:
     ]
 
 
-@requires(SANDBOX)
+@requires(MACOS_SANDBOX)
 def test_enforces_host_read_only_and_temporary_writes(binary: Path) -> Transcript:
     # fmt: python
     script = code(r"""
@@ -293,7 +302,7 @@ def test_enforces_host_read_only_and_temporary_writes(binary: Path) -> Transcrip
     return [entry]
 
 
-@requires(SANDBOX)
+@requires(MACOS_SANDBOX)
 def test_allows_replacing_temporary_directories(binary: Path) -> Transcript:
     # fmt: python
     script = code(r"""
@@ -354,7 +363,7 @@ def test_allows_processx_pty_processes(binary: Path) -> Transcript:
     return [record(binary, "sandbox", "--", "Rscript", "-e", script)]
 
 
-@requires(SANDBOX)
+@requires(MACOS_SANDBOX)
 def test_cannot_open_a_preexisting_pseudo_terminal(binary: Path) -> Transcript:
     master, slave = pty.openpty()
     slave_name = os.ttyname(slave)
@@ -401,7 +410,7 @@ def test_cannot_open_a_preexisting_pseudo_terminal(binary: Path) -> Transcript:
     return [entry]
 
 
-@requires(SANDBOX)
+@requires(MACOS_SANDBOX)
 def test_cannot_flush_a_host_terminal(binary: Path) -> Transcript:
     # Reading terminal attributes remains usable for interactive commands, but
     # flushing another host terminal's queued input is a mutating ioctl.
@@ -451,7 +460,7 @@ def test_cannot_flush_a_host_terminal(binary: Path) -> Transcript:
     ]
 
 
-@requires(SANDBOX)
+@requires(MACOS_SANDBOX)
 def test_cannot_hard_link_a_host_file_into_the_writable_directory(
     binary: Path,
 ) -> Transcript:

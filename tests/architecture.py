@@ -239,8 +239,16 @@ class ArchitectureCheckTests(unittest.TestCase):
                 """,
                 "depends on",
             ),
-            ("sandbox/macos.rs", "use crate::{worker, relay_protocol};", "depends on"),
-            ("sandbox/macos.rs", "use crate::{server::{self, Server}};", "depends on"),
+            (
+                "sandbox/command.rs",
+                "use crate::{worker, relay_protocol};",
+                "depends on",
+            ),
+            (
+                "sandbox/command.rs",
+                "use crate::{server::{self, Server}};",
+                "depends on",
+            ),
             ("server.rs", "use crate::{process_exit, cli};", None),
         )
         with tempfile.TemporaryDirectory() as temporary:

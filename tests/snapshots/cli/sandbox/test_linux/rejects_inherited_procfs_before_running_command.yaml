@@ -1,0 +1,12 @@
+---
+command:
+  - mcp-console
+  - sandbox
+  - --
+  - /bin/echo
+  - must not run
+environment: fresh procfs mounts denied by an outer namespace
+exit_code: 1
+stdout: ""
+stderr: |
+  Linux sandbox requires procfs mounted for its PID namespace

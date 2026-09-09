@@ -25,7 +25,7 @@
 #' @param version `NULL`, or one published `mcp-console` version, such as
 #'   `"0.0.2"`.
 #' @param no_sandbox Run evaluated code with the server's filesystem and
-#'   network permissions. Required on Linux.
+#'   network permissions.
 #' @return An [ellmer::ToolDef] to pass to an ellmer chat's
 #'   `$register_tool()` method.
 #' @examples

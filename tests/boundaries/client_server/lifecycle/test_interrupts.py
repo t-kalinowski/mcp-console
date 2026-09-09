@@ -119,7 +119,6 @@ def test_supervises_stopped_and_continued_workers(
             evaluation = client.start_send(r="echo echo")
             marker, worker_pid, worker_group = wait_for_stopped_worker(
                 temporary_path,
-                set(),
                 workers,
                 client,
                 execution,
@@ -161,7 +160,6 @@ def test_supervises_stopped_and_continued_workers(
             replacement_marker, replacement_pid, replacement_group = (
                 wait_for_stopped_worker(
                     temporary_path,
-                    {worker_pid},
                     workers,
                     client,
                     execution,

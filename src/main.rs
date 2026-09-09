@@ -61,8 +61,9 @@ fn main() -> ExitCode {
         },
         cli::Command::SandboxTarget {
             signal_mask,
+            ignored_signals,
             command,
-        } => match sandbox::run_target(signal_mask, &command) {
+        } => match sandbox::run_target(signal_mask, ignored_signals, &command) {
             Ok(exit_code) => exit_code,
             Err(error) => exit_with_error(error),
         },
@@ -81,10 +82,6 @@ fn run_server(
     relay: Option<std::path::PathBuf>,
     no_sandbox: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    #[cfg(target_os = "linux")]
-    if !no_sandbox {
-        return Err("Linux requires `mcp-console serve --no-sandbox`".into());
-    }
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;

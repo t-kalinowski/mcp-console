@@ -13,7 +13,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 STAGE_ROOT = ROOT / "wheel-data"
-TARGETS = ("aarch64-apple-darwin", "x86_64-apple-darwin")
+TARGETS = (
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+)
 
 
 def fail(message: str) -> None:
@@ -50,7 +55,7 @@ def main() -> None:
             for key in ("repository", "commit", "rust_toolchain"):
                 output.write(f"{key}={pin[key]}\n")
         return
-    if sys.platform != "darwin":
+    if sys.platform not in {"darwin", "linux"}:
         fail(f"building private runner artifacts is unsupported on {sys.platform}")
 
     checkout = args.checkout.resolve()
@@ -87,6 +92,7 @@ def main() -> None:
         "codex-mcp-console-sandbox",
         "--bin",
         "mcp-console-sandbox",
+        *(["-p", "codex-bwrap", "--bin", "bwrap"] if "linux" in target else []),
         "--target",
         target,
     ]
@@ -94,7 +100,6 @@ def main() -> None:
     if result.returncode != 0:
         fail(f"runner build failed with status {result.returncode}")
     runner = workspace / "target" / target / "release" / "mcp-console-sandbox"
-    digest = hashlib.sha256(runner.read_bytes()).hexdigest()
 
     for generated in (STAGE_ROOT / "data/libexec", STAGE_ROOT / "data/share"):
         if generated.exists():
@@ -106,15 +111,32 @@ def main() -> None:
     staged_runner = libexec / "mcp-console-sandbox"
     shutil.copyfile(runner, staged_runner)
     staged_runner.chmod(0o755)
+    artifacts = [staged_runner]
     for name in ("LICENSE", "NOTICE"):
         destination = licenses / f"Codex-{name}"
         shutil.copyfile(checkout / name, destination)
         destination.chmod(0o644)
+    if "linux" in target:
+        staged_bwrap = libexec / "bwrap"
+        shutil.copyfile(runner.with_name("bwrap"), staged_bwrap)
+        staged_bwrap.chmod(0o755)
+        artifacts.append(staged_bwrap)
+        shutil.copyfile(
+            workspace / "vendor/bubblewrap/COPYING", licenses / "bubblewrap-COPYING"
+        )
     build_record = ROOT / "target" / "sandbox-runner-build.json"
     build_record.parent.mkdir(exist_ok=True)
     build_record.write_text(
         json.dumps(
-            {"source_revision": head, "target": target, "sha256": digest}, indent=2
+            {
+                "source_revision": head,
+                "target": target,
+                "artifacts": {
+                    path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+                    for path in artifacts
+                },
+            },
+            indent=2,
         )
         + "\n",
         encoding="utf-8",

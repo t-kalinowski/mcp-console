@@ -12,6 +12,7 @@ from support.assertions import last_tool_text
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.processes import (
+    host_process_id,
     process_exists,
     stop_process,
     stop_process_id,
@@ -104,8 +105,13 @@ def test_restart_starts_first_worker_and_waits_until_ready(
                 "zod-replacement-waiting-ready",
                 client,
             )
-            worker_pid = int(
-                wait_for_marker(temporary_path, "zod-worker-pid", client).read_text()
+            worker_pid = host_process_id(
+                int(
+                    wait_for_marker(
+                        temporary_path, "zod-worker-pid", client
+                    ).read_text()
+                ),
+                client.process.pid,
             )
 
             while_restarting = client.start_send(r="echo echo")
@@ -268,7 +274,9 @@ def test_restart_force_stops_stalled_worker(
                 "zod-worker-pid",
                 client,
             )
-            worker_pid = int(pid_marker.read_text())
+            worker_pid = host_process_id(
+                int(pid_marker.read_text()), client.process.pid
+            )
             wait_for_marker(temporary_path, "zod-stalled", client)
 
             restart_call = client.start_send(control="restart")
@@ -321,7 +329,7 @@ def test_shuts_down_stalled_worker(binary: Path, execution: Execution) -> Transc
             stalled["send"]["stdin"] = "<large stdin>"
             control.connect(client)
             event = control.wait_for(operation, "parent_operation_stalled")
-            worker_pid = event["pid"]
+            worker_pid = host_process_id(event["pid"], client.process.pid)
             assert isinstance(worker_pid, int) and worker_pid > 0, event
             client.stdin.close()
             try:

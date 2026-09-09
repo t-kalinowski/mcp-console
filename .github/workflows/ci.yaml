@@ -37,12 +37,10 @@ jobs:
           python-version: "3.13"
 
       - name: Read private sandbox source pin
-        if: runner.os == 'macOS'
         id: sandbox-pin
         run: scripts/stage-sandbox-runner --github-output "$GITHUB_OUTPUT"
 
       - name: Check out private sandbox source
-        if: runner.os == 'macOS'
         uses: actions/checkout@v7
         with:
           repository: ${{ steps.sandbox-pin.outputs.repository }}
@@ -84,14 +82,14 @@ jobs:
         with:
           components: clippy, rustfmt
 
-      - name: Install Linux resolver build dependencies
+      - name: Install Linux build and sandbox dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libcurl4-openssl-dev
+          sudo apt-get install -y build-essential pkg-config libcurl4-openssl-dev libcap-dev
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
       - name: Install private sandbox Rust toolchain
-        if: runner.os == 'macOS'
         run: >-
           rustup toolchain install
           "${{ steps.sandbox-pin.outputs.rust_toolchain }}"
@@ -128,7 +126,6 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Restore private sandbox runner
-        if: runner.os == 'macOS'
         id: sandbox-cache
         uses: actions/cache/restore@v6
         with:
@@ -142,7 +139,7 @@ jobs:
             sandbox-runner-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('sandbox-runner.json', 'scripts/stage-sandbox-runner') }}
 
       - name: Stage private sandbox runner
-        if: runner.os == 'macOS' && steps.sandbox-cache.outputs.cache-hit != 'true'
+        if: steps.sandbox-cache.outputs.cache-hit != 'true'
         run: scripts/stage-sandbox-runner .sandbox-runner-source
 
       - name: Run core checks
@@ -228,7 +225,7 @@ jobs:
       # Save before rust-cache's post-job cleanup removes non-Cargo artifacts.
       - name: Save private sandbox runner
         if: >-
-          runner.os == 'macOS' && github.ref == 'refs/heads/main' &&
+          github.ref == 'refs/heads/main' &&
           steps.sandbox-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:

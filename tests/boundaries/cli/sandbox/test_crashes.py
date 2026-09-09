@@ -32,7 +32,12 @@ from support.macos import (
 )
 from support.normalization import code
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, SANDBOX, requires
+from support.requirements import (
+    MACOS_SANDBOX,
+    NATIVE_FIXTURES,
+    PROCESS_EVENTS,
+    requires,
+)
 from support.suites import run_this_suite
 
 
@@ -104,7 +109,7 @@ def _start_owned_echo_owner(
     )
 
 
-@requires(SANDBOX, PROCESS_EVENTS, NATIVE_FIXTURES)
+@requires(MACOS_SANDBOX, PROCESS_EVENTS, NATIVE_FIXTURES)
 def test_owner_loss_before_exit_watch_cleans_startup(binary: Path) -> Transcript:
     # Gate the launcher's first kqueue after the root is spawned but before the
     # owner watch is registered. The target remains behind its startup gate.
@@ -216,7 +221,7 @@ def test_owner_loss_before_exit_watch_cleans_startup(binary: Path) -> Transcript
             owner.stderr.close()
 
 
-@requires(SANDBOX, PROCESS_EVENTS, NATIVE_FIXTURES)
+@requires(MACOS_SANDBOX, PROCESS_EVENTS, NATIVE_FIXTURES)
 def test_owner_loss_before_target_release_cancels_startup(binary: Path) -> Transcript:
     # The manager reaches its own startup entry point only after the launcher
     # has registered the owner watch. Hold readiness there, then remove the
@@ -325,7 +330,7 @@ def test_owner_loss_before_target_release_cancels_startup(binary: Path) -> Trans
             owner.stderr.close()
 
 
-@requires(SANDBOX, PROCESS_EVENTS, NATIVE_FIXTURES)
+@requires(MACOS_SANDBOX, PROCESS_EVENTS, NATIVE_FIXTURES)
 def test_sigterm_before_setup_retires_without_releasing_target(
     binary: Path,
 ) -> Transcript:
@@ -397,7 +402,7 @@ def test_sigterm_before_setup_retires_without_releasing_target(
         ]
 
 
-@requires(SANDBOX, PROCESS_EVENTS, NATIVE_FIXTURES)
+@requires(MACOS_SANDBOX, PROCESS_EVENTS, NATIVE_FIXTURES)
 def test_cancels_owned_launch_during_setup(binary: Path) -> Transcript:
     transcript = []
     for reader, cancellation in (
@@ -508,7 +513,7 @@ def test_cancels_owned_launch_during_setup(binary: Path) -> Transcript:
     return transcript
 
 
-@requires(SANDBOX, PROCESS_EVENTS)
+@requires(MACOS_SANDBOX, PROCESS_EVENTS)
 def test_owner_loss_retires_the_sandbox_lifetime(binary: Path) -> Transcript:
     # Keep the target behind its inherited stdin until the owner has reported
     # the launcher PID. The detached child then leaves the target's session, so
@@ -657,7 +662,7 @@ def test_owner_loss_retires_the_sandbox_lifetime(binary: Path) -> Transcript:
         owner.stderr.close()
 
 
-@requires(SANDBOX, PROCESS_EVENTS)
+@requires(MACOS_SANDBOX, PROCESS_EVENTS)
 def test_launcher_crash_retires_the_sandbox_lifetime(binary: Path) -> Transcript:
     lifetime = _start_lifetime(binary)
     try:
@@ -684,7 +689,7 @@ def test_launcher_crash_retires_the_sandbox_lifetime(binary: Path) -> Transcript
         _cleanup(lifetime)
 
 
-@requires(SANDBOX, PROCESS_EVENTS)
+@requires(MACOS_SANDBOX, PROCESS_EVENTS)
 def test_manager_crash_retires_the_sandbox_lifetime(binary: Path) -> Transcript:
     lifetime = _start_lifetime(binary)
     try:

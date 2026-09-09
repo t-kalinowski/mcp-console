@@ -12,12 +12,29 @@ from support.execution import SANDBOXED
 from support.normalization import code, normalize_duckdb_progress
 from support.r import r_test_environment
 from support.records import Transcript
-from support.requirements import SANDBOX, requires
+from support.requirements import LINUX_SANDBOX, MACOS_SANDBOX, requires
 from support.suites import run_this_suite
 
 
-@requires(SANDBOX)
+@requires(MACOS_SANDBOX)
 def test_creates_ragnar_store_after_workspace_write_denial(binary: Path) -> Transcript:
+    return creates_ragnar_store_after_workspace_write_denial(
+        binary, "Operation not permitted"
+    )
+
+
+@requires(LINUX_SANDBOX)
+def test_creates_ragnar_store_after_workspace_write_denial_on_linux(
+    binary: Path,
+) -> Transcript:
+    return creates_ragnar_store_after_workspace_write_denial(
+        binary, "Read-only file system"
+    )
+
+
+def creates_ragnar_store_after_workspace_write_denial(
+    binary: Path, denial: str
+) -> Transcript:
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
     with tempfile.TemporaryDirectory() as temporary:
@@ -38,7 +55,7 @@ def test_creates_ragnar_store_after_workspace_write_denial(binary: Path) -> Tran
             client.send(r=r)
             output = normalize_duckdb_progress(client)
             assert "knowledge.ragnar.duckdb" in output
-            assert "Operation not permitted" in output
+            assert denial in output
             for directory in (str(workspace.resolve()), str(workspace)):
                 output = output.replace(directory, "<workspace>")
             client.transcript[-1]["result"]["content"][0]["text"] = output

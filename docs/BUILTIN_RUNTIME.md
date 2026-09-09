@@ -273,6 +273,7 @@ This transition does not restart the worker or Python interpreter.
 Python and R globals, Python objects, the DuckDB catalog, worker PID, and stdin state remain available.
 New subprocesses use the activated environment and can import its retained packages.
 In a sandboxed macOS worker, the built-in Python runtime makes psutil enumerate the dedicated process group instead of requesting the host-wide process table.
+On Linux, the PID namespace limits native process enumeration to the sandbox.
 With `serve --no-sandbox`, psutil retains its native host process enumeration.
 The server retains a successfully activated environment for later cells and restart, even if the inferred distribution does not provide the requested module or later code in the cell fails.
 An ordinary resolution failure before activation restores the earlier reticulate manifest and leaves the worker usable.
@@ -499,11 +500,12 @@ The [implemented architecture](ARCHITECTURE.md) describes the session record and
 - SQL previews do not include affected-row counts or total result counts.
 - Only default-device R graphics and open pyplot figures are captured automatically.
   Managed graphics and Python caches use each worker's R session temporary directory, including with `--no-sandbox`.
-- In the default sandboxed mode, normal restart, automatic failure replacement, orderly server shutdown, and unexpected server or relay failure retire descendants observed by the launcher-owned sandbox manager across process-group and session changes.
-  The configured relay starts only after the manager has adopted the private directory, installed root, descendant, and control-socket observation, and reported readiness, and the launcher has installed manager-failure recovery.
-  A later descendant that becomes orphaned before the manager resolves its fork event remains outside this guarantee.
+- In the default sandboxed mode, normal restart, automatic failure replacement, orderly server shutdown, and unexpected server or relay failure retire descendants across process-group and session changes.
+  On Linux, subreapers adopt orphaned descendants and wait for their exit before acknowledging cleanup.
+  On macOS, the guarantee covers descendants observed by the launcher-owned manager; a later descendant that becomes orphaned before its fork event is resolved remains outside this guarantee.
+  The configured relay starts only after host cleanup ownership and manager-failure recovery are established.
 - With `serve --no-sandbox`, the worker runs with host permissions and no manager tracks or retires its descendants; normal relay shutdown still reaps the direct worker.
-- Linux requires `serve --no-sandbox`.
+- Linux sandboxing requires kernel 5.11 or later, procfs, and permission for namespace setup; see [Linux sandboxing](LINUX_SANDBOX.md).
 - Windows is not supported.
 
 The [architecture](ARCHITECTURE.md) explains lifecycle and process ownership.
