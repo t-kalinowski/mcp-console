@@ -94,9 +94,10 @@ def main() -> None:
         if target not in TARGETS:
             fail(f"unsupported native target: {target}")
 
-    # Invoke Cargo on every source build. It owns dependency/configuration
-    # freshness, including native compiler flags; there is no local cache of
-    # finished executables that bypasses those checks.
+    # Invoke Cargo on every source build and use its normal freshness checks.
+    # Changes to external tools selected through PATH can require cleaning the
+    # runner's target directory; see RELEASE.md. No local completed-runner cache
+    # bypasses Cargo.
     environment = os.environ.copy()
     environment["CARGO_TARGET_DIR"] = str(workspace / "target")
     subprocess.run(

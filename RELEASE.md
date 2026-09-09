@@ -20,10 +20,15 @@ The default build does not inspect or change other working checkouts.
 To use a dedicated clean checkout at the pin, explicitly set `MCP_CONSOLE_SANDBOX_SOURCE`; CI and releases use a checkout within their own workspace.
 
 Every source installation invokes the runner's Cargo build with its pinned toolchain and lockfile.
-Cargo reuses its build intermediates under the runner checkout's `codex-rs/target` and checks changes to tracked source, configuration, and native compiler inputs.
+Cargo reuses its build intermediates under the runner checkout's `codex-rs/target` and checks inputs tracked by Cargo and dependency build scripts.
 Source builds use the caller's normal Cargo configuration and download cache.
 There is no separate local cache of finished runners that bypasses Cargo's freshness checks.
 The runner build finishes before the application's Cargo build starts.
+
+Build reuse has the same limits as an ordinary Cargo build: Cargo may not detect a different compiler or linker selected through `PATH`, changes to the tools themselves, or changes to an SDK or system library.
+After changing those external build inputs, clean the affected Cargo build directories, including the runner checkout's `codex-rs/target`, before reinstalling.
+For the default source checkout, that directory is `target/sandbox-runner-cache/<commit>/codex-rs/target`.
+Automatic detection of those environment changes is outside the source installer's contract.
 
 For direct Cargo builds or direct Maturin wheel builds, first run `scripts/stage-sandbox-runner`.
 The script stages companions under `wheel-data/data` and records their digests in `target/sandbox-runner-build.json`.

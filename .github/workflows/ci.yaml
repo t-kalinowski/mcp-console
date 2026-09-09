@@ -288,6 +288,8 @@ jobs:
           _R_CHECK_TESTS_NLINES_: "0"
         working-directory: r
         run: |
+          # Source-install checks share target and can replace its companions.
+          cargo build --locked --bin mcp-console --manifest-path ../Cargo.toml
           R CMD build .
           R CMD check --no-manual mcp.console_*.tar.gz
 

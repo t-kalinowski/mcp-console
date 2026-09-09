@@ -40,6 +40,7 @@ CI runs core checks and all capability-applicable transcript modes on macOS and 
 macOS and Linux uv source installations prepare the pinned sandbox companion before invoking the application's Cargo build, using a dedicated checkout under `target`.
 Direct Cargo or Maturin builds require `scripts/stage-sandbox-runner` first; `scripts/check` performs this preparation.
 Install development checkouts with `uv tool install --reinstall .`; bare `cargo install` does not install the companion bundle.
+Build reuse follows Cargo's tracked inputs; external tool changes through `PATH` can require cleaning the affected Cargo build directories, as described in `RELEASE.md`.
 Native Cargo bundles require the default shared build/target layout; a separate intermediate build directory is unsupported for running the Cargo output.
 The Python packaging backend holds a checkout-local lock from staging through wheel creation.
 Direct staging, Cargo, and Maturin commands require exclusive use of their source checkout.

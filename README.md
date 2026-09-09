@@ -143,7 +143,7 @@ Render only code you trust.
 Install the current checkout with `uv tool install --reinstall .`.
 Source builds require Python 3, Git, and rustup in addition to the Rust compiler and native build tools.
 The first uv source installation fetches and compiles the pinned sandbox runner in a dedicated checkout under `target`.
-Later installations invoke Cargo again, reusing its build intermediates and checking for changed build inputs.
+Later installations invoke Cargo again, reusing its build intermediates and checking for changes to tracked build inputs.
 The packaging backend prepares the companion before building the main executable; rustup installs the pinned toolchain if needed.
 It does not use another working checkout.
 
