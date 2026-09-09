@@ -8,6 +8,11 @@ server:
   source: waiter-owned evaluation
 ---
 server:
+  kind: stdin
+  data: |
+    poll ownership checkpoint
+---
+server:
   kind: interrupt
   request_id: 0
 ---

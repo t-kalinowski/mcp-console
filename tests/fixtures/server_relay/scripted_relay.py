@@ -41,6 +41,7 @@ INTERRUPT_ACTIVE_RELEASE_NAME = "mcp-console-interrupt-active-release"
 INTERRUPT_ACK_RELEASE_NAME = "mcp-console-interrupt-ack-release"
 INTERRUPT_ACKNOWLEDGED_NAME = "mcp-console-interrupt-acknowledged"
 INTERRUPT_RECEIVED_NAME = "mcp-console-interrupt-received"
+POLL_STDIN_RECEIVED_NAME = "mcp-console-poll-stdin-received"
 CONTROLLED_INTERRUPT_FIRST_RECEIVED_NAME = (
     "mcp-console-controlled-interrupt-first-received"
 )
@@ -758,6 +759,7 @@ def run_controlled_completion_then_interrupt(relay: ScriptedRelay) -> None:
 
 
 def run_controlled_interrupt_with_waiting_poll(relay: ScriptedRelay) -> None:
+    relay.make_checkpoint(POLL_STDIN_RECEIVED_NAME)
     relay.make_checkpoint(INTERRUPT_RECEIVED_NAME)
     relay.make_checkpoint(INTERRUPT_ACK_RELEASE_NAME)
     relay.make_checkpoint(INTERRUPT_ACTIVE_RELEASE_NAME)
@@ -770,6 +772,8 @@ def run_controlled_interrupt_with_waiting_poll(relay: ScriptedRelay) -> None:
         }
     )
     (relay.root / EVALUATING_NAME).touch()
+    relay.expect({"kind": "stdin", "data": "poll ownership checkpoint\n"})
+    relay.notify_checkpoint(POLL_STDIN_RECEIVED_NAME)
     relay.expect({"kind": "interrupt", "request_id": 0})
     relay.notify_checkpoint(INTERRUPT_RECEIVED_NAME)
     relay.wait_for_checkpoint(INTERRUPT_ACK_RELEASE_NAME)
