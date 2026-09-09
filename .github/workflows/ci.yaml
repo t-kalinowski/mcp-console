@@ -15,6 +15,8 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # Preserve compiler state for debug/test builds across PR revisions.
+  CARGO_INCREMENTAL: "1"
   IR_LATEST_RESOLUTION_MAX_AGE_SECONDS: "604800"
   UV_VERSION: 0.12.4
 
@@ -78,6 +80,7 @@ jobs:
             'source("https://mac.R-project.org/bin/install.R"); install.libs("gettext"); stopifnot(file.exists(file.path("/opt/R", Sys.info()[["machine"]], "include", "libintl.h")))'
 
       - name: Install Rust
+        id: rust
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
@@ -116,15 +119,23 @@ jobs:
             ir-v3-${{ runner.os }}-${{ runner.arch }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ steps.tools.outputs.ir_version }}-${{ hashFiles('src/worker_client.rs', 'src/resolver/managed_r.rs', 'tests/boundaries/client_server/requirements/test_r_automatic.py', 'tests/boundaries/client_server/requirements/test_r.py') }}-
             ir-v3-${{ runner.os }}-${{ runner.arch }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ steps.tools.outputs.ir_version }}-
 
-      - name: Cache Rust build data
-        uses: Swatinem/rust-cache@v2
+      - name: Restore Rust build data
+        id: rust-cache
+        uses: actions/cache/restore@v6
         with:
-          shared-key: debug
-          workspaces: |
-            . -> target
-            .sandbox-runner-source/codex-rs -> target
-          # Preserve compiled dependencies when later checks fail.
-          cache-on-failure: true
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/debug
+            target/release
+            target/libexec
+          # Refresh on compiled-source changes; transcript-only pushes reuse it.
+          # Restore preceding incremental state. Bump v1 for build flag changes.
+          key: >-
+            cargo-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/**', 'sandbox-runner.json', 'scripts/stage-sandbox-runner') }}-${{ hashFiles('src/**', 'build.rs') }}
+          restore-keys: |
+            cargo-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/**', 'sandbox-runner.json', 'scripts/stage-sandbox-runner') }}-
+            cargo-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.setup-r.outputs.installed-r-version }}-
 
       - name: Restore private sandbox runner
         id: sandbox-cache
@@ -139,11 +150,27 @@ jobs:
           key: >-
             sandbox-runner-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('sandbox-runner.json', 'scripts/stage-sandbox-runner') }}
 
+      - name: Restore private sandbox build data
+        id: sandbox-build-cache
+        if: steps.sandbox-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v6
+        with:
+          path: .sandbox-runner-source/codex-rs/target
+          # Ordinary PR pushes need only the staged runner. Restore intermediates
+          # when rebuilding it, including workspace crates from the preceding pin.
+          key: >-
+            sandbox-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.sandbox-pin.outputs.rust_toolchain }}-${{ hashFiles('.sandbox-runner-source/codex-rs/Cargo.toml', '.sandbox-runner-source/codex-rs/Cargo.lock', '.sandbox-runner-source/codex-rs/.cargo/**', 'scripts/stage-sandbox-runner') }}-${{ steps.sandbox-pin.outputs.commit }}
+          restore-keys: |
+            sandbox-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.sandbox-pin.outputs.rust_toolchain }}-${{ hashFiles('.sandbox-runner-source/codex-rs/Cargo.toml', '.sandbox-runner-source/codex-rs/Cargo.lock', '.sandbox-runner-source/codex-rs/.cargo/**', 'scripts/stage-sandbox-runner') }}-
+            sandbox-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.sandbox-pin.outputs.rust_toolchain }}-
+
       - name: Stage private sandbox runner
         if: steps.sandbox-cache.outputs.cache-hit != 'true'
+        env:
+          CARGO_INCREMENTAL: "0"
         run: scripts/stage-sandbox-runner .sandbox-runner-source
 
-      # Save the completed build before tests or post-job cache cleanup.
+      # Save each completed build before any tests run.
       - name: Save private sandbox runner
         if: steps.sandbox-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
@@ -153,14 +180,22 @@ jobs:
             target/sandbox-runner-build.json
           key: ${{ steps.sandbox-cache.outputs.cache-primary-key }}
 
-      - name: Run core checks
-        env:
-          GITHUB_PAT: ${{ github.token }}
-        run: scripts/check-core
+      - name: Save private sandbox build data
+        if: >-
+          steps.sandbox-cache.outputs.cache-hit != 'true' &&
+          steps.sandbox-build-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: .sandbox-runner-source/codex-rs/target
+          key: ${{ steps.sandbox-build-cache.outputs.cache-primary-key }}
 
-      - name: Build and smoke-test Python package
+      - name: Build Rust targets
+        run: cargo build --locked --all-targets --all-features
+
+      - name: Build Python package
         shell: bash
         env:
+          CARGO_INCREMENTAL: "0"
           GITHUB_PAT: ${{ github.token }}
           UV_TOOL_DIR: ${{ runner.temp }}/mcp-console-tool
           UV_TOOL_BIN_DIR: ${{ runner.temp }}/mcp-console-bin
@@ -171,13 +206,39 @@ jobs:
           set -euo pipefail
 
           rm -rf dist
-          cargo build --locked --bin mcp-console
           uvx --from 'maturin==1.15.0' \
             maturin build \
             --release \
             --locked \
             --compatibility pypi \
             --out dist
+
+      - name: Save Rust build data
+        if: steps.rust-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/debug
+            target/release
+            target/libexec
+          key: ${{ steps.rust-cache.outputs.cache-primary-key }}
+
+      - name: Run core checks
+        env:
+          GITHUB_PAT: ${{ github.token }}
+        run: scripts/check-core
+
+      - name: Smoke-test Python package
+        env:
+          GITHUB_PAT: ${{ github.token }}
+          UV_TOOL_DIR: ${{ runner.temp }}/mcp-console-tool
+          UV_TOOL_BIN_DIR: ${{ runner.temp }}/mcp-console-bin
+          UV_CACHE_DIR: ${{ runner.temp }}/mcp-console-cache
+          UV_PYTHON_DOWNLOADS: never
+          UV_NO_CONFIG: "1"
+        run: |
           python3 scripts/release.py \
             smoke-wheel \
             dist/*.whl \
