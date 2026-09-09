@@ -18,6 +18,7 @@ Source builds require Python 3, Git, and rustup; rustup installs the pinned tool
 The runner has its own Cargo build directory and jobserver, so the nested build also works when the outer Cargo uses `--jobs 1` or a custom target directory.
 It uses the pinned compiler's default macOS deployment target, independently of the application's `MACOSX_DEPLOYMENT_TARGET`.
 Inherited generic Rust flags and Cargo build, profile, and target settings, including compiler and linker overrides, are removed from the nested build environment.
+The runner and its host build dependencies use `/usr/bin/cc`, bypassing `cc` wrappers on the caller's PATH.
 Cargo runs from `/` with an explicit manifest and the pinned workspace configuration, so it does not discover configuration in the caller's checkout or home directory.
 Root-level `/.cargo/config` or `/.cargo/config.toml` is unsupported and causes an error before building.
 The runner's Cargo home and dependency cache live in `codex-rs/target/cargo-home` within its source checkout; rustup keeps its normal toolchain cache.
@@ -48,6 +49,10 @@ Move the complete bundle when relocating it; a symlink to `bin/mcp-console` also
 There is no embedded payload, extraction step, or runtime runner cache.
 Sandbox launches do not download anything or search PATH for the runner.
 Native Cargo builds put the companions under the target prefix, alongside the `debug` and `release` directories.
+This native bundle requires Cargo's default shared build/target layout.
+Use `CARGO_TARGET_DIR` or `--target-dir` to move it; running the native Cargo output with a separate intermediate directory (`CARGO_BUILD_BUILD_DIR` or `build.build-dir`) is unsupported.
+Cargo does not expose the invoking command's final `--target-dir` to build scripts, so the build script cannot reliably find that destination independently of `OUT_DIR`.
+Wheel installations use the staged wheel data independently of the native bundle layout.
 Use `uv tool install --reinstall .` to install a development checkout: `cargo install` copies only the main executable and cannot install the companion bundle.
 
 The current pin uses protocol 2: invoke the runner with `--bootstrap-fd <N>` and inherit a readable descriptor greater than 2.

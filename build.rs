@@ -34,6 +34,10 @@ fn bind_private_runner() {
     let output = PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
     let stage = output.join("sandbox-runner");
     // OUT_DIR is <target prefix>/<profile>/build/<package>/out.
+    // Native bundles require Cargo's default shared build/target layout: Cargo
+    // does not expose the caller's --target-dir to build scripts. A separate
+    // build.build-dir is unsupported for running the Cargo output; wheels use
+    // wheel-data independently. See RELEASE.md.
     let prefix = output.ancestors().nth(4).unwrap();
     let cache = prefix.join("sandbox-runner-cache");
     println!("cargo:rerun-if-changed=sandbox-runner.json");

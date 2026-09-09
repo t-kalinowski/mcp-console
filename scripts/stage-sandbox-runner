@@ -173,6 +173,11 @@ def build(checkout: Path, output: Path, target: str, pin: dict[str, object]) -> 
             del environment[name]
     environment["CARGO_TARGET_DIR"] = str(workspace / "target")
     environment["CARGO_HOME"] = str(cargo_home)
+    # Both the runner and host build dependencies use Apple's selected linker,
+    # independently of a caller's cc wrapper on PATH.
+    for native_target in TARGETS:
+        triple = native_target.upper().replace("-", "_")
+        environment[f"CARGO_TARGET_{triple}_LINKER"] = "/usr/bin/cc"
     command = [
         *toolchain,
         "cargo",

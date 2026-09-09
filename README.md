@@ -157,7 +157,9 @@ scripts/test --update BOUNDARY/SUITE[::CASE]
 
 The macOS installation contains `bin/mcp-console`, a private runner under `libexec`, and its license notices under `share/licenses/mcp-console`.
 Move the whole bundle to relocate it; copying only `mcp-console` leaves the runner behind.
-`cargo build` prepares a runnable development bundle under `target`, but `cargo install` installs only the main binary and is not a complete installation.
+`cargo build` prepares a runnable development bundle under `target` when Cargo uses its default shared build/target layout.
+For this native bundle, use `CARGO_TARGET_DIR` or `--target-dir` to change the build location; a separate intermediate directory (`CARGO_BUILD_BUILD_DIR` or `build.build-dir`) is unsupported.
+`cargo install` installs only the main binary and is not a complete installation.
 [RELEASE.md](RELEASE.md) describes the bundle and build caches.
 See [AGENTS.md](https://github.com/t-kalinowski/mcp-console/blob/main/AGENTS.md) for development rules and the repository map, and the [boundary test guide](https://github.com/t-kalinowski/mcp-console/blob/main/tests/boundaries/README.md) for test selection and snapshot updates.
 The standalone `mcp-console sandbox -- COMMAND [ARG]...` command is also available for development on macOS; [macOS sandbox supervision](https://github.com/t-kalinowski/mcp-console/blob/main/docs/SANDBOX_SUPERVISION.md) defines its lifecycle, terminal behavior, and limitations.

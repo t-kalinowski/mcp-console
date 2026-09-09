@@ -622,11 +622,17 @@ class ReleaseScriptTests(unittest.TestCase):
                     )
                 ),
                 ({}, {"CARGO_PROFILE_RELEASE_PANIC": "abort"}),
+                (
+                    {commands / "cc": "#!/bin/sh\nexit 97\n"},
+                    {},
+                ),
             ]
             for files, overrides in configurations:
                 with self.subTest(files=list(files), overrides=overrides):
                     for location, configuration in files.items():
                         location.write_text(configuration)
+                        if location.parent == commands:
+                            location.chmod(0o755)
                     output = directory / "output"
                     command = [
                         sys.executable,
@@ -657,6 +663,7 @@ class ReleaseScriptTests(unittest.TestCase):
                     # Every ambient configuration must be harmless on a fresh
                     # build, not just when the completed bundle is reused.
                     shutil.rmtree(project / "target")
+                    shutil.rmtree(workspace / "target")
 
     def test_stage_runner_builds_the_pin_and_records_artifact_integrity(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -747,11 +754,11 @@ class ReleaseScriptTests(unittest.TestCase):
                     "CARGO_BUILD_RUSTFLAGS",
                     "CARGO_TARGET_X86_64_APPLE_DARWIN_RUSTFLAGS",
                     "CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS",
-                    "CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER",
-                    "CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER",
                     "MACOSX_DEPLOYMENT_TARGET",
                 ):
                     assert name not in os.environ, name
+                for target in ("AARCH64_APPLE_DARWIN", "X86_64_APPLE_DARWIN"):
+                    assert os.environ[f"CARGO_TARGET_{target}_LINKER"] == "/usr/bin/cc"
                 Path(os.environ["FAKE_CARGO_ARGUMENTS"]).write_text(json.dumps(sys.argv[1:]))
                 target = sys.argv[sys.argv.index("--target") + 1] if "--target" in sys.argv else os.environ["CARGO_BUILD_TARGET"]
                 output = Path(os.environ["CARGO_TARGET_DIR"]) / target / "release"

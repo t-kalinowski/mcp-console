@@ -37,6 +37,7 @@ CI runs core checks and all capability-applicable transcript modes on macOS and 
 
 macOS Cargo builds automatically prepare the pinned sandbox companion using an isolated checkout under the target directory.
 Install development checkouts with `uv tool install --reinstall .`; bare `cargo install` does not install the companion bundle.
+Native Cargo bundles require the default shared build/target layout; a separate intermediate build directory is unsupported for running the Cargo output.
 Wheel packaging requires exclusive use of its source checkout; use separate checkouts for concurrent builds.
 See `RELEASE.md` for prerequisites, bundle layout, build caches, and the explicit source-checkout override.
 Run commands from the repository root:
