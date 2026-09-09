@@ -105,7 +105,8 @@ The client does not communicate directly with a relay, worker, or resolver.
 ### Sandbox launcher and private runner
 
 The private `mcp-console-sandbox` executable contains the extracted native sandbox implementation and is pinned by source revision in `sandbox-runner.json`.
-The build prepares the pinned source in a dedicated checkout under Cargo's target prefix, strips the distributed runner, and records the runner, license, and notice digests.
+The Python packaging backend prepares the pinned source in a dedicated checkout under `target`, strips the distributed runner, and records companion digests before invoking the application's Cargo build.
+Cargo consumes that prepared bundle; source installations invoke the runner's Cargo build on each run and reuse its normal build intermediates.
 macOS and Linux wheels install a relocatable bundle with `bin/mcp-console`, `libexec/mcp-console-sandbox`, and notices under `share/licenses/mcp-console`.
 Linux bundles also include `libexec/bwrap` and its license.
 The launcher resolves these companions relative to its canonical executable path and verifies their SHA-256 digests with a bounded buffer on every sandbox launch.

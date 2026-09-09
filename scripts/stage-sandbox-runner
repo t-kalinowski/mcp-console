@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import fcntl
 import hashlib
 import json
 import os
@@ -10,7 +9,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -20,12 +18,6 @@ TARGETS = (
     "x86_64-unknown-linux-gnu",
     "aarch64-unknown-linux-gnu",
 )
-
-
-def bundle_files(target: str) -> tuple[str, ...]:
-    return ("mcp-console-sandbox", "LICENSE", "NOTICE") + (
-        ("bwrap", "bubblewrap-COPYING") if "linux" in target else ()
-    )
 
 
 def fail(message: str) -> None:
@@ -53,12 +45,6 @@ def main() -> None:
     )
     parser.add_argument("--target", choices=TARGETS)
     parser.add_argument("--github-output", type=Path)
-    parser.add_argument(
-        "--cache-dir", type=Path, default=ROOT / "target/sandbox-runner-cache"
-    )
-    parser.add_argument(
-        "--output-dir", type=Path, default=ROOT / "target/sandbox-runner"
-    )
     args = parser.parse_args()
     pin = json.loads((ROOT / "sandbox-runner.json").read_text(encoding="utf-8"))
     if not re.fullmatch(r"[0-9a-f]{40}", pin["commit"]):
@@ -71,75 +57,25 @@ def main() -> None:
     if sys.platform not in {"darwin", "linux"}:
         fail(f"building private runner artifacts is unsupported on {sys.platform}")
 
-    target = args.target
-    if target is None:
-        target = subprocess.run(
-            [
-                "rustup",
-                "run",
-                "--install",
-                pin["rust_toolchain"],
-                "rustc",
-                "--print",
-                "host-tuple",
-            ],
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
-        if target not in TARGETS:
-            fail(f"unsupported native target: {target}")
-    key = hashlib.sha256(
-        (ROOT / "sandbox-runner.json").read_bytes() + Path(__file__).read_bytes()
-    ).hexdigest()
-    artifact = args.cache_dir / "artifacts" / key / target
-    args.cache_dir.mkdir(parents=True, exist_ok=True)
-    # Multiple Cargo profiles can request the same source build concurrently.
-    with (args.cache_dir / f"{pin['commit']}.lock").open("w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        checkout = args.checkout
-        if checkout is not None:
-            validate_checkout(checkout, pin)
-        if not artifact.exists():
-            if checkout is None:
-                checkout = args.cache_dir / pin["commit"]
-                checkout.mkdir(exist_ok=True)
-                if not (checkout / ".git").exists():
-                    git_output(checkout, "init")
-                if not (checkout / "codex-rs/Cargo.toml").exists():
-                    git_output(
-                        checkout,
-                        "fetch",
-                        "--depth",
-                        "1",
-                        f"https://github.com/{pin['repository']}.git",
-                        pin["commit"],
-                    )
-                    git_output(checkout, "checkout", "--detach", pin["commit"])
-                validate_checkout(checkout, pin)
-            artifact.parent.mkdir(parents=True, exist_ok=True)
-            with tempfile.TemporaryDirectory(dir=artifact.parent) as temporary:
-                staging = Path(temporary) / "bundle"
-                build(checkout.resolve(), staging, target, pin)
-                staging.rename(artifact)
-        metadata = json.loads((artifact / "build.json").read_text())
-        if (
-            metadata["source_revision"] != pin["commit"]
-            or metadata["target"] != target
-            or any(
-                metadata["sha256"][name]
-                != hashlib.sha256((artifact / name).read_bytes()).hexdigest()
-                for name in bundle_files(target)
+    checkout = args.checkout
+    if checkout is None:
+        checkout = ROOT / "target/sandbox-runner-cache" / pin["commit"]
+        checkout.mkdir(parents=True, exist_ok=True)
+        if not (checkout / ".git").exists():
+            git_output(checkout, "init")
+        if not (checkout / "codex-rs/Cargo.toml").exists():
+            git_output(
+                checkout,
+                "fetch",
+                "--depth",
+                "1",
+                f"https://github.com/{pin['repository']}.git",
+                pin["commit"],
             )
-        ):
-            fail(f"cached runner bundle does not match its build metadata: {artifact}")
-        if args.output_dir.exists():
-            shutil.rmtree(args.output_dir)
-        shutil.copytree(artifact, args.output_dir)
-
-
-def validate_checkout(checkout: Path, pin: dict[str, object]) -> None:
-    if not (checkout / "codex-rs/mcp-console-sandbox/Cargo.toml").is_file():
+            git_output(checkout, "checkout", "--detach", pin["commit"])
+    checkout = checkout.resolve()
+    workspace = checkout / "codex-rs"
+    if not (workspace / "mcp-console-sandbox/Cargo.toml").is_file():
         fail(f"not a sandbox-runner source checkout: {checkout}")
     head = git_output(checkout, "rev-parse", "HEAD")
     if head != pin["commit"]:
@@ -147,97 +83,81 @@ def validate_checkout(checkout: Path, pin: dict[str, object]) -> None:
     if git_output(checkout, "status", "--porcelain", "--untracked-files=all"):
         fail("source checkout is not clean")
 
+    toolchain = ["rustup", "run", "--install", pin["rust_toolchain"]]
+    target = args.target
+    if target is None:
+        target = subprocess.check_output(
+            [*toolchain, "rustc", "--print", "host-tuple"],
+            cwd=workspace,
+            text=True,
+        ).strip()
+        if target not in TARGETS:
+            fail(f"unsupported native target: {target}")
 
-def build(checkout: Path, output: Path, target: str, pin: dict[str, object]) -> None:
-    workspace = checkout / "codex-rs"
-    # Cargo discovers configuration from its cwd's ancestors and CARGO_HOME,
-    # independently of --manifest-path. Start at / with a private Cargo home
-    # and load only the pinned workspace configuration. Nothing is written to /.
-    for name in ("config", "config.toml"):
-        if (Path("/.cargo") / name).exists():
-            fail(f"cannot isolate runner build from /.cargo/{name}")
-    cargo_home = workspace / "target/cargo-home"
-    cargo_home.mkdir(parents=True, exist_ok=True)
-    toolchain = ["rustup", "run", "--install", str(pin["rust_toolchain"])]
+    # Invoke Cargo on every source build. It owns dependency/configuration
+    # freshness, including native compiler flags; there is no local cache of
+    # finished executables that bypasses those checks.
     environment = os.environ.copy()
-    # Build independently of the outer Cargo's jobserver, compiler, and Clippy
-    # wrapper. rustup must select the runner's pinned compiler and Cargo.
-    # Use that compiler's default deployment target, regardless of the outer
-    # application's setting, so the cached runner keeps the same minimum OS.
-    for name in (
-        "CARGO_MAKEFLAGS",
-        "MAKEFLAGS",
-        "MFLAGS",
-        "RUSTC",
-        "RUSTDOC",
-        "RUSTC_WRAPPER",
-        "RUSTC_WORKSPACE_WRAPPER",
-        "RUSTFLAGS",
-        "CARGO_ENCODED_RUSTFLAGS",
-        "CLIPPY_ARGS",
-        "MACOSX_DEPLOYMENT_TARGET",
-    ):
-        environment.pop(name, None)
-    # Cargo also accepts configuration-form compiler and profile overrides.
-    # Keep the pinned build configuration independent of all three namespaces.
-    for name in list(environment):
-        if name.startswith(("CARGO_BUILD_", "CARGO_PROFILE_", "CARGO_TARGET_")):
-            del environment[name]
     environment["CARGO_TARGET_DIR"] = str(workspace / "target")
-    environment["CARGO_HOME"] = str(cargo_home)
-    # Both the runner and host build dependencies use the system linker,
-    # independently of a caller's cc wrapper on PATH.
-    for native_target in TARGETS:
-        triple = native_target.upper().replace("-", "_")
-        environment[f"CARGO_TARGET_{triple}_LINKER"] = "/usr/bin/cc"
-    command = [
-        *toolchain,
-        "cargo",
-        "build",
-        "--manifest-path",
-        str(workspace / "Cargo.toml"),
-        "--config",
-        str(workspace / ".cargo/config.toml"),
-        "--locked",
-        "--release",
-        "-p",
-        "codex-mcp-console-sandbox",
-        "--bin",
-        "mcp-console-sandbox",
-        *(["-p", "codex-bwrap", "--bin", "bwrap"] if "linux" in target else []),
-        "--target",
-        target,
-    ]
-    result = subprocess.run(command, cwd="/", env=environment, check=False)
-    if result.returncode != 0:
-        fail(f"runner build failed with status {result.returncode}")
-    runner = workspace / "target" / target / "release" / "mcp-console-sandbox"
-    output.mkdir(parents=True, exist_ok=True)
-    executables = ("mcp-console-sandbox", "bwrap") if "linux" in target else ("mcp-console-sandbox",)
-    for name in executables:
-        staged = output / name
-        shutil.copyfile(runner.with_name(name), staged)
+    subprocess.run(
+        [
+            *toolchain,
+            "cargo",
+            "build",
+            "--locked",
+            "--release",
+            "-p",
+            "codex-mcp-console-sandbox",
+            "--bin",
+            "mcp-console-sandbox",
+            *(["-p", "codex-bwrap", "--bin", "bwrap"] if "linux" in target else []),
+            "--target",
+            target,
+        ],
+        cwd=workspace,
+        env=environment,
+        check=True,
+    )
+    binaries = workspace / "target" / target / "release"
+    data = ROOT / "wheel-data/data"
+    for name in ("libexec", "share"):
+        if (data / name).exists():
+            shutil.rmtree(data / name)
+    libexec = data / "libexec"
+    licenses = data / "share/licenses/mcp-console"
+    libexec.mkdir(parents=True)
+    licenses.mkdir(parents=True)
+    artifacts = []
+    for name in ("mcp-console-sandbox", *(["bwrap"] if "linux" in target else [])):
+        staged = libexec / name
+        shutil.copyfile(binaries / name, staged)
         staged.chmod(0o755)
-        # Preserve the symbolicateable original in the nested Cargo build tree.
-        # Strip distributed artifacts before recording their digests.
-        strip = ["strip", "--strip-unneeded"] if "linux" in target else ["xcrun", "strip", "-S", "-x"]
+        # Preserve the symbolicateable original in Cargo's build directory.
+        strip = (
+            ["strip", "--strip-unneeded"]
+            if "linux" in target
+            else ["xcrun", "strip", "-S", "-x"]
+        )
         subprocess.run([*strip, str(staged)], check=True)
-    for name in ("LICENSE", "NOTICE"):
-        destination = output / name
-        shutil.copyfile(checkout / name, destination)
-        destination.chmod(0o644)
+        artifacts.append(staged)
+    notices = [(checkout / name, name) for name in ("LICENSE", "NOTICE")]
     if "linux" in target:
-        destination = output / "bubblewrap-COPYING"
-        shutil.copyfile(workspace / "vendor/bubblewrap/COPYING", destination)
+        notices.append((workspace / "vendor/bubblewrap/COPYING", "bubblewrap-COPYING"))
+    for source, name in notices:
+        destination = licenses / name
+        shutil.copyfile(source, destination)
         destination.chmod(0o644)
-    (output / "build.json").write_text(
+        artifacts.append(destination)
+    build_record = ROOT / "target/sandbox-runner-build.json"
+    build_record.parent.mkdir(exist_ok=True)
+    build_record.write_text(
         json.dumps(
             {
-                "source_revision": pin["commit"],
+                "source_revision": head,
                 "target": target,
-                "sha256": {
-                    name: hashlib.sha256((output / name).read_bytes()).hexdigest()
-                    for name in bundle_files(target)
+                "artifacts": {
+                    path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+                    for path in artifacts
                 },
             },
             indent=2,

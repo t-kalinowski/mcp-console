@@ -37,10 +37,12 @@ Other Unix operating systems are not supported build or runtime targets; shared 
 Retain platform conditionals for modules that use OS-specific APIs and for selecting different implementations or unsupported-platform stubs; avoid redundant gates on shared code.
 CI runs core checks and all capability-applicable transcript modes on macOS and Linux.
 
-macOS and Linux Cargo builds automatically prepare the pinned sandbox companion using an isolated checkout under the target directory.
+macOS and Linux uv source installations prepare the pinned sandbox companion before invoking the application's Cargo build, using a dedicated checkout under `target`.
+Direct Cargo or Maturin builds require `scripts/stage-sandbox-runner` first; `scripts/check` performs this preparation.
 Install development checkouts with `uv tool install --reinstall .`; bare `cargo install` does not install the companion bundle.
 Native Cargo bundles require the default shared build/target layout; a separate intermediate build directory is unsupported for running the Cargo output.
-Wheel packaging requires exclusive use of its source checkout; use separate checkouts for concurrent builds.
+The Python packaging backend holds a checkout-local lock from staging through wheel creation.
+Direct staging, Cargo, and Maturin commands require exclusive use of their source checkout.
 See `RELEASE.md` for prerequisites, bundle layout, build caches, and the explicit source-checkout override.
 Run commands from the repository root:
 
@@ -129,7 +131,7 @@ Keep these invariants intact:
 - `src/resolver.rs`, `src/resolver/` — retained host environments, direct Python-version selection, validation, platform implementations, and resolver process-group lifecycle.
 - `src/resolver/programs/` — compile-time R programs for DuckDB extension preparation, R-library resolution, and `uv` discovery.
 - `src/sandbox/runner.rs`, `src/sandbox/policy_extensions.sbpl`, `src/process_descriptors.rs` — one-shot runner setup, macOS policy additions, and inherited-descriptor boundary.
-- `sandbox-runner.json`, `scripts/stage-sandbox-runner`, `build.rs`, `src/sandbox/installation.rs` — pinned source preparation, companion bundle packaging, and streaming artifact verification.
+- `sandbox-runner.json`, `scripts/stage-sandbox-runner`, `build_backend.py`, `build.rs`, `src/sandbox/installation.rs` — pinned source preparation, companion bundle packaging, and streaming artifact verification.
 
 ### Tests and development scripts
 

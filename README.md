@@ -142,9 +142,9 @@ Render only code you trust.
 
 Install the current checkout with `uv tool install --reinstall .`.
 Source builds require Python 3, Git, and rustup in addition to the Rust compiler and native build tools.
-The first build fetches and compiles the pinned sandbox runner automatically, using a dedicated checkout under Cargo's target directory.
-The runner has its own Cargo configuration and dependency cache; rustup installs the pinned toolchain if needed.
-Later builds reuse the completed runner while its pin, build script, and target are unchanged.
+The first uv source installation fetches and compiles the pinned sandbox runner in a dedicated checkout under `target`.
+Later installations invoke Cargo again, reusing its build intermediates and checking for changed build inputs.
+The packaging backend prepares the companion before building the main executable; rustup installs the pinned toolchain if needed.
 It does not use another working checkout.
 
 Run development commands from the repository root:
@@ -160,7 +160,7 @@ scripts/test --update BOUNDARY/SUITE[::CASE]
 The installation contains `bin/mcp-console`, a private runner under `libexec`, and its license notices under `share/licenses/mcp-console`.
 Linux installations also include `libexec/bwrap` and its license.
 Move the whole bundle to relocate it; copying only `mcp-console` leaves the runner behind.
-`cargo build` prepares a runnable development bundle under `target` when Cargo uses its default shared build/target layout.
+After `scripts/stage-sandbox-runner`, `cargo build` prepares a runnable development bundle under `target` when Cargo uses its default shared build/target layout.
 For this native bundle, use `CARGO_TARGET_DIR` or `--target-dir` to change the build location; a separate intermediate directory (`CARGO_BUILD_BUILD_DIR` or `build.build-dir`) is unsupported.
 `cargo install` installs only the main binary and is not a complete installation.
 [RELEASE.md](RELEASE.md) describes the bundle and build caches.

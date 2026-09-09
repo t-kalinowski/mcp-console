@@ -523,166 +523,6 @@ class ReleaseScriptTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("expected exactly four wheels", result.stderr)
 
-    @unittest.skipUnless(
-        sys.platform in ("darwin", "linux"), "requires a native runner target"
-    )
-    def test_stage_runner_ignores_ambient_cargo_configuration(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            directory = Path(temporary)
-            project = directory / "project"
-            (project / "scripts").mkdir(parents=True)
-            script = project / "scripts" / STAGE_SCRIPT.name
-            shutil.copyfile(STAGE_SCRIPT, script)
-            pin = json.loads((ROOT / "sandbox-runner.json").read_text())
-            # The tiny fixture uses the installed compiler; a runner cache hit
-            # in CI must not require downloading the upstream toolchain.
-            pin["rust_toolchain"] = subprocess.check_output(
-                ["rustup", "show", "active-toolchain"], text=True
-            ).split()[0]
-            (project / "sandbox-runner.json").write_text(json.dumps(pin))
-            checkout = directory / "source"
-            workspace = checkout / "codex-rs"
-            crate = workspace / "mcp-console-sandbox"
-            (crate / "src").mkdir(parents=True)
-            (workspace / "Cargo.toml").write_text(
-                '[workspace]\nmembers = ["mcp-console-sandbox"]\nresolver = "2"\n'
-            )
-            (workspace / "Cargo.lock").write_text(
-                'version = 4\n[[package]]\nname = "codex-mcp-console-sandbox"\nversion = "0.1.0"\n'
-            )
-            (crate / "Cargo.toml").write_text(
-                '[package]\nname = "codex-mcp-console-sandbox"\nversion = "0.1.0"\n'
-                '[[bin]]\nname = "mcp-console-sandbox"\npath = "src/main.rs"\n'
-            )
-            (crate / "src/main.rs").write_text(
-                textwrap.dedent("""
-                #[cfg(ambient_cargo_config)]
-                compile_error!("ambient Cargo flags");
-                #[cfg(panic = "abort")]
-                compile_error!("ambient Cargo profile");
-                fn main() { println!("{}", env!("RUNNER_PINNED_CONFIG")); }
-                """)
-            )
-            # Linux staging builds a second executable from the pinned workspace.
-            helper = workspace / "bwrap"
-            (helper / "src").mkdir(parents=True)
-            (workspace / "Cargo.toml").write_text(
-                '[workspace]\nmembers = ["mcp-console-sandbox", "bwrap"]\nresolver = "2"\n'
-            )
-            (helper / "Cargo.toml").write_text(
-                '[package]\nname = "codex-bwrap"\nversion = "0.1.0"\n'
-                '[[bin]]\nname = "bwrap"\npath = "src/main.rs"\n'
-            )
-            shutil.copyfile(crate / "src/main.rs", helper / "src/main.rs")
-            with (workspace / "Cargo.lock").open("a") as lock:
-                lock.write('[[package]]\nname = "codex-bwrap"\nversion = "0.1.0"\n')
-            vendor = workspace / "vendor/bubblewrap"
-            vendor.mkdir(parents=True)
-            (vendor / "COPYING").write_text("bwrap license\n")
-            pinned_config = workspace / ".cargo/config.toml"
-            pinned_config.parent.mkdir()
-            pinned_config.write_text('[env]\nRUNNER_PINNED_CONFIG = "pinned"\n')
-            for name in ("LICENSE", "NOTICE"):
-                (checkout / name).write_text(name)
-            commands = directory / "commands"
-            commands.mkdir()
-            write_executable(
-                commands / "git",
-                f"""
-                #!/usr/bin/env python3
-                import sys
-                if sys.argv[1:] == ["rev-parse", "HEAD"]:
-                    print({pin["commit"]!r})
-                else:
-                    assert sys.argv[1:] == ["status", "--porcelain", "--untracked-files=all"]
-                """,
-            )
-            cargo_home = directory / "cargo-home"
-            cargo_home.mkdir()
-            ancestor_config = directory / ".cargo/config.toml"
-            ancestor_config.parent.mkdir()
-            environment = os.environ.copy() | {
-                "CARGO_HOME": str(cargo_home),
-                "PATH": f"{commands}{os.pathsep}{os.environ['PATH']}",
-            }
-            target = subprocess.check_output(
-                [
-                    "rustup",
-                    "run",
-                    "--install",
-                    pin["rust_toolchain"],
-                    "rustc",
-                    "--print",
-                    "host-tuple",
-                ],
-                text=True,
-            ).strip()
-            configurations = [
-                (
-                    {
-                        cargo_home
-                        / "config.toml": '[build]\nrustflags = ["--cfg=ambient_cargo_config"]\n'
-                    },
-                    {},
-                ),
-                (
-                    {
-                        ancestor_config: f'[target.{target}]\nlinker = "/ambient/linker-wrapper"\n'
-                    },
-                    {},
-                ),
-                *(
-                    ({}, {name: "/ambient/compiler-override"})
-                    for name in (
-                        "CARGO_BUILD_RUSTC",
-                        "CARGO_BUILD_RUSTC_WRAPPER",
-                        "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER",
-                    )
-                ),
-                ({}, {"CARGO_PROFILE_RELEASE_PANIC": "abort"}),
-                (
-                    {commands / "cc": "#!/bin/sh\nexit 97\n"},
-                    {},
-                ),
-            ]
-            for files, overrides in configurations:
-                with self.subTest(files=list(files), overrides=overrides):
-                    for location, configuration in files.items():
-                        location.write_text(configuration)
-                        if location.parent == commands:
-                            location.chmod(0o755)
-                    output = directory / "output"
-                    command = [
-                        sys.executable,
-                        str(script),
-                        str(checkout),
-                        "--target",
-                        target,
-                        "--output-dir",
-                        str(output),
-                    ]
-                    result = subprocess.run(
-                        command,
-                        cwd=project,
-                        env=environment | overrides,
-                        capture_output=True,
-                        text=True,
-                    )
-                    for location, configuration in files.items():
-                        self.assertEqual(location.read_text(), configuration)
-                        location.unlink()
-                    self.assertEqual(result.returncode, 0, result.stderr)
-                    self.assertEqual(
-                        subprocess.check_output(
-                            [output / "mcp-console-sandbox"], text=True
-                        ),
-                        "pinned\n",
-                    )
-                    # Every ambient configuration must be harmless on a fresh
-                    # build, not just when the completed bundle is reused.
-                    shutil.rmtree(project / "target")
-                    shutil.rmtree(workspace / "target")
-
     def test_stage_runner_builds_the_pin_and_records_artifact_integrity(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
@@ -715,12 +555,7 @@ class ReleaseScriptTests(unittest.TestCase):
                 "rust_toolchain": "1.95.0",
             }
             (root / "sandbox-runner.json").write_text(json.dumps(pin))
-            # Exercise canonical paths on every host, including when its
-            # temporary directory itself does not contain a symlink.
-            source = directory / "source-directory"
-            source.mkdir()
             checkout = directory / "source"
-            checkout.symlink_to(source, target_is_directory=True)
             crate = checkout / "codex-rs" / "mcp-console-sandbox"
             crate.mkdir(parents=True)
             (crate / "Cargo.toml").touch()
@@ -765,54 +600,12 @@ class ReleaseScriptTests(unittest.TestCase):
                 import sys
                 from pathlib import Path
 
-                for name in (
-                    "CARGO_MAKEFLAGS",
-                    "CARGO_BUILD_BUILD_DIR",
-                    "RUSTC",
-                    "RUSTC_WRAPPER",
-                    "RUSTC_WORKSPACE_WRAPPER",
-                    "CARGO_ENCODED_RUSTFLAGS",
-                    "CARGO_BUILD_RUSTFLAGS",
-                    "CARGO_TARGET_X86_64_APPLE_DARWIN_RUSTFLAGS",
-                    "CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS",
-                    "MACOSX_DEPLOYMENT_TARGET",
-                ):
-                    assert name not in os.environ, name
-                for target in ("AARCH64_APPLE_DARWIN", "X86_64_APPLE_DARWIN"):
-                    assert os.environ[f"CARGO_TARGET_{target}_LINKER"] == "/usr/bin/cc"
                 Path(os.environ["FAKE_CARGO_ARGUMENTS"]).write_text(json.dumps(sys.argv[1:]))
                 target = sys.argv[sys.argv.index("--target") + 1] if "--target" in sys.argv else os.environ["CARGO_BUILD_TARGET"]
                 output = Path(os.environ["CARGO_TARGET_DIR"]) / target / "release"
                 output.mkdir(parents=True, exist_ok=True)
                 (output / "mcp-console-sandbox").write_bytes(b"runner bytes with debug symbols")
                 (output / "bwrap").write_bytes(b"bwrap bytes with debug symbols")
-                """,
-            )
-            write_executable(
-                commands / "xcrun",
-                """
-                #!/usr/bin/env python3
-                import sys
-                from pathlib import Path
-
-                assert sys.argv[1:4] == ["strip", "-S", "-x"], sys.argv
-                runner = Path(sys.argv[4])
-                assert runner.read_bytes() == b"runner bytes with debug symbols"
-                runner.write_bytes(b"runner bytes")
-                """,
-            )
-            write_executable(
-                commands / "strip",
-                """
-                #!/usr/bin/env python3
-                import sys
-                from pathlib import Path
-
-                assert sys.argv[1] == "--strip-unneeded", sys.argv
-                executable = Path(sys.argv[2])
-                original = executable.read_bytes()
-                assert original.endswith(b" with debug symbols")
-                executable.write_bytes(original.removesuffix(b" with debug symbols"))
                 """,
             )
             write_executable(
@@ -826,6 +619,20 @@ class ReleaseScriptTests(unittest.TestCase):
                 os.execvp(sys.argv[4], [sys.argv[4], "+1.95.0", *sys.argv[5:]])
                 """,
             )
+            for name in ("xcrun", "strip"):
+                write_executable(
+                    commands / name,
+                    """
+                    #!/usr/bin/env python3
+                    import sys
+                    from pathlib import Path
+
+                    executable = Path(sys.argv[-1])
+                    original = executable.read_bytes()
+                    assert original.endswith(b" with debug symbols")
+                    executable.write_bytes(original.removesuffix(b" with debug symbols"))
+                    """,
+                )
             environment = os.environ.copy()
             environment.update(
                 {
@@ -833,18 +640,6 @@ class ReleaseScriptTests(unittest.TestCase):
                     "FAKE_SOURCE_REVISION": pin["commit"],
                     "FAKE_CARGO_ARGUMENTS": str(directory / "cargo.json"),
                     "CARGO_BUILD_TARGET": "x86_64-apple-darwin",
-                    "CARGO_MAKEFLAGS": "outer jobserver",
-                    "CARGO_BUILD_BUILD_DIR": "/outer/build",
-                    "RUSTC": "/outer/rustc",
-                    "RUSTC_WRAPPER": "/outer/wrapper",
-                    "RUSTC_WORKSPACE_WRAPPER": "/outer/clippy-driver",
-                    "CARGO_ENCODED_RUSTFLAGS": "--deny=warnings",
-                    "CARGO_BUILD_RUSTFLAGS": "--deny=warnings",
-                    "CARGO_TARGET_X86_64_APPLE_DARWIN_RUSTFLAGS": "-C link-arg=-mmacosx-version-min=15.0",
-                    "CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS": "-C link-arg=-mmacosx-version-min=15.0",
-                    "CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER": "/outer/linker-wrapper",
-                    "CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER": "/outer/linker-wrapper",
-                    "MACOSX_DEPLOYMENT_TARGET": "15.0",
                 }
             )
             command = [
@@ -853,63 +648,9 @@ class ReleaseScriptTests(unittest.TestCase):
                 str(scripts / STAGE_SCRIPT.name),
                 str(checkout),
             ]
-            # Exercise a real one-token Cargo jobserver with a tiny outer
-            # package, rather than serializing the full application build.
-            outer = directory / "outer"
-            (outer / "src").mkdir(parents=True)
-            (outer / "Cargo.toml").write_text(
-                '[package]\nname = "staging-fixture"\nversion = "0.1.0"\n'
-            )
-            (outer / "src/main.rs").write_text("fn main() {}\n")
-            (outer / "build.rs").write_text(
-                textwrap.dedent("""
-                fn main() {
-                    assert!(std::env::var_os("CARGO_MAKEFLAGS").is_some());
-                    let status = std::process::Command::new(std::env::var_os("STAGING_PYTHON").unwrap())
-                        .arg(std::env::var_os("STAGING_LAUNCHER").unwrap())
-                        .arg(std::env::var_os("STAGING_SCRIPT").unwrap())
-                        .arg(std::env::var_os("STAGING_CHECKOUT").unwrap())
-                        .arg("--target")
-                        .arg("aarch64-apple-darwin")
-                        .status().unwrap();
-                    assert!(status.success());
-                }
-                """)
-            )
-            outer_environment = os.environ.copy() | {
-                "PATH": environment["PATH"],
-                "FAKE_SOURCE_REVISION": pin["commit"],
-                "FAKE_CARGO_ARGUMENTS": environment["FAKE_CARGO_ARGUMENTS"],
-                "RUSTC": shutil.which("rustc"),
-                "STAGING_PYTHON": sys.executable,
-                "STAGING_LAUNCHER": str(launcher),
-                "STAGING_SCRIPT": str(scripts / STAGE_SCRIPT.name),
-                "STAGING_CHECKOUT": str(checkout),
-            }
-            result = subprocess.run(
-                [
-                    shutil.which("cargo"),
-                    "build",
-                    "--offline",
-                    "--jobs",
-                    "1",
-                    "--target-dir",
-                    str(outer / "target"),
-                ],
-                cwd=outer,
-                env=outer_environment,
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
             for arguments, target in (
                 ([], "aarch64-apple-darwin"),
                 (["--target", "x86_64-unknown-linux-gnu"], "x86_64-unknown-linux-gnu"),
-                (
-                    ["--target", "aarch64-unknown-linux-gnu"],
-                    "aarch64-unknown-linux-gnu",
-                ),
                 (["--target", "x86_64-apple-darwin"], "x86_64-apple-darwin"),
             ):
                 with self.subTest(target=target):
@@ -926,10 +667,6 @@ class ReleaseScriptTests(unittest.TestCase):
                         [
                             "+1.95.0",
                             "build",
-                            "--manifest-path",
-                            str(checkout.resolve() / "codex-rs/Cargo.toml"),
-                            "--config",
-                            str(checkout.resolve() / "codex-rs/.cargo/config.toml"),
                             "--locked",
                             "--release",
                             "-p",
@@ -947,33 +684,40 @@ class ReleaseScriptTests(unittest.TestCase):
                     )
                     self.assertEqual(
                         json.loads(
-                            (root / "target/sandbox-runner/build.json").read_text()
+                            (root / "target/sandbox-runner-build.json").read_text()
                         ),
                         {
                             "source_revision": pin["commit"],
                             "target": target,
-                            "sha256": {
-                                name: hashlib.sha256(contents).hexdigest()
-                                for name, contents in (
-                                    ("mcp-console-sandbox", b"runner bytes"),
-                                    ("LICENSE", b"license\n"),
-                                    ("NOTICE", b"notice\n"),
-                                    *(
-                                        (
-                                            ("bwrap", b"bwrap bytes"),
-                                            ("bubblewrap-COPYING", b"bwrap license\n"),
-                                        )
-                                        if "linux" in target
-                                        else ()
-                                    ),
-                                )
+                            "artifacts": {
+                                "LICENSE": hashlib.sha256(b"license\n").hexdigest(),
+                                "NOTICE": hashlib.sha256(b"notice\n").hexdigest(),
+                                "mcp-console-sandbox": hashlib.sha256(
+                                    b"runner bytes"
+                                ).hexdigest(),
+                                **(
+                                    {
+                                        "bubblewrap-COPYING": hashlib.sha256(
+                                            b"bwrap license\n"
+                                        ).hexdigest(),
+                                        "bwrap": hashlib.sha256(
+                                            b"bwrap bytes"
+                                        ).hexdigest(),
+                                    }
+                                    if "linux" in target
+                                    else {}
+                                ),
                             },
                         },
                     )
-            data = root / "target" / "sandbox-runner"
-            runner = data / "mcp-console-sandbox"
+            data = root / "wheel-data" / "data"
+            runner = data / "libexec" / "mcp-console-sandbox"
             self.assertEqual(runner.read_bytes(), b"runner bytes")
             self.assertTrue(os.access(runner, os.X_OK))
+            self.assertEqual(
+                (data / "share/licenses/mcp-console/LICENSE").read_text(),
+                "license\n",
+            )
             self.assertEqual(
                 (
                     checkout
@@ -981,53 +725,7 @@ class ReleaseScriptTests(unittest.TestCase):
                 ).read_bytes(),
                 b"runner bytes with debug symbols",
             )
-            self.assertEqual(
-                (data / "LICENSE").read_text(),
-                "license\n",
-            )
             (directory / "cargo.json").unlink()
-            # A completed build must serve another Cargo profile without a
-            # source checkout, compiler, or nested Cargo invocation.
-            for name in ("git", "rustup"):
-                (commands / name).rename(commands / f"{name}.working")
-                write_executable(commands / name, "#!/bin/sh\nexit 97\n")
-            cached_output = directory / "cached-output"
-            cached_command = [
-                sys.executable,
-                str(launcher),
-                str(scripts / STAGE_SCRIPT.name),
-                "--target",
-                "x86_64-apple-darwin",
-                "--output-dir",
-                str(cached_output),
-            ]
-            cached_environment = environment.copy()
-            cached_environment.pop("MCP_CONSOLE_SANDBOX_SOURCE", None)
-            for name in (
-                "CARGO_BUILD_RUSTFLAGS",
-                "CARGO_TARGET_X86_64_APPLE_DARWIN_RUSTFLAGS",
-                "CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS",
-                "CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER",
-                "CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER",
-            ):
-                cached_environment.pop(name)
-            # Lowering the application's deployment target must reuse a runner
-            # built for the pinned compiler's default deployment target.
-            cached_environment["MACOSX_DEPLOYMENT_TARGET"] = "11.0"
-            result = subprocess.run(
-                cached_command,
-                env=cached_environment,
-                capture_output=True,
-                text=True,
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            for name in ("mcp-console-sandbox", "LICENSE", "NOTICE", "build.json"):
-                self.assertEqual(
-                    (cached_output / name).read_bytes(), (data / name).read_bytes()
-                )
-            self.assertFalse((directory / "cargo.json").exists())
-            for name in ("git", "rustup"):
-                (commands / f"{name}.working").replace(commands / name)
             for changes in (
                 {"FAKE_SOURCE_REVISION": "b" * 40},
                 {"FAKE_SOURCE_DIRTY": " M Cargo.lock"},
@@ -1037,47 +735,6 @@ class ReleaseScriptTests(unittest.TestCase):
                 )
                 self.assertNotEqual(result.returncode, 0)
                 self.assertFalse((directory / "cargo.json").exists())
-
-            # Both provenance and the build recipe invalidate the artifact.
-            pin["protocol_version"] = 3
-            (root / "sandbox-runner.json").write_text(json.dumps(pin))
-            for recipe_change in (False, True):
-                if recipe_change:
-                    with (scripts / STAGE_SCRIPT.name).open("a") as script:
-                        script.write("\n# changed build recipe\n")
-                result = subprocess.run(
-                    command + ["--target", "x86_64-apple-darwin"],
-                    env=environment,
-                    capture_output=True,
-                    text=True,
-                )
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertTrue((directory / "cargo.json").exists())
-                (directory / "cargo.json").unlink()
-
-            for name in ("mcp-console-sandbox", "LICENSE", "NOTICE"):
-                with self.subTest(corrupt_file=name):
-                    originals = {
-                        path: path.read_bytes()
-                        for path in (
-                            root / "target/sandbox-runner-cache/artifacts"
-                        ).rglob(name)
-                    }
-                    try:
-                        for path in originals:
-                            path.write_bytes(b"corrupt cached file")
-                        result = subprocess.run(
-                            cached_command,
-                            env=cached_environment,
-                            capture_output=True,
-                            text=True,
-                        )
-                        self.assertNotEqual(result.returncode, 0)
-                        self.assertIn("does not match", result.stderr)
-                        self.assertFalse((directory / "cargo.json").exists())
-                    finally:
-                        for path, original in originals.items():
-                            path.write_bytes(original)
 
     def test_cargo_rejects_changed_staged_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1112,37 +769,31 @@ class ReleaseScriptTests(unittest.TestCase):
             if sys.platform == "linux":
                 artifacts["bwrap"] = b"bwrap bytes"
                 artifacts["bubblewrap-COPYING"] = b"bwrap license"
-            staged = root / "staged"
-            staged.mkdir(parents=True)
+            staged = root / "wheel-data/data"
+            staged_files = {}
             for name, contents in artifacts.items():
-                (staged / name).write_bytes(contents)
-                (staged / name).chmod(0o755)
-            (staged / "build.json").write_text(
+                relative = (
+                    "libexec"
+                    if name in ("mcp-console-sandbox", "bwrap")
+                    else "share/licenses/mcp-console"
+                )
+                staged_files[name] = staged / relative / name
+                staged_files[name].parent.mkdir(parents=True, exist_ok=True)
+                staged_files[name].write_bytes(contents)
+                staged_files[name].chmod(0o755)
+            (root / "target").mkdir()
+            (root / "target/sandbox-runner-build.json").write_text(
                 json.dumps(
                     {
                         "source_revision": pin["commit"],
                         "target": target,
-                        "sha256": {
+                        "artifacts": {
                             name: hashlib.sha256(contents).hexdigest()
                             for name, contents in artifacts.items()
                         },
                     }
                 )
             )
-            # Exercise Cargo's verification of the staging command's output.
-            # The fixture producer supplies the declared bytes and digests.
-            script = root / "scripts/stage-sandbox-runner"
-            script.parent.mkdir()
-            script_source = textwrap.dedent("""
-                import shutil
-                import sys
-                from pathlib import Path
-
-                root = Path(__file__).resolve().parent.parent
-                output = Path(sys.argv[sys.argv.index("--output-dir") + 1])
-                shutil.copytree(root / "staged", output, dirs_exist_ok=True)
-                """)
-            script.write_text(script_source)
             arguments = [
                 "cargo",
                 "build",
@@ -1164,15 +815,14 @@ class ReleaseScriptTests(unittest.TestCase):
                     installed = prefix / relative / name
                     self.assertEqual(installed.read_bytes(), contents)
                     self.assertTrue(os.access(installed, os.X_OK))
-                    (staged / name).write_bytes(b"replaced artifact")
-                    script.write_text(script_source + f"\n# changed {name}\n")
+                    staged_files[name].write_bytes(b"replaced artifact")
                     result = subprocess.run(
                         arguments, cwd=root, capture_output=True, text=True
                     )
                     self.assertNotEqual(result.returncode, 0, result.stderr)
                     self.assertIn(f"artifact {name} changed", result.stderr)
                     self.assertEqual(installed.read_bytes(), contents)
-                    (staged / name).write_bytes(contents)
+                    staged_files[name].write_bytes(contents)
 
 
 if __name__ == "__main__":

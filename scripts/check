@@ -2,6 +2,7 @@
 
 set -eu
 
+scripts/stage-sandbox-runner
 scripts/check-core
 scripts/test
 python3 tests/install.py

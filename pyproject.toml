@@ -1,6 +1,7 @@
 [build-system]
 requires = ["maturin>=1.15,<2.0"]
-build-backend = "maturin"
+build-backend = "build_backend"
+backend-path = ["."]
 
 [project]
 name = "mcp-console"
@@ -30,7 +31,12 @@ bindings = "bin"
 compatibility = "pypi"
 locked = true
 data = "wheel-data"
-include = [{ path = "wheel-data/data/.gitignore", format = "sdist" }]
+include = [
+    { path = "wheel-data/data/.gitignore", format = "sdist" },
+    { path = "build_backend.py", format = "sdist" },
+    { path = "scripts/stage-sandbox-runner", format = "sdist" },
+    { path = "sandbox-runner.json", format = "sdist" },
+]
 exclude = [
     { path = "wheel-data/data/.gitignore", format = "wheel" },
     { path = "wheel-data/data/libexec/**", format = "sdist" },

@@ -29,8 +29,6 @@ jobs:
     name: pypi-${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
-    env:
-      MCP_CONSOLE_SANDBOX_SOURCE: ${{ github.workspace }}/.sandbox-runner-source
 
     strategy:
       fail-fast: false
@@ -93,6 +91,12 @@ jobs:
           rustup toolchain install
           "${{ steps.sandbox-pin.outputs.rust_toolchain }}"
           --profile minimal
+
+      - name: Stage private sandbox runner
+        run: >-
+          scripts/stage-sandbox-runner
+          .sandbox-runner-source
+          --target "${{ matrix.target }}"
 
       - name: Build wheel
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0

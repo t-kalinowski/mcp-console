@@ -1,23 +1,10 @@
 use sha2::{Digest as _, Sha256};
 use std::path::PathBuf;
-use std::process::Command;
 
 fn main() {
     println!("cargo:rerun-if-changed=src/r_graphics.c");
     println!("cargo:rerun-if-changed=src/r_repl.c");
 
-    let data =
-        PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("wheel-data/data");
-    // Another target or staging recipe can leave generated files behind, even
-    // after Cargo caches this build. Package only the current verified bundle.
-    println!("cargo:rerun-if-changed={}", data.display());
-    for directory in ["libexec", "share"] {
-        match std::fs::remove_dir_all(data.join(directory)) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => panic!("failed to remove stale {directory} wheel data: {error}"),
-        }
-    }
     if matches!(
         std::env::var("CARGO_CFG_TARGET_OS").as_deref(),
         Ok("macos" | "linux")
@@ -35,34 +22,22 @@ fn main() {
 fn bind_private_runner() {
     let root = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let output = PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
-    let stage = output.join("sandbox-runner");
     // OUT_DIR is <target prefix>/<profile>/build/<package>/out.
     // Native bundles require Cargo's default shared build/target layout: Cargo
     // does not expose the caller's --target-dir to build scripts. A separate
     // build.build-dir is unsupported for running the Cargo output; wheels use
     // wheel-data independently. See RELEASE.md.
     let prefix = output.ancestors().nth(4).unwrap();
-    let cache = prefix.join("sandbox-runner-cache");
     println!("cargo:rerun-if-changed=sandbox-runner.json");
-    println!("cargo:rerun-if-changed=scripts/stage-sandbox-runner");
-    println!("cargo:rerun-if-env-changed=MCP_CONSOLE_SANDBOX_SOURCE");
+    println!("cargo:rerun-if-changed=target/sandbox-runner-build.json");
     let target = std::env::var("TARGET").expect("Cargo did not provide its build target");
-    let status = Command::new("python3")
-        .arg(root.join("scripts/stage-sandbox-runner"))
-        .arg("--target")
-        .arg(&target)
-        .arg("--cache-dir")
-        .arg(cache)
-        .arg("--output-dir")
-        .arg(&stage)
-        .status()
-        .expect("building the private sandbox runner requires Python 3, Git, and rustup");
-    assert!(status.success(), "private sandbox runner build failed");
 
     let pin: serde_json::Value =
         serde_json::from_slice(&std::fs::read(root.join("sandbox-runner.json")).unwrap()).unwrap();
     let build: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(stage.join("build.json")).unwrap()).unwrap();
+        serde_json::from_slice(&std::fs::read(root.join("target/sandbox-runner-build.json"))
+            .expect("private sandbox runner is not staged; use uv tool install --reinstall . or run scripts/stage-sandbox-runner"))
+            .expect("invalid private sandbox runner build manifest");
     assert_eq!(build["source_revision"], pin["commit"]);
     assert_eq!(build["target"].as_str(), Some(target.as_str()));
     let mut artifacts = String::new();
@@ -81,23 +56,21 @@ fn bind_private_runner() {
         ]);
     }
     for (name, relative) in bundle {
-        let source = stage.join(name);
+        let source = root.join("wheel-data/data").join(relative);
+        println!("cargo:rerun-if-changed={}", source.display());
         let bytes = std::fs::read(&source).unwrap();
         let digest = Sha256::digest(&bytes);
         let digest_hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
         assert_eq!(
-            build["sha256"][name].as_str(),
+            build["artifacts"][name].as_str(),
             Some(digest_hex.as_str()),
             "private sandbox runner artifact {name} changed during staging"
         );
         artifacts.push_str(&format!("({relative:?}, {:?}),\n", digest.as_slice()));
-        // Cargo's native layout and Maturin's wheel data use the same bundle.
-        // Wheel packaging requires exclusive use of this source checkout until
-        // Maturin finishes writing the archive; see RELEASE.md.
-        for destination in [
-            prefix.join(relative),
-            root.join("wheel-data/data").join(relative),
-        ] {
+        // Wheel staging belongs to the packaging backend. Cargo only installs
+        // the verified companion beside its own native build output.
+        {
+            let destination = prefix.join(relative);
             std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
             // Publish the verified bytes atomically; an active sandbox may
             // still be using the previous executable during a rebuild.
