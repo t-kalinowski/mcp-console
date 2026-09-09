@@ -711,12 +711,22 @@ def main() -> None:
             continue
 
         if source == "overflow cell output file":
-            send_output(writer, "x" * (3 * PENDING_TEXT_BUDGET + 7))
-            send(writer, {"kind": "input_requested", "prompt": "continue> "})
-            assert input() == "continue"
-            send(writer, {"kind": "input_received"})
-            send_output(writer, "y" * (PENDING_TEXT_BUDGET + 7))
-            send(writer, {"kind": "completed"})
+            release = temporary / "zod-release-spooled-output"
+            processed = temporary / "zod-spooled-output-processed"
+            os.mkfifo(processed)
+            os.mkfifo(release)
+            for character, length in (
+                ("x", 3 * PENDING_TEXT_BUDGET + 7),
+                ("y", PENDING_TEXT_BUDGET + 7),
+            ):
+                with release.open("rb", buffering=0) as checkpoint:
+                    assert checkpoint.read(1) == b"1"
+                send_output(writer, character * length)
+                if character == "y":
+                    send(writer, {"kind": "completed"})
+                wait_for_server_to_process_sideband(reader, writer)
+                with processed.open("wb", buffering=0) as checkpoint:
+                    assert checkpoint.write(b"1") == 1
             continue
 
         if source == "overflow console output":

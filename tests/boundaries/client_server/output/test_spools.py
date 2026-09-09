@@ -98,15 +98,30 @@ def test_reports_partial_retention_and_later_unretained_output(
         with McpClient(
             launcher,
             execution.serve("--worker", str(fixtures / "zod")),
+            {**os.environ, "TMPDIR": temporary},
             current_directory=workspace,
         ) as client:
             client.initialize_and_list_tools()
-            client.send(r="overflow cell output file", timeout_ms=120_000)
-            first = client.transcript[-1]
-            first_text = last_tool_text(client)
-            client.send(stdin="continue\n", timeout_ms=120_000)
-            second = client.transcript[-1]
-            second_text = last_tool_text(client)
+            client.send(r="overflow cell output file", timeout_ms=0)
+            assert last_tool_text(client) == "\n[running; poll with an empty send]"
+            release = wait_for_worker_file(
+                workspace, "zod-release-spooled-output", client
+            )
+            with closing(
+                FifoCheckpoint.attach(release.with_name("zod-spooled-output-processed"))
+            ) as processed:
+                # Keep each batch pending until the server has processed it.
+                # Intermediate polls would reset the inline budget and split counts.
+                release_fixture_checkpoint(release)
+                processed.wait(timeout=client.response_timeout)
+                client.send(timeout_ms=0)
+                first = client.transcript[-1]
+                first_text = last_tool_text(client)
+                release_fixture_checkpoint(release)
+                processed.wait(timeout=client.response_timeout)
+                client.send(timeout_ms=0)
+                second = client.transcript[-1]
+                second_text = last_tool_text(client)
             assert "retained text:" not in second_text, second_text[-1000:]
 
             session = next((workspace / ".mcp-console" / "sessions").iterdir())
@@ -139,7 +154,7 @@ def test_reports_partial_retention_and_later_unretained_output(
             client.send(r="echo after failure")
             assert last_tool_text(client) == "zod: after failure\n"
             assert (
-                session / "outputs/call-000003.log"
+                session / "outputs/call-000004.log"
             ).read_bytes() == b"zod: after failure\n"
             events = [
                 json.loads(line)
