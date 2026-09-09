@@ -1,7 +1,7 @@
 use sha2::{Digest as _, Sha256};
 use std::fs::File;
 use std::io::{self, Read as _};
-use std::os::unix::fs::PermissionsExt as _;
+use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::path::PathBuf;
 
 include!(concat!(env!("OUT_DIR"), "/sandbox_runner_installation.rs"));
@@ -14,7 +14,11 @@ pub(super) fn private_runner() -> Result<PathBuf, String> {
             .and_then(|directory| directory.parent())
             .ok_or_else(|| io::Error::other("executable has no installation prefix"))?;
         for (relative, expected) in ARTIFACTS {
-            let mut file = File::open(prefix.join(relative))?;
+            // A replaced FIFO must not block before its file type is checked.
+            let mut file = File::options()
+                .read(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(prefix.join(relative))?;
             let metadata = file.metadata()?;
             if !metadata.is_file()
                 || (relative.starts_with("libexec/") && metadata.permissions().mode() & 0o111 == 0)

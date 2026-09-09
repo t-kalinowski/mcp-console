@@ -156,7 +156,7 @@ class SandboxInstallationTests(unittest.TestCase):
         self.assertEqual(result.stdout, b"")
         self.assertIn(b"private sandbox runner", result.stderr)
 
-    def test_rejects_missing_or_modified_bundle_files(self) -> None:
+    def test_rejects_invalid_bundle_files(self) -> None:
         prefix = self.binary.parent.parent
         for relative in (
             "libexec/mcp-console-sandbox",
@@ -165,16 +165,23 @@ class SandboxInstallationTests(unittest.TestCase):
         ):
             artifact = prefix / relative
             original = artifact.read_bytes()
-            for defect in ("missing", "modified"):
+            for defect in ("missing", "modified", "fifo"):
                 with self.subTest(artifact=relative, defect=defect):
-                    if defect == "missing":
-                        artifact.unlink()
-                    else:
+                    artifact.unlink(missing_ok=True)
+                    if defect == "modified":
                         artifact.write_bytes(b"modified")
+                    elif defect == "fifo":
+                        os.mkfifo(artifact)
                     result = self.run_sandbox()
                     self.assertNotEqual(result.returncode, 0)
                     self.assertEqual(result.stdout, b"")
                     self.assertIn(b"private sandbox runner", result.stderr)
+                    if defect == "fifo":
+                        self.assertIn(
+                            b"private artifact is not a readable file or executable",
+                            result.stderr,
+                        )
+            artifact.unlink()
             artifact.write_bytes(original)
             artifact.chmod(0o755 if relative.startswith("libexec/") else 0o644)
 
