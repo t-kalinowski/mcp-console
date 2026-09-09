@@ -274,6 +274,7 @@ jobs:
 
       - name: Check uv source installations
         env:
+          # Match the release wheel and companion builds above.
           CARGO_INCREMENTAL: "0"
           MCP_CONSOLE_SANDBOX_SOURCE: ${{ github.workspace }}/.sandbox-runner-source
           UV_CACHE_DIR: ${{ runner.temp }}/mcp-console-cache
