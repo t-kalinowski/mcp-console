@@ -13,7 +13,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 STAGE_ROOT = ROOT / "wheel-data"
-TARGETS = ("aarch64-apple-darwin", "x86_64-apple-darwin")
+TARGETS = (
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+)
 
 
 def fail(message: str) -> None:
@@ -50,7 +55,7 @@ def main() -> None:
             for key in ("repository", "commit", "rust_toolchain"):
                 output.write(f"{key}={pin[key]}\n")
         return
-    if sys.platform != "darwin":
+    if sys.platform not in {"darwin", "linux"}:
         fail(f"building private runner artifacts is unsupported on {sys.platform}")
 
     checkout = args.checkout.resolve()
@@ -87,6 +92,7 @@ def main() -> None:
         "codex-mcp-console-sandbox",
         "--bin",
         "mcp-console-sandbox",
+        *(["-p", "codex-bwrap", "--bin", "bwrap"] if "linux" in target else []),
         "--target",
         target,
     ]
@@ -110,6 +116,13 @@ def main() -> None:
         destination = licenses / f"Codex-{name}"
         shutil.copyfile(checkout / name, destination)
         destination.chmod(0o644)
+    if "linux" in target:
+        staged_bwrap = libexec / "bwrap"
+        shutil.copyfile(runner.with_name("bwrap"), staged_bwrap)
+        staged_bwrap.chmod(0o755)
+        shutil.copyfile(
+            workspace / "vendor/bubblewrap/COPYING", licenses / "bubblewrap-COPYING"
+        )
     build_record = ROOT / "target" / "sandbox-runner-build.json"
     build_record.parent.mkdir(exist_ok=True)
     build_record.write_text(

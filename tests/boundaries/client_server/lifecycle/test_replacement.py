@@ -16,6 +16,7 @@ from support.checkpoints import (
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.processes import (
+    host_process_id,
     process_exists,
     stop_process,
 )
@@ -326,7 +327,9 @@ def test_controlled_restart_runs_cell_once_in_fresh_worker(
             "zod-controlled-restart-old-worker",
             client,
         )
-        old_pid = int(old_worker.read_text(encoding="utf-8"))
+        old_pid = host_process_id(
+            int(old_worker.read_text(encoding="utf-8")), client.process.pid
+        )
 
         client.send(
             control="restart",
@@ -347,7 +350,7 @@ def test_controlled_restart_runs_cell_once_in_fresh_worker(
         records = evaluations.read_text(encoding="utf-8").splitlines()
         assert len(records) == 1, records
         new_pid, state, count = records[0].split()
-        assert int(new_pid) != old_pid, records
+        assert host_process_id(int(new_pid), client.process.pid) != old_pid, records
         assert (state, count) == ("fresh", "1"), records
         assert not process_exists(old_pid), old_pid
 

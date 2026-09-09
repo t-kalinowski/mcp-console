@@ -27,7 +27,12 @@ from support.macos import (
 )
 from support.normalization import code
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, SANDBOX, requires
+from support.requirements import (
+    MACOS_SANDBOX,
+    NATIVE_FIXTURES,
+    PROCESS_EVENTS,
+    requires,
+)
 from support.suites import run_this_suite
 
 TIMEOUT = 10
@@ -187,7 +192,7 @@ def _spawn_processx_generation(client: McpClient) -> _Generation:
     return _normalize_generation(client)
 
 
-@requires(SANDBOX, PROCESS_EVENTS)
+@requires(MACOS_SANDBOX, PROCESS_EVENTS)
 def test_restart_retires_descendants_outside_the_worker_group(
     binary: Path,
 ) -> Transcript:
@@ -206,7 +211,7 @@ def test_restart_retires_descendants_outside_the_worker_group(
             shutil.rmtree(generation[3], ignore_errors=True)
 
 
-@requires(SANDBOX, NATIVE_FIXTURES, PROCESS_EVENTS)
+@requires(MACOS_SANDBOX, NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_failure_replacement_retires_descendants_outside_the_worker_group(
     binary: Path,
 ) -> Transcript:
@@ -257,7 +262,7 @@ def test_failure_replacement_retires_descendants_outside_the_worker_group(
         temporary_owner.cleanup()
 
 
-@requires(SANDBOX, PROCESS_EVENTS)
+@requires(MACOS_SANDBOX, PROCESS_EVENTS)
 def test_server_shutdown_retires_descendants_outside_the_worker_group(
     binary: Path,
 ) -> Transcript:

@@ -7,6 +7,7 @@ use std::io::{self, PipeWriter, Write as _};
 use std::os::fd::{AsRawFd as _, RawFd};
 use std::process::Command;
 
+#[cfg(target_os = "macos")]
 const POLICY_EXTENSION: &str = include_str!("policy_extensions.sbpl");
 
 pub(super) struct Setup {
@@ -44,7 +45,10 @@ impl Setup {
             utf8(executable.as_os_str())?,
             "sandbox-target".to_string(),
             "--signal-mask".to_string(),
-            original_mask.to_string(),
+            (1..=64)
+                .filter(|signal| unsafe { libc::sigismember(&original_mask, *signal) } == 1)
+                .fold(0u64, |mask, signal| mask | (1 << (signal - 1)))
+                .to_string(),
             "--".to_string(),
             utf8(program)?,
         ];
@@ -66,21 +70,35 @@ impl Setup {
             }
         }
         environment.insert("TMPDIR".to_string(), utf8(temporary.path().as_os_str())?);
-        // This directory is disposable data, not a native writable workspace
-        // anchor: its metadata directories and the root itself may be replaced.
-        let temporary_literal = utf8(temporary.path().as_os_str())?
-            .replace('\\', "\\\\")
-            .replace('"', "\\\"");
-        let extension =
-            format!("{POLICY_EXTENSION}\n(allow file-write* (subpath \"{temporary_literal}\"))\n");
+        let entries = vec![serde_json::json!({
+            "path": {"type": "special", "value": {"kind": "root"}}, "access": "read"
+        })];
+        let extension: Option<String>;
+        #[cfg(target_os = "macos")]
+        {
+            // Disposable data is allowed to replace its own metadata and root.
+            let temporary_literal = utf8(temporary.path().as_os_str())?
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"");
+            extension = Some(format!(
+                "{POLICY_EXTENSION}\n(allow file-write* (subpath \"{temporary_literal}\"))\n"
+            ));
+        }
+        #[cfg(target_os = "linux")]
+        let entries = {
+            let mut entries = entries;
+            entries.push(serde_json::json!({
+                "path": {"type": "path", "path": temporary.path()}, "access": "write"
+            }));
+            extension = None;
+            entries
+        };
         let payload = serde_json::to_vec(&serde_json::json!({
             "version": installation::PROTOCOL_VERSION,
             "command": target,
             "cwd": std::env::current_dir().map_err(|error| format!("failed to read sandbox working directory: {error}"))?,
             "environment": environment,
-            "filesystem": {"kind": "restricted", "entries": [
-                {"path": {"type": "special", "value": {"kind": "root"}}, "access": "read"}
-            ]},
+            "filesystem": {"kind": "restricted", "entries": entries},
             "network": "restricted",
             "proxy": null,
             "macos_seatbelt_profile_extension": extension,
@@ -109,6 +127,11 @@ impl Setup {
             .as_raw_fd()
     }
 
+    #[cfg(target_os = "linux")]
+    pub(super) fn pending(&self) -> bool {
+        self.writer.is_some()
+    }
+
     pub(super) fn write_once(&mut self) -> io::Result<()> {
         let Some(writer) = &mut self.writer else {
             return Ok(());
@@ -134,7 +157,7 @@ impl Setup {
             Err(error) if error.kind() == io::ErrorKind::BrokenPipe => {}
             Err(error) => return Err(error),
         }
-        // Closing the completed channel also removes its kqueue write watch.
+        // Closing the completed channel removes its descriptor watch.
         // Native setup starts at the complete frame, without requiring EOF.
         self.writer = None;
         Ok(())

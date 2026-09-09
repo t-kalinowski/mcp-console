@@ -218,8 +218,12 @@ def test_owned_launcher_exposes_target_input_closure(binary: Path) -> Transcript
         import os
 
         os.close(0)
-        print("closed", os.getppid(), flush=True)
+        parent = os.getppid()
+        os.kill(parent, 0)
+        print("closed", flush=True)
         assert os.read(2, 1) == b"x"
+        assert os.getppid() == parent
+        os.kill(parent, 0)
         """)
     gate, release = os.pipe()
     process = subprocess.Popen(
@@ -249,10 +253,8 @@ def test_owned_launcher_exposes_target_input_closure(binary: Path) -> Transcript
             except BrokenPipeError:
                 break
         (ready,) = _read_lines(process.stdout, 1, "target input closure")
-        state, runner_pid = ready.split()
-        assert state == "closed", ready
+        assert ready == "closed", ready
         assert process.poll() is None
-        os.kill(int(runner_pid), 0)
         _, writable, _ = select.select([], [process.stdin], [], TIMEOUT)
         assert writable, "a host process retained the target's input reader"
         try:
@@ -262,7 +264,6 @@ def test_owned_launcher_exposes_target_input_closure(binary: Path) -> Transcript
         else:
             raise AssertionError("a host process retained the target's input reader")
         assert process.poll() is None
-        os.kill(int(runner_pid), 0)
         os.write(release, b"x")
         assert process.wait(timeout=TIMEOUT) == 0
     finally:

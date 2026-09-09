@@ -28,6 +28,10 @@ class SandboxInstallationTests(unittest.TestCase):
         self.runner = prefix / "libexec" / "mcp-console-sandbox"
         shutil.copy2(self.binary_source, self.binary)
         shutil.copy2(self.runner_source, self.runner)
+        if sys.platform == "linux":
+            shutil.copy2(
+                self.runner_source.with_name("bwrap"), self.runner.with_name("bwrap")
+            )
         self.path = self.root / "path"
         self.path.mkdir()
         decoy = self.path / "mcp-console-sandbox"

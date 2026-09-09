@@ -8,6 +8,7 @@ command:
   - |
     import sys
 
+    print("ready", flush=True)
     for line in sys.stdin:
         if line == "EXIT\n":
             break
@@ -19,6 +20,7 @@ command:
 stdin: |
   echo exactly: $(literal)
 stdout: |
+  ready
   echo exactly: $(literal)
 stderr: |
   echo exactly: $(literal)

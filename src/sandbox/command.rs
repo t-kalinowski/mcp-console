@@ -1,12 +1,17 @@
 use std::fs::{self, DirBuilder};
+#[cfg(target_os = "macos")]
 use std::io;
 use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, ExitStatus};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+#[cfg(target_os = "macos")]
+use std::time::Duration;
+use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(target_os = "macos")]
 pub(super) const RUNNER_NAME: &str = "private sandbox runner";
+#[cfg(target_os = "macos")]
 pub(super) fn wait_for_process_exit_without_reaping(
     process_id: u32,
     timeout: Duration,
@@ -14,6 +19,7 @@ pub(super) fn wait_for_process_exit_without_reaping(
     crate::process_exit::wait_for_process_exit_without_reaping(process_id, timeout)
 }
 
+#[cfg(target_os = "macos")]
 pub(super) fn kill_process_group(process_group_id: u32) -> io::Result<()> {
     super::process_group::kill(process_group_id)
 }
@@ -24,6 +30,7 @@ pub(super) fn sandboxed_command() -> Result<(Command, TemporaryDirectory), Strin
     // Keep host interposers out of the private executable and sandbox target.
     launcher
         .env_remove("DYLD_INSERT_LIBRARIES")
+        .env_remove("LD_PRELOAD")
         .env("MCP_CONSOLE_SANDBOX", "1");
 
     Ok((launcher, temporary_directory))
@@ -70,6 +77,7 @@ impl TemporaryDirectory {
         &self.path
     }
 
+    #[cfg(target_os = "macos")]
     pub(crate) fn adopt(path: PathBuf, owner_pid: libc::pid_t) -> Result<Self, String> {
         if owner_pid <= 0 {
             return Err("sandbox temporary directory has invalid ownership".to_string());
@@ -107,11 +115,13 @@ impl TemporaryDirectory {
     }
 
     /// Leaves the directory in place because cleanup could not prove that it is unused.
+    #[cfg(target_os = "macos")]
     pub(crate) fn preserve(mut self) {
         self.remove_on_drop = false;
     }
 
     /// Arms best-effort removal after cleanup proved that the directory is unused.
+    #[cfg(target_os = "macos")]
     pub(crate) fn remove(mut self) {
         self.remove_on_drop = true;
     }

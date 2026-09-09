@@ -24,7 +24,7 @@ from support.macos import (
 )
 from support.normalization import code
 from support.records import Transcript
-from support.requirements import PROCESS_EVENTS, SANDBOX, requires
+from support.requirements import MACOS_SANDBOX, PROCESS_EVENTS, requires
 from support.suites import run_this_suite
 
 TIMEOUT = 10
@@ -196,7 +196,7 @@ def _close_client_streams(client: McpClient) -> None:
             pass
 
 
-@requires(SANDBOX, PROCESS_EVENTS)
+@requires(MACOS_SANDBOX, PROCESS_EVENTS)
 def test_server_crash_retires_the_worker_generation(binary: Path) -> Transcript:
     # The owned launcher must treat loss of the server as retirement of the
     # entire worker generation. A detached child must not survive merely because
@@ -269,7 +269,7 @@ def test_server_crash_retires_the_worker_generation(binary: Path) -> Transcript:
         generation_reaping.close()
 
 
-@requires(SANDBOX, PROCESS_EVENTS)
+@requires(MACOS_SANDBOX, PROCESS_EVENTS)
 def test_manager_crash_retires_the_worker_generation(binary: Path) -> Transcript:
     # While the relay root remains live and pinned, the launcher must take over
     # bounded cleanup if the ready manager exits.

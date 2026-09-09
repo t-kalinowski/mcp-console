@@ -116,10 +116,9 @@ def smoke_mcp(
     env: dict[str, str],
     startup_timeout: float,
     response_timeout: float,
-    no_sandbox: bool,
 ) -> None:
     process = subprocess.Popen(
-        [str(executable), "serve", *(["--no-sandbox"] if no_sandbox else [])],
+        [str(executable), "serve"],
         env=env,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
@@ -225,13 +224,15 @@ def inspect_private_wheel_data(wheel: Path, version: str, *, linux: bool) -> Non
     data_root = f"mcp_console-{version}.data/data"
     with zipfile.ZipFile(wheel) as archive:
         members = {member.filename: member for member in archive.infolist()}
-    if linux:
-        require(
-            not any(name.endswith("/mcp-console-sandbox") for name in members),
-            "Linux wheel contains a macOS sandbox executable",
-        )
-        return
-    for relative_path in PRIVATE_DATA:
+    private_data = (
+        *PRIVATE_DATA,
+        *(
+            ("libexec/bwrap", "share/licenses/mcp-console/bubblewrap-COPYING")
+            if linux
+            else ()
+        ),
+    )
+    for relative_path in private_data:
         require(
             f"{data_root}/{relative_path}" in members,
             f"wheel is missing private sandbox runner data: {relative_path}",
@@ -373,43 +374,36 @@ def smoke_wheel(args: argparse.Namespace) -> None:
         command_output([str(installed), "--help"], strip=False) == cargo_help,
         "`uv` tool and Cargo help output differ",
     )
-    if not linux:
-        private_runner = (
-            installed.resolve().parent.parent / "libexec" / "mcp-console-sandbox"
-        )
-        require(
-            private_runner.is_file() and os.access(private_runner, os.X_OK),
-            f"installed private sandbox runner is missing or not executable: {private_runner}",
-        )
-        public_runner = tool_bin / "mcp-console-sandbox"
-        require(
-            not public_runner.exists(),
-            f"private sandbox runner was installed as a public command: {public_runner}",
-        )
-        with tempfile.TemporaryDirectory(prefix="mcp-console-empty-path-") as directory:
-            sandbox_env = os.environ.copy()
-            sandbox_env["PATH"] = directory
-            smoke_private_runner(
-                private_runner, sandbox_env, args.startup_timeout_seconds
-            )
-            run_command(
-                [str(cargo_bin), "sandbox", "--", "/usr/bin/true"], env=sandbox_env
-            )
-            run_command(
-                [str(installed), "sandbox", "--", "/usr/bin/true"], env=sandbox_env
-            )
-        run_command(
-            [
-                sys.executable,
-                str(
-                    Path(__file__).resolve().parent.parent
-                    / "tests"
-                    / "sandbox_installation.py"
-                ),
-                str(installed),
-                str(private_runner),
-            ]
-        )
+    private_runner = (
+        installed.resolve().parent.parent / "libexec" / "mcp-console-sandbox"
+    )
+    require(
+        private_runner.is_file() and os.access(private_runner, os.X_OK),
+        f"installed private sandbox runner is missing or not executable: {private_runner}",
+    )
+    public_runner = tool_bin / "mcp-console-sandbox"
+    require(
+        not public_runner.exists(),
+        f"private sandbox runner was installed as a public command: {public_runner}",
+    )
+    with tempfile.TemporaryDirectory(prefix="mcp-console-empty-path-") as directory:
+        sandbox_env = os.environ.copy()
+        sandbox_env["PATH"] = directory
+        smoke_private_runner(private_runner, sandbox_env, args.startup_timeout_seconds)
+        run_command([str(cargo_bin), "sandbox", "--", "/usr/bin/true"], env=sandbox_env)
+        run_command([str(installed), "sandbox", "--", "/usr/bin/true"], env=sandbox_env)
+    run_command(
+        [
+            sys.executable,
+            str(
+                Path(__file__).resolve().parent.parent
+                / "tests"
+                / "sandbox_installation.py"
+            ),
+            str(installed),
+            str(private_runner),
+        ]
+    )
 
     internal_ir = installed.resolve().with_name("ir")
     require(not internal_ir.exists(), f"wheel contains sibling `ir`: {internal_ir}")
@@ -442,7 +436,6 @@ def smoke_wheel(args: argparse.Namespace) -> None:
             env,
             args.startup_timeout_seconds,
             args.response_timeout_seconds,
-            no_sandbox=linux,
         )
 
 

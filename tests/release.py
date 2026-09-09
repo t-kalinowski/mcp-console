@@ -203,6 +203,7 @@ class ReleaseScriptTests(unittest.TestCase):
             libexec / "mcp-console-sandbox",
             runner_source.replace("#!/usr/bin/env python3", f"#!{sys.executable}"),
         )
+        write_executable(libexec / "bwrap", "#!/bin/sh\nexit 0\n")
         tool_bin = directory / "bin"
         tool_bin.mkdir()
 
@@ -363,6 +364,13 @@ class ReleaseScriptTests(unittest.TestCase):
                     f"{data}/libexec/mcp-console-sandbox",
                     0o100755 if executable else 0o100644,
                 )
+            )
+        if "linux" in wheel.name:
+            files.extend(
+                [
+                    (f"{data}/libexec/bwrap", 0o100755),
+                    (f"{data}/share/licenses/mcp-console/bubblewrap-COPYING", 0o100644),
+                ]
             )
         with zipfile.ZipFile(wheel, "w") as archive:
             for name, mode in files:
@@ -546,14 +554,14 @@ class ReleaseScriptTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("private sandbox runner", result.stderr)
 
-    def test_smoke_linux_wheel_uses_no_sandbox(self) -> None:
+    def test_smoke_linux_wheel_requires_sandbox_and_bundled_helper(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)
             environment, wheel, cargo_bin = self.smoke_environment(directory)
             linux_wheel = wheel.with_name(
                 "mcp_console-0.0.2-py3-none-manylinux_2_34_x86_64.whl"
             )
-            self.write_wheel(linux_wheel, omit_runner=True)
+            self.write_wheel(linux_wheel)
             wheel.unlink()
             record = directory / "arguments.jsonl"
             environment["FAKE_MCP_ARGUMENTS"] = str(record)
@@ -571,19 +579,17 @@ class ReleaseScriptTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             invocations = [json.loads(line) for line in record.read_text().splitlines()]
-            self.assertIn(["serve", "--no-sandbox"], invocations)
-            self.assertFalse(any(call[:1] == ["sandbox"] for call in invocations))
+            self.assertIn(["serve"], invocations)
+            self.assertTrue(any(call[:1] == ["sandbox"] for call in invocations))
 
-            self.write_wheel(linux_wheel)
+            self.write_wheel(linux_wheel, omit_runner=True)
             result = self.run_script(
                 *command,
                 cwd=directory,
                 env=environment,
             )
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn(
-                "Linux wheel contains a macOS sandbox executable", result.stderr
-            )
+            self.assertIn("wheel is missing private sandbox runner data", result.stderr)
 
     def test_verify_wheel_set_requires_macos_and_linux_architectures(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -644,6 +650,9 @@ class ReleaseScriptTests(unittest.TestCase):
             (crate / "Cargo.toml").touch()
             (checkout / "LICENSE").write_text("license\n")
             (checkout / "NOTICE").write_text("notice\n")
+            vendor = checkout / "codex-rs/vendor/bubblewrap"
+            vendor.mkdir(parents=True)
+            (vendor / "COPYING").write_text("bwrap license\n")
             commands = directory / "commands"
             commands.mkdir()
             write_executable(
@@ -685,6 +694,7 @@ class ReleaseScriptTests(unittest.TestCase):
                 output = Path(os.environ["CARGO_TARGET_DIR"]) / target / "release"
                 output.mkdir(parents=True, exist_ok=True)
                 (output / "mcp-console-sandbox").write_bytes(b"runner bytes")
+                (output / "bwrap").write_bytes(b"bwrap bytes")
                 """,
             )
             environment = os.environ.copy()
@@ -704,6 +714,7 @@ class ReleaseScriptTests(unittest.TestCase):
             ]
             for arguments, target in (
                 ([], "aarch64-apple-darwin"),
+                (["--target", "x86_64-unknown-linux-gnu"], "x86_64-unknown-linux-gnu"),
                 (["--target", "x86_64-apple-darwin"], "x86_64-apple-darwin"),
             ):
                 with self.subTest(target=target):
@@ -726,6 +737,11 @@ class ReleaseScriptTests(unittest.TestCase):
                             "codex-mcp-console-sandbox",
                             "--bin",
                             "mcp-console-sandbox",
+                            *(
+                                ["-p", "codex-bwrap", "--bin", "bwrap"]
+                                if "linux" in target
+                                else []
+                            ),
                             "--target",
                             target,
                         ],

@@ -29,6 +29,7 @@ from support.client import McpClient, TextReader
 from support.events import Events
 from support.execution import SANDBOXED, Execution
 from support.processes import (
+    host_process_id,
     process_group_exists,
     stop_process_group,
     stop_process_id,
@@ -575,6 +576,11 @@ def wait_for_stopped_worker(
                 int,
                 contents.split(),
             )
+            if execution == SANDBOXED:
+                process_id, parent_id, process_group = (
+                    host_process_id(pid, client.process.pid)
+                    for pid in (process_id, parent_id, process_group)
+                )
             if process_id in previous_process_ids:
                 continue
             worker = (process_id, process_group)

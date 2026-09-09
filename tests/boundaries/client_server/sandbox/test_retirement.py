@@ -27,6 +27,7 @@ from support.macos import (
 )
 from support.normalization import code
 from support.processes import (
+    host_process_id,
     process_exists,
     process_group_exists,
     stop_process,
@@ -34,7 +35,13 @@ from support.processes import (
     stop_process_id,
 )
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, SANDBOX, requires
+from support.requirements import (
+    MACOS_SANDBOX,
+    NATIVE_FIXTURES,
+    PROCESS_EVENTS,
+    SANDBOX,
+    requires,
+)
 from support.suites import run_this_suite
 
 LARGE_OUTPUT_SIZE = 2 * 1024 * 1024
@@ -132,7 +139,7 @@ def test_restart_rejects_unsolicited_status_137(binary: Path) -> Transcript:
         stop_client(client)
 
 
-@requires(SANDBOX, NATIVE_FIXTURES)
+@requires(MACOS_SANDBOX, NATIVE_FIXTURES)
 def test_restart_rejects_status_137_when_launcher_exits_before_sigterm(
     binary: Path,
 ) -> Transcript:
@@ -153,7 +160,7 @@ def test_restart_rejects_status_137_when_launcher_exits_before_sigterm(
         return client.transcript
 
 
-@requires(SANDBOX, NATIVE_FIXTURES)
+@requires(MACOS_SANDBOX, NATIVE_FIXTURES)
 def test_restart_accepts_owned_retirement_when_launcher_exits_before_signal_returns(
     binary: Path,
 ) -> Transcript:
@@ -204,9 +211,8 @@ def _restart_drains_relay_output_before_nonzero_launcher_error(
         import sys
 
         os.environ["MCP_CONSOLE_TEST_RELAY_READ_PID"] = str(os.getpid())
-        os.environ["DYLD_INSERT_LIBRARIES"] = os.environ.pop(
-            "MCP_CONSOLE_TEST_RELAY_READ_DYLIB"
-        )
+        loader = "DYLD_INSERT_LIBRARIES" if sys.platform == "darwin" else "LD_PRELOAD"
+        os.environ[loader] = os.environ.pop("MCP_CONSOLE_TEST_RELAY_READ_DYLIB")
         os.execv(sys.argv[1], sys.argv[1:])
         """)
     with tempfile.TemporaryDirectory() as temporary_directory:
@@ -319,10 +325,12 @@ def test_restart_allows_accepted_relay_shutdown_to_finish(
                 "zod-relay-resume-helper",
                 client,
             )
-            helper_pid, relay_target = map(
+            helper_namespace_pid, relay_namespace_pid = map(
                 int,
                 helper_marker.read_text(encoding="utf-8").split(),
             )
+            helper_pid = host_process_id(helper_namespace_pid, client.process.pid)
+            relay_target = host_process_id(relay_namespace_pid, client.process.pid)
             relay_group = os.getpgid(relay_target)
             assert relay_group != relay_target
 
@@ -525,7 +533,7 @@ def _restart_outer_force_stops_unresponsive_relay(
                 stop_process(client.process)
 
 
-@requires(SANDBOX, PROCESS_EVENTS)
+@requires(MACOS_SANDBOX, PROCESS_EVENTS)
 def test_restart_outer_force_stops_unresponsive_relay(binary: Path) -> Transcript:
     return _restart_outer_force_stops_unresponsive_relay(
         binary,
@@ -533,7 +541,7 @@ def test_restart_outer_force_stops_unresponsive_relay(binary: Path) -> Transcrip
     )
 
 
-@requires(SANDBOX, PROCESS_EVENTS)
+@requires(MACOS_SANDBOX, PROCESS_EVENTS)
 def test_restart_waits_for_owned_launcher_manager_recovery(
     binary: Path,
 ) -> Transcript:
@@ -580,7 +588,9 @@ def test_restart_does_not_report_never_ready_worker_as_stopped(
                 "zod-detached-startup-sideband-pid",
                 client,
             )
-            descendant_group = int(marker.read_text(encoding="utf-8"))
+            descendant_group = host_process_id(
+                int(marker.read_text(encoding="utf-8")), client.process.pid
+            )
 
             startup_control.write_text("ready", encoding="utf-8")
             restarted = client.start_send(control="restart")
@@ -659,6 +669,7 @@ def test_runs_worker_inside_sandbox(binary: Path) -> Transcript:
         )
         client.initialize_and_list_tools()
         client.send(r="probe sandbox")
+        assert last_tool_text(client) == "sandbox blocked host write\n"
         transcript = client.finish()
 
         assert host_file.read_text(encoding="utf-8") == "host data"
@@ -703,11 +714,11 @@ def test_shutdown_is_bounded_with_detached_stdin_descendant(
             created_group = created["process_group"]
             assert isinstance(created_group, int) and created_group > 0, created
             assert created["pid"] == created_group, created
-            assert created_group != os.getpgrp(), created
             assert created["inherited_fd"] == 0, created
             retained_fd = created["retained_fd"]
             assert isinstance(retained_fd, int) and retained_fd > 2, created
-            descendant_group = created_group
+            descendant_group = host_process_id(created_group, client.process.pid)
+            assert descendant_group != os.getpgrp(), created
 
             control.wait_for(operation, "parent_waiting_for_stdin")
             probe_start = len(client.transcript)
@@ -758,9 +769,9 @@ def test_shutdown_is_bounded_with_detached_stdin_descendant(
             stalled_event = control.wait_for(operation, "parent_operation_stalled")
             stalled_group = stalled_event["process_group"]
             assert isinstance(stalled_group, int) and stalled_group > 0, stalled_event
-            assert stalled_group != os.getpgrp(), stalled_event
-            assert stalled_group != descendant_group, stalled_event
-            worker_group = stalled_group
+            worker_group = host_process_id(stalled_group, client.process.pid)
+            assert worker_group != os.getpgrp(), stalled_event
+            assert worker_group != descendant_group, stalled_event
 
             poll_stdin = "p" + "x" * (LARGE_OUTPUT_SIZE - 1)
             stalled = client.start_send(

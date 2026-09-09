@@ -26,6 +26,9 @@ Security and liveness cases may add causal or process assertions for facts a sna
 Do not test exact internal sequencing unless it is itself an observable contract.
 
 Sandbox contracts live in a `sandbox/` directory within their owning boundary.
+Linux namespace and subreaper contracts live in `cli/sandbox/test_linux`; Seatbelt and kqueue fixtures require `MACOS_SANDBOX`.
+Fixture process IDs must be resolved through `support.processes.host_process_id` before host observation or signaling when they originate inside a PID namespace.
+In particular, namespace process-group ID 1 must never reach host group signaling: Linux interprets `kill(-1, ...)` as a broadcast.
 Ordinary runtime, protocol, and lifecycle cases stay with those subjects, including cases that also run sandboxed.
 Direct-launch host access and recovery live under `client_server/lifecycle`; plot-session isolation lives under `client_server/r`.
 

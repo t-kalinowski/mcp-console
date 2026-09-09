@@ -12,7 +12,7 @@ Keep the root `mcp-console` entry in `Cargo.lock` synchronized with it.
 ## Private sandbox executable
 
 `sandbox-runner.json` pins the runner source repository, release, commit, protocol, and Rust toolchain.
-On macOS, build and stage it from a clean checkout at that commit before building MCP Console:
+On macOS and Linux, build and stage it from a clean checkout at that commit before building MCP Console:
 
 ```sh
 scripts/stage-sandbox-runner ~/github/t-kalinowski/codex
@@ -20,7 +20,7 @@ scripts/stage-sandbox-runner ~/github/t-kalinowski/codex
 
 The script builds with the pinned toolchain and lockfile, stages the executable at `wheel-data/data/libexec/mcp-console-sandbox`, and records its source revision, target triple, and SHA-256 in `target/sandbox-runner-build.json`.
 By default it builds for the pinned compiler's native target, passing that target explicitly to Cargo.
-Use `--target aarch64-apple-darwin` or `--target x86_64-apple-darwin` when building for an explicit target; inherited Cargo default-target settings do not change this selection.
+Use `--target` with `aarch64-apple-darwin`, `x86_64-apple-darwin`, `aarch64-unknown-linux-gnu`, or `x86_64-unknown-linux-gnu` when building for an explicit target; inherited Cargo default-target settings do not change this selection.
 The source checkout remains unchanged.
 MCP Console's build verifies the staged revision, target, and digest and binds the runner's digest and protocol version into the executable.
 Stage the runner again for the intended target before changing MCP Console's build target.
@@ -35,9 +35,12 @@ Release smoke exercises the installed runner directly with a non-default descrip
 
 Maturin includes the staged executable under the installation's private `libexec` directory, with the upstream license and notice under `share/licenses/mcp-console/`.
 Only `mcp-console` is installed as a public command.
-On macOS, CI and the release workflow build the pinned source before packaging and verify the private layout, executable permissions, and sandbox launches from both the Cargo binary and installed command with an empty `PATH`.
-Linux builds use the tracked `wheel-data/data` directory without staging a sandbox executable; its placeholder is excluded from wheels.
-The Linux smoke test verifies installation and evaluates R through `serve --no-sandbox`.
+CI and the release workflow build the pinned source before packaging and verify the private layout, executable permissions, and sandbox launches from both the Cargo binary and installed command with an empty `PATH`.
+Linux staging also builds `codex-bwrap`, installs `libexec/bwrap`, and includes its `bubblewrap-COPYING` license.
+Builds require a C compiler, `pkg-config`, and libcap development files (`build-essential pkg-config libcap-dev` on Ubuntu); installations require `libcap.so.2`.
+Linux smoke tests exercise the bundled helper with an empty `PATH` and evaluate R through default sandboxed `serve`.
+CI permits unprivileged namespace setup on its disposable Ubuntu runners by disabling their AppArmor user-namespace restriction.
+A local rehearsal must likewise run in an environment whose policy permits the bundled helper's namespace operations; an approved system `bwrap` alone does not verify that installation path.
 
 ## One-time PyPI setup
 
@@ -126,8 +129,7 @@ uv tool install --no-cache --no-sources --default-index https://pypi.org/simple 
 "$UV_TOOL_BIN_DIR/mcp-console" sandbox -- /usr/bin/true
 ```
 
-Verify these commands on both Apple Silicon and Intel macOS.
-On ARM64 and x86-64 Linux, omit the `sandbox` invocation and add `--no-sandbox` when starting `serve` through an MCP client.
+Verify these commands on Apple Silicon and Intel macOS and on ARM64 and x86-64 Linux.
 Also start
 
 ```sh

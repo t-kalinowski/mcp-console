@@ -25,7 +25,12 @@ from support.macos import (
     live_darwin_processes,
 )
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, SANDBOX, requires
+from support.requirements import (
+    MACOS_SANDBOX,
+    NATIVE_FIXTURES,
+    PROCESS_EVENTS,
+    requires,
+)
 from support.suites import run_this_suite
 
 TIMEOUT = 10
@@ -132,7 +137,7 @@ def _assert_zod_echo(entry: dict[str, object]) -> None:
     }, result
 
 
-@requires(SANDBOX, PROCESS_EVENTS)
+@requires(MACOS_SANDBOX, PROCESS_EVENTS)
 def test_sandbox_setup_failure_is_reported_and_retryable(binary: Path) -> Transcript:
     worker = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as directory:
@@ -175,7 +180,7 @@ def test_sandbox_setup_failure_is_reported_and_retryable(binary: Path) -> Transc
             stop_client(client)
 
 
-@requires(SANDBOX, PROCESS_EVENTS, NATIVE_FIXTURES)
+@requires(MACOS_SANDBOX, PROCESS_EVENTS, NATIVE_FIXTURES)
 def test_manager_failure_before_readiness_keeps_custom_relay_gated(
     binary: Path,
 ) -> Transcript:

@@ -5,7 +5,10 @@ fn main() {
     println!("cargo:rerun-if-changed=src/r_graphics.c");
     println!("cargo:rerun-if-changed=src/r_repl.c");
 
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+    if matches!(
+        std::env::var("CARGO_CFG_TARGET_OS").as_deref(),
+        Ok("macos" | "linux")
+    ) {
         bind_private_runner();
     }
     if std::env::var_os("CARGO_CFG_UNIX").is_some() {
@@ -72,8 +75,20 @@ fn bind_private_runner() {
     let private_directory = prefix.join("libexec");
     std::fs::create_dir_all(&private_directory)
         .expect("failed to create the private sandbox runner directory");
-    std::fs::copy(&runner_path, private_directory.join("mcp-console-sandbox"))
-        .expect("failed to install the private sandbox runner beside the Cargo output");
+    let mut artifacts = vec![runner_path];
+    if target.contains("linux") {
+        let helper = root.join("wheel-data/data/libexec/bwrap");
+        println!("cargo:rerun-if-changed={}", helper.display());
+        artifacts.push(helper);
+    }
+    for artifact in artifacts {
+        let name = artifact.file_name().unwrap().to_str().unwrap();
+        let staged = private_directory.join(format!(".{name}-{}", std::process::id()));
+        // Rebuilding must not overwrite an executable used by an active sandbox.
+        std::fs::copy(&artifact, &staged).expect("failed to stage private sandbox artifact");
+        std::fs::rename(staged, private_directory.join(name))
+            .expect("failed to install private sandbox artifact beside the Cargo output");
+    }
     std::fs::write(
         output.join("sandbox_runner_installation.rs"),
         format!(
