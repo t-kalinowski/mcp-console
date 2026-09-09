@@ -341,8 +341,9 @@ def test_retries_python_runtime_initialization_after_interrupt(
                   where = asNamespace("reticulate")
                 )))
                 """)
-            client.send(r=r)
-            assert last_result_text(client) == "[done]"
+            wait_for_evaluation_output(
+                client, "[done]", "Python configuration checkpoint", r=r
+            )
 
             # The input request proves runtime configuration has started before
             # interrupting it, after any first-use Python preparation completes.

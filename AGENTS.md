@@ -12,6 +12,7 @@ The documents under `design-sketches/` describe intended behavior, not the curre
 - `RELEASE.md` defines release preparation, wheel rehearsal, publication, verification, and recovery.
 - `docs/README.md` maps the implemented documentation by audience.
 - `docs/ARCHITECTURE.md` describes the implemented process structure, ownership, and lifecycle.
+- `docs/LINUX_SANDBOX.md` describes Linux namespace policy, subreaper ownership, setup, cleanup, and signal delivery.
 - `docs/SANDBOX_SUPERVISION.md` describes macOS sandbox lifetime supervision, setup-FD ownership, policy exceptions, and standalone terminal and signal ownership.
 - `docs/BUILTIN_RUNTIME.md` describes user-visible behavior of the built-in mixed-language console.
 - `docs/SEND_OPERATIONS.md` defines validation, preparation, control, input, and timeout ordering for `send`.
@@ -29,13 +30,14 @@ Do not treat `design-sketches/` as evidence of implemented behavior.
 ## Platform and development
 
 The worker relay, built-in worker, and managed resolvers support macOS and Linux.
-Linux requires `serve --no-sandbox`; the sandbox command remains macOS-only.
+The default sandbox and standalone sandbox command support both platforms.
+Linux requires kernel 5.11 or later, procfs, and host permission for user, mount, PID, and network namespaces.
 Windows is not supported.
 Other Unix operating systems are not supported build or runtime targets; shared `cfg(unix)` modules do not imply support for them.
 Retain platform conditionals for modules that use OS-specific APIs and for selecting different implementations or unsupported-platform stubs; avoid redundant gates on shared code.
 CI runs core checks and all capability-applicable transcript modes on macOS and Linux.
 
-macOS Cargo builds automatically prepare the pinned sandbox companion using an isolated checkout under the target directory.
+macOS and Linux Cargo builds automatically prepare the pinned sandbox companion using an isolated checkout under the target directory.
 Install development checkouts with `uv tool install --reinstall .`; bare `cargo install` does not install the companion bundle.
 Native Cargo bundles require the default shared build/target layout; a separate intermediate build directory is unsupported for running the Cargo output.
 Wheel packaging requires exclusive use of its source checkout; use separate checkouts for concurrent builds.
@@ -71,7 +73,7 @@ They are not MCP, relay, sideband, or worker-stream records.
 ## Process and ownership boundaries
 
 The suite covers client-server MCP, server-relay JSONL, relay-worker sideband and standard streams, and the public CLI, including sandbox supervision.
-`docs/ARCHITECTURE.md` owns component contracts; `docs/SANDBOX_SUPERVISION.md` owns startup, retirement, failure recovery, and terminal details.
+`docs/ARCHITECTURE.md` owns component contracts; `docs/SANDBOX_SUPERVISION.md` and `docs/LINUX_SANDBOX.md` own platform-specific startup, retirement, failure recovery, and terminal details.
 Keep these invariants intact:
 
 - The server owns logical relay lifetime orchestration and retirement, worker-generation state, operation admission, output cuts, pending-output budgets, response assembly, delivery ownership, retained requirements, and host resolvers.
@@ -83,7 +85,7 @@ Keep these invariants intact:
   It preserves each producer's order without reconstructing chronology across independent transports.
   It does not own process-tree cleanup or depend on a particular process-group identity or sandbox topology.
 - One sandbox launcher owns each sandboxed relay-worker or standalone command lifetime, including command status, signal relaying, terminal ownership, and manager-failure recovery.
-  Its host-side manager owns observed-descendant retirement and private-directory cleanup; it does not own logical session state or relay transport.
+  Its host-side manager owns descendant retirement and private-directory cleanup; it does not own logical session state or relay transport.
   Preserve waitable child identities through cleanup and keep process retirement distinct from best-effort directory removal.
 - Restart, replacement, evaluation admission, stdin writes, resolver callbacks, and retained-environment commits are scoped to the worker generation that accepted them.
   Work admitted for an old generation must not reach its replacement.
@@ -111,7 +113,7 @@ Keep these invariants intact:
 - `src/worker_relay.rs`, `src/worker_relay/event_writer.rs` — worker launch, I/O forwarding, ordered event output, direct-worker signaling, termination, and reaping.
 - `src/worker_client.rs`, `src/worker_client/` — session coordination and send planning, server-owned environment, evaluation, lifecycle, ordinary launcher child ownership, ordered event dispatch, output tape, shared Unix relay transport, and platform-specific startup observation.
 - `src/process_exit.rs` — shared direct-child exit observation without reaping, used by launcher ownership and sandbox cleanup.
-- `src/sandbox.rs`, `src/sandbox/{child,installation,macos,process_group,runner}.rs`, `src/sandbox/supervision.rs`, `src/sandbox/supervision/` — launcher-owned sandbox construction, child and process-group cleanup, primary host-manager supervision, manager-failure recovery, and standalone job control.
+- `src/sandbox.rs`, `src/sandbox/{child,command,installation,linux,process_group,runner}.rs`, `src/sandbox/linux/`, `src/sandbox/supervision.rs`, `src/sandbox/supervision/` — launcher-owned sandbox construction, child and process-group cleanup, primary host-manager supervision, manager-failure recovery, and standalone job control.
 - `src/worker.rs`, `src/worker/core.rs`, `src/worker/embedded_r.rs`, `src/r_repl.c` — worker-facing facade, shared process services, current embedded-R backend, cell dispatch, console callbacks, and the C-owned DLL-REPL boundary.
 
 ### Language adapters

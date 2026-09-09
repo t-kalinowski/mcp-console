@@ -216,7 +216,9 @@ def test_explicit_matplotlib_config_is_read_only(binary: Path) -> Transcript:
         assert last_result_text(client) == "[prepared]"
         # fmt: python
         python = code("""
+            import errno
             import os
+            import sys
             from pathlib import Path
 
             import matplotlib
@@ -225,7 +227,8 @@ def test_explicit_matplotlib_config_is_read_only(binary: Path) -> Transcript:
             try:
                 with config.open("a", encoding="utf-8"):
                     pass
-            except PermissionError:
+            except OSError as error:
+                assert error.errno == (errno.EROFS if sys.platform == "linux" else errno.EPERM)
                 config_read_only = True
             else:
                 config_read_only = False

@@ -12,7 +12,7 @@ Keep the root `mcp-console` entry in `Cargo.lock` synchronized with it.
 ## Private sandbox executable
 
 `sandbox-runner.json` pins the runner source repository, release, commit, protocol, and Rust toolchain.
-macOS Cargo builds prepare it automatically with `scripts/stage-sandbox-runner`, including when invoked by `uv tool install --reinstall .`.
+macOS and Linux Cargo builds prepare it automatically with `scripts/stage-sandbox-runner`, including when invoked by `uv tool install --reinstall .`.
 The script fetches the exact source revision into `sandbox-runner-cache/<commit>` under Cargo's target prefix and builds it with the pinned toolchain and lockfile.
 Source builds require Python 3, Git, and rustup; rustup installs the pinned toolchain if needed.
 The runner has its own Cargo build directory and jobserver, so the nested build also works when the outer Cargo uses `--jobs 1` or a custom target directory.
@@ -23,16 +23,16 @@ Cargo runs from `/` with an explicit manifest and the pinned workspace configura
 Root-level `/.cargo/config` or `/.cargo/config.toml` is unsupported and causes an error before building.
 The runner's Cargo home and dependency cache live in `codex-rs/target/cargo-home` within its source checkout; rustup keeps its normal toolchain cache.
 Completed runner bundles are cached separately under `sandbox-runner-cache/artifacts/`, keyed by the pin, staging script, and target.
-Cache hits verify the executable, license, and notice checksums and copy the bundle without fetching sources or invoking Cargo.
+Cache hits verify all executable and license checksums and copy the bundle without fetching sources or invoking Cargo.
 
 The source checkout and runner build stay under the selected target prefix.
 To use a dedicated clean checkout at the pin on a cache miss, explicitly set `MCP_CONSOLE_SANDBOX_SOURCE`; the release workflow uses a checkout within its own workspace.
 The default build does not inspect or change other working checkouts.
 For a standalone runner build, run `scripts/stage-sandbox-runner`; its output is `target/sandbox-runner/`.
-Use `--target aarch64-apple-darwin` or `--target x86_64-apple-darwin` for an explicit target.
+Use `--target` with `aarch64-apple-darwin`, `x86_64-apple-darwin`, `aarch64-unknown-linux-gnu`, or `x86_64-unknown-linux-gnu` for an explicit target.
 Without that option, the standalone script selects the pinned compiler's native target.
 
-Staging strips the distributed runner with `xcrun strip -S -x` before computing its digest; the original executable remains in the nested Cargo build directory for debugging.
+Staging strips the distributed executables with `xcrun strip -S -x` on macOS and `strip --strip-unneeded` on Linux before computing their digests; the original executable remains in the nested Cargo build directory for debugging.
 MCP Console verifies the runner's source revision, target, and SHA-256 of each bundled file before packaging the executable, upstream license, and notice.
 The wheel installs this relocatable layout:
 
@@ -43,7 +43,7 @@ share/licenses/mcp-console/LICENSE
 share/licenses/mcp-console/NOTICE
 ```
 
-The main executable resolves the runner relative to its own canonical path and verifies all three companion files using streaming SHA-256 with a bounded buffer on every sandbox launch.
+The main executable resolves the runner relative to its own canonical path and verifies all companion files using streaming SHA-256 with a bounded buffer on every sandbox launch.
 Missing or modified files produce an installation error.
 Move the complete bundle when relocating it; a symlink to `bin/mcp-console` also works.
 There is no embedded payload, extraction step, or runtime runner cache.
@@ -73,8 +73,11 @@ The small staging-script fixture checks isolation from the outer jobserver and c
 Installation checks use unstaged sources, hide the build artifacts, and check the installed commands with a decoy runner on PATH.
 Wheel verification also checks sandbox launches with an empty PATH, bundled license notices, relocation without a writable home directory, bounded verification allocations, and rejection of missing or modified companions.
 Each build clears the generated wheel data before staging, removing stale files from previous targets or staging recipes, including cached builds.
-Linux builds require no sandbox runner and leave the generated wheel data empty.
-The Linux installation smoke test evaluates R through `serve --no-sandbox`.
+Linux staging also builds the private bubblewrap helper, installs `libexec/bwrap`, and includes its license at `share/licenses/mcp-console/bubblewrap-COPYING`.
+Builds require a C compiler, `pkg-config`, and libcap development files (`build-essential pkg-config libcap-dev` on Ubuntu); installations require `libcap.so.2`.
+Linux smoke tests exercise the bundled helper with an empty `PATH` and evaluate R through default sandboxed `serve`.
+CI permits unprivileged namespace setup on its disposable Ubuntu runners by disabling their AppArmor user-namespace restriction.
+A local rehearsal must likewise run in an environment whose policy permits the bundled helper's namespace operations; an approved system `bwrap` alone does not verify that installation path.
 
 ## One-time PyPI setup
 
@@ -163,8 +166,7 @@ uv tool install --no-cache --no-sources --default-index https://pypi.org/simple 
 "$UV_TOOL_BIN_DIR/mcp-console" sandbox -- /usr/bin/true
 ```
 
-Verify these commands on both Apple Silicon and Intel macOS.
-On ARM64 and x86-64 Linux, omit the `sandbox` invocation and add `--no-sandbox` when starting `serve` through an MCP client.
+Verify these commands on Apple Silicon and Intel macOS and on ARM64 and x86-64 Linux.
 Also start
 
 ```sh

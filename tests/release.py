@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import tomllib
 import unittest
 import zipfile
 from pathlib import Path
@@ -306,18 +307,21 @@ class ReleaseScriptTests(unittest.TestCase):
     ) -> None:
         with zipfile.ZipFile(wheel, "w") as archive:
             archive.writestr("mcp_console-0.0.2.data/scripts/mcp-console", "fixture\n")
-            for name in ("mcp-console-sandbox", "LICENSE", "NOTICE"):
+            names = ("mcp-console-sandbox", "LICENSE", "NOTICE")
+            if "linux" in wheel.name:
+                names += ("bwrap", "bubblewrap-COPYING")
+            for name in names:
                 if name == omit:
                     continue
                 directory = (
                     "libexec"
-                    if name == "mcp-console-sandbox"
+                    if name in ("mcp-console-sandbox", "bwrap")
                     else "share/licenses/mcp-console"
                 )
                 info = zipfile.ZipInfo(
                     f"mcp_console-0.0.2.data/data/{directory}/{name}"
                 )
-                mode = 0o755 if name == "mcp-console-sandbox" and executable else 0o644
+                mode = 0o755 if directory == "libexec" and executable else 0o644
                 info.external_attr = (stat.S_IFREG | mode) << 16
                 archive.writestr(info, "fixture\n")
 
@@ -463,14 +467,14 @@ class ReleaseScriptTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("MCP response timed out after 1 seconds", result.stderr)
 
-    def test_smoke_linux_wheel_uses_no_sandbox(self) -> None:
+    def test_smoke_linux_wheel_requires_sandbox_and_bundled_helper(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)
             environment, wheel, cargo_bin = self.smoke_environment(directory)
             linux_wheel = wheel.with_name(
                 "mcp_console-0.0.2-py3-none-manylinux_2_34_x86_64.whl"
             )
-            self.write_wheel(linux_wheel, omit="mcp-console-sandbox")
+            self.write_wheel(linux_wheel)
             wheel.unlink()
             record = directory / "arguments.jsonl"
             environment["FAKE_MCP_ARGUMENTS"] = str(record)
@@ -488,19 +492,15 @@ class ReleaseScriptTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             invocations = [json.loads(line) for line in record.read_text().splitlines()]
-            self.assertIn(["serve", "--no-sandbox"], invocations)
-            self.assertFalse(any(call[:1] == ["sandbox"] for call in invocations))
+            self.assertIn(["serve"], invocations)
+            self.assertTrue(any(call[:1] == ["sandbox"] for call in invocations))
 
-            self.write_wheel(linux_wheel)
-            result = self.run_script(
-                *command,
-                cwd=directory,
-                env=environment,
-            )
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn(
-                "Linux wheel contains a macOS sandbox executable", result.stderr
-            )
+            for missing in ("mcp-console-sandbox", "bwrap", "bubblewrap-COPYING"):
+                with self.subTest(missing=missing):
+                    self.write_wheel(linux_wheel, omit=missing)
+                    result = self.run_script(*command, cwd=directory, env=environment)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("private sandbox runner", result.stderr)
 
     def test_verify_wheel_set_requires_macos_and_linux_architectures(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -523,7 +523,9 @@ class ReleaseScriptTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("expected exactly four wheels", result.stderr)
 
-    @unittest.skipUnless(sys.platform == "darwin", "requires a native runner target")
+    @unittest.skipUnless(
+        sys.platform in ("darwin", "linux"), "requires a native runner target"
+    )
     def test_stage_runner_ignores_ambient_cargo_configuration(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
@@ -561,6 +563,22 @@ class ReleaseScriptTests(unittest.TestCase):
                 fn main() { println!("{}", env!("RUNNER_PINNED_CONFIG")); }
                 """)
             )
+            # Linux staging builds a second executable from the pinned workspace.
+            helper = workspace / "bwrap"
+            (helper / "src").mkdir(parents=True)
+            (workspace / "Cargo.toml").write_text(
+                '[workspace]\nmembers = ["mcp-console-sandbox", "bwrap"]\nresolver = "2"\n'
+            )
+            (helper / "Cargo.toml").write_text(
+                '[package]\nname = "codex-bwrap"\nversion = "0.1.0"\n'
+                '[[bin]]\nname = "bwrap"\npath = "src/main.rs"\n'
+            )
+            shutil.copyfile(crate / "src/main.rs", helper / "src/main.rs")
+            with (workspace / "Cargo.lock").open("a") as lock:
+                lock.write('[[package]]\nname = "codex-bwrap"\nversion = "0.1.0"\n')
+            vendor = workspace / "vendor/bubblewrap"
+            vendor.mkdir(parents=True)
+            (vendor / "COPYING").write_text("bwrap license\n")
             pinned_config = workspace / ".cargo/config.toml"
             pinned_config.parent.mkdir()
             pinned_config.write_text('[env]\nRUNNER_PINNED_CONFIG = "pinned"\n')
@@ -708,6 +726,9 @@ class ReleaseScriptTests(unittest.TestCase):
             (crate / "Cargo.toml").touch()
             (checkout / "LICENSE").write_text("license\n")
             (checkout / "NOTICE").write_text("notice\n")
+            vendor = checkout / "codex-rs/vendor/bubblewrap"
+            vendor.mkdir(parents=True)
+            (vendor / "COPYING").write_text("bwrap license\n")
             commands = directory / "commands"
             commands.mkdir()
             write_executable(
@@ -764,6 +785,7 @@ class ReleaseScriptTests(unittest.TestCase):
                 output = Path(os.environ["CARGO_TARGET_DIR"]) / target / "release"
                 output.mkdir(parents=True, exist_ok=True)
                 (output / "mcp-console-sandbox").write_bytes(b"runner bytes with debug symbols")
+                (output / "bwrap").write_bytes(b"bwrap bytes with debug symbols")
                 """,
             )
             write_executable(
@@ -777,6 +799,20 @@ class ReleaseScriptTests(unittest.TestCase):
                 runner = Path(sys.argv[4])
                 assert runner.read_bytes() == b"runner bytes with debug symbols"
                 runner.write_bytes(b"runner bytes")
+                """,
+            )
+            write_executable(
+                commands / "strip",
+                """
+                #!/usr/bin/env python3
+                import sys
+                from pathlib import Path
+
+                assert sys.argv[1] == "--strip-unneeded", sys.argv
+                executable = Path(sys.argv[2])
+                original = executable.read_bytes()
+                assert original.endswith(b" with debug symbols")
+                executable.write_bytes(original.removesuffix(b" with debug symbols"))
                 """,
             )
             write_executable(
@@ -869,6 +905,11 @@ class ReleaseScriptTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             for arguments, target in (
                 ([], "aarch64-apple-darwin"),
+                (["--target", "x86_64-unknown-linux-gnu"], "x86_64-unknown-linux-gnu"),
+                (
+                    ["--target", "aarch64-unknown-linux-gnu"],
+                    "aarch64-unknown-linux-gnu",
+                ),
                 (["--target", "x86_64-apple-darwin"], "x86_64-apple-darwin"),
             ):
                 with self.subTest(target=target):
@@ -895,6 +936,11 @@ class ReleaseScriptTests(unittest.TestCase):
                             "codex-mcp-console-sandbox",
                             "--bin",
                             "mcp-console-sandbox",
+                            *(
+                                ["-p", "codex-bwrap", "--bin", "bwrap"]
+                                if "linux" in target
+                                else []
+                            ),
                             "--target",
                             target,
                         ],
@@ -912,6 +958,14 @@ class ReleaseScriptTests(unittest.TestCase):
                                     ("mcp-console-sandbox", b"runner bytes"),
                                     ("LICENSE", b"license\n"),
                                     ("NOTICE", b"notice\n"),
+                                    *(
+                                        (
+                                            ("bwrap", b"bwrap bytes"),
+                                            ("bubblewrap-COPYING", b"bwrap license\n"),
+                                        )
+                                        if "linux" in target
+                                        else ()
+                                    ),
                                 )
                             },
                         },
@@ -1024,6 +1078,101 @@ class ReleaseScriptTests(unittest.TestCase):
                     finally:
                         for path, original in originals.items():
                             path.write_bytes(original)
+
+    def test_cargo_rejects_changed_staged_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "src").mkdir()
+            (root / "src/main.rs").write_text("fn main() {}\n")
+            for name in ("r_graphics.c", "r_repl.c"):
+                (root / "src" / name).touch()
+            shutil.copyfile(ROOT / "build.rs", root / "build.rs")
+            dependencies = tomllib.loads((ROOT / "Cargo.toml").read_text())[
+                "build-dependencies"
+            ]
+            (root / "Cargo.toml").write_text(
+                '[package]\nname = "sandbox-artifact-build"\nversion = "0.0.0"\n'
+                'edition = "2024"\n[build-dependencies]\n'
+                + "".join(
+                    f"{name} = {json.dumps(version)}\n"
+                    for name, version in dependencies.items()
+                )
+            )
+            shutil.copyfile(ROOT / "Cargo.lock", root / "Cargo.lock")
+            target = subprocess.check_output(
+                ["rustc", "--print", "host-tuple"], text=True
+            ).strip()
+            pin = json.loads((ROOT / "sandbox-runner.json").read_text())
+            (root / "sandbox-runner.json").write_text(json.dumps(pin))
+            artifacts = {
+                "mcp-console-sandbox": b"runner bytes",
+                "LICENSE": b"license",
+                "NOTICE": b"notice",
+            }
+            if sys.platform == "linux":
+                artifacts["bwrap"] = b"bwrap bytes"
+                artifacts["bubblewrap-COPYING"] = b"bwrap license"
+            staged = root / "staged"
+            staged.mkdir(parents=True)
+            for name, contents in artifacts.items():
+                (staged / name).write_bytes(contents)
+                (staged / name).chmod(0o755)
+            (staged / "build.json").write_text(
+                json.dumps(
+                    {
+                        "source_revision": pin["commit"],
+                        "target": target,
+                        "sha256": {
+                            name: hashlib.sha256(contents).hexdigest()
+                            for name, contents in artifacts.items()
+                        },
+                    }
+                )
+            )
+            # Exercise Cargo's verification of the staging command's output.
+            # The fixture producer supplies the declared bytes and digests.
+            script = root / "scripts/stage-sandbox-runner"
+            script.parent.mkdir()
+            script_source = textwrap.dedent("""
+                import shutil
+                import sys
+                from pathlib import Path
+
+                root = Path(__file__).resolve().parent.parent
+                output = Path(sys.argv[sys.argv.index("--output-dir") + 1])
+                shutil.copytree(root / "staged", output, dirs_exist_ok=True)
+                """)
+            script.write_text(script_source)
+            arguments = [
+                "cargo",
+                "build",
+                "--target",
+                target,
+                "--target-dir",
+                str(root / "target"),
+            ]
+            result = subprocess.run(arguments, cwd=root, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            prefix = root / "target" / target
+            for name, contents in artifacts.items():
+                with self.subTest(artifact=name):
+                    relative = (
+                        "libexec"
+                        if name in ("mcp-console-sandbox", "bwrap")
+                        else "share/licenses/mcp-console"
+                    )
+                    installed = prefix / relative / name
+                    self.assertEqual(installed.read_bytes(), contents)
+                    self.assertTrue(os.access(installed, os.X_OK))
+                    (staged / name).write_bytes(b"replaced artifact")
+                    script.write_text(script_source + f"\n# changed {name}\n")
+                    result = subprocess.run(
+                        arguments, cwd=root, capture_output=True, text=True
+                    )
+                    self.assertNotEqual(result.returncode, 0, result.stderr)
+                    self.assertIn(f"artifact {name} changed", result.stderr)
+                    self.assertEqual(installed.read_bytes(), contents)
+                    (staged / name).write_bytes(contents)
 
 
 if __name__ == "__main__":

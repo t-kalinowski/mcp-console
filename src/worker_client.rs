@@ -1376,7 +1376,7 @@ impl Client {
             }
         }
 
-        let _replacement_startup = self.0.preparation.blocking_read();
+        let replacement_startup = self.0.preparation.blocking_read();
         evaluation.start_replacement(failure.worker_stopped());
         let replacement = self
             .start_worker(
@@ -1394,6 +1394,8 @@ impl Client {
                 }
                 failure
             });
+        // A delivered replacement result must admit the next preparation.
+        drop(replacement_startup);
         evaluation.finish_replacement(replacement);
         Ok(())
     }

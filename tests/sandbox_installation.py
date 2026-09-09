@@ -15,7 +15,7 @@ from pathlib import Path
 from support.native import build_interposer
 
 
-@unittest.skipUnless(sys.platform == "darwin", "the sandbox requires macOS")
+@unittest.skipUnless(sys.platform in ("darwin", "linux"), "requires macOS or Linux")
 class SandboxInstallationTests(unittest.TestCase):
     binary_source: Path
 
@@ -162,6 +162,11 @@ class SandboxInstallationTests(unittest.TestCase):
             "libexec/mcp-console-sandbox",
             "share/licenses/mcp-console/LICENSE",
             "share/licenses/mcp-console/NOTICE",
+            *(
+                ("libexec/bwrap", "share/licenses/mcp-console/bubblewrap-COPYING")
+                if sys.platform == "linux"
+                else ()
+            ),
         ):
             artifact = prefix / relative
             original = artifact.read_bytes()
@@ -185,6 +190,9 @@ class SandboxInstallationTests(unittest.TestCase):
             artifact.write_bytes(original)
             artifact.chmod(0o755 if relative.startswith("libexec/") else 0o644)
 
+    @unittest.skipUnless(
+        sys.platform == "darwin", "requires the macOS allocator interposer"
+    )
     def test_first_and_repeated_launches_use_bounded_allocations(self) -> None:
         interposer = build_interposer(self.root, "bounded_allocation")
         self.environment["DYLD_INSERT_LIBRARIES"] = str(interposer)

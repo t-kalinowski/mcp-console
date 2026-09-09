@@ -3,7 +3,8 @@
 `mcp.console` adds MCP Console to an [ellmer](https://ellmer.tidyverse.org/) chat as a persistent workbench for R, Python, and DuckDB.
 
 MCP Console supports macOS and Linux.
-On Linux, use `console_tool(no_sandbox = TRUE)` to run evaluated code with the server's filesystem and network permissions.
+Evaluated code runs in a sandbox by default on both platforms.
+Use `console_tool(no_sandbox = TRUE)` to run with the server's filesystem and network permissions.
 
 ## Install
 

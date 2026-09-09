@@ -26,11 +26,11 @@ from support.macos import (
 )
 from support.normalization import code
 from support.records import Transcript
-from support.requirements import PROCESS_EVENTS, SANDBOX, requires
+from support.requirements import MACOS_SANDBOX, PROCESS_EVENTS, SANDBOX, requires
 from support.suites import run_this_suite
 
 
-@requires(SANDBOX, PROCESS_EVENTS)
+@requires(MACOS_SANDBOX, PROCESS_EVENTS)
 def test_pending_signal_at_root_exit_preserves_status(binary: Path) -> Transcript:
     lifetime = _start_lifetime(binary)
     exit_events = select.kqueue()
@@ -97,7 +97,7 @@ def test_pending_signal_at_root_exit_preserves_status(binary: Path) -> Transcrip
         _cleanup(lifetime)
 
 
-@requires(SANDBOX, PROCESS_EVENTS)
+@requires(MACOS_SANDBOX, PROCESS_EVENTS)
 def test_owned_sigterm_retires_the_sandbox_lifetime(binary: Path) -> Transcript:
     lifetime = _start_lifetime(binary, exit_with_parent=os.getpid())
     cleanup = (lifetime.root, lifetime.target, lifetime.descendant, lifetime.manager)
@@ -143,7 +143,7 @@ def test_owned_sigterm_retires_the_sandbox_lifetime(binary: Path) -> Transcript:
         _cleanup(lifetime)
 
 
-@requires(SANDBOX, PROCESS_EVENTS)
+@requires(MACOS_SANDBOX, PROCESS_EVENTS)
 def test_owned_sigterm_retires_when_inherited_ignored(binary: Path) -> Transcript:
     lifetime = _start_lifetime(
         binary,
@@ -194,7 +194,7 @@ def test_owned_sigterm_retires_when_inherited_ignored(binary: Path) -> Transcrip
         _cleanup(lifetime)
 
 
-@requires(SANDBOX, PROCESS_EVENTS)
+@requires(MACOS_SANDBOX, PROCESS_EVENTS)
 def test_owned_root_exit_waits_for_cleanup(binary: Path) -> Transcript:
     lifetime = _start_lifetime(binary, exit_with_parent=os.getpid())
     cleanup = (lifetime.root, lifetime.target, lifetime.descendant, lifetime.manager)
@@ -280,6 +280,59 @@ def test_preserves_status_when_sigchld_was_ignored(binary: Path) -> Transcript:
             "exit_code": result.returncode,
         }
     ]
+
+
+@requires(SANDBOX)
+def test_preserves_inherited_ignored_signals(binary: Path) -> Transcript:
+    # fmt: python
+    host_script = code(r"""
+        import os
+        import signal
+        import sys
+
+        for name in ("SIGHUP", "SIGINT", "SIGTERM", "SIGCHLD"):
+            signal.signal(getattr(signal, name), signal.SIG_IGN)
+        signal.signal(max(signal.valid_signals()), signal.SIG_IGN)
+        os.execv(sys.argv[1], sys.argv[1:])
+        """)
+    # fmt: python
+    target_script = code(r"""
+        import os
+        import signal
+
+        for name in ("SIGHUP", "SIGINT", "SIGTERM", "SIGCHLD"):
+            number = getattr(signal, name)
+            assert signal.getsignal(number) == signal.SIG_IGN, name
+            os.kill(os.getpid(), number)
+            print(name, "ignored")
+        highest = max(signal.valid_signals())
+        assert signal.getsignal(highest) == signal.SIG_IGN
+        os.kill(os.getpid(), highest)
+        print("highest signal ignored")
+        """)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            host_script,
+            binary,
+            "sandbox",
+            "--",
+            sys.executable,
+            "-c",
+            target_script,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=TIMEOUT,
+        check=False,
+    )
+    assert result.returncode == 0, result
+    assert result.stderr == "", result.stderr
+    assert result.stdout.splitlines() == [
+        f"{name} ignored" for name in ("SIGHUP", "SIGINT", "SIGTERM", "SIGCHLD")
+    ] + ["highest signal ignored"], result.stdout
+    return [{"inherited_signals": "ignored", "stdout": result.stdout, "exit_code": 0}]
 
 
 if __name__ == "__main__":

@@ -55,9 +55,10 @@ The manager inherits neither pipe end, and the final target and relay never see 
 Original fd 0, 1, and 2 carry only target streams; stdin retains its open file description, offsets, seekability, and terminal identity.
 Rust startup supplies `/dev/null` when the caller closed stdin before invoking the launcher.
 
-The hidden `sandbox-target` wrapper only restores the original macOS signal mask from the validated unsigned `--signal-mask <MASK>` argument and execs the target command after `--`.
+The hidden `sandbox-target` wrapper restores inherited ignored dispositions from `--ignored-signals <MASK>`, then the original signal mask from `--signal-mask <MASK>`, and execs the target command after `--`.
+Both masks are validated unsigned integers captured before the launcher changes signal state.
 It neither reads setup nor replaces stdin, and wrapper arguments do not reach the requested command.
-The runner retains the blocked forwarded signals while waiting; inherited dispositions still come from the launcher's child configuration.
+The runner retains the blocked forwarded signals while waiting; the wrapper restores the target's inherited ignored dispositions after native setup.
 Configured sandbox code therefore cannot run before manager observation is active and failure recovery is installed.
 
 Signal delivery has a known startup limitation: before the runner spawns its target, it can be the only member of the target process group.
@@ -138,7 +139,7 @@ The launcher closes the ownership token, waits for manager cleanup, reaps the di
 
 ## Policy extensions and compatibility
 
-The pinned runner uses the base and preferences policies in `codex-rs/sandboxing/src/seatbelt*.sbpl` at `4a061c4ec94f5ad99e148982168ea4f21367c26c`.
+The pinned runner uses the base and preferences policies in `codex-rs/sandboxing/src/seatbelt*.sbpl` at `3ee7d3190983b482b312ddfc3201c464179a1245`.
 MCP Console supplies read access to the filesystem root, restricted networking with no proxy, and its trusted `policy_extensions.sbpl`.
 Managed networking and configurable user policies remain planned work.
 
@@ -191,4 +192,5 @@ The runner's initial JSON configuration requires UTF-8 command arguments, paths,
 Standard-stream contents remain arbitrary bytes.
 Any future sandbox-specific control channel must terminate at the sandbox process boundary; its transport and setup mechanism are independent of the relay protocol.
 The launcher does not support `Ctrl-Z` followed by `fg` or general pipeline job-control semantics.
-Linux and Windows are not supported.
+Linux uses the separate [namespace and subreaper implementation](LINUX_SANDBOX.md).
+Windows is not supported.

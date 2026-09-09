@@ -15,6 +15,7 @@ from support.checkpoints import (
 from support.client import McpClient
 from support.execution import SANDBOXED
 from support.processes import (
+    host_process_id,
     process_exists,
     process_group_exists,
     stop_process,
@@ -53,12 +54,11 @@ def test_restarts_after_unexpected_sideband_message(binary: Path) -> Transcript:
             assert process_group_output.startswith(process_group_prefix), (
                 process_group_output
             )
-            worker_group = int(
-                process_group_output.removeprefix(process_group_prefix).removesuffix(
-                    "\n"
-                )
+            reported_group = int(
+                process_group_output.removeprefix(process_group_prefix)
             )
-            assert process_group_output == f"{process_group_prefix}{worker_group}\n"
+            assert process_group_output == f"{process_group_prefix}{reported_group}\n"
+            worker_group = host_process_id(reported_group, client.process.pid)
             assert worker_group != os.getpgrp(), (
                 "Zod did not enter a dedicated process group"
             )
@@ -123,7 +123,9 @@ def test_restarts_after_worker_exit_with_partial_sideband(binary: Path) -> Trans
                     "zod-sideband-descendant-pid",
                     client,
                 )
-                descendant_group = int(marker.read_text(encoding="utf-8"))
+                descendant_group = host_process_id(
+                    int(marker.read_text(encoding="utf-8")), client.process.pid
+                )
                 # Keep the event channel open before exit removes the directory.
                 control.connect(client)
                 release_partial_sideband(marker)
@@ -137,8 +139,27 @@ def test_restarts_after_worker_exit_with_partial_sideband(binary: Path) -> Trans
                 )
                 descendant_group = None
 
+                # Cleanup has completed, but replacement startup can outlast
+                # the first response. Collect its documented startup polls
+                # before evaluating the next cell, preserving the full failure.
+                content = result["content"][0]
+                failure = content["text"].removesuffix("[worker starting]")
+                poll_start = len(client.transcript)
+                if content["text"].endswith("[worker starting]"):
+                    while True:
+                        client.send(timeout_ms=15_000)
+                        state = last_tool_text(client)
+                        assert state in {"[worker starting]", "[idle]"}, state
+                        if state == "[idle]":
+                            break
+                    content["text"] = failure + "[idle]"
+                    del client.transcript[poll_start:]
+
                 client.send(r="echo echo")
-                assert last_tool_text(client) == "zod: echo\n"
+                assert client.transcript[-1]["result"] == {
+                    "content": [{"type": "text", "text": "zod: echo\n"}],
+                    "isError": False,
+                }, client.transcript[-2:]
                 return client.finish()
         finally:
             stop_process_group(descendant_group)
@@ -172,8 +193,14 @@ def test_replaces_worker_after_relay_exit(binary: Path) -> Transcript:
                 "zod-relay-exit-evaluation-started",
                 client,
             )
-            relay_pid = int((started.parent / "zod-relay-pid").read_text())
-            relay_group = os.getpgid(relay_pid)
+            reported_worker, reported_relay, reported_group = map(
+                int, started.read_text().split()
+            )
+            worker_pid, relay_pid, relay_group = (
+                host_process_id(pid, client.process.pid)
+                for pid in (reported_worker, reported_relay, reported_group)
+            )
+            assert os.getpgid(relay_pid) == relay_group
             assert relay_pid != relay_group, (
                 "relay unexpectedly leads the sandbox group"
             )
@@ -186,8 +213,8 @@ def test_replaces_worker_after_relay_exit(binary: Path) -> Transcript:
             assert text.startswith("zod worker pid: "), text
             topology, failure = text.split("\n", 1)
             worker, relay = topology.split("; ")
-            worker_pid = int(worker.removeprefix("zod worker pid: "))
-            assert int(relay.removeprefix("relay process group: ")) == relay_group
+            assert int(worker.removeprefix("zod worker pid: ")) == reported_worker
+            assert int(relay.removeprefix("relay process group: ")) == reported_group
             assert len({worker_pid, relay_pid, relay_group}) == 3, topology
             assert failure == (
                 "[worker relay stdout closed before retirement completed]\n"

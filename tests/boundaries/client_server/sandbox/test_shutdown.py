@@ -14,7 +14,9 @@ from support.assertions import last_tool_text
 from support.checkpoints import FifoCheckpoint, release_partial_sideband
 from support.client import McpClient
 from support.execution import SANDBOXED
+from support.native import compile_interposer
 from support.processes import (
+    host_process_id,
     process_exists,
     process_group_exists,
     stop_process,
@@ -59,7 +61,9 @@ def test_restart_cancels_partial_sideband_frame(binary: Path) -> Transcript:
                 "zod-sideband-descendant-pid",
                 client,
             )
-            descendant_group = int(marker.read_text(encoding="utf-8"))
+            descendant_group = host_process_id(
+                int(marker.read_text(encoding="utf-8")), client.process.pid
+            )
             control.connect(client)
             release_partial_sideband(marker)
             control.wait_for(0, "partial_sideband_written")
@@ -131,7 +135,9 @@ def test_restart_cancels_reader_after_operation_result(
                 "zod-sideband-descendant-pid",
                 client,
             )
-            descendant_group = int(marker.read_text(encoding="utf-8"))
+            descendant_group = host_process_id(
+                int(marker.read_text(encoding="utf-8")), client.process.pid
+            )
             wait_for_marker(
                 temporary_path,
                 "zod-sideband-partial-tail-written",
@@ -191,22 +197,8 @@ def test_restart_drains_readable_frame_before_abandoning_partial_tail(
         ZodFixtureControl(Path(temporary_directory)) as control,
     ):
         temporary = Path(temporary_directory)
-        interposer = temporary / "delay-sideband-poll.dylib"
-        subprocess.run(
-            [
-                "cc",
-                "-dynamiclib",
-                "-std=c11",
-                "-Wall",
-                "-Wextra",
-                "-Werror",
-                "-o",
-                interposer,
-                interposer_source,
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
+        interposer = compile_interposer(
+            interposer_source, temporary / "delay-sideband-poll"
         )
         loaded_name = "delay-sideband-poll-loaded"
         arm_name = "delay-sideband-poll-arm"
@@ -250,7 +242,9 @@ def test_restart_drains_readable_frame_before_abandoning_partial_tail(
                 "zod-sideband-descendant-pid",
                 client,
             )
-            descendant_group = int(marker.read_text(encoding="utf-8"))
+            descendant_group = host_process_id(
+                int(marker.read_text(encoding="utf-8")), client.process.pid
+            )
             wait_for_marker(temporary, socket_ready_name, client)
             wait_for_marker(temporary, partial_tail_name, client)
             restart = client.start_send(control="restart")
@@ -329,7 +323,9 @@ def test_shutdown_cancels_partial_sideband_frame(binary: Path) -> Transcript:
                 "zod-sideband-descendant-pid",
                 client,
             )
-            descendant_group = int(marker.read_text(encoding="utf-8"))
+            descendant_group = host_process_id(
+                int(marker.read_text(encoding="utf-8")), client.process.pid
+            )
             control.connect(client)
             release_partial_sideband(marker)
             control.wait_for(0, "partial_sideband_written")
@@ -398,14 +394,16 @@ def test_shutdown_deadline_does_not_wait_for_sideband_writer(
                 target_operation=target_operation,
             )
             event = control.wait_for(target_operation, "sideband_reader_stalled")
-            worker_group = event["process_group"]
+            worker_group = host_process_id(event["process_group"], client.process.pid)
             assert isinstance(worker_group, int) and worker_group > 0, event
             holder_marker = wait_for_marker(
                 Path(temporary_directory),
                 "zod-blocked-sideband-holder-pid",
                 client,
             )
-            sideband_holder = int(holder_marker.read_text(encoding="utf-8"))
+            sideband_holder = host_process_id(
+                int(holder_marker.read_text(encoding="utf-8")), client.process.pid
+            )
             assert os.getpgid(sideband_holder) == sideband_holder, (
                 "sideband holder did not detach from the worker process group"
             )

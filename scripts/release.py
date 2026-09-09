@@ -110,10 +110,9 @@ def smoke_mcp(
     env: dict[str, str],
     startup_timeout: float,
     response_timeout: float,
-    no_sandbox: bool,
 ) -> None:
     process = subprocess.Popen(
-        [str(executable), "serve", *(["--no-sandbox"] if no_sandbox else [])],
+        [str(executable), "serve"],
         env=env,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
@@ -217,25 +216,19 @@ def smoke_mcp(
 
 def inspect_wheel_commands(wheel: Path, *, linux: bool) -> None:
     data = f"mcp_console-{package_version()}.data/data"
-    runner = f"{data}/libexec/mcp-console-sandbox"
     with zipfile.ZipFile(wheel) as archive:
         members = archive.namelist()
-        if linux:
+        for name in ("mcp-console-sandbox", *(["bwrap"] if linux else [])):
+            runner = f"{data}/libexec/{name}"
             require(
-                not any(Path(name).name == "mcp-console-sandbox" for name in members),
-                "Linux wheel contains a macOS sandbox executable",
+                [member for member in members if Path(member).name == name] == [runner],
+                f"wheel must contain exactly one private sandbox runner {name} under libexec",
             )
-            return
-        require(
-            [name for name in members if Path(name).name == "mcp-console-sandbox"]
-            == [runner],
-            "wheel must contain exactly one private sandbox runner under libexec",
-        )
-        require(
-            archive.getinfo(runner).external_attr >> 16 & 0o111 != 0,
-            "private sandbox runner is not executable",
-        )
-        for name in ("LICENSE", "NOTICE"):
+            require(
+                archive.getinfo(runner).external_attr >> 16 & 0o111 != 0,
+                f"private sandbox runner {name} is not executable",
+            )
+        for name in ("LICENSE", "NOTICE", *(["bubblewrap-COPYING"] if linux else [])):
             require(
                 f"{data}/share/licenses/mcp-console/{name}" in members,
                 f"private sandbox runner is missing {name}",
@@ -308,16 +301,11 @@ def smoke_wheel(args: argparse.Namespace) -> None:
         not public_runner.exists(),
         f"private sandbox runner was installed as a public command: {public_runner}",
     )
-    if not linux:
-        with tempfile.TemporaryDirectory(prefix="mcp-console-empty-path-") as directory:
-            sandbox_env = os.environ.copy()
-            sandbox_env["PATH"] = directory
-            run_command(
-                [str(cargo_bin), "sandbox", "--", "/usr/bin/true"], env=sandbox_env
-            )
-            run_command(
-                [str(installed), "sandbox", "--", "/usr/bin/true"], env=sandbox_env
-            )
+    with tempfile.TemporaryDirectory(prefix="mcp-console-empty-path-") as directory:
+        sandbox_env = os.environ.copy()
+        sandbox_env["PATH"] = directory
+        run_command([str(cargo_bin), "sandbox", "--", "/usr/bin/true"], env=sandbox_env)
+        run_command([str(installed), "sandbox", "--", "/usr/bin/true"], env=sandbox_env)
 
     internal_ir = installed.resolve().with_name("ir")
     require(not internal_ir.exists(), f"wheel contains sibling `ir`: {internal_ir}")
@@ -350,7 +338,6 @@ def smoke_wheel(args: argparse.Namespace) -> None:
             env,
             args.startup_timeout_seconds,
             args.response_timeout_seconds,
-            no_sandbox=linux,
         )
 
 

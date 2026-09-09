@@ -18,7 +18,10 @@ fn main() {
             Err(error) => panic!("failed to remove stale {directory} wheel data: {error}"),
         }
     }
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+    if matches!(
+        std::env::var("CARGO_CFG_TARGET_OS").as_deref(),
+        Ok("macos" | "linux")
+    ) {
         bind_private_runner();
     }
     if std::env::var_os("CARGO_CFG_UNIX").is_some() {
@@ -63,16 +66,30 @@ fn bind_private_runner() {
     assert_eq!(build["source_revision"], pin["commit"]);
     assert_eq!(build["target"].as_str(), Some(target.as_str()));
     let mut artifacts = String::new();
-    for (name, relative) in [
+    let mut bundle = vec![
         ("mcp-console-sandbox", "libexec/mcp-console-sandbox"),
         ("LICENSE", "share/licenses/mcp-console/LICENSE"),
         ("NOTICE", "share/licenses/mcp-console/NOTICE"),
-    ] {
+    ];
+    if target.contains("linux") {
+        bundle.extend([
+            ("bwrap", "libexec/bwrap"),
+            (
+                "bubblewrap-COPYING",
+                "share/licenses/mcp-console/bubblewrap-COPYING",
+            ),
+        ]);
+    }
+    for (name, relative) in bundle {
         let source = stage.join(name);
         let bytes = std::fs::read(&source).unwrap();
         let digest = Sha256::digest(&bytes);
         let digest_hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
-        assert_eq!(build["sha256"][name].as_str(), Some(digest_hex.as_str()));
+        assert_eq!(
+            build["sha256"][name].as_str(),
+            Some(digest_hex.as_str()),
+            "private sandbox runner artifact {name} changed during staging"
+        );
         artifacts.push_str(&format!("({relative:?}, {:?}),\n", digest.as_slice()));
         // Cargo's native layout and Maturin's wheel data use the same bundle.
         // Wheel packaging requires exclusive use of this source checkout until
@@ -82,7 +99,12 @@ fn bind_private_runner() {
             root.join("wheel-data/data").join(relative),
         ] {
             std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
-            std::fs::copy(&source, &destination).unwrap();
+            // Publish the verified bytes atomically; an active sandbox may
+            // still be using the previous executable during a rebuild.
+            let temporary = destination.with_file_name(format!(".{name}-{}", std::process::id()));
+            std::fs::write(&temporary, &bytes).unwrap();
+            std::fs::set_permissions(&temporary, source.metadata().unwrap().permissions()).unwrap();
+            std::fs::rename(temporary, &destination).unwrap();
             // Restore removed data even when Cargo can reuse the compiled binary.
             println!("cargo:rerun-if-changed={}", destination.display());
         }

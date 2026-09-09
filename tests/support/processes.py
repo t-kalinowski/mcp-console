@@ -7,6 +7,7 @@ from collections.abc import Sequence
 
 
 def process_group_exists(process_group: int) -> bool:
+    assert process_group > 1, process_group
     try:
         os.killpg(process_group, 0)
     except ProcessLookupError:
@@ -17,6 +18,7 @@ def process_group_exists(process_group: int) -> bool:
 
 
 def process_exists(process_id: int) -> bool:
+    assert process_id > 1, process_id
     try:
         os.kill(process_id, 0)
     except ProcessLookupError:
@@ -29,6 +31,7 @@ def process_exists(process_id: int) -> bool:
 def stop_process_id(process_id: int | None) -> None:
     if process_id is None:
         return
+    assert process_id > 1, process_id
     try:
         os.kill(process_id, signal.SIGKILL)
     except ProcessLookupError:
@@ -38,7 +41,7 @@ def stop_process_id(process_id: int | None) -> None:
 def stop_process_group(process_group: int | None) -> None:
     if process_group is None:
         return
-    assert process_group > 0, process_group
+    assert process_group > 1, process_group
     assert process_group != os.getpgrp(), process_group
     try:
         os.killpg(process_group, signal.SIGKILL)
@@ -104,6 +107,8 @@ else:
         ]
 
     def signal_process(identity: ProcessIdentity, number: int) -> bool:
+        if current_process_identity(identity[0]) != identity:
+            return False
         try:
             descriptor = os.pidfd_open(identity[0])
         except ProcessLookupError:
@@ -124,3 +129,30 @@ else:
         for identity in identities:
             signal_process(identity, signal.SIGKILL)
         return survivors
+
+
+def host_process_id(process_id: int, owner: int) -> int:
+    """Resolve a live fixture's namespace PID only among its host owner's descendants."""
+    assert process_id > 0 and owner > 1
+    if sys.platform != "linux":
+        return process_id
+    pending = [owner]
+    matches = []
+    while pending:
+        pid = pending.pop()
+        try:
+            status = Path(f"/proc/{pid}/status").read_text()
+            namespace_ids = next(
+                line.split()[1:]
+                for line in status.splitlines()
+                if line.startswith("NSpid:")
+            )
+            if int(namespace_ids[-1]) == process_id:
+                matches.append(pid)
+            for task in Path(f"/proc/{pid}/task").iterdir():
+                pending.extend(map(int, (task / "children").read_text().split()))
+        except FileNotFoundError:
+            # Other descendants may exit while the gated fixture remains alive.
+            continue
+    assert len(matches) == 1, (process_id, owner, matches)
+    return matches[0]

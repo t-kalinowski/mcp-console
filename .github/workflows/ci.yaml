@@ -71,11 +71,12 @@ jobs:
         with:
           components: clippy, rustfmt
 
-      - name: Install Linux resolver build dependencies
+      - name: Install Linux build and sandbox dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libcurl4-openssl-dev
+          sudo apt-get install -y build-essential pkg-config libcurl4-openssl-dev libcap-dev
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
       - name: Select R cache epoch
         id: cache-epoch
@@ -111,7 +112,6 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Restore private sandbox runner
-        if: runner.os == 'macOS'
         id: sandbox-cache
         uses: actions/cache/restore@v6
         with:
@@ -188,7 +188,7 @@ jobs:
       # Save before rust-cache's post-job cleanup removes non-Cargo artifacts.
       - name: Save private sandbox runner
         if: >-
-          runner.os == 'macOS' && github.ref == 'refs/heads/main' &&
+          github.ref == 'refs/heads/main' &&
           steps.sandbox-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:

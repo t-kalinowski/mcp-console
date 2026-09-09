@@ -107,15 +107,13 @@ impl Client {
                 return Err("worker environment lock poisoned".to_string());
             }
         };
-        let mut worker = match self.0.worker.try_lock() {
-            Ok(worker) => worker,
-            Err(std::sync::TryLockError::WouldBlock) => {
-                return Err("[requirements not prepared: worker is starting]".to_string());
-            }
-            Err(std::sync::TryLockError::Poisoned(_)) => {
-                return Err("worker lock poisoned".to_string());
-            }
-        };
+        // Preparation owns admission and no evaluation is active. A delivered
+        // completion can precede release of the evaluator's worker lock.
+        let mut worker = self
+            .0
+            .worker
+            .lock()
+            .map_err(|_| "worker lock poisoned".to_string())?;
         let environment_preparation = if let WorkerState::Running(running) = &*worker {
             match running.reserve_environment_preparation() {
                 Ok(reservation) => Ok(Some(reservation)),

@@ -55,12 +55,10 @@ jobs:
           python-version: "3.13"
 
       - name: Read private sandbox source pin
-        if: runner.os == 'macOS'
         id: sandbox-pin
         run: scripts/stage-sandbox-runner --github-output "$GITHUB_OUTPUT"
 
       - name: Check out private sandbox source
-        if: runner.os == 'macOS'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ steps.sandbox-pin.outputs.repository }}
@@ -83,18 +81,18 @@ jobs:
         with:
           version: 0.12.4
 
+      - name: Install Linux build and sandbox dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libcurl4-openssl-dev libcap-dev
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
       - name: Install private sandbox Rust toolchain
-        if: runner.os == 'macOS'
         run: >-
           rustup toolchain install
           "${{ steps.sandbox-pin.outputs.rust_toolchain }}"
           --profile minimal
-
-      - name: Install Linux resolver build dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libcurl4-openssl-dev
 
       - name: Build wheel
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0

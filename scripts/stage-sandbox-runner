@@ -14,8 +14,18 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-TARGETS = ("aarch64-apple-darwin", "x86_64-apple-darwin")
-BUNDLE_FILES = ("mcp-console-sandbox", "LICENSE", "NOTICE")
+TARGETS = (
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+)
+
+
+def bundle_files(target: str) -> tuple[str, ...]:
+    return ("mcp-console-sandbox", "LICENSE", "NOTICE") + (
+        ("bwrap", "bubblewrap-COPYING") if "linux" in target else ()
+    )
 
 
 def fail(message: str) -> None:
@@ -58,7 +68,7 @@ def main() -> None:
             for key in ("repository", "commit", "rust_toolchain"):
                 output.write(f"{key}={pin[key]}\n")
         return
-    if sys.platform != "darwin":
+    if sys.platform not in {"darwin", "linux"}:
         fail(f"building private runner artifacts is unsupported on {sys.platform}")
 
     target = args.target
@@ -119,11 +129,13 @@ def main() -> None:
             or any(
                 metadata["sha256"][name]
                 != hashlib.sha256((artifact / name).read_bytes()).hexdigest()
-                for name in BUNDLE_FILES
+                for name in bundle_files(target)
             )
         ):
             fail(f"cached runner bundle does not match its build metadata: {artifact}")
-        shutil.copytree(artifact, args.output_dir, dirs_exist_ok=True)
+        if args.output_dir.exists():
+            shutil.rmtree(args.output_dir)
+        shutil.copytree(artifact, args.output_dir)
 
 
 def validate_checkout(checkout: Path, pin: dict[str, object]) -> None:
@@ -173,7 +185,7 @@ def build(checkout: Path, output: Path, target: str, pin: dict[str, object]) -> 
             del environment[name]
     environment["CARGO_TARGET_DIR"] = str(workspace / "target")
     environment["CARGO_HOME"] = str(cargo_home)
-    # Both the runner and host build dependencies use Apple's selected linker,
+    # Both the runner and host build dependencies use the system linker,
     # independently of a caller's cc wrapper on PATH.
     for native_target in TARGETS:
         triple = native_target.upper().replace("-", "_")
@@ -192,6 +204,7 @@ def build(checkout: Path, output: Path, target: str, pin: dict[str, object]) -> 
         "codex-mcp-console-sandbox",
         "--bin",
         "mcp-console-sandbox",
+        *(["-p", "codex-bwrap", "--bin", "bwrap"] if "linux" in target else []),
         "--target",
         target,
     ]
@@ -200,15 +213,22 @@ def build(checkout: Path, output: Path, target: str, pin: dict[str, object]) -> 
         fail(f"runner build failed with status {result.returncode}")
     runner = workspace / "target" / target / "release" / "mcp-console-sandbox"
     output.mkdir(parents=True, exist_ok=True)
-    staged_runner = output / "mcp-console-sandbox"
-    shutil.copyfile(runner, staged_runner)
-    staged_runner.chmod(0o755)
-    # Preserve the symbolicateable original in the nested Cargo build tree.
-    # Strip the distributed artifact before recording its digest.
-    subprocess.run(["xcrun", "strip", "-S", "-x", str(staged_runner)], check=True)
+    executables = ("mcp-console-sandbox", "bwrap") if "linux" in target else ("mcp-console-sandbox",)
+    for name in executables:
+        staged = output / name
+        shutil.copyfile(runner.with_name(name), staged)
+        staged.chmod(0o755)
+        # Preserve the symbolicateable original in the nested Cargo build tree.
+        # Strip distributed artifacts before recording their digests.
+        strip = ["strip", "--strip-unneeded"] if "linux" in target else ["xcrun", "strip", "-S", "-x"]
+        subprocess.run([*strip, str(staged)], check=True)
     for name in ("LICENSE", "NOTICE"):
         destination = output / name
         shutil.copyfile(checkout / name, destination)
+        destination.chmod(0o644)
+    if "linux" in target:
+        destination = output / "bubblewrap-COPYING"
+        shutil.copyfile(workspace / "vendor/bubblewrap/COPYING", destination)
         destination.chmod(0o644)
     (output / "build.json").write_text(
         json.dumps(
@@ -217,7 +237,7 @@ def build(checkout: Path, output: Path, target: str, pin: dict[str, object]) -> 
                 "target": target,
                 "sha256": {
                     name: hashlib.sha256((output / name).read_bytes()).hexdigest()
-                    for name in BUNDLE_FILES
+                    for name in bundle_files(target)
                 },
             },
             indent=2,

@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from boundaries.cli._harness import _read_lines
 from support.normalization import code
+from support.processes import host_process_id, process_exists
 from support.records import Transcript
 from support.requirements import SANDBOX, requires
 from support.suites import run_this_suite
@@ -218,8 +219,10 @@ def test_owned_launcher_exposes_target_input_closure(binary: Path) -> Transcript
         import os
 
         os.close(0)
-        print("closed", os.getppid(), flush=True)
+        parent = os.getppid()
+        print("closed", parent, flush=True)
         assert os.read(2, 1) == b"x"
+        assert os.getppid() == parent
         """)
     gate, release = os.pipe()
     process = subprocess.Popen(
@@ -249,10 +252,13 @@ def test_owned_launcher_exposes_target_input_closure(binary: Path) -> Transcript
             except BrokenPipeError:
                 break
         (ready,) = _read_lines(process.stdout, 1, "target input closure")
-        state, runner_pid = ready.split()
-        assert state == "closed", ready
+        checkpoint, parent = ready.split()
+        assert checkpoint == "closed", ready
+        # Seatbelt cannot signal its host parent, even with signal zero.
+        # Inspect that process from the host while the target holds its gate.
+        parent = host_process_id(int(parent), process.pid)
+        assert process_exists(parent)
         assert process.poll() is None
-        os.kill(int(runner_pid), 0)
         _, writable, _ = select.select([], [process.stdin], [], TIMEOUT)
         assert writable, "a host process retained the target's input reader"
         try:
@@ -262,7 +268,7 @@ def test_owned_launcher_exposes_target_input_closure(binary: Path) -> Transcript
         else:
             raise AssertionError("a host process retained the target's input reader")
         assert process.poll() is None
-        os.kill(int(runner_pid), 0)
+        assert process_exists(parent)
         os.write(release, b"x")
         assert process.wait(timeout=TIMEOUT) == 0
     finally:

@@ -76,12 +76,16 @@ pub enum Command {
         temporary_directory: PathBuf,
     },
 
-    /// Restore the target signal mask and execute its command
+    /// Restore the target signal state and execute its command
     #[command(hide = true)]
     SandboxTarget {
-        /// Original macOS signal mask, encoded as an unsigned decimal integer
+        /// Original signal mask, encoded as an unsigned decimal integer
         #[arg(long, value_name = "MASK")]
-        signal_mask: u32,
+        signal_mask: u64,
+
+        /// Inherited ignored signals, encoded as an unsigned decimal bitset
+        #[arg(long, value_name = "MASK")]
+        ignored_signals: u64,
 
         /// Command and arguments to run after host supervision is ready
         #[arg(

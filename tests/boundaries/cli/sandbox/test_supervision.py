@@ -27,13 +27,13 @@ from support.macos import (
 )
 from support.normalization import code
 from support.records import Transcript
-from support.requirements import PROCESS_EVENTS, SANDBOX, requires
+from support.requirements import MACOS_SANDBOX, PROCESS_EVENTS, SANDBOX, requires
 from support.suites import run_this_suite
 
 TIMEOUT = 10
 
 
-@requires(SANDBOX, PROCESS_EVENTS)
+@requires(MACOS_SANDBOX, PROCESS_EVENTS)
 def test_retires_processx_descendants_across_sessions(binary: Path) -> Transcript:
     # The processx child starts a new session on Unix. Its lightweight Python
     # program starts the sleep grandchild in a third session, so neither
@@ -154,7 +154,7 @@ def test_retires_processx_descendants_across_sessions(binary: Path) -> Transcrip
     ]
 
 
-@requires(SANDBOX, PROCESS_EVENTS)
+@requires(MACOS_SANDBOX, PROCESS_EVENTS)
 def test_relays_interrupt_then_retires_descendants(binary: Path) -> Transcript:
     # fmt: r
     script = code(r"""
@@ -269,7 +269,7 @@ def test_sandbox_cannot_retain_its_temporary_directory(binary: Path) -> Transcri
     ]
 
 
-@requires(SANDBOX, PROCESS_EVENTS)
+@requires(MACOS_SANDBOX, PROCESS_EVENTS)
 def test_delivers_terminal_interrupt_once(binary: Path) -> Transcript:
     # Event.set() in a signal handler can deadlock on Event.wait()'s lock.
     # A wakeup pipe retains the signal even if it arrives before the read.
@@ -354,7 +354,7 @@ def test_delivers_terminal_interrupt_once(binary: Path) -> Transcript:
     ]
 
 
-@requires(SANDBOX, PROCESS_EVENTS)
+@requires(MACOS_SANDBOX, PROCESS_EVENTS)
 def test_preserves_terminal_ownership_with_foreground_peer(binary: Path) -> Transcript:
     # A foreground shell pipeline places all of its stages in one process group.
     # Model another stage with a sibling that remains in the launcher's group.

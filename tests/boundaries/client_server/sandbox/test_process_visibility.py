@@ -12,11 +12,11 @@ from support.client import McpClient
 from support.execution import SANDBOXED
 from support.normalization import code
 from support.records import Transcript
-from support.requirements import SANDBOX, requires
+from support.requirements import MACOS_SANDBOX, requires
 from support.suites import run_this_suite
 
 
-@requires(SANDBOX)
+@requires(MACOS_SANDBOX)
 def test_inspects_sandbox_child_processes_with_psutil(binary: Path) -> Transcript:
     environment = os.environ.copy()
     environment.pop("RETICULATE_PYTHON", None)
@@ -81,7 +81,7 @@ def test_inspects_sandbox_child_processes_with_psutil(binary: Path) -> Transcrip
     return client.finish()
 
 
-@requires(SANDBOX)
+@requires(MACOS_SANDBOX)
 def test_retains_environment_when_optional_psutil_setup_fails(
     binary: Path,
 ) -> Transcript:

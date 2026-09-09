@@ -55,6 +55,11 @@ class InstallationTests(unittest.TestCase):
                 "libexec/mcp-console-sandbox",
                 "share/licenses/mcp-console/LICENSE",
                 "share/licenses/mcp-console/NOTICE",
+                *(
+                    ("libexec/bwrap", "share/licenses/mcp-console/bubblewrap-COPYING")
+                    if sys.platform == "linux"
+                    else ()
+                ),
             )
 
             def stage_stale_wheel_data() -> None:
@@ -83,14 +88,10 @@ class InstallationTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stdout)
             print(result.stdout, flush=True)
-            if sys.platform == "linux":
-                prefix = (directory / "uv-bin/mcp-console").resolve().parent.parent
-                for relative in ("libexec", "share"):
-                    self.assertFalse((prefix / relative).exists())
             for remove_companions in (True, False):
                 # Check both missing companions and stale additions after Cargo
                 # has cached a build with all current companions still present.
-                if sys.platform == "darwin" and remove_companions:
+                if remove_companions:
                     for relative in ("libexec", "share"):
                         shutil.rmtree(source / "wheel-data/data" / relative)
                 stage_stale_wheel_data()
@@ -122,8 +123,7 @@ class InstallationTests(unittest.TestCase):
                         for name in archive.namelist()
                         if ".data/data/" in name
                     )
-                expected = private_files if sys.platform == "darwin" else ()
-                self.assertEqual(actual, sorted(expected))
+                self.assertEqual(actual, sorted(private_files))
             result = subprocess.run(
                 ["uv", "build", "--sdist", "--out-dir", str(directory / "dist")],
                 cwd=source,
@@ -147,9 +147,8 @@ class InstallationTests(unittest.TestCase):
             (bundle / "bin").mkdir(parents=True)
             binary = bundle / "bin/mcp-console"
             shutil.copy2(target / "release/mcp-console", binary)
-            if sys.platform == "darwin":
-                for relative in ("libexec", "share/licenses/mcp-console"):
-                    shutil.copytree(target / relative, bundle / relative)
+            for relative in ("libexec", "share/licenses/mcp-console"):
+                shutil.copytree(target / relative, bundle / relative)
             shutil.rmtree(source)
             # Make every compiled-in build path unavailable during runtime checks.
             hidden = directory / "build-artifacts"
