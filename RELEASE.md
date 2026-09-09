@@ -17,7 +17,7 @@ The script fetches the exact source revision into `sandbox-runner-cache/<commit>
 Source builds require Python 3, Git, and rustup; rustup installs the pinned toolchain if needed.
 The runner has its own Cargo build directory and jobserver, so the nested build also works when the outer Cargo uses `--jobs 1` or a custom target directory.
 It uses the pinned compiler's default macOS deployment target, independently of the application's `MACOSX_DEPLOYMENT_TARGET`.
-Inherited generic Rust flags and all target-specific Cargo settings, including linker overrides, are removed from the nested build environment.
+Inherited generic Rust flags and Cargo build, profile, and target settings, including compiler and linker overrides, are removed from the nested build environment.
 Cargo runs from `/` with an explicit manifest and the pinned workspace configuration, so it does not discover configuration in the caller's checkout or home directory.
 Root-level `/.cargo/config` or `/.cargo/config.toml` is unsupported and causes an error before building.
 The runner's Cargo home and dependency cache live in `codex-rs/target/cargo-home` within its source checkout; rustup keeps its normal toolchain cache.

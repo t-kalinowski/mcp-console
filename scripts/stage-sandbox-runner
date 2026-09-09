@@ -156,20 +156,20 @@ def build(checkout: Path, output: Path, target: str, pin: dict[str, object]) -> 
         "CARGO_MAKEFLAGS",
         "MAKEFLAGS",
         "MFLAGS",
-        "CARGO_BUILD_BUILD_DIR",
         "RUSTC",
         "RUSTDOC",
         "RUSTC_WRAPPER",
         "RUSTC_WORKSPACE_WRAPPER",
         "RUSTFLAGS",
         "CARGO_ENCODED_RUSTFLAGS",
-        "CARGO_BUILD_RUSTFLAGS",
         "CLIPPY_ARGS",
         "MACOSX_DEPLOYMENT_TARGET",
     ):
         environment.pop(name, None)
+    # Cargo also accepts configuration-form compiler and profile overrides.
+    # Keep the pinned build configuration independent of all three namespaces.
     for name in list(environment):
-        if name.startswith("CARGO_TARGET_"):
+        if name.startswith(("CARGO_BUILD_", "CARGO_PROFILE_", "CARGO_TARGET_")):
             del environment[name]
     environment["CARGO_TARGET_DIR"] = str(workspace / "target")
     environment["CARGO_HOME"] = str(cargo_home)

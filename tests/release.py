@@ -553,8 +553,13 @@ class ReleaseScriptTests(unittest.TestCase):
                 '[[bin]]\nname = "mcp-console-sandbox"\npath = "src/main.rs"\n'
             )
             (crate / "src/main.rs").write_text(
-                '#[cfg(ambient_cargo_config)]\ncompile_error!("ambient Cargo flags");\n'
-                'fn main() { println!("{}", env!("RUNNER_PINNED_CONFIG")); }\n'
+                textwrap.dedent("""
+                #[cfg(ambient_cargo_config)]
+                compile_error!("ambient Cargo flags");
+                #[cfg(panic = "abort")]
+                compile_error!("ambient Cargo profile");
+                fn main() { println!("{}", env!("RUNNER_PINNED_CONFIG")); }
+                """)
             )
             pinned_config = workspace / ".cargo/config.toml"
             pinned_config.parent.mkdir()
@@ -594,18 +599,34 @@ class ReleaseScriptTests(unittest.TestCase):
                 ],
                 text=True,
             ).strip()
-            for location, configuration in (
+            configurations = [
                 (
-                    cargo_home / "config.toml",
-                    '[build]\nrustflags = ["--cfg=ambient_cargo_config"]\n',
+                    {
+                        cargo_home
+                        / "config.toml": '[build]\nrustflags = ["--cfg=ambient_cargo_config"]\n'
+                    },
+                    {},
                 ),
                 (
-                    ancestor_config,
-                    f'[target.{target}]\nlinker = "/ambient/linker-wrapper"\n',
+                    {
+                        ancestor_config: f'[target.{target}]\nlinker = "/ambient/linker-wrapper"\n'
+                    },
+                    {},
                 ),
-            ):
-                with self.subTest(configuration=location):
-                    location.write_text(configuration)
+                *(
+                    ({}, {name: "/ambient/compiler-override"})
+                    for name in (
+                        "CARGO_BUILD_RUSTC",
+                        "CARGO_BUILD_RUSTC_WRAPPER",
+                        "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER",
+                    )
+                ),
+                ({}, {"CARGO_PROFILE_RELEASE_PANIC": "abort"}),
+            ]
+            for files, overrides in configurations:
+                with self.subTest(files=list(files), overrides=overrides):
+                    for location, configuration in files.items():
+                        location.write_text(configuration)
                     output = directory / "output"
                     command = [
                         sys.executable,
@@ -619,12 +640,13 @@ class ReleaseScriptTests(unittest.TestCase):
                     result = subprocess.run(
                         command,
                         cwd=project,
-                        env=environment,
+                        env=environment | overrides,
                         capture_output=True,
                         text=True,
                     )
-                    self.assertEqual(location.read_text(), configuration)
-                    location.unlink()
+                    for location, configuration in files.items():
+                        self.assertEqual(location.read_text(), configuration)
+                        location.unlink()
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertEqual(
                         subprocess.check_output(
@@ -632,7 +654,7 @@ class ReleaseScriptTests(unittest.TestCase):
                         ),
                         "pinned\n",
                     )
-                    # Both ambient configurations must be harmless on a fresh
+                    # Every ambient configuration must be harmless on a fresh
                     # build, not just when the completed bundle is reused.
                     shutil.rmtree(project / "target")
 
