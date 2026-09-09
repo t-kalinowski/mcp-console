@@ -597,7 +597,20 @@ class ReleaseScriptTests(unittest.TestCase):
                 import sys
                 from pathlib import Path
 
-                for name in ("CARGO_MAKEFLAGS", "CARGO_BUILD_BUILD_DIR", "RUSTC", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "CARGO_ENCODED_RUSTFLAGS", "CARGO_BUILD_RUSTFLAGS", "CARGO_TARGET_X86_64_APPLE_DARWIN_RUSTFLAGS", "CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS", "MACOSX_DEPLOYMENT_TARGET"):
+                for name in (
+                    "CARGO_MAKEFLAGS",
+                    "CARGO_BUILD_BUILD_DIR",
+                    "RUSTC",
+                    "RUSTC_WRAPPER",
+                    "RUSTC_WORKSPACE_WRAPPER",
+                    "CARGO_ENCODED_RUSTFLAGS",
+                    "CARGO_BUILD_RUSTFLAGS",
+                    "CARGO_TARGET_X86_64_APPLE_DARWIN_RUSTFLAGS",
+                    "CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS",
+                    "CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER",
+                    "CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER",
+                    "MACOSX_DEPLOYMENT_TARGET",
+                ):
                     assert name not in os.environ, name
                 Path(os.environ["FAKE_CARGO_ARGUMENTS"]).write_text(json.dumps(sys.argv[1:]))
                 target = sys.argv[sys.argv.index("--target") + 1] if "--target" in sys.argv else os.environ["CARGO_BUILD_TARGET"]
@@ -646,6 +659,8 @@ class ReleaseScriptTests(unittest.TestCase):
                     "CARGO_BUILD_RUSTFLAGS": "--deny=warnings",
                     "CARGO_TARGET_X86_64_APPLE_DARWIN_RUSTFLAGS": "-C link-arg=-mmacosx-version-min=15.0",
                     "CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS": "-C link-arg=-mmacosx-version-min=15.0",
+                    "CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER": "/outer/linker-wrapper",
+                    "CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER": "/outer/linker-wrapper",
                     "MACOSX_DEPLOYMENT_TARGET": "15.0",
                 }
             )
@@ -787,6 +802,8 @@ class ReleaseScriptTests(unittest.TestCase):
                 "CARGO_BUILD_RUSTFLAGS",
                 "CARGO_TARGET_X86_64_APPLE_DARWIN_RUSTFLAGS",
                 "CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS",
+                "CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER",
+                "CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER",
             ):
                 cached_environment.pop(name)
             # Lowering the application's deployment target must reuse a runner

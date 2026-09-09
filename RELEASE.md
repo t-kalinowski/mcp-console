@@ -17,7 +17,7 @@ The script fetches the exact source revision into `sandbox-runner-cache/<commit>
 Source builds require Python 3, Git, and rustup; rustup installs the pinned toolchain if needed.
 The runner has its own Cargo build directory and jobserver, so the nested build also works when the outer Cargo uses `--jobs 1` or a custom target directory.
 It uses the pinned compiler's default macOS deployment target, independently of the application's `MACOSX_DEPLOYMENT_TARGET`.
-Inherited generic and target-specific Rust flags are removed from the nested build environment.
+Inherited generic Rust flags and all target-specific Cargo settings, including linker overrides, are removed from the nested build environment.
 Normal Cargo and rustup dependency caches still apply.
 Completed runner bundles are cached separately under `sandbox-runner-cache/artifacts/`, keyed by the pin, staging script, and target.
 Cache hits verify the executable, license, and notice checksums and copy the bundle without fetching sources or invoking Cargo.
@@ -55,6 +55,9 @@ When advancing the pin, inspect the package's `PROTOCOL.md`, implementation, exe
 Release smoke exercises the installed runner directly with a non-default descriptor and open, idle stdin, then checks the public launcher and artifact verification.
 
 The tracked `wheel-data/data` directory lets Maturin prepare metadata before the first build; Cargo fills it with verified companion files during compilation.
+Wheel packaging requires exclusive use of its source checkout until Maturin finishes writing the archive.
+Use separate source checkouts for concurrent builds; different Cargo target directories do not isolate wheel staging.
+The release matrix gives each target its own checkout.
 Source distributions retain the directory marker and omit generated companions so they can build for the destination machine.
 CI caches the completed runner independently of the application's dependencies, so ordinary changes do not rebuild the runner or restore its source and dependency graph.
 Successful main-branch checks save this cache before the Rust cache action removes non-Cargo artifacts.

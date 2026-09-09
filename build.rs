@@ -71,6 +71,8 @@ fn bind_private_runner() {
         assert_eq!(build["sha256"][name].as_str(), Some(digest_hex.as_str()));
         artifacts.push_str(&format!("({relative:?}, {:?}),\n", digest.as_slice()));
         // Cargo's native layout and Maturin's wheel data use the same bundle.
+        // Wheel packaging requires exclusive use of this source checkout until
+        // Maturin finishes writing the archive; see RELEASE.md.
         for destination in [
             prefix.join(relative),
             root.join("wheel-data/data").join(relative),

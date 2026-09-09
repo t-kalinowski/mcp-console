@@ -140,7 +140,6 @@ def build(checkout: Path, output: Path, target: str, pin: dict[str, object]) -> 
     workspace = checkout / "codex-rs"
     toolchain = ["rustup", "run", "--install", str(pin["rust_toolchain"])]
     environment = os.environ.copy()
-    environment["CARGO_TARGET_DIR"] = str(workspace / "target")
     # Build independently of the outer Cargo's jobserver, compiler, and Clippy
     # wrapper. rustup must select the runner's pinned compiler and Cargo.
     # Use that compiler's default deployment target, regardless of the outer
@@ -162,8 +161,9 @@ def build(checkout: Path, output: Path, target: str, pin: dict[str, object]) -> 
     ):
         environment.pop(name, None)
     for name in list(environment):
-        if name.startswith("CARGO_TARGET_") and name.endswith("_RUSTFLAGS"):
+        if name.startswith("CARGO_TARGET_"):
             del environment[name]
+    environment["CARGO_TARGET_DIR"] = str(workspace / "target")
     command = [
         *toolchain,
         "cargo",
