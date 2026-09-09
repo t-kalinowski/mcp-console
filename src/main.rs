@@ -61,8 +61,9 @@ fn main() -> ExitCode {
         },
         cli::Command::SandboxTarget {
             signal_mask,
+            ignored_signals,
             command,
-        } => match sandbox::run_target(signal_mask, &command) {
+        } => match sandbox::run_target(signal_mask, ignored_signals, &command) {
             Ok(exit_code) => exit_code,
             Err(error) => exit_with_error(error),
         },

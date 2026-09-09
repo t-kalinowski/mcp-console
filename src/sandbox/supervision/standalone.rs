@@ -5,7 +5,7 @@ use crate::process_descriptors;
 use crate::sandbox::{
     child::{append_retirement_error, terminate_standalone_root, terminate_unmanaged_child},
     platform,
-    runner::Setup,
+    runner::{self, Setup},
 };
 use std::ffi::{OsStr, OsString};
 use std::process::{Child, Command, ExitCode, ExitStatus};
@@ -20,6 +20,8 @@ pub(in crate::sandbox) fn status(
     arguments: &[OsString],
     owner: Option<super::SandboxOwner>,
 ) -> Result<ExitCode, String> {
+    let ignored = runner::ignored_signals()
+        .map_err(|error| format!("failed to read inherited signal dispositions: {error}"))?;
     let signal_relay = SignalRelay::install(owner.is_some())?;
     let mut setup = Setup::new(
         &mut command,
@@ -27,6 +29,7 @@ pub(in crate::sandbox) fn status(
         program,
         arguments,
         signal_relay.target_signal_mask(),
+        ignored,
     )?;
     let mut foreground_terminal = ForegroundTerminal::detect()?;
     let owned = owner.is_some();

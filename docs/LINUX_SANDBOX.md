@@ -59,7 +59,8 @@ Simultaneous loss of both host owners has no cleanup guarantee.
 The launcher consumes SIGHUP, SIGINT, SIGQUIT, and SIGTERM through signalfd.
 Ordinary signals travel over private manager control to the native namespace init, which forwards them to the target.
 Owned SIGTERM requests retirement instead.
-The hidden target wrapper restores the original signal mask before exec.
+The hidden target wrapper restores inherited ignored signal dispositions and then the original signal mask before exec.
+Supervisors reset ignored SIGCHLD and SIGTERM for their own child reaping and retirement; those changes do not reach the requested command.
 Signals arriving before native namespace creation have no target and are not replayed.
 
 The launcher keeps foreground terminal ownership and forwards terminal-generated signals; native sandbox setup creates a separate target session.

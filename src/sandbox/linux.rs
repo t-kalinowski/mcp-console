@@ -4,7 +4,10 @@
 
 mod process;
 
-use super::{platform, runner::Setup};
+use super::{
+    platform,
+    runner::{self, Setup},
+};
 use process::{pidfd, poll, watch};
 use std::ffi::OsString;
 use std::io::{self, Read, Write};
@@ -159,6 +162,7 @@ fn manage(
         program,
         arguments,
         signals.original,
+        signals.ignored,
     )
     .map_err(io::Error::other)?;
     let manager_pid = unsafe { libc::getpid() };
@@ -212,10 +216,12 @@ fn manage(
 struct Signals {
     fd: OwnedFd,
     original: libc::sigset_t,
+    ignored: u64,
 }
 
 impl Signals {
     fn new() -> io::Result<Self> {
+        let ignored = runner::ignored_signals()?;
         let mut set = unsafe { std::mem::zeroed() };
         let mut original = unsafe { std::mem::zeroed() };
         unsafe {
@@ -238,6 +244,7 @@ impl Signals {
             Ok(Self {
                 fd: OwnedFd::from_raw_fd(fd),
                 original,
+                ignored,
             })
         }
     }

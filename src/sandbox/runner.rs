@@ -10,6 +10,25 @@ use std::process::Command;
 #[cfg(target_os = "macos")]
 const POLICY_EXTENSION: &str = include_str!("policy_extensions.sbpl");
 
+pub(super) fn ignored_signals() -> io::Result<u64> {
+    let mut valid = unsafe { std::mem::zeroed() };
+    unsafe { libc::sigfillset(&mut valid) };
+    let mut ignored = 0;
+    for signal in 1..=64 {
+        if unsafe { libc::sigismember(&valid, signal) } != 1 {
+            continue;
+        }
+        let mut action = unsafe { std::mem::zeroed() };
+        if unsafe { libc::sigaction(signal, std::ptr::null(), &mut action) } < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if action.sa_sigaction == libc::SIG_IGN {
+            ignored |= 1 << (signal - 1);
+        }
+    }
+    Ok(ignored)
+}
+
 pub(super) struct Setup {
     writer: Option<PipeWriter>,
     frame: Vec<u8>,
@@ -23,6 +42,7 @@ impl Setup {
         program: &OsStr,
         arguments: &[OsString],
         original_mask: libc::sigset_t,
+        original_ignored: u64,
     ) -> Result<Self, String> {
         let (reader, writer) =
             io::pipe().map_err(|error| format!("failed to create sandbox setup pipe: {error}"))?;
@@ -49,6 +69,8 @@ impl Setup {
                 .filter(|signal| unsafe { libc::sigismember(&original_mask, *signal) } == 1)
                 .fold(0u64, |mask, signal| mask | (1 << (signal - 1)))
                 .to_string(),
+            "--ignored-signals".to_string(),
+            original_ignored.to_string(),
             "--".to_string(),
             utf8(program)?,
         ];

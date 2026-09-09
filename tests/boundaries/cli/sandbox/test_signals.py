@@ -282,5 +282,53 @@ def test_preserves_status_when_sigchld_was_ignored(binary: Path) -> Transcript:
     ]
 
 
+@requires(SANDBOX)
+def test_preserves_inherited_ignored_signals(binary: Path) -> Transcript:
+    # fmt: python
+    host_script = code(r"""
+        import os
+        import signal
+        import sys
+
+        for name in ("SIGHUP", "SIGINT", "SIGTERM", "SIGCHLD"):
+            signal.signal(getattr(signal, name), signal.SIG_IGN)
+        os.execv(sys.argv[1], sys.argv[1:])
+        """)
+    # fmt: python
+    target_script = code(r"""
+        import os
+        import signal
+
+        for name in ("SIGHUP", "SIGINT", "SIGTERM", "SIGCHLD"):
+            number = getattr(signal, name)
+            assert signal.getsignal(number) == signal.SIG_IGN, name
+            os.kill(os.getpid(), number)
+            print(name, "ignored")
+        """)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            host_script,
+            binary,
+            "sandbox",
+            "--",
+            sys.executable,
+            "-c",
+            target_script,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=TIMEOUT,
+        check=False,
+    )
+    assert result.returncode == 0, result
+    assert result.stderr == "", result.stderr
+    assert result.stdout.splitlines() == [
+        f"{name} ignored" for name in ("SIGHUP", "SIGINT", "SIGTERM", "SIGCHLD")
+    ], result.stdout
+    return [{"inherited_signals": "ignored", "stdout": result.stdout, "exit_code": 0}]
+
+
 if __name__ == "__main__":
     run_this_suite(__file__)

@@ -55,9 +55,10 @@ The manager inherits neither pipe end, and the final target and relay never see 
 Original fd 0, 1, and 2 carry only target streams; stdin retains its open file description, offsets, seekability, and terminal identity.
 Rust startup supplies `/dev/null` when the caller closed stdin before invoking the launcher.
 
-The hidden `sandbox-target` wrapper only restores the original signal mask from the validated unsigned `--signal-mask <MASK>` argument and execs the target command after `--`.
+The hidden `sandbox-target` wrapper restores inherited ignored dispositions from `--ignored-signals <MASK>`, then the original signal mask from `--signal-mask <MASK>`, and execs the target command after `--`.
+Both masks are validated unsigned integers captured before the launcher changes signal state.
 It neither reads setup nor replaces stdin, and wrapper arguments do not reach the requested command.
-The runner retains the blocked forwarded signals while waiting; inherited dispositions still come from the launcher's child configuration.
+The runner retains the blocked forwarded signals while waiting; the wrapper restores the target's inherited ignored dispositions after native setup.
 Configured sandbox code therefore cannot run before manager observation is active and failure recovery is installed.
 
 Signal delivery has a known startup limitation: before the runner spawns its target, it can be the only member of the target process group.

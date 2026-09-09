@@ -60,7 +60,11 @@ pub(crate) fn run_manager(
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-pub(crate) fn run_target(signal_mask: u64, command_line: &[OsString]) -> Result<ExitCode, String> {
+pub(crate) fn run_target(
+    signal_mask: u64,
+    ignored_signals: u64,
+    command_line: &[OsString],
+) -> Result<ExitCode, String> {
     let (program, arguments) = command_line
         .split_first()
         .expect("sandbox target must include a program");
@@ -77,6 +81,16 @@ pub(crate) fn run_target(signal_mask: u64, command_line: &[OsString]) -> Result<
     let mut mask = unsafe { std::mem::zeroed() };
     unsafe { libc::sigemptyset(&mut mask) };
     for signal in 1..=64 {
+        // Supervisors need waitable children and observable retirement signals.
+        // Restore the target's ignored dispositions before unblocking delivery.
+        if ignored_signals & (1 << (signal - 1)) != 0
+            && unsafe { libc::signal(signal, libc::SIG_IGN) } == libc::SIG_ERR
+        {
+            return Err(format!(
+                "failed to restore sandbox target signal {signal}: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
         if signal_mask & (1 << (signal - 1)) != 0 {
             unsafe { libc::sigaddset(&mut mask, signal) };
         }
@@ -113,6 +127,7 @@ pub(crate) fn run_manager(
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub(crate) fn run_target(
     _signal_mask: u64,
+    _ignored_signals: u64,
     _command_line: &[OsString],
 ) -> Result<ExitCode, String> {
     Err("the sandbox target wrapper is currently supported only on macOS".to_string())
