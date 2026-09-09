@@ -21,82 +21,73 @@ fn main() {
 
 fn bind_private_runner() {
     let root = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
-    let pin_path = root.join("sandbox-runner.json");
-    let build_path = root.join("target/sandbox-runner-build.json");
-    for path in [&pin_path, &build_path] {
-        println!("cargo:rerun-if-changed={}", path.display());
-    }
-    let pin: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(pin_path).expect("failed to read sandbox-runner.json"),
-    )
-    .expect("invalid sandbox-runner.json");
-    let build: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(build_path)
-            .expect("private sandbox runner is not staged; run scripts/stage-sandbox-runner"),
-    )
-    .expect("invalid private sandbox runner build manifest");
-    let revision = pin["commit"]
-        .as_str()
-        .expect("sandbox-runner.json must contain a source commit");
-    assert_eq!(
-        build["source_revision"].as_str(),
-        Some(revision),
-        "private sandbox runner source pin changed; run scripts/stage-sandbox-runner"
-    );
-    let target = std::env::var("TARGET").expect("Cargo did not provide its build target");
-    assert_eq!(
-        build["target"].as_str(),
-        Some(target.as_str()),
-        "private sandbox runner target does not match Cargo TARGET; run scripts/stage-sandbox-runner --target {target}"
-    );
-    let protocol = u32::try_from(
-        pin["protocol_version"]
-            .as_u64()
-            .expect("sandbox-runner.json must contain a protocol version"),
-    )
-    .expect("sandbox runner protocol version exceeds u32");
     let output = PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
-    // Cargo places OUT_DIR under <prefix>/<profile>/build/<package>/out.
-    // Match the installed bin/../libexec layout for every Cargo profile.
-    let prefix = output
-        .ancestors()
-        .nth(4)
-        .expect("Cargo OUT_DIR is missing its target prefix");
-    let private_directory = prefix.join("libexec");
-    std::fs::create_dir_all(&private_directory)
-        .expect("failed to create the private sandbox runner directory");
-    let mut artifacts = vec!["mcp-console-sandbox"];
+    // OUT_DIR is <target prefix>/<profile>/build/<package>/out.
+    // Native bundles require Cargo's default shared build/target layout: Cargo
+    // does not expose the caller's --target-dir to build scripts. A separate
+    // build.build-dir is unsupported for running the Cargo output; wheels use
+    // wheel-data independently. See RELEASE.md.
+    let prefix = output.ancestors().nth(4).unwrap();
+    println!("cargo:rerun-if-changed=sandbox-runner.json");
+    println!("cargo:rerun-if-changed=target/sandbox-runner-build.json");
+    let target = std::env::var("TARGET").expect("Cargo did not provide its build target");
+
+    let pin: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(root.join("sandbox-runner.json")).unwrap()).unwrap();
+    let build: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(root.join("target/sandbox-runner-build.json"))
+            .expect("private sandbox runner is not staged; use uv tool install --reinstall . or run scripts/stage-sandbox-runner"))
+            .expect("invalid private sandbox runner build manifest");
+    assert_eq!(build["source_revision"], pin["commit"]);
+    assert_eq!(build["target"].as_str(), Some(target.as_str()));
+    let mut artifacts = String::new();
+    let mut bundle = vec![
+        ("mcp-console-sandbox", "libexec/mcp-console-sandbox"),
+        ("LICENSE", "share/licenses/mcp-console/LICENSE"),
+        ("NOTICE", "share/licenses/mcp-console/NOTICE"),
+    ];
     if target.contains("linux") {
-        artifacts.push("bwrap");
+        bundle.extend([
+            ("bwrap", "libexec/bwrap"),
+            (
+                "bubblewrap-COPYING",
+                "share/licenses/mcp-console/bubblewrap-COPYING",
+            ),
+        ]);
     }
-    let mut expected_artifacts = Vec::new();
-    for name in artifacts {
-        let artifact = root.join("wheel-data/data/libexec").join(name);
-        println!("cargo:rerun-if-changed={}", artifact.display());
-        let bytes = std::fs::read(&artifact)
-            .expect("private sandbox artifact is unavailable; run scripts/stage-sandbox-runner");
-        let digest: [u8; 32] = Sha256::digest(&bytes).into();
-        let actual_digest: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    for (name, relative) in bundle {
+        let source = root.join("wheel-data/data").join(relative);
+        println!("cargo:rerun-if-changed={}", source.display());
+        let bytes = std::fs::read(&source).unwrap();
+        let digest = Sha256::digest(&bytes);
+        let digest_hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
         assert_eq!(
             build["artifacts"][name].as_str(),
-            Some(actual_digest.as_str()),
-            "private sandbox runner artifact {name} changed; run scripts/stage-sandbox-runner"
+            Some(digest_hex.as_str()),
+            "private sandbox runner artifact {name} changed during staging"
         );
-        let staged = private_directory.join(format!(".{name}-{}", std::process::id()));
-        // Rebuilding must not overwrite an executable used by an active sandbox.
-        // Install the verified bytes, without reopening the source for copying.
-        std::fs::write(&staged, bytes).expect("failed to stage private sandbox artifact");
-        std::fs::set_permissions(&staged, artifact.metadata().unwrap().permissions())
-            .expect("failed to set private sandbox artifact permissions");
-        std::fs::rename(staged, private_directory.join(name))
-            .expect("failed to install private sandbox artifact beside the Cargo output");
-        expected_artifacts.push((name, digest));
+        artifacts.push_str(&format!("({relative:?}, {:?}),\n", digest.as_slice()));
+        // Wheel staging belongs to the packaging backend. Cargo only installs
+        // the verified companion beside its own native build output.
+        {
+            let destination = prefix.join(relative);
+            std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+            // Publish the verified bytes atomically; an active sandbox may
+            // still be using the previous executable during a rebuild.
+            let temporary = destination.with_file_name(format!(".{name}-{}", std::process::id()));
+            std::fs::write(&temporary, &bytes).unwrap();
+            std::fs::set_permissions(&temporary, source.metadata().unwrap().permissions()).unwrap();
+            std::fs::rename(temporary, &destination).unwrap();
+            // Restore removed data even when Cargo can reuse the compiled binary.
+            println!("cargo:rerun-if-changed={}", destination.display());
+        }
     }
+    let protocol = pin["protocol_version"].as_u64().unwrap();
     std::fs::write(
         output.join("sandbox_runner_installation.rs"),
         format!(
             "pub(super) const PROTOCOL_VERSION: u32 = {protocol};\n\
-             const EXPECTED_ARTIFACTS: &[(&str, [u8; 32])] = &{expected_artifacts:?};\n"
+             const ARTIFACTS: &[(&str, [u8; 32])] = &[{artifacts}];\n",
         ),
     )
     .expect("failed to bind private sandbox runner installation");

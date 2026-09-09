@@ -12,20 +12,52 @@ Keep the root `mcp-console` entry in `Cargo.lock` synchronized with it.
 ## Private sandbox executable
 
 `sandbox-runner.json` pins the runner source repository, release, commit, protocol, and Rust toolchain.
-On macOS and Linux, build and stage it from a clean checkout at that commit before building MCP Console:
+`uv tool install --reinstall .` prepares the native companion automatically before Maturin compiles MCP Console and assembles the wheel.
+Editable source installations (`uv tool install --reinstall --editable .`) use the same preparation and packaging lock.
+Source builds require Python 3, Git, and rustup; rustup installs the pinned toolchain if needed.
+The packaging backend calls `scripts/stage-sandbox-runner`, which fetches the exact revision into `target/sandbox-runner-cache/<commit>` within the source checkout.
+The default build does not inspect or change other working checkouts.
+To use a dedicated clean checkout at the pin, explicitly set `MCP_CONSOLE_SANDBOX_SOURCE`; CI and releases use a checkout within their own workspace.
 
-```sh
-scripts/stage-sandbox-runner ~/github/t-kalinowski/codex
+Every source installation invokes the runner's Cargo build with its pinned toolchain and lockfile.
+Cargo reuses its build intermediates under the runner checkout's `codex-rs/target` and checks inputs tracked by Cargo and dependency build scripts.
+Source builds use the caller's normal Cargo configuration and download cache.
+There is no separate local cache of finished runners that bypasses Cargo's freshness checks.
+The runner build finishes before the application's Cargo build starts.
+
+Build reuse has the same limits as an ordinary Cargo build: Cargo may not detect a different compiler or linker selected through `PATH`, changes to the tools themselves, or changes to an SDK or system library.
+After changing those external build inputs, clean the affected Cargo build directories, including the runner checkout's `codex-rs/target`, before reinstalling.
+For the default source checkout, that directory is `target/sandbox-runner-cache/<commit>/codex-rs/target`.
+Automatic detection of those environment changes is outside the source installer's contract.
+
+For direct Cargo builds or direct Maturin wheel builds, first run `scripts/stage-sandbox-runner`.
+The script stages companions under `wheel-data/data` and records their digests in `target/sandbox-runner-build.json`.
+Use `--target` with `aarch64-apple-darwin`, `x86_64-apple-darwin`, `aarch64-unknown-linux-gnu`, or `x86_64-unknown-linux-gnu` for an explicit target.
+Without that option, the script selects the pinned compiler's native target.
+The automatic uv installation path builds for the native target; use explicit staging and Maturin's target options for other targets.
+
+Staging strips the distributed executables with `xcrun strip -S -x` on macOS and `strip --strip-unneeded` on Linux before computing their digests; the original executable remains in the nested Cargo build directory for debugging.
+MCP Console verifies the runner's source revision, target, and SHA-256 of each bundled file before packaging the executable, upstream license, and notice.
+The wheel installs this relocatable layout:
+
+```text
+bin/mcp-console
+libexec/mcp-console-sandbox
+share/licenses/mcp-console/LICENSE
+share/licenses/mcp-console/NOTICE
 ```
 
-The script builds with the pinned toolchain and lockfile, stages the executable at `wheel-data/data/libexec/mcp-console-sandbox`, and records its source revision, target triple, and each staged executable's SHA-256 in `target/sandbox-runner-build.json`.
-By default it builds for the pinned compiler's native target, passing that target explicitly to Cargo.
-Use `--target` with `aarch64-apple-darwin`, `x86_64-apple-darwin`, `aarch64-unknown-linux-gnu`, or `x86_64-unknown-linux-gnu` when building for an explicit target; inherited Cargo default-target settings do not change this selection.
-The source checkout remains unchanged.
-MCP Console's build verifies the staged revision, target, and artifact digests and binds those digests and the runner's protocol version into the executable.
-Stage the runner again for the intended target before changing MCP Console's build target.
-Cargo builds also copy the verified executables into the target prefix's `libexec` directory, so binaries in `debug`, `release`, and custom profile directories use the same relative lookup as installed wheels.
-Sandbox launches reject a missing or mismatched private runner or bundled Linux helper.
+The main executable resolves the runner relative to its own canonical path and verifies all companion files using streaming SHA-256 with a bounded buffer on every sandbox launch.
+Missing or modified files produce an installation error.
+Move the complete bundle when relocating it; a symlink to `bin/mcp-console` also works.
+There is no embedded payload, extraction step, or runtime runner cache.
+Sandbox launches do not download anything or search PATH for the runner.
+Native Cargo builds put the companions under the target prefix, alongside the `debug` and `release` directories.
+This native bundle requires Cargo's default shared build/target layout.
+Use `CARGO_TARGET_DIR` or `--target-dir` to move it; running the native Cargo output with a separate intermediate directory (`CARGO_BUILD_BUILD_DIR` or `build.build-dir`) is unsupported.
+Cargo does not expose the invoking command's final `--target-dir` to build scripts, so the build script cannot reliably find that destination independently of `OUT_DIR`.
+Wheel installations use the staged wheel data independently of the native bundle layout.
+Use `uv tool install --reinstall .` to install a development checkout: `cargo install` copies only the main executable and cannot install the companion bundle.
 
 The current protocol-2 pin also supplies standalone supervision.
 Console selects application policy in one immutable environment value and execs `mcp-console-sandbox --config-env MCP_CONSOLE_SANDBOX_CONFIG -- COMMAND [ARG]...`.
@@ -36,10 +68,18 @@ That interface closes setup after the frame without waiting for EOF or reading t
 When advancing the pin, inspect the package's `PROTOCOL.md`, implementation, executable contract tests, and `rust-toolchain.toml`; update all callers together.
 Release smoke exercises the installed runner directly with a non-default descriptor and open, idle stdin, then checks the public launcher and artifact verification.
 
-Maturin includes the staged executable under the installation's private `libexec` directory, with the upstream license and notice under `share/licenses/mcp-console/`.
-Only `mcp-console` is installed as a public command.
-CI and the release workflow build the pinned source before packaging and verify the private layout, executable permissions, and sandbox launches from both the Cargo binary and installed command with an empty `PATH`.
-Linux staging also builds `codex-bwrap`, installs `libexec/bwrap`, and includes its `bubblewrap-COPYING` license.
+The tracked `wheel-data/data` directory lets Maturin prepare metadata before the first build.
+`build_backend.py` owns companion staging through wheel creation and holds a checkout-local lock until Maturin finishes writing the archive.
+Each source build replaces the generated `libexec` and `share` trees, including when Cargo reuses its compiled output.
+`build.rs` verifies the prepared manifest and files and copies them beside native Cargo output; it neither builds the runner nor modifies wheel staging.
+Direct staging, Cargo, and Maturin commands require exclusive use of their source checkout; release matrix jobs use separate checkouts.
+Source distributions include the packaging backend, staging script, source pin, and data-directory marker, and omit generated companions.
+
+CI separately caches completed staged runners and Cargo dependencies for both workspaces.
+PR and main runs save a newly built runner before tests, and Cargo dependencies can be saved when later checks fail.
+Source installation checks still invoke Cargo and can reuse the prepared runner workspace.
+Installation checks cover unstaged sources, compiler-flag changes between reinstalls, relocated bundles, bounded verification allocations, and rejection of missing or modified companions.
+Linux staging also builds the private bubblewrap helper, installs `libexec/bwrap`, and includes its license at `share/licenses/mcp-console/bubblewrap-COPYING`.
 Builds require a C compiler, `pkg-config`, and libcap development files (`build-essential pkg-config libcap-dev` on Ubuntu); installations require `libcap.so.2`.
 Linux smoke tests exercise the bundled helper with an empty `PATH` and evaluate R through default sandboxed `serve`.
 CI permits unprivileged namespace setup on its disposable Ubuntu runners by disabling their AppArmor user-namespace restriction.

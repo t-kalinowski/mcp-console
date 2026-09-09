@@ -155,6 +155,8 @@ scripts/test --timeout 1800 client_server/requirements/test_r
 scripts/test --update client_server/server/test_tools::initializes_and_lists_tools
 ```
 
+`scripts/test` builds and uses `target/release/mcp-console`.
+CI also uses this release executable for the R package and installed-wheel integration checks; `scripts/check-core` keeps Rust unit tests in debug so their debug assertions remain enabled.
 With no selectors, `scripts/test` runs every suite and case in separate processes, with at least two concurrent cases and otherwise one per available CPU by default.
 Pass `--jobs N` to set the maximum concurrency or `--jobs 1` to run serially.
 Each case has a 600-second deadline that starts when its supervisor launches.
@@ -248,3 +250,7 @@ Each suite is also directly runnable:
 
 Suite files use an `uv run --script` shebang.
 Their `__main__` blocks delegate to `scripts/test`, so direct runs build the binary and run every case in that suite.
+
+The Python checkers invoked by `scripts/check-core` are executable uv scripts.
+Run the runner and MCP client regressions with `tests/transcript_runner.py` and `tests/mcp_client.py`, or together through `scripts/check-core`.
+These scripts prepare their Python dependencies before tests begin, then launch fixture runners with the same interpreter so package resolution does not consume test deadlines.

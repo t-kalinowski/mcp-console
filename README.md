@@ -53,12 +53,11 @@ The wheel includes a private bubblewrap helper; a suitable `bwrap` on `PATH` tak
 There is no automatic unsandboxed fallback.
 Use `mcp-console serve --no-sandbox` to explicitly run with host permissions and without descendant cleanup.
 
-To build from source, stage the pinned private runner before Cargo:
+Install the current source checkout with its private sandbox companions:
 
 ```sh
-scripts/stage-sandbox-runner ~/github/t-kalinowski/codex
-cargo build --release
-target/release/mcp-console serve
+uv tool install --reinstall .
+mcp-console serve
 ```
 
 See [release preparation](RELEASE.md#private-sandbox-executable) for build dependencies and [sandbox integration](docs/SANDBOX.md) for policy and process-lifetime details.
@@ -141,10 +140,16 @@ Render only code you trust.
 
 ## Development
 
+Install the current checkout with `uv tool install --reinstall .`.
+Source builds require Python 3, Git, and rustup in addition to the Rust compiler and native build tools.
+The first uv source installation fetches and compiles the pinned sandbox runner in a dedicated checkout under `target`.
+Later installations invoke Cargo again, reusing its build intermediates and checking for changes to tracked build inputs.
+The packaging backend prepares the companion before building the main executable; rustup installs the pinned toolchain if needed.
+It does not use another working checkout.
+
 Run development commands from the repository root:
 
 ```text
-scripts/stage-sandbox-runner /path/to/pinned-source-checkout
 scripts/format
 scripts/check
 scripts/test [BOUNDARY/SUITE[::CASE]]
@@ -152,7 +157,13 @@ scripts/test --list
 scripts/test --update BOUNDARY/SUITE[::CASE]
 ```
 
-Stage the private sandbox executable before the first build or after changing the source pin; [RELEASE.md](RELEASE.md) describes the required checkout and toolchain.
+The installation contains `bin/mcp-console`, a private runner under `libexec`, and its license notices under `share/licenses/mcp-console`.
+Linux installations also include `libexec/bwrap` and its license.
+Move the whole bundle to relocate it; copying only `mcp-console` leaves the runner behind.
+After `scripts/stage-sandbox-runner`, `cargo build` prepares a runnable development bundle under `target` when Cargo uses its default shared build/target layout.
+For this native bundle, use `CARGO_TARGET_DIR` or `--target-dir` to change the build location; a separate intermediate directory (`CARGO_BUILD_BUILD_DIR` or `build.build-dir`) is unsupported.
+`cargo install` installs only the main binary and is not a complete installation.
+[RELEASE.md](RELEASE.md) describes the bundle and build caches.
 See [AGENTS.md](https://github.com/t-kalinowski/mcp-console/blob/main/AGENTS.md) for development rules and the repository map, and the [boundary test guide](https://github.com/t-kalinowski/mcp-console/blob/main/tests/boundaries/README.md) for test selection and snapshot updates.
 The standalone `mcp-console sandbox -- COMMAND [ARG]...` command is also available for development on macOS and Linux.
 [Sandbox integration](docs/SANDBOX.md) defines its policy, executable handoff, terminal behavior, and lifetime limits.

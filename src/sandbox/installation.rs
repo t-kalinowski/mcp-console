@@ -1,31 +1,51 @@
 use sha2::{Digest as _, Sha256};
-use std::os::unix::fs::PermissionsExt as _;
+use std::fs::File;
+use std::io::{self, Read as _};
+use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::path::PathBuf;
 
 include!(concat!(env!("OUT_DIR"), "/sandbox_runner_installation.rs"));
 
 pub(super) fn private_runner() -> Result<PathBuf, String> {
-    let executable = std::env::current_exe()
-        .and_then(|path| path.canonicalize())
-        .map_err(|error| format!("failed to locate the private sandbox runner: {error}"))?;
-    let directory = executable
-        .parent()
-        .and_then(|path| path.parent())
-        .ok_or_else(|| "failed to locate the private sandbox runner installation".to_string())?
-        .join("libexec");
-    for (name, digest) in EXPECTED_ARTIFACTS {
-        let path = directory.join(name);
-        let unavailable = || format!("the private sandbox runner artifact {name} is unavailable");
-        let metadata = path.metadata().map_err(|_| unavailable())?;
-        if !metadata.is_file() || metadata.permissions().mode() & 0o111 == 0 {
-            return Err(unavailable());
+    let verify = || -> io::Result<PathBuf> {
+        let executable = std::env::current_exe()?.canonicalize()?;
+        let prefix = executable
+            .parent()
+            .and_then(|directory| directory.parent())
+            .ok_or_else(|| io::Error::other("executable has no installation prefix"))?;
+        for (relative, expected) in ARTIFACTS {
+            // A replaced FIFO must not block before its file type is checked.
+            let mut file = File::options()
+                .read(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(prefix.join(relative))?;
+            let metadata = file.metadata()?;
+            if !metadata.is_file()
+                || (relative.starts_with("libexec/") && metadata.permissions().mode() & 0o111 == 0)
+            {
+                return Err(io::Error::other(
+                    "private artifact is not a readable file or executable",
+                ));
+            }
+            let mut digest = Sha256::new();
+            let mut buffer = [0; 64 * 1024];
+            loop {
+                let count = match file.read(&mut buffer) {
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    result => result?,
+                };
+                if count == 0 {
+                    break;
+                }
+                digest.update(&buffer[..count]);
+            }
+            if digest.finalize().as_slice() != expected {
+                return Err(io::Error::other(
+                    "private artifact does not match this installation",
+                ));
+            }
         }
-        let bytes = std::fs::read(&path).map_err(|_| unavailable())?;
-        if Sha256::digest(bytes).as_slice() != digest {
-            return Err(format!(
-                "the private sandbox runner artifact {name} does not match this installation"
-            ));
-        }
-    }
-    Ok(directory.join("mcp-console-sandbox"))
+        Ok(prefix.join("libexec/mcp-console-sandbox"))
+    };
+    verify().map_err(|error| format!("failed to verify the private sandbox runner: {error}"))
 }
