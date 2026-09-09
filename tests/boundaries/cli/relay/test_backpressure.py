@@ -323,7 +323,7 @@ def test_succeeds_when_deadline_passes_after_final_output(binary: Path) -> Trans
     ):
         worker = r"""
 import os
-os.write(int(os.environ["MCP_CONSOLE_SIDEBAND_FD"]), b'{"kind":"ready"}\n')
+os.write(int(os.environ["MCP_CONSOLE_SIDEBAND_WRITE_FD"]), b'{"kind":"ready"}\n')
 """
         result = subprocess.run(
             [binary, "worker-relay", sys.executable, "-c", worker],
@@ -357,7 +357,7 @@ def test_writes_regular_file_after_retirement_deadline(binary: Path) -> Transcri
     ):
         worker = r"""
 import os
-os.write(int(os.environ["MCP_CONSOLE_SIDEBAND_FD"]), b'{"kind":"ready"}\n')
+os.write(int(os.environ["MCP_CONSOLE_SIDEBAND_WRITE_FD"]), b'{"kind":"ready"}\n')
 """
         destination = root / "relay.jsonl"
         with destination.open("w") as output:

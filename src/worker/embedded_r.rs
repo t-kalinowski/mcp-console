@@ -180,7 +180,7 @@ pub(crate) fn run() -> Result<(), Box<dyn Error>> {
     let (reader, writer) = crate::sideband::connect_from_env()?;
     let r_home = harp::command::r_home_setup()?;
     #[cfg(target_os = "linux")]
-    reexec_with_r_library_path(&r_home, &reader)?;
+    reexec_with_r_library_path(&r_home, &reader, &writer)?;
     normalize_interrupt_signal()?;
     initialize_r(&r_home)?;
     let temporary_directory =
@@ -207,6 +207,7 @@ pub(crate) fn run() -> Result<(), Box<dyn Error>> {
 fn reexec_with_r_library_path(
     r_home: &std::path::Path,
     reader: &crate::sideband::Reader,
+    writer: &crate::sideband::Writer,
 ) -> Result<(), Box<dyn Error>> {
     use std::os::unix::process::CommandExt;
 
@@ -224,7 +225,7 @@ fn reexec_with_r_library_path(
     command
         .args(std::env::args_os().skip(1))
         .env("LD_LIBRARY_PATH", std::env::join_paths(paths)?);
-    reader.configure_exec(&mut command)?;
+    crate::sideband::configure_exec(reader, writer, &mut command)?;
     Err(command.exec().into())
 }
 

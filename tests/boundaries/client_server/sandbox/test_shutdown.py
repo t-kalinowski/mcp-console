@@ -202,7 +202,7 @@ def test_restart_drains_readable_frame_before_abandoning_partial_tail(
         )
         loaded_name = "delay-sideband-poll-loaded"
         arm_name = "delay-sideband-poll-arm"
-        socket_ready_name = "delay-sideband-poll-socket-ready"
+        sideband_ready_name = "delay-sideband-poll-sideband-ready"
         cancellation_ready_name = "delay-sideband-poll-cancellation-ready"
         partial_tail_name = "zod-sideband-partial-tail-written"
         environment = os.environ.copy()
@@ -211,7 +211,7 @@ def test_restart_drains_readable_frame_before_abandoning_partial_tail(
         environment["MCP_CONSOLE_TEST_POLL_DYLIB"] = str(interposer)
         environment["MCP_CONSOLE_TEST_POLL_LOADED_NAME"] = loaded_name
         environment["MCP_CONSOLE_TEST_POLL_ARM_NAME"] = arm_name
-        environment["MCP_CONSOLE_TEST_POLL_SOCKET_READY_NAME"] = socket_ready_name
+        environment["MCP_CONSOLE_TEST_POLL_SIDEBAND_READY_NAME"] = sideband_ready_name
         environment["MCP_CONSOLE_TEST_POLL_CANCEL_READY_NAME"] = cancellation_ready_name
         control.configure(environment)
         client = McpClient(
@@ -245,7 +245,7 @@ def test_restart_drains_readable_frame_before_abandoning_partial_tail(
             descendant_group = host_process_id(
                 int(marker.read_text(encoding="utf-8")), client.process.pid
             )
-            wait_for_marker(temporary, socket_ready_name, client)
+            wait_for_marker(temporary, sideband_ready_name, client)
             wait_for_marker(temporary, partial_tail_name, client)
             restart = client.start_send(control="restart")
             cancellation_ready.wait(

@@ -19,8 +19,6 @@ CAPTURE_STDIN_CLOSE_ENV = "MCP_CONSOLE_MITM_CAPTURE_STDIN_CLOSE"
 
 CAPTURE_WORKER_SIDEBAND_CLOSE_ENV = "MCP_CONSOLE_MITM_CAPTURE_WORKER_SIDEBAND_CLOSE"
 
-SHUTDOWN_ENOTCONN_ENV = "MCP_CONSOLE_MITM_SHUTDOWN_ENOTCONN"
-
 
 class RelayWorkerClient:
     def __init__(
@@ -31,7 +29,6 @@ class RelayWorkerClient:
         capture_stdin_close: bool = False,
         capture_worker_sideband_close: bool = False,
         disable_r_segv_handler: bool = False,
-        inject_shutdown_enotconn: bool = False,
     ) -> None:
         self._temporary = tempfile.TemporaryDirectory()
         root = Path(self._temporary.name)
@@ -44,8 +41,6 @@ class RelayWorkerClient:
             environment[CAPTURE_WORKER_SIDEBAND_CLOSE_ENV] = "1"
         if disable_r_segv_handler:
             environment["R_NO_SEGV_HANDLER"] = "1"
-        if inject_shutdown_enotconn:
-            environment[SHUTDOWN_ENOTCONN_ENV] = "relay"
         mitm = (
             Path(__file__).resolve().parents[2]
             / "fixtures"

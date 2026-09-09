@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import signal
-import socket
 import tempfile
 from pathlib import Path
 from typing import TextIO
@@ -54,11 +53,12 @@ def evaluate_echo(message: dict[str, str], writer: TextIO) -> None:
 
 
 def main() -> None:
-    descriptor = int(os.environ.pop("MCP_CONSOLE_SIDEBAND_FD"))
-    os.set_inheritable(descriptor, False)
-    endpoint = socket.socket(fileno=descriptor)
-    reader = endpoint.makefile("r", encoding="utf-8")
-    writer = endpoint.makefile("w", encoding="utf-8")
+    read_fd = int(os.environ.pop("MCP_CONSOLE_SIDEBAND_READ_FD"))
+    write_fd = int(os.environ.pop("MCP_CONSOLE_SIDEBAND_WRITE_FD"))
+    os.set_inheritable(read_fd, False)
+    os.set_inheritable(write_fd, False)
+    reader = os.fdopen(read_fd, "r", encoding="utf-8")
+    writer = os.fdopen(write_fd, "w", encoding="utf-8")
     temporary = Path(tempfile.gettempdir())
     mode = Path(os.environ["ZOD_STARTUP_CONTROL"]).read_text(encoding="utf-8")
 
