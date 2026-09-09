@@ -37,7 +37,8 @@ Cancellation before worker readiness also requests runner retirement and waits f
 The runner inherits the original fd 0, 1, and 2; Console does not copy, frame, relay, or retain those streams.
 The runner restores target signal state and handles native terminal ownership.
 Version 2 requires UTF-8 executable arguments, paths, and environment values.
-Console adds no request-size cap; the configuration and ordinary launch inputs remain subject to native exec limits.
+Console adds no application-level request-size cap; the fixed configuration and ordinary launch inputs share the native exec byte budget.
+Exact maximum-size parity with the former handoff was not tested.
 The runner's separate framed-descriptor interface still accepts requests up to 1 MiB and is exercised by installation tests, but Console does not need it for its small fixed policy.
 
 Installation-relative lookup, source provenance, target validation, executable digests, and bundled Linux helper verification remain in Console.

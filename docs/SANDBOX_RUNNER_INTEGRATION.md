@@ -32,6 +32,10 @@ Local logs and inventories are under `/tmp/mcp-console-supervisor-integration` a
 | Updated main hosted macOS and Ubuntu 24.04                  | Ubuntu passed; the macOS job was cancelled during transcripts, so it has no passing full result. [Run 34395951703](https://github.com/t-kalinowski/mcp-console/actions/runs/34395951703). |
 | Local Linux Console baseline                                | Not performed.                                                                                                                                                                            |
 
+The later hosted run for main `abba95d6` was inspected during final validation.
+macOS passed; Ubuntu failed before sandbox execution while resolving the host PyTorch environment, after the fixture's 300-second timeout.
+That is a separate baseline failure in [run 34400453875](https://github.com/t-kalinowski/mcp-console/actions/runs/34400453875).
+
 Counts refer to public cases, including all applicable execution modes.
 The macOS logs have 11 skip records for 10 unavailable cases because the null-fault case reports its direct and sandbox modes separately.
 
@@ -46,8 +50,8 @@ Only fixed policy and lifecycle choices enter the immutable JSON value; argv, cw
 The selected variable is consumed and removed from the target environment.
 No configuration file, path handoff, pipe writer, or waiting Console adapter is introduced.
 The separate inherited-descriptor interface remains covered by installation tests.
-Console adds no request-size restriction; the 96 KiB environment, binary stdin, and long/multibyte source cases remain public constraints.
-Maximum host exec limits were not exhaustively tested.
+Console adds no application-level request-size cap; the 96 KiB environment, binary stdin, and long/multibyte source cases remain public constraints.
+The fixed configuration consumes part of the native exec byte budget; exact maximum-size parity with the former handoff was not tested.
 
 The new runner preserves the waitable root through retirement, retires owned-group members and observed detached descendants, orders cancellation before native setup writes, retains a partial setup channel through retirement, and reports Linux procfs prerequisite errors without a panic.
 Linux socket syscall restrictions remain unchanged; the two-pipe sideband works within them.
@@ -212,9 +216,9 @@ The Linux lifetime case is renamed without changing its three retained scenarios
 | macOS installed public/private executable pair | Five passed, two Linux-only skips.                                                                                                                                                       |
 | Pinned runner executable contracts, macOS      | All 58 passed in the release build.                                                                                                                                                      |
 | Linux core checks                              | Passed, including 47 Rust tests.                                                                                                                                                         |
-| Linux public transcripts                       | Final run in progress.                                                                                                                                                                   |
+| Linux public transcripts                       | Per-case inventory: all 383 applicable host cases passed; 35 cases unavailable (37 mode-level skip records). Two aggregate attempts failed as detailed below.                            |
 | Linux nested procfs prerequisite               | The unchanged public case passed in an Ubuntu 24.04 container with namespace prerequisites enabled.                                                                                      |
-| Linux installed public/private executable pair | All seven passed in the same container environment.                                                                                                                                       |
+| Linux installed public/private executable pair | All seven passed in the same container environment.                                                                                                                                      |
 
 The Linux development host runs kernel 6.8.0-139-generic on x86_64 and restricts user namespaces with AppArmor.
 Its transcript run uses a test-only PATH wrapper to execute the exact built bubblewrap under the host's existing `bwrap` profile.
@@ -229,7 +233,15 @@ The unchanged case then passed a focused run and all 12 repeated trials; the sam
 Those trials each cover direct and sandbox modes, with six trials running concurrently.
 The fixture's file marker precedes the blocking SQL statement, so it does not establish entry into that statement; this is a possible timing window, not an isolated root cause.
 The failure remains unexplained, and neither its assertion nor snapshot is changed.
-A further aggregate run uses the same 12-job default, deadline, fixtures, and expectations; its result is recorded above.
+The further aggregate run used the same 12-job default and passed 175 cases before `client_server/r/test_lifecycle::restart_skips_direct_stdin_boundary_callback` failed in sandbox mode: the waiting response lacked `direct callback released`.
+That unchanged case passed focused execution in both modes on the integration and on main.
+This second failure also remains unexplained.
+To finish the inventory without stopping at the first failure, a temporary driver invokes each unchanged public selector, with 12 cases concurrently and the existing case deadlines.
+It changes no repository harness, test, execution mode, assertion, or snapshot.
+The per-case inventory is reported separately from the failed aggregate attempts.
+All 383 applicable host cases passed in that inventory, including both cases that failed in aggregate runs.
+Together with the separately passing procfs case, this covers all 384 applicable Linux cases.
+This does not establish a passing aggregate run or resolve the two intermittent failures.
 
 The final snapshot inventory contains 427 files: 421 are byte-identical to current main, four have the listed diagnostic changes, six old paths are removed, and two paths are added (the frontend-exec case and the renamed Linux lifetime case).
 Formatting-only regeneration is restored to baseline bytes after checking parsed equality.
