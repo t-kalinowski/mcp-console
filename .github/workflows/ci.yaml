@@ -123,7 +123,8 @@ jobs:
           workspaces: |
             . -> target
             .sandbox-runner-source/codex-rs -> target
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          # Preserve compiled dependencies when later checks fail.
+          cache-on-failure: true
 
       - name: Restore private sandbox runner
         id: sandbox-cache
@@ -141,6 +142,16 @@ jobs:
       - name: Stage private sandbox runner
         if: steps.sandbox-cache.outputs.cache-hit != 'true'
         run: scripts/stage-sandbox-runner .sandbox-runner-source
+
+      # Save the completed build before tests or post-job cache cleanup.
+      - name: Save private sandbox runner
+        if: steps.sandbox-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            wheel-data
+            target/sandbox-runner-build.json
+          key: ${{ steps.sandbox-cache.outputs.cache-primary-key }}
 
       - name: Run core checks
         env:
@@ -221,18 +232,6 @@ jobs:
         env:
           GITHUB_PAT: ${{ github.token }}
         run: scripts/test --jobs 6
-
-      # Save before rust-cache's post-job cleanup removes non-Cargo artifacts.
-      - name: Save private sandbox runner
-        if: >-
-          github.ref == 'refs/heads/main' &&
-          steps.sandbox-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v6
-        with:
-          path: |
-            wheel-data
-            target/sandbox-runner-build.json
-          key: ${{ steps.sandbox-cache.outputs.cache-primary-key }}
 
       - name: Save R environments
         if: >-
