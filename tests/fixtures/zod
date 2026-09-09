@@ -30,7 +30,6 @@ TEST_RESPONSE_RESULT_FIFO_NAME = "zod-test-response-result"
 TEST_CONTROL_READY_NAME = "zod-test-control-ready"
 LARGE_OUTPUT_SIZE = 2 * 1024 * 1024
 PENDING_TEXT_BUDGET = 8 * 1024 * 1024
-WORKER_SHUTDOWN_GRACE_SECONDS = 1
 PNG_1X1 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42Y"
     "AAAAASUVORK5CYII="
@@ -573,41 +572,25 @@ def main() -> None:
             return
 
         if source == "stall accepted relay shutdown":
-            relay_pid = int(os.environ["ZOD_RELAY_PID"])
-            stop_observed = temporary / "zod-accepted-relay-stop-observed"
-            os.mkfifo(stop_observed)
+            relay_pid = os.getppid()
             helper = os.fork()
             if helper == 0:
                 os.setsid()
                 close_sideband(reader, writer)
-                for descriptor in (1, 2):
+                for descriptor in (0, 1, 2):
                     os.close(descriptor)
                 publish_marker(
-                    temporary / "zod-relay-resume-helper",
+                    temporary / "zod-relay-retirement-processes",
                     f"{os.getpid()} {relay_pid}",
                 )
-                while os.read(0, 1) != b"":
-                    pass
-                os.close(0)
-                os.kill(relay_pid, signal.SIGSTOP)
-                resume_at = time.monotonic() + WORKER_SHUTDOWN_GRACE_SECONDS
-                publish_marker(temporary / "zod-relay-stopped-after-shutdown")
-                with stop_observed.open("rb", buffering=0) as checkpoint:
-                    assert checkpoint.read(1) == b"1"
-                while (remaining := resume_at - time.monotonic()) > 0:
-                    time.sleep(remaining)
-                try:
-                    os.kill(relay_pid, signal.SIGCONT)
-                except ProcessLookupError:
-                    pass
-                os._exit(0)
-            stopped = temporary / "zod-relay-stopped-after-shutdown"
-            while not stopped.exists():
-                time.sleep(0.01)
+                while True:
+                    signal.pause()
+            assert os.read(0, 1) == b""
+            # The relay's read checkpoint holds this output until reader join.
+            # Keep the worker alive so shutdown must consume its grace period.
             write_all(1, b"zod output during relay retirement\n")
-            publish_marker(temporary / "zod-relay-retirement-output-written")
             while True:
-                time.sleep(60)
+                signal.pause()
 
         if source == "stall with stopped relay":
             relay_pid = int(os.environ["ZOD_RELAY_PID"])
@@ -719,12 +702,22 @@ def main() -> None:
             continue
 
         if source == "overflow cell output file":
-            send_output(writer, "x" * (3 * PENDING_TEXT_BUDGET + 7))
-            send(writer, {"kind": "input_requested", "prompt": "continue> "})
-            assert input() == "continue"
-            send(writer, {"kind": "input_received"})
-            send_output(writer, "y" * (PENDING_TEXT_BUDGET + 7))
-            send(writer, {"kind": "completed"})
+            release = temporary / "zod-release-spooled-output"
+            processed = temporary / "zod-spooled-output-processed"
+            os.mkfifo(processed)
+            os.mkfifo(release)
+            for character, length in (
+                ("x", 3 * PENDING_TEXT_BUDGET + 7),
+                ("y", PENDING_TEXT_BUDGET + 7),
+            ):
+                with release.open("rb", buffering=0) as checkpoint:
+                    assert checkpoint.read(1) == b"1"
+                send_output(writer, character * length)
+                if character == "y":
+                    send(writer, {"kind": "completed"})
+                wait_for_server_to_process_sideband(reader, writer)
+                with processed.open("wb", buffering=0) as checkpoint:
+                    assert checkpoint.write(b"1") == 1
             continue
 
         if source == "overflow console output":
