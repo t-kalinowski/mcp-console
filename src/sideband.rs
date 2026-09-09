@@ -22,10 +22,7 @@ pub(crate) struct Reader {
 }
 
 #[derive(Clone)]
-pub(crate) struct Writer {
-    endpoint: Arc<PipeWriter>,
-    serialization: Arc<Mutex<()>>,
-}
+pub(crate) struct Writer(Arc<Mutex<PipeWriter>>);
 
 pub(crate) struct ChildEndpoints {
     reader: PipeReader,
@@ -121,22 +118,17 @@ impl Reader {
     /// Reads one chunk after the caller observes descriptor readiness.
     pub(crate) fn read_chunk(&mut self) -> io::Result<()> {
         let mut buffer = [0; READ_CHUNK_SIZE];
-        let length = self.endpoint.read(&mut buffer)?;
-        self.append_chunk(&buffer[..length])
-    }
-
-    fn append_chunk(&mut self, chunk: &[u8]) -> io::Result<()> {
-        match chunk {
-            [] if self.buffer.is_empty() => Err(io::Error::new(
+        match self.endpoint.read(&mut buffer)? {
+            0 if self.buffer.is_empty() => Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 "worker sideband closed",
             )),
-            [] => Err(io::Error::new(
+            0 => Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 "worker sideband closed midway through a frame",
             )),
-            chunk => {
-                self.buffer.extend_from_slice(chunk);
+            length => {
+                self.buffer.extend_from_slice(&buffer[..length]);
                 Ok(())
             }
         }
@@ -172,10 +164,7 @@ impl AsRawFd for Reader {
 
 impl Writer {
     fn new(endpoint: PipeWriter) -> Self {
-        Self {
-            endpoint: Arc::new(endpoint),
-            serialization: Arc::new(Mutex::new(())),
-        }
+        Self(Arc::new(Mutex::new(endpoint)))
     }
 
     /// Sends and flushes one newline-delimited JSON message to the worker.
@@ -188,16 +177,16 @@ impl Writer {
         message: &T,
         cancelled: Option<&PipeReader>,
     ) -> io::Result<()> {
-        let _serialization = self
-            .serialization
+        let endpoint = self
+            .0
             .lock()
             .map_err(|_| io::Error::other("worker sideband writer lock poisoned"))?;
         let mut frame = serde_json::to_vec(message)?;
         frame.push(b'\n');
         let mut remaining = frame.as_slice();
         while !remaining.is_empty() {
-            wait_for_io(self.endpoint.as_raw_fd(), libc::POLLOUT, cancelled)?;
-            match write_without_sigpipe(self.endpoint.as_ref(), remaining) {
+            wait_for_io(endpoint.as_raw_fd(), libc::POLLOUT, cancelled)?;
+            match write_without_sigpipe(&endpoint, remaining) {
                 Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
                 Ok(length) => remaining = &remaining[length..],
                 Err(error)
@@ -230,11 +219,15 @@ pub(crate) fn configure_exec(
     writer: &Writer,
     command: &mut std::process::Command,
 ) -> io::Result<()> {
+    let writer = writer
+        .0
+        .lock()
+        .map_err(|_| io::Error::other("worker sideband writer lock poisoned"))?;
     make_inheritable(reader.as_raw_fd())?;
-    make_inheritable(writer.endpoint.as_raw_fd())?;
+    make_inheritable(writer.as_raw_fd())?;
     command
         .env(READ_FD_ENV, reader.as_raw_fd().to_string())
-        .env(WRITE_FD_ENV, writer.endpoint.as_raw_fd().to_string());
+        .env(WRITE_FD_ENV, writer.as_raw_fd().to_string());
     Ok(())
 }
 
