@@ -523,6 +523,119 @@ class ReleaseScriptTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("expected exactly four wheels", result.stderr)
 
+    @unittest.skipUnless(sys.platform == "darwin", "requires a native runner target")
+    def test_stage_runner_ignores_ambient_cargo_configuration(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            project = directory / "project"
+            (project / "scripts").mkdir(parents=True)
+            script = project / "scripts" / STAGE_SCRIPT.name
+            shutil.copyfile(STAGE_SCRIPT, script)
+            pin = json.loads((ROOT / "sandbox-runner.json").read_text())
+            # The tiny fixture uses the installed compiler; a runner cache hit
+            # in CI must not require downloading the upstream toolchain.
+            pin["rust_toolchain"] = subprocess.check_output(
+                ["rustup", "show", "active-toolchain"], text=True
+            ).split()[0]
+            (project / "sandbox-runner.json").write_text(json.dumps(pin))
+            checkout = directory / "source"
+            workspace = checkout / "codex-rs"
+            crate = workspace / "mcp-console-sandbox"
+            (crate / "src").mkdir(parents=True)
+            (workspace / "Cargo.toml").write_text(
+                '[workspace]\nmembers = ["mcp-console-sandbox"]\nresolver = "2"\n'
+            )
+            (workspace / "Cargo.lock").write_text(
+                'version = 4\n[[package]]\nname = "codex-mcp-console-sandbox"\nversion = "0.1.0"\n'
+            )
+            (crate / "Cargo.toml").write_text(
+                '[package]\nname = "codex-mcp-console-sandbox"\nversion = "0.1.0"\n'
+                '[[bin]]\nname = "mcp-console-sandbox"\npath = "src/main.rs"\n'
+            )
+            (crate / "src/main.rs").write_text(
+                '#[cfg(ambient_cargo_config)]\ncompile_error!("ambient Cargo flags");\n'
+                'fn main() { println!("{}", env!("RUNNER_PINNED_CONFIG")); }\n'
+            )
+            pinned_config = workspace / ".cargo/config.toml"
+            pinned_config.parent.mkdir()
+            pinned_config.write_text('[env]\nRUNNER_PINNED_CONFIG = "pinned"\n')
+            for name in ("LICENSE", "NOTICE"):
+                (checkout / name).write_text(name)
+            commands = directory / "commands"
+            commands.mkdir()
+            write_executable(
+                commands / "git",
+                f"""
+                #!/usr/bin/env python3
+                import sys
+                if sys.argv[1:] == ["rev-parse", "HEAD"]:
+                    print({pin["commit"]!r})
+                else:
+                    assert sys.argv[1:] == ["status", "--porcelain", "--untracked-files=all"]
+                """,
+            )
+            cargo_home = directory / "cargo-home"
+            cargo_home.mkdir()
+            ancestor_config = directory / ".cargo/config.toml"
+            ancestor_config.parent.mkdir()
+            environment = os.environ.copy() | {
+                "CARGO_HOME": str(cargo_home),
+                "PATH": f"{commands}{os.pathsep}{os.environ['PATH']}",
+            }
+            target = subprocess.check_output(
+                [
+                    "rustup",
+                    "run",
+                    "--install",
+                    pin["rust_toolchain"],
+                    "rustc",
+                    "--print",
+                    "host-tuple",
+                ],
+                text=True,
+            ).strip()
+            for location, configuration in (
+                (
+                    cargo_home / "config.toml",
+                    '[build]\nrustflags = ["--cfg=ambient_cargo_config"]\n',
+                ),
+                (
+                    ancestor_config,
+                    f'[target.{target}]\nlinker = "/ambient/linker-wrapper"\n',
+                ),
+            ):
+                with self.subTest(configuration=location):
+                    location.write_text(configuration)
+                    output = directory / "output"
+                    command = [
+                        sys.executable,
+                        str(script),
+                        str(checkout),
+                        "--target",
+                        target,
+                        "--output-dir",
+                        str(output),
+                    ]
+                    result = subprocess.run(
+                        command,
+                        cwd=project,
+                        env=environment,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertEqual(location.read_text(), configuration)
+                    location.unlink()
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(
+                        subprocess.check_output(
+                            [output / "mcp-console-sandbox"], text=True
+                        ),
+                        "pinned\n",
+                    )
+                    # Both ambient configurations must be harmless on a fresh
+                    # build, not just when the completed bundle is reused.
+                    shutil.rmtree(project / "target")
+
     def test_stage_runner_builds_the_pin_and_records_artifact_integrity(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
@@ -738,6 +851,10 @@ class ReleaseScriptTests(unittest.TestCase):
                         [
                             "+1.95.0",
                             "build",
+                            "--manifest-path",
+                            str(checkout / "codex-rs/Cargo.toml"),
+                            "--config",
+                            str(checkout / "codex-rs/.cargo/config.toml"),
                             "--locked",
                             "--release",
                             "-p",

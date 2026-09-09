@@ -138,6 +138,14 @@ def validate_checkout(checkout: Path, pin: dict[str, object]) -> None:
 
 def build(checkout: Path, output: Path, target: str, pin: dict[str, object]) -> None:
     workspace = checkout / "codex-rs"
+    # Cargo discovers configuration from its cwd's ancestors and CARGO_HOME,
+    # independently of --manifest-path. Start at / with a private Cargo home
+    # and load only the pinned workspace configuration. Nothing is written to /.
+    for name in ("config", "config.toml"):
+        if (Path("/.cargo") / name).exists():
+            fail(f"cannot isolate runner build from /.cargo/{name}")
+    cargo_home = workspace / "target/cargo-home"
+    cargo_home.mkdir(parents=True, exist_ok=True)
     toolchain = ["rustup", "run", "--install", str(pin["rust_toolchain"])]
     environment = os.environ.copy()
     # Build independently of the outer Cargo's jobserver, compiler, and Clippy
@@ -164,10 +172,15 @@ def build(checkout: Path, output: Path, target: str, pin: dict[str, object]) -> 
         if name.startswith("CARGO_TARGET_"):
             del environment[name]
     environment["CARGO_TARGET_DIR"] = str(workspace / "target")
+    environment["CARGO_HOME"] = str(cargo_home)
     command = [
         *toolchain,
         "cargo",
         "build",
+        "--manifest-path",
+        str(workspace / "Cargo.toml"),
+        "--config",
+        str(workspace / ".cargo/config.toml"),
         "--locked",
         "--release",
         "-p",
@@ -177,7 +190,7 @@ def build(checkout: Path, output: Path, target: str, pin: dict[str, object]) -> 
         "--target",
         target,
     ]
-    result = subprocess.run(command, cwd=workspace, env=environment, check=False)
+    result = subprocess.run(command, cwd="/", env=environment, check=False)
     if result.returncode != 0:
         fail(f"runner build failed with status {result.returncode}")
     runner = workspace / "target" / target / "release" / "mcp-console-sandbox"

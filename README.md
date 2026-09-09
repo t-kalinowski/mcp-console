@@ -141,7 +141,7 @@ Render only code you trust.
 Install the current checkout with `uv tool install --reinstall .`.
 macOS source builds require Python 3, Git, and rustup in addition to the Rust compiler and native build tools.
 The first macOS build fetches and compiles the pinned sandbox runner automatically, using a dedicated checkout under Cargo's target directory.
-It installs the pinned Rust toolchain if needed and uses the usual Cargo dependency cache.
+The runner has its own Cargo configuration and dependency cache; rustup installs the pinned toolchain if needed.
 Later builds reuse the completed runner while its pin, build script, and target are unchanged.
 It does not use another working checkout.
 
