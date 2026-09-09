@@ -668,7 +668,12 @@ class ReleaseScriptTests(unittest.TestCase):
                 "rust_toolchain": "1.95.0",
             }
             (root / "sandbox-runner.json").write_text(json.dumps(pin))
+            # Exercise canonical paths on every host, including when its
+            # temporary directory itself does not contain a symlink.
+            source = directory / "source-directory"
+            source.mkdir()
             checkout = directory / "source"
+            checkout.symlink_to(source, target_is_directory=True)
             crate = checkout / "codex-rs" / "mcp-console-sandbox"
             crate.mkdir(parents=True)
             (crate / "Cargo.toml").touch()
@@ -852,9 +857,9 @@ class ReleaseScriptTests(unittest.TestCase):
                             "+1.95.0",
                             "build",
                             "--manifest-path",
-                            str(checkout / "codex-rs/Cargo.toml"),
+                            str(checkout.resolve() / "codex-rs/Cargo.toml"),
                             "--config",
-                            str(checkout / "codex-rs/.cargo/config.toml"),
+                            str(checkout.resolve() / "codex-rs/.cargo/config.toml"),
                             "--locked",
                             "--release",
                             "-p",
