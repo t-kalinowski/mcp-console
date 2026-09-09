@@ -218,7 +218,7 @@ class TranscriptRunnerTests(unittest.TestCase):
             / "test_tools"
         )
         support = self.root / "tests" / "support"
-        binary = self.root / "target" / "debug" / "mcp-console"
+        binary = self.root / "target" / "release" / "mcp-console"
         for directory in (self.suite.parent, self.snapshots, support, binary.parent):
             directory.mkdir(parents=True, exist_ok=True)
 
@@ -265,6 +265,52 @@ class TranscriptRunnerTests(unittest.TestCase):
         return subprocess.CompletedProcess(
             arguments, process.returncode, stdout, stderr
         )
+
+    def test_script_builds_and_uses_release_with_a_stale_debug_binary(self) -> None:
+        scripts = self.root / "scripts"
+        scripts.mkdir()
+        shutil.copy2(ROOT / "scripts" / "test", scripts / "test")
+        commands = self.root / "commands"
+        commands.mkdir()
+        cargo = commands / "cargo"
+        # fmt: python
+        cargo.write_text(
+            f"#!{sys.executable}\n"
+            + """
+import sys
+from pathlib import Path
+
+profile = "release" if "--release" in sys.argv else "debug"
+binary = Path("target") / profile / "mcp-console"
+binary.parent.mkdir(parents=True, exist_ok=True)
+binary.write_text(profile, encoding="utf-8")
+""".lstrip(),
+            encoding="utf-8",
+        )
+        cargo.chmod(0o755)
+        debug = self.root / "target" / "debug" / "mcp-console"
+        debug.parent.mkdir()
+        debug.write_text("stale debug", encoding="utf-8")
+        (self.root / "target" / "release" / "mcp-console").unlink()
+        self.suite.write_text(
+            PUBLIC_SUITE
+            + """
+def test_selected(binary: Path) -> list[dict[str, str]]:
+    assert binary.read_text(encoding="utf-8") == "release"
+    return record(binary, "selected")
+""",
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            [scripts / "test", "client_server/server/test_tools::selected"],
+            cwd=self.root,
+            env={**os.environ, "PATH": f"{commands}{os.pathsep}{os.environ['PATH']}"},
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.root / "selected.marker").exists())
 
     def test_case_requirements_and_skip_reporting(self) -> None:
         self.suite.write_text(

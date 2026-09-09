@@ -151,7 +151,7 @@ class McpClientTests(unittest.TestCase):
                 / "test_client"
             )
             support = root / "tests" / "support"
-            binary = root / "target" / "debug" / "mcp-console"
+            binary = root / "target" / "release" / "mcp-console"
             for path in (suite_path.parent, snapshots, support, binary.parent):
                 path.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ROOT / "tests" / "boundaries" / "_run.py", runner)
