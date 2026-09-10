@@ -101,12 +101,6 @@ jobs:
           sudo apt-get install -y build-essential pkg-config libcurl4-openssl-dev libcap-dev
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
-      - name: Install private sandbox Rust toolchain
-        run: >-
-          rustup toolchain install
-          "${{ steps.sandbox-pin.outputs.rust_toolchain }}"
-          --profile minimal
-
       - name: Select weekly cache epoch
         id: cache-epoch
         run: printf 'value=%s\n' "$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
@@ -165,8 +159,8 @@ jobs:
           path: |
             wheel-data
             target/sandbox-runner-build.json
-          # v2 caches the wheel-data staging root. The pin includes the source
-          # revision and compiler. Bump the version for changes to runner build
+          # v2 caches the wheel-data staging root. The pinned source revision
+          # owns its compiler configuration. Bump the version for runner build
           # flags or the macOS deployment target.
           key: >-
             sandbox-runner-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('sandbox-runner.json', 'scripts/stage-sandbox-runner') }}
@@ -180,10 +174,10 @@ jobs:
           # Reuse workspace crates from the preceding pin when rebuilding it.
           # Keep every restore prefix within the current UTC week.
           key: >-
-            sandbox-build-v1-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.sandbox-pin.outputs.rust_toolchain }}-${{ hashFiles('.sandbox-runner-source/codex-rs/Cargo.toml', '.sandbox-runner-source/codex-rs/Cargo.lock', '.sandbox-runner-source/codex-rs/.cargo/**', 'scripts/stage-sandbox-runner') }}-${{ steps.sandbox-pin.outputs.commit }}
+            sandbox-build-v1-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.sandbox-runner-source/codex-rs/rust-toolchain.toml') }}-${{ hashFiles('.sandbox-runner-source/codex-rs/Cargo.toml', '.sandbox-runner-source/codex-rs/Cargo.lock', '.sandbox-runner-source/codex-rs/.cargo/**', 'scripts/stage-sandbox-runner') }}-${{ steps.sandbox-pin.outputs.commit }}
           restore-keys: |
-            sandbox-build-v1-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.sandbox-pin.outputs.rust_toolchain }}-${{ hashFiles('.sandbox-runner-source/codex-rs/Cargo.toml', '.sandbox-runner-source/codex-rs/Cargo.lock', '.sandbox-runner-source/codex-rs/.cargo/**', 'scripts/stage-sandbox-runner') }}-
-            sandbox-build-v1-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.sandbox-pin.outputs.rust_toolchain }}-
+            sandbox-build-v1-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.sandbox-runner-source/codex-rs/rust-toolchain.toml') }}-${{ hashFiles('.sandbox-runner-source/codex-rs/Cargo.toml', '.sandbox-runner-source/codex-rs/Cargo.lock', '.sandbox-runner-source/codex-rs/.cargo/**', 'scripts/stage-sandbox-runner') }}-
+            sandbox-build-v1-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.sandbox-runner-source/codex-rs/rust-toolchain.toml') }}-
 
       - name: Stage private sandbox runner
         if: >-
