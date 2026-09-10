@@ -1,3 +1,9 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+
 from __future__ import annotations
 
 import ast
@@ -11,14 +17,15 @@ ROOT = Path(__file__).resolve().parent.parent
 SOURCE_ROOT = ROOT / "src"
 EXPECTED_SOURCES = {
     "src/python/bridge.R",
+    "src/python/initialize.R",
     "src/python/runtime.py",
     "src/r_environment/bridge.R",
     "src/r_graphics/bridge.R",
     "src/resolver/programs/duckdb_extensions.R",
-    "src/resolver/programs/managed_python.R",
-    "src/resolver/programs/python_version.R",
     "src/resolver/programs/r_library.R",
+    "src/resolver/programs/uv_binary.R",
     "src/sql/bridge.R",
+    "src/sql/dbapi.py",
 }
 INCLUDE_PATTERN = re.compile(
     r'include_str!\(\s*"([^"\n]+\.(?:R|py))"\s*\)', re.MULTILINE

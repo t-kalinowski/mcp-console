@@ -28,6 +28,7 @@ pub(super) struct OutputTape(Arc<Mutex<OutputTapeState>>);
 struct OutputTapeState {
     direct_stdout: DirectDecoder,
     direct_stderr: DirectDecoder,
+    cell_output: Option<crate::transcript::CellOutput>,
     next_event: u64,
     events: Vec<(u64, OutputEvent)>,
     /// A failed pre-evaluation response reclaimed after unsuccessful MCP delivery.
@@ -121,15 +122,15 @@ struct Truncation {
     image_bytes: usize,
     image_metadata_bytes: usize,
     events: usize,
+    output_path: Option<Box<str>>,
+    retained_text_bytes: usize,
 }
 
-#[cfg(target_os = "macos")]
 pub(super) struct DirectOutput {
     output: OutputTape,
     stream: DirectOutputStream,
 }
 
-#[cfg(target_os = "macos")]
 #[derive(Clone, Copy)]
 enum DirectOutputStream {
     Stdout,
@@ -454,7 +455,7 @@ impl ResponseBuilder {
         } else {
             "events"
         };
-        let message = if truncated.image_metadata_bytes == 0 {
+        let mut message = if truncated.image_metadata_bytes == 0 {
             format!(
                 "output truncated: omitted {} text bytes and {} encoded image bytes across {} {event}",
                 truncated.text_bytes, truncated.image_bytes, truncated.events
@@ -468,6 +469,12 @@ impl ResponseBuilder {
                 truncated.events
             )
         };
+        if let Some(path) = truncated.output_path {
+            message.push_str(&format!(
+                "; retained text: {path} ({} of {} omitted text bytes)",
+                truncated.retained_text_bytes, truncated.text_bytes
+            ));
+        }
         self.notice(message);
     }
 
@@ -598,17 +605,14 @@ impl OutputTape {
         state.recovered = Some(response);
     }
 
-    #[cfg(target_os = "macos")]
     pub(super) fn direct_stdout(&self) -> DirectOutput {
         self.direct_output(DirectOutputStream::Stdout)
     }
 
-    #[cfg(target_os = "macos")]
     pub(super) fn direct_stderr(&self) -> DirectOutput {
         self.direct_output(DirectOutputStream::Stderr)
     }
 
-    #[cfg(target_os = "macos")]
     fn direct_output(&self, stream: DirectOutputStream) -> DirectOutput {
         DirectOutput {
             output: self.clone(),
@@ -673,12 +677,14 @@ impl OutputTape {
 
     pub(super) fn cut(&self) -> OutputCut {
         let mut state = self.lock();
+        state.flush_cell_output();
         state.seal_truncation();
         OutputCut(state.next_event)
     }
 
     pub(super) fn take(&self) -> Response {
         let mut state = self.lock();
+        state.flush_cell_output();
         state.seal_truncation();
         let cut = OutputCut(state.next_event);
         drain_through(&mut state, cut, false)
@@ -703,6 +709,38 @@ impl OutputTape {
         response
     }
 
+    /// Establishes one cell's output file at the same boundary as its worker operation.
+    pub(super) fn begin_cell_output_before(
+        &self,
+        cell_output: Option<crate::transcript::CellOutput>,
+        capture_prelude: bool,
+        boundary: impl FnOnce(),
+    ) -> Response {
+        let mut state = self.lock();
+        assert!(
+            state.cell_output.is_none(),
+            "only one cell output file can be active"
+        );
+        state.seal_truncation();
+        let response = if capture_prelude {
+            let cut = OutputCut(state.next_event);
+            drain_through(&mut state, cut, true)
+        } else {
+            Response::default()
+        };
+        state.cell_output = cell_output;
+        boundary();
+        response
+    }
+
+    /// Finishes one cell's file at the same ordered boundary as its completion cut.
+    pub(super) fn finish_cell_output(&self) -> OutputCut {
+        let mut state = self.lock();
+        state.finish_cell_output();
+        state.seal_truncation();
+        OutputCut(state.next_event)
+    }
+
     pub(super) fn drain_through(&self, cut: OutputCut) -> Response {
         let mut state = self.lock();
         drain_through(&mut state, cut, false)
@@ -715,7 +753,6 @@ impl OutputTape {
     }
 }
 
-#[cfg(target_os = "macos")]
 impl DirectOutput {
     pub(super) fn push(&self, bytes: &[u8]) {
         self.output.lock().push_direct_output(self.stream, bytes);
@@ -728,7 +765,6 @@ impl DirectOutput {
     }
 }
 
-#[cfg(target_os = "macos")]
 impl DirectOutputStream {
     fn event(self, event: DirectOutputEvent) -> OutputEvent {
         match self {
@@ -743,6 +779,7 @@ impl OutputTapeState {
         Self {
             direct_stdout: DirectDecoder::default(),
             direct_stderr: DirectDecoder::default(),
+            cell_output: None,
             next_event: 0,
             events: Vec::new(),
             recovered: None,
@@ -752,10 +789,26 @@ impl OutputTapeState {
         }
     }
 
+    fn flush_cell_output(&mut self) {
+        let notice = self.cell_output.as_mut().and_then(|output| output.flush());
+        self.push_cell_output_notice(notice);
+    }
+
+    fn finish_cell_output(&mut self) {
+        let notice = self.cell_output.take().and_then(|output| output.finish());
+        self.push_cell_output_notice(notice);
+    }
+
     fn push_console_text(&mut self, channel: crate::worker_protocol::ConsoleChannel, text: String) {
         let original_length = text.len();
+        let (spooled, cell_output_notice) = self
+            .cell_output
+            .as_mut()
+            .map(|output| output.append(text.as_bytes()))
+            .unwrap_or_default();
         if self.budget.dropping_ordinary_output {
-            self.omit(original_length, 0, 0, 1);
+            self.omit_cell_text(original_length, spooled);
+            self.push_cell_output_notice(cell_output_notice);
             return;
         }
 
@@ -785,8 +838,9 @@ impl OutputTapeState {
             );
         }
         if retained < original_length {
-            self.omit(original_length - retained, 0, 0, 1);
+            self.omit_cell_text(original_length - retained, spooled.saturating_sub(retained));
         }
+        self.push_cell_output_notice(cell_output_notice);
     }
 
     fn push_bounded_notice_line(&mut self, message: String) {
@@ -807,7 +861,7 @@ impl OutputTapeState {
                 0,
             );
         } else {
-            self.omit(rendered_length, 0, 0, 1);
+            self.omit(rendered_length, 0, 0, 1, None, 0);
         }
     }
 
@@ -847,18 +901,23 @@ impl OutputTapeState {
                 metadata_length,
             );
         } else {
-            self.omit(0, length, metadata_length, 1);
+            self.omit(0, length, metadata_length, 1, None, 0);
         }
         Ok(())
     }
 
-    #[cfg(target_os = "macos")]
     fn push_direct_output(&mut self, stream: DirectOutputStream, bytes: &[u8]) {
         if bytes.is_empty() {
             return;
         }
+        let (spooled, cell_output_notice) = self
+            .cell_output
+            .as_mut()
+            .map(|output| output.append(bytes))
+            .unwrap_or_default();
         if self.budget.dropping_ordinary_output {
-            self.omit(bytes.len(), 0, 0, 1);
+            self.omit_cell_text(bytes.len(), spooled);
+            self.push_cell_output_notice(cell_output_notice);
             return;
         }
 
@@ -880,8 +939,9 @@ impl OutputTapeState {
             );
         }
         if retained < bytes.len() {
-            self.omit(bytes.len() - retained, 0, 0, 1);
+            self.omit_cell_text(bytes.len() - retained, spooled.saturating_sub(retained));
         }
+        self.push_cell_output_notice(cell_output_notice);
     }
 
     fn retain_ordinary(
@@ -917,6 +977,8 @@ impl OutputTapeState {
         image_bytes: usize,
         image_metadata_bytes: usize,
         events: usize,
+        output_path: Option<Box<str>>,
+        retained_text_bytes: usize,
     ) {
         self.budget.dropping_ordinary_output = true;
         if let Some(sequence) = self.active_truncation {
@@ -933,6 +995,12 @@ impl OutputTapeState {
                 .image_metadata_bytes
                 .saturating_add(image_metadata_bytes);
             truncation.events = truncation.events.saturating_add(events);
+            truncation.retained_text_bytes = truncation
+                .retained_text_bytes
+                .saturating_add(retained_text_bytes);
+            if truncation.output_path.is_none() {
+                truncation.output_path = output_path;
+            }
             // Omitted publications still occupy observation-order positions, so a
             // later cut can seal counts without retaining one event per chunk.
             self.allocate_position();
@@ -942,8 +1010,24 @@ impl OutputTapeState {
                 image_bytes,
                 image_metadata_bytes,
                 events,
+                output_path,
+                retained_text_bytes,
             }));
             self.active_truncation = Some(sequence);
+        }
+    }
+
+    fn omit_cell_text(&mut self, text_bytes: usize, retained_text_bytes: usize) {
+        let output_path = self.cell_output.as_mut().and_then(|output| {
+            output.note_inline_omission(text_bytes);
+            (retained_text_bytes > 0).then(|| Box::<str>::from(output.public_path()))
+        });
+        self.omit(text_bytes, 0, 0, 1, output_path, retained_text_bytes);
+    }
+
+    fn push_cell_output_notice(&mut self, notice: Option<String>) {
+        if let Some(notice) = notice {
+            self.push_control(OutputEvent::ServerNotice(notice));
         }
     }
 
@@ -1546,7 +1630,6 @@ mod tests {
         assert_text(output.take(), "new");
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn direct_utf8_obeys_truncation_and_stream_order() {
         let output = OutputTape::with_limits(limits(2, 100, 100));
@@ -1569,7 +1652,6 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn direct_utf8_respects_cut_and_prelude_boundaries() {
         let output = OutputTape::with_limits(limits(100, 100, 100));
@@ -1597,7 +1679,6 @@ mod tests {
         assert!(matches!(&content[1], Content::Image { data, .. } if data == "image"));
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn mixed_text_channels_direct_streams_images_and_notices_keep_order() {
         let output = OutputTape::with_limits(limits(100, 100, 100));

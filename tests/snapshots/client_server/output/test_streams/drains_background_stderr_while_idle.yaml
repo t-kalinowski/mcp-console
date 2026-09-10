@@ -1,0 +1,21 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  r: start background stderr
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+        zod background stderr
+        <large output>
+        [idle]
+  isError: false

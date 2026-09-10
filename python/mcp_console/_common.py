@@ -108,9 +108,7 @@ def openai_result_output(result: Any) -> Union[str, List[Dict[str, Any]]]:
                     }
                 )
             else:
-                output.append(
-                    {"type": "input_text", "text": f"[{mime_type} output]"}
-                )
+                output.append({"type": "input_text", "text": f"[{mime_type} output]"})
         else:
             output.append({"type": "input_text", "text": as_json(item)})
 

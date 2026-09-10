@@ -12,8 +12,9 @@ Its sources of truth are:
 The relay forwards the semantic messages in this document between the server and worker without changing their JSON shapes.
 The separate server-relay JSONL protocol is specified in [`RELAY_PROTOCOL.md`](RELAY_PROTOCOL.md).
 
-Outside this wire contract, [`ARCHITECTURE.md`](ARCHITECTURE.md) owns process placement and lifecycle, [`BUILTIN_RUNTIME.md`](BUILTIN_RUNTIME.md) owns console behavior, [`REQUIREMENTS.md`](REQUIREMENTS.md) owns dependency preparation, and [`TOOL_DESCRIPTIONS.md`](TOOL_DESCRIPTIONS.md) mirrors the registered MCP descriptions.
-Process-boundary test guidance lives in [`../tests/transcripts/README.md`](../tests/transcripts/README.md).
+Outside this wire contract, [`ARCHITECTURE.md`](ARCHITECTURE.md) owns process placement and lifecycle, [`BUILTIN_RUNTIME.md`](BUILTIN_RUNTIME.md) owns console behavior, [`REQUIREMENTS.md`](REQUIREMENTS.md) owns dependency preparation, and [`TOOL_DESCRIPTIONS.md`](TOOL_DESCRIPTIONS.md) gives editorial guidance for tool descriptions.
+The [canonical handshake snapshot](../tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml) records the registered MCP descriptions.
+Process-boundary test guidance lives in [`../tests/boundaries/README.md`](../tests/boundaries/README.md).
 
 Direction labels below use the logical `server` and `worker` endpoints.
 The relay translates matching server-relay commands and events at the transport boundary.
@@ -34,30 +35,32 @@ The sideband has no protocol negotiation, capability exchange, session name, req
 Interrupt delivery is a process signal managed by the relay.
 Response cuts, output budgets, and MCP response assembly are server state and never appear on this boundary.
 
-The protocol is currently supported only on macOS because the worker relay and sandbox runtime are macOS-only.
+The sideband transport, worker relay, and built-in worker support macOS and Linux.
+Both platforms support the default sandbox launcher and explicit `serve --no-sandbox`.
 
 ## Launch contract
 
-For every worker generation, the sandboxed relay launches the configured worker with piped standard input, standard output, and standard error.
-The relay is already inside the worker sandbox, and the worker inherits that sandbox and its process group.
+For every worker generation, the relay launches the configured worker with piped standard input, standard output, and standard error.
+By default, the relay is already inside the worker sandbox, and the worker inherits that sandbox and its process group.
+With `serve --no-sandbox`, the server launches the relay directly, and both relay and worker run with server permissions without a sandbox runner or descendant-cleanup guarantee.
 The built-in command is `mcp-console worker`.
 The hidden `serve --worker PATH` option uses `PATH` as one executable name or path, without arguments or shell parsing.
 
-Before spawning the worker, the relay creates two anonymous sideband pipes and places the worker endpoint numbers in its environment:
+Before spawning the worker, the relay creates two anonymous pipes and places the worker endpoint numbers in its environment:
 
 ```yaml
-MCP_CONSOLE_SIDEBAND_READ_FD: <worker reads server messages here>
-MCP_CONSOLE_SIDEBAND_WRITE_FD: <worker writes messages here>
+MCP_CONSOLE_SIDEBAND_READ_FD: <worker reads relay messages here>
+MCP_CONSOLE_SIDEBAND_WRITE_FD: <worker writes messages to the relay here>
 ```
 
-The relay clears `FD_CLOEXEC` on those two worker endpoints for the spawn, then drops its duplicate child endpoints.
-The worker takes ownership of both file descriptors.
+The relay clears `FD_CLOEXEC` only on the worker's two endpoints for the spawn, then drops its local copies immediately after spawning.
+The worker takes ownership of both inherited file descriptors.
 
 Before executing descendants or evaluated code, a worker must:
 
 1. remove both sideband environment variables;
 2. set `FD_CLOEXEC` on both descriptors or otherwise prevent exec descendants from inheriting them; and
-3. close both descriptors in fork-only descendants.
+3. close both descriptors in fork-only descendants, leaving the parent's endpoints usable.
 
 Keeping a sideband endpoint open in a descendant can prevent the relay from observing closure and is outside the contract.
 Descendants may retain fd 1 or fd 2; their bytes remain part of the worker generation's captured standard streams.
@@ -66,12 +69,19 @@ Descendants may retain fd 1 or fd 2; their bytes remain part of the worker gener
 
 ### Sideband framing
 
-The sideband consists of two one-way pipes:
+Each sideband direction has its own ordered byte pipe:
 
 ```text
 relay writer  ──>  worker reader
 relay reader  <──  worker writer
 ```
+
+Reads and writes proceed independently.
+The built-in endpoints use nonblocking descriptor I/O and readiness polling, while message sends and receives wait for progress.
+Relay reader and writer waits also poll explicit cancellation pipes, so full pipes or descendants retaining endpoints cannot prevent their threads from joining.
+Cancellation does not close a descriptor being used by another thread.
+Pipe writes suppress their own `SIGPIPE` using a temporary thread-local signal mask, preserve a previously pending signal, and restore the caller's mask.
+They report `EPIPE` without changing the process-wide signal disposition installed by R or Python.
 
 Each frame is one UTF-8 JSON object followed by line feed (`\n`).
 A sender flushes every frame.
@@ -88,6 +98,7 @@ Nested request and manifest objects also reject unknown fields.
 `shutdown`, `ready`, `input_received`, `input_cancelled`, `python_prepared`, and `completed` are payload-free: their frames contain exactly `kind` and reject every additional field.
 
 Each sideband direction preserves frame order.
+There is no ordering guarantee between the two directions.
 The relay continuously reads worker frames after readiness, including while the worker is idle and after an operation result.
 There is no result acknowledgment that pauses the relay.
 
@@ -114,48 +125,48 @@ The relay reads and forwards arbitrary bytes without line buffering.
 The readable UTF-8 versus base64 representation used on the outer JSONL stream belongs to [`RELAY_PROTOCOL.md`](RELAY_PROTOCOL.md), not to the worker sideband.
 
 Each standard stream preserves its own byte order.
-The worker sideband, stdout, and stderr use independent pipes, so there is no chronological cross-source ordering guarantee.
+The worker sideband, stdout, and stderr are independent transports, so there is no chronological cross-source ordering guarantee.
 In particular, raw output written before a `completed` or preparation-result frame may be observed after that frame.
 
 ## Message schemas
 
 ### Server to worker
 
-| Frame | Required meaning |
-| --- | --- |
-| `{"kind":"evaluate","language":"r","source":"..."}` | Evaluate one complete source string. `language` is `r`, `python`, or `sql`. |
-| `{"kind":"prepare_r","library":"..."}` | Apply this resolved R library to the live R search path. |
-| `{"kind":"r_resolved","library":"..."}` | Return the provisional library selected for the current `resolve_r` request. |
+| Frame                                                             | Required meaning                                                                          |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `{"kind":"evaluate","language":"r","source":"..."}`               | Evaluate one complete source string. `language` is `r`, `python`, or `sql`.               |
+| `{"kind":"prepare_r","library":"..."}`                            | Apply this resolved R library to the live R search path.                                  |
+| `{"kind":"r_resolved","library":"..."}`                           | Return the provisional library selected for the current `resolve_r` request.              |
 | `{"kind":"r_resolution_failed","failure":"host","message":"..."}` | Fail the current `resolve_r` request. `failure` is `host`, `interrupted`, or `operation`. |
-| `{"kind":"prepare_python","packages":["py-yaml12"]}` | Add these package requirements through the live managed-Python preparation operation. |
-| `{"kind":"python_resolved","python":"..."}` | Return the interpreter path selected for the current `resolve_python` request. |
-| `{"kind":"python_resolution_failed","message":"..."}` | Return an ordinary failure for the current `resolve_python` request. |
-| `{"kind":"python_version_resolved","version":"3.12.11"}` | Return the version selected for the current `resolve_python_version` request. |
-| `{"kind":"python_version_resolution_failed","message":"..."}` | Return an ordinary failure for the current version request. |
-| `{"kind":"shutdown"}` | Exit without a sideband reply. |
+| `{"kind":"prepare_python","packages":["py-yaml12"]}`              | Add these package requirements through the live managed-Python preparation operation.     |
+| `{"kind":"python_resolved","python":"..."}`                       | Return the interpreter path selected for the current `resolve_python` request.            |
+| `{"kind":"python_resolution_failed","message":"..."}`             | Return an ordinary failure for the current `resolve_python` request.                      |
+| `{"kind":"python_version_resolved","version":"3.12.11"}`          | Return the version selected for the current `resolve_python_version` request.             |
+| `{"kind":"python_version_resolution_failed","message":"..."}`     | Return an ordinary failure for the current version request.                               |
+| `{"kind":"shutdown"}`                                             | Exit without a sideband reply.                                                            |
 
 ### Worker to server
 
-| Frame | Required meaning |
-| --- | --- |
-| `{"kind":"ready"}` | Startup is complete. |
-| `{"kind":"console_output","data":"..."}` | Publish ordinary console text. |
-| `{"kind":"console_diagnostic","data":"..."}` | Publish diagnostic console text. |
-| `{"kind":"image","data":"...","mime_type":"image/png"}` | Publish one base64-encoded image. |
-| `{"kind":"input_requested","prompt":"..."}` | Report that a managed console read is about to wait for input. |
-| `{"kind":"input_received"}` | Report that the outstanding managed read succeeded. |
-| `{"kind":"input_cancelled"}` | Report that interruption cancelled the outstanding managed read. |
-| `{"kind":"r_prepared","library":"..."}` | Complete `prepare_r` successfully with the applied library path. |
-| `{"kind":"r_preparation_failed","message":"..."}` | Complete `prepare_r` with an ordinary live-update failure. |
-| `{"kind":"resolve_r","packages":["cli","glue"]}` | Request host resolution of these plain R package names. |
-| `{"kind":"r_activated","library":"..."}` | Report that the worker accepted this resolved R library. |
-| `{"kind":"r_activation_failed","library":"...","message":"..."}` | Report that the worker could not apply this resolved R library. |
-| `{"kind":"resolve_python","request":{"requirements":{"packages":["numpy","pandas"]},"retained_requirements":{"packages":["numpy","pandas"]}}}` | Request host resolution of one managed-Python environment. |
-| `{"kind":"resolve_python_version","request":{"constraints":[]}}` | Request host Python-version selection. |
-| `{"kind":"python_activated","requirements":{"packages":["numpy","pandas"]}}` | Report that the worker accepted this complete logical managed-Python manifest. |
-| `{"kind":"python_prepared"}` | Complete explicit Python preparation successfully. |
-| `{"kind":"python_preparation_failed","message":"..."}` | Complete explicit Python preparation with an ordinary failure. |
-| `{"kind":"completed"}` | Complete the current evaluation. |
+| Frame                                                                                                                                          | Required meaning                                                               |
+| ---------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `{"kind":"ready"}`                                                                                                                             | Startup is complete.                                                           |
+| `{"kind":"console_output","data":"..."}`                                                                                                       | Publish ordinary console text.                                                 |
+| `{"kind":"console_diagnostic","data":"..."}`                                                                                                   | Publish diagnostic console text.                                               |
+| `{"kind":"image","data":"...","mime_type":"image/png"}`                                                                                        | Publish one base64-encoded image.                                              |
+| `{"kind":"input_requested","prompt":"..."}`                                                                                                    | Report that a managed console read is about to wait for input.                 |
+| `{"kind":"input_received"}`                                                                                                                    | Report that the outstanding managed read succeeded.                            |
+| `{"kind":"input_cancelled"}`                                                                                                                   | Report that interruption cancelled the outstanding managed read.               |
+| `{"kind":"r_prepared","library":"..."}`                                                                                                        | Complete `prepare_r` successfully with the applied library path.               |
+| `{"kind":"r_preparation_failed","message":"..."}`                                                                                              | Complete `prepare_r` with an ordinary live-update failure.                     |
+| `{"kind":"resolve_r","packages":["cli","glue"]}`                                                                                               | Request host resolution of these plain R package names.                        |
+| `{"kind":"r_activated","library":"..."}`                                                                                                       | Report that the worker accepted this resolved R library.                       |
+| `{"kind":"r_activation_failed","library":"...","message":"..."}`                                                                               | Report that the worker could not apply this resolved R library.                |
+| `{"kind":"resolve_python","request":{"requirements":{"packages":["numpy","pandas"]},"retained_requirements":{"packages":["numpy","pandas"]}}}` | Request host resolution of one managed-Python environment.                     |
+| `{"kind":"resolve_python_version","request":{"constraints":[]}}`                                                                               | Request host Python-version selection.                                         |
+| `{"kind":"python_activated","requirements":{"packages":["numpy","pandas"]}}`                                                                   | Report that the worker accepted this complete logical managed-Python manifest. |
+| `{"kind":"python_prepared"}`                                                                                                                   | Complete explicit Python preparation successfully.                             |
+| `{"kind":"python_preparation_failed","message":"..."}`                                                                                         | Complete explicit Python preparation with an ordinary failure.                 |
+| `{"kind":"completed"}`                                                                                                                         | Complete the current evaluation.                                               |
 
 `console_output` and `console_diagnostic` remain distinct on this boundary.
 Their MCP projection is described in [`BUILTIN_RUNTIME.md`](BUILTIN_RUNTIME.md).
@@ -220,9 +231,9 @@ An ordinary language result ends with exactly one `completed` frame.
 
 All sideband output belonging to the evaluation must precede `completed`.
 Later sideband output is idle activity.
-Raw fd-1 or fd-2 bytes remain subject to the independent-pipe ordering rule above.
+Raw fd-1 or fd-2 bytes remain subject to the independent-source ordering rule above.
 
-Language parse errors, runtime errors, Python exceptions, and DuckDB errors are ordinary console results: a worker reports their text and then `completed` if it remains usable.
+Language parse errors, runtime errors, Python exceptions, and SQL backend errors are ordinary console results: a worker reports their text and then `completed` if it remains usable.
 The protocol has no structured language-error message.
 Infrastructure failure instead closes or invalidates the worker boundary.
 
@@ -335,7 +346,7 @@ It must not depend on host Python resolution, whose requests are rejected for cu
 
 A custom worker may opt into runtime managed-R resolution and the matching `r_activated` and `r_activation_failed` messages.
 The server merges each request with the complete retained R environment and the custom worker's fixed R requirements.
-It validates package names before invoking IR, so an invalid request receives an ordinary `host` rejection.
+It validates package names before invoking `ir`, so an invalid request receives an ordinary `host` rejection.
 Activation messages remain subject to the same candidate and generation matching rules as the built-in worker.
 
 ### Synchronous resolver waits
@@ -352,33 +363,33 @@ A response for another resolver kind, or any resolver response without its match
 The following table summarizes the required semantic transitions.
 Console, image, and permitted nested resolver frames do not by themselves change the current phase.
 
-| Current phase | Frame | Required result |
-| --- | --- | --- |
-| starting | worker -> server `ready` | idle |
-| idle | server -> worker `evaluate` | evaluating |
-| idle | server -> worker `prepare_r` | preparing R |
-| idle | server -> worker `prepare_python` | preparing Python |
-| evaluating | worker -> server `completed` | idle |
-| preparing R | worker -> server `r_prepared` with the requested path | idle |
-| preparing R | worker -> server `r_preparation_failed` | idle |
-| preparing Python | worker -> server `python_prepared` | idle |
-| preparing Python | worker -> server `python_preparation_failed` | idle |
-| idle or evaluating | worker -> server `input_requested` | same phase, input outstanding |
-| input outstanding | worker -> server `input_received` or `input_cancelled` | prior phase |
-| idle or evaluating | worker -> server `resolve_r` | same phase, nested R resolution |
-| nested R resolution | server -> worker `r_resolved` or `r_resolution_failed` | prior phase |
-| idle, evaluating, or preparing | worker -> server `resolve_python` | same phase, nested resolution |
-| idle, evaluating, or preparing | worker -> server `resolve_python_version` | same phase, nested version selection |
-| nested resolution | server -> worker matching success or failure reply | prior phase |
-| any live phase | server -> worker `shutdown` | terminal |
+| Current phase                  | Frame                                                  | Required result                      |
+| ------------------------------ | ------------------------------------------------------ | ------------------------------------ |
+| starting                       | worker -> server `ready`                               | idle                                 |
+| idle                           | server -> worker `evaluate`                            | evaluating                           |
+| idle                           | server -> worker `prepare_r`                           | preparing R                          |
+| idle                           | server -> worker `prepare_python`                      | preparing Python                     |
+| evaluating                     | worker -> server `completed`                           | idle                                 |
+| preparing R                    | worker -> server `r_prepared` with the requested path  | idle                                 |
+| preparing R                    | worker -> server `r_preparation_failed`                | idle                                 |
+| preparing Python               | worker -> server `python_prepared`                     | idle                                 |
+| preparing Python               | worker -> server `python_preparation_failed`           | idle                                 |
+| idle or evaluating             | worker -> server `input_requested`                     | same phase, input outstanding        |
+| input outstanding              | worker -> server `input_received` or `input_cancelled` | prior phase                          |
+| idle or evaluating             | worker -> server `resolve_r`                           | same phase, nested R resolution      |
+| nested R resolution            | server -> worker `r_resolved` or `r_resolution_failed` | prior phase                          |
+| idle, evaluating, or preparing | worker -> server `resolve_python`                      | same phase, nested resolution        |
+| idle, evaluating, or preparing | worker -> server `resolve_python_version`              | same phase, nested version selection |
+| nested resolution              | server -> worker matching success or failure reply     | prior phase                          |
+| any live phase                 | server -> worker `shutdown`                            | terminal                             |
 
 `r_activated` or `r_activation_failed` may occur while idle or evaluating, but only for a matching provisional R library.
 `python_activated` may occur while idle, evaluating, or preparing, but only for a matching managed environment.
 An input request during preparation is an error, as described above.
 
-The relay has independent producers for sideband, stdout, stderr, and process supervision.
+The relay has independent producers for sideband, stdout, stderr, and direct-worker lifecycle.
 It serializes their outer events without interleaving frames and preserves each producer's order.
-That serialized observation order does not reconstruct chronology between the worker's independent pipes.
+That serialized observation order does not reconstruct chronology between the worker's independent transports.
 
 ## Shutdown and closure
 
@@ -390,16 +401,24 @@ For intentional restart or server shutdown, the relay concurrently closes worker
 
 The worker sends no acknowledgment.
 It exits and lets process closure close its sideband and standard streams.
+The protocol defines no general sideband half-close operation.
 The shutdown frame may arrive while the worker is waiting for a nested resolver reply; it terminates that wait rather than acting as a resolver response.
 
 Fd-0 closure and the `shutdown` frame are both generation-retirement signals, not evaluation or stdin-payload delimiters.
 A worker must not require both in a particular order.
-If it does not exit within the relay's supplied grace period, the relay forcibly terminates it and its supported process-group descendants.
+If it does not exit within the relay's supplied grace period, the relay forcibly terminates it.
+After direct-worker exit or force-stop, the relay reaps the direct child and retires its local transports.
+In sandboxed mode, the sandbox launcher owns cleanup of remaining descendants, including those retaining worker descriptors or entering another process group or session.
+The server requires successful managed launcher exit as the sandbox-lifetime retirement barrier before replacement in that mode.
+With `--no-sandbox`, the server waits for and reaps the relay directly; no runner cleans up remaining descendants.
 The exact server-relay acceptance and retirement sequence is specified in [`RELAY_PROTOCOL.md`](RELAY_PROTOCOL.md).
 
-During retirement, the relay forwards every complete worker-sideband frame already buffered or immediately readable.
-It may abandon an incomplete frame held open by a descendant.
-It drains fd 1 and fd 2 before reporting their outer stream closures and the direct worker process outcome.
+During retirement, additional nonblocking reads of worker-sideband, fd 1, and fd 2 share a 100-millisecond allowance.
+The relay attempts to queue every complete worker-sideband frame assembled from its reads, including frames still buffered when the read deadline expires.
+Queue admission and downstream delivery share the output deadline.
+It may abandon an incomplete frame and further descendant output when draining ends.
+It finishes draining before queuing the outer stream closures and the direct worker process outcome.
+Delivery to the server remains subject to the shared one-second output allowance in [relay retirement](RELAY_PROTOCOL.md#retirement-and-failure); expiry with pending output is a transport failure.
 
 Outside intentional retirement, worker-sideband EOF is a worker failure.
 A worker must flush complete frames before exit; closure midway through a frame is a protocol failure.
@@ -429,8 +448,8 @@ Public failure and replacement behavior is described in [`BUILTIN_RUNTIME.md`](B
 
 A conforming custom worker:
 
-- accepts the inherited descriptor and fd-0/1/2 launch contract;
-- removes or closes the sideband bootstrap capability before descendants can inherit it;
+- accepts the two inherited sideband pipe endpoints and fd-0/1/2 launch contract;
+- removes both sideband bootstrap variables and prevents descendants from inheriting the descriptors;
 - sends `ready` first and exactly once;
 - accepts complete `evaluate` cells for the declared `r`, `python`, and `sql` language values and ends ordinary outcomes with `completed`;
 - uses console, image, and managed-input frames with the exact schemas and ordering above;
@@ -444,4 +463,4 @@ A conforming custom worker:
 
 The executable fixture under `tests/fixtures/zod` exercises successful evaluation, exact text and image frames, stdin, R preparation, interruption, protocol violations, standard streams, and bounded shutdown.
 Its individual commands are fixture behavior, not additions to this protocol.
-See [`../tests/transcripts/README.md`](../tests/transcripts/README.md) for the corresponding public process-boundary suites.
+See [`../tests/boundaries/README.md`](../tests/boundaries/README.md) for the corresponding public process-boundary suites.

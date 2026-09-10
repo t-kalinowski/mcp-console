@@ -36,9 +36,11 @@ struct EvaluationState {
     input_report_at: Option<Instant>,
     /// Whether one `send` currently owns the right to drain this evaluation's response.
     waiting: bool,
-    restart_reserved: bool,
+    /// Restart or controlled handoff permanently retires this evaluation.
+    /// Releasing its response reservation must not revive late task failures.
+    retired: bool,
     restart_handoff: Option<Response>,
-    #[cfg(target_os = "macos")]
+    #[cfg(unix)]
     stdin: Option<super::platform::StdinSender>,
     pending_stdin: String,
 }
@@ -122,9 +124,9 @@ impl Evaluation {
                 controlled_completion,
                 input_report_at: None,
                 waiting: false,
-                restart_reserved: false,
+                retired: false,
                 restart_handoff: None,
-                #[cfg(target_os = "macos")]
+                #[cfg(unix)]
                 stdin: None,
                 pending_stdin: String::new(),
             }),
@@ -147,7 +149,7 @@ impl Evaluation {
         if state.completion_collected && state.reclaimed.is_none() {
             return Err("evaluation response was already delivered".to_string());
         }
-        if state.restart_reserved {
+        if state.retired {
             return Err("session restart began before this send could wait".to_string());
         }
         if state.waiting {
@@ -185,7 +187,7 @@ impl Evaluation {
                 .lock()
                 .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
         }
-        state.restart_reserved = true;
+        state.retired = true;
         let waiting = state.waiting;
         let unfinished = !matches!(state.phase, EvaluationPhase::Complete(_));
         let completion = match state.phase {
@@ -245,7 +247,7 @@ impl Evaluation {
         let EvaluationPhase::Complete(completion_kind) = state.phase else {
             return Ok(None);
         };
-        state.restart_reserved = true;
+        state.retired = true;
         let completion = (!state.completion_collected).then_some(completion_kind);
         Ok(Some(EvaluationReservation {
             evaluation: self.clone(),
@@ -274,20 +276,39 @@ impl Evaluation {
             && state.delivery.is_none()
             && state.reclaimed.is_none()
             && !state.waiting
-            && !state.restart_reserved)
+            && !state.retired)
     }
 
     /// Adopts output that remained idle until the worker operation became active.
-    pub(super) fn capture_prelude_before(&self, boundary: impl FnOnce()) -> Result<(), String> {
+    pub(super) fn capture_prelude_before(
+        &self,
+        capture_idle_prelude: bool,
+        boundary: impl FnOnce(),
+    ) -> Result<(), String> {
+        let (cell_output, failure) = match self.transcript.create_cell_output(self.call_id) {
+            Ok(cell_output) => (cell_output, None),
+            Err(error) => (
+                None,
+                Some(format!(
+                    "cell output file was not created: {error}; text omitted from inline responses will be permanently discarded"
+                )),
+            ),
+        };
         let mut state = self
             .state
             .lock()
             .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
-        let additional = self.output.take_prelude_before(boundary);
+        let additional =
+            self.output
+                .begin_cell_output_before(cell_output, capture_idle_prelude, boundary);
         if let Some(prelude) = state.idle_prelude.as_mut() {
             prelude.extend(additional);
         } else {
             state.idle_prelude = Some(additional);
+        }
+        drop(state);
+        if let Some(failure) = failure {
+            self.output.push_notice_line(failure);
         }
         Ok(())
     }
@@ -305,7 +326,7 @@ impl Evaluation {
         if let Some(report_at) = state.input_report_at.as_mut() {
             *report_at = Instant::now() + INPUT_REQUEST_GRACE;
         }
-        #[cfg(target_os = "macos")]
+        #[cfg(unix)]
         if let Some(writer) = &state.stdin {
             writer.send(stdin)?;
             return Ok(());
@@ -314,7 +335,7 @@ impl Evaluation {
         Ok(())
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(unix)]
     pub(super) fn attach_writer(&self, writer: super::platform::StdinSender) -> Result<(), String> {
         let mut state = self
             .state
@@ -330,7 +351,6 @@ impl Evaluation {
         Ok(())
     }
 
-    #[cfg(target_os = "macos")]
     pub(super) fn output(
         &self,
         channel: crate::worker_protocol::ConsoleChannel,
@@ -340,13 +360,11 @@ impl Evaluation {
         Ok(())
     }
 
-    #[cfg(target_os = "macos")]
     pub(super) fn bounded_notice(&self, message: String) -> Result<(), String> {
         self.output.push_bounded_notice_line(message);
         Ok(())
     }
 
-    #[cfg(target_os = "macos")]
     pub(super) fn image(&self, data: String, mime_type: String) -> Result<(), String> {
         crate::transcript::validate_image_data(&data)?;
         self.output
@@ -355,7 +373,6 @@ impl Evaluation {
             })
     }
 
-    #[cfg(target_os = "macos")]
     pub(super) fn input_requested(&self, prompt: String) -> Result<(), String> {
         let mut state = self
             .state
@@ -373,7 +390,6 @@ impl Evaluation {
         Ok(())
     }
 
-    #[cfg(target_os = "macos")]
     pub(super) fn resume_input_request(&self) -> Result<(), String> {
         let mut state = self
             .state
@@ -392,7 +408,6 @@ impl Evaluation {
         Ok(())
     }
 
-    #[cfg(target_os = "macos")]
     pub(super) fn input_received(&self) -> Result<(), String> {
         let mut state = self
             .state
@@ -406,7 +421,6 @@ impl Evaluation {
         Ok(())
     }
 
-    #[cfg(target_os = "macos")]
     pub(super) fn input_complete(&self) -> Result<(), String> {
         let state = self
             .state
@@ -455,7 +469,7 @@ impl Evaluation {
             return;
         }
         state.phase = EvaluationPhase::Complete(CompletionKind::Cell);
-        state.completion_cut = Some(self.output.cut());
+        state.completion_cut = Some(self.finish_cell_output());
         state.completion_collected = false;
         self.changed.notify_one();
     }
@@ -474,6 +488,7 @@ impl Evaluation {
         };
         state.input_report_at = None;
         state.completion_cut = None;
+        self.finish_cell_output();
         self.output.push_failure(failure);
         state.phase = EvaluationPhase::ReplacementStarting;
         self.changed.notify_one();
@@ -499,12 +514,12 @@ impl Evaluation {
         };
         state.input_report_at = None;
         if let Err(failure) = result
-            && (!state.restart_reserved || failure.should_survive_restart())
+            && (!state.retired || failure.should_survive_restart())
         {
             self.output.push_failure(failure);
         }
         state.phase = EvaluationPhase::Complete(completion);
-        state.completion_cut = Some(cut.unwrap_or_else(|| self.output.cut()));
+        state.completion_cut = Some(cut.unwrap_or_else(|| self.finish_cell_output()));
         state.completion_collected = false;
         self.changed.notify_one();
     }
@@ -514,9 +529,13 @@ impl Evaluation {
     pub(super) fn classify_failure(&self, message: String) -> SendFailure {
         let failure = SendFailure::from(message);
         match self.state.lock() {
-            Ok(state) if !state.restart_reserved => failure.preceded_restart(),
+            Ok(state) if !state.retired => failure.preceded_restart(),
             Ok(_) | Err(_) => failure,
         }
+    }
+
+    fn finish_cell_output(&self) -> OutputCut {
+        self.output.finish_cell_output()
     }
 
     pub(super) fn claim(self: &Arc<Self>) -> Result<WaitClaim, String> {
@@ -573,7 +592,7 @@ impl Evaluation {
             .state
             .lock()
             .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
-        if state.restart_reserved {
+        if state.retired {
             return Ok(match state.restart_handoff.take() {
                 Some(response) => EvaluationStatus::Report(EvaluationWait::Restarted(response)),
                 None => EvaluationStatus::Waiting,
@@ -710,7 +729,9 @@ impl EvaluationReservation {
     }
 
     pub(super) fn take_output(&mut self, output: &OutputTape) -> (Response, Response) {
-        let cut = self.completion_cut.unwrap_or_else(|| output.cut());
+        let cut = self
+            .completion_cut
+            .unwrap_or_else(|| self.evaluation.finish_cell_output());
         let mut state = self
             .evaluation
             .state
@@ -758,7 +779,6 @@ impl EvaluationReservation {
             }
         };
         if !state.waiting {
-            state.restart_reserved = false;
             return Ok(RestartDelivery::Unclaimed(response));
         }
         let (acknowledged, wait_for_acknowledgment) = mpsc::sync_channel(0);
@@ -786,18 +806,6 @@ fn take_owned_response(
     control
 }
 
-impl Drop for EvaluationReservation {
-    fn drop(&mut self) {
-        let Ok(mut state) = self.evaluation.state.lock() else {
-            return;
-        };
-        if state.restart_handoff.is_none() {
-            state.restart_reserved = false;
-            self.evaluation.changed.notify_one();
-        }
-    }
-}
-
 impl Drop for WaitClaim {
     fn drop(&mut self) {
         let Ok(mut state) = self.evaluation.state.lock() else {
@@ -819,7 +827,7 @@ mod tests {
     async fn completed_response() -> (Arc<Evaluation>, Response) {
         let output = OutputTape::new();
         let evaluation = Arc::new(Evaluation::new(
-            crate::transcript::Transcript::new(),
+            crate::transcript::Transcript::new(true),
             None,
             output,
             Response::default(),

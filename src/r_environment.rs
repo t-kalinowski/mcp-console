@@ -1,6 +1,5 @@
 const R_ENVIRONMENT_BRIDGE_SOURCE: &str = include_str!("r_environment/bridge.R");
 
-#[cfg(target_os = "macos")]
 use libr::SEXP;
 
 pub(crate) struct Bridge(crate::r_bridge::Bridge);
@@ -20,6 +19,7 @@ impl ResolutionFailureKind {
 }
 
 pub(crate) enum ResolutionOutcome {
+    Unavailable,
     Resolved {
         library: String,
     },
@@ -54,13 +54,13 @@ impl Bridge {
     }
 }
 
-#[cfg(target_os = "macos")]
 #[allow(clippy::result_large_err)]
 #[harp::register]
 pub extern "C-unwind" fn mcp_console_resolve_r(packages: SEXP) -> harp::Result<SEXP> {
     let packages = Vec::<String>::try_from(harp::object::RObject::view(packages))?;
     let outcome = crate::worker::resolve_r(packages).map_err(|error| harp::anyhow!("{error}"))?;
     let response = match outcome {
+        ResolutionOutcome::Unavailable => vec!["unavailable".to_string()],
         ResolutionOutcome::Resolved { library } => vec!["resolved".to_string(), library],
         ResolutionOutcome::Failed { failure, message } => {
             vec!["failed".to_string(), failure.as_str().to_string(), message]
@@ -69,7 +69,6 @@ pub extern "C-unwind" fn mcp_console_resolve_r(packages: SEXP) -> harp::Result<S
     Ok(harp::object::RObject::from(response).sexp)
 }
 
-#[cfg(target_os = "macos")]
 #[allow(clippy::result_large_err)]
 #[harp::register]
 pub extern "C-unwind" fn mcp_console_r_activated(library: SEXP) -> harp::Result<SEXP> {
@@ -78,7 +77,6 @@ pub extern "C-unwind" fn mcp_console_r_activated(library: SEXP) -> harp::Result<
     unsafe { Ok(libr::R_NilValue) }
 }
 
-#[cfg(target_os = "macos")]
 #[allow(clippy::result_large_err)]
 #[harp::register]
 pub extern "C-unwind" fn mcp_console_r_activation_failed(

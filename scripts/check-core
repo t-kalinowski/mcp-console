@@ -1,0 +1,13 @@
+#!/bin/sh
+
+set -eu
+
+scripts/validate_runtime_sources.py
+tests/release.py
+tests/transcript_runner.py
+tests/mcp_client.py
+tests/architecture.py
+python3 tests/python_api.py
+cargo fmt --all --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-targets --all-features

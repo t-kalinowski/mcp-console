@@ -9,97 +9,214 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
+  # Preserve compiler state for debug/test builds across PR revisions.
+  CARGO_INCREMENTAL: "1"
+  IR_LATEST_RESOLUTION_MAX_AGE_SECONDS: "604800"
+  UV_VERSION: 0.12.4
 
 jobs:
-  rust:
-    name: Rust (macos-latest)
-    runs-on: macos-latest
+  check:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-24.04]
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
-
-      - name: Install R
-        if: runner.os == 'macOS'
-        uses: r-lib/actions/setup-r@v2
-
-      # The tidyverse prewarm can build data.table from source. Its NLS code
-      # needs libintl.h in R's /opt/R/<arch> build prefix.
-      - name: Install gettext for R source packages
-        if: runner.os == 'macOS'
-        run: |
-          sudo Rscript --vanilla -e \
-            'source("https://mac.R-project.org/bin/install.R"); install.libs("gettext"); stopifnot(file.exists(file.path("/opt/R", Sys.info()[["machine"]], "include", "libintl.h")))'
-
-      - name: Install R dependencies
-        if: runner.os == 'macOS'
-        uses: r-lib/actions/setup-r-dependencies@v2
-        with:
-          packages: |
-            any::arrow
-            any::DBI
-            any::dbplyr
-            any::dplyr
-            any::duckdb
-            any::nanoarrow
-            any::pillar
-            any::processx
-            any::tibble
-            github::rstudio/reticulate
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
 
       - name: Install Python
         uses: actions/setup-python@v7
         with:
           python-version: "3.13"
 
+      - name: Read private sandbox source pin
+        id: sandbox-pin
+        run: scripts/stage-sandbox-runner --github-output "$GITHUB_OUTPUT"
+
+      - name: Check out private sandbox source
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ steps.sandbox-pin.outputs.repository }}
+          ref: ${{ steps.sandbox-pin.outputs.commit }}
+          path: .sandbox-runner-source
+
       - name: Install uv
         uses: astral-sh/setup-uv@v10.0.1
         with:
-          version: "0.12.4"
-
-      - name: Install Quarto
-        uses: quarto-dev/quarto-actions/setup@v2
+          version: ${{ env.UV_VERSION }}
+          cache-suffix: tools-pruned-v1
+          prune-cache: true
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install tools
+        id: tools
         run: |
           uv tool install r-lib-ir
           uv tool install yamark
           uv tool dir --bin >> "$GITHUB_PATH"
+          printf 'ir_version=%s\n' "$(ir --version | tr ' ' '-')" >> "$GITHUB_OUTPUT"
 
-      - name: Prewarm default R environment
-        env:
-          GITHUB_PAT: ${{ github.token }}
-          IR_NO_LOCAL_SOURCES: "1"
+      # Chrome is unused here; its repository can block apt with inconsistent metadata.
+      - name: Disable unused Chrome apt repository
+        if: runner.os == 'Linux'
         run: |
-          ir run \
-            --with tidyverse \
-            --with github::rstudio/reticulate \
-            --with DBI \
-            --with duckdb \
-            --with arrow \
-            --with nanoarrow \
-            --isolated \
-            --vanilla \
-            -e 'invisible(NULL)'
+          sudo find /etc/apt/sources.list.d -type f \
+            \( -name '*.list' -o -name '*.sources' \) \
+            -exec grep -qF 'dl.google.com/linux/chrome' {} \; \
+            -print -delete
 
-      - name: Cache Rust build data
-        uses: Swatinem/rust-cache@v2
+      - name: Install R
+        id: setup-r
+        uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: always
 
-      - name: Run checks
+      # The managed R environment can build data.table from source. Its NLS
+      # code needs libintl.h in R's /opt/R/<arch> build prefix.
+      - name: Install gettext for R source packages
+        if: runner.os == 'macOS'
+        run: |
+          sudo Rscript --vanilla -e \
+            'source("https://mac.R-project.org/bin/install.R"); install.libs("gettext"); stopifnot(file.exists(file.path("/opt/R", Sys.info()[["machine"]], "include", "libintl.h")))'
+
+      - name: Install Rust
+        id: rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Install Linux build and sandbox dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libcurl4-openssl-dev libcap-dev
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Install private sandbox Rust toolchain
+        run: >-
+          rustup toolchain install
+          "${{ steps.sandbox-pin.outputs.rust_toolchain }}"
+          --profile minimal
+
+      - name: Select weekly cache epoch
+        id: cache-epoch
+        run: printf 'value=%s\n' "$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+
+      - name: Configure R cache paths
+        run: |
+          printf 'IR_CACHE_DIR=%s\n' "$RUNNER_TEMP/mcp-console-r-cache/ir" >> "$GITHUB_ENV"
+          printf 'RENV_PATHS_CACHE=%s\n' "$RUNNER_TEMP/mcp-console-r-cache/renv" >> "$GITHUB_ENV"
+
+      - name: Restore R environments
+        id: ir-cache
+        uses: actions/cache/restore@v6
+        with:
+          # v3 covers the inline prewarm contract. Bump it when that contract changes.
+          path: ${{ runner.temp }}/mcp-console-r-cache
+          key: >-
+            ir-v3-${{ runner.os }}-${{ runner.arch }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ steps.tools.outputs.ir_version }}-${{ hashFiles('src/worker_client.rs', 'src/resolver/managed_r.rs', 'tests/boundaries/client_server/requirements/test_r_automatic.py', 'tests/boundaries/client_server/requirements/test_r.py') }}-${{ steps.cache-epoch.outputs.value }}
+          restore-keys: |
+            ir-v3-${{ runner.os }}-${{ runner.arch }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ steps.tools.outputs.ir_version }}-${{ hashFiles('src/worker_client.rs', 'src/resolver/managed_r.rs', 'tests/boundaries/client_server/requirements/test_r_automatic.py', 'tests/boundaries/client_server/requirements/test_r.py') }}-
+            ir-v3-${{ runner.os }}-${{ runner.arch }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ steps.tools.outputs.ir_version }}-
+
+      - name: Restore Cargo downloads
+        id: cargo-downloads
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          # Downloads survive the weekly build-cache reset.
+          key: >-
+            cargo-downloads-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '.sandbox-runner-source/codex-rs/Cargo.lock') }}
+          restore-keys: |
+            cargo-downloads-v1-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Restore Rust build data
+        id: rust-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            target/debug
+            target/release
+            target/libexec
+          # Refresh on compiled-source changes; transcript-only pushes reuse it.
+          # Every restore prefix includes the UTC week to start fresh on Monday.
+          # Bump v1 for build flag changes.
+          key: >-
+            cargo-build-v1-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/**', 'sandbox-runner.json', 'scripts/stage-sandbox-runner') }}-${{ hashFiles('src/**', 'build.rs') }}
+          restore-keys: |
+            cargo-build-v1-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/**', 'sandbox-runner.json', 'scripts/stage-sandbox-runner') }}-
+            cargo-build-v1-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.setup-r.outputs.installed-r-version }}-
+
+      - name: Restore private sandbox runner
+        id: sandbox-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            wheel-data
+            target/sandbox-runner-build.json
+          # v2 caches the wheel-data staging root. The pin includes the source
+          # revision and compiler. Bump the version for changes to runner build
+          # flags or the macOS deployment target.
+          key: >-
+            sandbox-runner-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('sandbox-runner.json', 'scripts/stage-sandbox-runner') }}
+
+      - name: Restore private sandbox build data
+        id: sandbox-build-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: .sandbox-runner-source/codex-rs/target
+          # Source-install checks need intermediates even with a staged runner.
+          # Reuse workspace crates from the preceding pin when rebuilding it.
+          # Keep every restore prefix within the current UTC week.
+          key: >-
+            sandbox-build-v1-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.sandbox-pin.outputs.rust_toolchain }}-${{ hashFiles('.sandbox-runner-source/codex-rs/Cargo.toml', '.sandbox-runner-source/codex-rs/Cargo.lock', '.sandbox-runner-source/codex-rs/.cargo/**', 'scripts/stage-sandbox-runner') }}-${{ steps.sandbox-pin.outputs.commit }}
+          restore-keys: |
+            sandbox-build-v1-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.sandbox-pin.outputs.rust_toolchain }}-${{ hashFiles('.sandbox-runner-source/codex-rs/Cargo.toml', '.sandbox-runner-source/codex-rs/Cargo.lock', '.sandbox-runner-source/codex-rs/.cargo/**', 'scripts/stage-sandbox-runner') }}-
+            sandbox-build-v1-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.sandbox-pin.outputs.rust_toolchain }}-
+
+      - name: Stage private sandbox runner
+        if: >-
+          steps.sandbox-cache.outputs.cache-hit != 'true' ||
+          steps.sandbox-build-cache.outputs.cache-hit != 'true'
         env:
-          GITHUB_PAT: ${{ github.token }}
-        run: scripts/check
+          CARGO_INCREMENTAL: "0"
+        run: scripts/stage-sandbox-runner .sandbox-runner-source
 
-      - name: Build and smoke-test Python package
+      # Save each completed build before any tests run.
+      - name: Save private sandbox runner
+        if: steps.sandbox-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            wheel-data
+            target/sandbox-runner-build.json
+          key: ${{ steps.sandbox-cache.outputs.cache-primary-key }}
+
+      - name: Save private sandbox build data
+        if: steps.sandbox-build-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: .sandbox-runner-source/codex-rs/target
+          key: ${{ steps.sandbox-build-cache.outputs.cache-primary-key }}
+
+      - name: Build Rust test targets
+        run: cargo test --locked --no-run --all-targets --all-features
+
+      - name: Build Python package
         shell: bash
         env:
+          CARGO_INCREMENTAL: "0"
           GITHUB_PAT: ${{ github.token }}
           UV_TOOL_DIR: ${{ runner.temp }}/mcp-console-tool
           UV_TOOL_BIN_DIR: ${{ runner.temp }}/mcp-console-bin
@@ -110,14 +227,122 @@ jobs:
           set -euo pipefail
 
           rm -rf dist
-          cargo build --locked --bin mcp-console
-          uvx --from 'maturin==1.14.1' \
+          uvx --from 'maturin==1.15.0' \
             maturin build \
             --release \
             --locked \
             --compatibility pypi \
             --out dist
+
+      - name: Save Cargo downloads
+        if: steps.cargo-downloads.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ steps.cargo-downloads.outputs.cache-primary-key }}
+
+      - name: Save Rust build data
+        if: steps.rust-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            target/debug
+            target/release
+            target/libexec
+          key: ${{ steps.rust-cache.outputs.cache-primary-key }}
+
+      - name: Run core checks
+        env:
+          GITHUB_PAT: ${{ github.token }}
+        run: scripts/check-core
+
+      - name: Smoke-test Python package
+        env:
+          GITHUB_PAT: ${{ github.token }}
+          UV_TOOL_DIR: ${{ runner.temp }}/mcp-console-tool
+          UV_TOOL_BIN_DIR: ${{ runner.temp }}/mcp-console-bin
+          UV_CACHE_DIR: ${{ runner.temp }}/mcp-console-cache
+          UV_PYTHON_DOWNLOADS: never
+          UV_NO_CONFIG: "1"
+        run: |
           python3 scripts/release.py \
             smoke-wheel \
             dist/*.whl \
-            target/debug/mcp-console
+            target/release/mcp-console
+
+      - name: Check uv source installations
+        env:
+          # Match the release wheel and companion builds above.
+          CARGO_INCREMENTAL: "0"
+          MCP_CONSOLE_SANDBOX_SOURCE: ${{ github.workspace }}/.sandbox-runner-source
+          UV_CACHE_DIR: ${{ runner.temp }}/mcp-console-cache
+          UV_PYTHON_DOWNLOADS: never
+          UV_NO_CONFIG: "1"
+        run: python3 tests/install.py
+
+      - name: Install R package dependencies
+        uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          # A post-job save would capture the later transcript dependency state.
+          cache: false
+          working-directory: r
+          upgrade: "FALSE"
+          packages: |
+            deps::.
+
+      - name: Check R package
+        env:
+          CARGO_INCREMENTAL: "0"
+          MCP_CONSOLE_TEST_BINARY: ${{ github.workspace }}/target/release/mcp-console
+          _R_CHECK_TESTS_NLINES_: "0"
+        working-directory: r
+        run: |
+          # Source-install checks share target and can replace its companions.
+          cargo build --release --locked --bin mcp-console --manifest-path ../Cargo.toml
+          R CMD build .
+          R CMD check --no-manual mcp.console_*.tar.gz
+
+      - name: Install transcript dependencies
+        uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          install-quarto: true
+          upgrade: "FALSE"
+          packages: |
+            any::devtools
+            any::processx
+            github::rstudio/reticulate
+
+      - name: Prewarm default R environment
+        env:
+          GITHUB_PAT: ${{ github.token }}
+          IR_NO_LOCAL_SOURCES: "1"
+          IR_LATEST_RESOLUTION_MAX_AGE_SECONDS: ${{ github.ref == 'refs/heads/main' && steps.ir-cache.outputs.cache-hit != 'true' && '0' || '604800' }}
+        run: |
+          ir run \
+            --with tidyverse \
+            --with github::rstudio/reticulate \
+            --with DBI \
+            --with duckdb \
+            --with arrow \
+            --with nanoarrow \
+            --isolated \
+            --vanilla \
+            -e 'sessionInfo(package = c("tidyverse", "reticulate", "DBI", "duckdb", "arrow", "nanoarrow"))'
+
+      - name: Run transcripts
+        env:
+          CARGO_INCREMENTAL: "0"
+          GITHUB_PAT: ${{ github.token }}
+        run: scripts/test --jobs 6
+
+      - name: Save R environments
+        if: >-
+          github.ref == 'refs/heads/main' && steps.ir-cache.outputs.cache-hit !=
+          'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ runner.temp }}/mcp-console-r-cache
+          key: >-
+            ir-v3-${{ runner.os }}-${{ runner.arch }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ steps.tools.outputs.ir_version }}-${{ hashFiles('src/worker_client.rs', 'src/resolver/managed_r.rs', 'tests/boundaries/client_server/requirements/test_r_automatic.py', 'tests/boundaries/client_server/requirements/test_r.py') }}-${{ steps.cache-epoch.outputs.value }}

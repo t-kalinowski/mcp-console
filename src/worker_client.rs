@@ -8,19 +8,27 @@ mod evaluation;
 mod lifecycle;
 mod output;
 
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
+mod child_exit;
+#[cfg(unix)]
 mod events;
+#[cfg(unix)]
+mod relay_output;
+#[cfg(unix)]
+mod startup;
 
-#[cfg(target_os = "macos")]
-#[path = "worker_client/macos.rs"]
+#[cfg(unix)]
+#[path = "worker_client/unix.rs"]
 mod platform;
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(unix))]
 #[path = "worker_client/unsupported.rs"]
 mod platform;
 
-use environment::{Environment, PreparationIntent, PythonEnvironment, RuntimeRResolutionFailure};
-pub(crate) use environment::{PrepareResult, Requirements};
+pub(crate) use environment::Requirements;
+use environment::{
+    Environment, PreparationIntent, PrepareResult, PythonEnvironment, RuntimeRResolutionFailure,
+};
 use evaluation::{Evaluation, EvaluationWait};
 use lifecycle::{
     ControlledSendAdmission, LifecycleControl, OldGenerationCommitDisposition, WorkerGeneration,
@@ -37,7 +45,6 @@ pub(crate) const DEFAULT_R_REQUIREMENTS: &[&str] = &[
     "nanoarrow",
 ];
 
-#[cfg(target_os = "macos")]
 const DEFAULT_DUCKDB_EXTENSIONS: &[&str] = &["icu", "json"];
 
 const CUSTOM_DUCKDB_R_REQUIREMENTS: &[&str] = &["DBI", "duckdb", "jsonlite"];
@@ -50,19 +57,48 @@ pub(crate) enum SendControl {
     Restart,
 }
 
-pub(crate) enum RequirementSubmission {
-    Valid(Requirements),
-    Invalid(String),
-}
-
 pub(crate) struct SendRequest {
     pub(crate) cell: Option<crate::cell::Cell>,
     pub(crate) stdin: Option<String>,
-    pub(crate) requirements: Option<RequirementSubmission>,
+    pub(crate) requirements: Option<Requirements>,
     pub(crate) control: Option<SendControl>,
     pub(crate) timeout: Duration,
     pub(crate) transcript: crate::transcript::Transcript,
     pub(crate) call_id: Option<u64>,
+}
+
+impl SendRequest {
+    fn validate(&self, dynamic_resolution: bool) -> Result<(), String> {
+        let Some(requirements) = &self.requirements else {
+            return Ok(());
+        };
+        if !dynamic_resolution {
+            return Err(
+                "dynamic environment resolution is unavailable; install `ir` or `uv` and restart MCP Console"
+                    .to_string(),
+            );
+        }
+        if self.cell.is_none()
+            && self.control.is_none()
+            && self.stdin.as_ref().is_some_and(|stdin| !stdin.is_empty())
+        {
+            return Err(
+                "requirements-only `send` performs standalone preparation and cannot also queue stdin"
+                    .to_string(),
+            );
+        }
+        if self.cell.is_none() && matches!(self.control, Some(SendControl::Interrupt)) {
+            return Err(
+                "`requirements` with `control = \"interrupt\"` requires a code cell".to_string(),
+            );
+        }
+        // An interrupt and its stdin precede requirement-content errors. Validate
+        // those only after the previous evaluation settles, before the new cell.
+        if !matches!(self.control, Some(SendControl::Interrupt)) {
+            requirements.validate()?;
+        }
+        Ok(())
+    }
 }
 
 /// A cloneable handle to one lazily started worker.
@@ -74,6 +110,8 @@ struct ClientInner {
     program: PathBuf,
     arguments: Vec<OsString>,
     relay: Option<PathBuf>,
+    no_sandbox: bool,
+    writable_roots: Vec<PathBuf>,
     worker: Mutex<WorkerState>,
     /// The one evaluation occupying this session, independently of who is polling it.
     evaluation: Mutex<Option<ActiveEvaluation>>,
@@ -83,6 +121,22 @@ struct ClientInner {
     output: OutputTape,
     lifecycle: Mutex<LifecycleControl>,
     environment: Option<Mutex<Environment>>,
+    dynamic_resolution: bool,
+}
+
+#[derive(Clone)]
+enum RResolver {
+    Discover,
+    Pending(BuiltinSetup),
+    Configured(crate::resolver::ManagedRResolverConfiguration),
+    Disabled,
+}
+
+#[derive(Clone)]
+struct BuiltinSetup {
+    bootstrap: crate::resolver::ManagedRBootstrap,
+    python_resolver: crate::resolver::ManagedPythonResolverConfiguration,
+    configured_python: Option<OsString>,
 }
 
 /// Describes one worker launch for the current runtime.
@@ -90,8 +144,11 @@ struct WorkerSpec<'a> {
     executable: &'a std::path::Path,
     arguments: &'a [OsString],
     relay: Option<&'a std::path::Path>,
+    no_sandbox: bool,
+    writable_roots: &'a [PathBuf],
     python: Option<&'a PythonEnvironment>,
     managed_r: Option<&'a crate::resolver::ManagedR>,
+    dynamic_resolution: bool,
     callbacks: WorkerCallbacks,
 }
 
@@ -140,11 +197,16 @@ impl WorkerProcessOutcome {
 struct WorkerRetirementFailure {
     message: String,
     outcome: Option<WorkerProcessOutcome>,
+    can_replace: bool,
 }
 
 impl WorkerRetirementFailure {
     fn new(message: String, outcome: Option<WorkerProcessOutcome>) -> Self {
-        Self { message, outcome }
+        Self {
+            message,
+            outcome,
+            can_replace: false,
+        }
     }
 
     fn attach_to(self, mut failure: SendFailure) -> SendFailure {
@@ -279,58 +341,93 @@ fn interrupted_cell_not_run_response(wait: EvaluationWait) -> Response {
 }
 
 impl Client {
-    pub(crate) fn new(program: PathBuf, relay: Option<PathBuf>) -> Result<Self, String> {
+    pub(crate) fn new(
+        program: PathBuf,
+        relay: Option<PathBuf>,
+        no_sandbox: bool,
+        writable_roots: Vec<PathBuf>,
+    ) -> Result<Self, String> {
         Ok(Self::with_arguments(
             program,
             Vec::new(),
             relay,
+            no_sandbox,
+            writable_roots,
             Some(Environment {
                 custom_worker: true,
                 duckdb_extensions: Default::default(),
                 duckdb_r_targets: Vec::new(),
                 python: None,
                 r: None,
+                r_resolver: RResolver::Discover,
             }),
         ))
     }
 
-    pub(crate) fn builtin() -> Result<Self, String> {
-        let python_resolver = crate::resolver::ManagedPythonResolverConfiguration::capture();
+    pub(crate) fn builtin(no_sandbox: bool, writable_roots: Vec<PathBuf>) -> Result<Self, String> {
+        #[cfg(unix)]
+        return startup::with_input_owner(|on_started| {
+            Self::builtin_with(no_sandbox, writable_roots, on_started)
+        });
+        #[cfg(not(unix))]
+        Self::builtin_with(no_sandbox, writable_roots, &|_| Ok(()))
+    }
+
+    fn builtin_with(
+        no_sandbox: bool,
+        writable_roots: Vec<PathBuf>,
+        on_started: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
+    ) -> Result<Self, String> {
+        let mut python_resolver = crate::resolver::ManagedPythonResolverConfiguration::capture();
         let configured_python = std::env::var_os("RETICULATE_PYTHON");
         let program = std::env::current_exe()
             .map_err(|error| format!("failed to locate the R worker executable: {error}"))?;
-        #[cfg(target_os = "macos")]
-        let (r, duckdb_extensions) = {
-            let r = crate::resolver::resolve_r(
-                DEFAULT_R_REQUIREMENTS
-                    .iter()
-                    .map(|requirement| (*requirement).to_string())
-                    .collect(),
-                |_| Ok(()),
-            )?;
-            let duckdb_extensions = DEFAULT_DUCKDB_EXTENSIONS
-                .iter()
-                .map(|extension| (*extension).to_string())
-                .collect::<Vec<_>>();
-            crate::resolver::resolve_duckdb_extensions(&r, &duckdb_extensions, |_| Ok(()))?;
-            (Some(r), duckdb_extensions.into_iter().collect())
+        #[cfg(unix)]
+        let (r, duckdb_extensions, python, r_resolver) = {
+            match crate::resolver::detect_r_bootstrap(&mut python_resolver, on_started)? {
+                Some(bootstrap) => (
+                    None,
+                    Default::default(),
+                    None,
+                    RResolver::Pending(BuiltinSetup {
+                        bootstrap,
+                        python_resolver,
+                        configured_python,
+                    }),
+                ),
+                None => (
+                    None,
+                    Default::default(),
+                    Some(PythonEnvironment::bare(configured_python)),
+                    RResolver::Disabled,
+                ),
+            }
         };
-        #[cfg(not(target_os = "macos"))]
-        let (r, duckdb_extensions) = (
+        #[cfg(not(unix))]
+        let (r, duckdb_extensions, python, r_resolver) = (
             Option::<crate::resolver::ManagedR>::None,
             Default::default(),
+            Some(PythonEnvironment::builtin(
+                configured_python,
+                python_resolver,
+                None,
+                on_started,
+            )?),
+            RResolver::Discover,
         );
-        let python = PythonEnvironment::builtin(configured_python, python_resolver, r.as_ref())?;
         Ok(Self::with_arguments(
             program,
             vec![OsString::from("worker")],
             None,
+            no_sandbox,
+            writable_roots,
             Some(Environment {
                 custom_worker: false,
                 duckdb_extensions,
                 duckdb_r_targets: Vec::new(),
-                python: Some(python),
+                python,
                 r,
+                r_resolver,
             }),
         ))
     }
@@ -339,13 +436,20 @@ impl Client {
         program: PathBuf,
         arguments: Vec<OsString>,
         relay: Option<PathBuf>,
+        no_sandbox: bool,
+        writable_roots: Vec<PathBuf>,
         environment: Option<Environment>,
     ) -> Self {
+        let dynamic_resolution = environment
+            .as_ref()
+            .is_some_and(|environment| !matches!(environment.r_resolver, RResolver::Disabled));
         Self(Arc::new(ClientInner {
             runtime: platform::WorkerRuntime,
             program,
             arguments,
             relay,
+            no_sandbox,
+            writable_roots,
             worker: Mutex::new(WorkerState::Initial),
             evaluation: Mutex::new(None),
             admission: tokio::sync::RwLock::new(()),
@@ -353,11 +457,17 @@ impl Client {
             output: OutputTape::new(),
             lifecycle: Mutex::new(LifecycleControl::new()),
             environment: environment.map(Mutex::new),
+            dynamic_resolution,
         }))
     }
 
-    /// Starts one cell, supplies stdin, or collects an idle response.
+    pub(crate) fn dynamic_resolution(&self) -> bool {
+        self.0.dynamic_resolution
+    }
+
+    /// Interprets preparation, control, evaluation, stdin, and polling for the session.
     pub(crate) async fn send(&self, request: SendRequest) -> Result<Response, String> {
+        request.validate(self.dynamic_resolution())?;
         if let Some(control) = request.control {
             return self.send_controlled(control, request).await;
         }
@@ -371,20 +481,21 @@ impl Client {
             call_id,
         } = request;
         if let Some(requirements) = requirements {
-            let Some(cell) = cell else {
-                return Ok(output::direct_failure(
-                    "`requirements` requires a code cell",
-                ));
-            };
-            let requirements = match requirements {
-                RequirementSubmission::Valid(requirements) => requirements,
-                RequirementSubmission::Invalid(error) => {
-                    return Ok(output::direct_failure(error));
+            if let Some(cell) = cell {
+                return Ok(self
+                    .send_with_requirements(cell, stdin, requirements, timeout, transcript, call_id)
+                    .await);
+            }
+            let notice = match self.prepare(requirements).await? {
+                PrepareResult::Prepared => "prepared",
+                PrepareResult::RestartRequired => "restart required",
+                PrepareResult::Failed(response) | PrepareResult::WorkerStopped(response) => {
+                    return Ok(response);
                 }
             };
-            return Ok(self
-                .send_with_requirements(cell, stdin, requirements, timeout, transcript, call_id)
-                .await);
+            let mut response = Response::default();
+            response.push_notice(notice);
+            return Ok(response);
         }
         Ok(
             match self
@@ -410,14 +521,6 @@ impl Client {
         let direct_restart_error = matches!(control, SendControl::Restart)
             && request.requirements.is_some()
             && request.cell.is_none();
-        if matches!(control, SendControl::Interrupt)
-            && request.requirements.is_some()
-            && request.cell.is_none()
-        {
-            return Ok(output::direct_failure(
-                "`requirements` with `control = \"interrupt\"` requires a code cell",
-            ));
-        }
         let client = self.clone();
         let admission = tokio::task::spawn_blocking(move || {
             client.control_and_start_evaluation(control, request)
@@ -574,7 +677,7 @@ impl Client {
         control: &ControlledSendAdmission,
         cell: Option<crate::cell::Cell>,
         stdin: Option<String>,
-        requirements: Option<RequirementSubmission>,
+        requirements: Option<Requirements>,
         transcript: crate::transcript::Transcript,
         call_id: Option<u64>,
     ) -> Result<ControlledEvaluation, String> {
@@ -597,7 +700,7 @@ impl Client {
         control: &ControlledSendAdmission,
         generation: WorkerGeneration,
         cell: Option<crate::cell::Cell>,
-        requirements: Option<RequirementSubmission>,
+        requirements: Option<Requirements>,
         transcript: crate::transcript::Transcript,
         call_id: Option<u64>,
     ) -> Result<ControlledEvaluation, String> {
@@ -652,13 +755,10 @@ impl Client {
             }
         };
         if let Some(requirements) = requirements {
-            let requirements = match requirements {
-                RequirementSubmission::Valid(requirements) => requirements,
-                RequirementSubmission::Invalid(error) => {
-                    control_prelude.push_tool_error(error);
-                    return Ok(self.return_controlled_response(control_prelude));
-                }
-            };
+            if let Err(error) = requirements.validate() {
+                control_prelude.push_tool_error(error);
+                return Ok(self.return_controlled_response(control_prelude));
+            }
             let preparation = match self.admit_preparation() {
                 Ok(preparation) => preparation,
                 Err(error) => {
@@ -716,19 +816,15 @@ impl Client {
         control: &ControlledSendAdmission,
         cell: Option<crate::cell::Cell>,
         stdin: Option<String>,
-        requirements: Option<RequirementSubmission>,
+        requirements: Option<Requirements>,
         transcript: crate::transcript::Transcript,
         call_id: Option<u64>,
     ) -> Result<ControlledEvaluation, String> {
-        let requirements = match requirements {
-            Some(RequirementSubmission::Valid(requirements)) => requirements,
-            Some(RequirementSubmission::Invalid(error)) => return Err(error),
-            None => Requirements {
-                duckdb: Vec::new(),
-                python: Vec::new(),
-                r: Vec::new(),
-            },
-        };
+        let requirements = requirements.unwrap_or(Requirements {
+            duckdb: Vec::new(),
+            python: Vec::new(),
+            r: Vec::new(),
+        });
         let stdin_follows = stdin.as_ref().is_some_and(|stdin| !stdin.is_empty());
         let restart = self.restart_blocking(
             requirements,
@@ -972,6 +1068,12 @@ impl Client {
                     {
                         match self.generation_status(&generation)? {
                             lifecycle::GenerationStatus::CurrentReady => {
+                                let active = self.evaluation()?;
+                                if active.is_some() {
+                                    return Err(failure);
+                                }
+                                // A later cell must capture this failure in its
+                                // idle prelude when it is admitted.
                                 self.0.output.push_failure(failure);
                             }
                             lifecycle::GenerationStatus::CurrentClosing
@@ -1038,6 +1140,7 @@ impl Client {
             return Err(active.evaluation.reject_new_cell_message().to_string());
         }
         self.ensure_evaluation_admission(&generation, control)?;
+        let startup = self.reserve_worker_startup(&generation)?;
         let idle_prelude = self.0.output.take_prelude();
         let evaluation = Arc::new(Evaluation::new(
             transcript,
@@ -1064,7 +1167,7 @@ impl Client {
         let client = self.clone();
         let evaluator = evaluation.clone();
         let evaluation_task = tokio::task::spawn_blocking(move || {
-            client.evaluate_blocking(cell, evaluator, generation);
+            client.evaluate_blocking(cell, evaluator, generation, startup);
         });
         let failed = evaluation.clone();
         let _completion_task = tokio::spawn(async move {
@@ -1220,8 +1323,25 @@ impl Client {
         cell: crate::cell::Cell,
         evaluation: Arc<Evaluation>,
         generation: WorkerGeneration,
+        startup: Option<Arc<lifecycle::WorkerStartupAdmission>>,
     ) {
-        let result = self.evaluate_with_worker(cell, &evaluation, generation);
+        let result = (|| {
+            self.ensure_generation(&generation)
+                .map_err(SendFailure::from)?;
+            let mut worker = self
+                .0
+                .worker
+                .lock()
+                .map_err(|_| SendFailure::from("worker lock poisoned".to_string()))?;
+            let result = self.evaluate_with_worker(&mut worker, cell, &evaluation, generation);
+            drop(startup);
+            // Restart waits for this lock before taking the old output cut.
+            // Publish failures before releasing it, including startup failures.
+            if let Err(failure) = result {
+                evaluation.complete_cell(Err(failure));
+            }
+            Ok(())
+        })();
         if let Err(failure) = result {
             evaluation.complete_cell(Err(failure));
         }
@@ -1229,24 +1349,18 @@ impl Client {
 
     fn evaluate_with_worker(
         &self,
+        worker: &mut WorkerState,
         cell: crate::cell::Cell,
         evaluation: &Arc<Evaluation>,
         generation: WorkerGeneration,
     ) -> Result<(), SendFailure> {
         self.ensure_generation(&generation)
             .map_err(SendFailure::from)?;
-        let mut worker = self
-            .0
-            .worker
-            .lock()
-            .map_err(|_| SendFailure::from("worker lock poisoned".to_string()))?;
-        self.ensure_generation(&generation)
-            .map_err(SendFailure::from)?;
         // Only an established worker can publish idle output in the admission
         // gap. A new worker's startup output remains part of this call.
-        let capture_idle_prelude = matches!(&*worker, WorkerState::Running(_));
+        let capture_idle_prelude = matches!(worker, WorkerState::Running(_));
         if let Err(mut failure) = self.start_worker(
-            &mut worker,
+            worker,
             generation.clone(),
             true,
             |stop_handle| self.register_stop_handle(&generation, stop_handle),
@@ -1259,7 +1373,7 @@ impl Client {
             }
             return Err(failure);
         }
-        let WorkerState::Running(running) = &mut *worker else {
+        let WorkerState::Running(running) = worker else {
             return Err(SendFailure::from("worker is not running".to_string()));
         };
         let result = running
@@ -1269,7 +1383,7 @@ impl Client {
             Ok(()) => return Ok(()),
             Err(failure) => failure,
         };
-        match self.stop_failed_worker(&mut worker, &generation) {
+        match self.stop_failed_worker(worker, &generation) {
             Ok(lifecycle::FailedWorkerStop::Stopped(outcome)) => {
                 failure = failure.worker_outcome(outcome);
             }
@@ -1279,11 +1393,11 @@ impl Client {
             }
         }
 
-        let _replacement_startup = self.0.preparation.blocking_read();
+        let replacement_startup = self.0.preparation.blocking_read();
         evaluation.start_replacement(failure.worker_stopped());
         let replacement = self
             .start_worker(
-                &mut worker,
+                worker,
                 generation.clone(),
                 true,
                 |stop_handle| self.register_stop_handle(&generation, stop_handle),
@@ -1297,6 +1411,8 @@ impl Client {
                 }
                 failure
             });
+        // A delivered replacement result must admit the next preparation.
+        drop(replacement_startup);
         evaluation.finish_replacement(replacement);
         Ok(())
     }
@@ -1356,6 +1472,7 @@ impl Client {
     ) -> Result<(), SendFailure> {
         let replacing = matches!(&*worker, WorkerState::Stopped);
         if !matches!(&*worker, WorkerState::Running(_)) {
+            let _startup = self.reserve_worker_startup(&generation)?;
             let mut environment = match &self.0.environment {
                 Some(environment) => Some(
                     environment
@@ -1364,6 +1481,28 @@ impl Client {
                 ),
                 None => None,
             };
+            if let Some(environment) = environment.as_mut()
+                && matches!(environment.r_resolver, RResolver::Pending(_))
+            {
+                let delta = environment::RequirementDelta::calculate(
+                    environment,
+                    Requirements {
+                        duckdb: Vec::new(),
+                        python: Vec::new(),
+                        r: Vec::new(),
+                    },
+                )?;
+                let prepared = self
+                    .resolve_prestart_environment(&generation, environment, delta)
+                    .map_err(|failure| SendFailure::from(failure.into_message()))?;
+                let lifecycle = self
+                    .0
+                    .lifecycle
+                    .lock()
+                    .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
+                lifecycle.ensure_startup(&generation)?;
+                **environment = prepared;
+            }
             let python = environment
                 .as_ref()
                 .and_then(|environment| environment.python.as_ref());
@@ -1374,8 +1513,11 @@ impl Client {
                 executable: &self.0.program,
                 arguments: &self.0.arguments,
                 relay: self.0.relay.as_deref(),
+                no_sandbox: self.0.no_sandbox,
+                writable_roots: &self.0.writable_roots,
                 python,
                 managed_r,
+                dynamic_resolution: self.dynamic_resolution(),
                 callbacks: WorkerCallbacks {
                     client: self.clone(),
                     generation,

@@ -28,7 +28,7 @@ pub(crate) fn resolve_duckdb_extensions(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    managed_r.configure_resolver(&mut command)?;
+    managed_r.configure_worker(&mut command)?;
     // DuckDB performs its normal extension installation outside the sandbox.
     // Names are JSON input, never R or SQL source.
     let mut child = command.spawn().map_err(|error| {

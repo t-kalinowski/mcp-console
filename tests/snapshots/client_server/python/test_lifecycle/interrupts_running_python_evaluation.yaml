@@ -1,0 +1,172 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  r: |
+    python_interrupt_started <- tempfile("python-interrupt-started-")
+    python_interrupt_release <- tempfile("python-interrupt-release-")
+    Sys.setenv(
+      MCP_CONSOLE_PYTHON_INTERRUPT_STARTED = python_interrupt_started,
+      MCP_CONSOLE_PYTHON_INTERRUPT_RELEASE = python_interrupt_release
+    )
+    # Complete Python initialization before arming the dispatch checkpoint.
+    invisible(reticulate::py_config())
+    invisible(suppressMessages(base::trace(
+      "py_eval",
+      tracer = quote({
+        invisible(file.create(file.path(
+          tempdir(),
+          "python-r-interrupt-started"
+        )))
+        repeat {
+          Sys.sleep(60)
+        }
+      }),
+      print = FALSE,
+      where = asNamespace("reticulate")
+    )))
+    cat(python_interrupt_started, python_interrupt_release, sep = "\n")
+result:
+  content:
+    - type: text
+      text: |-
+        <interrupt started>
+        <interrupt release>
+  isError: false
+---
+send:
+  python: "42"
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running; poll with an empty send]
+  isError: false
+---
+send:
+  control: interrupt
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: "\n"
+  isError: false
+---
+send:
+  r: |
+    invisible(suppressMessages(base::untrace(
+      "py_eval",
+      where = asNamespace("reticulate")
+    )))
+    # Poison reticulate's cached result wrapper after MCP Console
+    # initializes its private Python evaluator. Cell results must
+    # still return through direct conversion instead of that wrapper.
+    invisible(reticulate::py_eval(
+      r"---(
+    exec(
+        "import inspect\n"
+        "inspect._mcp_original_getmro_code = inspect.getmro.__code__\n"
+        "def _mcp_interrupting_getmro(cls):\n"
+        "    getmro.__code__ = _mcp_original_getmro_code\n"
+        "    raise KeyboardInterrupt\n"
+        "inspect.getmro.__code__ = _mcp_interrupting_getmro.__code__\n"
+    )
+    )---",
+      convert = TRUE
+    ))
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  python: |
+    import inspect
+
+    inspect.getmro.__code__ = inspect._mcp_original_getmro_code
+
+    import ctypes
+    import os
+    import signal
+
+    checkpoint_library = ctypes.PyDLL(os.environ["MCP_CONSOLE_PYTHON_INTERRUPT_LIBRARY"])
+    wait_for_interrupt = checkpoint_library.wait_for_probe_interrupt
+    wait_for_interrupt.argtypes = (
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_void_p,
+    )
+    wait_for_interrupt.restype = ctypes.c_int
+    python_interrupt_state = 41
+    wakeup_read, wakeup_write = os.pipe()
+    os.set_blocking(wakeup_write, False)
+    previous_wakeup = signal.set_wakeup_fd(wakeup_write)
+    try:
+        with (
+            open(
+                os.environ["MCP_CONSOLE_PYTHON_INTERRUPT_STARTED"],
+                "wb",
+                buffering=0,
+            ) as started,
+            open(
+                os.environ["MCP_CONSOLE_PYTHON_INTERRUPT_RELEASE"],
+                "rb",
+                buffering=0,
+            ) as release,
+        ):
+            assert (
+                wait_for_interrupt(
+                    started.fileno(),
+                    release.fileno(),
+                    wakeup_read,
+                    ctypes.pythonapi.PyErr_CheckSignals,
+                )
+                == 0
+            )
+    finally:
+        signal.set_wakeup_fd(previous_wakeup)
+        os.close(wakeup_read)
+        os.close(wakeup_write)
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running; poll with an empty send]
+  isError: false
+---
+send:
+  control: interrupt
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running; poll with an empty send]
+  isError: false
+---
+send: {}
+result:
+  content:
+    - type: text
+      text: |
+        Traceback (most recent call last):
+          File "<string>", line 467, in _mcp_console_eval_cell
+          File "<mcp-console:python:e2>", line 36, in <module>
+        KeyboardInterrupt
+  isError: false
+---
+send:
+  python: python_interrupt_state + 1
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false

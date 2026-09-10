@@ -553,7 +553,10 @@ def _mcp_console_apply_psutil_process_group(
 def _mcp_console_configure_psutil(
     _Exception=_builtins.Exception,
     _apply=_mcp_console_apply_psutil_process_group,
+    _sandboxed=_os.environ.get("MCP_CONSOLE_SANDBOX") == "1",
 ):
+    if not _sandboxed:
+        return None
     # This adapter may run after reticulate has activated an environment, so
     # its optional probe and setup must not abort activation.
     try:
@@ -588,9 +591,23 @@ def _mcp_console_dispatch(state=_mcp_console.__dict__):
     return state[operation](*arguments)
 
 
+def _mcp_console_without_automatic_resolution(
+    operation,
+    *arguments,
+    _finder=_mcp_console_import_finder,
+):
+    resolving = getattr(_finder._state, "resolving", False)
+    try:
+        _finder._state.resolving = True
+        return operation(*arguments)
+    finally:
+        _finder._state.resolving = resolving
+
+
 _mcp_console.activate_process_environment = _mcp_console_activate_process_environment
 _mcp_console.disable_matplotlib_show = _mcp_console_disable_matplotlib_show
 _mcp_console.configure_import_resolution = _mcp_console_import_finder.configure
+_mcp_console.without_automatic_resolution = _mcp_console_without_automatic_resolution
 _mcp_console.eval_cell = _mcp_console_eval_cell
 _mcp_console.take_images = _mcp_console_take_images
 _mcp_console.dispatch = _mcp_console_dispatch

@@ -1,0 +1,13 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.direct.yaml
+---
+send:
+  r: |
+    dyn.load("loader_probe.so")
+    .C("loader_probe", result = 0L)$result
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false

@@ -1,0 +1,17 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  python: |
+    print("x" * 8388600, end="")
+    import yaml12
+
+    yaml12.__name__
+  timeout_ms: 120000
+result:
+  content:
+    - type: text
+      text: |-
+        <retained 8388600 text bytes>
+        [output truncated: omitted 78 text bytes and 0 encoded image bytes across 3 events; retained text: .mcp-console/sessions/<run ID>/outputs/call-000001.log (9 of 78 omitted text bytes)]
+  isError: false

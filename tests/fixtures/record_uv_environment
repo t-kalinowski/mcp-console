@@ -8,6 +8,17 @@ record = {
     name: os.environ.get(name)
     for name in ("UV_CACHE_DIR", "UV_DEFAULT_INDEX", "UV_OFFLINE")
 }
+arguments = sys.argv[1:]
+uv = os.environ["MCP_CONSOLE_TEST_REAL_UV"]
+if arguments[:3] == ["pip", "install", "--dry-run"]:
+    # Reticulate's worker-side environment diagnostic is separate from host
+    # resolution. Preserve it without mixing it into resolver observations.
+    diagnostic_path = os.environ["MCP_CONSOLE_TEST_UV_RECORD"] + ".diagnostics"
+    with open(diagnostic_path, "a", encoding="utf-8") as stream:
+        json.dump({"arguments": arguments, "environment": record}, stream)
+        stream.write("\n")
+    os.execv(uv, [uv, *arguments])
+
 with open(os.environ["MCP_CONSOLE_TEST_UV_RECORD"], "a", encoding="utf-8") as stream:
     json.dump(record, stream, sort_keys=True)
     stream.write("\n")
@@ -22,6 +33,24 @@ if r_libs_record := os.environ.get("MCP_CONSOLE_TEST_R_LIBS_RECORD"):
         json.dump(os.environ.get("R_LIBS"), stream)
         stream.write("\n")
 
+intercept_marker = os.environ.get("MCP_CONSOLE_TEST_UV_INTERCEPT_MARKER")
+intercept = intercept_marker is None or os.path.exists(intercept_marker)
+
+if resolver_record := os.environ.get("MCP_CONSOLE_TEST_UV_RESOLVER_RECORD"):
+    resolver_state = {
+        "arguments": arguments,
+        "RETICULATE_UV": os.environ.get("RETICULATE_UV"),
+        "UV_CACHE_DIR": os.environ.get("UV_CACHE_DIR"),
+        "UV_MANAGED_PYTHON": os.environ.get("UV_MANAGED_PYTHON"),
+        "UV_NO_MANAGED_PYTHON": os.environ.get("UV_NO_MANAGED_PYTHON"),
+        "UV_PYTHON_INSTALL_DIR": os.environ.get("UV_PYTHON_INSTALL_DIR"),
+        "UV_PYTHON_PREFERENCE": os.environ.get("UV_PYTHON_PREFERENCE"),
+        "UV_NO_CACHE": os.environ.get("UV_NO_CACHE"),
+    }
+    with open(resolver_record, "a", encoding="utf-8") as stream:
+        json.dump(resolver_state, stream, sort_keys=True)
+        stream.write("\n")
+
 failure_marker = os.environ.get("MCP_CONSOLE_TEST_UV_FAILURE_MARKER")
 failure_argument = os.environ.get("MCP_CONSOLE_TEST_UV_FAILURE_ARGUMENT")
 if (
@@ -33,8 +62,28 @@ if (
     print("synthetic uv failure", file=sys.stderr)
     raise SystemExit(99)
 
-uv = os.environ["MCP_CONSOLE_TEST_REAL_UV"]
-arguments = sys.argv[1:]
+inventories = os.environ.get("MCP_CONSOLE_TEST_UV_PYTHON_INVENTORIES")
+if (
+    intercept
+    and inventories
+    and os.path.exists(inventories)
+    and arguments[:2] == ["python", "list"]
+):
+    with open(inventories, encoding="utf-8") as stream:
+        inventories_by_preference = json.load(stream)
+    preference_index = arguments.index("--python-preference") + 1
+    preference = arguments[preference_index]
+    json.dump(inventories_by_preference[preference], sys.stdout)
+    sys.stdout.write("\n")
+    raise SystemExit(0)
+
+if intercept and arguments[:2] == ["tool", "run"] and "--" in arguments:
+    separator = arguments.index("--")
+    command = arguments[separator + 1 :]
+    if command and command[0] == "python":
+        if python := os.environ.get("MCP_CONSOLE_TEST_UV_PYTHON"):
+            os.execv(python, [python, *command[1:]])
+
 substitute = os.environ.get("MCP_CONSOLE_TEST_UV_SUBSTITUTE_REQUIREMENT")
 replacement = os.environ.get("MCP_CONSOLE_TEST_UV_REPLACEMENT_REQUIREMENT")
 assert (substitute is None) == (replacement is None)

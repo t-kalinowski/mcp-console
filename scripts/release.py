@@ -5,10 +5,12 @@ import json
 import os
 import re
 import select
+import shutil
 import subprocess
 import sys
 import tempfile
 import time
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +19,8 @@ PACKAGE_VERSION = re.compile(r'^version\s*=\s*"([^"]+)"\s*$')
 TARGET_ARCHITECTURES = {
     "aarch64-apple-darwin": "arm64",
     "x86_64-apple-darwin": "x86_64",
+    "aarch64-unknown-linux-gnu": "aarch64",
+    "x86_64-unknown-linux-gnu": "x86_64",
 }
 
 
@@ -147,10 +151,30 @@ def smoke_mcp(
         )
 
         send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        # Runtime preparation is lazy; start the worker under the startup deadline.
         send(
             {
                 "jsonrpc": "2.0",
                 "id": 2,
+                "method": "tools/call",
+                "params": {"name": "send", "arguments": {"control": "restart"}},
+            }
+        )
+        startup = receive(process, buffer, startup_timeout)
+        require(startup.get("id") == 2, "unexpected startup response ID")
+        require(
+            startup.get("result")
+            == {
+                "content": [{"type": "text", "text": "[starting new worker]\n[idle]"}],
+                "isError": False,
+            },
+            "unexpected runtime startup response",
+        )
+
+        send(
+            {
+                "jsonrpc": "2.0",
+                "id": 3,
                 "method": "tools/call",
                 "params": {
                     "name": "send",
@@ -159,14 +183,14 @@ def smoke_mcp(
             }
         )
         evaluation = receive(process, buffer, response_timeout)
-        require(evaluation.get("id") == 2, "unexpected evaluation response ID")
+        require(evaluation.get("id") == 3, "unexpected evaluation response ID")
         require(
             evaluation.get("result")
             == {
                 "content": [{"type": "text", "text": "[1] 42\n"}],
                 "isError": False,
             },
-            "unexpected R evaluation response",
+            f"unexpected R evaluation response: {json.dumps(evaluation, ensure_ascii=False)}",
         )
     except Exception as error:
         standard_error = terminate(process)
@@ -190,6 +214,27 @@ def smoke_mcp(
     require(not standard_error, f"MCP server wrote to stderr: {standard_error}")
 
 
+def inspect_wheel_commands(wheel: Path, *, linux: bool) -> None:
+    data = f"mcp_console-{package_version()}.data/data"
+    with zipfile.ZipFile(wheel) as archive:
+        members = archive.namelist()
+        for name in ("mcp-console-sandbox", *(["bwrap"] if linux else [])):
+            runner = f"{data}/libexec/{name}"
+            require(
+                [member for member in members if Path(member).name == name] == [runner],
+                f"wheel must contain exactly one private sandbox runner {name} under libexec",
+            )
+            require(
+                archive.getinfo(runner).external_attr >> 16 & 0o111 != 0,
+                f"private sandbox runner {name} is not executable",
+            )
+        for name in ("LICENSE", "NOTICE", *(["bubblewrap-COPYING"] if linux else [])):
+            require(
+                f"{data}/share/licenses/mcp-console/{name}" in members,
+                f"private sandbox runner is missing {name}",
+            )
+
+
 def smoke_wheel(args: argparse.Namespace) -> None:
     wheel = Path(args.wheel).resolve()
     cargo_bin = Path(args.cargo_bin).resolve()
@@ -204,25 +249,33 @@ def smoke_wheel(args: argparse.Namespace) -> None:
         wheel.name.startswith(f"mcp_console-{version}-"),
         f"wheel version does not match {version}: {wheel.name}",
     )
-    require("-macosx_" in wheel.name, f"wheel must be macOS-specific: {wheel.name}")
+    platform = wheel.name.rsplit("-", 1)[-1]
+    require(
+        platform.startswith(("macosx_", "manylinux", "linux_")),
+        f"unsupported wheel platform: {wheel.name}",
+    )
+    linux = not platform.startswith("macosx_")
     require(not wheel.name.endswith("-none-any.whl"), "wheel must be platform-specific")
+    inspect_wheel_commands(wheel, linux=linux)
 
     if args.target is not None:
         architecture = TARGET_ARCHITECTURES[args.target]
         require(
-            wheel.name.endswith(f"_{architecture}.whl"),
+            wheel.name.endswith(f"_{architecture}.whl")
+            and linux == ("linux" in args.target),
             f"wheel does not match {args.target}: {wheel.name}",
         )
 
     expected_version = command_output([str(cargo_bin), "--version"])
     actual_version = command_output(
-        ["uvx", "--from", str(wheel), "mcp-console", "--version"]
+        ["uv", "tool", "run", "--from", str(wheel), "mcp-console", "--version"]
     )
     require(actual_version == expected_version, "installed and Cargo versions differ")
 
     cargo_help = command_output([str(cargo_bin), "--help"], strip=False)
     wheel_help = command_output(
-        ["uvx", "--from", str(wheel), "mcp-console", "--help"], strip=False
+        ["uv", "tool", "run", "--from", str(wheel), "mcp-console", "--help"],
+        strip=False,
     )
     require(wheel_help == cargo_help, "installed and Cargo help output differ")
 
@@ -237,34 +290,48 @@ def smoke_wheel(args: argparse.Namespace) -> None:
     )
     require(
         command_output([str(installed), "--version"]) == expected_version,
-        "uv tool and Cargo versions differ",
+        "`uv` tool and Cargo versions differ",
     )
     require(
         command_output([str(installed), "--help"], strip=False) == cargo_help,
-        "uv tool and Cargo help output differ",
+        "`uv` tool and Cargo help output differ",
     )
-    run_command([str(installed), "sandbox", "--", "/usr/bin/true"])
+    public_runner = tool_bin / "mcp-console-sandbox"
+    require(
+        not public_runner.exists(),
+        f"private sandbox runner was installed as a public command: {public_runner}",
+    )
+    with tempfile.TemporaryDirectory(prefix="mcp-console-empty-path-") as directory:
+        sandbox_env = os.environ.copy()
+        sandbox_env["PATH"] = directory
+        run_command([str(cargo_bin), "sandbox", "--", "/usr/bin/true"], env=sandbox_env)
+        run_command([str(installed), "sandbox", "--", "/usr/bin/true"], env=sandbox_env)
 
     internal_ir = installed.resolve().with_name("ir")
-    require(internal_ir.is_file(), f"sibling ir does not exist: {internal_ir}")
-    require(
-        os.access(internal_ir, os.X_OK), f"sibling ir is not executable: {internal_ir}"
-    )
-    command_output([str(internal_ir), "--version"])
+    require(not internal_ir.exists(), f"wheel contains sibling `ir`: {internal_ir}")
 
     r_home = command_output(["R", "RHOME"])
-    with tempfile.TemporaryDirectory(prefix="mcp-console-fake-path-") as directory:
-        fake_bin = Path(directory)
-        fake_ir = fake_bin / "ir"
-        fake_ir.write_text(
-            '#!/bin/sh\necho "PATH ir should not be used" >&2\nexit 99\n',
-            encoding="utf-8",
+    uv = shutil.which("uv")
+    require(uv is not None, "host `uv` is not on `PATH`")
+    with tempfile.TemporaryDirectory(prefix="mcp-console-uv-path-") as directory:
+        uv_bin = Path(directory)
+        (uv_bin / "uv").symlink_to(Path(uv).resolve())
+        unavailable_uvx = uv_bin / "uvx"
+        unavailable_uvx.write_text("#!/bin/sh\nexit 97\n", encoding="utf-8")
+        unavailable_uvx.chmod(0o755)
+        path = os.pathsep.join(
+            [str(uv_bin)]
+            + [
+                entry
+                for entry in os.environ.get("PATH", "").split(os.pathsep)
+                if not (Path(entry) / "ir").is_file()
+            ]
         )
-        fake_ir.chmod(0o755)
 
         env = os.environ.copy()
+        env.pop("RETICULATE_UV", None)
         env["R_HOME"] = r_home
-        env["PATH"] = f"{fake_bin}{os.pathsep}{env['PATH']}"
+        env["PATH"] = path
         smoke_mcp(
             installed,
             version,
@@ -341,12 +408,16 @@ def verify_wheel_set(args: argparse.Namespace) -> None:
     wheels = sorted(directory.glob("*.whl"))
     arm64 = list(directory.glob("mcp_console-*-macosx_*_arm64.whl"))
     x86_64 = list(directory.glob("mcp_console-*-macosx_*_x86_64.whl"))
+    linux_arm64 = list(directory.glob("mcp_console-*-manylinux_*_aarch64.whl"))
+    linux_x86_64 = list(directory.glob("mcp_console-*-manylinux_*_x86_64.whl"))
     universal = list(directory.glob("*-none-any.whl"))
     sdists = list(directory.glob("*.tar.gz"))
 
-    require(len(wheels) == 2, f"expected exactly two wheels, found {len(wheels)}")
+    require(len(wheels) == 4, f"expected exactly four wheels, found {len(wheels)}")
     require(len(arm64) == 1, "expected exactly one Apple Silicon wheel")
     require(len(x86_64) == 1, "expected exactly one Intel macOS wheel")
+    require(len(linux_arm64) == 1, "expected exactly one ARM64 Linux wheel")
+    require(len(linux_x86_64) == 1, "expected exactly one x86-64 Linux wheel")
     require(not universal, "a platform-independent wheel must not be published")
     require(not sdists, "a source distribution must not be published")
 

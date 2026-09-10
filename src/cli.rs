@@ -29,11 +29,19 @@ pub struct Cli {
 pub enum Command {
     /// Run the MCP server over standard input and output
     Serve {
+        /// Run evaluated code with server permissions, without sandbox isolation or descendant cleanup
+        #[arg(long)]
+        no_sandbox: bool,
+
+        /// Allow writes to an additional path (temporary launch option)
+        #[arg(long, value_name = "PATH", conflicts_with = "no_sandbox")]
+        writable_root: Vec<PathBuf>,
+
         /// Replace the runtime worker during development
         #[arg(long, hide = true, value_name = "PATH")]
         worker: Option<PathBuf>,
 
-        /// Replace the sandboxed worker relay during development
+        /// Replace the worker relay during development
         #[arg(long, hide = true, value_name = "PATH", requires = "worker")]
         relay: Option<PathBuf>,
     },
@@ -45,7 +53,7 @@ pub enum Command {
     /// Run the internal worker relay
     #[command(hide = true)]
     WorkerRelay {
-        /// Worker command to launch inside the relay sandbox
+        /// Worker command to launch through the relay
         #[arg(
             value_name = "COMMAND",
             required = true,
@@ -56,15 +64,26 @@ pub enum Command {
         command: Vec<OsString>,
     },
 
-    /// Run a command with the MCP Console sandbox policy
+    /// Run a command with the default or an explicit sandbox policy
     #[command(after_help = SANDBOX_EXAMPLES)]
     Sandbox {
+        /// Read the runner configuration as JSON from this launch environment variable
+        #[arg(long, value_name = "NAME", conflicts_with = "exit_with_parent")]
+        config_env: Option<String>,
+
+        /// Allow writes to an additional path (temporary launch option)
+        #[arg(long, value_name = "PATH", conflicts_with = "config_env")]
+        writable_root: Vec<PathBuf>,
+
+        /// Retire the sandbox when this parent process exits
+        #[arg(long, hide = true, value_name = "PID")]
+        exit_with_parent: Option<u32>,
+
         /// Command and arguments to run
         #[arg(
             value_name = "COMMAND",
             required = true,
             num_args = 1..,
-            allow_hyphen_values = true,
             trailing_var_arg = true
         )]
         command: Vec<OsString>,

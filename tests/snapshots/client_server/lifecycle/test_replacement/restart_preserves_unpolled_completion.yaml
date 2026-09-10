@@ -1,0 +1,25 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  r: complete before restart checkpoint
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running; poll with an empty send]
+  isError: false
+---
+send:
+  control: restart
+result:
+  content:
+    - type: text
+      text: |-
+        [done]
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: false

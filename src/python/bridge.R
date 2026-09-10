@@ -2,6 +2,13 @@ base::local(
   {
     initialized <- FALSE
     managed <- Sys.getenv("MCP_CONSOLE_MANAGED_PYTHON", unset = NA_character_)
+    dynamic_resolution <- identical(
+      Sys.getenv(
+        "MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION",
+        unset = "1"
+      ),
+      "1"
+    )
     # Python 3.9 and older are intentionally outside the bridge contract.
     minimum_python <- base::numeric_version("3.10")
     # Reticulate callable proxies convert results through an interruptible wrapper.
@@ -13,15 +20,21 @@ base::local(
     pending_requirements <- NULL
     source <- NULL
     `%||%` <- function(x, y) if (is.null(x)) y else x
-    managed_python_disabled_message <- paste0(
-      "MCP Console is using a user-selected Python environment. ",
-      "Automatic managed package resolution is disabled, and ",
-      "`requirements.python` is also disabled for this interpreter selection. ",
-      "Install the distribution into the selected environment or restart MCP ",
-      "Console with managed Python enabled."
-    )
-    # Capture the embedded runtime once before reticulate hooks can initialize Python.
-    python_runtime_source <- .Call("mcp_console_python_runtime_source")
+    managed_python_disabled_message <- if (!dynamic_resolution) {
+      paste0(
+        "MCP Console dynamic environment resolution is unavailable. ",
+        "Install the distribution into the ambient Python environment, or ",
+        "install `ir` or `uv` and restart MCP Console."
+      )
+    } else {
+      paste0(
+        "MCP Console is using a user-selected Python environment. ",
+        "Automatic managed package resolution is disabled, and ",
+        "`requirements.python` is also disabled for this interpreter selection. ",
+        "Install the distribution into the selected environment or restart MCP ",
+        "Console with managed Python enabled."
+      )
+    }
 
     manifest <- function(packages, python_version, exclude_newer) {
       list(
@@ -340,11 +353,10 @@ base::local(
           call. = FALSE
         )
       }
-      reticulate::py_run_string(
-        python_runtime_source,
-        local = TRUE,
-        convert = FALSE
-      )
+      invisible(.Call(
+        "mcp_console_install_python_runtime",
+        python_config$libpython
+      ))
       python_module <<- reticulate::import("_mcp_console", convert = FALSE)
       configured <- FALSE
       on.exit(

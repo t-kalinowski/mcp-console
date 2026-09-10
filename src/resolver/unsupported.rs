@@ -7,6 +7,33 @@ pub(crate) struct ManagedPython {
 pub(crate) struct ManagedR;
 
 #[derive(Clone)]
+pub(crate) struct ManagedRBootstrap;
+
+impl ManagedRBootstrap {
+    pub(crate) fn prepare(
+        &self,
+        _python: &mut super::ManagedPythonResolverConfiguration,
+        _on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
+    ) -> Result<ManagedRResolverConfiguration, String> {
+        Err("managed R libraries are supported only on macOS".to_string())
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct ManagedRResolverConfiguration;
+
+impl ManagedRResolverConfiguration {
+    pub(crate) fn resolve_uv(
+        &self,
+        _managed_r: &ManagedR,
+        _configuration: &super::ManagedPythonResolverConfiguration,
+        _on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
+    ) -> Result<std::ffi::OsString, String> {
+        Err("managed R libraries are supported only on macOS".to_string())
+    }
+}
+
+#[derive(Clone)]
 pub(crate) struct ResolverStopHandle;
 
 impl ResolverStopHandle {
@@ -48,6 +75,14 @@ impl ManagedR {
 }
 
 pub(crate) fn resolve_r(
+    _requirements: Vec<String>,
+    _on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
+) -> Result<ManagedR, String> {
+    Err("managed R libraries are supported only on macOS".to_string())
+}
+
+pub(crate) fn resolve_r_with(
+    _configuration: &ManagedRResolverConfiguration,
     _requirements: Vec<String>,
     _on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<ManagedR, String> {
@@ -100,7 +135,7 @@ pub(crate) fn resolve_python_host(
 pub(crate) fn resolve_python_version(
     constraints: Vec<String>,
     _configuration: &super::ManagedPythonResolverConfiguration,
-    _managed_r: Option<&ManagedR>,
+    _managed_r: &ManagedR,
     _on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<String, String> {
     crate::python_requirement::validate_version_constraints(&constraints)?;

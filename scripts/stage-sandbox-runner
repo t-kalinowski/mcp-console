@@ -1,0 +1,201 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+TARGETS = (
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+)
+
+
+def fail(message: str) -> None:
+    raise SystemExit(f"stage-sandbox-runner: {message}")
+
+
+def git_output(checkout: Path, *arguments: str) -> str:
+    result = subprocess.run(
+        ["git", *arguments], cwd=checkout, capture_output=True, text=True, check=False
+    )
+    if result.returncode != 0:
+        fail(result.stderr.strip() or result.stdout.strip())
+    return result.stdout.strip()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Build and stage the pinned private sandbox runner"
+    )
+    parser.add_argument(
+        "checkout",
+        nargs="?",
+        type=Path,
+        default=os.environ.get("MCP_CONSOLE_SANDBOX_SOURCE"),
+    )
+    parser.add_argument("--target", choices=TARGETS)
+    parser.add_argument("--github-output", type=Path)
+    args = parser.parse_args()
+    pin = json.loads((ROOT / "sandbox-runner.json").read_text(encoding="utf-8"))
+    if not re.fullmatch(r"[0-9a-f]{40}", pin["commit"]):
+        fail("sandbox-runner.json must pin a full source commit")
+    if args.github_output is not None:
+        with args.github_output.open("a", encoding="utf-8") as output:
+            for key in ("repository", "commit", "rust_toolchain"):
+                output.write(f"{key}={pin[key]}\n")
+        return
+    if sys.platform not in {"darwin", "linux"}:
+        fail(f"building private runner artifacts is unsupported on {sys.platform}")
+
+    checkout = args.checkout
+    if checkout is None:
+        checkout = ROOT / "target/sandbox-runner-cache" / pin["commit"]
+        checkout.mkdir(parents=True, exist_ok=True)
+        if not (checkout / ".git").exists():
+            git_output(checkout, "init")
+        if not (checkout / "codex-rs/Cargo.toml").exists():
+            git_output(
+                checkout,
+                "fetch",
+                "--depth",
+                "1",
+                f"https://github.com/{pin['repository']}.git",
+                pin["commit"],
+            )
+            git_output(checkout, "checkout", "--detach", pin["commit"])
+    checkout = checkout.resolve()
+    workspace = checkout / "codex-rs"
+    if not (workspace / "mcp-console-sandbox/Cargo.toml").is_file():
+        fail(f"not a sandbox-runner source checkout: {checkout}")
+    head = git_output(checkout, "rev-parse", "HEAD")
+    if head != pin["commit"]:
+        fail(f"source checkout is at {head}, expected {pin['commit']}")
+    if git_output(checkout, "status", "--porcelain", "--untracked-files=all"):
+        fail("source checkout is not clean")
+
+    toolchain = ["rustup", "run", "--install", pin["rust_toolchain"]]
+    target = args.target
+    if target is None:
+        target = subprocess.check_output(
+            [*toolchain, "rustc", "--print", "host-tuple"],
+            cwd=workspace,
+            text=True,
+        ).strip()
+        if target not in TARGETS:
+            fail(f"unsupported native target: {target}")
+
+    # Invoke Cargo on every source build and use its normal freshness checks.
+    # Changes to external tools selected through PATH can require cleaning the
+    # runner's target directory; see RELEASE.md. No local completed-runner cache
+    # bypasses Cargo.
+    environment = os.environ.copy()
+    environment["CARGO_TARGET_DIR"] = str(workspace / "target")
+    binaries = workspace / "target" / target / "release"
+    staged_helper = ROOT / "target/sandbox-runner-bwrap" / target / "bwrap"
+    if "linux" in target:
+        subprocess.run(
+            [
+                *toolchain,
+                "cargo",
+                "build",
+                "--locked",
+                "--release",
+                "-p",
+                "codex-bwrap",
+                "--bin",
+                "bwrap",
+                "--target",
+                target,
+            ],
+            cwd=workspace,
+            env=environment,
+            check=True,
+        )
+        staged_helper.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(binaries / "bwrap", staged_helper)
+        subprocess.run(["strip", "--strip-unneeded", str(staged_helper)], check=True)
+        # Bind the runner to the exact stripped executable we ship. Native
+        # selection hashes and executes one open descriptor, without a PATH
+        # fallback after an integrity failure.
+        environment["CODEX_BWRAP_SHA256"] = hashlib.sha256(
+            staged_helper.read_bytes()
+        ).hexdigest()
+    subprocess.run(
+        [
+            *toolchain,
+            "cargo",
+            "build",
+            "--locked",
+            "--release",
+            "-p",
+            "codex-mcp-console-sandbox",
+            "--bin",
+            "mcp-console-sandbox",
+            "--target",
+            target,
+        ],
+        cwd=workspace,
+        env=environment,
+        check=True,
+    )
+    data = ROOT / "wheel-data/data"
+    for name in ("libexec", "share"):
+        if (data / name).exists():
+            shutil.rmtree(data / name)
+    libexec = data / "libexec"
+    licenses = data / "share/licenses/mcp-console"
+    libexec.mkdir(parents=True)
+    licenses.mkdir(parents=True)
+    artifacts = []
+    for name in ("mcp-console-sandbox", *(["bwrap"] if "linux" in target else [])):
+        staged = libexec / name
+        shutil.copyfile(staged_helper if name == "bwrap" else binaries / name, staged)
+        staged.chmod(0o755)
+        # Preserve the symbolicateable original in Cargo's build directory.
+        strip = (
+            ["strip", "--strip-unneeded"]
+            if "linux" in target
+            else ["xcrun", "strip", "-S", "-x"]
+        )
+        if name != "bwrap":
+            subprocess.run([*strip, str(staged)], check=True)
+        artifacts.append(staged)
+    notices = [(checkout / name, name) for name in ("LICENSE", "NOTICE")]
+    if "linux" in target:
+        notices.append((workspace / "vendor/bubblewrap/COPYING", "bubblewrap-COPYING"))
+    for source, name in notices:
+        destination = licenses / name
+        shutil.copyfile(source, destination)
+        destination.chmod(0o644)
+        artifacts.append(destination)
+    build_record = ROOT / "target/sandbox-runner-build.json"
+    build_record.parent.mkdir(exist_ok=True)
+    build_record.write_text(
+        json.dumps(
+            {
+                "source_revision": head,
+                "target": target,
+                "artifacts": {
+                    path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+                    for path in artifacts
+                },
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+if __name__ == "__main__":
+    main()

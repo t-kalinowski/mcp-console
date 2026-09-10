@@ -96,48 +96,61 @@ struct SendArguments {
     /// One complete R cell evaluated in persistent global state. Its final visible expression
     /// autoprints through R's normal console display; R also autoprints earlier visible top-level
     /// expressions. Leave the primary result last and print only when additional output is needed.
-    /// The built-in worker resolves missing plain CRAN package names on demand through `library()`,
-    /// `require()`, `requireNamespace()`, `loadNamespace()`, `::`, or `:::`. Treat CRAN packages as
-    /// available and use them directly; do not probe package availability or call
-    /// `install.packages()`. Resolution makes a package available but attaches it only through the
-    /// original `library()` or `require()` call. R source is not scanned in advance. Read Python
-    /// globals through `py$name`. R data frames are directly queryable by name from later SQL cells.
-    /// Access DuckDB tables and views through the borrowed `sql_connection()` with DBI or dplyr; do
-    /// not disconnect it. Default-device plots return as PNG images. Keep all drawing operations for
-    /// one plot in the same cell. Set persistent dimensions with
+    /// When dynamic resolution is available, the built-in worker resolves missing plain CRAN
+    /// package names on demand through `library()`, `require()`, `requireNamespace()`,
+    /// `loadNamespace()`, `::`, or `:::`. Use packages directly; do not probe package availability
+    /// or call `install.packages()`. Resolution makes a package available but attaches it only
+    /// through the original `library()` or `require()` call. In a bare runtime, packages must
+    /// already be installed and these operations keep their ordinary R behavior. R source is not
+    /// scanned in advance. Read Python globals through `py$name`. With managed DuckDB active, R data
+    /// frames are directly queryable by name from later SQL cells. `sql_connection()` returns the
+    /// R-owned SQL connection for DBI or dplyr use. Select a user-owned DBI connection for later SQL
+    /// cells with `console_sql_connection(connection)` and restore managed DuckDB with
+    /// `console_sql_connection(NULL)`. Do not disconnect the managed DuckDB connection, and restore a
+    /// selected connection before disconnecting it. Default-device plots return as PNG images. Keep
+    /// all drawing operations for one plot in the same cell. Set persistent dimensions with
     /// `options(console.plot.width = ..., console.plot.height = ..., console.plot.dpi = ...)`;
     /// width and height are in inches. Omit this field for polling or stdin-only calls.
     r: Option<String>,
     /// One complete Python cell evaluated in persistent `__main__` state. Its final visible expression
     /// autoprints through Python's normal display hook. Leave the primary result last and print only
-    /// when additional output is needed. When an import is missing, the built-in managed worker
-    /// resolves a PyPI distribution on demand, using a curated mapping for well-known
+    /// when additional output is needed. When dynamic resolution is available and an import is
+    /// missing, the built-in managed worker resolves a PyPI distribution on demand, using a curated mapping for well-known
     /// import/distribution differences and otherwise assuming the distribution matches the top-level
     /// module. Python source is not scanned; resolution starts only when execution reaches the import.
     /// Use `requirements.python` when the distribution differs from the inferred name, exact registry
     /// metadata is needed, or the package should be prepared before the cell. A user-selected Python
-    /// environment disables both automatic resolution and managed requirements; import packages
-    /// already installed there directly. Read R globals and call R functions through `r.name`. Python
-    /// data frames are not automatically visible to SQL; bind them to an R name first. At cell end,
-    /// including after a Python error, every open `matplotlib.pyplot` figure returns once as a PNG image
-    /// and is closed. `show()` is optional. R plots called through `r` follow the R plot rules. Omit this
-    /// field for polling or stdin-only calls.
+    /// environment or bare runtime disables both automatic resolution and managed requirements;
+    /// import packages already installed there directly. Read R globals and call R functions through
+    /// `r.name`. Select a user-owned DB-API connection for later SQL cells with
+    /// `console_sql_connection(connection)` and restore managed DuckDB with
+    /// `console_sql_connection(None)`. Python data frames are not automatically visible to managed
+    /// DuckDB SQL; bind them to an R name before querying them there. At cell end, including after a
+    /// Python error, every open `matplotlib.pyplot` figure returns once as a PNG image and is closed.
+    /// `show()` is optional. R plots called through `r` follow the R plot rules. Omit this field for
+    /// polling or stdin-only calls.
     python: Option<String>,
-    /// One complete DuckDB SQL cell evaluated in the persistent catalog. The final query result returns
-    /// a bounded preview. An unqualified relation name can query a data frame in R global state; a
-    /// DuckDB table or view with the same name takes precedence. When attaching an existing DuckDB
-    /// database outside the worker's private temporary directory, use
-    /// `ATTACH 'path' AS name (READ_ONLY)`; the sandbox blocks DuckDB's default writable mode for those
-    /// paths. Use `SHOW TABLES`, `DESCRIBE`, `SUMMARIZE`, and `EXPLAIN` for discovery. DuckDB CLI dot
-    /// commands are not supported. Omit this field for polling or stdin-only calls.
+    /// One complete SQL cell evaluated through the active connection. The managed DuckDB backend is
+    /// active by default and keeps a persistent catalog. A result with columns returns a bounded
+    /// preview. With managed DuckDB, an unqualified relation name can query a data frame in R global
+    /// state, and a DuckDB table or view with the same name takes precedence. A user-selected R
+    /// connection receives cells through `DBI::dbSendQuery()`; a Python DB-API connection executes
+    /// them through its connection or cursor protocol. The selected driver supplies its own SQL
+    /// dialect and type mappings. Use DBI from an R cell for commands that require the statement
+    /// interface. Managed DuckDB conveniences and extension requirements apply only to the managed
+    /// backend. With the sandbox enabled, use `ATTACH 'path' AS name (READ_ONLY)` for existing DuckDB
+    /// databases outside the sandbox's writable paths; the sandbox blocks DuckDB's
+    /// default writable mode for those paths. Use `SHOW TABLES`, `DESCRIBE`, `SUMMARIZE`, and `EXPLAIN`
+    /// for DuckDB discovery. DuckDB CLI dot commands are not supported. Omit this field for polling
+    /// or stdin-only calls.
     sql: Option<String>,
     /// Applies lifecycle control alone or before compatible same-call fields. `interrupt` requests
     /// SIGINT from the active host resolver or live worker and preserves in-memory state. After
-    /// successful delivery, stdin is queued and `send` waits a short grace before observing the
+    /// successful delivery, stdin is queued and `send` waits 100 milliseconds before observing the
     /// earlier evaluation or attempting an optional following cell; the cell is not run if the
-    /// interrupted evaluation remains active. `restart` resolves same-call requirements before
-    /// replacement, discards R, Python, DuckDB, debugger, and unread-stdin state, then sends
-    /// same-call stdin and code only to the replacement.
+    /// interrupted evaluation remains active. When `requirements` is available, restart resolves
+    /// same-call requirements before replacement. It then discards R, Python, DuckDB, debugger,
+    /// and unread-stdin state and sends same-call stdin and code only to the replacement.
     control: Option<SendControl>,
     /// Additive R packages, Python packages, or DuckDB extensions to retain for later calls.
     /// Requirements alone perform standalone preparation. With one cell, they are preconditions of
@@ -150,19 +163,18 @@ struct SendArguments {
     /// delivery and stdin enqueue happen before requirements are validated or prepared and are not
     /// rolled back if that later work fails. Ordinary CRAN packages used by the built-in R worker need
     /// not be declared here; use `requirements.r` to stage packages ahead of evaluation or provide
-    /// explicit IR references. In the built-in managed Python environment, missing imports normally
+    /// explicit `ir` references. In the built-in managed Python environment, missing imports normally
     /// resolve at runtime. Use `requirements.python` to stage a distribution before the cell, provide
     /// a version, extra, or marker, or correct automatic inference. Python source is not pre-scanned,
     /// and SQL does not trigger package discovery. A cell is not run if explicit preparation fails or
-    /// further changes require restart. Resolution runs outside the worker sandbox and may download
-    /// packages or extensions or execute installation or build code on the host. Use only trusted
-    /// requirements.
+    /// further changes require restart. Resolution runs with server permissions and may download
+    /// packages or extensions or execute installation or build code. Use only trusted requirements.
     requirements: Option<Requirements>,
     /// Input for an active read, prompt, or debugger. When responding to active input, omit R, Python,
     /// and SQL code and send stdin on its own. Its UTF-8 encoding is queued exactly; no newline is added.
     /// Line-oriented input therefore normally needs a trailing `\n`. On a code-bearing call without
-    /// control, requirements are prepared before nonempty stdin is queued. Standalone preparation
-    /// cannot queue nonempty stdin. After `interrupt`, nonempty stdin is queued before the
+    /// control, available requirements are prepared before nonempty stdin is queued. Standalone
+    /// preparation cannot queue nonempty stdin. After `interrupt`, nonempty stdin is queued before the
     /// 100-millisecond grace and may be consumed while the earlier operation unwinds. After `restart`,
     /// same-call stdin is sent only to the replacement. When sent with a cell, nonempty text is queued
     /// before the code is run; an already waiting interactive read may consume it before the new cell
@@ -194,19 +206,19 @@ enum SendControl {
 #[schemars(inline)]
 #[serde(deny_unknown_fields)]
 struct Requirements {
-    /// Additive DuckDB extension names for standalone preparation, preparation before a cell, or a
-    /// restart transaction, for example `fts`, `spatial`, or `excel`. JSON and ICU are already
-    /// prepared for built-in workers. Names must start with a lowercase ASCII letter and contain
-    /// only lowercase ASCII letters, digits, and underscores. The host resolver uses DuckDB's own
-    /// `INSTALL` outside the sandbox, with DuckDB's default extension repository and native cache.
-    /// Preparation does not load extension code; `LOAD` and automatic loading happen later inside
-    /// the sandbox.
+    /// Additive DuckDB extension names for the managed DuckDB backend, for standalone preparation,
+    /// preparation before a cell, or a restart transaction, for example `fts`, `spatial`, or `excel`.
+    /// JSON and ICU are included in built-in defaults. Names must start with a lowercase ASCII
+    /// letter and contain only lowercase ASCII letters, digits, and underscores. The host resolver
+    /// uses DuckDB's own `INSTALL`, with DuckDB's default extension repository and
+    /// native cache. Preparation does not load extension code; `LOAD` and automatic loading happen
+    /// later inside the worker.
     #[serde(default)]
     #[schemars(length(max = 64), inner(length(min = 1, max = 64)))]
     duckdb: Vec<String>,
-    /// Additive, single-line IR package references for standalone preparation, preparation before a
+    /// Additive, single-line `ir` package references for standalone preparation, preparation before a
     /// cell, or a restart transaction, for example `data.table`, `sf`, or `yaml12`. Use this field
-    /// to stage packages ahead of evaluation or supply an explicit supported remote IR reference.
+    /// to stage packages ahead of evaluation or supply an explicit supported remote `ir` reference.
     /// Automatic R discovery accepts only plain package names. An idle worker that implements R
     /// preparation can add requirements without losing live state. Local package sources are
     /// rejected because resolution runs with server permissions.
@@ -233,15 +245,23 @@ fn default_timeout_ms() -> u64 {
 }
 
 impl ConsoleServer {
-    fn new(worker: Option<PathBuf>, relay: Option<PathBuf>) -> Result<Self, String> {
+    fn new(
+        worker: Option<PathBuf>,
+        relay: Option<PathBuf>,
+        no_sandbox: bool,
+        writable_roots: Vec<PathBuf>,
+    ) -> Result<Self, String> {
         let languages = Languages::from_environment()?;
-        let tool_router = Self::configured_tool_router(languages);
-        let transcript = crate::transcript::Transcript::new();
         let worker = match (worker, relay) {
-            (Some(program), relay) => crate::worker_client::Client::new(program, relay)?,
-            (None, None) => crate::worker_client::Client::builtin()?,
+            (Some(program), relay) => {
+                crate::worker_client::Client::new(program, relay, no_sandbox, writable_roots)?
+            }
+            (None, None) => crate::worker_client::Client::builtin(no_sandbox, writable_roots)?,
             (None, Some(_)) => return Err("a custom relay requires a custom worker".to_string()),
         };
+        let dynamic_resolution = worker.dynamic_resolution();
+        let transcript = crate::transcript::Transcript::new(dynamic_resolution);
+        let tool_router = Self::configured_tool_router(languages, dynamic_resolution, no_sandbox);
         Ok(Self {
             worker,
             transcript,
@@ -251,12 +271,29 @@ impl ConsoleServer {
         })
     }
 
-    fn configured_tool_router(languages: Languages) -> ToolRouter<Self> {
+    fn configured_tool_router(
+        languages: Languages,
+        dynamic_resolution: bool,
+        no_sandbox: bool,
+    ) -> ToolRouter<Self> {
         let mut router = Self::tool_router();
         let send = router
             .map
             .get_mut("send")
             .expect("send tool must be registered");
+        let description = send
+            .attr
+            .description
+            .as_mut()
+            .expect("send tool must have a description")
+            .to_mut();
+        description.push_str("\n\n");
+        let security = if no_sandbox {
+            "Evaluated code runs without a sandbox, with the server's permissions, including filesystem and network access. Dependency resolution, when available, may execute installation or build code; use only trusted dependencies."
+        } else {
+            "Evaluated code can read host files, cannot directly access the network, and can write in the worker's private temporary directory and to paths explicitly allowed by the launcher. Dependency resolution, when available, runs outside the sandbox and may execute installation or build code; use only trusted dependencies."
+        };
+        description.push_str(security);
         let schema = Arc::make_mut(&mut send.attr.input_schema);
         let properties = schema
             .get_mut("properties")
@@ -287,6 +324,9 @@ impl ConsoleServer {
                 properties.shift_remove(field);
             }
         }
+        if !dynamic_resolution {
+            properties.shift_remove("requirements");
+        }
         router
     }
 }
@@ -294,15 +334,11 @@ impl ConsoleServer {
 #[tool_router]
 impl ConsoleServer {
     #[tool(
-        description = r#"Persistent R, Python, and DuckDB SQL workbench for exact computation, file and data inspection, transformation, visualization, statistics, simulation, and modeling. State persists across sequential calls. Reassess the language for each cell and switch whenever another language is a better fit; do not stay in one language solely because state already exists there. Use the available live bridges when switching: Python reads R globals through `r.name`, R reads Python globals through `py$name`, SQL can query R data frames by name, and R accesses DuckDB through `sql_connection()`.
+        description = r#"Persistent R, Python, and SQL workbench for exact computation, file and data inspection, transformation, visualization, statistics, simulation, and modeling. State persists across calls. Choose the language best suited to each cell and reuse live state when switching: Python reads R globals through `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can query R data frames by name. R accesses its SQL connection through `sql_connection()`; R or Python can select a user-owned connection with `console_sql_connection(connection)`.
 
-Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls must be sequential because only one evaluation can be active. A control-only interrupt may overlap a pending `send` while that call resolves or prepares requirements, including for restart. When an intermediate result affects the next step, inspect it before sending another cell. R and Python display a final visible top-level expression, and SQL returns a bounded preview, so leave the primary result last and print only when additional output is needed. Cells are not transactional; changes made before an error may remain.
+Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls must be sequential; a control-only interrupt may overlap a pending `send`. Inspect intermediate results before submitting dependent cells. Cells are not transactional; changes made before an error may remain.
 
-`send` is the sole interaction with the persistent console. Use one code field for evaluation. Omit code to poll, provide stdin, prepare requirements, interrupt, or restart. Requirements alone stage dependencies; requirements with a cell prepare its preconditions. `control = "restart"` can include requirements, stdin, and a cell. Restart discards in-memory R, Python, DuckDB, debugger, and unread-stdin state, then targets same-call stdin and code only at the replacement. `control = "interrupt"` can include stdin and optionally a following cell. Interrupt preserves in-memory state and waits 100 milliseconds before observing the earlier evaluation or attempting that cell; the cell is not run if the interrupted evaluation remains active. `timeout_ms = 0` gives the shortest post-grace observation after interrupt.
-
-`timeout_ms` limits how long the call waits after dispatch or attachment. Inline control, interrupt grace, restart, and explicit requirement preparation can make the complete call take longer and do not consume the cell wait timeout. The timeout does not cancel startup, dependency resolution, or evaluation. If a response ends in `[running; poll with an empty send]`, call `send` again without code or stdin; do not resubmit the cell. Send `stdin` without code to answer an active prompt or debugger.
-
-The built-in worker resolves ordinary CRAN packages and missing imports in its managed Python environment on demand. Use `requirements` for explicit R references, exact Python distribution metadata, or DuckDB extensions; preparation makes dependencies available but does not import, attach, or load them. R default-device plots and open `matplotlib.pyplot` figures return as PNG images. Evaluated code can read host files, cannot directly access the network, and can write only in the worker's private temporary directory. Dependency resolution runs outside the sandbox and may execute package installation or build code; use only trusted dependencies."#
+Omit code to poll, supply stdin, control the session, or prepare requirements when available. If a response ends in `[running; poll with an empty send]`, call `send` again without code or stdin; do not resubmit the cell. Send `stdin` alone to answer an active prompt or debugger. Field descriptions specify preparation, control, and timeout ordering."#
     )]
     async fn send(
         &self,
@@ -344,59 +380,9 @@ The built-in worker resolves ordinary CRAN packages and missing imports in its m
                 Languages::field(cell.language)
             ));
         }
-        let standalone_preparation = requirements.is_some() && cell.is_none() && control.is_none();
-        if standalone_preparation && stdin.as_ref().is_some_and(|stdin| !stdin.is_empty()) {
-            return Err(
-                "requirements-only `send` performs standalone preparation and cannot also queue stdin"
-                    .to_string(),
-            );
-        }
-        if requirements.is_some()
-            && cell.is_none()
-            && matches!(control, Some(SendControl::Interrupt))
-        {
-            return Err(
-                "`requirements` with `control = \"interrupt\"` requires a code cell".to_string(),
-            );
-        }
-        let validation = requirements
-            .as_ref()
-            .map(validate_environment_requirements)
-            .transpose();
-        let deferred_validation_error = match validation {
-            Err(error) if matches!(control, Some(SendControl::Interrupt)) => Some(error),
-            Err(error) => return Err(error),
-            Ok(_) => None,
-        };
         let requirements = requirements.map(|Requirements { duckdb, r, python }| {
-            let requirements = crate::worker_client::Requirements { duckdb, r, python };
-            match deferred_validation_error {
-                Some(error) => crate::worker_client::RequirementSubmission::Invalid(error),
-                None => crate::worker_client::RequirementSubmission::Valid(requirements),
-            }
+            crate::worker_client::Requirements { duckdb, r, python }
         });
-        if standalone_preparation {
-            let Some(crate::worker_client::RequirementSubmission::Valid(requirements)) =
-                requirements
-            else {
-                unreachable!("standalone requirements were validated before preparation")
-            };
-            let text = match self.worker.prepare(requirements).await? {
-                crate::worker_client::PrepareResult::Prepared => "[prepared]",
-                crate::worker_client::PrepareResult::RestartRequired => "[restart required]",
-                crate::worker_client::PrepareResult::Failed(response)
-                | crate::worker_client::PrepareResult::WorkerStopped(response) => {
-                    return Ok(response_to_tool_result(
-                        response,
-                        &call,
-                        &self.transcript,
-                        &self.deliveries,
-                        &delivery,
-                    ));
-                }
-            };
-            return Ok(CallToolResult::success(vec![ContentBlock::text(text)]));
-        }
         let response = self
             .worker
             .send(crate::worker_client::SendRequest {
@@ -459,79 +445,6 @@ fn response_to_tool_result(
     } else {
         CallToolResult::success(content)
     }
-}
-
-fn validate_r_requirements(r: &[String]) -> Result<(), String> {
-    validate_requirements(r, "r", "R")
-}
-
-fn validate_python_requirements(python: &[String]) -> Result<(), String> {
-    if python.len() > 64 {
-        return Err("`requirements.python` accepts at most 64 requirements".to_string());
-    }
-    crate::python_requirement::validate_all(python)
-}
-
-fn validate_environment_requirements(requirements: &Requirements) -> Result<(), String> {
-    if requirements.duckdb.is_empty() && requirements.r.is_empty() && requirements.python.is_empty()
-    {
-        return Err(
-            "at least one of `requirements.r`, `requirements.python`, or `requirements.duckdb` is required"
-                .to_string(),
-        );
-    }
-    validate_duckdb_extensions(&requirements.duckdb)?;
-    validate_r_requirements(&requirements.r)?;
-    validate_python_requirements(&requirements.python)
-}
-
-fn validate_duckdb_extensions(extensions: &[String]) -> Result<(), String> {
-    if extensions.len() > 64 {
-        return Err("`requirements.duckdb` accepts at most 64 extensions".to_string());
-    }
-    if extensions.iter().any(|extension| extension.len() > 64) {
-        return Err("DuckDB extension names must be at most 64 ASCII characters".to_string());
-    }
-    if extensions.iter().any(|extension| {
-        let mut bytes = extension.bytes();
-        !bytes.next().is_some_and(|byte| byte.is_ascii_lowercase())
-            || bytes
-                .any(|byte| !(byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_'))
-    }) {
-        return Err(
-            "DuckDB extension names must start with a lowercase ASCII letter and contain only lowercase ASCII letters, digits, and underscores"
-                .to_string(),
-        );
-    }
-    Ok(())
-}
-
-fn validate_requirements(
-    requirements: &[String],
-    field: &str,
-    language: &str,
-) -> Result<(), String> {
-    if requirements.len() > 64 {
-        return Err(format!(
-            "`requirements.{field}` accepts at most 64 requirements"
-        ));
-    }
-    if requirements
-        .iter()
-        .any(|requirement| requirement.trim().is_empty())
-    {
-        return Err(format!("{language} requirement strings must not be empty"));
-    }
-    if requirements.iter().any(|requirement| {
-        requirement
-            .bytes()
-            .any(|byte| matches!(byte, b'\0' | b'\r' | b'\n'))
-    }) {
-        return Err(format!(
-            "{language} requirement strings must not contain NUL or line breaks"
-        ));
-    }
-    Ok(())
 }
 
 #[tool_handler(name = "mcp-console", router = self.tool_router)]
@@ -624,8 +537,14 @@ impl ServerHandler for ConsoleServer {
 /// Runs the MCP stdio server and owns the selected worker.
 ///
 /// Closing MCP input also stops a worker whose evaluation is still running.
-pub async fn run(worker: Option<PathBuf>, relay: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
-    let server = ConsoleServer::new(worker, relay).map_err(std::io::Error::other)?;
+pub async fn run(
+    worker: Option<PathBuf>,
+    relay: Option<PathBuf>,
+    no_sandbox: bool,
+    writable_roots: Vec<PathBuf>,
+) -> Result<(), Box<dyn Error>> {
+    let server = ConsoleServer::new(worker, relay, no_sandbox, writable_roots)
+        .map_err(std::io::Error::other)?;
     let worker = server.worker.clone();
     let (input_closed, wait_for_input_close) = oneshot::channel();
     let input = ShutdownReader::new(tokio::io::stdin(), input_closed);

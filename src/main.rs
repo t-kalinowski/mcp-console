@@ -4,13 +4,18 @@ use clap::Parser;
 
 mod cell;
 mod cli;
+#[cfg(unix)]
+mod process_descriptors;
+#[cfg(unix)]
+mod process_exit;
+#[cfg(unix)]
 mod python;
 mod python_requirement;
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 mod r_bridge;
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 mod r_environment;
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 mod r_graphics;
 mod r_package_name;
 mod relay_protocol;
@@ -18,9 +23,9 @@ mod resolver;
 mod sandbox;
 mod server;
 mod server_transport;
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 mod sideband;
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 mod sql;
 mod transcript;
 mod worker;
@@ -30,7 +35,12 @@ mod worker_relay;
 
 fn main() -> ExitCode {
     match cli::Cli::parse().command {
-        cli::Command::Serve { worker, relay } => match run_server(worker, relay) {
+        cli::Command::Serve {
+            worker,
+            relay,
+            no_sandbox,
+            writable_root,
+        } => match run_server(worker, relay, no_sandbox, writable_root) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
@@ -42,7 +52,17 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
-        cli::Command::Sandbox { command } => match sandbox::run(&command) {
+        cli::Command::Sandbox {
+            exit_with_parent,
+            command,
+            config_env,
+            writable_root,
+        } => match sandbox::run(
+            &command,
+            exit_with_parent,
+            config_env.as_deref(),
+            writable_root,
+        ) {
             Ok(exit_code) => exit_code,
             Err(error) => exit_with_error(error),
         },
@@ -52,11 +72,14 @@ fn main() -> ExitCode {
 fn run_server(
     worker: Option<std::path::PathBuf>,
     relay: Option<std::path::PathBuf>,
+    no_sandbox: bool,
+    writable_roots: Vec<std::path::PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let writable_roots = sandbox::resolve_writable_roots(writable_roots)?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    let result = runtime.block_on(server::run(worker, relay));
+    let result = runtime.block_on(server::run(worker, relay, no_sandbox, writable_roots));
     // `server::run` has already joined service and worker shutdown. Tokio's
     // stdout uses a blocking task that cannot be cancelled while the client
     // leaves its output pipe full, so runtime teardown must not wait for it.

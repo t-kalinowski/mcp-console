@@ -1,8 +1,11 @@
 use std::collections::BTreeSet;
 use std::ffi::OsString;
+#[cfg(unix)]
+use std::process::Command;
 
 use super::requirements::push_duckdb_r_target;
 
+#[derive(Clone)]
 pub(in crate::worker_client) struct Environment {
     pub(in crate::worker_client) custom_worker: bool,
     pub(in crate::worker_client) duckdb_extensions: BTreeSet<String>,
@@ -10,6 +13,7 @@ pub(in crate::worker_client) struct Environment {
     pub(in crate::worker_client) duckdb_r_targets: Vec<crate::resolver::ManagedR>,
     pub(in crate::worker_client) python: Option<PythonEnvironment>,
     pub(in crate::worker_client) r: Option<crate::resolver::ManagedR>,
+    pub(in crate::worker_client) r_resolver: super::super::RResolver,
 }
 
 const USER_SELECTED_PYTHON_ERROR: &str = "managed Python requirements are disabled because the session uses a user-selected Python environment";
@@ -21,13 +25,20 @@ pub(in crate::worker_client) enum PythonEnvironment {
         resolver: crate::resolver::ManagedPythonResolverConfiguration,
     },
     UserSelected(OsString),
+    Ambient,
 }
 
 impl PythonEnvironment {
+    pub(in crate::worker_client) fn uses_managed(configured: Option<&std::ffi::OsStr>) -> bool {
+        !configured.is_some_and(|configured| !configured.is_empty() && configured != "managed")
+    }
+
+    #[cfg(not(unix))]
     pub(in crate::worker_client) fn builtin(
         configured: Option<OsString>,
         resolver: crate::resolver::ManagedPythonResolverConfiguration,
         managed_r: Option<&crate::resolver::ManagedR>,
+        on_started: impl FnOnce(crate::resolver::ResolverStopHandle) -> Result<(), String>,
     ) -> Result<Self, String> {
         if let Some(configured) = configured
             && !configured.is_empty()
@@ -35,14 +46,25 @@ impl PythonEnvironment {
         {
             return Ok(Self::UserSelected(configured));
         }
-        let selected = crate::resolver::resolve_python(&[], &resolver, managed_r, |_| Ok(()))?;
+        let selected = crate::resolver::resolve_python(&[], &resolver, managed_r, on_started)?;
         Ok(Self::Managed { selected, resolver })
+    }
+
+    pub(in crate::worker_client) fn bare(configured: Option<OsString>) -> Self {
+        if let Some(configured) = configured
+            && !configured.is_empty()
+            && configured != "managed"
+        {
+            Self::UserSelected(configured)
+        } else {
+            Self::Ambient
+        }
     }
 
     pub(super) fn managed(&self) -> Option<&crate::resolver::ManagedPython> {
         match self {
             Self::Managed { selected, .. } => Some(selected),
-            Self::UserSelected(_) => None,
+            Self::UserSelected(_) | Self::Ambient => None,
         }
     }
 
@@ -58,6 +80,7 @@ impl PythonEnvironment {
         match self {
             Self::Managed { selected, resolver } => Ok((selected, resolver)),
             Self::UserSelected(_) => Err(USER_SELECTED_PYTHON_ERROR.to_string()),
+            Self::Ambient => Err("dynamic environment resolution is unavailable".to_string()),
         }
     }
 
@@ -71,19 +94,22 @@ impl PythonEnvironment {
                 Ok(())
             }
             Self::UserSelected(_) => Err(USER_SELECTED_PYTHON_ERROR.to_string()),
+            Self::Ambient => Err("dynamic environment resolution is unavailable".to_string()),
         }
     }
 
-    #[cfg(target_os = "macos")]
-    pub(in crate::worker_client) fn configure_worker(
-        &self,
-        command: &mut crate::sandbox::SandboxedCommand,
-    ) {
+    #[cfg(unix)]
+    pub(in crate::worker_client) fn configure_worker(&self, command: &mut Command) {
         match self {
             Self::Managed { selected, .. } => selected.configure_worker(command),
             Self::UserSelected(python) => {
                 command
                     .env("RETICULATE_PYTHON", python)
+                    .env_remove("MCP_CONSOLE_MANAGED_PYTHON");
+            }
+            Self::Ambient => {
+                command
+                    .env_remove("RETICULATE_PYTHON")
                     .env_remove("MCP_CONSOLE_MANAGED_PYTHON");
             }
         }
@@ -100,9 +126,19 @@ pub(super) fn ensure_python_additions_available(
     if environment.custom_worker {
         return Err("Python requirements are unavailable with a custom worker".to_string());
     }
+    if let super::super::RResolver::Pending(setup) = &environment.r_resolver {
+        return if PythonEnvironment::uses_managed(setup.configured_python.as_deref()) {
+            Ok(())
+        } else {
+            Err(USER_SELECTED_PYTHON_ERROR.to_string())
+        };
+    }
     match environment.python.as_ref() {
         Some(PythonEnvironment::Managed { .. }) => Ok(()),
         Some(PythonEnvironment::UserSelected(_)) => Err(USER_SELECTED_PYTHON_ERROR.to_string()),
+        Some(PythonEnvironment::Ambient) => {
+            Err("dynamic environment resolution is unavailable".to_string())
+        }
         None => Err("managed Python environment is unavailable".to_string()),
     }
 }

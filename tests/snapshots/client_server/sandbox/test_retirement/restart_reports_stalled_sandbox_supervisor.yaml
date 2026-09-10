@@ -1,0 +1,27 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  r: stall with stopped relay
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running; poll with an empty send]
+  isError: false
+---
+send:
+  control: restart
+result:
+  content:
+    - type: text
+      text: |-
+        [active evaluation stopped by session restart request]
+        [worker stopped: in-memory state lost]
+        [worker launcher did not retire within 6000 ms; additionally worker launcher terminated by signal 9]
+  isError: true
+launcher_failure:
+  supervisor: stopped before owned retirement
+  verified_barrier: direct launcher reaped; descendant cleanup is not guaranteed

@@ -12,28 +12,33 @@ It gives an MCP client one live computational workspace instead of a sequence of
 An agent can submit complete R, Python, or SQL cells, keep state across calls, answer interactive prompts, inspect partial output, and switch languages as a task evolves.
 
 The built-in worker embeds R.
-Python runs through reticulate, and SQL runs through a persistent DuckDB connection.
-R and Python can access one another's globals through reticulate, while DuckDB can query data frames in the R workspace directly.
+Python runs through reticulate, and SQL uses a persistent DuckDB connection by default while allowing R code to select another DBI connection or Python code to select a DB-API connection.
+R and Python can access one another's globals through reticulate, while the managed DuckDB backend can query data frames in the R workspace directly.
 R plots made with the default device and open Matplotlib figures are returned as images, SQL results are returned as bounded previews, and long-running work can be polled or interrupted.
 
 ## Install
 
-MCP Console is currently distributed as native wheels for Apple Silicon and Intel macOS.
-Linux and Windows are not supported yet.
+MCP Console runs on macOS and Linux.
+Both platforms sandbox evaluated code by default; Windows is not supported.
+The release workflow builds native wheels for Apple Silicon and Intel macOS and for ARM64 and x86-64 Linux.
+Linux wheels require glibc 2.39 or later; building from source uses the host glibc.
+On older Linux kernels or when seccomp denies `close_range` with `EPERM`, inherited-descriptor cleanup requires `/proc` to be mounted.
 
 A working R installation is required.
 Set `R_HOME` or make `R` discoverable on `PATH`.
-The Python package installs `r-lib-ir` into the same uv tool environment; it supplies the `ir` command used to prepare R libraries.
-The first server start may download and install the default R and Python requirements.
+Dynamic environment resolution normally starts from either `ir` 0.4.0 or later or `uv` on `PATH`.
+The first managed server start may download and install the default R and Python requirements.
+If no resolver bootstrap is available, the server starts a bare runtime using installed packages.
+See [Requirements and environments](https://github.com/t-kalinowski/mcp-console/blob/main/docs/REQUIREMENTS.md) for bootstrap options, managed defaults, and bare runtime behavior.
 
 Run the published command without installing it persistently:
 
 ```sh
-uvx mcp-console --help
-uvx mcp-console serve
+uv tool run mcp-console --help
+uv tool run mcp-console serve
 ```
 
-Or install it as a persistent uv tool:
+Or install it as a persistent `uv` tool:
 
 ```sh
 uv tool install mcp-console
@@ -41,6 +46,22 @@ uv tool install mcp-console
 mcp-console --help
 mcp-console serve
 ```
+
+Linux sandboxing requires mounted `/proc`, permission for the native helper's namespace operations, and the selected filesystem and network enforcement capabilities.
+Fresh procfs mounts and pidfds are optional; see the [tested host capabilities](docs/LINUX_COMPATIBILITY.md).
+Host AppArmor policy or container restrictions can prevent namespace setup.
+The wheel includes a private bubblewrap helper; a suitable `bwrap` on `PATH` takes precedence.
+There is no automatic unsandboxed fallback.
+Use `mcp-console serve --no-sandbox` to explicitly run with host permissions and without descendant cleanup.
+
+Install the current source checkout with its private sandbox companions:
+
+```sh
+uv tool install --reinstall .
+mcp-console serve
+```
+
+See [release preparation](RELEASE.md#private-sandbox-executable) for build dependencies and [sandbox integration](docs/SANDBOX.md) for policy and process-lifetime details.
 
 `mcp-console serve` communicates with its MCP client over standard input and output.
 It waits for MCP protocol input rather than presenting an interactive terminal prompt.
@@ -96,7 +117,9 @@ console = MCPConsole()
 await console.register_chatlas(chat)
 
 try:
-    await chat.chat_async("Use the console to calculate the first 20 Fibonacci numbers.")
+    await chat.chat_async(
+        "Use the console to calculate the first 20 Fibonacci numbers."
+    )
 finally:
     await chat.cleanup_mcp_tools()
 ```
@@ -106,7 +129,9 @@ For function-style registration, keep the console connection alive and register 
 ```python
 async with MCPConsole() as console:
     chat.register_tool(console.send)
-    await chat.chat_async("Use the console to calculate the first 20 Fibonacci numbers.")
+    await chat.chat_async(
+        "Use the console to calculate the first 20 Fibonacci numbers."
+    )
 ```
 
 ### OpenAI Responses API
@@ -242,32 +267,15 @@ with console.openai_codex_sdk_options() as options:
 
 The compatibility helper uses a temporary Codex executable shim to supply MCP configuration because that older SDK has no native insertion point.
 
-## What it is useful for
-
-MCP Console is intended for iterative computational work: inspecting and transforming data, fitting models, running simulations, making plots, debugging code, and checking exact results.
-
-An agent can load data once, build useful objects, inspect an intermediate result in another language, and continue without reconstructing its environment or passing every intermediate value through files and model context.
-
 ## Working with the console
 
 The MCP interface exposes one tool: `send`.
 It runs one complete R, Python, or SQL cell, supplies interactive input, prepares additive requirements, applies an optional interrupt or restart, or collects pending output.
 
 Code-bearing calls to `send` are sequential.
-A control-only interrupt may overlap a pending `send` while that call resolves or prepares requirements, including for restart.
-Requirements alone perform standalone preparation without starting an initial worker.
-With a cell, requirements are its preconditions; without control, preparation precedes nonempty standard input and evaluation.
-`control = "interrupt"` preserves in-memory state and orders signal delivery, same-call input, and a 100-millisecond grace period; when a cell follows, its requirements are then prepared before evaluation, and the cell is not run if the interrupted evaluation remains active.
-`control = "restart"` resolves requirements before replacing the worker, then queues same-call input and runs an optional cell only in the replacement.
-Polling and stdin remain code-free `send` calls.
-Control, interrupt grace, and explicit requirement preparation do not consume the wait timeout, which starts after cell dispatch or attachment to an active evaluation.
-R and Python global state and the in-memory DuckDB catalog remain available until the worker is restarted, replaced after failure, or the server exits.
-Prepared requirements remain available across worker restarts, but in-memory language, database, debugger, and unread-input state does not.
-Requirements declared on `send` are prepared before its cell runs and remain available to later cells.
-Preparation makes packages and extensions available; it does not import, attach, or load them.
-The built-in worker resolves missing plain R packages and managed Python imports on demand.
-Use packages directly; declare an explicit Python requirement when exact distribution metadata is needed or automatic inference asks for it.
-Successful package additions survive restart, while attached packages, imported modules, and other in-memory state do not.
+The current interface has one implicit session, with no named-session management.
+The [send operation reference](https://github.com/t-kalinowski/mcp-console/blob/main/docs/SEND_OPERATIONS.md) defines validation, preparation, control, input, and timeout ordering.
+The [built-in runtime guide](https://github.com/t-kalinowski/mcp-console/blob/main/docs/BUILTIN_RUNTIME.md) covers language state, output, graphics, and interoperability.
 
 ## Example workflow
 
@@ -306,64 +314,41 @@ plt.scatter(frame["temperature"], frame[".residual"])
 plt.axhline(0)
 ```
 
-The data, model, Python imports, and DuckDB catalog remain available for later calls until the runtime is restarted or replaced.
+The data, model, Python imports, and DuckDB catalog remain available for later calls until the worker is restarted, replaced, or the server exits.
 
-## Current status
-
-The repository contains a working Rust MCP server, sandboxed worker relay, built-in mixed-language worker, host dependency resolvers, session recording, and public process-boundary transcript tests.
-The registered MCP surface contains only `send`.
-
-The core console and its initial PyPI distribution currently support only macOS.
-Linux and Windows support is not implemented.
-The project remains under active construction.
-
-The server records a JSONL journal of tool calls and results together with image artifacts.
-It projects each journal event into a Yamark-formatted, append-only `transcript.md` with syntax-highlighted R, Python, and SQL source, text results, and relative artifact links.
-Alongside it, the server regenerates a Yamark-formatted `transcript.qmd` from incremental source and requirement state when submitted code or declared R or Python requirements change.
-The QMD contains only submitted executable code cells and IR front matter with the built-in requirements and cumulative declarations.
-With the PyPI package, run `uvx --from r-lib-ir ir render transcript.qmd` to execute those client-authored cells in order and export a fresh report using reticulate's default managed Python selection.
-When `ir` is installed separately, `ir render transcript.qmd` is equivalent.
-The projection is intended to reproduce the analysis represented by `transcript.md`, but it does not include recorded output or artifacts and does not yet reconstruct every runtime detail.
-Human-facing tools for following and inspecting an agent's work remain future design.
-
-Other current limitations include:
-
-- there is one implicit session and no named-session management;
-- cells run sequentially, while lifecycle control may overlap the operation it interrupts or replaces; and
-- restart and worker replacement discard R, Python, DuckDB, debugger, and unread-input state.
+The server records tool calls and results in a JSONL journal with image artifacts and a Markdown transcript.
+It also produces a Quarto source projection, `transcript.qmd`.
+Rejected or failed submissions may appear in that file, and rendering it does not reconstruct session control.
+See [Recording and artifacts](https://github.com/t-kalinowski/mcp-console/blob/main/docs/ARCHITECTURE.md#recording-and-image-artifacts) for the file formats and rendering behavior.
 
 ## Security boundary
 
-Submitted R, Python, and SQL have shell-class capability inside the worker sandbox.
-The worker can read host files, but direct network access and regular-file writes outside its private temporary directory are denied.
+Submitted R, Python, and SQL have shell-class capability.
+On macOS and Linux, the worker sandbox is enabled by default.
+The worker can read host files, but direct network access and regular-file writes outside its private temporary directory and any explicitly allowed paths are denied.
+The temporary `--writable-root PATH` launch argument adds a writable path; see [path semantics and an example](docs/SANDBOX_CONFIGURATION.md#additional-writable-paths).
 This is a process boundary, not a safe evaluator for untrusted code with access to sensitive readable files.
+
+`mcp-console serve --no-sandbox` launches the relay directly with host permissions.
+The worker inherits the host temporary-directory environment, and no sandbox runner tracks or cleans up descendants.
+The relay still shuts down and reaps its direct worker normally.
 
 The server installs automatically inferred or explicitly declared R and Python packages and DuckDB extensions outside the worker sandbox with server permissions.
 Those operations may access the network and execute installation or build code, so only trusted requirements should be supplied.
 See [Requirements and environments](https://github.com/t-kalinowski/mcp-console/blob/main/docs/REQUIREMENTS.md) for the accepted inputs and trust model.
 
-Session journals and the Markdown projection record submitted source, standard input, declared requirements, result text, and artifact paths without redaction.
-Image bytes are stored in separate artifact files linked from those records.
-The source-only Quarto document contains submitted code and declared R and Python requirements without redaction.
-Rendering it executes that source outside the MCP Console worker sandbox with the permissions of the `ir` and Quarto processes.
+Session records contain submitted source, standard input, requirements, results, and artifacts without redaction.
+Rendering the Quarto source projection executes submitted code outside the worker sandbox with the permissions of the `ir` and Quarto processes.
 Render only code you trust.
-See [Implemented architecture](https://github.com/t-kalinowski/mcp-console/blob/main/docs/ARCHITECTURE.md) for recording and process placement.
 
 ## Development
 
-The implemented commands are:
-
-```text
-mcp-console serve
-mcp-console sandbox -- COMMAND [ARG]...
-mcp-console --help
-mcp-console help [COMMAND]
-mcp-console --version
-```
-
-`mcp-console serve` communicates with its MCP client over standard input and output.
-The standalone `sandbox` command is available for development, but it supervises only its direct child.
-Use the MCP server for the supported worker-generation lifecycle.
+Install the current checkout with `uv tool install --reinstall .`.
+Source builds require Python 3, Git, and rustup in addition to the Rust compiler and native build tools.
+The first uv source installation fetches and compiles the pinned sandbox runner in a dedicated checkout under `target`.
+Later installations invoke Cargo again, reusing its build intermediates and checking for changes to tracked build inputs.
+The packaging backend prepares the companion before building the main executable; rustup installs the pinned toolchain if needed.
+It does not use another working checkout.
 
 Run development commands from the repository root:
 
@@ -375,19 +360,31 @@ scripts/test --list
 scripts/test --update BOUNDARY/SUITE[::CASE]
 ```
 
-`scripts/format` attempts each installed formatter and leaves failures visible while continuing with the remaining formatters.
-`scripts/check` validates extracted runtime sources, checks the Python integrations, checks Rust formatting and Clippy, runs Rust tests, and runs the complete transcript suite.
+The installation contains `bin/mcp-console`, a private runner under `libexec`, and its license notices under `share/licenses/mcp-console`.
+Linux installations also include `libexec/bwrap` and its license.
+Move the whole bundle to relocate it; copying only `mcp-console` leaves the runner behind.
+After `scripts/stage-sandbox-runner`, `cargo build` prepares a runnable development bundle under `target` when Cargo uses its default shared build/target layout.
+For this native bundle, use `CARGO_TARGET_DIR` or `--target-dir` to change the build location; a separate intermediate directory (`CARGO_BUILD_BUILD_DIR` or `build.build-dir`) is unsupported.
+`cargo install` installs only the main binary and is not a complete installation.
+[RELEASE.md](RELEASE.md) describes the bundle and build caches.
+See [AGENTS.md](https://github.com/t-kalinowski/mcp-console/blob/main/AGENTS.md) for development rules and the repository map, and the [boundary test guide](https://github.com/t-kalinowski/mcp-console/blob/main/tests/boundaries/README.md) for test selection and snapshot updates.
+The standalone `mcp-console sandbox -- COMMAND [ARG]...` command is also available for development on macOS and Linux.
+Use `mcp-console sandbox --config-env NAME -- COMMAND [ARG]...` to select a complete runner configuration from a child-specific JSON environment value.
+See [sandbox configuration](docs/SANDBOX_CONFIGURATION.md) for its schema, defaults, and runnable shell, Python, and R examples.
+[Sandbox integration](docs/SANDBOX.md) defines its policy, executable handoff, terminal behavior, and lifetime limits.
 
 ## Documentation
 
 The [documentation index](https://github.com/t-kalinowski/mcp-console/blob/main/docs/README.md) maps current documents by audience.
 
 - [Implemented architecture](https://github.com/t-kalinowski/mcp-console/blob/main/docs/ARCHITECTURE.md) explains current process boundaries, ownership, lifecycle, recording, and artifacts.
+- [Sandbox integration](docs/SANDBOX.md) explains Console policy, verified runner selection, macOS and Linux prerequisites, signals, and cleanup guarantees.
 - [Built-in runtime](https://github.com/t-kalinowski/mcp-console/blob/main/docs/BUILTIN_RUNTIME.md) describes user-visible R, Python, SQL, input, output, and graphics behavior.
+- [Send operations](https://github.com/t-kalinowski/mcp-console/blob/main/docs/SEND_OPERATIONS.md) defines validation and execution order for each `send` combination.
 - [Requirements and environments](https://github.com/t-kalinowski/mcp-console/blob/main/docs/REQUIREMENTS.md) describes dependency preparation and its trust boundary.
 - [Worker protocol](https://github.com/t-kalinowski/mcp-console/blob/main/docs/WORKER_PROTOCOL.md) and [relay protocol](https://github.com/t-kalinowski/mcp-console/blob/main/docs/RELAY_PROTOCOL.md) define the exact transport contracts.
-  [Registered tool descriptions](https://github.com/t-kalinowski/mcp-console/blob/main/docs/TOOL_DESCRIPTIONS.md) is a human-readable mirror of the current agent-facing wording.
-- [Transcript test guide](https://github.com/t-kalinowski/mcp-console/blob/main/tests/transcripts/README.md) explains selectors, normalization, and golden updates.
+  [Tool description guidance](https://github.com/t-kalinowski/mcp-console/blob/main/docs/TOOL_DESCRIPTIONS.md) covers editorial rules; the [canonical handshake snapshot](https://github.com/t-kalinowski/mcp-console/blob/main/tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml) records the registered wording.
+- [Boundary test guide](https://github.com/t-kalinowski/mcp-console/blob/main/tests/boundaries/README.md) explains selectors, normalization, and snapshot updates.
 - The [release guide](https://github.com/t-kalinowski/mcp-console/blob/main/RELEASE.md) describes PyPI setup, publication, verification, and recovery.
 
 The [project vision](https://github.com/t-kalinowski/mcp-console/blob/main/design-sketches/VISION.md) and other documents under [`design-sketches/`](https://github.com/t-kalinowski/mcp-console/blob/main/design-sketches/README.md) describe intended or exploratory future design, not the implemented system.

@@ -15,11 +15,24 @@ impl WorkerRuntime {
             executable,
             arguments,
             relay,
+            no_sandbox,
+            writable_roots,
             python,
             managed_r,
+            dynamic_resolution,
             callbacks,
         } = spec;
-        let _ = (executable, arguments, relay, python, managed_r, callbacks);
+        let _ = (
+            executable,
+            arguments,
+            relay,
+            no_sandbox,
+            writable_roots,
+            python,
+            managed_r,
+            dynamic_resolution,
+            callbacks,
+        );
         Err(super::output::SendFailure::from(
             "workers are supported only on macOS".to_string(),
         ))

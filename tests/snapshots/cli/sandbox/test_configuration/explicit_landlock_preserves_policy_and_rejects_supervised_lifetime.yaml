@@ -1,0 +1,11 @@
+---
+stdout: |
+  explicit Landlock
+---
+stdout: |
+  truncate denied
+---
+stderr: >
+  mcp-console-sandbox: landlock does not provide supervised lifetime; omit
+  lifecycle options
+exit_code: 1

@@ -1,0 +1,168 @@
+---
+scenario: sandbox defaults
+runner_configuration:
+  version: 2
+  filesystem:
+    kind: restricted
+    entries:
+      - path:
+          type: special
+          value:
+            kind: root
+        access: read
+  network: restricted
+  proxy: ~
+  lifecycle:
+    parent_pid: ~
+    sigterm: forward
+    private_tmp:
+      environment:
+        - TMPDIR
+    cleanup_timeout_ms: 1000
+transcript_normalization:
+  host_directory: omitted
+  server_pid: omitted
+---
+scenario: sandbox with roots
+runner_configuration:
+  version: 2
+  filesystem:
+    kind: restricted
+    entries:
+      - path:
+          type: special
+          value:
+            kind: root
+        access: read
+      - path:
+          type: path
+          path: <host directory>/output café 雪
+        access: write
+      - path:
+          type: path
+          path: <host directory>/cache
+        access: write
+      - path:
+          type: path
+          path: <host directory>/future output
+        access: write
+  network: restricted
+  proxy: ~
+  lifecycle:
+    parent_pid: ~
+    sigterm: forward
+    private_tmp:
+      environment:
+        - TMPDIR
+    cleanup_timeout_ms: 1000
+transcript_normalization:
+  host_directory: omitted
+  server_pid: omitted
+---
+scenario: serve initial worker
+runner_configuration:
+  version: 2
+  filesystem:
+    kind: restricted
+    entries:
+      - path:
+          type: special
+          value:
+            kind: root
+        access: read
+      - path:
+          type: path
+          path: <host directory>/output café 雪
+        access: write
+      - path:
+          type: path
+          path: <host directory>/cache
+        access: write
+      - path:
+          type: path
+          path: <host directory>/future output
+        access: write
+  network: restricted
+  proxy: ~
+  lifecycle:
+    parent_pid: <server pid>
+    sigterm: retire
+    private_tmp:
+      environment:
+        - TMPDIR
+    cleanup_timeout_ms: 1000
+transcript_normalization:
+  host_directory: omitted
+  server_pid: omitted
+---
+scenario: serve restart
+runner_configuration:
+  version: 2
+  filesystem:
+    kind: restricted
+    entries:
+      - path:
+          type: special
+          value:
+            kind: root
+        access: read
+      - path:
+          type: path
+          path: <host directory>/output café 雪
+        access: write
+      - path:
+          type: path
+          path: <host directory>/cache
+        access: write
+      - path:
+          type: path
+          path: <host directory>/future output
+        access: write
+  network: restricted
+  proxy: ~
+  lifecycle:
+    parent_pid: <server pid>
+    sigterm: retire
+    private_tmp:
+      environment:
+        - TMPDIR
+    cleanup_timeout_ms: 1000
+transcript_normalization:
+  host_directory: omitted
+  server_pid: omitted
+---
+scenario: serve failure replacement
+runner_configuration:
+  version: 2
+  filesystem:
+    kind: restricted
+    entries:
+      - path:
+          type: special
+          value:
+            kind: root
+        access: read
+      - path:
+          type: path
+          path: <host directory>/output café 雪
+        access: write
+      - path:
+          type: path
+          path: <host directory>/cache
+        access: write
+      - path:
+          type: path
+          path: <host directory>/future output
+        access: write
+  network: restricted
+  proxy: ~
+  lifecycle:
+    parent_pid: <server pid>
+    sigterm: retire
+    private_tmp:
+      environment:
+        - TMPDIR
+    cleanup_timeout_ms: 1000
+transcript_normalization:
+  host_directory: omitted
+  server_pid: omitted

@@ -1,11 +1,13 @@
 use std::fmt::Write as _;
 use std::fs::File;
 use std::io::{BufWriter, Write};
-use std::path::{Component, Path, PathBuf};
+use std::path::PathBuf;
 
+use rmcp::model::{CallToolRequestParams, ContentBlock};
+use serde::Serialize;
 use serde_json::{Map, Value, json};
 
-const SCHEMA_VERSION: u64 = 1;
+use super::event::{Envelope, Event, Outcome, RecordedContent, RecordedResult};
 
 const MARKDOWN_HEADER: &str = r#"# MCP Console session transcript
 
@@ -31,6 +33,7 @@ struct QuartoWriter {
     working_directory: String,
     r_requirements: Vec<String>,
     python_requirements: Vec<String>,
+    dynamic_resolution: bool,
     sources: Vec<QuartoSource>,
 }
 
@@ -40,48 +43,59 @@ struct QuartoSource {
 }
 
 impl Writers {
-    pub(super) fn new(markdown: File, quarto: PathBuf, working_directory: &str) -> Self {
+    pub(super) fn new(
+        markdown: File,
+        quarto: PathBuf,
+        working_directory: &str,
+        dynamic_resolution: bool,
+    ) -> Self {
         Self {
             markdown: ProjectionWriter::new(markdown, "Markdown transcript"),
-            quarto: QuartoWriter::new(quarto, working_directory),
+            quarto: QuartoWriter::new(quarto, working_directory, dynamic_resolution),
         }
     }
 
-    pub(super) fn append(&mut self, event: &Value) -> Result<(), String> {
-        validate_envelope(event)?;
+    pub(super) fn append(&mut self, event: &Envelope<'_>) -> Result<(), String> {
         let mut fragment = String::new();
         render_event(&mut fragment, event)?;
         self.markdown.append(MARKDOWN_HEADER, &fragment)?;
-        self.quarto.append(event)
+        self.quarto.append(&event.event)
     }
 }
 
 impl QuartoWriter {
-    fn new(path: PathBuf, working_directory: &str) -> Self {
-        Self {
+    fn new(path: PathBuf, working_directory: &str, dynamic_resolution: bool) -> Self {
+        let mut writer = Self {
             path,
             working_directory: working_directory.to_string(),
-            r_requirements: crate::worker_client::DEFAULT_R_REQUIREMENTS
-                .iter()
-                .map(|requirement| (*requirement).to_string())
-                .collect(),
-            python_requirements: crate::worker_protocol::DEFAULT_PYTHON_PACKAGES
-                .iter()
-                .map(|requirement| (*requirement).to_string())
-                .collect(),
+            r_requirements: Vec::new(),
+            python_requirements: Vec::new(),
+            dynamic_resolution,
             sources: Vec::new(),
+        };
+        if dynamic_resolution {
+            writer.r_requirements.extend(
+                crate::worker_client::DEFAULT_R_REQUIREMENTS
+                    .iter()
+                    .map(|requirement| (*requirement).to_string()),
+            );
+            writer.python_requirements.extend(
+                crate::worker_protocol::DEFAULT_PYTHON_PACKAGES
+                    .iter()
+                    .map(|requirement| (*requirement).to_string()),
+            );
         }
+        writer
     }
 
-    fn append(&mut self, event: &Value) -> Result<(), String> {
-        let changed = match string(field(event, "event")?, "event kind")? {
-            "session_started" => true,
-            "tool_call" => {
-                let Some(request) = event.get("request").and_then(Value::as_object) else {
-                    return Ok(());
-                };
+    fn append(&mut self, event: &Event<'_>) -> Result<(), String> {
+        let changed = match event {
+            Event::SessionStarted { .. } => true,
+            Event::ToolCall { request, .. } => {
                 let mut changed = false;
-                if let Some(requirements) = declared_requirements(request) {
+                if self.dynamic_resolution
+                    && let Some(requirements) = declared_requirements(request)
+                {
                     extend_unique(&mut self.r_requirements, requirements.r);
                     extend_unique(&mut self.python_requirements, requirements.python);
                     changed = true;
@@ -95,11 +109,8 @@ impl QuartoWriter {
                 }
                 changed
             }
-            "artifact_created" | "tool_result" => false,
-            kind => {
-                return Err(format!(
-                    "Quarto source transcript has unsupported event kind {kind:?}"
-                ));
+            Event::ArtifactCreated { .. } | Event::CellOutput { .. } | Event::ToolResult { .. } => {
+                false
             }
         };
         if !changed {
@@ -145,13 +156,13 @@ struct DeclaredRequirements<'a> {
     python: Vec<&'a str>,
 }
 
-fn declared_requirements(request: &Map<String, Value>) -> Option<DeclaredRequirements<'_>> {
-    if request.get("name")?.as_str()? != "send" {
+fn declared_requirements(request: &CallToolRequestParams) -> Option<DeclaredRequirements<'_>> {
+    if request.name != "send" {
         return None;
     }
     let requirements = request
-        .get("arguments")?
-        .as_object()?
+        .arguments
+        .as_ref()?
         .get("requirements")?
         .as_object()?;
     let r = requirement_strings(requirements, "r")?;
@@ -273,50 +284,64 @@ impl ProjectionWriter {
     }
 }
 
-fn render_event(document: &mut String, event: &Value) -> Result<(), String> {
-    match string(field(event, "event")?, "event kind")? {
-        "session_started" => render_session_started(document, event),
-        "tool_call" => render_tool_call(document, event),
-        "artifact_created" => render_artifact(document, event),
-        "tool_result" => render_tool_result(document, event),
-        kind => Err(format!(
-            "Markdown transcript has unsupported event kind {kind:?}"
-        )),
+fn render_event(document: &mut String, envelope: &Envelope<'_>) -> Result<(), String> {
+    match &envelope.event {
+        Event::SessionStarted {
+            session,
+            working_directory,
+            ..
+        } => {
+            let metadata = json!({
+                "session": session,
+                "run_id": envelope.run_id,
+                "started_at": envelope.at,
+                "working_directory": working_directory,
+            });
+            document.push_str("## Session\n\n");
+            push_json(document, &metadata)
+        }
+        Event::ToolCall {
+            call_id, request, ..
+        } => render_tool_call(document, *call_id, request),
+        Event::ArtifactCreated {
+            artifact_id,
+            call_id,
+            path,
+            ..
+        } => {
+            writeln!(
+                document,
+                "## Artifact {artifact_id} for call {call_id}\n\n[Artifact {artifact_id} from call {call_id}](<{path}>)\n"
+            )
+            .expect("writing to a String cannot fail");
+            Ok(())
+        }
+        Event::CellOutput {
+            call_id,
+            path,
+            retained_bytes,
+            inline_omitted_bytes,
+            discarded_bytes,
+            ..
+        } => {
+            if *inline_omitted_bytes != 0 || *discarded_bytes != 0 {
+                writeln!(
+                    document,
+                    "## Retained output for call {call_id}\n\n[Retained text output for call {call_id}](<{path}>)\n\n{retained_bytes} bytes retained; {inline_omitted_bytes} bytes omitted from inline responses; {discarded_bytes} bytes not retained in this file.\n"
+                )
+                .expect("writing to a String cannot fail");
+            }
+            Ok(())
+        }
+        Event::ToolResult { call_id, outcome } => render_tool_result(document, *call_id, outcome),
     }
 }
 
-fn validate_envelope(event: &Value) -> Result<(), String> {
-    object(event, "event")?;
-    let schema_version = number(event, "schema_version")?;
-    if schema_version != SCHEMA_VERSION {
-        return Err(format!(
-            "Markdown transcript has unsupported schema version {schema_version}"
-        ));
-    }
-    string(field(event, "run_id")?, "run ID")?;
-    number(event, "sequence")?;
-    string(field(event, "at")?, "event timestamp")?;
-    Ok(())
-}
-
-fn render_session_started(document: &mut String, event: &Value) -> Result<(), String> {
-    let metadata = json!({
-        "session": string(field(event, "session")?, "session name")?,
-        "run_id": string(field(event, "run_id")?, "run ID")?,
-        "started_at": string(field(event, "at")?, "session timestamp")?,
-        "working_directory": string(
-            field(event, "working_directory")?,
-            "working directory",
-        )?,
-    });
-    document.push_str("## Session\n\n");
-    push_json(document, &metadata)
-}
-
-fn render_tool_call(document: &mut String, event: &Value) -> Result<(), String> {
-    let call_id = number(event, "call_id")?;
-    field(event, "request_id")?;
-    let request = object(field(event, "request")?, "tool request")?;
+fn render_tool_call(
+    document: &mut String,
+    call_id: u64,
+    request: &CallToolRequestParams,
+) -> Result<(), String> {
     let Some(send) = parse_send(request) else {
         writeln!(document, "## Call {call_id}: Tool request\n")
             .expect("writing to a String cannot fail");
@@ -324,7 +349,7 @@ fn render_tool_call(document: &mut String, event: &Value) -> Result<(), String> 
             push_fence(document, source.language, source.contents);
             document.push_str("### Raw request\n\n");
         }
-        return push_json(document, &Value::Object(request.clone()));
+        return push_json(document, request);
     };
 
     let label = send.label();
@@ -380,11 +405,11 @@ struct Source<'a> {
     contents: &'a str,
 }
 
-fn submitted_source(request: &Map<String, Value>) -> Option<Source<'_>> {
-    if request.get("name")?.as_str()? != "send" {
+fn submitted_source(request: &CallToolRequestParams) -> Option<Source<'_>> {
+    if request.name != "send" {
         return None;
     }
-    let arguments = request.get("arguments")?.as_object()?;
+    let arguments = request.arguments.as_ref()?;
     let mut source = None;
     for (field, label, language) in [
         ("r", "R", "r"),
@@ -409,16 +434,15 @@ fn submitted_source(request: &Map<String, Value>) -> Option<Source<'_>> {
     source
 }
 
-fn parse_send(request: &Map<String, Value>) -> Option<Send<'_>> {
-    if request.get("name")?.as_str()? != "send"
-        || request
-            .keys()
-            .any(|key| !matches!(key.as_str(), "name" | "arguments" | "_meta"))
+fn parse_send(request: &CallToolRequestParams) -> Option<Send<'_>> {
+    if request.name != "send"
+        || request.input_responses.is_some()
+        || request.request_state.is_some()
     {
         return None;
     }
-    let arguments = match request.get("arguments") {
-        Some(arguments) => arguments.as_object()?,
+    let arguments = match request.arguments.as_ref() {
+        Some(arguments) => arguments,
         None => {
             return Some(Send {
                 source: None,
@@ -459,67 +483,50 @@ fn parse_send(request: &Map<String, Value>) -> Option<Send<'_>> {
     })
 }
 
-fn render_artifact(document: &mut String, event: &Value) -> Result<(), String> {
-    let artifact_id = number(event, "artifact_id")?;
-    let call_id = number(event, "call_id")?;
-    let path = artifact_path(field(event, "path")?)?;
-    string(field(event, "mime_type")?, "artifact MIME type")?;
-    number(event, "bytes")?;
-    writeln!(
-        document,
-        "## Artifact {artifact_id} for call {call_id}\n\n[Artifact {artifact_id} from call {call_id}](<{path}>)\n"
-    )
-    .expect("writing to a String cannot fail");
-    Ok(())
-}
-
-fn render_tool_result(document: &mut String, event: &Value) -> Result<(), String> {
-    let call_id = number(event, "call_id")?;
+fn render_tool_result(
+    document: &mut String,
+    call_id: u64,
+    outcome: &Outcome<'_>,
+) -> Result<(), String> {
     writeln!(document, "## Result for call {call_id}\n").expect("writing to a String cannot fail");
-    match (event.get("result"), event.get("error")) {
-        (Some(result), None) => render_result(document, call_id, result),
-        (None, Some(error)) => {
-            object(error, "tool error")?;
+    match outcome {
+        Outcome::Result { result } => render_result(document, call_id, result),
+        Outcome::Error { error } => {
             document.push_str("### Tool error\n\n");
             push_json(document, error)
         }
-        _ => Err(format!(
-            "Markdown transcript has invalid result event for call {call_id}"
-        )),
     }
 }
 
-fn render_result(document: &mut String, call_id: u64, result: &Value) -> Result<(), String> {
-    let result = object(result, "tool result")?;
-    if let Some(is_error) = result.get("isError")
-        && bool_value(is_error, "tool result error flag")?
-    {
+fn render_result(
+    document: &mut String,
+    call_id: u64,
+    result: &RecordedResult<'_>,
+) -> Result<(), String> {
+    if result.is_error == Some(true) {
         document.push_str("### Tool result error\n\n");
     }
-    let content = result
-        .get("content")
-        .ok_or_else(|| format!("Markdown transcript result for call {call_id} has no content"))?
-        .as_array()
-        .ok_or_else(|| format!("Markdown transcript content for call {call_id} is not an array"))?;
-    if content.is_empty() {
+    if result.content.is_empty() {
         document.push_str("_No content._\n\n");
     }
-    for block in content {
-        let block = object(block, "content block")?;
-        match string(field_map(block, "type")?, "content block type")? {
-            "text" => push_fence(
-                document,
-                "text",
-                string(field_map(block, "text")?, "text content")?,
-            ),
-            "image" => {
-                let artifact_id = unsigned(field_map(block, "artifactId")?, "artifact ID")?;
-                let path = artifact_path(field_map(block, "path")?)?;
-                string(field_map(block, "mimeType")?, "image MIME type")?;
+    for block in &result.content {
+        match block {
+            RecordedContent::Text(text) => push_fence(document, "text", &text.text),
+            RecordedContent::Image {
+                artifact_id, path, ..
+            } => {
                 writeln!(document, "![Artifact {artifact_id}](<{path}>)\n")
                     .expect("writing to a String cannot fail");
             }
-            kind => {
+            RecordedContent::Other(content) => {
+                let kind = match content {
+                    ContentBlock::Text(_) => "text",
+                    ContentBlock::Image(_) => "image",
+                    ContentBlock::Audio(_) => "audio",
+                    ContentBlock::Resource(_) => "resource",
+                    ContentBlock::ResourceLink(_) => "resource_link",
+                    _ => "unknown",
+                };
                 return Err(format!(
                     "Markdown transcript has unsupported content kind {kind:?} for call {call_id}"
                 ));
@@ -529,7 +536,7 @@ fn render_result(document: &mut String, call_id: u64, result: &Value) -> Result<
     Ok(())
 }
 
-fn push_json(document: &mut String, value: &Value) -> Result<(), String> {
+fn push_json(document: &mut String, value: &(impl Serialize + ?Sized)) -> Result<(), String> {
     let json = serde_json::to_string_pretty(value)
         .map_err(|error| format!("failed to render Markdown transcript JSON: {error}"))?;
     push_fence(document, "json", &json);
@@ -577,59 +584,4 @@ fn push_fence_with_prefix(document: &mut String, language: &str, prefix: &str, c
         document.push('\n');
     }
     writeln!(document, "{fence}\n").expect("writing to a String cannot fail");
-}
-
-fn artifact_path(value: &Value) -> Result<&str, String> {
-    let path = string(value, "artifact path")?;
-    if path.is_empty()
-        || path
-            .chars()
-            .any(|character| matches!(character, '\0' | '\n' | '\r' | '<' | '>'))
-        || Path::new(path)
-            .components()
-            .any(|component| !matches!(component, Component::Normal(_)))
-    {
-        return Err("Markdown transcript artifact path is not a safe relative path".to_string());
-    }
-    Ok(path)
-}
-
-fn field<'a>(value: &'a Value, name: &str) -> Result<&'a Value, String> {
-    value
-        .get(name)
-        .ok_or_else(|| format!("Markdown transcript value has no {name}"))
-}
-
-fn field_map<'a>(value: &'a Map<String, Value>, name: &str) -> Result<&'a Value, String> {
-    value
-        .get(name)
-        .ok_or_else(|| format!("Markdown transcript value has no {name}"))
-}
-
-fn object<'a>(value: &'a Value, name: &str) -> Result<&'a Map<String, Value>, String> {
-    value
-        .as_object()
-        .ok_or_else(|| format!("Markdown transcript {name} is not an object"))
-}
-
-fn string<'a>(value: &'a Value, name: &str) -> Result<&'a str, String> {
-    value
-        .as_str()
-        .ok_or_else(|| format!("Markdown transcript {name} is not a string"))
-}
-
-fn number(value: &Value, name: &str) -> Result<u64, String> {
-    unsigned(field(value, name)?, name)
-}
-
-fn unsigned(value: &Value, name: &str) -> Result<u64, String> {
-    value
-        .as_u64()
-        .ok_or_else(|| format!("Markdown transcript {name} is not an unsigned integer"))
-}
-
-fn bool_value(value: &Value, name: &str) -> Result<bool, String> {
-    value
-        .as_bool()
-        .ok_or_else(|| format!("Markdown transcript {name} is not a boolean"))
 }
