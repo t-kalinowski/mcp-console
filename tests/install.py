@@ -111,10 +111,33 @@ class InstallationTests(unittest.TestCase):
                 """)
                 )
                 (crate / "build.rs").write_text(
-                    'fn main() { cc::Build::new().file("value.c").compile("value"); }\n'
+                    textwrap.dedent("""
+                    fn main() {
+                        let mut build = cc::Build::new();
+                        build.file("value.c");
+                        if std::env::var("CARGO_CFG_TARGET_OS").unwrap() == "linux"
+                            && std::env::var("CARGO_PKG_NAME").unwrap() == "codex-bwrap"
+                        {
+                            build.define("LINK_LIBCAP", None);
+                            println!("cargo:rustc-link-lib=cap");
+                        }
+                        build.compile("value");
+                    }
+                """)
                 )
                 (crate / "value.c").write_text(
-                    "int value(void) { return FIXTURE_VALUE; }\n"
+                    textwrap.dedent("""
+                    #ifdef LINK_LIBCAP
+                    extern void *cap_get_proc(void);
+                    extern int cap_free(void *);
+                    #endif
+                    int value(void) {
+                    #ifdef LINK_LIBCAP
+                        cap_free(cap_get_proc());
+                    #endif
+                        return FIXTURE_VALUE;
+                    }
+                """)
                 )
                 (crate / "src/main.rs").write_text(
                     textwrap.dedent("""
@@ -285,7 +308,11 @@ class InstallationTests(unittest.TestCase):
                 "share/licenses/mcp-console/LICENSE",
                 "share/licenses/mcp-console/NOTICE",
                 *(
-                    ("libexec/bwrap", "share/licenses/mcp-console/bubblewrap-COPYING")
+                    (
+                        "libexec/bwrap",
+                        "share/licenses/mcp-console/bubblewrap-COPYING",
+                        "share/licenses/mcp-console/bubblewrap-SOURCE.json",
+                    )
                     if sys.platform == "linux"
                     else ()
                 ),

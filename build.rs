@@ -53,7 +53,14 @@ fn bind_private_runner() {
                 "bubblewrap-COPYING",
                 "share/licenses/mcp-console/bubblewrap-COPYING",
             ),
+            (
+                "bubblewrap-SOURCE.json",
+                "share/licenses/mcp-console/bubblewrap-SOURCE.json",
+            ),
         ]);
+        if build["artifacts"].get("libcap-NOTICE").is_some() {
+            bundle.push(("libcap-NOTICE", "share/licenses/mcp-console/libcap-NOTICE"));
+        }
     }
     for (name, relative) in bundle {
         let source = root.join("wheel-data/data").join(relative);
@@ -66,6 +73,28 @@ fn bind_private_runner() {
             Some(digest_hex.as_str()),
             "private sandbox runner artifact {name} changed during staging"
         );
+        if name == "bubblewrap-SOURCE.json" {
+            let provenance: serde_json::Value =
+                serde_json::from_slice(&bytes).expect("invalid Bubblewrap provenance");
+            assert_eq!(
+                provenance["source_revision"], pin["commit"],
+                "stale Bubblewrap provenance"
+            );
+            assert_eq!(provenance["source_repository"], pin["repository"]);
+            assert_eq!(provenance["source_directory"], "codex-rs/vendor/bubblewrap");
+            assert_eq!(provenance["build_script"], "codex-rs/bwrap/build.rs");
+            assert_eq!(provenance["wrapper_directory"], "codex-rs/bwrap");
+            assert_eq!(provenance["sha256"], build["artifacts"]["bwrap"]);
+            if provenance["libcap_linkage"] == "static" {
+                assert!(
+                    build["artifacts"].get("libcap-NOTICE").is_some(),
+                    "missing static libcap notice"
+                );
+            } else {
+                assert_eq!(provenance["libcap_linkage"], "dynamic");
+                assert!(build["artifacts"].get("libcap-NOTICE").is_none());
+            }
+        }
         artifacts.push_str(&format!("({relative:?}, {:?}),\n", digest.as_slice()));
         // Wheel staging belongs to the packaging backend. Cargo only installs
         // the verified companion beside its own native build output.

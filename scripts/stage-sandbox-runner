@@ -116,6 +116,11 @@ def main() -> None:
     binaries = workspace / "target" / target / "release"
     staged_helper = ROOT / "target/sandbox-runner-bwrap" / target / "bwrap"
     if "linux" in target:
+        for name in ("CODEX_BWRAP_SOURCE_DIR", "CODEX_SKIP_BWRAP_BUILD"):
+            if name in environment:
+                fail(
+                    f"unset {name}: packaged Bubblewrap must be built from the pinned checkout"
+                )
         subprocess.run(
             [
                 *toolchain,
@@ -186,6 +191,59 @@ def main() -> None:
     notices = [(checkout / name, name) for name in ("LICENSE", "NOTICE")]
     if "linux" in target:
         notices.append((workspace / "vendor/bubblewrap/COPYING", "bubblewrap-COPYING"))
+        # Inspect the shipped ELF, not pkg-config's requested linkage. The pinned
+        # build script emits unqualified rustc-link-lib directives for libcap.
+        dynamic = subprocess.check_output(
+            ["readelf", "-d", "-W", str(staged_helper)],
+            text=True,
+            env=environment | {"LC_ALL": "C"},
+        )
+        needed = sorted(re.findall(r"\(NEEDED\).*\[([^]]+)\]", dynamic))
+        libcap_linkage = (
+            "dynamic"
+            if any(name.startswith("libcap.so.") for name in needed)
+            else "static"
+        )
+        if libcap_linkage == "static":
+            symbols = subprocess.check_output(
+                ["readelf", "-s", "-W", str(binaries / "bwrap")],
+                text=True,
+                env=environment | {"LC_ALL": "C"},
+            )
+            if not re.search(r"\bFUNC\s+\w+\s+\w+\s+\d+\s+cap_get_proc\b", symbols):
+                fail("cannot establish libcap linkage from the helper ELF")
+            notice = environment.get("MCP_CONSOLE_LIBCAP_NOTICE")
+            if (
+                not notice
+                or not Path(notice).is_file()
+                or not Path(notice).read_bytes().strip()
+            ):
+                fail(
+                    "static libcap requires MCP_CONSOLE_LIBCAP_NOTICE pointing to its redistribution notice"
+                )
+            notices.append((Path(notice), "libcap-NOTICE"))
+        provenance = licenses / "bubblewrap-SOURCE.json"
+        write_if_changed(
+            provenance,
+            (
+                json.dumps(
+                    {
+                        "source_repository": pin["repository"],
+                        "source_revision": head,
+                        "source_directory": "codex-rs/vendor/bubblewrap",
+                        "build_script": "codex-rs/bwrap/build.rs",
+                        "wrapper_directory": "codex-rs/bwrap",
+                        "sha256": environment["CODEX_BWRAP_SHA256"],
+                        "elf_needed": needed,
+                        "libcap_linkage": libcap_linkage,
+                    },
+                    indent=2,
+                )
+                + "\n"
+            ).encode(),
+            0o644,
+        )
+        artifacts.append(provenance)
     for source, name in notices:
         destination = licenses / name
         write_if_changed(destination, source.read_bytes(), 0o644)

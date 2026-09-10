@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -228,11 +229,63 @@ def inspect_wheel_commands(wheel: Path, *, linux: bool) -> None:
                 archive.getinfo(runner).external_attr >> 16 & 0o111 != 0,
                 f"private sandbox runner {name} is not executable",
             )
-        for name in ("LICENSE", "NOTICE", *(["bubblewrap-COPYING"] if linux else [])):
+        for name in (
+            "LICENSE",
+            "NOTICE",
+            *(["bubblewrap-COPYING", "bubblewrap-SOURCE.json"] if linux else []),
+        ):
             require(
                 f"{data}/share/licenses/mcp-console/{name}" in members,
                 f"private sandbox runner is missing {name}",
             )
+
+        if linux:
+            prefix = f"{data}/share/licenses/mcp-console"
+            provenance = json.loads(archive.read(f"{prefix}/bubblewrap-SOURCE.json"))
+            pin = json.loads(Path("sandbox-runner.json").read_text())
+            helper = archive.read(f"{data}/libexec/bwrap")
+            for key, expected in {
+                "source_repository": pin["repository"],
+                "source_revision": pin["commit"],
+                "source_directory": "codex-rs/vendor/bubblewrap",
+                "build_script": "codex-rs/bwrap/build.rs",
+                "wrapper_directory": "codex-rs/bwrap",
+                "sha256": hashlib.sha256(helper).hexdigest(),
+            }.items():
+                require(
+                    provenance.get(key) == expected,
+                    f"Bubblewrap provenance has inconsistent {key}",
+                )
+            with tempfile.TemporaryDirectory() as directory:
+                elf = Path(directory) / "bwrap"
+                elf.write_bytes(helper)
+                dynamic = command_output(
+                    ["readelf", "-d", "-W", str(elf)], env=os.environ | {"LC_ALL": "C"}
+                )
+            needed = sorted(re.findall(r"\(NEEDED\).*\[([^]]+)\]", dynamic))
+            linkage = (
+                "dynamic"
+                if any(name.startswith("libcap.so.") for name in needed)
+                else "static"
+            )
+            require(
+                provenance.get("elf_needed") == needed,
+                "Bubblewrap provenance has inconsistent ELF dependencies",
+            )
+            require(
+                provenance.get("libcap_linkage") == linkage,
+                "Bubblewrap provenance has inconsistent libcap linkage",
+            )
+            libcap_notice = f"{prefix}/libcap-NOTICE"
+            require(
+                (libcap_notice in members) == (linkage == "static"),
+                "Bubblewrap provenance requires libcap-NOTICE only for redistributed static libcap",
+            )
+            if linkage == "static":
+                require(
+                    bool(archive.read(libcap_notice).strip()),
+                    "Bubblewrap provenance has an empty libcap-NOTICE",
+                )
 
 
 def smoke_wheel(args: argparse.Namespace) -> None:
