@@ -5,6 +5,7 @@ import inspect
 import json
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -16,6 +17,7 @@ from mcp_console import AsyncMCPConsole, MCPConsole
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.records import Transcript
 from support.requirements import WORKER, requires
+from support.resolvers import bare_runtime_environment
 from support.suites import run_this_suite
 
 
@@ -72,6 +74,109 @@ def assert_callable_schema(schema: dict, description: str) -> None:
     ), schema
     arguments["requirements"]["pip"] = ["numpy"]
     assert not validator.is_valid(arguments), schema
+
+
+@executions(DIRECT, SANDBOXED)
+def test_callable_tools_follow_connected_server_fields(
+    binary: Path, execution: Execution
+) -> Transcript:
+    from agents.tool_context import ToolContext
+    from chatlas import ChatOpenAI
+    from jsonschema import Draft202012Validator
+
+    for console_type in (AsyncMCPConsole, MCPConsole):
+        console = console_type()
+        for create_tool in (
+            console.openai_responses_tool,
+            console.openai_agents_tool,
+            console.anthropic_tool,
+        ):
+            try:
+                create_tool()
+            except RuntimeError as error:
+                assert "connect" in str(error).lower(), error
+            else:
+                raise AssertionError("disconnected console created a tool")
+
+    async def exercise_tools(console, source, expected_fields):
+        live_schema = console.openai_responses_tool().definition["parameters"]
+        assert set(live_schema["properties"]) == expected_fields, live_schema
+        chat = ChatOpenAI(model="unused", api_key="unused")
+        chat.register_tool(console.send)
+        chat_tool = chat.get_tools()[0]
+        agent = console.openai_agents_tool(failure_error_function=None)
+        anthropic = console.anthropic_tool()
+        arguments = dict.fromkeys(expected_fields) | {"r": source, "timeout_ms": 60_000}
+        encoded = json.dumps(arguments)
+        context = ToolContext(
+            context=None,
+            tool_name="send",
+            tool_call_id="call_1",
+            tool_arguments=encoded,
+        )
+        tools = (
+            (
+                chat_tool.schema["function"]["parameters"],
+                lambda: chat_tool.func(**arguments),
+            ),
+            (agent.params_json_schema, lambda: agent.on_invoke_tool(context, encoded)),
+            (anthropic.to_dict()["input_schema"], lambda: anthropic.call(arguments)),
+        )
+        outputs = []
+        for schema, invoke in tools:
+            assert set(schema["properties"]) == expected_fields, schema
+            validator = Draft202012Validator(schema)
+            validator.validate(arguments)
+            for omitted in {"r", "python", "sql", "requirements"} - expected_fields:
+                value = {"r": ["praise"]} if omitted == "requirements" else "1"
+                assert not validator.is_valid(arguments | {omitted: value}), schema
+            output = invoke()
+            outputs.append(await output if inspect.isawaitable(output) else output)
+        assert outputs[0] == outputs[1] == outputs[2], outputs
+        return outputs[0]
+
+    async def exercise():
+        transcript = []
+        original_parameters = set(inspect.signature(AsyncMCPConsole.send).parameters)
+        with tempfile.TemporaryDirectory() as directory:
+            custom = options(binary, execution)
+            custom["server_parameters"]["env"]["MCP_CONSOLE_LANGUAGES"] = "r"
+            bare = {
+                "command": binary,
+                "args": execution.serve(),
+                "server_parameters": {
+                    "env": bare_runtime_environment(os.environ.copy(), Path(directory))
+                },
+            }
+            for label, settings, source, expected_fields in (
+                (
+                    "bare",
+                    bare,
+                    "1 + 1",
+                    {"r", "python", "sql", "control", "stdin", "timeout_ms"},
+                ),
+                (
+                    "custom",
+                    custom,
+                    "echo configured",
+                    {"r", "control", "requirements", "stdin", "timeout_ms"},
+                ),
+            ):
+                async with AsyncMCPConsole(**settings) as console:
+                    output = await exercise_tools(console, source, expected_fields)
+                with MCPConsole(**settings) as console:
+                    assert (
+                        await exercise_tools(console, source, expected_fields) == output
+                    )
+                transcript.append({label: output, "fields": sorted(expected_fields)})
+        assert (
+            set(inspect.signature(AsyncMCPConsole.send).parameters)
+            == original_parameters
+        )
+        assert set(inspect.signature(MCPConsole.send).parameters) == original_parameters
+        return transcript
+
+    return asyncio.run(exercise())
 
 
 @executions(DIRECT, SANDBOXED)
@@ -217,18 +322,16 @@ def test_openai_agents_callable_preserves_optional_arguments(
     from jsonschema import validate
 
     async def exercise():
-        # Construction itself must work with the SDK's default schema handling.
-        console = AsyncMCPConsole(**options(binary, execution))
-        console.openai_agents_tool()
-        tool = console.openai_agents_tool(
-            strict_mode=False, failure_error_function=None
-        )
-        assert isinstance(tool, FunctionTool)
-        assert_callable_schema(tool.params_json_schema, tool.description)
-        validate({"requirements": {"python": ["numpy"]}}, tool.params_json_schema)
-        agent = Agent(name="test", tools=[tool])
-        assert agent.tools == [tool]
-        async with console:
+        async with AsyncMCPConsole(**options(binary, execution)) as console:
+            console.openai_agents_tool()
+            tool = console.openai_agents_tool(
+                strict_mode=False, failure_error_function=None
+            )
+            assert isinstance(tool, FunctionTool)
+            assert_callable_schema(tool.params_json_schema, tool.description)
+            validate({"requirements": {"r": ["praise"]}}, tool.params_json_schema)
+            agent = Agent(name="test", tools=[tool])
+            assert agent.tools == [tool]
             arguments = json.dumps({"r": "echo agent"})
             context = ToolContext(
                 context=None,
@@ -338,15 +441,14 @@ def test_chatlas_callable_registers_concrete_schema(
 
     async def exercise():
         chat = ChatOpenAI(model="unused", api_key="unused")
-        console = AsyncMCPConsole(**options(binary, execution))
-        chat.register_tool(console.send)
-        tools = chat.get_tools()
-        assert [tool.name for tool in tools] == ["send"]
-        assert_callable_schema(
-            tools[0].schema["function"]["parameters"],
-            tools[0].schema["function"]["description"],
-        )
-        async with console:
+        async with AsyncMCPConsole(**options(binary, execution)) as console:
+            chat.register_tool(console.send)
+            tools = chat.get_tools()
+            assert [tool.name for tool in tools] == ["send"]
+            assert_callable_schema(
+                tools[0].schema["function"]["parameters"],
+                tools[0].schema["function"]["description"],
+            )
             return [{"output": await tools[0].func(r="echo callable chatlas")}]
 
     return asyncio.run(exercise())
@@ -392,7 +494,7 @@ def test_sync_callable_and_framework_tools(
 
         agent_tool = console.openai_agents_tool(failure_error_function=None)
         assert_callable_schema(agent_tool.params_json_schema, agent_tool.description)
-        validate({"requirements": {"python": ["numpy"]}}, agent_tool.params_json_schema)
+        validate({"requirements": {"r": ["praise"]}}, agent_tool.params_json_schema)
         arguments = json.dumps({"r": "echo agent"})
         context = ToolContext(
             context=None,

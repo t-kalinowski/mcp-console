@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Literal, Self, cast
 from annotated_types import Ge, Le, MaxLen, MinLen
 from typing_extensions import TypeAliasType, TypedDict
 
-from ._common import Command, result_text, stdio_command
+from ._common import Command, configured_send, result_text, stdio_command
 from .openai import AsyncResponsesTool
 
 if TYPE_CHECKING:
@@ -84,15 +84,18 @@ class AsyncMCPConsole:
             )
             if send_tool is None:
                 raise RuntimeError("MCP Console did not expose its send tool")
+            send = configured_send(self.send, send_tool)
             self._stack = stack.pop_all()
             self._client = client
             self._send_tool = send_tool
+            self.send = send
         return self
 
     async def close(self) -> None:
         """Close the MCP client session and terminate its subprocess."""
         stack = self._stack
         self._stack = self._client = self._send_tool = None
+        self.__dict__.pop("send", None)
         if stack is not None:
             await stack.aclose()
 
@@ -154,23 +157,30 @@ class AsyncMCPConsole:
 
     __call__ = send
 
-    def openai_responses_tool(self) -> "AsyncResponsesTool":
-        """Return an object for a standard OpenAI Responses tool loop."""
+    def _connected_tool(self) -> "Tool":
         if self._send_tool is None:
             raise RuntimeError(
-                "AsyncMCPConsole must be connected before creating an OpenAI tool"
+                "Connect the console before creating tools; enter its context or call connect()"
             )
-        return AsyncResponsesTool(self, self._send_tool)
+        return self._send_tool
+
+    def openai_responses_tool(self) -> "AsyncResponsesTool":
+        """Return an object for a standard OpenAI Responses tool loop."""
+        return AsyncResponsesTool(self, self._connected_tool())
 
     def openai_agents_tool(self, *, strict_mode: bool = False, **kwargs: Any) -> Any:
         """Return a native OpenAI Agents function tool wrapping ``send``."""
+        self._connected_tool()
         from agents import function_tool
 
         # send accepts sparse arguments and requirements rather than a strict object.
-        return function_tool(self.send, strict_mode=strict_mode, **kwargs)
+        tool = function_tool(self.send, strict_mode=strict_mode, **kwargs)
+        tool.params_json_schema["additionalProperties"] = False
+        return tool
 
     def anthropic_tool(self, **kwargs: Any) -> Any:
         """Return a native Anthropic async function tool wrapping ``send``."""
+        self._connected_tool()
         from anthropic import beta_async_tool
 
         return beta_async_tool(self.send, **kwargs)

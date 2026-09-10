@@ -58,6 +58,8 @@ Enter and close an async connection in the same async task.
 The synchronous client manages that task on an AnyIO portal thread.
 The MCP SDK owns subprocess and transport cleanup.
 After closing, reconnecting starts a fresh server and console session.
+Create or register tools after connecting, and recreate them after reconnecting.
+Their callable signatures reflect the languages and requirement preparation available from that server.
 Pass native stdio settings such as `env` and `cwd` through `server_parameters=`.
 
 ## chatlas

@@ -4,7 +4,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Any, Literal, Self
 
 from ._client import AsyncMCPConsole, Requirements, TimeoutMilliseconds
-from ._common import Command
+from ._common import Command, configured_send
 from .openai import ResponsesTool
 
 if TYPE_CHECKING:
@@ -40,6 +40,7 @@ class MCPConsole:
                 portal = stack.enter_context(start_blocking_portal())
                 # The MCP transport must enter and exit in the same async task.
                 stack.enter_context(portal.wrap_async_context_manager(self._async))
+                self.send = configured_send(self.send, self._async._connected_tool())
                 self._portal = portal
                 self._stack = stack.pop_all()
         return self
@@ -48,6 +49,7 @@ class MCPConsole:
         """Close the MCP session, subprocess, and portal thread."""
         stack = self._stack
         self._stack = self._portal = None
+        self.__dict__.pop("send", None)
         if stack is not None:
             stack.close()
 
@@ -96,12 +98,16 @@ class MCPConsole:
 
     def openai_agents_tool(self, *, strict_mode: bool = False, **kwargs: Any) -> Any:
         """Return a native OpenAI Agents function tool wrapping ``send``."""
+        self._async._connected_tool()
         from agents import function_tool
 
-        return function_tool(self.send, strict_mode=strict_mode, **kwargs)
+        tool = function_tool(self.send, strict_mode=strict_mode, **kwargs)
+        tool.params_json_schema["additionalProperties"] = False
+        return tool
 
     def anthropic_tool(self, **kwargs: Any) -> Any:
         """Return a native Anthropic synchronous function tool wrapping ``send``."""
+        self._async._connected_tool()
         from anthropic import beta_tool
 
         return beta_tool(self.send, **kwargs)
