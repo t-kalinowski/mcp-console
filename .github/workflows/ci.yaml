@@ -17,6 +17,10 @@ env:
   CARGO_TERM_COLOR: always
   # Preserve compiler state for debug, test, and release builds across revisions.
   CARGO_INCREMENTAL: "1"
+  # Manual version used by GitHub Actions cache keys and restore prefixes.
+  # Bump for build inputs outside the hashed files, such as workflow build
+  # flags or native dependency setup. Cargo and Maturin do not read this value.
+  CI_BUILD_CACHE_VERSION: "2"
   IR_LATEST_RESOLUTION_MAX_AGE_SECONDS: "604800"
   UV_VERSION: 0.12.4
 
@@ -175,14 +179,13 @@ jobs:
             target/release
             target/libexec
             target/share/licenses
-          # Refresh on compiled-source changes; transcript-only pushes reuse it.
+          # Keep one baseline per dependency set, shared from main by ordinary PRs.
+          # Source edits reuse it without uploading another large target snapshot.
           # Every restore prefix includes the UTC week to start fresh on Monday.
-          # Include the image and workflow recipe for native build inputs.
           key: >-
-            cargo-build-v2-${{ steps.cache-epoch.outputs.value }}-${{ steps.cache-epoch.outputs.image }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/**', 'sandbox-runner.json', 'scripts/stage-sandbox-runner', '.github/workflows/ci.yaml') }}-${{ hashFiles('src/**', 'build.rs') }}
+            cargo-build-v${{ env.CI_BUILD_CACHE_VERSION }}-${{ steps.cache-epoch.outputs.value }}-${{ steps.cache-epoch.outputs.image }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/**') }}
           restore-keys: |
-            cargo-build-v2-${{ steps.cache-epoch.outputs.value }}-${{ steps.cache-epoch.outputs.image }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/**', 'sandbox-runner.json', 'scripts/stage-sandbox-runner', '.github/workflows/ci.yaml') }}-
-            cargo-build-v2-${{ steps.cache-epoch.outputs.value }}-${{ steps.cache-epoch.outputs.image }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.setup-r.outputs.installed-r-version }}-
+            cargo-build-v${{ env.CI_BUILD_CACHE_VERSION }}-${{ steps.cache-epoch.outputs.value }}-${{ steps.cache-epoch.outputs.image }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.setup-r.outputs.installed-r-version }}-
 
       - name: Restore private sandbox runner
         id: sandbox-cache
@@ -193,7 +196,7 @@ jobs:
             target/sandbox-runner-build.json
           # The pin, runner image, and recipe identify the native build inputs.
           key: >-
-            sandbox-runner-v3-${{ steps.cache-epoch.outputs.image }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('sandbox-runner.json', 'scripts/stage-sandbox-runner', '.github/workflows/ci.yaml') }}
+            sandbox-runner-v3-${{ steps.cache-epoch.outputs.image }}-${{ runner.os }}-${{ runner.arch }}-recipe-${{ env.CI_BUILD_CACHE_VERSION }}-${{ hashFiles('sandbox-runner.json', 'scripts/stage-sandbox-runner') }}
 
       - name: Restore private sandbox build data
         id: sandbox-build-cache
@@ -204,10 +207,10 @@ jobs:
           # Reuse workspace crates from the preceding pin when rebuilding it.
           # Keep every restore prefix within the current UTC week.
           key: >-
-            sandbox-build-v2-${{ steps.cache-epoch.outputs.value }}-${{ steps.cache-epoch.outputs.image }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.sandbox-runner-source/codex-rs/rust-toolchain.toml') }}-${{ hashFiles('.sandbox-runner-source/codex-rs/Cargo.toml', '.sandbox-runner-source/codex-rs/Cargo.lock', '.sandbox-runner-source/codex-rs/.cargo/**', 'scripts/stage-sandbox-runner', '.github/workflows/ci.yaml') }}-${{ steps.sandbox-pin.outputs.commit }}
+            sandbox-build-v${{ env.CI_BUILD_CACHE_VERSION }}-${{ steps.cache-epoch.outputs.value }}-${{ steps.cache-epoch.outputs.image }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.sandbox-runner-source/codex-rs/rust-toolchain.toml') }}-${{ hashFiles('.sandbox-runner-source/codex-rs/Cargo.toml', '.sandbox-runner-source/codex-rs/Cargo.lock', '.sandbox-runner-source/codex-rs/.cargo/**') }}-${{ steps.sandbox-pin.outputs.commit }}
           restore-keys: |
-            sandbox-build-v2-${{ steps.cache-epoch.outputs.value }}-${{ steps.cache-epoch.outputs.image }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.sandbox-runner-source/codex-rs/rust-toolchain.toml') }}-${{ hashFiles('.sandbox-runner-source/codex-rs/Cargo.toml', '.sandbox-runner-source/codex-rs/Cargo.lock', '.sandbox-runner-source/codex-rs/.cargo/**', 'scripts/stage-sandbox-runner', '.github/workflows/ci.yaml') }}-
-            sandbox-build-v2-${{ steps.cache-epoch.outputs.value }}-${{ steps.cache-epoch.outputs.image }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.sandbox-runner-source/codex-rs/rust-toolchain.toml') }}-
+            sandbox-build-v${{ env.CI_BUILD_CACHE_VERSION }}-${{ steps.cache-epoch.outputs.value }}-${{ steps.cache-epoch.outputs.image }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.sandbox-runner-source/codex-rs/rust-toolchain.toml') }}-${{ hashFiles('.sandbox-runner-source/codex-rs/Cargo.toml', '.sandbox-runner-source/codex-rs/Cargo.lock', '.sandbox-runner-source/codex-rs/.cargo/**') }}-
+            sandbox-build-v${{ env.CI_BUILD_CACHE_VERSION }}-${{ steps.cache-epoch.outputs.value }}-${{ steps.cache-epoch.outputs.image }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.sandbox-runner-source/codex-rs/rust-toolchain.toml') }}-
 
       - name: Stage private sandbox runner
         env:
@@ -243,7 +246,7 @@ jobs:
           # Only exact matches skip packaging. On a miss, Maturin invokes Cargo
           # using the build data restored above, including earlier revisions.
           key: >-
-            release-v1-${{ steps.cache-epoch.outputs.image }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.setup-r.outputs.installed-r-version }}-py-${{ steps.python.outputs.python-version }}-${{ hashFiles('src/**', 'python/**', 'Cargo.toml', 'Cargo.lock', '.cargo/**', 'build.rs', 'build_backend.py', 'pyproject.toml', 'sandbox-runner.json', 'target/sandbox-runner-build.json', 'scripts/stage-sandbox-runner', 'README.md', 'LICENSE', '.github/workflows/ci.yaml') }}
+            release-v1-${{ steps.cache-epoch.outputs.image }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.setup-r.outputs.installed-r-version }}-py-${{ steps.python.outputs.python-version }}-recipe-${{ env.CI_BUILD_CACHE_VERSION }}-${{ hashFiles('src/**', 'python/**', 'Cargo.toml', 'Cargo.lock', '.cargo/**', 'build.rs', 'build_backend.py', 'pyproject.toml', 'sandbox-runner.json', 'target/sandbox-runner-build.json', 'scripts/stage-sandbox-runner', 'README.md', 'LICENSE') }}
 
       - name: Build Rust test targets
         run: cargo test --locked --no-run --all-targets --all-features
