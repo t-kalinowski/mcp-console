@@ -118,14 +118,20 @@ def _python_fork_client(binary: Path, execution: Execution) -> RelayWorkerClient
 
         assert fork_ready
         saved_stdout, saved_stderr = sys.stdout, sys.stderr
-        logger = logging.getLogger("fork-output")
+        parent_tty = saved_stdout.isatty(), saved_stderr.isatty()
+        worker_pid = os.getpid()
+        logger = logging.Logger("fork-output")
         logger.propagate = False
         handler = logging.StreamHandler()
         logger.addHandler(handler)
 
 
         def reject_r_callback(frame, event, function):
-            if event == "c_call" and getattr(function, "__module__", None) == "rpycall":
+            if (
+                os.getpid() != worker_pid
+                and event == "c_call"
+                and getattr(function, "__module__", None) == "rpycall"
+            ):
                 raise AssertionError("fork child called back into R")
 
 
@@ -133,16 +139,21 @@ def _python_fork_client(binary: Path, execution: Execution) -> RelayWorkerClient
             read_fd, write_fd = os.pipe()
             # Only this known CPython diagnostic is filtered, only around fork.
             # The automatic-resolution lifecycle test records it in full.
-            with warnings.catch_warnings():
-                warnings.filterwarnings(
-                    "ignore",
-                    message=r"This process \(pid=\d+\) is multi-threaded, use of fork\(\) may lead to deadlocks in the child\.$",
-                    category=DeprecationWarning,
-                )
-                child = os.fork()
+            previous_profile = sys.getprofile()
+            sys.setprofile(reject_r_callback)
+            try:
+                with warnings.catch_warnings():
+                    warnings.filterwarnings(
+                        "ignore",
+                        message=r"This process \(pid=\d+\) is multi-threaded, use of fork\(\) may lead to deadlocks in the child\.$",
+                        category=DeprecationWarning,
+                    )
+                    child = os.fork()
+            finally:
+                if os.getpid() == worker_pid:
+                    sys.setprofile(previous_profile)
             if child == 0:
                 os.close(read_fd)
-                sys.setprofile(reject_r_callback)
                 try:
                     action()
                 except BaseException:
@@ -152,14 +163,16 @@ def _python_fork_client(binary: Path, execution: Execution) -> RelayWorkerClient
                 os._exit(0)
 
             os.close(write_fd)
+            exited = False
             try:
                 readable, _, _ = select.select([read_fd], [], [], 10)
                 assert readable, "fork child did not exit"
                 assert os.read(read_fd, 1) == b""
+                exited = True
             finally:
                 os.close(read_fd)
-                # Also reap on timeout or interruption; an exited child is a zombie.
-                os.kill(child, signal.SIGKILL)
+                if not exited:
+                    os.kill(child, signal.SIGKILL)
                 _, status = os.waitpid(child, 0)
             assert os.waitstatus_to_exitcode(status) == 0, status
         """)
@@ -176,6 +189,7 @@ def _finish_python_fork_output(
         assert sys.stdout is saved_stdout
         assert sys.stderr is saved_stderr
         assert handler.stream is saved_stderr
+        assert (saved_stdout.isatty(), saved_stderr.isatty()) == parent_tty
         parent_stdout = sys.stdout.write("parent stdout\n")
         parent_stderr = sys.stderr.write("parent stderr\n")
         logger.warning("parent log")
@@ -237,6 +251,8 @@ def test_preserves_cached_python_streams_from_fork_children(
     # fmt: python
     python = code(r"""
         def child_output():
+            assert saved_stdout.isatty() == sys.stdout.isatty() == os.isatty(1)
+            assert saved_stderr.isatty() == sys.stderr.isatty() == os.isatty(2)
             saved_stdout.write("cached child stdout\n")
             saved_stdout.flush()
             saved_stderr.write("cached child stderr\n")
@@ -301,6 +317,9 @@ def test_preserves_redirected_python_streams_from_fork_children(
                 redirected_handler.handle(
                     logging.makeLogRecord({"msg": "redirected child log"})
                 )
+                saved_stdout.write("cached stdout during redirection\n")
+                saved_stdout.flush()
+                logger.warning("cached log during redirection")
 
             run_child(child_output)
             assert sys.stdout is stdout_file
@@ -318,8 +337,14 @@ def test_preserves_redirected_python_streams_from_fork_children(
                 "redirected parent stderr\nredirected parent log\n"
             )
         """)
-    assert _tool_text(client.send(python=python)) == "[done]"
-    return _finish_python_fork_output(client, "", "")
+    expected = "cached stdout during redirection\ncached log during redirection\n"
+    output = _tool_text(client.send(python=python))
+    assert "Traceback" not in output, output
+    output = client._collect_output(output, len(expected))
+    assert sorted(output.splitlines()) == sorted(expected.splitlines()), repr(output)
+    return _finish_python_fork_output(
+        client, "cached stdout during redirection\n", "cached log during redirection\n"
+    )
 
 
 @executions(DIRECT, SANDBOXED)
