@@ -28,6 +28,6 @@ stdout: ""
 stderr: |
   bwrap: Can't mkdir parents for <host directory>/output café 雪.txt/.git: Not a directory
 
-  thread 'main' (<runner pid>) panicked at linux-sandbox/src/linux_run_main.rs:1338:21:
+  thread 'main' (<runner pid>) panicked at linux-sandbox/src/linux_run_main.rs:<line>:<column>:
   failed to inspect synthetic bubblewrap mount target <host directory>/output café 雪.txt/.codex: Not a directory (os error 20)
   note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

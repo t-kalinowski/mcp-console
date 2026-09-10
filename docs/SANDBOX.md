@@ -106,7 +106,7 @@ Startup failures use the runner's native diagnostics; successful cancellation ca
 
 ## Policy extensions and compatibility
 
-The pinned runner uses the base and preferences policies in `codex-rs/sandboxing/src/seatbelt*.sbpl` at `7aacbcf1bca0f173f036617a5ee8ae71e18fb8cc`.
+The pinned runner uses the base and preferences policies in `codex-rs/sandboxing/src/seatbelt*.sbpl` at `689f48c30deeb6aaa95a193e31e5971dd6820465`.
 MCP Console supplies read access to the filesystem root, restricted networking with no proxy, and its trusted `policy_extensions.sbpl`.
 The default application policy remains fixed.
 Standalone callers can select an explicit configuration through `--config-env`; managed proxy support follows the runner schema.

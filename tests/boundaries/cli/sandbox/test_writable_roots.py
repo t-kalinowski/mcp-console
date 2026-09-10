@@ -176,8 +176,12 @@ def _file_and_missing_writable_roots(binary: Path, *, supported: bool) -> Transc
         assert not (host / "future output").exists()
         assert not (host / "unlisted").exists()
         stderr = result.stderr.replace(str(host), "<host directory>")
+        # Panic coordinates move when the pinned runner source changes.
         stderr = re.sub(
-            r"(thread 'main' \()\d+(\) panicked at)", r"\1<runner pid>\2", stderr
+            r"(thread 'main' \()\d+(\) panicked at "
+            r"linux-sandbox/src/linux_run_main\.rs):\d+:\d+:",
+            r"\1<runner pid>\2:<line>:<column>:",
+            stderr,
         )
     return [
         {
