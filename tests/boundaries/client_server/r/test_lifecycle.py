@@ -478,12 +478,17 @@ def test_interrupts_running_r_evaluation(
                 client,
             )
 
-            client.send(
+            # An interrupt can leave R unwinding after the 100 ms grace.
+            # Collect the interrupted evaluation before submitting another cell.
+            wait_for_evaluation_output(
+                client,
+                "\n",
+                "running R interruption",
                 control="interrupt",
-                r="interrupt_state + 1L",
                 timeout_ms=3_000,
             )
-            assert last_tool_text(client) == "\n[1] 42\n[done]"
+            client.send(r="interrupt_state + 1L")
+            assert last_tool_text(client) == "[1] 42\n"
 
             # fmt: r
             r = code(r"""
@@ -518,9 +523,13 @@ def test_interrupts_running_r_evaluation(
                 client,
             )
 
-            client.send(control="interrupt", timeout_ms=0)
-            output = last_tool_text(client)
-            assert output == "\n", repr(output)
+            wait_for_evaluation_output(
+                client,
+                "\n",
+                "R input-handler interruption",
+                control="interrupt",
+                timeout_ms=0,
+            )
             client.send(r="c(boundary_interrupt_state, boundary_interrupt_cleanup)")
             assert last_tool_text(client) == "[1] 42  1\n"
 
