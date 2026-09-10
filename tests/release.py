@@ -754,6 +754,30 @@ class ReleaseScriptTests(unittest.TestCase):
                             },
                         },
                     )
+                    data = root / "wheel-data/data"
+                    unchanged = [
+                        root / "target/sandbox-runner-build.json",
+                        *(path for path in data.rglob("*") if path.is_file()),
+                    ]
+                    for path in unchanged:
+                        os.utime(path, ns=(1_000_000_000, 1_000_000_000))
+                    obsolete = data / "libexec/obsolete-runner"
+                    obsolete.write_bytes(b"obsolete")
+                    result = subprocess.run(
+                        command + arguments,
+                        env=environment,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertFalse(obsolete.exists())
+                    self.assertEqual(
+                        {
+                            path.relative_to(root): path.stat().st_mtime_ns
+                            for path in unchanged
+                        },
+                        {path.relative_to(root): 1_000_000_000 for path in unchanged},
+                    )
             data = root / "wheel-data" / "data"
             runner = data / "libexec" / "mcp-console-sandbox"
             self.assertEqual(runner.read_bytes(), b"runner bytes")
@@ -856,6 +880,24 @@ class ReleaseScriptTests(unittest.TestCase):
             ]
             result = subprocess.run(arguments, cwd=root, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
+            # Let Cargo observe companions created by the initial build, then
+            # require the next unchanged invocation to reuse the executable.
+            result = subprocess.run(arguments, cwd=root, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            result = subprocess.run(
+                [*arguments, "--message-format=json"],
+                cwd=root,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            executable = [
+                event
+                for line in result.stdout.splitlines()
+                if (event := json.loads(line)).get("executable")
+            ]
+            self.assertEqual(len(executable), 1, result.stdout)
+            self.assertTrue(executable[0]["fresh"], result.stderr)
             prefix = root / "target" / target
             for name, contents in artifacts.items():
                 with self.subTest(artifact=name):

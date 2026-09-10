@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tomllib
@@ -30,6 +31,17 @@ def git_output(checkout: Path, *arguments: str) -> str:
     if result.returncode != 0:
         fail(result.stderr.strip() or result.stdout.strip())
     return result.stdout.strip()
+
+
+def write_if_changed(path: Path, contents: bytes, mode: int) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if (
+        not path.exists()
+        or path.read_bytes() != contents
+        or stat.S_IMODE(path.stat().st_mode) != mode
+    ):
+        path.write_bytes(contents)
+        path.chmod(mode)
 
 
 def main() -> None:
@@ -150,16 +162,13 @@ def main() -> None:
         check=True,
     )
     data = ROOT / "wheel-data/data"
-    for name in ("libexec", "share"):
-        if (data / name).exists():
-            shutil.rmtree(data / name)
     libexec = data / "libexec"
     licenses = data / "share/licenses/mcp-console"
-    libexec.mkdir(parents=True)
-    licenses.mkdir(parents=True)
+    libexec.mkdir(parents=True, exist_ok=True)
     artifacts = []
     for name in ("mcp-console-sandbox", *(["bwrap"] if "linux" in target else [])):
-        staged = libexec / name
+        # Strip a temporary copy so unchanged Cargo inputs keep their mtimes.
+        staged = libexec / f".{name}"
         shutil.copyfile(staged_helper if name == "bwrap" else binaries / name, staged)
         staged.chmod(0o755)
         # Preserve the symbolicateable original in Cargo's build directory.
@@ -170,31 +179,43 @@ def main() -> None:
         )
         if name != "bwrap":
             subprocess.run([*strip, str(staged)], check=True)
-        artifacts.append(staged)
+        destination = libexec / name
+        write_if_changed(destination, staged.read_bytes(), 0o755)
+        staged.unlink()
+        artifacts.append(destination)
     notices = [(checkout / name, name) for name in ("LICENSE", "NOTICE")]
     if "linux" in target:
         notices.append((workspace / "vendor/bubblewrap/COPYING", "bubblewrap-COPYING"))
     for source, name in notices:
         destination = licenses / name
-        shutil.copyfile(source, destination)
-        destination.chmod(0o644)
+        write_if_changed(destination, source.read_bytes(), 0o644)
         artifacts.append(destination)
+    # Reconcile the owned trees, including artifacts from a different target.
+    for name in ("libexec", "share"):
+        for path in sorted((data / name).rglob("*"), reverse=True):
+            if path.is_dir():
+                if not any(path.iterdir()):
+                    path.rmdir()
+            elif path not in artifacts:
+                path.unlink()
     build_record = ROOT / "target/sandbox-runner-build.json"
-    build_record.parent.mkdir(exist_ok=True)
-    build_record.write_text(
-        json.dumps(
-            {
-                "source_revision": head,
-                "target": target,
-                "artifacts": {
-                    path.name: hashlib.sha256(path.read_bytes()).hexdigest()
-                    for path in artifacts
+    write_if_changed(
+        build_record,
+        (
+            json.dumps(
+                {
+                    "source_revision": head,
+                    "target": target,
+                    "artifacts": {
+                        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+                        for path in artifacts
+                    },
                 },
-            },
-            indent=2,
-        )
-        + "\n",
-        encoding="utf-8",
+                indent=2,
+            )
+            + "\n"
+        ).encode("utf-8"),
+        0o644,
     )
 
 

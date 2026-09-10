@@ -77,15 +77,21 @@ Release smoke exercises the installed runner directly with a non-default descrip
 
 The tracked `wheel-data/data` directory lets Maturin prepare metadata before the first build.
 `build_backend.py` owns companion staging through wheel creation and holds a checkout-local lock until Maturin finishes writing the archive.
-Each source build replaces the generated `libexec` and `share` trees, including when Cargo reuses its compiled output.
+Each source build reconciles the generated `libexec` and `share` trees, including when Cargo reuses its compiled output.
+Staging removes obsolete files and preserves timestamps when the intended contents and permissions are unchanged.
 `build.rs` verifies the prepared manifest and files and copies them beside native Cargo output; it neither builds the runner nor modifies wheel staging.
+Unchanged native companions and generated Rust retain their timestamps so subsequent Cargo invocations can reuse the executable.
 Direct staging, Cargo, and Maturin commands require exclusive use of their source checkout; release matrix jobs use separate checkouts.
 Source distributions include the packaging backend, staging script, source pin, and data-directory marker, and omit generated companions.
 
-CI separately caches completed staged runners and Cargo dependencies for both workspaces.
+CI separately caches completed staged runners, release wheels and native bundles, and Cargo build data for both workspaces.
 Runner build-cache keys include the toolchain file from the checked-out source.
-PR and main runs save a newly built runner before tests, and Cargo dependencies can be saved when later checks fail.
-Source installation checks still invoke Cargo and can reuse the prepared runner workspace.
+Completed release outputs require an exact match of source, packaging inputs, toolchain, R and Python versions, and runner image.
+Runner source archives preserve the timestamps used by Cargo while excluding Git metadata and the separately cached build directory.
+PR and main runs save completed builds, including Clippy preparation, before tests.
+R package checks use a separate cached library, and packaging and runtime preparation share a uv cache that retains downloaded wheels.
+CI keeps one job per platform and runs all current tests; source installation checks run last because they replace and hide the shared target directory.
+Those installation checks still invoke Cargo and can reuse the prepared runner workspace.
 Installation checks cover unstaged sources, compiler-flag changes between reinstalls, relocated bundles, bounded verification allocations, and rejection of missing or modified companions.
 Linux staging first builds and strips the private bubblewrap helper, embeds that exact SHA-256 in the runner build, installs `libexec/bwrap`, and includes its license at `share/licenses/mcp-console/bubblewrap-COPYING`.
 Rebuilding the helper therefore invalidates the runner's tracked digest input.
