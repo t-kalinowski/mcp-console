@@ -46,8 +46,9 @@ stdout: |
   Usage: mcp-console serve [OPTIONS]
 
   Options:
-        --no-sandbox  Run evaluated code with server permissions, without sandbox isolation or descendant cleanup
-    -h, --help        Print help
+        --no-sandbox           Run evaluated code with server permissions, without sandbox isolation or descendant cleanup
+        --writable-root <DIR>  Allow writes in an additional existing directory (temporary launch option)
+    -h, --help                 Print help
 ---
 command: mcp-console worker --help
 stdout: |
@@ -79,8 +80,9 @@ stdout: |
     <COMMAND>...  Command and arguments to run
 
   Options:
-        --config-env <NAME>  Read the runner configuration as JSON from this launch environment variable
-    -h, --help               Print help
+        --config-env <NAME>    Read the runner configuration as JSON from this launch environment variable
+        --writable-root <DIR>  Allow writes in an additional existing directory (temporary launch option)
+    -h, --help                 Print help
 
   Examples:
     mcp-console sandbox -- Rscript analysis.R

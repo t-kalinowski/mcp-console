@@ -139,7 +139,7 @@ struct SendArguments {
     /// dialect and type mappings. Use DBI from an R cell for commands that require the statement
     /// interface. Managed DuckDB conveniences and extension requirements apply only to the managed
     /// backend. With the sandbox enabled, use `ATTACH 'path' AS name (READ_ONLY)` for existing DuckDB
-    /// databases outside the worker's private temporary directory; the sandbox blocks DuckDB's
+    /// databases outside the sandbox's writable directories; the sandbox blocks DuckDB's
     /// default writable mode for those paths. Use `SHOW TABLES`, `DESCRIBE`, `SUMMARIZE`, and `EXPLAIN`
     /// for DuckDB discovery. DuckDB CLI dot commands are not supported. Omit this field for polling
     /// or stdin-only calls.
@@ -249,13 +249,14 @@ impl ConsoleServer {
         worker: Option<PathBuf>,
         relay: Option<PathBuf>,
         no_sandbox: bool,
+        writable_roots: Vec<PathBuf>,
     ) -> Result<Self, String> {
         let languages = Languages::from_environment()?;
         let worker = match (worker, relay) {
             (Some(program), relay) => {
-                crate::worker_client::Client::new(program, relay, no_sandbox)?
+                crate::worker_client::Client::new(program, relay, no_sandbox, writable_roots)?
             }
-            (None, None) => crate::worker_client::Client::builtin(no_sandbox)?,
+            (None, None) => crate::worker_client::Client::builtin(no_sandbox, writable_roots)?,
             (None, Some(_)) => return Err("a custom relay requires a custom worker".to_string()),
         };
         let dynamic_resolution = worker.dynamic_resolution();
@@ -290,7 +291,7 @@ impl ConsoleServer {
         let security = if no_sandbox {
             "Evaluated code runs without a sandbox, with the server's permissions, including filesystem and network access. Dependency resolution, when available, may execute installation or build code; use only trusted dependencies."
         } else {
-            "Evaluated code can read host files, cannot directly access the network, and can write only in the worker's private temporary directory. Dependency resolution, when available, runs outside the sandbox and may execute installation or build code; use only trusted dependencies."
+            "Evaluated code can read host files, cannot directly access the network, and can write in the worker's private temporary directory and any directories explicitly allowed by the launcher. Dependency resolution, when available, runs outside the sandbox and may execute installation or build code; use only trusted dependencies."
         };
         description.push_str(security);
         let schema = Arc::make_mut(&mut send.attr.input_schema);
@@ -540,8 +541,10 @@ pub async fn run(
     worker: Option<PathBuf>,
     relay: Option<PathBuf>,
     no_sandbox: bool,
+    writable_roots: Vec<PathBuf>,
 ) -> Result<(), Box<dyn Error>> {
-    let server = ConsoleServer::new(worker, relay, no_sandbox).map_err(std::io::Error::other)?;
+    let server = ConsoleServer::new(worker, relay, no_sandbox, writable_roots)
+        .map_err(std::io::Error::other)?;
     let worker = server.worker.clone();
     let (input_closed, wait_for_input_close) = oneshot::channel();
     let input = ShutdownReader::new(tokio::io::stdin(), input_closed);

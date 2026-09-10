@@ -39,7 +39,8 @@ fn main() -> ExitCode {
             worker,
             relay,
             no_sandbox,
-        } => match run_server(worker, relay, no_sandbox) {
+            writable_root,
+        } => match run_server(worker, relay, no_sandbox, writable_root) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
@@ -55,7 +56,13 @@ fn main() -> ExitCode {
             exit_with_parent,
             command,
             config_env,
-        } => match sandbox::run(&command, exit_with_parent, config_env.as_deref()) {
+            writable_root,
+        } => match sandbox::run(
+            &command,
+            exit_with_parent,
+            config_env.as_deref(),
+            writable_root,
+        ) {
             Ok(exit_code) => exit_code,
             Err(error) => exit_with_error(error),
         },
@@ -66,11 +73,13 @@ fn run_server(
     worker: Option<std::path::PathBuf>,
     relay: Option<std::path::PathBuf>,
     no_sandbox: bool,
+    writable_roots: Vec<std::path::PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let writable_roots = sandbox::resolve_writable_roots(writable_roots)?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    let result = runtime.block_on(server::run(worker, relay, no_sandbox));
+    let result = runtime.block_on(server::run(worker, relay, no_sandbox, writable_roots));
     // `server::run` has already joined service and worker shutdown. Tokio's
     // stdout uses a blocking task that cannot be cancelled while the client
     // leaves its output pipe full, so runtime teardown must not wait for it.

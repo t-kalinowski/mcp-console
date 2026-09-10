@@ -3,6 +3,7 @@
 use super::installation;
 use std::ffi::OsString;
 use std::os::unix::process::CommandExt as _;
+use std::path::PathBuf;
 use std::process::{Command, ExitCode};
 
 const CONFIGURATION: &str = "MCP_CONSOLE_SANDBOX_CONFIG";
@@ -11,6 +12,7 @@ pub(super) fn run(
     command: &[OsString],
     parent: Option<u32>,
     config_env: Option<&str>,
+    writable_roots: &[PathBuf],
 ) -> Result<ExitCode, String> {
     if let Some(pid) = parent
         && unsafe { libc::getppid() } as u32 != pid
@@ -30,12 +32,19 @@ pub(super) fn run(
     {
         extension = None;
     }
+    let mut entries = vec![serde_json::json!({
+        "path": {"type": "special", "value": {"kind": "root"}},
+        "access": "read",
+    })];
+    entries.extend(writable_roots.iter().map(|root| {
+        serde_json::json!({
+            "path": {"type": "path", "path": root},
+            "access": "write",
+        })
+    }));
     let configuration = serde_json::json!({
         "version": installation::PROTOCOL_VERSION,
-        "filesystem": {"kind": "restricted", "entries": [{
-            "path": {"type": "special", "value": {"kind": "root"}},
-            "access": "read",
-        }]},
+        "filesystem": {"kind": "restricted", "entries": entries},
         "network": "restricted",
         "proxy": null,
         "macos_seatbelt_profile_extension": extension,

@@ -49,9 +49,10 @@ result:
 
 
         Evaluated code can read host files, cannot directly access the network,
-        and can write only in the worker's private temporary directory.
-        Dependency resolution, when available, runs outside the sandbox and may
-        execute installation or build code; use only trusted dependencies.
+        and can write in the worker's private temporary directory and any
+        directories explicitly allowed by the launcher. Dependency resolution,
+        when available, runs outside the sandbox and may execute installation or
+        build code; use only trusted dependencies.
       inputSchema:
         $schema: https://json-schema.org/draft/2020-12/schema
         additionalProperties: false
@@ -113,7 +114,7 @@ result:
               dialect and type mappings. Use DBI from an R cell for commands that require the statement
               interface. Managed DuckDB conveniences and extension requirements apply only to the managed
               backend. With the sandbox enabled, use `ATTACH 'path' AS name (READ_ONLY)` for existing DuckDB
-              databases outside the worker's private temporary directory; the sandbox blocks DuckDB's
+              databases outside the sandbox's writable directories; the sandbox blocks DuckDB's
               default writable mode for those paths. Use `SHOW TABLES`, `DESCRIBE`, `SUMMARIZE`, and `EXPLAIN`
               for DuckDB discovery. DuckDB CLI dot commands are not supported. Omit this field for polling
               or stdin-only calls.

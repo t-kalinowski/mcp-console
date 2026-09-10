@@ -11,9 +11,33 @@ SANDBOX_POLICY='{"version":2,"filesystem":{"kind":"restricted","entries":[{"path
 Console forwards the selected name to its verified private runner, which owns the configuration types, validation, and enforcement.
 An explicit configuration supplies the complete policy; Console does not merge its default policy or macOS extension into it.
 
-Without `--config-env`, `sandbox` retains the [Console defaults](SANDBOX.md#application-policy-and-launch).
-`serve` always supplies those defaults explicitly and never selects a policy from ambient environment state.
+Without `--config-env`, `sandbox` uses the [Console defaults](SANDBOX.md#application-policy-and-launch), augmented by any explicit writable roots.
+`serve` supplies the same policy and never selects a policy from ambient environment state.
 Setting `MCP_CONSOLE_SANDBOX_CONFIG` alone does not change either command's policy.
+
+## Additional writable directories
+
+`serve` and `sandbox` accept repeatable `--writable-root DIR` arguments:
+
+```sh
+mcp-console serve --writable-root './output files' --writable-root /path/to/cache
+```
+
+This temporary argument does not define the eventual configuration interface.
+Each path must name an existing directory; Console does not create it.
+Relative paths resolve against the launch working directory before workload startup, and the server retains the absolute paths across worker restarts and replacements.
+Paths remain separate arguments, including spaces and Unicode; symlink components remain subject to the runner's native writable-root validation.
+
+The directories augment the default filesystem policy for the workload and its subprocesses.
+Their parents, the working directory, and home receive no implicit write grant.
+The runner's native safeguards, network restrictions, macOS extensions, private temporary storage, and lifecycle cleanup still apply.
+These directories contain persistent user data; retirement removes only runner-owned private storage.
+Omitting the argument preserves the default permissions.
+
+`serve --no-sandbox` and `sandbox --config-env` each conflict with `--writable-root`.
+An explicit `--config-env` value supplies a complete policy; no merging or precedence is defined.
+There is no environment-variable interface for the directory list or automatic configuration lookup.
+The launch code accepts a path list independently of argument parsing so a later configuration front end can supply the same list.
 
 ## Command and environment
 

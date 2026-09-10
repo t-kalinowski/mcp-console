@@ -1234,6 +1234,7 @@ mod tests {
             Vec::new(),
             None,
             false,
+            Vec::new(),
             None,
         );
         let evaluation = Arc::new(super::super::Evaluation::new(
@@ -1283,6 +1284,7 @@ mod tests {
             Vec::new(),
             None,
             false,
+            Vec::new(),
             None,
         );
         let evaluation = Arc::new(super::super::Evaluation::new(

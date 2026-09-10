@@ -18,7 +18,7 @@ Linux namespace init retains a private runner control endpoint that never reache
 
 The public `sandbox --config-env NAME -- COMMAND [ARG]...` option selects an explicit complete configuration using the runner's canonical schema.
 See [sandbox configuration](SANDBOX_CONFIGURATION.md) for fields, defaults, trust boundaries, size limits, and runnable shell, Python, and R examples.
-`serve` always supplies the default configuration explicitly; ambient values never select its policy.
+`serve` supplies the default configuration plus any explicit writable roots; ambient values never select its policy.
 
 By default, Console requests:
 
@@ -34,6 +34,9 @@ By default, Console requests:
 The frontend continues to remove `DYLD_INSERT_LIBRARIES` and `LD_PRELOAD` before runner exec.
 The runner supplies full mutation of its private storage; Console does not construct or remove its path.
 The temporary layout is a runner-owned `sandbox-XXXXXX` container with a writable `data` child.
+The temporary [`--writable-root DIR`](SANDBOX_CONFIGURATION.md#additional-writable-directories) option augments the filesystem entries with explicit write access on `serve` and `sandbox`.
+The server retains the resolved path list across worker generations and only forwards it to the sandbox frontend; the relay and worker do not interpret it.
+These directories are persistent user data and are never removed by sandbox retirement.
 
 The frontend preserves its PID and direct caller across exec.
 The server still launches one ordinary child with piped stdin/stdout and inherited stderr for each worker generation.
