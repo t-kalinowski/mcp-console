@@ -213,8 +213,10 @@ jobs:
             sandbox-build-v${{ env.CI_BUILD_CACHE_VERSION }}-${{ steps.cache-epoch.outputs.value }}-${{ steps.cache-epoch.outputs.image }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.sandbox-runner-source/codex-rs/rust-toolchain.toml') }}-
 
       - name: Stage private sandbox runner
-        env:
-          CARGO_LOG: cargo::core::compiler::fingerprint=info
+        # Rebuild on either miss so source-install checks retain a warm workspace.
+        if: >-
+          steps.sandbox-cache.outputs.cache-hit != 'true' ||
+          steps.sandbox-build-cache.outputs.cache-hit != 'true'
         run: scripts/stage-sandbox-runner .sandbox-runner-source
 
       # Save each completed build before any tests run.

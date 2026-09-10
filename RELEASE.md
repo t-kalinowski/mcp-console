@@ -86,6 +86,8 @@ Source distributions include the packaging backend, staging script, source pin, 
 
 CI separately caches completed staged runners, release wheels and native bundles, and Cargo build data for both workspaces.
 Runner build-cache keys include the toolchain file from the checked-out source.
+CI skips runner staging when both the finished runner and its build data are exact cache hits.
+If either cache misses, staging invokes Cargo and saves the completed outputs before tests; a build-data miss still prepares the workspace for later source-install checks.
 Cargo build data is restored across source, pin, and dependency changes within the same platform, toolchain, runner image, applicable R version, and UTC week.
 Console keeps one cached build baseline per dependency set during that week.
 Ordinary source edits reuse the baseline without uploading another large target-directory snapshot; Cargo updates the restored files for the current checkout.
