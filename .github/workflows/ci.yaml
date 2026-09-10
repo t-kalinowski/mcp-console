@@ -380,7 +380,7 @@ jobs:
         env:
           GITHUB_PAT: ${{ github.token }}
         # Use the prepared executable; scripts/test also invokes Cargo.
-        run: uv run --script tests/boundaries/_run.py --jobs 6
+        run: uv run --upgrade --script tests/boundaries/_run.py --jobs 6
 
       - name: Check uv source installations
         env:

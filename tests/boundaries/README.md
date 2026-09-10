@@ -156,6 +156,8 @@ scripts/test --update client_server/server/test_tools::initializes_and_lists_too
 ```
 
 `scripts/test` builds and uses `target/release/mcp-console`.
+The Python SDK integration dependencies are unpinned.
+Both `scripts/test` and CI use `uv run --upgrade` to refresh cached resolutions and test the latest compatible releases, so upstream breaking changes surface as test failures.
 CI also uses this release executable for the R package and installed-wheel integration checks; `scripts/check-core` keeps Rust unit tests in debug so their debug assertions remain enabled.
 With no selectors, `scripts/test` runs every suite and case in separate processes, with at least two concurrent cases and otherwise one per available CPU by default.
 Pass `--jobs N` to set the maximum concurrency or `--jobs 1` to run serially.

@@ -40,6 +40,7 @@ Windows is not supported.
 Other Unix operating systems are not supported build or runtime targets; shared `cfg(unix)` modules do not imply support for them.
 Retain platform conditionals for modules that use OS-specific APIs and for selecting different implementations or unsupported-platform stubs; avoid redundant gates on shared code.
 CI runs core checks and all capability-applicable transcript modes on macOS and Linux.
+Keep Python SDK integration test dependencies unpinned and refresh their resolution on each local or CI transcript run to detect upstream breaking releases.
 Keep one CI job per platform.
 CI restores Cargo build data across source and dependency changes within the same native build environment and UTC week, with incremental compilation enabled.
 Keep the intentional weekly build-cache reset.
