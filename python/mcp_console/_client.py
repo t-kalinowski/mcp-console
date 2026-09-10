@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import json
 from collections.abc import Mapping, Sequence
 from contextlib import AsyncExitStack
@@ -36,7 +34,7 @@ class MCPConsole:
         self._client: Client | None = None
         self._send_tool: Tool | None = None
 
-    async def connect(self) -> Self:
+    async def connect(self) -> "Self":
         """Start MCP Console and initialize its MCP client session."""
         if self._client is not None:
             return self
@@ -67,13 +65,13 @@ class MCPConsole:
         if stack is not None:
             await stack.aclose()
 
-    async def __aenter__(self) -> Self:
+    async def __aenter__(self) -> "Self":
         return await self.connect()
 
     async def __aexit__(self, exc_type: object, exc: object, traceback: object) -> None:
         await self.close()
 
-    async def _call_send(self, arguments: Mapping[str, Any]) -> CallToolResult:
+    async def _call_send(self, arguments: Mapping[str, Any]) -> "CallToolResult":
         if self._client is None:
             raise RuntimeError(
                 "MCPConsole is not connected; use `async with MCPConsole() as console` "
@@ -81,6 +79,7 @@ class MCPConsole:
             )
         return await self._client.call_tool("send", dict(arguments))
 
+    # Framework schema generators need concrete callable annotations.
     async def send(
         self,
         *,
@@ -120,7 +119,7 @@ class MCPConsole:
 
     __call__ = send
 
-    def openai_responses_tool(self) -> OpenAIResponsesTool:
+    def openai_responses_tool(self) -> "OpenAIResponsesTool":
         """Return an object for a standard OpenAI Responses tool loop."""
         if self._send_tool is None:
             raise RuntimeError(
@@ -145,7 +144,7 @@ class MCPConsole:
 class OpenAIResponsesTool:
     """MCP Console as one function tool for the OpenAI Responses API."""
 
-    def __init__(self, console: MCPConsole, tool: Tool) -> None:
+    def __init__(self, console: MCPConsole, tool: "Tool") -> None:
         self._console = console
         self._tool = tool
 

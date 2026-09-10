@@ -27,6 +27,7 @@ def openai_agents_server(
     args: Sequence[Command] | None = None,
     name: str = "MCP Console",
     params: Mapping[str, Any] | None = None,
+    client_session_timeout_seconds: float | None = None,
     **kwargs: Any,
 ) -> Any:
     """Return the native OpenAI Agents ``MCPServerStdio`` object."""
@@ -36,6 +37,7 @@ def openai_agents_server(
     return MCPServerStdio(
         name=name,
         params=dict(params or {}) | {"command": command, "args": args},
+        client_session_timeout_seconds=client_session_timeout_seconds,
         **kwargs,
     )
 

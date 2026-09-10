@@ -194,6 +194,24 @@ def test_anthropic_callable_and_native_tools(
     return asyncio.run(exercise())
 
 
+@requires(WORKER)
+@executions(DIRECT, SANDBOXED)
+def test_native_openai_agents_waits_for_console_output(
+    binary: Path, execution: Execution
+) -> Transcript:
+    async def exercise():
+        async with openai_agents_server(
+            command=binary, args=execution.serve()
+        ) as server:
+            # The evaluation outlives send's wait, which exceeds the SDK's default.
+            result = await server.call_tool(
+                "send", {"r": "Sys.sleep(60)", "timeout_ms": 6_000}
+            )
+            return [result.model_dump(mode="json", by_alias=True, exclude_none=True)]
+
+    return asyncio.run(exercise())
+
+
 @executions(DIRECT, SANDBOXED)
 def test_chatlas_registers_on_existing_chat(
     binary: Path, execution: Execution
@@ -212,6 +230,24 @@ def test_chatlas_registers_on_existing_chat(
             return [{"name": tools[0].name, "value": result.value}]
         finally:
             await chat.cleanup_mcp_tools()
+
+    return asyncio.run(exercise())
+
+
+@executions(DIRECT, SANDBOXED)
+def test_chatlas_callable_registers_concrete_schema(
+    binary: Path, execution: Execution
+) -> Transcript:
+    from chatlas import ChatOpenAI
+
+    async def exercise():
+        chat = ChatOpenAI(model="unused", api_key="unused")
+        console = MCPConsole(**options(binary, execution))
+        chat.register_tool(console.send)
+        tools = chat.get_tools()
+        assert [tool.name for tool in tools] == ["send"]
+        async with console:
+            return [{"output": await tools[0].func(r="echo callable chatlas")}]
 
     return asyncio.run(exercise())
 

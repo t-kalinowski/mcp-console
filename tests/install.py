@@ -417,29 +417,41 @@ class InstallationTests(unittest.TestCase):
                 print(result.stdout, flush=True)
                 for python_version in ("3.10", "3.14"):
                     with self.subTest(python=python_version):
-                        result = subprocess.run(
+                        venv = directory / f"python-{python_version}"
+                        python = str(venv / "bin/python")
+                        for command in (
                             [
                                 "uv",
-                                "run",
-                                "--isolated",
-                                "--no-project",
+                                "venv",
+                                str(venv),
                                 "--python",
                                 python_version,
-                                "--with",
+                            ],
+                            [
+                                "uv",
+                                "pip",
+                                "install",
+                                "--python",
+                                python,
                                 f"{wheels[0]}[client,anthropic,chatlas,openai,openai-agents,codex]",
-                                "python",
+                            ],
+                            [
+                                python,
                                 str(ROOT / "tests/fixtures/python_api_smoke.py"),
                             ],
-                            cwd=directory,
-                            env=environment | {"UV_PYTHON_DOWNLOADS": "automatic"},
-                            check=False,
-                            text=True,
-                            stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT,
-                            timeout=600,
-                        )
-                        self.assertEqual(result.returncode, 0, result.stdout)
-                        print(result.stdout, flush=True)
+                        ):
+                            result = subprocess.run(
+                                command,
+                                cwd=directory,
+                                env=environment | {"UV_PYTHON_DOWNLOADS": "automatic"},
+                                check=False,
+                                text=True,
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT,
+                                timeout=600,
+                            )
+                            self.assertEqual(result.returncode, 0, result.stdout)
+                            print(result.stdout, flush=True)
                 for installed in (
                     binary,
                     directory / "uv-bin" / "mcp-console",

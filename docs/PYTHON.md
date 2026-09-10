@@ -101,13 +101,14 @@ Supply the native server to an agent:
 from agents import Agent, Runner
 from mcp_console import openai_agents_server
 
-async with openai_agents_server(client_session_timeout_seconds=None) as server:
+async with openai_agents_server() as server:
     agent = Agent(name="Data analyst", mcp_servers=[server])
     result = await Runner.run(agent, "Use the console to calculate 20!.")
     print(result.final_output)
 ```
 
-`client_session_timeout_seconds=None` lets the server's `send` timeout govern each call, including long evaluations.
+The SDK read deadline is unset by default so the server's `send` timeout governs each call, including long evaluations.
+Set `client_session_timeout_seconds=` to supply an SDK deadline.
 Pass stdio settings through `params=` and other native SDK options as keyword arguments.
 For a connected `MCPConsole`, `console.openai_agents_tool()` returns a native function tool for `Agent(tools=[...])`.
 It uses a non-strict schema to preserve optional arguments and sparse requirement dictionaries.
