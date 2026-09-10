@@ -162,6 +162,7 @@ class McpClientTests(unittest.TestCase):
                 "records.py",
                 "snapshots.py",
                 "requirements.py",
+                "linux_sandbox.py",
                 "execution.py",
             ):
                 shutil.copy2(ROOT / "tests" / "support" / name, support / name)

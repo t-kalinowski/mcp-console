@@ -174,14 +174,23 @@ class SandboxInstallationTests(unittest.TestCase):
                 with self.subTest(artifact=relative, defect=defect):
                     artifact.unlink(missing_ok=True)
                     if defect == "modified":
-                        artifact.write_bytes(b"modified")
+                        artifact.write_bytes(original + b"\0")
+                        if relative.startswith("libexec/"):
+                            artifact.chmod(0o755)
                     elif defect == "fifo":
                         os.mkfifo(artifact)
                     result = self.run_sandbox()
                     self.assertNotEqual(result.returncode, 0)
                     self.assertEqual(result.stdout, b"")
-                    self.assertIn(b"private sandbox runner", result.stderr)
-                    if defect == "fifo":
+                    self.assertIn(
+                        b"bubblewrap"
+                        if relative == "libexec/bwrap"
+                        else b"private sandbox runner",
+                        result.stderr,
+                    )
+                    if relative == "libexec/bwrap" and defect == "modified":
+                        self.assertIn(b"digest mismatch", result.stderr)
+                    if defect == "fifo" and relative != "libexec/bwrap":
                         self.assertIn(
                             b"private artifact is not a readable file or executable",
                             result.stderr,
@@ -189,6 +198,29 @@ class SandboxInstallationTests(unittest.TestCase):
             artifact.unlink()
             artifact.write_bytes(original)
             artifact.chmod(0o755 if relative.startswith("libexec/") else 0o644)
+
+    @unittest.skipUnless(sys.platform == "linux", "requires Linux helper selection")
+    def test_unused_bundled_helper_does_not_block_a_suitable_host_helper(self) -> None:
+        # Native discovery excludes helpers inside cwd. Supply a trusted helper
+        # outside that tree independently of the relocated bundle we damage.
+        host = tempfile.TemporaryDirectory(prefix="mcp-console-host-helper-")
+        self.addCleanup(host.cleanup)
+        helper = Path(host.name) / "bwrap"
+        shutil.copy2(self.binary_source.parent.parent / "libexec/bwrap", helper)
+        (self.path / "bwrap").symlink_to(helper)
+        bundled = self.binary.parent.parent / "libexec/bwrap"
+        for defect in ("missing", "modified", "fifo"):
+            with self.subTest(defect=defect):
+                bundled.unlink(missing_ok=True)
+                if defect == "modified":
+                    bundled.write_bytes(b"modified")
+                    bundled.chmod(0o755)
+                elif defect == "fifo":
+                    os.mkfifo(bundled)
+                result = self.run_sandbox()
+                self.assertEqual(
+                    (result.returncode, result.stdout, result.stderr), (0, b"", b"")
+                )
 
     @unittest.skipUnless(
         sys.platform == "darwin", "requires the macOS allocator interposer"

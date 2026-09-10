@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.normalization import code
 from support.records import Transcript
-from support.requirements import SANDBOX, requires
+from support.requirements import LANDLOCK, MACOS_SANDBOX, SANDBOX, requires
 from support.suites import run_this_suite
 
 
@@ -411,6 +411,61 @@ def test_child_specific_shell_python_and_processx_examples(binary: Path) -> Tran
             {"example": f"sandbox-config.{suffix}", "stdout": result.stdout}
         )
     return transcript
+
+
+@requires(LANDLOCK)
+def test_explicit_landlock_preserves_policy_and_rejects_supervised_lifetime(
+    binary: Path,
+) -> Transcript:
+    config = configuration() | {"linux_backend": "landlock"}
+    result = invoke(binary, config, "/bin/echo", "explicit Landlock")
+    assert result.returncode == 0, result
+    assert result.stderr == ""
+    assert result.stdout == "explicit Landlock\n"
+    transcript = [{"stdout": result.stdout}]
+    with TemporaryDirectory() as directory:
+        sentinel = Path(directory) / "sentinel"
+        sentinel.write_text("synthetic sentinel")
+        result = invoke(
+            binary,
+            config,
+            sys.executable,
+            "-c",
+            code(r"""
+            import os
+            import sys
+            try:
+                os.truncate(sys.argv[1], 0)
+            except PermissionError:
+                print("truncate denied")
+            else:
+                raise AssertionError("host truncation succeeded")
+            """),
+            str(sentinel),
+        )
+        assert result.returncode == 0 and not result.stderr, result
+        assert result.stdout == "truncate denied\n"
+        assert sentinel.read_text() == "synthetic sentinel"
+        transcript.append({"stdout": result.stdout})
+    config["lifecycle"] = {"private_tmp": {"environment": ["TMPDIR"]}}
+    result = invoke(binary, config, "/bin/echo", "must not run")
+    assert result.returncode == 1 and not result.stdout, result
+    assert "landlock does not provide supervised lifetime" in result.stderr
+    transcript.append({"stderr": result.stderr, "exit_code": result.returncode})
+    return transcript
+
+
+@requires(MACOS_SANDBOX)
+def test_linux_backend_is_rejected_on_macos(binary: Path) -> Transcript:
+    result = invoke(
+        binary,
+        configuration() | {"linux_backend": "landlock"},
+        "/bin/echo",
+        "must not run",
+    )
+    assert result.returncode == 1 and not result.stdout, result
+    assert "linux_backend is supported only on Linux" in result.stderr
+    return [{"stderr": result.stderr, "exit_code": result.returncode}]
 
 
 if __name__ == "__main__":

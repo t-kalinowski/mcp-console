@@ -398,5 +398,7 @@ This path requires mounted procfs, uses no allocation after fork, covers descrip
 Other sanitation errors fail the spawn.
 The server uses blocking `poll` on Linux and `kqueue` on macOS for startup input-closure observation.
 CI runs core checks and the applicable transcript cases on both platforms.
-Linux sandboxing requires kernel 5.11 or later, procfs, and permitted user, mount, PID, and network namespace operations.
+Linux sandboxing requires procfs, permitted native namespace operations, and the selected policy enforcement capabilities.
+The runner uses native namespace lifetime and its direct child wait; host subreapers, process-tree enumeration, and namespace-PID discovery are unnecessary.
+Fresh procfs and pidfds are optional; [Linux compatibility](LINUX_COMPATIBILITY.md) records the tested capabilities and failure boundaries.
 Windows has no working execution stack.

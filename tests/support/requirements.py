@@ -9,6 +9,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeVar
 
+from support.linux_sandbox import (
+    fresh_procfs_available,
+    landlock_available,
+    nested_namespaces_available,
+    process_events_available,
+)
+
 
 @dataclass(frozen=True)
 class Requirement:
@@ -36,12 +43,22 @@ LINUX_SANDBOX = Requirement(
     sys.platform == "linux",
     "requires Linux namespace isolation",
 )
+NESTED_PROCFS = Requirement(
+    "nested procfs fixture",
+    nested_namespaces_available(),
+    "requires an outer bwrap fixture and permission for nested user and PID namespaces",
+)
+FRESH_PROCFS = Requirement(
+    "fresh procfs fixture",
+    fresh_procfs_available(),
+    "requires an outer bwrap fixture and permission to mount namespace-local procfs",
+)
 POSIX = Requirement(
     "POSIX", os.name == "posix", "requires POSIX processes and descriptors"
 )
 PROCESS_EVENTS = Requirement(
     "process events",
-    sys.platform in {"darwin", "linux"},
+    sys.platform == "darwin" or process_events_available(),
     "requires macOS process events or Linux procfs, inotify, and pidfds",
 )
 NATIVE_FIXTURES = Requirement(
@@ -115,4 +132,11 @@ LINUX_NATIVE = Requirement(
     "Linux native fixtures",
     sys.platform == "linux",
     "requires Linux ELF loading and seccomp",
+)
+
+
+LANDLOCK = Requirement(
+    "Landlock filesystem enforcement",
+    landlock_available(),
+    "requires Landlock with truncate enforcement (ABI 3 or later)",
 )

@@ -30,6 +30,7 @@ Source and public acceptance tests remain the final authority when prose disagre
 ## Maintainers
 
 - The [release guide](../RELEASE.md) describes PyPI setup, publication, verification, and recovery.
+- [Linux compatibility](LINUX_COMPATIBILITY.md) records native capability requirements, procfs security comparisons, backend differences, and helper integrity.
 - The [runner integration record](SANDBOX_RUNNER_INTEGRATION.md) records the baseline, validation, changed fixtures and guarantees for the standalone-supervisor migration.
 
 ## Future design

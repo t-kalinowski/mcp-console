@@ -13,7 +13,8 @@ Without a public configuration option, Console uses `--config-env MCP_CONSOLE_SA
 The selected variable contains one immutable JSON object, consumed by the runner and removed from the target environment.
 It is reserved for this private handoff.
 Arguments, cwd, and the rest of the environment remain ordinary executable inputs.
-There is no configuration file, mutable path reference, bootstrap writer process, or persistent control channel.
+There is no configuration file, mutable path reference, bootstrap writer process, or application control channel.
+Linux namespace init retains a private runner control endpoint that never reaches target code.
 
 The public `sandbox --config-env NAME -- COMMAND [ARG]...` option selects an explicit complete configuration using the runner's canonical schema.
 See [sandbox configuration](SANDBOX_CONFIGURATION.md) for fields, defaults, trust boundaries, size limits, and runnable shell, Python, and R examples.
@@ -45,8 +46,10 @@ The selected JSON is limited to 1 MiB and shares the native exec byte budget wit
 The runner's separate private framed-descriptor interface still accepts requests up to 1 MiB independently of stdin.
 It remains available for larger integrations; Console uses environment transport for its small default policy.
 
-Installation-relative lookup, source provenance, target validation, executable digests, and bundled Linux helper verification remain in Console.
-A missing or mismatched artifact fails before launch.
+Console verifies installation-relative runner lookup, source provenance, target, runner digest, and license artifacts.
+The runner retains native trusted-PATH helper selection and verifies a selected bundled helper through the same open descriptor it executes.
+Its expected digest is embedded during staging; an unused bundled helper does not block a suitable host helper.
+Missing or mismatched selected artifacts fail before target execution.
 See [release preparation](../RELEASE.md#private-sandbox-executable).
 
 ## Supported hosts and lifetime limits
@@ -57,12 +60,22 @@ The runner transfers an exclusively owned foreground terminal to the target grou
 With a foreground peer, it keeps the caller group in control and forwards terminal signals.
 General shell job suspension and resumption are unsupported.
 
-Linux uses the native namespace helper, bubblewrap, namespace-local procfs, a host subreaper, and pidfds.
+Linux uses the native namespace helper, bubblewrap, and native namespace retirement.
+The runner waits for its known direct native child; it does not require a host subreaper, process-tree enumeration, or namespace-PID discovery.
+Fresh procfs is optional: the supported inherited-procfs path retains user, mount, and PID isolation, though host PIDs and permitted metadata may be visible.
+Pidfds provide optional emergency termination of a stopped namespace init.
+Without that capability, a stopped init can exceed the retirement deadline; the runner reports failure and retains private storage.
+Missing native wait evidence never establishes cleanup.
 The relay-worker sideband uses two anonymous pipes under the same sandbox policy.
 It does not require Unix socket syscall exceptions or relaxed network restrictions.
-It requires kernel 5.11 or later and permission for user, mount, PID, and network namespaces.
-Full-disk-write policies and procfs fallback are rejected by the runner's supervised path; Console's fixed policy requests neither.
+The selected helper's namespace operations, procfs, and requested seccomp/network capabilities must be available.
+See [Linux compatibility](LINUX_COMPATIBILITY.md) for differential security results and tested baselines.
+Full-disk-write policies remain rejected by supervised execution because writable procfs could expose supervisor resources.
 Linux keeps the caller's foreground-terminal ownership and relays interrupts through namespace init.
+Standalone callers may explicitly select `linux_backend: "landlock"` for native filesystem/network enforcement with direct-exec semantics.
+This mode has no process isolation or descendant cleanup and rejects supervised-lifetime and proxy options.
+The default server never selects it.
+See [configuration](SANDBOX_CONFIGURATION.md).
 Windows and other operating systems remain unsupported.
 
 Configured caller death must retire the workload while the runner lives.
@@ -90,9 +103,10 @@ Startup failures use the runner's native diagnostics; successful cancellation ca
 
 ## Policy extensions and compatibility
 
-The pinned runner uses the base and preferences policies in `codex-rs/sandboxing/src/seatbelt*.sbpl` at `b5a1c9f76a9c6ca2909105aecbc78555a26fda01`.
+The pinned runner uses the base and preferences policies in `codex-rs/sandboxing/src/seatbelt*.sbpl` at `7aacbcf1bca0f173f036617a5ee8ae71e18fb8cc`.
 MCP Console supplies read access to the filesystem root, restricted networking with no proxy, and its trusted `policy_extensions.sbpl`.
-Managed networking and configurable user policies remain planned work.
+The default application policy remains fixed.
+Standalone callers can select an explicit configuration through `--config-env`; managed proxy support follows the runner schema.
 
 Compared with the previous `read_only_policy.sbpl`, the native base already provides the CPU and R startup sysctls (including `hw.logicalcpu` and `kern.usrstack64`), Python's `kern.sysv.semmns`, POSIX semaphores, OpenMP shared memory, process permissions, `/dev/null`, PTY allocation, user lookup, power-management lookup, and read-only preferences.
 Those local rules became redundant; their deletion does not mean the applications stopped needing them.

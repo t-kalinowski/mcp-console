@@ -100,6 +100,36 @@ def main() -> None:
     # bypasses Cargo.
     environment = os.environ.copy()
     environment["CARGO_TARGET_DIR"] = str(workspace / "target")
+    binaries = workspace / "target" / target / "release"
+    staged_helper = ROOT / "target/sandbox-runner-bwrap" / target / "bwrap"
+    if "linux" in target:
+        subprocess.run(
+            [
+                *toolchain,
+                "cargo",
+                "build",
+                "--locked",
+                "--release",
+                "-p",
+                "codex-bwrap",
+                "--bin",
+                "bwrap",
+                "--target",
+                target,
+            ],
+            cwd=workspace,
+            env=environment,
+            check=True,
+        )
+        staged_helper.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(binaries / "bwrap", staged_helper)
+        subprocess.run(["strip", "--strip-unneeded", str(staged_helper)], check=True)
+        # Bind the runner to the exact stripped executable we ship. Native
+        # selection hashes and executes one open descriptor, without a PATH
+        # fallback after an integrity failure.
+        environment["CODEX_BWRAP_SHA256"] = hashlib.sha256(
+            staged_helper.read_bytes()
+        ).hexdigest()
     subprocess.run(
         [
             *toolchain,
@@ -111,7 +141,6 @@ def main() -> None:
             "codex-mcp-console-sandbox",
             "--bin",
             "mcp-console-sandbox",
-            *(["-p", "codex-bwrap", "--bin", "bwrap"] if "linux" in target else []),
             "--target",
             target,
         ],
@@ -119,7 +148,6 @@ def main() -> None:
         env=environment,
         check=True,
     )
-    binaries = workspace / "target" / target / "release"
     data = ROOT / "wheel-data/data"
     for name in ("libexec", "share"):
         if (data / name).exists():
@@ -131,7 +159,7 @@ def main() -> None:
     artifacts = []
     for name in ("mcp-console-sandbox", *(["bwrap"] if "linux" in target else [])):
         staged = libexec / name
-        shutil.copyfile(binaries / name, staged)
+        shutil.copyfile(staged_helper if name == "bwrap" else binaries / name, staged)
         staged.chmod(0o755)
         # Preserve the symbolicateable original in Cargo's build directory.
         strip = (
@@ -139,7 +167,8 @@ def main() -> None:
             if "linux" in target
             else ["xcrun", "strip", "-S", "-x"]
         )
-        subprocess.run([*strip, str(staged)], check=True)
+        if name != "bwrap":
+            subprocess.run([*strip, str(staged)], check=True)
         artifacts.append(staged)
     notices = [(checkout / name, name) for name in ("LICENSE", "NOTICE")]
     if "linux" in target:

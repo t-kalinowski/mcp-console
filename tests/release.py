@@ -606,7 +606,8 @@ class ReleaseScriptTests(unittest.TestCase):
                 import sys
                 from pathlib import Path
 
-                Path(os.environ["FAKE_CARGO_ARGUMENTS"]).write_text(json.dumps(sys.argv[1:]))
+                with Path(os.environ["FAKE_CARGO_ARGUMENTS"]).open("a") as record:
+                    record.write(json.dumps({"arguments": sys.argv[1:], "helper_sha256": os.environ.get("CODEX_BWRAP_SHA256")}) + "\\n")
                 target = sys.argv[sys.argv.index("--target") + 1] if "--target" in sys.argv else os.environ["CARGO_BUILD_TARGET"]
                 output = Path(os.environ["CARGO_TARGET_DIR"]) / target / "release"
                 output.mkdir(parents=True, exist_ok=True)
@@ -660,6 +661,7 @@ class ReleaseScriptTests(unittest.TestCase):
                 (["--target", "x86_64-apple-darwin"], "x86_64-apple-darwin"),
             ):
                 with self.subTest(target=target):
+                    (directory / "cargo.json").unlink(missing_ok=True)
                     result = subprocess.run(
                         command + arguments,
                         env=environment,
@@ -668,24 +670,37 @@ class ReleaseScriptTests(unittest.TestCase):
                     )
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertEqual(placeholder.read_text(), "/*\n!/.gitignore\n")
+                    packages = [("codex-mcp-console-sandbox", "mcp-console-sandbox")]
+                    if "linux" in target:
+                        packages.insert(0, ("codex-bwrap", "bwrap"))
                     self.assertEqual(
-                        json.loads((directory / "cargo.json").read_text()),
                         [
-                            "+1.95.0",
-                            "build",
-                            "--locked",
-                            "--release",
-                            "-p",
-                            "codex-mcp-console-sandbox",
-                            "--bin",
-                            "mcp-console-sandbox",
-                            *(
-                                ["-p", "codex-bwrap", "--bin", "bwrap"]
-                                if "linux" in target
-                                else []
-                            ),
-                            "--target",
-                            target,
+                            json.loads(line)
+                            for line in (directory / "cargo.json")
+                            .read_text()
+                            .splitlines()
+                        ],
+                        [
+                            {
+                                "arguments": [
+                                    "+1.95.0",
+                                    "build",
+                                    "--locked",
+                                    "--release",
+                                    "-p",
+                                    package,
+                                    "--bin",
+                                    binary,
+                                    "--target",
+                                    target,
+                                ],
+                                "helper_sha256": hashlib.sha256(
+                                    b"bwrap bytes"
+                                ).hexdigest()
+                                if "linux" in target and binary == "mcp-console-sandbox"
+                                else None,
+                            }
+                            for package, binary in packages
                         ],
                     )
                     self.assertEqual(

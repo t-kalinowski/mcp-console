@@ -47,7 +47,8 @@ mcp-console --help
 mcp-console serve
 ```
 
-Linux sandboxing requires kernel 5.11 or later, mounted `/proc`, and permission to create user, mount, PID, and network namespaces.
+Linux sandboxing requires mounted `/proc`, permission for the native helper's namespace operations, and the selected filesystem and network enforcement capabilities.
+Fresh procfs mounts and pidfds are optional; see the [tested host capabilities](docs/LINUX_COMPATIBILITY.md).
 Host AppArmor policy or container restrictions can prevent namespace setup.
 The wheel includes a private bubblewrap helper; a suitable `bwrap` on `PATH` takes precedence.
 There is no automatic unsandboxed fallback.

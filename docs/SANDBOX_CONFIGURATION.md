@@ -66,7 +66,7 @@ Neither may also be a private-directory export.
 
 ## Configuration fields and defaults
 
-The pinned [runner protocol](https://github.com/t-kalinowski/codex/blob/d488fc969da435f93ea5937c7f284fa91a8c2575/codex-rs/mcp-console-sandbox/PROTOCOL.md) defines the canonical schema.
+The pinned [runner protocol](https://github.com/t-kalinowski/codex/blob/7aacbcf1bca0f173f036617a5ee8ae71e18fb8cc/codex-rs/mcp-console-sandbox/PROTOCOL.md) defines the canonical schema.
 Its filesystem and proxy fields use the upstream types and validators directly.
 
 | Field                              | Environment-mode contract                                                                                                                                                            |
@@ -78,6 +78,7 @@ Its filesystem and proxy fields use the upstream types and validators directly.
 | `macos_seatbelt_profile_extension` | Optional trusted SBPL appended to the native profile. It can grant permissions as well as restrict them. Omitted or `null` adds no extension; a supplied value is rejected on Linux. |
 | `inherit_environment`              | Optional Boolean, default `true`.                                                                                                                                                    |
 | `environment`                      | Optional target override map, default empty. Keys must be nonempty and contain neither `=` nor NUL; values must be NUL-free.                                                         |
+| `linux_backend`                    | Optional on Linux: `"bubblewrap"` (default) or explicit `"landlock"`. Rejected on macOS.                                                                                             |
 | `lifecycle`                        | Optional object with the defaults below.                                                                                                                                             |
 
 | Lifecycle field      | Default and behavior                                                                                                                                                                                                                                                        |
@@ -89,12 +90,31 @@ Its filesystem and proxy fields use the upstream types and validators directly.
 
 These are the runner defaults for an explicit configuration.
 Console's no-config path additionally requests its macOS extension and private `TMPDIR`.
-Descendant retirement and the [supported lifetime boundaries](SANDBOX.md#supported-hosts-and-lifetime-limits) still apply.
+For default bubblewrap and macOS execution, descendant retirement and the [supported lifetime boundaries](SANDBOX.md#supported-hosts-and-lifetime-limits) still apply.
 
 Repeated `--config-env`, combining it with private `--exit-with-parent`, duplicate top-level JSON fields, and unknown top-level fields are rejected.
 Use `lifecycle.parent_pid` in an explicit configuration.
 The runner rejects simultaneous environment and descriptor input options.
 There is no configuration-file option, automatic file discovery, `@file` syntax, include, reload, or file fallback.
+
+## Explicit Linux backend selection
+
+`linux_backend: "bubblewrap"` retains the default namespace sandbox and supervised lifetime.
+A namespace failure does not switch backends.
+Native procfs fallback changes the procfs view while preserving the backend and policy; see [Linux compatibility](LINUX_COMPATIBILITY.md).
+
+`linux_backend: "landlock"` explicitly selects native Landlock/seccomp enforcement and replaces the runner with the restricted command.
+It needs no bubblewrap or namespace setup and preserves native policy-compatibility checks.
+The direct native handoff uses a sealed anonymous memfd for target setup.
+Restricted-read policies are unsupported.
+A restricted filesystem requires Landlock truncate enforcement (ABI 3 or later); older best-effort enforcement is rejected.
+Native device-ioctl restrictions depend on ABI 5 and are outside this backend's portable contract.
+
+Landlock provides no process isolation: same-user host signalling may remain possible.
+It provides no descendant retirement, caller-death cleanup, private storage, or terminal supervisor.
+Accordingly, `parent_pid`, `private_tmp`, an explicit cleanup timeout, retirement SIGTERM, and managed proxy routing are rejected.
+Ordinary exit and signal behavior follows direct native execution.
+`serve` continues to request bubblewrap supervision.
 
 ## Caller examples
 

@@ -15,11 +15,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from support.processes import capture_process_identity, child_process_identities
 from support.normalization import code
 from support.records import Transcript
-from support.requirements import LINUX_SANDBOX, requires
+from support.requirements import FRESH_PROCFS, LINUX_SANDBOX, PROCESS_EVENTS, requires
 from support.suites import run_this_suite
 
 
-@requires(LINUX_SANDBOX)
+@requires(LINUX_SANDBOX, FRESH_PROCFS)
 def test_isolates_files_network_and_processes(binary: Path) -> Transcript:
     # fmt: python
     script = code(r"""
@@ -85,7 +85,7 @@ def test_isolates_files_network_and_processes(binary: Path) -> Transcript:
     ]
 
 
-@requires(LINUX_SANDBOX)
+@requires(LINUX_SANDBOX, PROCESS_EVENTS)
 def test_retires_descendants_after_exit_and_supervisor_loss(binary: Path) -> Transcript:
     # fmt: python
     script = code(r'''
@@ -273,51 +273,6 @@ def test_relays_signal_and_preserves_target_status(binary: Path) -> Transcript:
             stderr,
         )
     return [{"signal": "SIGINT", "stdout": "ready\ninterrupted\n", "exit_code": 23}]
-
-
-@requires(LINUX_SANDBOX)
-def test_rejects_inherited_procfs_before_running_command(binary: Path) -> Transcript:
-    helper = binary.parent.parent / "libexec" / "bwrap"
-    result = subprocess.run(
-        [
-            helper,
-            "--unshare-user",
-            "--unshare-pid",
-            "--bind",
-            "/",
-            "/",
-            "--dev",
-            "/dev",
-            "--proc",
-            "/proc",
-            "--ro-bind",
-            "/proc/sys",
-            "/proc/sys",
-            "--",
-            binary,
-            "sandbox",
-            "--",
-            "/bin/echo",
-            "must not run",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    assert result.returncode == 1, result
-    assert result.stdout == "", result
-    assert result.stderr == "native target setup requires namespace-local procfs\n", (
-        result
-    )
-    return [
-        {
-            "command": ["mcp-console", "sandbox", "--", "/bin/echo", "must not run"],
-            "environment": "fresh procfs mounts denied by an outer namespace",
-            "exit_code": result.returncode,
-            "stdout": result.stdout,
-            "stderr": result.stderr,
-        }
-    ]
 
 
 if __name__ == "__main__":
