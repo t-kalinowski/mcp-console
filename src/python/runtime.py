@@ -627,7 +627,8 @@ def _mcp_console_detach_output_streams(
         if isinstance(stream, _OutputRemap):
             stream.handler = stream.target.write
             stream.flush = stream.target.flush
-            stream.tty = stream.target.isatty()
+            # Do not probe a possibly closed target during detachment.
+            stream.isatty = stream.target.isatty
 
 
 _os.register_at_fork(after_in_child=_mcp_console_detach_output_streams)

@@ -291,6 +291,39 @@ def test_preserves_cached_python_logging_from_fork_children(
 
 @executions(DIRECT, SANDBOXED)
 @requires(POSIX, command("python3"))
+def test_preserves_fork_stderr_after_stdout_is_closed(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = _python_fork_client(binary, execution)
+    # fmt: python
+    python = code(r"""
+        saved_stdout.buffer.close()
+
+
+        def child_output():
+            try:
+                saved_stdout.write("closed child stdout\n")
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("closed stdout accepted a write")
+            saved_stderr.write("child stderr after stdout closed\n")
+            saved_stderr.flush()
+            logger.warning("child log after stdout closed")
+
+
+        run_child(child_output)
+        """)
+    expected = "child stderr after stdout closed\nchild log after stdout closed\n"
+    output = _tool_text(client.send(python=python))
+    assert "Traceback" not in output, output
+    output = client._collect_output(output, len(expected))
+    assert output == expected, repr(output)
+    return _finish_python_fork_output(client, "", expected)
+
+
+@executions(DIRECT, SANDBOXED)
+@requires(POSIX, command("python3"))
 def test_preserves_redirected_python_streams_from_fork_children(
     binary: Path, execution: Execution
 ) -> Transcript:
