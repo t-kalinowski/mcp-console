@@ -23,7 +23,8 @@ from support.processes import (
     stop_process_id,
 )
 from support.records import Transcript
-from support.requirements import PROCESS_EVENTS, SANDBOX, requires
+from support.sandbox_observation import observed_sandbox_descendants
+from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, SANDBOX, requires
 from support.suites import run_this_suite
 
 
@@ -96,15 +97,18 @@ def test_restarts_after_unexpected_sideband_message(binary: Path) -> Transcript:
                 stop_process(client.process)
 
 
-@requires(SANDBOX, PROCESS_EVENTS)
+@requires(SANDBOX, PROCESS_EVENTS, NATIVE_FIXTURES)
 def test_restarts_after_worker_exit_with_partial_sideband(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
+    environment = os.environ.copy()
     with (
         tempfile.TemporaryDirectory() as temporary_directory,
         ZodFixtureControl(Path(temporary_directory)) as control,
+        observed_sandbox_descendants(
+            Path(temporary_directory), environment
+        ) as wait_for_descendant,
     ):
         temporary_path = Path(temporary_directory)
-        environment = os.environ.copy()
         control.configure(environment)
         descendant_group = None
         try:
@@ -126,6 +130,7 @@ def test_restarts_after_worker_exit_with_partial_sideband(binary: Path) -> Trans
                 descendant_group = host_process_id(
                     int(marker.read_text(encoding="utf-8")), client.process.pid
                 )
+                wait_for_descendant(descendant_group, client.process)
                 # Keep the event channel open before exit removes the directory.
                 control.connect(client)
                 release_partial_sideband(marker)
@@ -201,9 +206,7 @@ def test_replaces_worker_after_relay_exit(binary: Path) -> Transcript:
                 for pid in (reported_worker, reported_relay, reported_group)
             )
             assert os.getpgid(relay_pid) == relay_group
-            assert relay_pid != relay_group, (
-                "relay unexpectedly leads the sandbox group"
-            )
+            assert relay_pid != worker_pid, "worker unexpectedly identified the relay"
             release_fixture_checkpoint(started.parent / "zod-release-relay-exit")
             client.send()
 
@@ -215,7 +218,7 @@ def test_replaces_worker_after_relay_exit(binary: Path) -> Transcript:
             worker, relay = topology.split("; ")
             assert int(worker.removeprefix("zod worker pid: ")) == reported_worker
             assert int(relay.removeprefix("relay process group: ")) == reported_group
-            assert len({worker_pid, relay_pid, relay_group}) == 3, topology
+            assert worker_pid != relay_pid, topology
             assert failure == (
                 "[worker relay stdout closed before retirement completed]\n"
                 "[worker stopped: in-memory state lost]\n"

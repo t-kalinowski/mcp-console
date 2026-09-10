@@ -200,7 +200,7 @@ def test_relays_interrupt_then_retires_descendants(binary: Path) -> Transcript:
         root = _capture_identity(_sandbox_root_pid(process.pid))
         identities.append(root)
         assert os.getpgid(pids[0]) == root[0]
-        assert root[0] != pids[0]
+        assert root[0] == pids[0]
         assert os.getpgid(pids[1]) != os.getpgid(pids[0])
         os.kill(process.pid, signal.SIGINT)
         returncode = process.wait(timeout=TIMEOUT)
@@ -314,7 +314,7 @@ def test_delivers_terminal_interrupt_once(binary: Path) -> Transcript:
         root = _capture_identity(_sandbox_root_pid(process.pid))
         identities.append(root)
         assert target_group == root[0]
-        assert target_group != target_pid
+        assert target_group == target_pid
         assert target_group != process.pid
         assert os.tcgetpgrp(master) == target_group
 
@@ -421,7 +421,7 @@ def test_preserves_terminal_ownership_with_foreground_peer(binary: Path) -> Tran
             root = _capture_identity(_sandbox_root_pid(process.pid))
             identities.insert(0, root)
             assert target_group == root[0]
-            assert target_group != target_pid
+            assert target_group == target_pid
             assert foreground_group == process.pid
             assert target_group != foreground_group
 

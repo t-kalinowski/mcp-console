@@ -1,3 +1,4 @@
+#include "runner_interposer.h"
 #include <crt_externs.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -12,12 +13,6 @@ typedef int (*proc_listchildpids_function)(pid_t, void *, int);
 
 static proc_listchildpids_function next_proc_listchildpids(void) {
     return proc_listchildpids;
-}
-
-static int is_manager(void) {
-    int argc = *_NSGetArgc();
-    char **argv = *_NSGetArgv();
-    return argc > 1 && strcmp(argv[1], "sandbox-manager") == 0;
 }
 
 static void report_observation(pid_t process_id) {
@@ -55,7 +50,7 @@ static int observe_child_snapshot(
 ) {
     int result = next_proc_listchildpids()(process_id, buffer, buffer_size);
     int saved_errno = errno;
-    if (is_manager() && (result > 0 || (result == 0 && saved_errno == 0))) {
+    if (runner_is_supervisor() && (result > 0 || (result == 0 && saved_errno == 0))) {
         report_observation(process_id);
     }
     errno = saved_errno;

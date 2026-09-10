@@ -20,7 +20,7 @@
 
 ; These entries were local exceptions in read_only_policy.sbpl. None is supplied
 ; by the pinned base. Their individual provenance and remaining attribution gaps
-; are recorded in docs/SANDBOX_SUPERVISION.md; passing a workflow alone does not
+; are recorded in docs/SANDBOX.md; passing a workflow alone does not
 ; establish that each probe is still necessary on every supported macOS version.
 (allow sysctl-read
   ; Apple Silicon startup probes query pointer-authentication availability.

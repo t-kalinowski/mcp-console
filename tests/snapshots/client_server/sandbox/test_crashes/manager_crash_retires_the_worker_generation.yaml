@@ -37,9 +37,9 @@ send: {}
 result:
   content:
     - type: text
-      text: |-
-        [worker relay stdout closed before retirement completed]
-        [worker stopped: in-memory state lost]
+      text: >-
+        [worker relay stdout closed before retirement completed; additionally
+        failed to stop the worker: worker launcher terminated by signal 9]
   isError: true
 ---
 send:

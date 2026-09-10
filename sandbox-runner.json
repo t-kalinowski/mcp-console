@@ -1,7 +1,7 @@
 {
   "repository": "t-kalinowski/codex",
   "release": "rust-v0.150.1",
-  "commit": "3ee7d3190983b482b312ddfc3201c464179a1245",
+  "commit": "b5a1c9f76a9c6ca2909105aecbc78555a26fda01",
   "protocol_version": 2,
   "rust_toolchain": "1.95.0"
 }

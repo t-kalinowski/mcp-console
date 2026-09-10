@@ -1,28 +1,24 @@
 #!/usr/bin/env -S uv run --script
 
-from __future__ import annotations
-
 import os
-import re
 import select
-import shutil
-import subprocess
+import time
 import sys
 import tempfile
-import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.checkpoints import FifoCheckpoint
+from support.native import build_interposer
 from support.client import McpClient, stop_client
 from support.execution import SANDBOXED
 from support.macos import (
     DarwinProcessIdentity,
-    capture_darwin_process_identity,
-    darwin_child_process_identities,
     kill_darwin_processes,
     live_darwin_processes,
+    capture_darwin_process_identity,
+    darwin_child_process_identities,
 )
 from support.records import Transcript
 from support.requirements import (
@@ -33,86 +29,9 @@ from support.requirements import (
 )
 from support.suites import run_this_suite
 
+
 TIMEOUT = 10
 MARKER_NAME = "mcp-console-startup-marker"
-
-
-def _build_manager_start_interposer(directory: Path) -> Path:
-    source = directory / "manager-start-interposer.c"
-    library = directory / "manager-start-interposer.dylib"
-    fixture = (
-        Path(__file__).resolve().parents[3]
-        / "fixtures"
-        / "native"
-        / "manager_start_interposer.c"
-    )
-    shutil.copyfile(fixture, source)
-    subprocess.run(
-        [
-            "cc",
-            "-std=c11",
-            "-Wall",
-            "-Wextra",
-            "-Wpedantic",
-            "-Werror",
-            "-dynamiclib",
-            "-o",
-            library,
-            source,
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return library
-
-
-def _worker_generation_processes(server_pid: int) -> tuple[int, int]:
-    deadline = time.monotonic() + TIMEOUT
-    while True:
-        processes = subprocess.run(
-            ["/bin/ps", "-axo", "pid=,ppid=,comm="],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=TIMEOUT,
-        ).stdout
-        records = []
-        for process in processes.splitlines():
-            fields = process.strip().split(maxsplit=2)
-            if len(fields) == 3:
-                records.append((int(fields[0]), int(fields[1]), fields[2]))
-
-        # At this checkpoint the server owns a launcher, whose only children
-        # are the gated runner and manager. Preserve full executable paths,
-        # including spaces, instead of tokenizing the process's arguments.
-        server_executable = next(
-            executable for pid, _, executable in records if pid == server_pid
-        )
-        launchers = {
-            pid
-            for pid, parent, executable in records
-            if parent == server_pid and executable == server_executable
-        }
-
-        managers = [
-            pid
-            for pid, parent, executable in records
-            if parent in launchers and executable == server_executable
-        ]
-        roots = [
-            pid
-            for pid, parent, executable in records
-            if parent in launchers and Path(executable).name == "mcp-console-sandbox"
-        ]
-        assert len(managers) <= 1, managers
-        assert len(roots) <= 1, roots
-        if managers and roots:
-            return roots[0], managers[0]
-        assert time.monotonic() < deadline, (
-            "worker generation did not start its root and manager"
-        )
-        time.sleep(0.01)
 
 
 def _wait_for_startup_cleanup(
@@ -165,16 +84,11 @@ def test_sandbox_setup_failure_is_reported_and_retryable(binary: Path) -> Transc
             client.send(r="echo echo")
             _assert_zod_echo(client.transcript[-1])
             transcript, stderr = client.finish_with_standard_error()
-            diagnostic = re.sub(
-                re.escape(str(temporary_parent)) + r"/mcp-console-tmp-\d+-\d+",
-                "<sandbox temp>",
-                stderr,
-            )
-            assert diagnostic == (
-                "failed to create temporary directory `<sandbox temp>`: "
+            assert stderr == (
+                "mcp-console-sandbox: create private storage: "
                 "Not a directory (os error 20)\n"
-            ), diagnostic
-            transcript.append({"stderr": diagnostic})
+            ), stderr
+            transcript.append({"stderr": stderr})
             return transcript
         finally:
             stop_client(client)
@@ -198,7 +112,7 @@ def test_manager_failure_before_readiness_keeps_custom_relay_gated(
         environment["MCP_CONSOLE_TEST_MANAGER_START"] = str(manager_started.path)
         environment["MCP_CONSOLE_TEST_MANAGER_RELEASE"] = str(manager_release.path)
         environment["DYLD_INSERT_LIBRARIES"] = str(
-            _build_manager_start_interposer(temporary)
+            build_interposer(temporary, "manager_start_interposer")
         )
 
         client = McpClient(
@@ -213,9 +127,11 @@ def test_manager_failure_before_readiness_keeps_custom_relay_gated(
             waiting = client.start_send(r="echo echo")
             manager_started.wait("manager startup")
 
-            root_pid, manager_pid = _worker_generation_processes(client.process.pid)
-            root = capture_darwin_process_identity(root_pid)
-            manager = capture_darwin_process_identity(manager_pid)
+            (manager,) = darwin_child_process_identities(
+                capture_darwin_process_identity(client.process.pid)
+            )
+            (root,) = darwin_child_process_identities(manager)
+            manager_pid = manager[0]
             identities = (root, manager)
             assert list(temporary.glob(f"**/{MARKER_NAME}")) == []
 
@@ -236,9 +152,9 @@ def test_manager_failure_before_readiness_keeps_custom_relay_gated(
                 "isError": True,
             }, result
             diagnostic = client.stderr.readline(timeout=TIMEOUT).rstrip("\n")
-            assert diagnostic == (
-                "sandbox manager did not become ready: failed to fill whole buffer"
-            ), diagnostic
+            assert diagnostic == ("mcp-console-sandbox: failed to fill whole buffer"), (
+                diagnostic
+            )
             _wait_for_startup_cleanup(identities)
             assert list(temporary.glob(f"**/{MARKER_NAME}")) == []
             waiting["startup_supervision_failure"] = {

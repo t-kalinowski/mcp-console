@@ -32,8 +32,8 @@ In particular, namespace process-group ID 1 must never reach host group signalin
 Ordinary runtime, protocol, and lifecycle cases stay with those subjects, including cases that also run sandboxed.
 Direct-launch host access and recovery live under `client_server/lifecycle`; plot-session isolation lives under `client_server/r`.
 
-The direct CLI sandbox cases own setup cancellation, large-frame startup, original-stdin identity and closure, argument and standard-stream fidelity, job control, signal and exit status, security policy, and manager-owned retirement.
-The public MCP sandbox cases cover sandbox-dependent runtime workflows, startup failure and gating, worker replacement, supervisor loss, restart, and shutdown.
+The direct CLI sandbox cases own setup cancellation, large-frame startup, original-stdin identity and closure, argument and standard-stream fidelity, job control, signal and exit status, security policy, and runner-owned retirement.
+The public MCP sandbox cases cover sandbox-dependent runtime workflows, startup failure and gating, worker replacement, caller loss, restart, and shutdown.
 The lifecycle suites own the inherited-descriptor launch matrix in direct and sandboxed modes.
 The relay wrapper workflow verifies MCP restart and shutdown when the relay is below the sandbox root and a worker descendant retains its streams.
 The direct relay CLI case compares the complete protocol through ordinary direct launch and the public sandbox command, without requiring the relay to be a process-group leader.
@@ -50,8 +50,10 @@ Map each non-generic sandbox allowance to the real workflow that requires it and
 | `__KMP_REGISTERED_LIB_*`    | PyTorch/libomp                                    | Supplied by the pinned native base; no local extension                                     |
 | uv platform services        | Offline wheel installation in private storage     | `cli/sandbox/test_uv::installs_a_local_wheel_into_private_storage`                         |
 
-The [policy audit](../../docs/SANDBOX_SUPERVISION.md#policy-extensions-and-compatibility) distinguishes redundant base-policy rules from local exceptions whose current necessity or precise caller is unconfirmed.
-Runner protocol parsing belongs to the extraction's executable tests; `tests/sandbox_installation.py` covers the installed caller boundary, one-shot resource closure, and startup without setup EOF.
+The [policy audit](../../docs/SANDBOX.md#policy-extensions-and-compatibility) distinguishes redundant base-policy rules from local exceptions whose current necessity or precise caller is unconfirmed.
+Runner protocol parsing belongs to the pinned executable tests; `tests/sandbox_installation.py` covers installation verification, one-shot resource closure, and startup without setup EOF.
+The CLI execution suite verifies frontend exec with PID and binary standard-stream preservation.
+The [integration record](../../docs/SANDBOX_RUNNER_INTEGRATION.md) separately inventories topology-only fixture changes and obsolete supervisor-death recovery cases.
 
 `cli/sandbox/test_pytorch::matches_unsandboxed_autograd` runs one CPU autograd script outside and inside the default sandbox with the same freshly resolved PyTorch environment.
 It compares the loss, full gradient, and thread count against the live unsandboxed run; the snapshot records that comparison without dependency warnings or fixed numerical values.

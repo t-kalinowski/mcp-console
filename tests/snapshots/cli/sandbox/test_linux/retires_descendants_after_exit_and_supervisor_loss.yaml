@@ -15,23 +15,10 @@ scenario: launcher crash
 exit_code: -9
 stderr: ""
 descendants_exited: true
-temporary_directory_removed: true
+temporary_directory_removed: false
 ---
 scenario: owner exit
 exit_code: -9
 stderr: ""
-descendants_exited: true
-temporary_directory_removed: true
----
-scenario: manager crash
-exit_code: 137
-stderr: ""
-descendants_exited: true
-temporary_directory_removed: true
----
-scenario: stopped manager
-exit_code: 1
-stderr: |
-  Linux sandbox: sandbox manager did not retire
 descendants_exited: true
 temporary_directory_removed: true

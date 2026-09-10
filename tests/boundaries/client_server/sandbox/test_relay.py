@@ -81,7 +81,7 @@ def test_restart_and_shutdown_with_relay_below_sandbox_root(binary: Path) -> Tra
                 assert root != relay, "relay unexpectedly replaced the sandbox root"
                 assert os.getpgid(relay) == root
                 root_identity = capture_darwin_process_identity(root)
-                (wrapper_identity,) = darwin_child_process_identities(root_identity)
+                wrapper_identity = root_identity
                 assert wrapper_identity[0] != relay
                 assert darwin_child_process_identities(wrapper_identity) == (
                     capture_darwin_process_identity(relay),

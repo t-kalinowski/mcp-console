@@ -4,16 +4,12 @@ use std::io;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::Duration;
-#[cfg(target_os = "macos")]
-use std::time::Instant;
 
 const CHILD_EXITED: libc::c_int = 1;
 const CHILD_KILLED: libc::c_int = 2;
 const CHILD_DUMPED: libc::c_int = 3;
 const CHILD_STOPPED: libc::c_int = 5;
 const CHILD_CONTINUED: libc::c_int = 6;
-#[cfg(target_os = "macos")]
-const CHILD_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(1);
 
 pub(crate) struct ChildExitWaiter {
     completion: Receiver<Result<(), String>>,
@@ -22,6 +18,13 @@ pub(crate) struct ChildExitWaiter {
 
 impl ChildExitWaiter {
     pub(crate) fn start(process_id: u32) -> Result<Self, String> {
+        Self::start_notifying(process_id, || {})
+    }
+
+    pub(crate) fn start_notifying(
+        process_id: u32,
+        notify: impl FnOnce() + Send + 'static,
+    ) -> Result<Self, String> {
         let process_id =
             valid_process_id(process_id).map_err(|_| "child process ID is invalid".to_string())?;
         let (sender, completion) = mpsc::sync_channel(1);
@@ -29,6 +32,7 @@ impl ChildExitWaiter {
             .name("worker launcher exit".to_string())
             .spawn(move || {
                 let _ = sender.send(wait_for_direct_child_exit(process_id));
+                notify();
             })
             .map_err(|error| format!("failed to start child exit observer: {error}"))?;
         Ok(Self {
@@ -53,38 +57,9 @@ impl ChildExitWaiter {
     }
 }
 
-#[cfg(target_os = "macos")]
-pub(crate) fn wait_for_process_exit_without_reaping(
-    process_id: u32,
-    timeout: Duration,
-) -> io::Result<bool> {
-    let process_id = valid_process_id(process_id)?;
-    let deadline = Instant::now() + timeout;
-
-    loop {
-        match observe_direct_child(process_id, true) {
-            Ok(true) => return Ok(true),
-            Ok(false) => {}
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => {
-                if Instant::now() >= deadline {
-                    return Ok(false);
-                }
-                continue;
-            }
-            Err(error) => return Err(error),
-        }
-
-        let now = Instant::now();
-        if now >= deadline {
-            return Ok(false);
-        }
-        thread::sleep(CHILD_EXIT_POLL_INTERVAL.min(deadline.saturating_duration_since(now)));
-    }
-}
-
 fn wait_for_direct_child_exit(process_id: libc::pid_t) -> Result<(), String> {
     loop {
-        match observe_direct_child(process_id, false) {
+        match observe_direct_child(process_id) {
             Ok(true) => return Ok(()),
             Ok(false) => {}
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
@@ -97,12 +72,9 @@ fn wait_for_direct_child_exit(process_id: libc::pid_t) -> Result<(), String> {
     }
 }
 
-fn observe_direct_child(process_id: libc::pid_t, nonblocking: bool) -> io::Result<bool> {
+fn observe_direct_child(process_id: libc::pid_t) -> io::Result<bool> {
     let wait_id = process_id as libc::id_t;
-    let mut options = libc::WEXITED | libc::WNOWAIT;
-    if nonblocking {
-        options |= libc::WNOHANG;
-    }
+    let options = libc::WEXITED | libc::WNOWAIT;
 
     loop {
         let mut information = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
@@ -115,8 +87,7 @@ fn observe_direct_child(process_id: libc::pid_t, nonblocking: bool) -> io::Resul
             return Err(io::Error::last_os_error());
         }
 
-        // SAFETY: successful `waitid` initialized the zeroed structure. Darwin
-        // leaves `si_pid` zero when WNOHANG finds no matching event.
+        // SAFETY: successful `waitid` initialized the zeroed structure.
         let information = unsafe { information.assume_init() };
         // SAFETY: waitid populated the child-status variant of siginfo_t.
         let observed_pid = unsafe { information.si_pid() };

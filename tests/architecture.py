@@ -167,9 +167,9 @@ class SandboxProcessBoundaryTests(unittest.TestCase):
 class ArchitectureCheckTests(unittest.TestCase):
     def test_checker_preserves_rust_boundaries(self) -> None:
         cases = (
-            ("sandbox/child.rs", "use super::super::server;", "depends on"),
+            ("sandbox/runner.rs", "use super::super::server;", "depends on"),
             (
-                "sandbox/supervision/manager.rs",
+                "sandbox/runner.rs",
                 "use super::{super::{super::{worker_relay as relay}}};",
                 "depends on",
             ),
@@ -177,12 +177,12 @@ class ArchitectureCheckTests(unittest.TestCase):
             ("process_exit.rs", "use super::worker_client;", "depends on"),
             ("process_descriptors.rs", "use crate::worker;", "depends on"),
             (
-                "sandbox/supervision/manager.rs",
+                "sandbox/runner.rs",
                 "use super::{process, process_tree};",
                 None,
             ),
             (
-                "sandbox/child.rs",
+                "sandbox/runner.rs",
                 "use crate::{process_descriptors, process_exit};",
                 None,
             ),
@@ -244,12 +244,12 @@ class ArchitectureCheckTests(unittest.TestCase):
                 "depends on",
             ),
             (
-                "sandbox/command.rs",
+                "sandbox/runner.rs",
                 "use crate::{worker, relay_protocol};",
                 "depends on",
             ),
             (
-                "sandbox/command.rs",
+                "sandbox/runner.rs",
                 "use crate::{server::{self, Server}};",
                 "depends on",
             ),

@@ -12,8 +12,8 @@ The documents under `design-sketches/` describe intended behavior, not the curre
 - `RELEASE.md` defines release preparation, wheel rehearsal, publication, verification, and recovery.
 - `docs/README.md` maps the implemented documentation by audience.
 - `docs/ARCHITECTURE.md` describes the implemented process structure, ownership, and lifecycle.
-- `docs/LINUX_SANDBOX.md` describes Linux namespace policy, subreaper ownership, setup, cleanup, and signal delivery.
-- `docs/SANDBOX_SUPERVISION.md` describes macOS sandbox lifetime supervision, setup-FD ownership, policy exceptions, and standalone terminal and signal ownership.
+- `docs/SANDBOX.md` describes application policy, runner integration, supported hosts, and lifetime guarantees.
+- `docs/SANDBOX_RUNNER_INTEGRATION.md` records the migration baseline, fixture changes, supported-host validation, and changed guarantees.
 - `docs/BUILTIN_RUNTIME.md` describes user-visible behavior of the built-in mixed-language console.
 - `docs/SEND_OPERATIONS.md` defines validation, preparation, control, input, and timeout ordering for `send`.
 - `docs/REQUIREMENTS.md` describes dependency and environment behavior and its trust boundary.
@@ -76,20 +76,22 @@ They are not MCP, relay, sideband, or worker-stream records.
 ## Process and ownership boundaries
 
 The suite covers client-server MCP, server-relay JSONL, relay-worker sideband and standard streams, and the public CLI, including sandbox supervision.
-`docs/ARCHITECTURE.md` owns component contracts; `docs/SANDBOX_SUPERVISION.md` and `docs/LINUX_SANDBOX.md` own platform-specific startup, retirement, failure recovery, and terminal details.
+`docs/ARCHITECTURE.md` owns component contracts; `docs/SANDBOX.md` owns the Console policy and external runner boundary.
 Keep these invariants intact:
 
 - The server owns logical relay lifetime orchestration and retirement, worker-generation state, operation admission, output cuts, pending-output budgets, response assembly, delivery ownership, retained requirements, and host resolvers.
   By default, it starts the relay through an ordinary sandbox launcher child and uses successful managed launcher exit as its synchronous cleanup barrier.
-  `serve --no-sandbox` starts the relay directly without sandbox policy or manager-owned descendant cleanup.
+  `serve --no-sandbox` starts the relay directly without sandbox policy or runner-owned descendant cleanup.
   Its sandbox access is limited to the launcher's standard streams and ordinary child lifecycle.
   Do not move these responsibilities into the relay.
 - The relay owns local worker transports, sideband translation, direct-worker signal delivery, bounded termination, and direct-worker reaping.
   It preserves each producer's order without reconstructing chronology across independent transports.
   It does not own process-tree cleanup or depend on a particular process-group identity or sandbox topology.
-- One sandbox launcher owns each sandboxed relay-worker or standalone command lifetime, including command status, signal relaying, terminal ownership, and manager-failure recovery.
-  Its host-side manager owns descendant retirement and private-directory cleanup; it does not own logical session state or relay transport.
-  Preserve waitable child identities through cleanup and keep process retirement distinct from best-effort directory removal.
+- The sandbox frontend selects application policy and execs the verified private runner with launch-time configuration.
+  Native enforcement, command status, signals, terminal ownership, descendant retirement, and private storage belong to that executable.
+  Do not rebuild native supervision in Console.
+  Caller death while the runner lives must still trigger configured cleanup; independent recovery after runner death is unsupported.
+  The server retains only ordinary child-process integration and logical worker-generation ownership.
 - Restart, replacement, evaluation admission, stdin writes, resolver callbacks, and retained-environment commits are scoped to the worker generation that accepted them.
   Work admitted for an old generation must not reach its replacement.
 - R, Python, and DuckDB dependency resolution runs outside the worker sandbox.
@@ -115,8 +117,9 @@ Keep these invariants intact:
 - `src/relay_protocol.rs` — server-relay JSONL message and framing contract.
 - `src/worker_relay.rs`, `src/worker_relay/event_writer.rs` — worker launch, I/O forwarding, ordered event output, direct-worker signaling, termination, and reaping.
 - `src/worker_client.rs`, `src/worker_client/` — session coordination and send planning, server-owned environment, evaluation, lifecycle, ordinary launcher child ownership, ordered event dispatch, output tape, shared Unix relay transport, and platform-specific startup observation.
-- `src/process_exit.rs` — shared direct-child exit observation without reaping, used by launcher ownership and sandbox cleanup.
-- `src/sandbox.rs`, `src/sandbox/{child,command,installation,linux,process_group,runner}.rs`, `src/sandbox/linux/`, `src/sandbox/supervision.rs`, `src/sandbox/supervision/` — launcher-owned sandbox construction, child and process-group cleanup, primary host-manager supervision, manager-failure recovery, and standalone job control.
+- `src/process_exit.rs` — ordinary direct-child exit observation without reaping, used by server launcher ownership.
+- `src/worker_client/relay_output.rs` — relay output draining bounded by ordinary launcher exit, including a surviving inherited writer.
+- `src/sandbox.rs`, `src/sandbox/{installation,runner,unsupported}.rs` — thin sandbox frontend, verified runner selection, application policy, and unsupported-platform errors.
 - `src/worker.rs`, `src/worker/core.rs`, `src/worker/embedded_r.rs`, `src/r_repl.c` — worker-facing facade, shared process services, current embedded-R backend, cell dispatch, console callbacks, and the C-owned DLL-REPL boundary.
 
 ### Language adapters
@@ -131,7 +134,7 @@ Keep these invariants intact:
 
 - `src/resolver.rs`, `src/resolver/` — retained host environments, direct Python-version selection, validation, platform implementations, and resolver process-group lifecycle.
 - `src/resolver/programs/` — compile-time R programs for DuckDB extension preparation, R-library resolution, and `uv` discovery.
-- `src/sandbox/runner.rs`, `src/sandbox/policy_extensions.sbpl`, `src/process_descriptors.rs` — one-shot runner setup, macOS policy additions, and inherited-descriptor boundary.
+- `src/sandbox/runner.rs`, `src/sandbox/policy_extensions.sbpl`, `src/process_descriptors.rs` — immutable runner launch configuration, macOS policy additions, and ordinary child inherited-descriptor boundary.
 - `sandbox-runner.json`, `scripts/stage-sandbox-runner`, `build_backend.py`, `build.rs`, `src/sandbox/installation.rs` — pinned source preparation, companion bundle packaging, and streaming artifact verification.
 
 ### Tests and development scripts

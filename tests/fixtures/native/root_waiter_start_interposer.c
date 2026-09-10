@@ -1,3 +1,4 @@
+#include "runner_interposer.h"
 #include <crt_externs.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -10,12 +11,6 @@
 #include <unistd.h>
 
 static _Atomic int gated_root_waiter_start = 0;
-
-static int is_subcommand(const char *name) {
-    int argc = *_NSGetArgc();
-    char **argv = *_NSGetArgv();
-    return argc > 1 && strcmp(argv[1], name) == 0;
-}
 
 static void signal_checkpoint(const char *name) {
     const char *checkpoint = getenv(name);
@@ -61,12 +56,12 @@ static void wait_for_release(const char *name) {
 }
 
 static int gate_root_waiter_start(void) {
-    if (is_subcommand("sandbox")
+    if (runner_is_supervisor()
         && atomic_exchange(&gated_root_waiter_start, 1) == 0) {
         signal_checkpoint("MCP_CONSOLE_TEST_ROOT_WAITER_START");
         wait_for_release("MCP_CONSOLE_TEST_ROOT_WAITER_RELEASE");
     }
-    return (int)syscall(SYS_kqueue);
+    return getppid();
 }
 
 #define DYLD_INTERPOSE(replacement, replacee)                                  \
@@ -78,4 +73,4 @@ static int gate_root_waiter_start(void) {
         (const void *)(uintptr_t)&replacee,                                    \
     };
 
-DYLD_INTERPOSE(gate_root_waiter_start, kqueue)
+DYLD_INTERPOSE(gate_root_waiter_start, getppid)

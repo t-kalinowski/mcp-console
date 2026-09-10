@@ -5,7 +5,6 @@ import re
 import select
 import shutil
 import signal
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -95,7 +94,9 @@ def _spawn_detached_generation(client: McpClient) -> Generation:
         "sandbox_temporary_directory": "omitted",
     }
     relay_identity = capture_darwin_process_identity(relay_pid)
-    runner_identity = capture_darwin_process_identity(os.getpgid(relay_pid))
+    (runner_identity,) = darwin_child_process_identities(
+        capture_darwin_process_identity(client.process.pid)
+    )
     assert darwin_child_process_identities(runner_identity) == (relay_identity,)
     worker_identity = capture_darwin_process_identity(worker_pid)
     child_identity = capture_darwin_process_identity(child_pid)
@@ -106,18 +107,6 @@ def _spawn_detached_generation(client: McpClient) -> Generation:
         child_identity,
         temporary_directory,
     )
-
-
-def _wait_for_process_cleanup(
-    identities: tuple[DarwinProcessIdentity, ...],
-    timeout: float,
-) -> list[int]:
-    deadline = time.monotonic() + timeout
-    survivors = live_darwin_processes(identities)
-    while survivors and time.monotonic() < deadline:
-        time.sleep(0.01)
-        survivors = live_darwin_processes(identities)
-    return survivors
 
 
 def _wait_for_process_reaping(
@@ -147,8 +136,9 @@ def _wait_for_generation_failure(client: McpClient) -> None:
         result = client.send()
         if result.get("isError") is True:
             assert result["content"][0]["text"] == (
-                "[worker relay stdout closed before retirement completed]\n"
-                "[worker stopped: in-memory state lost]"
+                "[worker relay stdout closed before retirement completed; "
+                "additionally failed to stop the worker: "
+                "worker launcher terminated by signal 9]"
             ), result
             final_poll = client.transcript[-1]
             client.transcript[poll_start:] = [final_poll]
@@ -160,32 +150,10 @@ def _wait_for_generation_failure(client: McpClient) -> None:
 
 
 def _manager_pid(server_pid: int) -> int:
-    processes = subprocess.check_output(
-        ["/bin/ps", "-axo", "pid=,ppid=,command="],
-        text=True,
+    (runner,) = darwin_child_process_identities(
+        capture_darwin_process_identity(server_pid)
     )
-    records = []
-    for process in processes.splitlines():
-        fields = process.strip().split(None, 2)
-        if len(fields) == 3:
-            records.append((int(fields[0]), int(fields[1]), fields[2]))
-
-    # The CLI launcher is the sandbox owner. Locate its manager by ancestry and
-    # its internal executable role.
-    descendants = {server_pid}
-    while True:
-        discovered = {pid for pid, parent, _ in records if parent in descendants}
-        if discovered.issubset(descendants):
-            break
-        descendants.update(discovered)
-
-    managers = [
-        pid
-        for pid, _, command in records
-        if pid in descendants and "sandbox-manager" in command.split()
-    ]
-    assert len(managers) == 1, managers
-    return managers[0]
+    return runner[0]
 
 
 def _close_client_streams(client: McpClient) -> None:
@@ -261,7 +229,7 @@ def test_server_crash_retires_the_worker_generation(binary: Path) -> Transcript:
         stop_client(client)
         if generation is not None:
             kill_darwin_processes(generation[:4])
-            shutil.rmtree(generation[4], ignore_errors=True)
+            shutil.rmtree(generation[4].parent, ignore_errors=True)
         if manager_identity is not None:
             kill_darwin_processes((manager_identity,))
         _close_client_streams(client)
@@ -271,8 +239,8 @@ def test_server_crash_retires_the_worker_generation(binary: Path) -> Transcript:
 
 @requires(MACOS_SANDBOX, PROCESS_EVENTS)
 def test_manager_crash_retires_the_worker_generation(binary: Path) -> Transcript:
-    # While the relay root remains live and pinned, the launcher must take over
-    # bounded cleanup if the ready manager exits.
+    # Losing the runner must still fail the logical generation and permit a
+    # replacement. Native cleanup after supervisor death is not guaranteed.
     client = McpClient(binary, SANDBOXED.serve())
     generation: Generation | None = None
     manager_identity: DarwinProcessIdentity | None = None
@@ -287,29 +255,18 @@ def test_manager_crash_retires_the_worker_generation(binary: Path) -> Transcript
         )
         client.transcript.append({"manager_signal": "SIGKILL"})
         _wait_for_generation_failure(client)
-        survivors = _wait_for_process_cleanup(generation[:4], timeout=5)
-        survivor_names = [
-            name
-            for name, identity in zip(
-                ("runner", "relay", "worker", "detached child"), generation[:4]
-            )
-            if identity[0] in survivors
-        ]
-        assert survivors == [], (
-            f"worker-generation processes survived manager crash: {survivor_names}"
-        )
         client.send(r=code('writeLines("replacement ready")'))
         replacement = _last_text(client)
         assert replacement == "[starting new worker]\nreplacement ready\n", repr(
             replacement
         )
-        assert generation[4].exists(), "manager recovery removed worker temp"
+        assert generation[4].exists(), "failed supervisor cleanup removed worker temp"
         return client.transcript
     finally:
         stop_client(client)
         if generation is not None:
             kill_darwin_processes(generation[:4])
-            shutil.rmtree(generation[4], ignore_errors=True)
+            shutil.rmtree(generation[4].parent, ignore_errors=True)
         if manager_identity is not None:
             kill_darwin_processes((manager_identity,))
         _close_client_streams(client)

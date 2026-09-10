@@ -1046,6 +1046,7 @@ def run_explicit_r_preparation_owns_environment(relay: ScriptedRelay) -> None:
     )
     relay.expect({"kind": "r_resolved", "library": library})
     relay.send({"kind": "r_activated", "library": library})
+    relay.notify_checkpoint(EXPLICIT_R_PREPARATION_CALLBACK_REPLY_NAME)
     relay.expect(EVALUATION)
     relay.complete()
     relay.retire()

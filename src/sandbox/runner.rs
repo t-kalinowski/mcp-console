@@ -1,204 +1,54 @@
-//! Send one initial configuration frame over the private runner setup pipe.
+//! Select application policy and replace the frontend with the verified runner.
 
-use super::{installation, platform::TemporaryDirectory};
-use std::collections::BTreeMap;
-use std::ffi::{OsStr, OsString};
-use std::io::{self, PipeWriter, Write as _};
-use std::os::fd::{AsRawFd as _, RawFd};
-use std::process::Command;
+use super::installation;
+use std::ffi::OsString;
+use std::os::unix::process::CommandExt as _;
+use std::process::{Command, ExitCode};
 
-#[cfg(target_os = "macos")]
-const POLICY_EXTENSION: &str = include_str!("policy_extensions.sbpl");
+const CONFIGURATION: &str = "MCP_CONSOLE_SANDBOX_CONFIG";
 
-pub(super) fn catchable_signals() -> impl Iterator<Item = libc::c_int> {
-    // Darwin's sigfillset includes bit 32, but sigaction accepts only 1..=31.
-    // Its last signal is SIGUSR2; Linux also has real-time signals.
+pub(super) fn run(command: &[OsString], parent: Option<u32>) -> Result<ExitCode, String> {
+    if let Some(pid) = parent
+        && unsafe { libc::getppid() } as u32 != pid
+    {
+        return Err(format!(
+            "sandbox owner {pid} is not the launcher's current parent"
+        ));
+    }
+    // The runner captures and monitors this same caller after exec. No waiting
+    // adapter changes its direct-parent identity or retains a standard stream.
+    let extension: Option<&str>;
     #[cfg(target_os = "macos")]
-    let last = libc::SIGUSR2;
+    {
+        extension = Some(include_str!("policy_extensions.sbpl"));
+    }
     #[cfg(target_os = "linux")]
-    let last = libc::SIGRTMAX();
-    let mut valid = unsafe { std::mem::zeroed() };
-    unsafe { libc::sigfillset(&mut valid) };
-    // Darwin rejects even queries for SIGKILL/SIGSTOP. Neither platform can
-    // catch or block them. Also omit libc-reserved Linux thread signals.
-    (1..=last)
-        .filter(|signal| !matches!(*signal, libc::SIGKILL | libc::SIGSTOP))
-        .filter(move |signal| unsafe { libc::sigismember(&valid, *signal) } == 1)
-}
-
-pub(super) fn ignored_signals() -> io::Result<u64> {
-    let mut ignored = 0;
-    for signal in catchable_signals() {
-        let mut action = unsafe { std::mem::zeroed() };
-        if unsafe { libc::sigaction(signal, std::ptr::null(), &mut action) } < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        if action.sa_sigaction == libc::SIG_IGN {
-            ignored |= 1 << (signal - 1);
-        }
+    {
+        extension = None;
     }
-    Ok(ignored)
-}
-
-pub(super) struct Setup {
-    writer: Option<PipeWriter>,
-    frame: Vec<u8>,
-    written: usize,
-}
-
-impl Setup {
-    pub(super) fn new(
-        command: &mut Command,
-        temporary: &TemporaryDirectory,
-        program: &OsStr,
-        arguments: &[OsString],
-        original_mask: libc::sigset_t,
-        original_ignored: u64,
-    ) -> Result<Self, String> {
-        let (reader, writer) =
-            io::pipe().map_err(|error| format!("failed to create sandbox setup pipe: {error}"))?;
-        let flags = unsafe { libc::fcntl(writer.as_raw_fd(), libc::F_GETFL) };
-        if flags < 0
-            || unsafe { libc::fcntl(writer.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) }
-                < 0
-        {
-            return Err(format!(
-                "failed to configure sandbox setup writes: {}",
-                io::Error::last_os_error()
-            ));
-        }
-        command
-            .arg("--bootstrap-fd")
-            .arg(reader.as_raw_fd().to_string());
-        let executable = std::env::current_exe()
-            .map_err(|error| format!("failed to locate the sandbox target wrapper: {error}"))?;
-        let mut target = vec![
-            utf8(executable.as_os_str())?,
-            "sandbox-target".to_string(),
-            "--signal-mask".to_string(),
-            catchable_signals()
-                .filter(|signal| unsafe { libc::sigismember(&original_mask, *signal) } == 1)
-                .fold(0u64, |mask, signal| mask | (1 << (signal - 1)))
-                .to_string(),
-            "--ignored-signals".to_string(),
-            original_ignored.to_string(),
-            "--".to_string(),
-            utf8(program)?,
-        ];
-        target.extend(
-            arguments
-                .iter()
-                .map(|argument| utf8(argument))
-                .collect::<Result<Vec<_>, _>>()?,
-        );
-        let mut environment = std::env::vars_os()
-            .map(|(name, value)| Ok((utf8(&name)?, utf8(&value)?)))
-            .collect::<Result<BTreeMap<_, _>, String>>()?;
-        for (name, value) in command.get_envs() {
-            let name = utf8(name)?;
-            if let Some(value) = value {
-                environment.insert(name, utf8(value)?);
-            } else {
-                environment.remove(&name);
-            }
-        }
-        environment.insert("TMPDIR".to_string(), utf8(temporary.path().as_os_str())?);
-        let entries = vec![serde_json::json!({
-            "path": {"type": "special", "value": {"kind": "root"}}, "access": "read"
-        })];
-        let extension: Option<String>;
-        #[cfg(target_os = "macos")]
-        {
-            // Disposable data is allowed to replace its own metadata and root.
-            let temporary_literal = utf8(temporary.path().as_os_str())?
-                .replace('\\', "\\\\")
-                .replace('"', "\\\"");
-            extension = Some(format!(
-                "{POLICY_EXTENSION}\n(allow file-write* (subpath \"{temporary_literal}\"))\n"
-            ));
-        }
-        #[cfg(target_os = "linux")]
-        let entries = {
-            let mut entries = entries;
-            entries.push(serde_json::json!({
-                "path": {"type": "path", "path": temporary.path()}, "access": "write"
-            }));
-            extension = None;
-            entries
-        };
-        let payload = serde_json::to_vec(&serde_json::json!({
-            "version": installation::PROTOCOL_VERSION,
-            "command": target,
-            "cwd": std::env::current_dir().map_err(|error| format!("failed to read sandbox working directory: {error}"))?,
-            "environment": environment,
-            "filesystem": {"kind": "restricted", "entries": entries},
-            "network": "restricted",
-            "proxy": null,
-            "macos_seatbelt_profile_extension": extension,
-        })).map_err(|error| format!("failed to encode sandbox startup: {error}"))?;
-        if payload.len() > 1_048_576 {
-            return Err(
-                "sandbox startup exceeds the private executable's message limit".to_string(),
-            );
-        }
-        let mut frame = (payload.len() as u32).to_be_bytes().to_vec();
-        frame.extend(payload);
-        // Command owns the read end through spawn. Dropping Command closes
-        // the launcher's copy before manager startup; the parent stays CLOEXEC.
-        crate::process_descriptors::close_unlisted(command, reader)?;
-        Ok(Self {
-            writer: Some(writer),
-            frame,
-            written: 0,
-        })
-    }
-
-    pub(super) fn descriptor(&self) -> RawFd {
-        self.writer
-            .as_ref()
-            .expect("setup has not started")
-            .as_raw_fd()
-    }
-
-    #[cfg(target_os = "linux")]
-    pub(super) fn pending(&self) -> bool {
-        self.writer.is_some()
-    }
-
-    pub(super) fn write_once(&mut self) -> io::Result<()> {
-        let Some(writer) = &mut self.writer else {
-            return Ok(());
-        };
-        // Return to lifetime events after every write, even when the reader
-        // drains fast enough that successive writes would all succeed.
-        match writer.write(&self.frame[self.written..]) {
-            Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
-            Ok(count) => {
-                self.written += count;
-                if self.written < self.frame.len() {
-                    return Ok(());
-                }
-            }
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    io::ErrorKind::Interrupted | io::ErrorKind::WouldBlock
-                ) =>
-            {
-                return Ok(());
-            }
-            Err(error) if error.kind() == io::ErrorKind::BrokenPipe => {}
-            Err(error) => return Err(error),
-        }
-        // Closing the completed channel removes its descriptor watch.
-        // Native setup starts at the complete frame, without requiring EOF.
-        self.writer = None;
-        Ok(())
-    }
-}
-
-fn utf8(value: &OsStr) -> Result<String, String> {
-    value.to_str().map(str::to_owned).ok_or_else(|| {
-        "sandbox startup requires UTF-8 arguments, paths, and environment values".to_string()
-    })
+    let configuration = serde_json::json!({
+        "version": installation::PROTOCOL_VERSION,
+        "filesystem": {"kind": "restricted", "entries": [{
+            "path": {"type": "special", "value": {"kind": "root"}},
+            "access": "read",
+        }]},
+        "network": "restricted",
+        "proxy": null,
+        "macos_seatbelt_profile_extension": extension,
+        "lifecycle": {
+            "parent_pid": parent,
+            "sigterm": if parent.is_some() { "retire" } else { "forward" },
+            "private_tmp": {"environment": ["TMPDIR"]},
+            "cleanup_timeout_ms": 1000,
+        },
+    });
+    let error = Command::new(installation::private_runner()?)
+        .args(["--config-env", CONFIGURATION, "--"])
+        .args(command)
+        .env(CONFIGURATION, configuration.to_string())
+        .env("MCP_CONSOLE_SANDBOX", "1")
+        .env_remove("DYLD_INSERT_LIBRARIES")
+        .env_remove("LD_PRELOAD")
+        .exec();
+    Err(format!("failed to launch private sandbox runner: {error}"))
 }

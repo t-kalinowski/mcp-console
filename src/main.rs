@@ -51,22 +51,6 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
-        cli::Command::SandboxManager {
-            root_pid,
-            cleanup_timeout_millis,
-            temporary_directory,
-        } => match sandbox::run_manager(root_pid, cleanup_timeout_millis, temporary_directory) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(error) => exit_with_error(error),
-        },
-        cli::Command::SandboxTarget {
-            signal_mask,
-            ignored_signals,
-            command,
-        } => match sandbox::run_target(signal_mask, ignored_signals, &command) {
-            Ok(exit_code) => exit_code,
-            Err(error) => exit_with_error(error),
-        },
         cli::Command::Sandbox {
             exit_with_parent,
             command,

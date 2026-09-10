@@ -20,8 +20,8 @@ result:
       text: |-
         [active evaluation stopped by session restart request]
         [worker stopped: in-memory state lost]
-        [worker launcher exited with status 1]
+        [worker launcher did not retire within 6000 ms; additionally worker launcher terminated by signal 9]
   isError: true
-launcher_recovery:
-  manager: stopped before owned retirement
-  verified_barrier: manager, relay, worker, and detached descendant
+launcher_failure:
+  supervisor: stopped before owned retirement
+  verified_barrier: direct launcher reaped; descendant cleanup is not guaranteed

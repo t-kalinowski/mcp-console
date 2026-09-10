@@ -24,6 +24,7 @@ from support.processes import (
     stop_process_id,
 )
 from support.records import Transcript
+from support.sandbox_observation import observed_sandbox_descendants
 from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, SANDBOX, requires
 from support.suites import run_this_suite
 
@@ -35,15 +36,18 @@ from boundaries.client_server._harness import (
 )
 
 
-@requires(SANDBOX, PROCESS_EVENTS)
+@requires(SANDBOX, PROCESS_EVENTS, NATIVE_FIXTURES)
 def test_restart_cancels_partial_sideband_frame(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
+    environment = os.environ.copy()
     with (
         tempfile.TemporaryDirectory() as temporary_directory,
         ZodFixtureControl(Path(temporary_directory)) as control,
+        observed_sandbox_descendants(
+            Path(temporary_directory), environment
+        ) as wait_for_descendant,
     ):
         temporary_path = Path(temporary_directory)
-        environment = os.environ.copy()
         control.configure(environment)
         client = McpClient(
             binary,
@@ -64,6 +68,7 @@ def test_restart_cancels_partial_sideband_frame(binary: Path) -> Transcript:
             descendant_group = host_process_id(
                 int(marker.read_text(encoding="utf-8")), client.process.pid
             )
+            wait_for_descendant(descendant_group, client.process)
             control.connect(client)
             release_partial_sideband(marker)
             control.wait_for(0, "partial_sideband_written")
@@ -110,14 +115,19 @@ def test_restart_cancels_partial_sideband_frame(binary: Path) -> Transcript:
                 stop_process(client.process)
 
 
-@requires(SANDBOX, PROCESS_EVENTS)
+@requires(SANDBOX, PROCESS_EVENTS, NATIVE_FIXTURES)
 def test_restart_cancels_reader_after_operation_result(
     binary: Path,
 ) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
-    with tempfile.TemporaryDirectory() as temporary_directory:
+    environment = os.environ.copy()
+    with (
+        tempfile.TemporaryDirectory() as temporary_directory,
+        observed_sandbox_descendants(
+            Path(temporary_directory), environment
+        ) as wait_for_descendant,
+    ):
         temporary_path = Path(temporary_directory)
-        environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
         client = McpClient(
             binary,
@@ -138,6 +148,7 @@ def test_restart_cancels_reader_after_operation_result(
             descendant_group = host_process_id(
                 int(marker.read_text(encoding="utf-8")), client.process.pid
             )
+            wait_for_descendant(descendant_group, client.process)
             wait_for_marker(
                 temporary_path,
                 "zod-sideband-partial-tail-written",
@@ -192,9 +203,13 @@ def test_restart_drains_readable_frame_before_abandoning_partial_tail(
     interposer_source = (
         Path(__file__).resolve().parents[3] / "fixtures" / "delay_sideband_poll.c"
     )
+    environment = os.environ.copy()
     with (
         tempfile.TemporaryDirectory() as temporary_directory,
         ZodFixtureControl(Path(temporary_directory)) as control,
+        observed_sandbox_descendants(
+            Path(temporary_directory), environment
+        ) as wait_for_descendant,
     ):
         temporary = Path(temporary_directory)
         interposer = compile_interposer(
@@ -205,7 +220,6 @@ def test_restart_drains_readable_frame_before_abandoning_partial_tail(
         sideband_ready_name = "delay-sideband-poll-sideband-ready"
         cancellation_ready_name = "delay-sideband-poll-cancellation-ready"
         partial_tail_name = "zod-sideband-partial-tail-written"
-        environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
         environment["MCP_CONSOLE_TEST_RELAY_BINARY"] = str(binary)
         environment["MCP_CONSOLE_TEST_POLL_DYLIB"] = str(interposer)
@@ -245,6 +259,7 @@ def test_restart_drains_readable_frame_before_abandoning_partial_tail(
             descendant_group = host_process_id(
                 int(marker.read_text(encoding="utf-8")), client.process.pid
             )
+            wait_for_descendant(descendant_group, client.process)
             wait_for_marker(temporary, sideband_ready_name, client)
             wait_for_marker(temporary, partial_tail_name, client)
             restart = client.start_send(control="restart")
@@ -297,15 +312,18 @@ def test_restart_drains_readable_frame_before_abandoning_partial_tail(
                 stop_process(client.process)
 
 
-@requires(SANDBOX, PROCESS_EVENTS)
+@requires(SANDBOX, PROCESS_EVENTS, NATIVE_FIXTURES)
 def test_shutdown_cancels_partial_sideband_frame(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
+    environment = os.environ.copy()
     with (
         tempfile.TemporaryDirectory() as temporary_directory,
         ZodFixtureControl(Path(temporary_directory)) as control,
+        observed_sandbox_descendants(
+            Path(temporary_directory), environment
+        ) as wait_for_descendant,
     ):
         temporary_path = Path(temporary_directory)
-        environment = os.environ.copy()
         control.configure(environment)
         client = McpClient(
             binary,
@@ -326,6 +344,7 @@ def test_shutdown_cancels_partial_sideband_frame(binary: Path) -> Transcript:
             descendant_group = host_process_id(
                 int(marker.read_text(encoding="utf-8")), client.process.pid
             )
+            wait_for_descendant(descendant_group, client.process)
             control.connect(client)
             release_partial_sideband(marker)
             control.wait_for(0, "partial_sideband_written")

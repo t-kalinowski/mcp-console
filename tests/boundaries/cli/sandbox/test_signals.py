@@ -26,11 +26,17 @@ from support.macos import (
 )
 from support.normalization import code
 from support.records import Transcript
-from support.requirements import MACOS_SANDBOX, PROCESS_EVENTS, SANDBOX, requires
+from support.requirements import (
+    MACOS_SANDBOX,
+    NATIVE_FIXTURES,
+    PROCESS_EVENTS,
+    SANDBOX,
+    requires,
+)
 from support.suites import run_this_suite
 
 
-@requires(MACOS_SANDBOX, PROCESS_EVENTS)
+@requires(MACOS_SANDBOX, PROCESS_EVENTS, NATIVE_FIXTURES)
 def test_pending_signal_at_root_exit_preserves_status(binary: Path) -> Transcript:
     lifetime = _start_lifetime(binary)
     exit_events = select.kqueue()
@@ -97,7 +103,7 @@ def test_pending_signal_at_root_exit_preserves_status(binary: Path) -> Transcrip
         _cleanup(lifetime)
 
 
-@requires(MACOS_SANDBOX, PROCESS_EVENTS)
+@requires(MACOS_SANDBOX, PROCESS_EVENTS, NATIVE_FIXTURES)
 def test_owned_sigterm_retires_the_sandbox_lifetime(binary: Path) -> Transcript:
     lifetime = _start_lifetime(binary, exit_with_parent=os.getpid())
     cleanup = (lifetime.root, lifetime.target, lifetime.descendant, lifetime.manager)
@@ -143,7 +149,7 @@ def test_owned_sigterm_retires_the_sandbox_lifetime(binary: Path) -> Transcript:
         _cleanup(lifetime)
 
 
-@requires(MACOS_SANDBOX, PROCESS_EVENTS)
+@requires(MACOS_SANDBOX, PROCESS_EVENTS, NATIVE_FIXTURES)
 def test_owned_sigterm_retires_when_inherited_ignored(binary: Path) -> Transcript:
     lifetime = _start_lifetime(
         binary,
@@ -194,7 +200,7 @@ def test_owned_sigterm_retires_when_inherited_ignored(binary: Path) -> Transcrip
         _cleanup(lifetime)
 
 
-@requires(MACOS_SANDBOX, PROCESS_EVENTS)
+@requires(MACOS_SANDBOX, PROCESS_EVENTS, NATIVE_FIXTURES)
 def test_owned_root_exit_waits_for_cleanup(binary: Path) -> Transcript:
     lifetime = _start_lifetime(binary, exit_with_parent=os.getpid())
     cleanup = (lifetime.root, lifetime.target, lifetime.descendant, lifetime.manager)

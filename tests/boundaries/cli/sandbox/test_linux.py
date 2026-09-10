@@ -2,6 +2,7 @@
 
 import os
 import select
+import shutil
 import signal
 import socket
 import subprocess
@@ -140,8 +141,6 @@ def test_retires_descendants_after_exit_and_supervisor_loss(binary: Path) -> Tra
         "owned SIGTERM",
         "launcher crash",
         "owner exit",
-        "manager crash",
-        "stopped manager",
     ):
         process = subprocess.Popen(
             [sys.executable, "-c", owner, str(binary), script]
@@ -162,6 +161,7 @@ def test_retires_descendants_after_exit_and_supervisor_loss(binary: Path) -> Tra
             text=True,
         )
         descriptors: list[int] = []
+        temporary: str | None = None
         try:
             assert select.select([process.stdout], [], [], 15)[0], scenario
             temporary = process.stdout.readline().strip()
@@ -170,9 +170,9 @@ def test_retires_descendants_after_exit_and_supervisor_loss(binary: Path) -> Tra
             if scenario == "owner exit":
                 (launcher,) = child_process_identities(launcher)
                 descriptors.append(os.pidfd_open(launcher[0]))
-            managers = child_process_identities(launcher)
-            assert len(managers) == 1, managers
-            pending = list(managers)
+            roots = child_process_identities(launcher)
+            assert len(roots) == 1, roots
+            pending = list(roots)
             while pending:
                 identity = pending.pop()
                 descriptors.append(os.pidfd_open(identity[0]))
@@ -182,13 +182,9 @@ def test_retires_descendants_after_exit_and_supervisor_loss(binary: Path) -> Tra
                 process.stdin.flush()
             elif scenario == "owned SIGTERM":
                 process.send_signal(signal.SIGTERM)
-            elif scenario in {"launcher crash", "owner exit"}:
-                process.kill()
-            elif scenario == "stopped manager":
-                os.kill(managers[0][0], signal.SIGSTOP)
-                process.send_signal(signal.SIGTERM)
             else:
-                os.kill(managers[0][0], signal.SIGKILL)
+                assert scenario in {"launcher crash", "owner exit"}
+                process.kill()
             process.wait(timeout=15)
             poll = select.poll()
             for descriptor in descriptors:
@@ -200,22 +196,19 @@ def test_retires_descendants_after_exit_and_supervisor_loss(binary: Path) -> Tra
                     poll.unregister(descriptor)
                     descriptors.remove(descriptor)
                     os.close(descriptor)
-            # All host owners have exited; cleanup precedes their exit.
-            assert not Path(temporary).exists(), (scenario, temporary)
+            # Native death links retire descendants after runner SIGKILL,
+            # but only a living runner can remove private storage.
+            if scenario == "launcher crash":
+                assert Path(temporary).is_dir(), (scenario, temporary)
+            else:
+                assert not Path(temporary).exists(), (scenario, temporary)
             stderr = process.stderr.read()
-            expected_stderr = (
-                "Linux sandbox: sandbox manager did not retire\n"
-                if scenario == "stopped manager"
-                else ""
-            )
-            assert stderr == expected_stderr, (scenario, stderr)
+            assert stderr == "", (scenario, stderr)
             expected = {
                 "command exit": 23,
                 "owned SIGTERM": 0,
                 "launcher crash": -signal.SIGKILL,
                 "owner exit": -signal.SIGKILL,
-                "manager crash": 137,
-                "stopped manager": 1,
             }
             assert process.returncode == expected[scenario], (
                 scenario,
@@ -227,7 +220,7 @@ def test_retires_descendants_after_exit_and_supervisor_loss(binary: Path) -> Tra
                     "exit_code": process.returncode,
                     "stderr": stderr,
                     "descendants_exited": True,
-                    "temporary_directory_removed": True,
+                    "temporary_directory_removed": scenario != "launcher crash",
                 }
             )
         finally:
@@ -239,6 +232,8 @@ def test_retires_descendants_after_exit_and_supervisor_loss(binary: Path) -> Tra
             process.wait(timeout=15)
             for stream in (process.stdin, process.stdout, process.stderr):
                 stream.close()
+            if temporary:
+                shutil.rmtree(Path(temporary).parent, ignore_errors=True)
     return transcript
 
 
@@ -311,9 +306,9 @@ def test_rejects_inherited_procfs_before_running_command(binary: Path) -> Transc
     )
     assert result.returncode == 1, result
     assert result.stdout == "", result
-    assert (
-        result.stderr == "Linux sandbox requires procfs mounted for its PID namespace\n"
-    ), result
+    assert result.stderr == "native target setup requires namespace-local procfs\n", (
+        result
+    )
     return [
         {
             "command": ["mcp-console", "sandbox", "--", "/bin/echo", "must not run"],

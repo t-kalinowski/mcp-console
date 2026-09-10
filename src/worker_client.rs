@@ -13,6 +13,8 @@ mod child_exit;
 #[cfg(unix)]
 mod events;
 #[cfg(unix)]
+mod relay_output;
+#[cfg(unix)]
 mod startup;
 
 #[cfg(unix)]
@@ -193,11 +195,16 @@ impl WorkerProcessOutcome {
 struct WorkerRetirementFailure {
     message: String,
     outcome: Option<WorkerProcessOutcome>,
+    can_replace: bool,
 }
 
 impl WorkerRetirementFailure {
     fn new(message: String, outcome: Option<WorkerProcessOutcome>) -> Self {
-        Self { message, outcome }
+        Self {
+            message,
+            outcome,
+            can_replace: false,
+        }
     }
 
     fn attach_to(self, mut failure: SendFailure) -> SendFailure {

@@ -1,3 +1,4 @@
+#include "runner_interposer.h"
 #include <crt_externs.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -6,14 +7,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/socket.h>
 
 static _Atomic int gated_manager_start = 0;
-
-static int is_subcommand(const char *name) {
-    int argc = *_NSGetArgc();
-    char **argv = *_NSGetArgv();
-    return argc > 1 && strcmp(argv[1], name) == 0;
-}
 
 static void signal_checkpoint(const char *name) {
     const char *checkpoint = getenv(name);
@@ -58,13 +54,15 @@ static void wait_for_release(const char *name) {
     }
 }
 
-static pid_t gate_manager_start(void) {
-    if (is_subcommand("sandbox-manager")
-        && atomic_exchange(&gated_manager_start, 1) == 0) {
+static ssize_t gate_native_readiness(int descriptor, void *buffer, size_t count, int flags) {
+    ssize_t result = recv(descriptor, buffer, count, flags);
+    if (runner_is_supervisor() && count == 1 && result == 1 &&
+        *(const unsigned char *)buffer == 1 &&
+        atomic_exchange(&gated_manager_start, 1) == 0) {
         signal_checkpoint("MCP_CONSOLE_TEST_MANAGER_START");
         wait_for_release("MCP_CONSOLE_TEST_MANAGER_RELEASE");
     }
-    return getppid();
+    return result;
 }
 
 #define DYLD_INTERPOSE(replacement, replacee)                                  \
@@ -76,4 +74,4 @@ static pid_t gate_manager_start(void) {
         (const void *)(uintptr_t)&replacee,                                    \
     };
 
-DYLD_INTERPOSE(gate_manager_start, getppid)
+DYLD_INTERPOSE(gate_native_readiness, recv)

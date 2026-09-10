@@ -11,8 +11,7 @@ result:
 startup_supervision_failure:
   manager: killed before readiness
   custom_relay: did not execute
-  sandbox_stderr: >-
-    sandbox manager did not become ready: failed to fill whole buffer
+  sandbox_stderr: "mcp-console-sandbox: failed to fill whole buffer"
   verified_cleanup: gated relay root and manager
 ---
 send:

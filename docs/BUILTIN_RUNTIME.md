@@ -502,10 +502,11 @@ The [implemented architecture](ARCHITECTURE.md) describes the session record and
   Managed graphics and Python caches use each worker's R session temporary directory, including with `--no-sandbox`.
 - In the default sandboxed mode, normal restart, automatic failure replacement, orderly server shutdown, and unexpected server or relay failure retire descendants across process-group and session changes.
   On Linux, subreapers adopt orphaned descendants and wait for their exit before acknowledging cleanup.
-  On macOS, the guarantee covers descendants observed by the launcher-owned manager; a later descendant that becomes orphaned before its fork event is resolved remains outside this guarantee.
-  The configured relay starts only after host cleanup ownership and manager-failure recovery are established.
-- With `serve --no-sandbox`, the worker runs with host permissions and no manager tracks or retires its descendants; normal relay shutdown still reaps the direct worker.
-- Linux sandboxing requires kernel 5.11 or later, procfs, and permission for namespace setup; see [Linux sandboxing](LINUX_SANDBOX.md).
+  On macOS, the guarantee covers the owned process group and detached descendants observed by the runner; a later descendant that becomes orphaned before its fork event is resolved remains outside this guarantee.
+  The configured relay starts only after the runner establishes native enforcement and cleanup ownership.
+  Caller death triggers cleanup while the runner lives; runner death has no independent recovery guarantee.
+- With `serve --no-sandbox`, the worker runs with host permissions and no runner tracks or retires its descendants; normal relay shutdown still reaps the direct worker.
+- Linux sandboxing requires kernel 5.11 or later, procfs, and permission for namespace setup; see [Linux sandboxing](SANDBOX.md).
 - Windows is not supported.
 
 The [architecture](ARCHITECTURE.md) explains lifecycle and process ownership.

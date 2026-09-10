@@ -60,44 +60,6 @@ pub enum Command {
         command: Vec<OsString>,
     },
 
-    /// Run the internal sandbox lifetime manager
-    #[command(hide = true)]
-    SandboxManager {
-        /// Direct sandbox root to supervise
-        #[arg(long, value_name = "PID")]
-        root_pid: u32,
-
-        /// Maximum process-cleanup interval
-        #[arg(long, value_name = "MILLISECONDS")]
-        cleanup_timeout_millis: u64,
-
-        /// Private directory owned by the sandbox lifetime
-        #[arg(long, value_name = "PATH")]
-        temporary_directory: PathBuf,
-    },
-
-    /// Restore the target signal state and execute its command
-    #[command(hide = true)]
-    SandboxTarget {
-        /// Original signal mask, encoded as an unsigned decimal integer
-        #[arg(long, value_name = "MASK")]
-        signal_mask: u64,
-
-        /// Inherited ignored signals, encoded as an unsigned decimal bitset
-        #[arg(long, value_name = "MASK")]
-        ignored_signals: u64,
-
-        /// Command and arguments to run after host supervision is ready
-        #[arg(
-            value_name = "COMMAND",
-            required = true,
-            num_args = 1..,
-            allow_hyphen_values = true,
-            trailing_var_arg = true
-        )]
-        command: Vec<OsString>,
-    },
-
     /// Run a command with the MCP Console sandbox policy
     #[command(after_help = SANDBOX_EXAMPLES)]
     Sandbox {

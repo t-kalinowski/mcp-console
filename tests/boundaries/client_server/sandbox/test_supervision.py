@@ -2,13 +2,10 @@
 
 import os
 import re
-import select
 import shutil
 import signal
-import subprocess
 import sys
 import tempfile
-import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -27,6 +24,10 @@ from support.macos import (
 )
 from support.normalization import code
 from support.records import Transcript
+from support.sandbox_observation import (
+    RunnerObservations,
+    build_runner_observation_interposer,
+)
 from support.requirements import (
     MACOS_SANDBOX,
     NATIVE_FIXTURES,
@@ -35,79 +36,7 @@ from support.requirements import (
 )
 from support.suites import run_this_suite
 
-TIMEOUT = 10
-
-
 _Generation = tuple[_ProcessIdentity, _ProcessIdentity, _ProcessIdentity, Path]
-
-
-class _ManagerObservations:
-    def __init__(self, path: Path) -> None:
-        os.mkfifo(path)
-        self.path = path
-        self.descriptor = os.open(path, os.O_RDWR | os.O_NONBLOCK)
-        self.buffer = bytearray()
-
-    def close(self) -> None:
-        os.close(self.descriptor)
-
-    def wait_for(self, process_id: int, client: McpClient) -> None:
-        deadline = time.monotonic() + TIMEOUT
-        while True:
-            newline = self.buffer.find(b"\n")
-            if newline >= 0:
-                observed = int(self.buffer[:newline])
-                del self.buffer[: newline + 1]
-                if observed == process_id:
-                    return
-                continue
-
-            assert client.process.poll() is None, (
-                "mcp-console stopped before manager observation"
-            )
-            remaining = deadline - time.monotonic()
-            assert remaining > 0, (
-                f"manager did not observe sandbox descendant {process_id}"
-            )
-            readable, _, _ = select.select([self.descriptor], [], [], remaining)
-            assert readable, f"manager did not observe sandbox descendant {process_id}"
-            chunk = os.read(self.descriptor, 4096)
-            assert chunk, "manager observation stream closed"
-            self.buffer.extend(chunk)
-
-
-def _build_manager_observation_interposer(directory: Path) -> Path:
-    library = directory / "manager-observation-interposer.dylib"
-    source = (
-        Path(__file__).resolve().parents[3]
-        / "fixtures"
-        / "native"
-        / "manager_observation_interposer.c"
-    )
-    architectures = []
-    if os.uname().machine == "arm64":
-        # The loader variable also reaches host helpers before the manager.
-        # Host executables can use the arm64e ABI.
-        architectures = ["-arch", "arm64", "-arch", "arm64e"]
-    subprocess.run(
-        [
-            "cc",
-            "-std=c11",
-            "-Wall",
-            "-Wextra",
-            "-Wpedantic",
-            "-Werror",
-            "-dynamiclib",
-            *architectures,
-            "-o",
-            library,
-            source,
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return library
 
 
 def _normalize_generation(client: McpClient) -> _Generation:
@@ -208,7 +137,7 @@ def test_restart_retires_descendants_outside_the_worker_group(
         stop_client(client)
         if generation is not None:
             _kill_generation(generation)
-            shutil.rmtree(generation[3], ignore_errors=True)
+            shutil.rmtree(generation[3].parent, ignore_errors=True)
 
 
 @requires(MACOS_SANDBOX, NATIVE_FIXTURES, PROCESS_EVENTS)
@@ -217,21 +146,21 @@ def test_failure_replacement_retires_descendants_outside_the_worker_group(
 ) -> Transcript:
     temporary_owner = tempfile.TemporaryDirectory()
     temporary = Path(temporary_owner.name)
-    observations = _ManagerObservations(temporary / "manager-observations")
+    observations = RunnerObservations(temporary / "manager-observations")
     environment = os.environ.copy()
     environment["MCP_CONSOLE_TEST_MANAGER_OBSERVATIONS"] = str(observations.path)
     environment["DYLD_INSERT_LIBRARIES"] = str(
-        _build_manager_observation_interposer(temporary)
+        build_runner_observation_interposer(temporary)
     )
     client = McpClient(binary, SANDBOXED.serve(), environment)
     generation: _Generation | None = None
     try:
         client.initialize_and_list_tools()
         generation = _spawn_processx_generation(client)
-        # The manager lists a process's children only after registering its
+        # The runner lists a process's children only after registering its
         # identity in the descendant tracker. Wait for the exact processx PID
         # so killing its parent cannot race that observation.
-        observations.wait_for(generation[2][0], client)
+        observations.wait_for(generation[2][0], client.process)
         client.send(r="tools::pskill(Sys.getpid(), signal = 9L)")
         result = client.transcript[-1]["result"]
         assert result == {
@@ -257,7 +186,7 @@ def test_failure_replacement_retires_descendants_outside_the_worker_group(
         stop_client(client)
         if generation is not None:
             _kill_generation(generation)
-            shutil.rmtree(generation[3], ignore_errors=True)
+            shutil.rmtree(generation[3].parent, ignore_errors=True)
         observations.close()
         temporary_owner.cleanup()
 
@@ -278,7 +207,7 @@ def test_server_shutdown_retires_descendants_outside_the_worker_group(
         stop_client(client)
         if generation is not None:
             _kill_generation(generation)
-            shutil.rmtree(generation[3], ignore_errors=True)
+            shutil.rmtree(generation[3].parent, ignore_errors=True)
 
 
 if __name__ == "__main__":

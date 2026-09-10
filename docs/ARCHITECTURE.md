@@ -9,84 +9,43 @@ The material under `design-sketches/` is future or exploratory design, not evide
 
 ## Process layout
 
-The diagrams below show the macOS sibling-manager layout.
-On Linux, the launcher forks a manager that owns the private runner as its direct child.
-Both host processes register as subreapers: manager loss adopts the runner and its remaining descendants into the launcher, while launcher loss requests manager cleanup through control-socket EOF.
-The manager establishes ownership before writing the bootstrap frame.
-Linux's native runner creates the PID namespace and a new session for the target.
-See [Linux sandboxing](LINUX_SANDBOX.md) for the complete Linux lifetime and signal contract.
-
-By default, MCP Console has three runtime communication boundaries, a one-shot runner setup pipe and a launcher-private manager channel for lifetime ownership of each sandbox, and one host-only resolver path:
+For default sandboxed execution, the public sandbox frontend execs the private runner in the same PID:
 
 ```text
 MCP client
     │ MCP JSON-RPC over stdio
     ▼
-mcp-console server                         host, outside the sandbox
+mcp-console server                         host
     ├── generation, relay lifetime, and operation owner
-    ├── retained environments and output
-    ├── transcript and image artifacts
+    ├── retained environments, output, and recording
+    ├──── host resolvers                    R, Python, and DuckDB setup
     │
-    ├──── host resolver processes          outside the sandbox
-    │     R, Python, and DuckDB setup
-    │
-    │ relay stdin and stdout; inherited stderr
+    │ ordinary child stdin/stdout; inherited stderr
     ▼
-mcp-console sandbox launcher               host, outside the sandbox
-    ├── direct-root status and manager monitor
-    ├──── sandbox manager                  host, outside the sandbox
-    │     primary lifetime observer and private-directory owner
-    │
-    │ setup pipe: one frame after manager readiness
+mcp-console sandbox → private runner        same PID, host supervisor
+    │ immutable launch-time policy and lifecycle configuration
+    │ native enforcement and target release
     ▼
-private sandbox runner                     host, process-group leader
-    │ native sandbox setup
+worker relay                               sandbox
+    │ worker sideband plus standard streams
     ▼
-hidden target wrapper → worker relay        macOS sandbox
-    │ original fd 0 inherited from process creation
-    │ worker sideband plus fd 0, 1, and 2
-    ▼
-worker                                     same sandbox and process group
+worker                                     same sandbox
     └── built-in R, Python, and DuckDB runtime
 ```
 
-With `serve --no-sandbox`, the server launches the relay directly, omitting the sandbox launcher, manager, private executable, and hidden wrapper.
-The relay and worker run with host permissions and inherit the host temporary-directory environment; no sandbox-owned private directory is created.
+On macOS, the runner's native child applies Seatbelt and execs the relay in place.
+That relay leads the target process group; an explicit relay wrapper can instead lead the group and launch the relay below it.
+Linux retains native namespace-init and bubblewrap helper processes.
+Those native processes and all sandbox descendant supervision belong to the runner executable.
 
-The direct development command uses the same launcher implementation without a relay or worker protocol:
+A standalone `mcp-console sandbox -- COMMAND [ARG]...` uses the same frontend-to-runner exec, with the requested command in place of the relay and worker.
+No waiting Console adapter remains.
+The runner sees the original caller as its direct parent and inherits the original standard streams.
+The [sandbox integration](SANDBOX.md) defines Console policy defaults, installation verification, supported hosts, and lifetime limits.
+The [migration record](SANDBOX_RUNNER_INTEGRATION.md) records the baseline, validation, and changed lifetime guarantees.
 
-```text
-mcp-console sandbox launcher               host, outside the sandbox
-    ├── direct-root status, terminal, and manager monitor
-    ├──── sandbox manager                  host, outside the sandbox
-    │     primary lifetime observer for this command
-    ▼
-private sandbox runner                     host, process-group leader
-    └── command and observed descendants    macOS sandbox
-```
-
-The server is the MCP stdio process.
-For each sandboxed worker lifetime, it constructs either the built-in relay command line or a configured custom relay command line, then starts the current executable as `mcp-console sandbox` in hidden parent-owned mode with that relay as the target.
-The launcher is the server's direct child and the sole host-side sandbox owner.
-On macOS it retains the private sandbox executable and manager as waitable children; on Linux the manager owns the runner.
-After establishing manager ownership and failure recovery, the macOS launcher or Linux manager sends the executable one setup frame specifying the command, environment, filesystem permissions, network policy, and optional macOS policy additions.
-The runner applies the native sandbox to a hidden target wrapper, which restores the original signal mask from a private argument and replaces itself with the relay.
-The runner inherits the original stdin at process creation; setup never uses fd 0.
-The server's piped launcher input and output and inherited error stream pass through to that relay without a data proxy.
-After passing input to the runner, host supervisors release their stdin copies; macOS retains the standalone launcher's terminal descriptor for job control.
-The runner drops its owned stdin immediately after spawning the target, so relay input closure remains observable to the server's writer.
-On macOS the private executable leads the process group and waits for its direct child; the relay and worker inherit that group.
-On Linux the native PID namespace has its own session and process identifiers.
-The relay also works below a wrapper process and does not inspect or manage the surrounding process group.
-Submitted R, Python, and SQL cells run in the worker, not in the server or a host resolver.
-
-For a direct macOS `mcp-console sandbox` invocation, the launcher retains the same private executable as its direct child and starts the same primary manager while a root-only waiter supplies exit and signal wakeups.
-It releases the requested command by sending the same setup frame after manager readiness and failure monitoring.
-It has no MCP, relay, worker, resolver, recording, or retained-session responsibilities.
-
-R, Python, and DuckDB dependency resolution follows a separate path.
-The server launches resolver subprocesses on the host, outside the worker sandbox, because they need normal installation, cache, and network access.
-Resolver inputs are restricted and may execute trusted installation or build code with server permissions; [requirements and environments](REQUIREMENTS.md) owns the accepted syntax and security policy.
+With `serve --no-sandbox`, the server launches the relay directly with host permissions and the host temporary-directory environment.
+R, Python, and DuckDB dependency resolution always runs in separate host processes; [requirements and environments](REQUIREMENTS.md) defines its trust boundary.
 
 ## Communication boundaries
 
@@ -102,54 +61,31 @@ One `send` can poll, provide stdin, prepare requirements, evaluate a cell, inter
 This is the only public protocol boundary.
 The client does not communicate directly with a relay, worker, or resolver.
 
-### Sandbox launcher and private runner
+### Sandbox frontend and private runner
 
 The private `mcp-console-sandbox` executable contains the extracted native sandbox implementation and is pinned by source revision in `sandbox-runner.json`.
 The Python packaging backend prepares the pinned source in a dedicated checkout under `target`, strips the distributed runner, and records companion digests before invoking the application's Cargo build.
 Cargo consumes that prepared bundle; source installations invoke the runner's Cargo build on each run and reuse its normal build intermediates.
 macOS and Linux wheels install a relocatable bundle with `bin/mcp-console`, `libexec/mcp-console-sandbox`, and notices under `share/licenses/mcp-console`.
 Linux bundles also include `libexec/bwrap` and its license.
-The launcher resolves these companions relative to its canonical executable path and verifies their SHA-256 digests with a bounded buffer on every sandbox launch.
+The frontend resolves these companions relative to its canonical executable path and verifies their SHA-256 digests with a bounded buffer on every sandbox launch.
 Missing or modified companions are an installation error.
 The main executable has no embedded runner payload, extraction step, or runtime runner cache.
 The runtime does not access the source checkout or download the runner.
 
-The runner accepts `--bootstrap-fd <N>` with an inherited readable descriptor greater than 2.
-Protocol 2 carries one four-byte big-endian length followed by 1 through 1,048,576 bytes of UTF-8 JSON on that descriptor.
-The runner reads exactly the frame and closes the descriptor before native setup; startup does not wait for EOF.
-The host process that owns setup starts the runner before writing, closes its unused read end after spawn, and closes the writer after sending the frame.
-Setup writes share that owner's event-driven lifetime wait, so pipe backpressure cannot block owned cancellation or failure recovery.
-Only the designated setup descriptor is inherited beyond stdio at runner exec; the parent keeps both pipe ends close-on-exec.
-On macOS the launcher owns setup; on Linux its manager owns setup.
-The setup descriptor does not reach the target or relay.
-The runner launches one sandboxed command and returns its status.
-It has no console, relay, descendant-retirement, or private-directory-cleanup responsibilities.
-The launcher supplies a small macOS policy extension that preserves host-terminal restrictions, runtime allowances, and full mutability of its private temporary directory.
-The native implementation owns the base policy.
-Signals sent to the target group before the runner creates its child are not replayed to that child; this remains a documented startup limitation.
-The [macOS supervision guide](SANDBOX_SUPERVISION.md) and [Linux sandbox guide](LINUX_SANDBOX.md) describe startup and signal handling across this boundary.
-
-### Sandbox launcher and sandbox manager
-
-The launcher starts one manager per invocation of `mcp-console sandbox` and is the sole host-side owner of that sandbox lifetime.
-One parent-owned invocation runs each sandboxed worker generation, which may evaluate multiple cells before restart or replacement; an ordinary invocation runs one direct command.
-On Linux, the forked manager establishes subreaper ownership before spawning the runner and writing its setup frame.
-Its socket accepts forwarded signals, retirement requests, and EOF; the launcher can adopt and retire descendants if that manager fails.
-
-On macOS, the manager reports readiness over a private inherited Unix socket before configured sandbox code may run.
-Readiness confirms process observation and adoption of the private-directory guard.
-The launcher relinquishes its duplicate guard after installing manager-failure recovery.
-The socket then carries no messages: the launcher holds it open as the lifetime ownership token, and EOF requests retirement.
-Successful manager process exit is the primary process-cleanup barrier; the launcher retains the direct root waitably through manager exit and any fallback cleanup, then reaps it.
-Directory removal is best effort, so successful process retirement does not prove that the directory was deleted.
-
-This is a private lifetime-management boundary rather than part of the relay protocol or public interface.
-The [supervision guide](SANDBOX_SUPERVISION.md) owns startup sequencing, retirement, manager failure, and directory-removal semantics.
+The frontend supplies immutable environment configuration through the runner's explicit `--config-env` interface.
+Only policy and lifecycle choices enter this JSON object.
+Command arguments, cwd, environment, and standard streams remain ordinary process-launch inputs.
+The runner consumes the selected configuration variable and owns all subsequent native setup, target signal restoration, descendant retirement, and private storage.
+Console has no setup pipe, target wrapper, manager socket, recovery monitor, or sandbox-owned path state.
 
 ### Server and relay
 
 The server sends commands to the relay's standard input and receives JSONL events from the relay's standard output.
 Relay standard error is inherited separately and is not part of that protocol.
+The server's ordinary child-exit observer also wakes the relay reader.
+On launcher exit, that reader drains already-queued bytes and ends the generation even if an unsupervised descendant retains stdout.
+The server joins the reader and dispatcher before replacement; a reaped launcher permits replacement while any cleanup failure is still reported.
 The transport is private and keeps worker connections and direct-worker supervision in the relay, inside the sandbox by default.
 [`RELAY_PROTOCOL.md`](RELAY_PROTOCOL.md) defines its commands, events, framing, and retirement behavior.
 
@@ -181,36 +117,19 @@ The server does not execute submitted cells or ask the relay to interpret MCP ca
 It configures the child's piped standard input and output and inherited standard error, closes unrelated inherited descriptors before exec, and knows normal child exit and signaling, but no private directory, startup gate, sandbox root, manager, or manager monitor.
 At generation retirement, it first requests graceful shutdown through the relay protocol and waits through the applicable relay deadline.
 In sandboxed mode, it then sends `SIGTERM` to the launcher to request managed retirement and uses a hard launcher kill only as the final fail-safe.
-On normal and owned-retirement paths, successful managed launcher exit is the synchronous cleanup barrier before the server reaps it.
-With `--no-sandbox`, the server owns and reaps the relay directly; no manager supplies descendant cleanup.
+On normal and owned-retirement paths, the server treats successful managed launcher exit as the synchronous cleanup barrier before reaping.
+Cancellation before worker readiness follows the same runner-retirement request and grace period, including when the startup I/O join reaches the child first.
+With `--no-sandbox`, the server owns and reaps the relay directly; no runner supplies descendant cleanup.
 After the relay deadline, the server accepts termination from its own successful `SIGTERM` request as completed direct retirement.
 
-### Sandbox launcher
+### Sandbox frontend and runner
 
-The sandbox launcher preserves the requested command's status after natural completion and owns the complete host-side sandbox lifetime.
-It inherits only the three documented streams from the server and independently closes every unrelated inherited descriptor before target exec.
-On macOS it creates the target group and retains the root directly; on Linux the manager owns the root and native namespace setup supplies the target session.
-After cleanup succeeds, natural root completion returns that root's exit status; a handled retirement request in hidden parent-owned mode returns success as the cleanup acknowledgment.
-It owns runner setup, exact parent-exit observation in owned mode, manager-failure recovery, and ordinary-mode terminal and signal handling.
-It owns recovery cleanup after manager failure, but does not own console state, dependency resolution, recording, relay transport, or worker protocol behavior.
-It does not implement stopped/continued job state or general shell-pipeline job control.
-The launcher itself never writes to standard output because that stream carries relay JSONL in a worker generation.
-In parent-owned mode it relinquishes its copy of the relay input pipe after transferring that stream to the target; it retains standard output until cleanup finishes, so target output closure and launcher cleanup completion share one observable boundary.
-If the launcher is killed or crashes, manager-control EOF still requests cleanup, but the server can no longer wait synchronously for that manager.
-
-### Sandbox manager
-
-The sandbox manager owns primary descendant cleanup for one sandbox lifetime.
-On Linux, it uses kernel child adoption, pidfds, and blocking descriptor waits; it reaps its descendants before exiting, and launcher recovery also removes unused private storage.
-The following tracker details apply to macOS.
-It records descendants by PID and process start time, validates the exact root identity, and adopts the private temporary-directory path.
-It retires only identities its tracker observed, uses the still-pinned root process group as a race backstop, and attempts directory removal only after successful process cleanup.
-Its single thread uses one `kqueue` for descendant and root events plus control-socket readability.
-It does not own session state, operation admission, relay transport, command exit status, or terminal semantics.
-
-If the manager itself fails while the launcher retains a live, waitable root, the launcher monitor reconstructs the root's current ancestry and performs bounded process cleanup.
-That fallback has no directory-cleanup state, so the directory remains if the manager exits before completing its own cleanup and removal attempt.
-That fallback cannot recover a descendant that had already detached from the root's ancestry.
+The frontend selects application policy and verifies the installation, then execs the runner.
+It never writes protocol data to stdout or waits for a target process.
+The runner captures configured caller identity, applies native enforcement, releases the target, restores its inherited signal state, and owns descendant and directory retirement.
+A successful runner exit is the server's synchronous cleanup barrier.
+Supervisor death has no independent recovery guarantee.
+The server retains only ordinary child signaling, exit observation, and reaping around this boundary.
 
 ### Relay
 
@@ -235,7 +154,7 @@ Blocked downstream pipe or socket output can therefore fail retirement without d
 The internal `worker-relay` command uses the same stream protocol when launched directly without a sandbox or below another process wrapper.
 Such a direct invocation owns only its direct worker; it supplies no sandbox policy or descendant-cleanup guarantee.
 `serve --no-sandbox` selects this direct launch while retaining the relay protocol and direct-worker shutdown behavior.
-A replacement sandbox launcher must provide the process-lifetime contract described in [sandbox supervision](SANDBOX_SUPERVISION.md), including cleanup before successful owned retirement.
+A replacement sandbox launcher must provide the process-lifetime contract described in [sandbox integration](SANDBOX.md), including cleanup before successful owned retirement.
 Any future sandbox-specific control plane ends at that launcher, without reaching the relay or changing its protocol.
 
 ### Worker
@@ -295,7 +214,7 @@ For each worker start, the server first constructs the relay target independentl
 The built-in target is the current executable's `worker-relay` command followed by the worker command line; a configured relay is followed directly by the same worker command line.
 By default, the server then constructs an ordinary current-executable command for `sandbox --exit-with-parent <server-pid> -- <relay-target>`; with `--no-sandbox`, it uses the relay target directly.
 It applies the retained environment and configures piped input and output plus inherited error in either mode.
-In sandboxed mode, the launcher inherits that environment and those streams and releases the configured relay only after sandbox observation and failure recovery are installed.
+In sandboxed mode, the frontend execs the runner with that environment and those streams; the runner establishes native enforcement and descendant observation before releasing the relay.
 The relay creates the worker sideband and standard streams, launches the worker, and forwards its startup events.
 The server admits the worker only after the required readiness exchange succeeds.
 If sandbox setup fails before relay readiness, the launcher writes the detailed infrastructure error to inherited standard error and exits; the server reports a stable relay-startup failure from the closed transport.

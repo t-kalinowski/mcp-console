@@ -56,7 +56,7 @@ def test_materializes_records_only_for_console_use(
             "message": "tool not found",
         }, removed
         assert not (unused_workspace / ".mcp-console").exists(), unused_workspace
-        assert not list(unused_workspace.glob("mcp-console-tmp-*")), unused_workspace
+        assert not list(unused_workspace.glob("sandbox-*")), unused_workspace
         transcript = client.finish()
         assert not (unused_workspace / ".mcp-console").exists(), unused_workspace
 

@@ -9,4 +9,4 @@ environment: fresh procfs mounts denied by an outer namespace
 exit_code: 1
 stdout: ""
 stderr: |
-  Linux sandbox requires procfs mounted for its PID namespace
+  native target setup requires namespace-local procfs

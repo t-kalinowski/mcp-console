@@ -29,6 +29,8 @@ from support.client import McpClient, TextReader
 from support.events import Events
 from support.execution import SANDBOXED, Execution
 from support.processes import (
+    capture_process_identity,
+    child_process_identities,
     host_process_id,
     process_group_exists,
     stop_process_group,
@@ -533,7 +535,7 @@ def wait_for_marker(root: Path, name: str, client: McpClient) -> Path:
         events.watch_process(client.process.pid)
         events.watch_file(root)
         while True:
-            for directory in root.glob("mcp-console-tmp-*"):
+            for directory in (*root.glob("sandbox-*"), *root.glob("sandbox-*/data")):
                 if directory.is_dir():
                     events.watch_file(directory)
             marker = find_marker(root, name)
@@ -551,7 +553,7 @@ def wait_for_marker(root: Path, name: str, client: McpClient) -> Path:
 
 def find_marker(root: Path, name: str) -> Path | None:
     markers = [path for path in [root / name] if path.exists()]
-    markers.extend(root.glob(f"mcp-console-tmp-*/{name}"))
+    markers.extend(root.glob(f"sandbox-*/data/{name}"))
     assert len(markers) <= 1, f"found multiple {name} markers"
     return markers[0] if markers else None
 
@@ -580,8 +582,19 @@ def wait_for_stopped_worker(
             if execution == SANDBOXED:
                 relay_status = read_process_status(parent_id)
                 assert relay_status is not None, "stopped worker's relay exited"
-                assert relay_status[:2] == (process_group, process_group), (
-                    "stopped worker's relay is not the sandbox runner's direct child"
+                if sys.platform == "darwin":
+                    # The native stage now execs the relay as its group leader.
+                    # The server's direct child is the runner outside that group.
+                    assert parent_id == process_group
+                    (supervisor,) = child_process_identities(
+                        capture_process_identity(client.process.pid)
+                    )
+                    expected_parent = supervisor[0]
+                else:
+                    # Linux keeps its namespace init above the relay.
+                    expected_parent = process_group
+                assert relay_status[:2] == (expected_parent, process_group), (
+                    "stopped worker's relay changed its sandbox process boundary"
                 )
                 assert process_id != process_group, (
                     "stopped worker unexpectedly leads the relay process group"

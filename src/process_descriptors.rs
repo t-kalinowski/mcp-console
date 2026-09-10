@@ -1,56 +1,8 @@
-use std::fs::File;
-#[cfg(target_os = "macos")]
-use std::os::fd::AsRawFd as _;
 use std::os::fd::RawFd;
 #[cfg(target_os = "linux")]
 use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
 use std::os::unix::process::CommandExt as _;
 use std::process::Command;
-
-pub(crate) fn detach_stdin() -> Result<(), String> {
-    let null = File::open("/dev/null")
-        .map_err(|error| format!("failed to detach launcher standard input: {error}"))?;
-
-    loop {
-        if unsafe { libc::dup2(null.as_raw_fd(), libc::STDIN_FILENO) } >= 0 {
-            break;
-        }
-        let error = std::io::Error::last_os_error();
-        if error.raw_os_error() != Some(libc::EINTR) {
-            return Err(format!("failed to detach launcher standard input: {error}"));
-        }
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "macos")]
-pub(crate) fn close_unlisted(
-    command: &mut Command,
-    setup: std::io::PipeReader,
-) -> Result<(), String> {
-    // The standalone path reaches this point before starting any threads, so
-    // this snapshot contains every inherited descriptor that can reach the
-    // child. Change flags only after fork to leave the launcher unchanged.
-    // Rust creates its later exec-error pipe with close-on-exec already set.
-    let mut descriptors = open_descriptors()?;
-    descriptors.retain(|descriptor| *descriptor > libc::STDERR_FILENO);
-    unsafe {
-        command.pre_exec(move || {
-            for descriptor in &descriptors {
-                set_close_on_exec(*descriptor)?;
-            }
-            // Keep the dynamically allocated setup descriptor alive through
-            // fork and make it the only inheritance exception beyond stdio.
-            let descriptor = setup.as_raw_fd();
-            let flags = libc::fcntl(descriptor, libc::F_GETFD);
-            if flags < 0 || libc::fcntl(descriptor, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-    Ok(())
-}
 
 #[cfg(target_os = "macos")]
 pub(crate) fn close_unlisted_from_multithreaded_parent(
@@ -255,23 +207,4 @@ fn cloexec_proc_descriptors() -> std::io::Result<()> {
             offset += length;
         }
     }
-}
-
-#[cfg(target_os = "linux")]
-pub(crate) fn close_unlisted(
-    command: &mut Command,
-    setup: std::io::PipeReader,
-) -> Result<(), String> {
-    close_unlisted_from_multithreaded_parent(command)?;
-    unsafe {
-        command.pre_exec(move || {
-            let fd = setup.as_raw_fd();
-            let flags = libc::fcntl(fd, libc::F_GETFD);
-            if flags < 0 || libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-    Ok(())
 }
