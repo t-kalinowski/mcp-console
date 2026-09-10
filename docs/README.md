@@ -9,6 +9,7 @@ Source and public acceptance tests remain the final authority when prose disagre
 
 - The [project README](../README.md) is the short product overview and current project-status page.
 - The [ellmer R package](../r/README.md) explains how to install and register MCP Console as an ellmer tool.
+- [Python integrations](PYTHON.md) covers the callable client, framework adapters, optional dependencies, and connection ownership.
 - [`send` operation order](SEND_OPERATIONS.md) owns request validation, preparation and control ordering, stdin generation, failure effects, and wait-timeout semantics.
 - [Built-in runtime](BUILTIN_RUNTIME.md) is the source of truth for user-visible R, Python, DuckDB SQL, input, output, graphics, and interoperability behavior.
 - [Requirements and environments](REQUIREMENTS.md) is the source of truth for dependency preparation, retained environments, accepted requirement syntax, and the host-resolution trust boundary.

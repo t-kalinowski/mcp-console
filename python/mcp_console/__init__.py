@@ -5,7 +5,6 @@ from ._integrations import (
     anthropic_tools,
     codex_config,
     openai_agents_server,
-    openai_codex_sdk_options,
     register_chatlas,
 )
 
@@ -16,6 +15,5 @@ __all__ = [
     "anthropic_tools",
     "codex_config",
     "openai_agents_server",
-    "openai_codex_sdk_options",
     "register_chatlas",
 ]

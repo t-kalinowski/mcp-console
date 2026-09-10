@@ -16,6 +16,7 @@ The documents under `design-sketches/` describe intended behavior, not the curre
 - `docs/SANDBOX_CONFIGURATION.md` defines the public configuration interface, environment ownership, caller examples, and transport integrity.
 - `docs/LINUX_COMPATIBILITY.md` records capability requirements, security comparisons, native backend differences, and tested Linux baselines.
 - `docs/SANDBOX_RUNNER_INTEGRATION.md` records the migration baseline, fixture changes, supported-host validation, and changed guarantees.
+- `docs/PYTHON.md` describes the Python client and framework integrations.
 - `docs/BUILTIN_RUNTIME.md` describes user-visible behavior of the built-in mixed-language console.
 - `docs/SEND_OPERATIONS.md` defines validation, preparation, control, input, and timeout ordering for `send`.
 - `docs/REQUIREMENTS.md` describes dependency and environment behavior and its trust boundary.
@@ -60,7 +61,7 @@ scripts/test --update BOUNDARY/SUITE[::CASE]
 
 `scripts/format` attempts Ruff, Yamark, rustfmt, and Air in sequence.
 A missing or failing formatter does not prevent the remaining formatters from running or make the script fail, so review its output and resulting changes.
-`scripts/check` validates extracted runtime sources, checks the Python integrations, checks Rust formatting and Clippy, runs Rust tests in debug, runs the complete transcript suite against the release executable, and checks uv source and wheel installations with a shared Cargo target directory.
+`scripts/check` validates extracted runtime sources, checks Rust formatting and Clippy, runs Rust tests in debug, runs the complete transcript suite against the release executable, and checks uv source and wheel installations with a shared Cargo target directory.
 
 ### Boundary snapshots
 
@@ -145,14 +146,13 @@ Keep these invariants intact:
 
 - `tests/support/` — shared capability requirements, explicit execution fixtures, transcript records, snapshots, normalization, checkpoints, capture, process, platform event, native fixture, macOS, assertion, R, resolver, client, and direct-suite helpers.
 - `tests/fixtures/` — deterministic workers, resolvers, package fixtures, searchable native interposers, and boundary-specific relay and worker programs.
-- `tests/boundaries/client_server/` — public MCP client-server behavior.
+- `tests/boundaries/client_server/` — public MCP client-server behavior, including real Python SDK integrations under `integrations/`.
 - `tests/boundaries/server_relay/` — private server-relay wire behavior.
 - `tests/boundaries/relay_worker/` — worker sideband and standard-stream behavior through the relay.
 - `tests/boundaries/cli/` — direct CLI behavior.
 - `tests/boundaries/*/sandbox/` — sandbox-specific contracts within their owning boundary; ordinary cases remain under their runtime, protocol, or lifecycle subject.
 - `tests/boundaries/*/_harness.py` — boundary-specific process launch and capture mechanics.
 - `tests/boundaries/_run.py`, `tests/transcript_runner.py` — recursive transcript discovery, selection, location, snapshot checking, progress reporting, and runner regressions.
-- `tests/python_api.py` — Python integration delegation, output conversion, and lifecycle tests.
 - `tests/architecture.py` — sandbox dependency-direction checks and their command-line regressions.
 - `tests/snapshots/` — generated YAML 1.2 snapshots, parallel to the boundary test hierarchy.
 - `r/tests/testthat/` — R package protocol and ellmer adapter tests.

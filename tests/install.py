@@ -29,6 +29,7 @@ class InstallationTests(unittest.TestCase):
             (source / "src").mkdir()
             for name in ("pyproject.toml", "README.md", "LICENSE", "build.rs"):
                 shutil.copyfile(ROOT / name, source / name)
+            shutil.copytree(ROOT / "python", source / "python")
             shutil.copyfile(ROOT / "build_backend.py", source / "build_backend.py")
             shutil.copyfile(
                 ROOT / "scripts/stage-sandbox-runner",
@@ -414,6 +415,31 @@ class InstallationTests(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode, 0, result.stdout)
                 print(result.stdout, flush=True)
+                for python_version in ("3.10", "3.14"):
+                    with self.subTest(python=python_version):
+                        result = subprocess.run(
+                            [
+                                "uv",
+                                "run",
+                                "--isolated",
+                                "--no-project",
+                                "--python",
+                                python_version,
+                                "--with",
+                                f"{wheels[0]}[client,anthropic,chatlas,openai,openai-agents,codex]",
+                                "python",
+                                str(ROOT / "tests/fixtures/python_api_smoke.py"),
+                            ],
+                            cwd=directory,
+                            env=environment | {"UV_PYTHON_DOWNLOADS": "automatic"},
+                            check=False,
+                            text=True,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT,
+                            timeout=600,
+                        )
+                        self.assertEqual(result.returncode, 0, result.stdout)
+                        print(result.stdout, flush=True)
                 for installed in (
                     binary,
                     directory / "uv-bin" / "mcp-console",
