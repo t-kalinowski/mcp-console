@@ -1,14 +1,18 @@
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import ExitStack
 from functools import partial
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, Self
 
-from ._client import AsyncMCPConsole, AsyncOpenAIResponsesTool, Requirements
+from ._client import (
+    AsyncMCPConsole,
+    AsyncOpenAIResponsesTool,
+    Requirements,
+    TimeoutMilliseconds,
+)
 from ._common import Command
 
 if TYPE_CHECKING:
     from anyio.from_thread import BlockingPortal
-    from typing_extensions import Self
 
 
 class MCPConsole:
@@ -74,7 +78,7 @@ class MCPConsole:
         control: Literal["interrupt", "restart"] | None = None,
         requirements: Requirements | None = None,
         stdin: str | None = None,
-        timeout_ms: int = 60_000,
+        timeout_ms: TimeoutMilliseconds = 60_000,
     ) -> str:
         return self._run(
             self._async.send,

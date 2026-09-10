@@ -1,16 +1,22 @@
 import json
 from collections.abc import Mapping, Sequence
 from contextlib import AsyncExitStack
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal, Self
 
-from typing_extensions import TypedDict
+from annotated_types import Ge, Le
+from typing_extensions import TypeAliasType, TypedDict
 
 from ._common import Command, openai_result_output, result_text, stdio_command
 
 if TYPE_CHECKING:
     from mcp import Client
     from mcp.types import CallToolResult, Tool
-    from typing_extensions import Self
+
+
+# A named alias keeps Agents and chatlas from discarding the constraints.
+TimeoutMilliseconds = TypeAliasType(
+    "TimeoutMilliseconds", Annotated[int, Ge(0), Le(2**64 - 1)]
+)
 
 
 class Requirements(TypedDict, total=False, closed=True):
@@ -95,7 +101,7 @@ class AsyncMCPConsole:
         control: Literal["interrupt", "restart"] | None = None,
         requirements: Requirements | None = None,
         stdin: str | None = None,
-        timeout_ms: int = 60_000,
+        timeout_ms: TimeoutMilliseconds = 60_000,
     ) -> str:
         """Run or control the persistent R, Python, and SQL console.
 
