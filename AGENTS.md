@@ -42,8 +42,11 @@ CI runs core checks and all capability-applicable transcript modes on macOS and 
 Keep one CI job per platform.
 CI restores Cargo build data across source and dependency changes within the same native build environment and UTC week, with incremental compilation enabled.
 Keep the intentional weekly build-cache reset.
+Ordinary source edits reuse one cached baseline per dependency set rather than saving another target-directory snapshot.
+Keep `main` caches reusable by PRs and remove caches for closed PRs.
 Cargo determines which crates need rebuilding.
 An exact match of compiled and packaging inputs additionally lets CI skip the release build and reuse a finished wheel and native bundle; it still runs the current tests.
+Bump `CI_BUILD_RECIPE` in `.github/workflows/ci.yaml` when native dependency setup or build commands or flags change; unrelated workflow edits must not invalidate build caches.
 Source installation checks run after the other checks because they replace and hide the shared Cargo target directory.
 Python package builds and installations require Python 3.11 or later.
 
