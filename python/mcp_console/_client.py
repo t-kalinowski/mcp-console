@@ -1,6 +1,6 @@
 from collections.abc import Mapping, Sequence
 from contextlib import AsyncExitStack
-from typing import TYPE_CHECKING, Annotated, Any, Literal, Self
+from typing import TYPE_CHECKING, Annotated, Any, Literal, Self, cast
 
 from annotated_types import Ge, Le, MaxLen, MinLen
 from typing_extensions import TypeAliasType, TypedDict
@@ -23,6 +23,25 @@ class Requirements(TypedDict, total=False, closed=True):
     r: Annotated[list[Annotated[str, MinLen(1)]], MaxLen(64)]
     python: Annotated[list[Annotated[str, MinLen(1)]], MaxLen(64)]
     duckdb: Annotated[list[Annotated[str, MinLen(1), MaxLen(64)]], MaxLen(64)]
+
+
+def _nonempty_requirements_schema(schema: dict[str, Any]) -> None:
+    properties = schema["properties"]
+    # Keep all keys in each branch for SDKs that close objects in strict mode.
+    schema["anyOf"] = [
+        schema
+        | {
+            "properties": properties | {name: field | {"minItems": 1}},
+            "required": [name],
+        }
+        for name, field in properties.items()
+    ]
+
+
+# Configure SDK schema generation without importing their Pydantic dependency.
+cast(Any, Requirements).__pydantic_config__ = {
+    "json_schema_extra": _nonempty_requirements_schema
+}
 
 
 class AsyncMCPConsole:

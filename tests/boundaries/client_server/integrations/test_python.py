@@ -47,7 +47,17 @@ def assert_callable_schema(schema: dict) -> None:
             "properties"
         ]["timeout_ms"]
     requirements = arguments["requirements"]
+    empty_requirements = {key: [] for key in requirements}
+    validator.validate(arguments | {"requirements": None})
+    for empty in ({}, empty_requirements):
+        assert not validator.is_valid(arguments | {"requirements": empty}), schema
     for language in ("r", "python", "duckdb"):
+        validator.validate(
+            arguments | {"requirements": empty_requirements | {language: ["a"]}}
+        )
+        assert not validator.is_valid(arguments | {"requirements": {language: []}}), (
+            schema
+        )
         for packages in ([], ["a"] * 64, ["a" * (64 if language == "duckdb" else 65)]):
             validator.validate(
                 arguments | {"requirements": requirements | {language: packages}}
