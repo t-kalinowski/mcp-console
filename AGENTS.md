@@ -42,6 +42,7 @@ CI runs core checks and all capability-applicable transcript modes on macOS and 
 Keep one CI job per platform.
 CI restores Cargo build data across source and dependency changes within the same native build environment and UTC week, with incremental compilation enabled.
 Keep the intentional weekly build-cache reset.
+Skip runner staging only when both its finished artifacts and build data are exact cache hits.
 Ordinary source edits reuse one cached baseline per dependency set rather than saving another target-directory snapshot.
 Keep `main` caches reusable by PRs and remove caches for closed PRs.
 Cargo determines which crates need rebuilding.
