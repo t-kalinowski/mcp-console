@@ -100,24 +100,24 @@ Neither may also be a private-directory export.
 The pinned [runner protocol](https://github.com/t-kalinowski/codex/blob/689f48c30deeb6aaa95a193e31e5971dd6820465/codex-rs/mcp-console-sandbox/PROTOCOL.md) defines the canonical schema.
 Its filesystem and proxy fields use the upstream types and validators directly.
 
-| Field                              | Environment-mode contract                                                                                                                                                            |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `version`                          | Required integer, currently `2`.                                                                                                                                                     |
-| `filesystem`                       | Required runner filesystem policy. The example grants host reads and one writable directory. Linux supervised execution requires a restricted filesystem policy.                     |
-| `network`                          | Required: `"restricted"` or `"enabled"`.                                                                                                                                             |
-| `proxy`                            | Optional managed proxy configuration; omitted or `null` means none. A supplied configuration must be enabled. Its allowlist is selected by the trusted launcher.                     |
-| `macos_seatbelt_profile_extension` | Optional trusted SBPL appended to the native profile. It can grant permissions as well as restrict them. Omitted or `null` adds no extension; a supplied value is rejected on Linux. |
-| `inherit_environment`              | Optional Boolean, default `true`.                                                                                                                                                    |
-| `environment`                      | Optional target override map, default empty. Keys must be nonempty and contain neither `=` nor NUL; values must be NUL-free.                                                         |
-| `linux_backend`                    | Optional on Linux: `"bubblewrap"` (default) or explicit `"landlock"`. Rejected on macOS.                                                                                             |
-| `lifecycle`                        | Optional object with the defaults below.                                                                                                                                             |
+| Field                              | Environment-mode contract                                                                                                                                                                                                                                     |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `version`                          | Required integer, currently `2`.                                                                                                                                                                                                                              |
+| `filesystem`                       | Required runner filesystem policy. The example grants host reads and one writable directory. Supervised Linux rejects policies classified as full-filesystem write access; see [filesystem classification](LINUX_COMPATIBILITY.md#filesystem-classification). |
+| `network`                          | Required: `"restricted"` or `"enabled"`. Enabling networking does not grant filesystem writes.                                                                                                                                                                |
+| `proxy`                            | Optional managed proxy configuration; omitted or `null` means none. A supplied configuration must be enabled. Its allowlist is selected by the trusted launcher.                                                                                              |
+| `macos_seatbelt_profile_extension` | Optional trusted SBPL appended to the native profile. It can grant permissions as well as restrict them. Omitted or `null` adds no extension; a supplied value is rejected on Linux.                                                                          |
+| `inherit_environment`              | Optional Boolean, default `true`.                                                                                                                                                                                                                             |
+| `environment`                      | Optional target override map, default empty. Keys must be nonempty and contain neither `=` nor NUL; values must be NUL-free.                                                                                                                                  |
+| `linux_backend`                    | Optional on Linux: `"bubblewrap"` (default) or explicit `"landlock"`. Rejected on macOS.                                                                                                                                                                      |
+| `lifecycle`                        | Optional object with the defaults below.                                                                                                                                                                                                                      |
 
 | Lifecycle field      | Default and behavior                                                                                                                                                                                                                                                        |
 | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `parent_pid`         | Omitted/`null`: no caller-death observation. Otherwise it must identify the runner's actual current parent and be greater than 1.                                                                                                                                           |
 | `sigterm`            | `"forward"`: forward SIGTERM and preserve the target's exit status. `"retire"`: retire the sandbox on SIGTERM.                                                                                                                                                              |
 | `private_tmp`        | Omitted/`null`: create no private storage. Otherwise provide `environment`, an array of export names, and optionally an absolute `parent` directory. The default parent is the supervisor's native temporary directory. The runner creates and removes its private storage. |
-| `cleanup_timeout_ms` | `1000`; an explicit value must be between 1 and 60000. A retirement failure returns a nonzero status.                                                                                                                                                                       |
+| `cleanup_timeout_ms` | Omitted/`null`: `1000` for supervised execution; an explicit value must be between 1 and 60000. A retirement failure returns a nonzero status.                                                                                                                              |
 
 These are the runner defaults for an explicit configuration.
 Console's no-config path additionally requests its macOS extension and private `TMPDIR`.
@@ -130,20 +130,36 @@ There is no configuration-file option, automatic file discovery, `@file` syntax,
 
 ## Explicit Linux backend selection
 
-`linux_backend: "bubblewrap"` retains the default namespace sandbox and supervised lifetime.
-A namespace failure does not switch backends.
+Omitting `linux_backend` or selecting `"bubblewrap"` retains the default namespace sandbox and supervised lifetime, even when `lifecycle` is omitted.
+Both reject unrestricted filesystem policies and special root write grants without effective narrower rules, with either network setting.
+Root write with effective read-only or denied carveouts proceeds to native validation; it is not equivalent to unrestricted access.
+See the [exact classification and remaining supervision restriction](LINUX_COMPATIBILITY.md#filesystem-classification).
+A namespace or policy failure does not switch backends or retry the target unsandboxed.
 Native procfs fallback changes the procfs view while preserving the backend and policy; see [Linux compatibility](LINUX_COMPATIBILITY.md).
 
 `linux_backend: "landlock"` explicitly selects native Landlock/seccomp enforcement and replaces the runner with the restricted command.
 It needs no bubblewrap or namespace setup and preserves native policy-compatibility checks.
 The direct native handoff uses a sealed anonymous memfd for target setup.
-Restricted-read policies are unsupported.
-A restricted filesystem requires Landlock truncate enforcement (ABI 3 or later); older best-effort enforcement is rejected.
+Root-readable policies and compatible writable-directory grants retain native Landlock enforcement.
+Restricted-read policies, including root read with denied carveouts, are unsupported; native validation also rejects policies its legacy representation cannot preserve, such as root write with carveouts.
+When the policy is not classified as full-filesystem write access, the runner requires Landlock truncate enforcement (ABI 3 or later); older best-effort enforcement is rejected.
+An explicitly full-write policy skips filesystem Landlock enforcement and this ABI requirement; requested network restrictions still apply.
 Native device-ioctl restrictions depend on ABI 5 and are outside this backend's portable contract.
 
 Landlock provides no process isolation: same-user host signalling may remain possible.
 It provides no descendant retirement, caller-death cleanup, private storage, or terminal supervisor.
 Accordingly, `parent_pid`, `private_tmp`, an explicit cleanup timeout, retirement SIGTERM, and managed proxy routing are rejected.
+The runner validates those incompatible requests before native setup:
+
+| Option               | Accepted with Landlock                            | Rejected with Landlock                                       |
+| -------------------- | ------------------------------------------------- | ------------------------------------------------------------ |
+| `lifecycle`          | Omitted or `{}`                                   | Requests for the supervised features below                   |
+| `parent_pid`         | Omitted or `null`                                 | A supplied PID, including the actual caller                  |
+| `private_tmp`        | Omitted or `null`                                 | Any supplied object, including an empty export list          |
+| `sigterm`            | Omitted or explicit `"forward"`                   | `"retire"`                                                   |
+| `cleanup_timeout_ms` | Omitted or `null`; no retirement deadline applies | Any supplied number, including the supervised default `1000` |
+| `proxy`              | Omitted or `null`                                 | A supplied managed proxy configuration                       |
+
 Ordinary exit and signal behavior follows direct native execution.
 `serve` continues to request bubblewrap supervision.
 

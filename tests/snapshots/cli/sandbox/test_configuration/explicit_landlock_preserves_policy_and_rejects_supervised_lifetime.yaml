@@ -9,3 +9,15 @@ stderr: >
   mcp-console-sandbox: landlock does not provide supervised lifetime; omit
   lifecycle options
 exit_code: 1
+---
+lifecycle: {}
+stdout: |
+  explicit Landlock defaults
+---
+lifecycle:
+  parent_pid: ~
+  private_tmp: ~
+  cleanup_timeout_ms: ~
+  sigterm: forward
+stdout: |
+  explicit Landlock defaults
