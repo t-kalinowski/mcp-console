@@ -546,12 +546,15 @@ class ReleaseScriptTests(unittest.TestCase):
                 from pathlib import Path
                 name = Path(sys.argv[-1]).name
                 print("Machine: " + os.environ.get("FAKE_MACHINE", "Advanced Micro Devices X86-64"))
-                if name == "mcp-console":
+                if name != os.environ.get("FAKE_STATIC_HELPER"):
                     print("[Requesting program interpreter: /lib64/ld-linux-x86-64.so.2]")
                     print("(NEEDED) Shared library: [libc.so.6]")
-                    print("Name: GLIBC_2.39")
-                elif name == os.environ.get("FAKE_DYNAMIC_HELPER"):
-                    print("(NEEDED) Shared library: [libcap.so.2]")
+                    if name == "bwrap":
+                        print("(NEEDED) Shared library: [libcap.so.2]")
+                    if name == os.environ.get("FAKE_EXTRA_LIBRARY"):
+                        print("(NEEDED) Shared library: [libssl.so.3]")
+                    version = "2.40" if name == os.environ.get("FAKE_NEW_GLIBC") else "2.39"
+                    print("Name: GLIBC_" + version)
             """,
             )
             environment = os.environ | {
@@ -560,10 +563,21 @@ class ReleaseScriptTests(unittest.TestCase):
             for platform, changes, error in (
                 ("manylinux_2_39_x86_64", {}, None),
                 ("manylinux_2_17_x86_64", {}, "GLIBC_2.39"),
-                ("manylinux_2_39_x86_64", {"FAKE_DYNAMIC_HELPER": "bwrap"}, "bwrap"),
                 (
                     "manylinux_2_39_x86_64",
-                    {"FAKE_DYNAMIC_HELPER": "mcp-console-sandbox"},
+                    {"FAKE_EXTRA_LIBRARY": "mcp-console-sandbox"},
+                    "libssl.so.3",
+                ),
+                ("manylinux_2_39_x86_64", {"FAKE_NEW_GLIBC": "bwrap"}, "GLIBC_2.40"),
+                (
+                    "manylinux_2_39_x86_64",
+                    {"FAKE_NEW_GLIBC": "mcp-console-sandbox"},
+                    "GLIBC_2.40",
+                ),
+                ("manylinux_2_39_x86_64", {"FAKE_STATIC_HELPER": "bwrap"}, "bwrap"),
+                (
+                    "manylinux_2_39_x86_64",
+                    {"FAKE_STATIC_HELPER": "mcp-console-sandbox"},
                     "mcp-console-sandbox",
                 ),
                 ("manylinux_2_39_x86_64", {"FAKE_MACHINE": "AArch64"}, "architecture"),
@@ -700,23 +714,6 @@ class ReleaseScriptTests(unittest.TestCase):
                     executable.write_bytes(original.removesuffix(b" with debug symbols"))
                     """,
                 )
-            write_executable(
-                commands / "readelf",
-                """
-                #!/usr/bin/env python3
-                import json
-                import os
-                from pathlib import Path
-
-                command = json.loads(Path(os.environ["FAKE_CARGO_ARGUMENTS"]).read_text().splitlines()[-1])
-                target = command["arguments"][-1]
-                print("Machine: AArch64" if target.startswith("aarch64") else "Machine: Advanced Micro Devices X86-64")
-                if target.endswith("gnu"):
-                    print("[Requesting program interpreter: /lib64/ld-linux-x86-64.so.2]")
-                    print("(NEEDED) Shared library: [libcap.so.2]")
-                    print("Name: GLIBC_2.34")
-                """,
-            )
             environment = os.environ.copy()
             environment.update(
                 {
@@ -735,14 +732,6 @@ class ReleaseScriptTests(unittest.TestCase):
             for arguments, target in (
                 ([], "aarch64-apple-darwin"),
                 (["--target", "x86_64-unknown-linux-gnu"], "x86_64-unknown-linux-gnu"),
-                (
-                    ["--target", "x86_64-unknown-linux-musl"],
-                    "x86_64-unknown-linux-musl",
-                ),
-                (
-                    ["--target", "aarch64-unknown-linux-musl"],
-                    "aarch64-unknown-linux-musl",
-                ),
                 (["--target", "x86_64-apple-darwin"], "x86_64-apple-darwin"),
             ):
                 with self.subTest(target=target):
@@ -795,26 +784,6 @@ class ReleaseScriptTests(unittest.TestCase):
                         {
                             "source_revision": pin["commit"],
                             "target": target,
-                            **(
-                                {
-                                    "linkage": {
-                                        name: {
-                                            "interpreter": "/lib64/ld-linux-x86-64.so.2"
-                                            if target.endswith("gnu")
-                                            else None,
-                                            "needed": ["libcap.so.2"]
-                                            if target.endswith("gnu")
-                                            else [],
-                                            "versions": ["GLIBC_2.34"]
-                                            if target.endswith("gnu")
-                                            else [],
-                                        }
-                                        for name in ("mcp-console-sandbox", "bwrap")
-                                    }
-                                }
-                                if "linux" in target
-                                else {}
-                            ),
                             "artifacts": {
                                 "LICENSE": hashlib.sha256(b"license\n").hexdigest(),
                                 "NOTICE": hashlib.sha256(b"notice\n").hexdigest(),
@@ -855,7 +824,6 @@ class ReleaseScriptTests(unittest.TestCase):
             for changes in (
                 {"FAKE_SOURCE_REVISION": "b" * 40},
                 {"FAKE_SOURCE_DIRTY": " M Cargo.lock"},
-                {"MCP_CONSOLE_SANDBOX_TARGET": "x86_64-pc-windows-msvc"},
             ):
                 result = subprocess.run(
                     command, env=environment | changes, capture_output=True, text=True
@@ -913,11 +881,7 @@ class ReleaseScriptTests(unittest.TestCase):
                 json.dumps(
                     {
                         "source_revision": pin["commit"],
-                        "target": target.replace("linux-gnu", "linux-musl"),
-                        "linkage": {
-                            name: {"interpreter": None, "needed": [], "versions": []}
-                            for name in ("mcp-console-sandbox", "bwrap")
-                        },
+                        "target": target,
                         "artifacts": {
                             name: hashlib.sha256(contents).hexdigest()
                             for name, contents in artifacts.items()

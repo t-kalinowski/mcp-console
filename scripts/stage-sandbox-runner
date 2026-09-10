@@ -17,8 +17,6 @@ TARGETS = (
     "x86_64-apple-darwin",
     "x86_64-unknown-linux-gnu",
     "aarch64-unknown-linux-gnu",
-    "x86_64-unknown-linux-musl",
-    "aarch64-unknown-linux-musl",
 )
 
 
@@ -35,35 +33,6 @@ def git_output(checkout: Path, *arguments: str) -> str:
     return result.stdout.strip()
 
 
-def elf_linkage(executable: Path, target: str) -> dict:
-    report = subprocess.check_output(
-        [
-            "readelf",
-            "--wide",
-            "--file-header",
-            "--program-headers",
-            "--dynamic",
-            "--version-info",
-            str(executable),
-        ],
-        text=True,
-    )
-    machine = (
-        "AArch64" if target.startswith("aarch64-") else "Advanced Micro Devices X86-64"
-    )
-    if not re.search(rf"Machine:\s+{re.escape(machine)}\s*$", report, re.MULTILINE):
-        fail(f"{executable.name} is not an ELF executable for {target}")
-    interpreter = re.search(r"Requesting program interpreter: (.+)\]", report)
-    linkage = {
-        "interpreter": interpreter[1] if interpreter else None,
-        "needed": sorted(re.findall(r"\(NEEDED\).*\[(.+)\]", report)),
-        "versions": sorted(set(re.findall(r"Name: (\S+)", report))),
-    }
-    if target.endswith("-musl") and any(linkage.values()):
-        fail(f"{executable.name} must be static for the release musl target: {linkage}")
-    return linkage
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Build and stage the pinned private sandbox runner"
@@ -74,11 +43,7 @@ def main() -> None:
         type=Path,
         default=os.environ.get("MCP_CONSOLE_SANDBOX_SOURCE"),
     )
-    parser.add_argument(
-        "--target",
-        choices=TARGETS,
-        default=os.environ.get("MCP_CONSOLE_SANDBOX_TARGET"),
-    )
+    parser.add_argument("--target", choices=TARGETS)
     parser.add_argument("--github-output", type=Path)
     args = parser.parse_args()
     pin = json.loads((ROOT / "sandbox-runner.json").read_text(encoding="utf-8"))
@@ -126,8 +91,8 @@ def main() -> None:
             cwd=workspace,
             text=True,
         ).strip()
-    if target not in TARGETS:
-        fail(f"unsupported target: {target}")
+        if target not in TARGETS:
+            fail(f"unsupported native target: {target}")
 
     # Invoke Cargo on every source build and use its normal freshness checks.
     # Changes to external tools selected through PATH can require cleaning the
@@ -192,7 +157,6 @@ def main() -> None:
     libexec.mkdir(parents=True)
     licenses.mkdir(parents=True)
     artifacts = []
-    linkage = {}
     for name in ("mcp-console-sandbox", *(["bwrap"] if "linux" in target else [])):
         staged = libexec / name
         shutil.copyfile(staged_helper if name == "bwrap" else binaries / name, staged)
@@ -205,8 +169,6 @@ def main() -> None:
         )
         if name != "bwrap":
             subprocess.run([*strip, str(staged)], check=True)
-        if "linux" in target:
-            linkage[name] = elf_linkage(staged, target)
         artifacts.append(staged)
     notices = [(checkout / name, name) for name in ("LICENSE", "NOTICE")]
     if "linux" in target:
@@ -223,7 +185,6 @@ def main() -> None:
             {
                 "source_revision": head,
                 "target": target,
-                **({"linkage": linkage} if linkage else {}),
                 "artifacts": {
                     path.name: hashlib.sha256(path.read_bytes()).hexdigest()
                     for path in artifacts

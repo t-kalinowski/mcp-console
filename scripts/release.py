@@ -401,28 +401,24 @@ def audit_linux_wheel(args: argparse.Namespace) -> None:
                 "needed": needed,
                 "versions": versions,
             }
-            if name != "mcp-console":
-                require(
-                    not loader and not needed and not versions,
-                    f"release companion {name} must be static: {report[name]}",
-                )
-                continue
             require(
                 loader is not None and loader[1] == interpreter,
-                "GNU Console must use its native glibc loader",
+                f"{name} must use its native glibc loader",
             )
+            allowed = {
+                "libc.so.6",
+                "libgcc_s.so.1",
+                "libm.so.6",
+                "libdl.so.2",
+                "libpthread.so.0",
+                "librt.so.1",
+                Path(interpreter).name,
+            }
+            if name == "bwrap":
+                allowed.add("libcap.so.2")
             require(
-                set(needed)
-                <= {
-                    "libc.so.6",
-                    "libgcc_s.so.1",
-                    "libm.so.6",
-                    "libdl.so.2",
-                    "libpthread.so.0",
-                    "librt.so.1",
-                    Path(interpreter).name,
-                },
-                f"unexpected Console shared libraries: {needed}",
+                set(needed) <= allowed,
+                f"unexpected {name} shared libraries: {needed}",
             )
             for version in versions:
                 if match := re.fullmatch(r"GLIBC_(\d+)\.(\d+)", version):

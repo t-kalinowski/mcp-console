@@ -1,72 +1,44 @@
 # Linux host compatibility
 
-## Artifact portability
+## Build and runtime scope
 
-The portability work starts at Console main `f21abe426014ba70ef2a1ab7419955396d385aab` and advances the [runner pin](https://github.com/t-kalinowski/codex/compare/7aacbcf1bca0f173f036617a5ee8ae71e18fb8cc...a5bca6098099c40a1cad146c6e1d5e895bcac6ee) to `a5bca6098099c40a1cad146c6e1d5e895bcac6ee`.
-It reuses that release's Linux matrix, `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl`, and its existing `install-musl-build-tools.sh` recipe.
-The recipe supplies Zig 0.14 for native dependencies, a musl GCC linker, and static libcap 2.75 with target-specific pkg-config paths.
-The standalone runner now enables the same vendored OpenSSL dependency as the upstream release executable.
-Its ancillary-message length conversions also accommodate the musl libc field types on both architectures.
-No additional operating-system implementation is introduced.
+Linux release wheels and ordinary local source builds use the same native GNU targets, pinned runner source, and companion build path for x86-64 and AArch64.
+Neither path requires Zig or a musl toolchain.
+Release wheels retain their glibc 2.39 baseline and the helper's libcap runtime dependency; source builds use the host libraries.
+The release audit reads the actual ELF architecture, loader, dependencies, and symbol versions for all three executables, including the private files outside Maturin's application audit.
+Wheel tags alone do not cover the additional companion libraries or the libraries R, Python, and SQL load later.
+See [release preparation](../RELEASE.md) for build prerequisites and end-user requirements.
 
-Console release wheels deliberately pair a GNU application with static musl companions of the same architecture.
-Staging records actual ELF linkage and rejects dynamically linked musl companions.
-The build verifies target compatibility and all staged digests; the release audit checks the packaged executables and wheel tags again.
-Every bundled file must also pass Console's existing launch-time integrity check, including bubblewrap when a system helper is available.
-Native selection still prefers a compatible system helper and otherwise uses the bundled one.
-It does not retry a failed sandboxed command with a different helper.
+The native x86-64 wheel was built on Ubuntu 24.04 with Zig absent from `PATH`.
+All three executable files use the GNU loader; the main application and runner require GLIBC 2.39, while bubblewrap requires GLIBC 2.38 and adds `libcap.so.2` to the standard GNU libraries.
+These executable files have no dynamic OpenSSL dependency; language runtimes may load it separately.
+The installed native bundle passed empty-PATH operation, relocation and integrity checks, supported host-helper selection, and R/Python/DuckDB cells, preparation, both interruptions, and restart with R 4.6.1 and managed Python 3.12.13.
 
-The following results were measured on 2026-09-10 using native x86-64 and AArch64 execution in privileged disposable Docker containers.
+## Runtime portability investigation
+
+Exploratory probes on 2026-09-10 used native x86-64 and AArch64 execution in privileged disposable Docker containers.
 The x86-64 host used kernel `6.8.0-139-generic`; the AArch64 VM used `6.8.0-117-generic`.
-These containers supplied namespace permissions; the results do not establish that an arbitrary host's security policy permits sandboxing.
+These results are separate from the native release configuration above: the GNU application probes used static musl companions built from runner revision `a5bca6098099c40a1cad146c6e1d5e895bcac6ee`, and the musl application builds were prototypes.
+The containers supplied namespace permissions; these results do not establish that an arbitrary host permits sandboxing.
 
-| Artifact                              | ELF dependencies and version requirements                                            | Execution result on both architectures                                                                                                           |
-| ------------------------------------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Static musl runner and bubblewrap     | No interpreter, `DT_NEEDED`, or symbol-version requirements                          | Ran on Ubuntu 22.04/glibc 2.35, Ubuntu 24.04/glibc 2.39, and Alpine 3.22/musl 1.2.5; empty-PATH sandbox operation and binary stdin/stdout passed |
-| GNU Console wheel                     | Native GNU loader, `libc.so.6`, `libgcc_s.so.1`; highest required GLIBC version 2.39 | Installed `manylinux_2_39_{x86_64,aarch64}` wheels passed bundle, relocation, integrity, and launcher checks on Ubuntu 24.04                     |
-| GNU Console on Ubuntu 22.04           | Loader reports `GLIBC_2.39` not found                                                | Unsupported, even though its companions run there                                                                                                |
-| Default static musl Console prototype | Static executable cannot load shared R                                               | A real R cell failed with `Dynamic loading not supported` on both Alpine architectures                                                           |
-| Dynamic musl Console prototype        | Native musl loader and libc plus `libgcc_s.so.1`                                     | Native bundle and bare runtime probes passed below; repaired musllinux wheel layout and default managed runtime remain unqualified               |
+| Artifact or runtime combination                                                             | Result                                                                                                                                                                                                                                                                           |
+| ------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Static musl runner and helper, both architectures                                           | ELF inspection found no interpreter, shared-library dependencies, or symbol-version requirements. Empty-PATH sandbox operation and binary stdin/stdout passed on Ubuntu 22.04/glibc 2.35, Ubuntu 24.04/glibc 2.39, and Alpine 3.22/musl 1.2.5. These companions are not shipped. |
+| GNU x86-64 application, Ubuntu 24.04, R 4.6.1, managed Python 3.12.13                       | Installed R/Python/DuckDB cells, native NumPy/SSL imports, R/Python state sharing, preparation of R `digest`, Python `packaging==25.0`, and DuckDB `fts`, both interruptions, and restart passed.                                                                                |
+| GNU AArch64 application, Ubuntu 24.04, R 4.6.1, managed Python 3.12.13                      | Cells and preparation passed; R interruption entered R's crash handler. The complete combination remains unqualified.                                                                                                                                                            |
+| GNU application on Ubuntu 22.04, both architectures                                         | The loader rejected the actual executable with `GLIBC_2.39` not found. Portable companions do not lower that requirement.                                                                                                                                                        |
+| Default static musl application, both Alpine architectures                                  | A real R cell failed with `Dynamic loading not supported`.                                                                                                                                                                                                                       |
+| Dynamic musl native bundle, Alpine 3.22, R 4.5.0, system Python 3.12.14, both architectures | Bare R, native NumPy/SSL, user-owned SQLite through the SQL tool, both interruptions, and restart passed with preinstalled packages. This did not qualify managed preparation or DuckDB.                                                                                         |
 
-The musl ARM prototype's versioned `GLIBC_2.0` reference is supplied by `libgcc_s.so.1`; its loader and libc dependency are musl.
-Version names alone do not identify the required libc.
-Release audits inspect the loader, dependencies, and symbol versions together, and do not infer compatibility from Rust target names.
+The GNU ARM R failure also reproduces without the sandbox: `stop("portable-error")` enters the crash handler with R 4.6.1 and Ubuntu's R 4.3.3.
+The affected return path is the C DLL-REPL boundary in `src/r_repl.c`, which returns through the context installed by `R_ReplDLLinit()` after that function has returned.
+Repairing and qualifying that error/interrupt boundary is independent of companion linkage.
 
-## Complete runtime results
-
-Manual probes exercised the installed executable through public MCP calls and default sandboxed `serve`.
-They loaded R and Python, imported native NumPy and SSL extensions, shared state through the R/Python bridge, executed DuckDB SQL, prepared R `digest`, Python `packaging==25.0`, and DuckDB `fts`, interrupted active R and Python cells, and restarted the worker.
-Restart checks covered state loss and retained requirements.
-These were exploratory runtime checks; the release workflow retains its existing runtime smoke contract.
-
-| Application and host combination                                                            | Result                                                                                                                                                                                                             |
-| ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| GNU x86-64 wheel, Ubuntu 24.04, R 4.6.1, managed Python 3.12.13                             | Full installed R/Python/DuckDB, preparation, both interruptions, and restart passed                                                                                                                                |
-| GNU AArch64 wheel, Ubuntu 24.04, R 4.6.1, managed Python 3.12.13                            | R/Python/DuckDB cells and all preparation passed; R interruption entered R's crash handler, so the complete combination is not qualified                                                                           |
-| Dynamic musl native bundle, Alpine 3.22, R 4.5.0, system Python 3.12.14, both architectures | Bare R, native NumPy/SSL, a user-owned SQLite connection through the SQL tool, both interruptions, and restart passed; this used preinstalled packages and did not establish managed preparation or DuckDB support |
-| Default managed runtime on Alpine                                                           | Not qualified: `r-lib-ir` 0.4.0 has no matching musllinux distribution; an unmodified native build of its v0.4.0 source succeeded, but default R-package preparation encountered the build failures below          |
-
-The GNU ARM failure reproduces through public R cells with both `serve` and `serve --no-sandbox`.
-`stop("portable-error")` also enters the crash handler: R 4.6.1 reports an invalid-permissions segfault and Ubuntu's R 4.3.3 reports an illegal operand.
-The affected return path is the current C DLL-REPL boundary in `src/r_repl.c`, which relies on returning through the context installed by `R_ReplDLLinit()` after that function has returned.
-Repairing and qualifying that R error/interrupt boundary is separate from companion linkage; this change does not replace the worker's REPL architecture.
-
-A dynamic musl build with `RUSTFLAGS='-C target-feature=-crt-static'` demonstrates that R/Python/SQL loading can work, but that flag alone is not full musl-host support.
-Maturin 1.15 repairs its `libgcc_s` dependency by placing the ELF executable under `mcp_console.scripts` in site-packages and installing a Python launcher.
-Console's current relocatable bundle contract expects the executable under `bin`, so that repaired musllinux wheel fails companion lookup before a runtime starts.
-The native-layout prototype avoids that packaging transformation; it is not a qualified wheel.
-
-On Alpine AArch64 with R 4.5.0/GCC 14.2, default preparation also failed to compile DuckDB 1.5.5, Arrow 25.0.1, and systemfonts with the distribution's LTO/fortify settings: `snprintf` or `vsnprintf` reported `function body can be overwritten at link time`.
-The `fs` build additionally required libuv development headers.
-These are dependency-build prerequisites and failures, not evidence of a sandbox policy denial.
-Managed Python preparation, default DuckDB extension loading, and a relocatable musllinux installation therefore remain unverified as a complete application combination.
-No musllinux application wheel is added to the release matrix.
-
-The portable companion improvement is independently usable by the existing GNU wheels.
-It removes their companion libcap/OpenSSL runtime requirements without claiming an older GNU application baseline or full musl-host support.
-Both musl release jobs passed in the [coordinated runner CI run](https://github.com/t-kalinowski/codex/actions/runs/34474894244), including actual ELF inspection and public transport/lifecycle contracts.
-Console's macOS `scripts/check` passed, including source and wheel installation checks; Linux installed-layout checks passed on both architectures.
-See [release preparation](../RELEASE.md) for source-build prerequisites, explicit companion target selection, wheel audits, and installed-layout checks.
+Disabling `crt-static` lets the musl prototype load shared R, but Maturin 1.15 repairs its `libgcc_s` dependency by moving the ELF executable into site-packages and installing a Python launcher.
+That layout breaks Console's installation-relative companion lookup, which expects the executable under `bin`.
+Managed preparation remains unqualified: `r-lib-ir` 0.4.0 has no musllinux distribution, and an unmodified native build of its source was insufficient to complete default preparation.
+On Alpine AArch64, R 4.5.0/GCC 14.2 failed to build DuckDB 1.5.5, Arrow 25.0.1, and systemfonts with the distribution's LTO/fortify settings (`function body can be overwritten at link time`); `fs` additionally needed libuv development headers.
+These packaging and dependency-build blockers remain unresolved; full musl-host support is deferred.
 
 ## Namespace compatibility review
 
@@ -122,8 +94,8 @@ Native device-ioctl restrictions depend on ABI 5 and are not part of this backen
 
 The downstream package builds and strips its bundled helper first, embeds that exact helper digest in the runner, and verifies the selected bundled executable through the same open descriptor used for exec.
 A suitable trusted host helper retains native precedence; native discovery still excludes helpers beneath the working directory.
-Console verifies every bundled file before launching the runner.
-A missing or modified bundled helper fails immediately, even when a suitable host helper is available.
+Console verifies every bundled file before native helper selection, so a missing or modified bundled helper fails even when a suitable host helper is available.
+A failed sandboxed command is not retried with a different helper.
 
 
 ## Reproducing the comparisons

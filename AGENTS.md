@@ -34,8 +34,6 @@ Do not treat `design-sketches/` as evidence of implemented behavior.
 The worker relay, built-in worker, and managed resolvers support macOS and Linux.
 The default sandbox and standalone sandbox command support both platforms.
 Linux requires procfs, permitted native namespace operations, and the selected policy enforcement capabilities; see `docs/LINUX_COMPATIBILITY.md` for tested baselines and constrained-host behavior.
-Release Linux applications use GNU libc and verified static musl companions of the same architecture.
-Companion portability and full R/Python/SQL runtime compatibility are separate contracts; verify ELF dependencies and installed runtime behavior before extending either claim.
 Do not infer support from a kernel version alone.
 Windows is not supported.
 Other Unix operating systems are not supported build or runtime targets; shared `cfg(unix)` modules do not imply support for them.

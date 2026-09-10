@@ -22,8 +22,6 @@ MCP Console runs on macOS and Linux.
 Both platforms sandbox evaluated code by default; Windows is not supported.
 The release workflow builds native wheels for Apple Silicon and Intel macOS and for ARM64 and x86-64 Linux.
 Linux wheels require glibc 2.39 or later; building from source uses the host glibc.
-Their private runner and bubblewrap helper are static musl executables; this does not make the R/Python/SQL application portable to musl hosts.
-See the [Linux artifact and runtime validation](docs/LINUX_COMPATIBILITY.md) for tested combinations and remaining runtime limitations.
 On older Linux kernels or when seccomp denies `close_range` with `EPERM`, inherited-descriptor cleanup requires `/proc` to be mounted.
 
 A working R installation is required.
