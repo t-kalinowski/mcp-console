@@ -4,7 +4,7 @@ Install the extra for the interface you use, with Python 3.11 or newer:
 
 | Interface           | Install                                    |
 | ------------------- | ------------------------------------------ |
-| Callable client     | `pip install "mcp-console[client]"`        |
+| Python client       | `pip install "mcp-console[client]"`        |
 | chatlas             | `pip install "mcp-console[chatlas]"`       |
 | OpenAI Responses    | `pip install "mcp-console[openai]"`        |
 | OpenAI Agents       | `pip install "mcp-console[openai-agents]"` |
@@ -15,12 +15,12 @@ The base package installs the executable without framework dependencies.
 The client uses MCP 2.2 or newer within the 2.x series.
 Each framework extra declares the minimum SDK release used by the integration tests.
 
-All helpers default to the executable installed in the current Python environment, then search `PATH`, and launch it with `serve`.
-Pass `command=` and `args=` to override the command.
+Clients and helpers that open a connection use the executable installed in the current Python environment, then search `PATH`, and launch it with `serve`.
+Pass `command=` and `args=` to configure that launch.
 The application owns its model clients, agents, chats, and tool loops.
-The callable clients are available at the package root; framework helpers live in the `chatlas`, `openai`, `anthropic`, and `codex` submodules.
+The clients are available at the package root; framework helpers live in the `chatlas`, `openai`, `anthropic`, and `codex` submodules.
 
-## Callable clients
+## Python clients
 
 Use `MCPConsole` for synchronous code:
 
@@ -40,13 +40,17 @@ async with AsyncMCPConsole() as console:
     print(await console.send(python="answer = 42; answer"))
 ```
 
-Both clients have the same `send()` arguments; calling the console object is equivalent to calling `send()`.
-It returns text, represents images with a MIME-type placeholder, and raises `RuntimeError` for MCP tool errors.
+Both clients have the same `send()` arguments; `console(...)` is shorthand for a Python call to `console.send(...)`.
+These calls return text, represent images with a MIME-type placeholder, and raise `RuntimeError` for MCP tool errors.
 The native MCP integrations and Responses adapters preserve image content.
+
+Use the product adapters below for SDK tool registration.
+They use the connected server's schema, available as `console.send_tool`, including its configured languages and requirement availability.
+Registering the console object or `console.send` through an SDK's function-schema inference is outside this API: the Python annotations describe ordinary calls and do not describe a particular server's capabilities.
 
 Supply at most one of `r`, `python`, or `sql` per call.
 The server returns a tool error if multiple code fields are supplied.
-SDK-generated callable schemas leave this cross-field validation to the server, as the native MCP schema does.
+The adapters preserve the native MCP schema and leave runtime validation, including this cross-field rule, to the server.
 
 `timeout_ms` limits the wait, not the evaluation.
 If the response ends in `[running; poll with an empty send]`, call `send()` again without code or stdin until the evaluation finishes before submitting another cell.
@@ -59,22 +63,24 @@ The synchronous client manages that task on an AnyIO portal thread.
 The MCP SDK owns subprocess and transport cleanup.
 After closing, reconnecting starts a fresh server and console session.
 Create or register tools after connecting, and recreate them after reconnecting.
-Their callable signatures reflect the languages and requirement preparation available from that server.
 Pass native stdio settings such as `env` and `cwd` through `server_parameters=`.
 
 ## chatlas
 
-Register the synchronous callable on an existing chat:
+Add a tool to an existing chat:
 
 ```python
 from chatlas import ChatOpenAI
-from mcp_console import MCPConsole
+from mcp_console import MCPConsole, chatlas
 
 chat = ChatOpenAI()
 with MCPConsole() as console:
-    chat.register_tool(console.send)
+    chat.set_tools([*chat.get_tools(), chatlas.tool(console)])
     chat.chat("Use the console to calculate 20!.")
 ```
+
+`chatlas.tool()` accepts either client and returns a synchronous or asynchronous `chatlas.Tool`.
+Use `set_tools()` to preserve its explicit schema; chatlas 0.23.0's `register_tool()` rebuilds schemas from Python annotations.
 
 For native MCP registration, use chatlas's async interface:
 
@@ -91,24 +97,22 @@ finally:
 ```
 
 chatlas owns the native MCP connection.
-With an existing `AsyncMCPConsole` connection, `chat.register_tool(console.send)` registers the async callable.
 Native registration uses chatlas's stdio helper; use its default tool names because chatlas 0.23.0's `namespace=` option also renames the tool sent to the server.
 
 ## OpenAI Responses
 
-Both callable clients provide `openai_responses_tool()`.
-The adapter reads the live MCP tool schema.
+`mcp_console.openai.responses_tool(console)` accepts either client and reads the live MCP tool schema.
 Its `definition` goes in `responses.create(tools=...)`, and calling it with a function call returns a `function_call_output` item containing text and images.
 
 Use the synchronous OpenAI client with `MCPConsole`:
 
 ```python
-from mcp_console import MCPConsole
+from mcp_console import MCPConsole, openai
 from openai import OpenAI
 
 client = OpenAI()
 with MCPConsole() as console:
-    tool = console.openai_responses_tool()
+    tool = openai.responses_tool(console)
     response = client.responses.create(
         model="your-model",
         input="Use the console to calculate 20!.",
@@ -139,16 +143,17 @@ Use a synchronous console with `Runner.run_sync`:
 
 ```python
 from agents import Agent, Runner
-from mcp_console import MCPConsole
+from mcp_console import MCPConsole, openai
 
 with MCPConsole() as console:
-    agent = Agent(name="Data analyst", tools=[console.openai_agents_tool()])
+    agent = Agent(name="Data analyst", tools=[openai.agents_tool(console)])
     result = Runner.run_sync(agent, "Use the console to calculate 20!.")
     print(result.final_output)
 ```
 
-`AsyncMCPConsole.openai_agents_tool()` supplies an async callable for `Runner.run`.
-Both callable adapters use a non-strict schema to preserve optional arguments and sparse requirement dictionaries.
+`openai.agents_tool()` also accepts `AsyncMCPConsole` for use with `Runner.run`.
+It returns the SDK's `FunctionTool` with the live MCP schema and `strict_json_schema=False` to preserve optional arguments.
+Tool errors raise `RuntimeError`.
 
 To use the SDK's native MCP support, supply its server to an agent:
 
@@ -168,18 +173,18 @@ Pass stdio settings through `params=` and other native SDK options as keyword ar
 
 ## Anthropic
 
-Use the synchronous client and runner with a console callable:
+Use the synchronous client and runner:
 
 ```python
 from anthropic import Anthropic
-from mcp_console import MCPConsole
+from mcp_console import MCPConsole, anthropic
 
 client = Anthropic()
 with MCPConsole() as console:
     runner = client.beta.messages.tool_runner(
         model="your-model",
         max_tokens=4096,
-        tools=[console.anthropic_tool()],
+        tools=[anthropic.tool(console)],
         messages=[{"role": "user", "content": "Use the console to calculate 20!."}],
     )
     for message in runner:
@@ -187,26 +192,10 @@ with MCPConsole() as console:
 ```
 
 For async code, use `AsyncAnthropic`, `AsyncMCPConsole`, and `async for`.
-`AsyncMCPConsole.anthropic_tool()` returns a native async function tool.
+`anthropic.tool(console)` selects the native sync or async function tool to match the console.
 
-The native MCP adapter preserves images and owns its connection:
-
-```python
-import mcp_console
-from anthropic import AsyncAnthropic
-
-client = AsyncAnthropic()
-async with mcp_console.anthropic.tools() as tools:
-    runner = client.beta.messages.tool_runner(
-        model="your-model",
-        max_tokens=4096,
-        tools=tools,
-        messages=[{"role": "user", "content": "Use the console to calculate 20!."}],
-    )
-    async for message in runner:
-        print(message)
-```
-
+For native MCP tools that preserve images, use `async with mcp_console.anthropic.tools() as tools` and pass `tools` to the async runner.
+This context owns its connection.
 Pass stdio settings through `server_parameters=` and native conversion options through `tool_kwargs=`.
 
 ## Official thread SDK

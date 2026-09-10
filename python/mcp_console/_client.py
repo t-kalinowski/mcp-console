@@ -1,47 +1,18 @@
 from collections.abc import Mapping, Sequence
 from contextlib import AsyncExitStack
-from typing import TYPE_CHECKING, Annotated, Any, Literal, Self, cast
+from typing import TYPE_CHECKING, Any, Literal, Self, TypedDict
 
-from annotated_types import Ge, Le, MaxLen, MinLen
-from typing_extensions import TypeAliasType, TypedDict
-
-from ._common import Command, configured_send, result_text, stdio_command
-from .openai import AsyncResponsesTool
+from ._common import Command, result_text, stdio_command
 
 if TYPE_CHECKING:
     from mcp import Client
     from mcp.types import CallToolResult, Tool
 
 
-# A named alias keeps Agents and chatlas from discarding the constraints.
-TimeoutMilliseconds = TypeAliasType(
-    "TimeoutMilliseconds", Annotated[int, Ge(0), Le(2**64 - 1)]
-)
-
-
-class Requirements(TypedDict, total=False, closed=True):
-    r: Annotated[list[Annotated[str, MinLen(1)]], MaxLen(64)]
-    python: Annotated[list[Annotated[str, MinLen(1)]], MaxLen(64)]
-    duckdb: Annotated[list[Annotated[str, MinLen(1), MaxLen(64)]], MaxLen(64)]
-
-
-def _nonempty_requirements_schema(schema: dict[str, Any]) -> None:
-    properties = schema["properties"]
-    # Keep all keys in each branch for SDKs that close objects in strict mode.
-    schema["anyOf"] = [
-        schema
-        | {
-            "properties": properties | {name: field | {"minItems": 1}},
-            "required": [name],
-        }
-        for name, field in properties.items()
-    ]
-
-
-# Configure SDK schema generation without importing their Pydantic dependency.
-cast(Any, Requirements).__pydantic_config__ = {
-    "json_schema_extra": _nonempty_requirements_schema
-}
+class Requirements(TypedDict, total=False):
+    r: list[str]
+    python: list[str]
+    duckdb: list[str]
 
 
 class AsyncMCPConsole:
@@ -84,18 +55,15 @@ class AsyncMCPConsole:
             )
             if send_tool is None:
                 raise RuntimeError("MCP Console did not expose its send tool")
-            send = configured_send(self.send, send_tool)
             self._stack = stack.pop_all()
             self._client = client
             self._send_tool = send_tool
-            self.send = send
         return self
 
     async def close(self) -> None:
         """Close the MCP client session and terminate its subprocess."""
         stack = self._stack
         self._stack = self._client = self._send_tool = None
-        self.__dict__.pop("send", None)
         if stack is not None:
             await stack.aclose()
 
@@ -113,7 +81,6 @@ class AsyncMCPConsole:
             )
         return await self._client.call_tool("send", dict(arguments))
 
-    # Framework schema generators need concrete callable annotations.
     async def send(
         self,
         *,
@@ -123,7 +90,7 @@ class AsyncMCPConsole:
         control: Literal["interrupt", "restart"] | None = None,
         requirements: Requirements | None = None,
         stdin: str | None = None,
-        timeout_ms: TimeoutMilliseconds = 60_000,
+        timeout_ms: int = 60_000,
     ) -> str:
         """Run or control the persistent R, Python, and SQL console.
 
@@ -155,32 +122,14 @@ class AsyncMCPConsole:
             )
         )
 
+    # Ordinary Python shorthand; SDK registration uses the product adapters.
     __call__ = send
 
-    def _connected_tool(self) -> "Tool":
+    @property
+    def send_tool(self) -> "Tool":
+        """The connected server's MCP tool definition, used by SDK adapters."""
         if self._send_tool is None:
             raise RuntimeError(
                 "Connect the console before creating tools; enter its context or call connect()"
             )
         return self._send_tool
-
-    def openai_responses_tool(self) -> "AsyncResponsesTool":
-        """Return an object for a standard OpenAI Responses tool loop."""
-        return AsyncResponsesTool(self, self._connected_tool())
-
-    def openai_agents_tool(self, *, strict_mode: bool = False, **kwargs: Any) -> Any:
-        """Return a native OpenAI Agents function tool wrapping ``send``."""
-        self._connected_tool()
-        from agents import function_tool
-
-        # send accepts sparse arguments and requirements rather than a strict object.
-        tool = function_tool(self.send, strict_mode=strict_mode, **kwargs)
-        tool.params_json_schema["additionalProperties"] = False
-        return tool
-
-    def anthropic_tool(self, **kwargs: Any) -> Any:
-        """Return a native Anthropic async function tool wrapping ``send``."""
-        self._connected_tool()
-        from anthropic import beta_async_tool
-
-        return beta_async_tool(self.send, **kwargs)

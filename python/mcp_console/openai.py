@@ -4,15 +4,60 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any
+from functools import partial
+from inspect import iscoroutinefunction
+from typing import TYPE_CHECKING, Any, overload
 
 from ._common import Command, content_text, result_text, stdio_command
 
 if TYPE_CHECKING:
+    from agents import FunctionTool
     from mcp.types import Tool
 
     from ._client import AsyncMCPConsole
     from ._sync import MCPConsole
+
+
+def agents_tool(console: MCPConsole | AsyncMCPConsole) -> FunctionTool:
+    """Return an Agents function tool using the connected server's MCP schema."""
+    from agents import FunctionTool
+    from anyio import to_thread
+
+    tool = console.send_tool
+
+    async def invoke(context: Any, arguments: str) -> str:
+        parsed = json.loads(arguments)
+        if iscoroutinefunction(console.send):
+            return await console.send(**parsed)
+        return await to_thread.run_sync(partial(console.send, **parsed))
+
+    return FunctionTool(
+        name=tool.name,
+        description=tool.description or "",
+        params_json_schema=tool.input_schema,
+        on_invoke_tool=invoke,
+        strict_json_schema=False,
+    )
+
+
+@overload
+def responses_tool(console: MCPConsole) -> ResponsesTool: ...
+
+
+@overload
+def responses_tool(console: AsyncMCPConsole) -> AsyncResponsesTool: ...
+
+
+def responses_tool(
+    console: MCPConsole | AsyncMCPConsole,
+) -> ResponsesTool | AsyncResponsesTool:
+    """Return a sync or async tool for an application-owned Responses loop."""
+    from ._sync import MCPConsole
+
+    tool = console.send_tool
+    if isinstance(console, MCPConsole):
+        return ResponsesTool(console, AsyncResponsesTool(console._async, tool))
+    return AsyncResponsesTool(console, tool)
 
 
 def agents_server(

@@ -1,10 +1,44 @@
 """Native Anthropic tools backed by MCP Console."""
 
+from __future__ import annotations
+
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
-from typing import Any
+from inspect import iscoroutinefunction
+from typing import TYPE_CHECKING, Any
 
 from ._common import Command, stdio_command
+
+if TYPE_CHECKING:
+    from ._client import AsyncMCPConsole
+    from ._sync import MCPConsole
+
+
+def tool(console: MCPConsole | AsyncMCPConsole, **kwargs: Any) -> Any:
+    """Return a sync or async runner tool using the live MCP schema."""
+    from anthropic import beta_async_tool, beta_tool
+
+    definition = console.send_tool
+    if iscoroutinefunction(console.send):
+
+        async def invoke(**arguments: Any) -> str:
+            return await console.send(**arguments)
+
+        decorate = beta_async_tool
+    else:
+
+        def invoke(**arguments: Any) -> str:
+            return console.send(**arguments)
+
+        decorate = beta_tool
+
+    return decorate(
+        invoke,
+        name=definition.name,
+        description=definition.description,
+        input_schema=definition.input_schema,
+        **kwargs,
+    )
 
 
 @asynccontextmanager

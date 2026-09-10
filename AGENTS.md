@@ -127,6 +127,7 @@ Keep these invariants intact:
 - `src/transcript.rs`, `src/transcript/{event,markdown,output}.rs` — typed recording events, append-only tool journal, Markdown and source-only Quarto projections, cell output files, and image artifacts.
 - `python/mcp_console/` — synchronous and asynchronous MCP clients and composable framework adapters.
   The public `openai.py`, `anthropic.py`, `chatlas.py`, and `codex.py` modules group adapters by product or SDK.
+  SDK registration uses these adapters with the live MCP schema; `send()` and the callable console object are ordinary Python interfaces, not SDK schema providers.
 - `r/` — thin ellmer package that resolves and manages `mcp-console serve` as a persistent tool.
 
 ### Protocols, relay, and worker orchestration

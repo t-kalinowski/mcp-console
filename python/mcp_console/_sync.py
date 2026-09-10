@@ -3,12 +3,12 @@ from contextlib import ExitStack
 from functools import partial
 from typing import TYPE_CHECKING, Any, Literal, Self
 
-from ._client import AsyncMCPConsole, Requirements, TimeoutMilliseconds
-from ._common import Command, configured_send
-from .openai import ResponsesTool
+from ._client import AsyncMCPConsole, Requirements
+from ._common import Command
 
 if TYPE_CHECKING:
     from anyio.from_thread import BlockingPortal
+    from mcp.types import Tool
 
 
 class MCPConsole:
@@ -40,7 +40,6 @@ class MCPConsole:
                 portal = stack.enter_context(start_blocking_portal())
                 # The MCP transport must enter and exit in the same async task.
                 stack.enter_context(portal.wrap_async_context_manager(self._async))
-                self.send = configured_send(self.send, self._async._connected_tool())
                 self._portal = portal
                 self._stack = stack.pop_all()
         return self
@@ -49,7 +48,6 @@ class MCPConsole:
         """Close the MCP session, subprocess, and portal thread."""
         stack = self._stack
         self._stack = self._portal = None
-        self.__dict__.pop("send", None)
         if stack is not None:
             stack.close()
 
@@ -76,7 +74,7 @@ class MCPConsole:
         control: Literal["interrupt", "restart"] | None = None,
         requirements: Requirements | None = None,
         stdin: str | None = None,
-        timeout_ms: TimeoutMilliseconds = 60_000,
+        timeout_ms: int = 60_000,
     ) -> str:
         return self._run(
             self._async.send,
@@ -92,22 +90,7 @@ class MCPConsole:
     send.__doc__ = AsyncMCPConsole.send.__doc__
     __call__ = send
 
-    def openai_responses_tool(self) -> "ResponsesTool":
-        """Return a synchronous tool for an OpenAI Responses tool loop."""
-        return ResponsesTool(self, self._run(self._async.openai_responses_tool))
-
-    def openai_agents_tool(self, *, strict_mode: bool = False, **kwargs: Any) -> Any:
-        """Return a native OpenAI Agents function tool wrapping ``send``."""
-        self._async._connected_tool()
-        from agents import function_tool
-
-        tool = function_tool(self.send, strict_mode=strict_mode, **kwargs)
-        tool.params_json_schema["additionalProperties"] = False
-        return tool
-
-    def anthropic_tool(self, **kwargs: Any) -> Any:
-        """Return a native Anthropic synchronous function tool wrapping ``send``."""
-        self._async._connected_tool()
-        from anthropic import beta_tool
-
-        return beta_tool(self.send, **kwargs)
+    @property
+    def send_tool(self) -> "Tool":
+        """The connected server's MCP tool definition, used by SDK adapters."""
+        return self._async.send_tool

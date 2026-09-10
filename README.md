@@ -69,7 +69,7 @@ It waits for MCP protocol input rather than presenting an interactive terminal p
 
 ## Python integrations
 
-The Python package provides synchronous and asynchronous callable clients and adapters for chatlas, OpenAI Responses, OpenAI Agents, Anthropic, and the official thread SDK.
+The Python package provides synchronous and asynchronous clients and adapters for chatlas, OpenAI Responses, OpenAI Agents, Anthropic, and the official thread SDK.
 Python 3.11 or newer is required.
 
 ```sh

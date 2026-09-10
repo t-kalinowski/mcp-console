@@ -9,7 +9,6 @@ dynamic = ["version"]
 description = "Persistent R, Python, and SQL sessions for MCP clients"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["annotated-types>=0.8.0", "typing-extensions>=4.16.0"]
 license = "MIT"
 keywords = ["mcp", "r", "python", "sql", "duckdb"]
 classifiers = [
