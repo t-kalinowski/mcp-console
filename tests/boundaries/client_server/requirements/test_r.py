@@ -19,7 +19,12 @@ from support.normalization import code
 from support.r import r_test_environment
 from support.records import Transcript
 from support.requirements import command, requires
-from support.resolvers import checkpoint_uv_environment
+from support.resolvers import (
+    checkpoint_uv_environment,
+    ir_requirements,
+    ir_run_records,
+    recording_ir_environment,
+)
 from support.suites import run_this_suite
 
 
@@ -431,13 +436,13 @@ def test_failed_late_mixed_preparation_preserves_worker(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(command("ir"))
 def test_evaluates_with_default_managed_r(
     binary: Path, execution: Execution
 ) -> Transcript:
-    environment, _ = r_test_environment()
-    environment["RETICULATE_PYTHON"] = ""
     with tempfile.TemporaryDirectory() as temporary:
         workspace = Path(temporary)
+        environment, record = recording_ir_environment(workspace)
         ambient_library = workspace / "ambient-library"
         ambient_library.mkdir()
         environment["R_LIBS"] = os.pathsep.join(
@@ -460,7 +465,6 @@ def test_evaluates_with_default_managed_r(
               identical(dirname(find.package("duckdb")), .libPaths()[[1L]]),
               identical(dirname(find.package("arrow")), .libPaths()[[1L]]),
               identical(dirname(find.package("nanoarrow")), .libPaths()[[1L]]),
-              identical(packageDescription("reticulate")$Repository, "CRAN"),
               vapply(
                 c("ggplot2", "dplyr", "readr", "jsonlite"),
                 requireNamespace,
@@ -475,10 +479,23 @@ def test_evaluates_with_default_managed_r(
             """)
         client.send(r=r)
         assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
+        # Repository labels vary by mirror. Check the default package references
+        # passed to ir, including the registry release of reticulate.
+        runs = ir_run_records(record)
+        assert len(runs) == 1, runs
+        assert set(ir_requirements(runs[0])) == {
+            "tidyverse",
+            "reticulate",
+            "DBI",
+            "duckdb",
+            "arrow",
+            "nanoarrow",
+        }, runs
         client.send(
             requirements={"r": ["DBI", "duckdb", "arrow", "nanoarrow"]},
         )
         assert last_result_text(client) == "[prepared]", client.transcript[-1]
+        assert ir_run_records(record) == runs
         return client.finish()
 
 
