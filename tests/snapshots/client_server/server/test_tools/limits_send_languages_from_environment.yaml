@@ -91,7 +91,7 @@ result:
               dialect and type mappings. Use DBI from an R cell for commands that require the statement
               interface. Managed DuckDB conveniences and extension requirements apply only to the managed
               backend. With the sandbox enabled, use `ATTACH 'path' AS name (READ_ONLY)` for existing DuckDB
-              databases outside the worker's private temporary directory; the sandbox blocks DuckDB's
+              databases outside the sandbox's writable paths; the sandbox blocks DuckDB's
               default writable mode for those paths. Use `SHOW TABLES`, `DESCRIBE`, `SUMMARIZE`, and `EXPLAIN`
               for DuckDB discovery. DuckDB CLI dot commands are not supported. Omit this field for polling
               or stdin-only calls.

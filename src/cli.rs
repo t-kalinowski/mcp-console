@@ -33,6 +33,10 @@ pub enum Command {
         #[arg(long)]
         no_sandbox: bool,
 
+        /// Allow writes to an additional path (temporary launch option)
+        #[arg(long, value_name = "PATH", conflicts_with = "no_sandbox")]
+        writable_root: Vec<PathBuf>,
+
         /// Replace the runtime worker during development
         #[arg(long, hide = true, value_name = "PATH")]
         worker: Option<PathBuf>,
@@ -66,6 +70,10 @@ pub enum Command {
         /// Read the runner configuration as JSON from this launch environment variable
         #[arg(long, value_name = "NAME", conflicts_with = "exit_with_parent")]
         config_env: Option<String>,
+
+        /// Allow writes to an additional path (temporary launch option)
+        #[arg(long, value_name = "PATH", conflicts_with = "config_env")]
+        writable_root: Vec<PathBuf>,
 
         /// Retire the sandbox when this parent process exits
         #[arg(long, hide = true, value_name = "PID")]

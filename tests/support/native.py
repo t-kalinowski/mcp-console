@@ -1,5 +1,6 @@
 """Compile and load native checkpoints on macOS and Linux."""
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -16,10 +17,15 @@ def build_interposer(directory: Path, name: str) -> Path:
 
 def compile_interposer(source: Path, output: Path) -> Path:
     library = output.with_suffix(".dylib" if sys.platform == "darwin" else ".so")
+    architectures = []
+    if sys.platform == "darwin" and os.uname().machine == "arm64":
+        # The loader environment can also reach arm64e host helpers.
+        architectures = ["-arch", "arm64", "-arch", "arm64e"]
     subprocess.run(
         [
             "cc",
             SHARED_LIBRARY_FLAG,
+            *architectures,
             "-fPIC",
             "-std=c11",
             "-Wall",

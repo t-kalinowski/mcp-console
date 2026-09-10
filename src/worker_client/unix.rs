@@ -139,6 +139,7 @@ impl WorkerRuntime {
             arguments,
             relay,
             no_sandbox,
+            writable_roots,
             python,
             managed_r,
             dynamic_resolution,
@@ -157,9 +158,11 @@ impl WorkerRuntime {
             command
                 .arg("sandbox")
                 .arg("--exit-with-parent")
-                .arg(std::process::id().to_string())
-                .arg("--")
-                .args(target);
+                .arg(std::process::id().to_string());
+            for root in writable_roots {
+                command.arg("--writable-root").arg(root);
+            }
+            command.arg("--").args(target);
             command
         };
         if let Some(python) = python {

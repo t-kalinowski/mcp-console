@@ -124,7 +124,8 @@ See [Recording and artifacts](https://github.com/t-kalinowski/mcp-console/blob/m
 
 Submitted R, Python, and SQL have shell-class capability.
 On macOS and Linux, the worker sandbox is enabled by default.
-The worker can read host files, but direct network access and regular-file writes outside its private temporary directory are denied.
+The worker can read host files, but direct network access and regular-file writes outside its private temporary directory and any explicitly allowed paths are denied.
+The temporary `--writable-root PATH` launch argument adds a writable path; see [path semantics and an example](docs/SANDBOX_CONFIGURATION.md#additional-writable-paths).
 This is a process boundary, not a safe evaluator for untrusted code with access to sensitive readable files.
 
 `mcp-console serve --no-sandbox` launches the relay directly with host permissions.
