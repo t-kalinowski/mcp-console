@@ -20,6 +20,7 @@ R plots made with the default device and open Matplotlib figures are returned as
 
 MCP Console runs on macOS and Linux.
 Both platforms sandbox evaluated code by default; Windows is not supported.
+Package installation requires Python 3.11 or later.
 The release workflow builds native wheels for Apple Silicon and Intel macOS and for ARM64 and x86-64 Linux.
 Linux wheels require glibc 2.39 or later; building from source uses the host glibc.
 On older Linux kernels or when seccomp denies `close_range` with `EPERM`, inherited-descriptor cleanup requires `/proc` to be mounted.
@@ -69,7 +70,7 @@ It waits for MCP protocol input rather than presenting an interactive terminal p
 ## Python integrations
 
 The Python package provides synchronous and asynchronous callable clients and adapters for chatlas, OpenAI Responses, OpenAI Agents, Anthropic, and the official thread SDK.
-Python 3.10 or newer is required.
+Python 3.11 or newer is required.
 
 ```sh
 pip install "mcp-console[client]"
@@ -161,10 +162,11 @@ Render only code you trust.
 ## Development
 
 Install the current checkout with `uv tool install --reinstall .`.
-Source builds require Python 3, Git, and rustup in addition to the Rust compiler and native build tools.
+Source builds require Python 3.11 or later, Git, and rustup in addition to the Rust compiler and native build tools.
 The first uv source installation fetches and compiles the pinned sandbox runner in a dedicated checkout under `target`.
 Later installations invoke Cargo again, reusing its build intermediates and checking for changes to tracked build inputs.
-The packaging backend prepares the companion before building the main executable; rustup installs the pinned toolchain if needed.
+The packaging backend prepares the companion before building the main executable; rustup installs the compiler selected by the runner checkout if needed.
+The runner build is independent of the caller's `RUSTUP_TOOLCHAIN` selection for Console.
 It does not use another working checkout.
 
 Run development commands from the repository root:

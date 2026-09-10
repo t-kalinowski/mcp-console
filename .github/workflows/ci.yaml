@@ -130,12 +130,6 @@ jobs:
           sudo apt-get install -y build-essential pkg-config libcurl4-openssl-dev libcap-dev
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
-      - name: Install private sandbox Rust toolchain
-        run: >-
-          rustup toolchain install
-          "${{ steps.sandbox-pin.outputs.rust_toolchain }}"
-          --profile minimal
-
       - name: Select weekly cache epoch
         id: cache-epoch
         run: |
@@ -210,10 +204,10 @@ jobs:
           # Reuse workspace crates from the preceding pin when rebuilding it.
           # Keep every restore prefix within the current UTC week.
           key: >-
-            sandbox-build-v2-${{ steps.cache-epoch.outputs.value }}-${{ steps.cache-epoch.outputs.image }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.sandbox-pin.outputs.rust_toolchain }}-${{ hashFiles('.sandbox-runner-source/codex-rs/Cargo.toml', '.sandbox-runner-source/codex-rs/Cargo.lock', '.sandbox-runner-source/codex-rs/.cargo/**', 'scripts/stage-sandbox-runner', '.github/workflows/ci.yaml') }}-${{ steps.sandbox-pin.outputs.commit }}
+            sandbox-build-v2-${{ steps.cache-epoch.outputs.value }}-${{ steps.cache-epoch.outputs.image }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.sandbox-runner-source/codex-rs/rust-toolchain.toml') }}-${{ hashFiles('.sandbox-runner-source/codex-rs/Cargo.toml', '.sandbox-runner-source/codex-rs/Cargo.lock', '.sandbox-runner-source/codex-rs/.cargo/**', 'scripts/stage-sandbox-runner', '.github/workflows/ci.yaml') }}-${{ steps.sandbox-pin.outputs.commit }}
           restore-keys: |
-            sandbox-build-v2-${{ steps.cache-epoch.outputs.value }}-${{ steps.cache-epoch.outputs.image }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.sandbox-pin.outputs.rust_toolchain }}-${{ hashFiles('.sandbox-runner-source/codex-rs/Cargo.toml', '.sandbox-runner-source/codex-rs/Cargo.lock', '.sandbox-runner-source/codex-rs/.cargo/**', 'scripts/stage-sandbox-runner', '.github/workflows/ci.yaml') }}-
-            sandbox-build-v2-${{ steps.cache-epoch.outputs.value }}-${{ steps.cache-epoch.outputs.image }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.sandbox-pin.outputs.rust_toolchain }}-
+            sandbox-build-v2-${{ steps.cache-epoch.outputs.value }}-${{ steps.cache-epoch.outputs.image }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.sandbox-runner-source/codex-rs/rust-toolchain.toml') }}-${{ hashFiles('.sandbox-runner-source/codex-rs/Cargo.toml', '.sandbox-runner-source/codex-rs/Cargo.lock', '.sandbox-runner-source/codex-rs/.cargo/**', 'scripts/stage-sandbox-runner', '.github/workflows/ci.yaml') }}-
+            sandbox-build-v2-${{ steps.cache-epoch.outputs.value }}-${{ steps.cache-epoch.outputs.image }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.sandbox-runner-source/codex-rs/rust-toolchain.toml') }}-
 
       - name: Stage private sandbox runner
         env:

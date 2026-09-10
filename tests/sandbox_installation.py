@@ -94,9 +94,10 @@ class SandboxInstallationTests(unittest.TestCase):
         read, write = os.pipe()
         relocated = fcntl.fcntl(read, fcntl.F_DUPFD_CLOEXEC, 73)
         os.close(read)
-        with os.fdopen(relocated, "rb", buffering=0) as setup_read, os.fdopen(
-            write, "wb"
-        ) as setup_write:
+        with (
+            os.fdopen(relocated, "rb", buffering=0) as setup_read,
+            os.fdopen(write, "wb") as setup_write,
+        ):
             process = subprocess.Popen(
                 [self.runner, "--bootstrap-fd", str(relocated)],
                 pass_fds=(relocated,),

@@ -12,6 +12,7 @@ import tempfile
 import textwrap
 import unittest
 import zipfile
+from email.parser import BytesParser
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -54,6 +55,7 @@ class InstallationTests(unittest.TestCase):
             (source / "src/main.rs").write_text(
                 textwrap.dedent("""
                 fn main() {
+                    println!("console {}", env!("RUSTUP_TOOLCHAIN"));
                     let executable = std::env::current_exe().unwrap().canonicalize().unwrap();
                     let runner = executable.parent().unwrap().parent().unwrap()
                         .join("libexec/mcp-console-sandbox");
@@ -67,6 +69,18 @@ class InstallationTests(unittest.TestCase):
             runner_source = directory / "runner"
             workspace = runner_source / "codex-rs"
             workspace.mkdir(parents=True)
+            runner_toolchain = subprocess.check_output(
+                ["rustup", "show", "active-toolchain"], text=True
+            ).split()[0]
+            # The caller selects the available compiler by path while the
+            # runner checkout selects its named toolchain. This avoids
+            # downloading a second compiler just for this fixture.
+            console_toolchain = subprocess.check_output(
+                ["rustc", "--print", "sysroot"], text=True
+            ).strip()
+            (workspace / "rust-toolchain.toml").write_text(
+                f"[toolchain]\nchannel = {json.dumps(runner_toolchain)}\n"
+            )
             (runner_source / ".gitignore").write_text("/codex-rs/target\n")
             (workspace / "Cargo.toml").write_text(
                 textwrap.dedent("""
@@ -105,7 +119,9 @@ class InstallationTests(unittest.TestCase):
                 (crate / "src/main.rs").write_text(
                     textwrap.dedent("""
                     unsafe extern "C" { fn value() -> i32; }
-                    fn main() { println!("{}", unsafe { value() }); }
+                    fn main() {
+                        println!("{} {}", unsafe { value() }, env!("RUSTUP_TOOLCHAIN"));
+                    }
                 """)
                 )
             for name in ("LICENSE", "NOTICE"):
@@ -148,9 +164,6 @@ class InstallationTests(unittest.TestCase):
                     ["git", "rev-parse", "HEAD"], cwd=runner_source, text=True
                 ).strip(),
                 "protocol_version": 2,
-                "rust_toolchain": subprocess.check_output(
-                    ["rustup", "show", "active-toolchain"], text=True
-                ).split()[0],
             }
             (source / "sandbox-runner.json").write_text(json.dumps(pin))
             environment = os.environ.copy()
@@ -160,6 +173,7 @@ class InstallationTests(unittest.TestCase):
                     "UV_TOOL_DIR": str(directory / "tools"),
                     "UV_TOOL_BIN_DIR": str(directory / "bin"),
                     "CARGO_TARGET_DIR": str(source / "target"),
+                    "RUSTUP_TOOLCHAIN": console_toolchain,
                     "GIT_CONFIG_COUNT": "1",
                     "GIT_CONFIG_KEY_0": f"url.{runner_source.as_uri()}.insteadOf",
                     "GIT_CONFIG_VALUE_0": "https://github.com/fixture/runner.git",
@@ -192,7 +206,10 @@ class InstallationTests(unittest.TestCase):
                         text=True,
                         check=True,
                     )
-                    self.assertEqual(result.stdout, f"{value}\n")
+                    self.assertEqual(
+                        result.stdout,
+                        f"console {console_toolchain}\n{value} {runner_toolchain}\n",
+                    )
 
             # The same backend and staging recipe must be present when uv
             # receives a source archive instead of a working checkout.
@@ -220,7 +237,7 @@ class InstallationTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual(
                 subprocess.check_output([directory / "bin/mcp-console"], text=True),
-                "210\n",
+                f"console {console_toolchain}\n210 {runner_toolchain}\n",
             )
 
     def test_uv_installs_a_relocatable_bundle_from_unstaged_sources(self) -> None:
@@ -356,6 +373,13 @@ class InstallationTests(unittest.TestCase):
                 wheels = list((directory / "dist").glob("*.whl"))
                 self.assertEqual(len(wheels), 1)
                 with zipfile.ZipFile(wheels[0]) as archive:
+                    metadata_path = next(
+                        name
+                        for name in archive.namelist()
+                        if name.endswith(".dist-info/METADATA")
+                    )
+                    metadata = BytesParser().parsebytes(archive.read(metadata_path))
+                    self.assertEqual(metadata["Requires-Python"], ">=3.11")
                     actual = sorted(
                         name.split(".data/data/", 1)[1]
                         for name in archive.namelist()
@@ -415,7 +439,7 @@ class InstallationTests(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode, 0, result.stdout)
                 print(result.stdout, flush=True)
-                for python_version in ("3.10", "3.14"):
+                for python_version in ("3.11", "3.14"):
                     with self.subTest(python=python_version):
                         venv = directory / f"python-{python_version}"
                         python = str(venv / "bin/python")

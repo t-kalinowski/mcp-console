@@ -46,8 +46,10 @@ Keep the intentional weekly build-cache reset.
 Cargo determines which crates need rebuilding.
 An exact match of compiled and packaging inputs additionally lets CI skip the release build and reuse a finished wheel and native bundle; it still runs the current tests.
 Source installation checks run after the other checks because they replace and hide the shared Cargo target directory.
+Python package builds and installations require Python 3.11 or later.
 
 macOS and Linux uv source installations prepare the pinned sandbox companion before invoking the application's Cargo build, using a dedicated checkout under `target`.
+The pinned checkout's `codex-rs/rust-toolchain.toml` owns the runner's compiler configuration; Console's toolchain selection is independent.
 Direct Cargo or Maturin builds require `scripts/stage-sandbox-runner` first; `scripts/check` performs this preparation.
 Install development checkouts with `uv tool install --reinstall .`; bare `cargo install` does not install the companion bundle.
 Build reuse follows Cargo's tracked inputs; external tool changes through `PATH` can require cleaning the affected Cargo build directories, as described in `RELEASE.md`.

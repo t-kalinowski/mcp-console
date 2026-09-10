@@ -8,18 +8,23 @@ It does not publish a source distribution, Windows wheels, or GitHub release arc
 
 `Cargo.toml` is the package-version source of truth.
 Keep the root `mcp-console` entry in `Cargo.lock` synchronized with it.
+CI and release wheels build Console with stable Rust, independently of the sandbox runner's compiler.
 
 ## Private sandbox executable
 
-`sandbox-runner.json` pins the runner source repository, release, commit, protocol, and Rust toolchain.
+`sandbox-runner.json` pins the runner source repository, release, commit, and protocol.
+The pinned checkout's `codex-rs/rust-toolchain.toml` owns the runner's Rust toolchain configuration.
 `uv tool install --reinstall .` prepares the native companion automatically before Maturin compiles MCP Console and assembles the wheel.
 Editable source installations (`uv tool install --reinstall --editable .`) use the same preparation and packaging lock.
-Source builds require Python 3, Git, and rustup; rustup installs the pinned toolchain if needed.
+Source builds require Python 3.11 or later, Git, and rustup; rustup installs the pinned toolchain if needed.
 The packaging backend calls `scripts/stage-sandbox-runner`, which fetches the exact revision into `target/sandbox-runner-cache/<commit>` within the source checkout.
 The default build does not inspect or change other working checkouts.
 To use a dedicated clean checkout at the pin, explicitly set `MCP_CONSOLE_SANDBOX_SOURCE`; CI and releases use a checkout within their own workspace.
 
 Every source installation invokes the runner's Cargo build with its pinned toolchain and lockfile.
+Staging reads `[toolchain].channel` from that file with Python's standard-library `tomllib` and selects it explicitly with `rustup run --install`.
+This selection takes precedence over the caller's `RUSTUP_TOOLCHAIN` for runner commands.
+Console's build retains the caller's toolchain selection.
 Cargo reuses its build intermediates under the runner checkout's `codex-rs/target` and checks inputs tracked by Cargo and dependency build scripts.
 Source builds use the caller's normal Cargo configuration and download cache.
 There is no separate local cache of finished runners that bypasses Cargo's freshness checks.
@@ -80,6 +85,7 @@ Direct staging, Cargo, and Maturin commands require exclusive use of their sourc
 Source distributions include the packaging backend, staging script, source pin, and data-directory marker, and omit generated companions.
 
 CI separately caches completed staged runners, release wheels and native bundles, and Cargo build data for both workspaces.
+Runner build-cache keys include the toolchain file from the checked-out source.
 Cargo build data is restored across source, pin, and dependency changes within the same platform, toolchain, runner image, applicable R version, and UTC week.
 The build caches intentionally reset each Monday.
 All CI builds enable incremental compilation, including release builds and source installation checks; Cargo decides which tracked inputs require rebuilding.

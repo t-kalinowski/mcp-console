@@ -1,6 +1,6 @@
 # Python integrations
 
-Install the extra for the interface you use, with Python 3.10 or newer:
+Install the extra for the interface you use, with Python 3.11 or newer:
 
 | Interface           | Install                                    |
 | ------------------- | ------------------------------------------ |

@@ -7,7 +7,8 @@ The [integration validation record](SANDBOX_RUNNER_INTEGRATION.md) records the b
 
 ## Application policy and launch
 
-The pin in `sandbox-runner.json` selects the runner source commit, protocol 2, and Rust 1.95.0.
+The pin in `sandbox-runner.json` selects the runner source commit and protocol 2.
+The pinned checkout's `codex-rs/rust-toolchain.toml` selects its Rust toolchain.
 The executable contract and acceptance tests at that commit are the source of truth for runner behavior.
 Without a public configuration option, Console uses `--config-env MCP_CONSOLE_SANDBOX_CONFIG -- COMMAND [ARG]...`.
 The selected variable contains one immutable JSON object, consumed by the runner and removed from the target environment.
