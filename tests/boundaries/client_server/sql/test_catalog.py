@@ -966,6 +966,23 @@ def test_avoids_private_preview_name_collisions(
 
 
 @executions(DIRECT, SANDBOXED)
+def test_preserves_utf8_preview_in_c_locale(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = McpClient(
+        binary,
+        execution.serve(),
+        environment={**os.environ, "LC_ALL": "C"},
+    )
+    client.initialize_and_list_tools()
+    client.send(sql="SELECT 'façade 漢字' AS label")
+    preview = last_tool_text(client)
+    assert preview.startswith("# A tibble: 1 × 1\n"), preview
+    assert '"façade 漢字"' in preview, preview
+    return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
 def test_previews_schema_and_exact_values(
     binary: Path, execution: Execution
 ) -> Transcript:

@@ -55,6 +55,13 @@ def assert_callable_schema(schema: dict) -> None:
 def test_callable_preserves_mixed_language_state(
     binary: Path, execution: Execution
 ) -> Transcript:
+    settings = {
+        "command": binary,
+        "args": execution.serve(),
+        # MCP omits locale variables by default. Exercise Linux's resulting
+        # C locale explicitly on every host, including macOS.
+        "server_parameters": {"env": {"LC_ALL": "C"}},
+    }
     cells = {
         "r": "answer <- 42; answer",
         "python": "r.answer + 1",
@@ -69,7 +76,7 @@ def test_callable_preserves_mixed_language_state(
         )
 
     async def exercise():
-        async with AsyncMCPConsole(command=binary, args=execution.serve()) as console:
+        async with AsyncMCPConsole(**settings) as console:
             assert await console.connect() is console
             transcript = []
             for language, source in cells.items():
@@ -82,7 +89,7 @@ def test_callable_preserves_mixed_language_state(
             return transcript
 
     transcript = asyncio.run(exercise())
-    with MCPConsole(command=binary, args=execution.serve()) as console:
+    with MCPConsole(**settings) as console:
         synchronous = []
         for language, source in cells.items():
             chunks = [console(**{language: source}, timeout_ms=0)]

@@ -410,7 +410,8 @@ base::local(
           more_rows
         )
         if (nchar(output, type = "bytes") + 1L <= response_bytes) {
-          cat(output, "\n", sep = "")
+          # MCP carries UTF-8 even when R runs in the C locale.
+          writeLines(enc2utf8(output), useBytes = TRUE)
           return(invisible(NULL))
         }
         if (visible_rows > 0L) {
