@@ -106,11 +106,11 @@ base::local(
       }
       pillar_shaft <- function(x, ...) {
         type <- attr(x, "arrow_type", exact = TRUE)
-        quote <- if (grepl("^(large_)?string|^string_view", type)) "\"" else ""
-        formatted <- encodeString(
+        # MCP displays UTF-8 independently of the R process locale.
+        formatted <- utf8::utf8_encode(
           unclass(x),
-          quote = quote,
-          na.encode = FALSE
+          quote = grepl("^(large_)?string|^string_view", type),
+          utf8 = TRUE
         )
         align <- if (grepl("^(u?int|float|double|decimal)", type)) {
           "right"

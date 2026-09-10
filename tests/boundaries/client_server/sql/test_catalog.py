@@ -979,6 +979,19 @@ def test_preserves_utf8_preview_in_c_locale(
     preview = last_tool_text(client)
     assert preview.startswith("# A tibble: 1 × 1\n"), preview
     assert '"façade 漢字"' in preview, preview
+
+    sql = code(r"""
+        SELECT
+          E'line\nbreak\t"quoted"' AS controls,
+          'literal \u6f22 and \path' AS backslashes,
+          '' AS empty,
+          CAST(NULL AS VARCHAR) AS missing
+        """)
+    client.send(sql=sql)
+    preview = last_tool_text(client)
+    assert r'"line\nbreak\t\"quoted\""' in preview, preview
+    assert r'"literal \\u6f22 and \\path"' in preview, preview
+    assert '""' in preview and "NULL" in preview, preview
     return client.finish()
 
 
