@@ -47,9 +47,10 @@ The runner's separate private framed-descriptor interface still accepts requests
 It remains available for larger integrations; Console uses environment transport for its small default policy.
 
 Console verifies installation-relative runner lookup, source provenance, target, runner digest, and license artifacts.
-The runner retains native trusted-PATH helper selection and verifies a selected bundled helper through the same open descriptor it executes.
-Its expected digest is embedded during staging; an unused bundled helper does not block a suitable host helper.
-Missing or mismatched selected artifacts fail before target execution.
+Console verifies the complete bundle before launch, including the Linux helper, whether or not a system helper is available.
+The runner then retains native trusted-PATH helper selection and verifies a selected bundled helper through the same open descriptor it executes.
+Its expected digest is embedded during staging.
+Missing or mismatched artifacts fail before target execution.
 See [release preparation](../RELEASE.md#private-sandbox-executable).
 
 ## Supported hosts and lifetime limits

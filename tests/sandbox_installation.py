@@ -20,6 +20,9 @@ class SandboxInstallationTests(unittest.TestCase):
     binary_source: Path
 
     def setUp(self) -> None:
+        self.true = shutil.which("true")
+        self.touch = shutil.which("touch")
+        assert self.true is not None and self.touch is not None
         temporary = tempfile.TemporaryDirectory(prefix="mcp-console-installation-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
@@ -49,7 +52,7 @@ class SandboxInstallationTests(unittest.TestCase):
         self, binary: Path | None = None
     ) -> subprocess.CompletedProcess[bytes]:
         return subprocess.run(
-            [str(binary or self.binary), "sandbox", "--", "/usr/bin/true"],
+            [str(binary or self.binary), "sandbox", "--", self.true],
             input=b"",
             capture_output=True,
             cwd=self.root,
@@ -141,7 +144,7 @@ class SandboxInstallationTests(unittest.TestCase):
     def test_sandbox_cannot_write_to_the_installed_runner(self) -> None:
         marker = self.runner.parent / "modified"
         result = subprocess.run(
-            [str(self.binary), "sandbox", "--", "/usr/bin/touch", str(marker)],
+            [str(self.binary), "sandbox", "--", self.touch, str(marker)],
             capture_output=True,
             env=self.environment,
             timeout=30,
@@ -182,15 +185,10 @@ class SandboxInstallationTests(unittest.TestCase):
                     result = self.run_sandbox()
                     self.assertNotEqual(result.returncode, 0)
                     self.assertEqual(result.stdout, b"")
-                    self.assertIn(
-                        b"bubblewrap"
-                        if relative == "libexec/bwrap"
-                        else b"private sandbox runner",
-                        result.stderr,
-                    )
-                    if relative == "libexec/bwrap" and defect == "modified":
-                        self.assertIn(b"digest mismatch", result.stderr)
-                    if defect == "fifo" and relative != "libexec/bwrap":
+                    self.assertIn(b"private sandbox runner", result.stderr)
+                    if defect == "modified":
+                        self.assertIn(b"private artifact does not match", result.stderr)
+                    if defect == "fifo":
                         self.assertIn(
                             b"private artifact is not a readable file or executable",
                             result.stderr,
@@ -200,7 +198,7 @@ class SandboxInstallationTests(unittest.TestCase):
             artifact.chmod(0o755 if relative.startswith("libexec/") else 0o644)
 
     @unittest.skipUnless(sys.platform == "linux", "requires Linux helper selection")
-    def test_unused_bundled_helper_does_not_block_a_suitable_host_helper(self) -> None:
+    def test_host_helper_does_not_mask_a_damaged_bundle(self) -> None:
         # Native discovery excludes helpers inside cwd. Supply a trusted helper
         # outside that tree independently of the relocated bundle we damage.
         host = tempfile.TemporaryDirectory(prefix="mcp-console-host-helper-")
@@ -208,6 +206,10 @@ class SandboxInstallationTests(unittest.TestCase):
         helper = Path(host.name) / "bwrap"
         shutil.copy2(self.binary_source.parent.parent / "libexec/bwrap", helper)
         (self.path / "bwrap").symlink_to(helper)
+        result = self.run_sandbox()
+        self.assertEqual(
+            (result.returncode, result.stdout, result.stderr), (0, b"", b"")
+        )
         bundled = self.binary.parent.parent / "libexec/bwrap"
         for defect in ("missing", "modified", "fifo"):
             with self.subTest(defect=defect):
@@ -218,9 +220,9 @@ class SandboxInstallationTests(unittest.TestCase):
                 elif defect == "fifo":
                     os.mkfifo(bundled)
                 result = self.run_sandbox()
-                self.assertEqual(
-                    (result.returncode, result.stdout, result.stderr), (0, b"", b"")
-                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(result.stdout, b"")
+                self.assertIn(b"private sandbox runner", result.stderr)
 
     @unittest.skipUnless(
         sys.platform == "darwin", "requires the macOS allocator interposer"

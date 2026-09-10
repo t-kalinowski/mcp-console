@@ -14,12 +14,6 @@ pub(super) fn private_runner() -> Result<PathBuf, String> {
             .and_then(|directory| directory.parent())
             .ok_or_else(|| io::Error::other("executable has no installation prefix"))?;
         for (relative, expected) in ARTIFACTS {
-            // Native helper selection prefers a suitable trusted host bwrap.
-            // The runner verifies the bundled helper's embedded digest and
-            // executes that same open file only when it actually selects it.
-            if *relative == "libexec/bwrap" {
-                continue;
-            }
             // A replaced FIFO must not block before its file type is checked.
             let mut file = File::options()
                 .read(true)
