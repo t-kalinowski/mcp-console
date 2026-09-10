@@ -194,19 +194,16 @@ def test_anthropic_callable_and_native_tools(
     return asyncio.run(exercise())
 
 
-@requires(WORKER)
 @executions(DIRECT, SANDBOXED)
 def test_native_openai_agents_waits_for_console_output(
     binary: Path, execution: Execution
 ) -> Transcript:
     async def exercise():
-        async with openai_agents_server(
-            command=binary, args=execution.serve()
-        ) as server:
-            # The evaluation outlives send's wait, which exceeds the SDK's default.
-            result = await server.call_tool(
-                "send", {"r": "Sys.sleep(60)", "timeout_ms": 6_000}
-            )
+        settings = options(binary, execution)
+        parameters = settings.pop("server_parameters")
+        async with openai_agents_server(**settings, params=parameters) as server:
+            # The fixture stays blocked beyond the SDK's five-second default.
+            result = await server.call_tool("send", {"r": "stall", "timeout_ms": 6_000})
             return [result.model_dump(mode="json", by_alias=True, exclude_none=True)]
 
     return asyncio.run(exercise())
