@@ -15,7 +15,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  # Preserve compiler state for debug/test builds across PR revisions.
+  # Preserve compiler state for debug, test, and release builds across revisions.
   CARGO_INCREMENTAL: "1"
   IR_LATEST_RESOLUTION_MAX_AGE_SECONDS: "604800"
   UV_VERSION: 0.12.4
@@ -34,6 +34,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Install Python
+        id: python
         uses: actions/setup-python@v7
         with:
           python-version: "3.13"
@@ -49,13 +50,41 @@ jobs:
           ref: ${{ steps.sandbox-pin.outputs.commit }}
           path: .sandbox-runner-source
 
+      - name: Restore private sandbox source timestamps
+        id: sandbox-source-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ runner.temp }}/sandbox-source.tar
+          key: sandbox-source-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.sandbox-pin.outputs.commit }}
+
+      - name: Prepare private sandbox source archive
+        run: |
+          if [ -f "$RUNNER_TEMP/sandbox-source.tar" ]; then
+            tar -xf "$RUNNER_TEMP/sandbox-source.tar" -C .sandbox-runner-source
+          else
+            # Preserve tracked-source mtimes with the build cache, excluding
+            # checkout credentials and the separately cached Cargo outputs.
+            tar -cf "$RUNNER_TEMP/sandbox-source.tar" \
+              --exclude=./.git --exclude=./codex-rs/target \
+              -C .sandbox-runner-source .
+          fi
+          test -z "$(git -C .sandbox-runner-source status --porcelain --untracked-files=all)"
+
+      - name: Save private sandbox source timestamps
+        if: steps.sandbox-source-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ runner.temp }}/sandbox-source.tar
+          key: ${{ steps.sandbox-source-cache.outputs.cache-primary-key }}
+
       - name: Install uv
         uses: astral-sh/setup-uv@v10.0.1
         with:
           version: ${{ env.UV_VERSION }}
-          cache-suffix: tools-pruned-v1
-          prune-cache: true
-          save-cache: ${{ github.ref == 'refs/heads/main' }}
+          cache-local-path: ${{ runner.temp }}/mcp-console-cache
+          cache-suffix: runtime-v2
+          prune-cache: false
+          save-cache: true
 
       - name: Install tools
         id: tools
@@ -109,7 +138,9 @@ jobs:
 
       - name: Select weekly cache epoch
         id: cache-epoch
-        run: printf 'value=%s\n' "$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+        run: |
+          printf 'value=%s\n' "$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+          printf 'image=%s-%s\n' "${ImageOS:?}" "${ImageVersion:?}" >> "$GITHUB_OUTPUT"
 
       - name: Configure R cache paths
         run: |
@@ -149,14 +180,15 @@ jobs:
             target/debug
             target/release
             target/libexec
+            target/share/licenses
           # Refresh on compiled-source changes; transcript-only pushes reuse it.
           # Every restore prefix includes the UTC week to start fresh on Monday.
-          # Bump v1 for build flag changes.
+          # Include the image and workflow recipe for native build inputs.
           key: >-
-            cargo-build-v1-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/**', 'sandbox-runner.json', 'scripts/stage-sandbox-runner') }}-${{ hashFiles('src/**', 'build.rs') }}
+            cargo-build-v2-${{ steps.cache-epoch.outputs.value }}-${{ steps.cache-epoch.outputs.image }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/**', 'sandbox-runner.json', 'scripts/stage-sandbox-runner', '.github/workflows/ci.yaml') }}-${{ hashFiles('src/**', 'build.rs') }}
           restore-keys: |
-            cargo-build-v1-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/**', 'sandbox-runner.json', 'scripts/stage-sandbox-runner') }}-
-            cargo-build-v1-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.setup-r.outputs.installed-r-version }}-
+            cargo-build-v2-${{ steps.cache-epoch.outputs.value }}-${{ steps.cache-epoch.outputs.image }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/**', 'sandbox-runner.json', 'scripts/stage-sandbox-runner', '.github/workflows/ci.yaml') }}-
+            cargo-build-v2-${{ steps.cache-epoch.outputs.value }}-${{ steps.cache-epoch.outputs.image }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.setup-r.outputs.installed-r-version }}-
 
       - name: Restore private sandbox runner
         id: sandbox-cache
@@ -165,11 +197,9 @@ jobs:
           path: |
             wheel-data
             target/sandbox-runner-build.json
-          # v2 caches the wheel-data staging root. The pin includes the source
-          # revision and compiler. Bump the version for changes to runner build
-          # flags or the macOS deployment target.
+          # The pin, runner image, and recipe identify the native build inputs.
           key: >-
-            sandbox-runner-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('sandbox-runner.json', 'scripts/stage-sandbox-runner') }}
+            sandbox-runner-v3-${{ steps.cache-epoch.outputs.image }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('sandbox-runner.json', 'scripts/stage-sandbox-runner', '.github/workflows/ci.yaml') }}
 
       - name: Restore private sandbox build data
         id: sandbox-build-cache
@@ -180,17 +210,14 @@ jobs:
           # Reuse workspace crates from the preceding pin when rebuilding it.
           # Keep every restore prefix within the current UTC week.
           key: >-
-            sandbox-build-v1-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.sandbox-pin.outputs.rust_toolchain }}-${{ hashFiles('.sandbox-runner-source/codex-rs/Cargo.toml', '.sandbox-runner-source/codex-rs/Cargo.lock', '.sandbox-runner-source/codex-rs/.cargo/**', 'scripts/stage-sandbox-runner') }}-${{ steps.sandbox-pin.outputs.commit }}
+            sandbox-build-v2-${{ steps.cache-epoch.outputs.value }}-${{ steps.cache-epoch.outputs.image }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.sandbox-pin.outputs.rust_toolchain }}-${{ hashFiles('.sandbox-runner-source/codex-rs/Cargo.toml', '.sandbox-runner-source/codex-rs/Cargo.lock', '.sandbox-runner-source/codex-rs/.cargo/**', 'scripts/stage-sandbox-runner', '.github/workflows/ci.yaml') }}-${{ steps.sandbox-pin.outputs.commit }}
           restore-keys: |
-            sandbox-build-v1-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.sandbox-pin.outputs.rust_toolchain }}-${{ hashFiles('.sandbox-runner-source/codex-rs/Cargo.toml', '.sandbox-runner-source/codex-rs/Cargo.lock', '.sandbox-runner-source/codex-rs/.cargo/**', 'scripts/stage-sandbox-runner') }}-
-            sandbox-build-v1-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.sandbox-pin.outputs.rust_toolchain }}-
+            sandbox-build-v2-${{ steps.cache-epoch.outputs.value }}-${{ steps.cache-epoch.outputs.image }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.sandbox-pin.outputs.rust_toolchain }}-${{ hashFiles('.sandbox-runner-source/codex-rs/Cargo.toml', '.sandbox-runner-source/codex-rs/Cargo.lock', '.sandbox-runner-source/codex-rs/.cargo/**', 'scripts/stage-sandbox-runner', '.github/workflows/ci.yaml') }}-
+            sandbox-build-v2-${{ steps.cache-epoch.outputs.value }}-${{ steps.cache-epoch.outputs.image }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.sandbox-pin.outputs.rust_toolchain }}-
 
       - name: Stage private sandbox runner
-        if: >-
-          steps.sandbox-cache.outputs.cache-hit != 'true' ||
-          steps.sandbox-build-cache.outputs.cache-hit != 'true'
         env:
-          CARGO_INCREMENTAL: "0"
+          CARGO_LOG: cargo::core::compiler::fingerprint=info
         run: scripts/stage-sandbox-runner .sandbox-runner-source
 
       # Save each completed build before any tests run.
@@ -210,13 +237,30 @@ jobs:
           path: .sandbox-runner-source/codex-rs/target
           key: ${{ steps.sandbox-build-cache.outputs.cache-primary-key }}
 
+      - name: Restore release outputs
+        id: release-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            target/release/mcp-console
+            target/libexec
+            target/share/licenses
+            dist
+          # Only exact matches skip packaging. On a miss, Maturin invokes Cargo
+          # using the build data restored above, including earlier revisions.
+          key: >-
+            release-v1-${{ steps.cache-epoch.outputs.image }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.setup-r.outputs.installed-r-version }}-py-${{ steps.python.outputs.python-version }}-${{ hashFiles('src/**', 'Cargo.toml', 'Cargo.lock', '.cargo/**', 'build.rs', 'build_backend.py', 'pyproject.toml', 'sandbox-runner.json', 'target/sandbox-runner-build.json', 'scripts/stage-sandbox-runner', 'README.md', 'LICENSE', '.github/workflows/ci.yaml') }}
+
       - name: Build Rust test targets
         run: cargo test --locked --no-run --all-targets --all-features
 
+      - name: Prepare Clippy build data
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
       - name: Build Python package
+        if: steps.release-cache.outputs.cache-hit != 'true'
         shell: bash
         env:
-          CARGO_INCREMENTAL: "0"
           GITHUB_PAT: ${{ github.token }}
           UV_TOOL_DIR: ${{ runner.temp }}/mcp-console-tool
           UV_TOOL_BIN_DIR: ${{ runner.temp }}/mcp-console-bin
@@ -233,6 +277,17 @@ jobs:
             --locked \
             --compatibility pypi \
             --out dist
+
+      - name: Save release outputs
+        if: steps.release-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            target/release/mcp-console
+            target/libexec
+            target/share/licenses
+            dist
+          key: ${{ steps.release-cache.outputs.cache-primary-key }}
 
       - name: Save Cargo downloads
         if: steps.cargo-downloads.outputs.cache-hit != 'true'
@@ -251,6 +306,7 @@ jobs:
             target/debug
             target/release
             target/libexec
+            target/share/licenses
           key: ${{ steps.rust-cache.outputs.cache-primary-key }}
 
       - name: Run core checks
@@ -272,21 +328,13 @@ jobs:
             dist/*.whl \
             target/release/mcp-console
 
-      - name: Check uv source installations
-        env:
-          # Match the release wheel and companion builds above.
-          CARGO_INCREMENTAL: "0"
-          MCP_CONSOLE_SANDBOX_SOURCE: ${{ github.workspace }}/.sandbox-runner-source
-          UV_CACHE_DIR: ${{ runner.temp }}/mcp-console-cache
-          UV_PYTHON_DOWNLOADS: never
-          UV_NO_CONFIG: "1"
-        run: python3 tests/install.py
-
       - name: Install R package dependencies
         uses: r-lib/actions/setup-r-dependencies@v2
+        env:
+          R_LIBS_USER: ${{ runner.temp }}/mcp-console-r-package
         with:
-          # A post-job save would capture the later transcript dependency state.
-          cache: false
+          cache: always
+          cache-version: r-package-v1
           working-directory: r
           upgrade: "FALSE"
           packages: |
@@ -294,13 +342,11 @@ jobs:
 
       - name: Check R package
         env:
-          CARGO_INCREMENTAL: "0"
           MCP_CONSOLE_TEST_BINARY: ${{ github.workspace }}/target/release/mcp-console
+          R_LIBS_USER: ${{ runner.temp }}/mcp-console-r-package
           _R_CHECK_TESTS_NLINES_: "0"
         working-directory: r
         run: |
-          # Source-install checks share target and can replace its companions.
-          cargo build --release --locked --bin mcp-console --manifest-path ../Cargo.toml
           R CMD build .
           R CMD check --no-manual mcp.console_*.tar.gz
 
@@ -333,9 +379,18 @@ jobs:
 
       - name: Run transcripts
         env:
-          CARGO_INCREMENTAL: "0"
           GITHUB_PAT: ${{ github.token }}
-        run: scripts/test --jobs 6
+        # Use the prepared executable; scripts/test also invokes Cargo.
+        run: uv run --script tests/boundaries/_run.py --jobs 6
+
+      - name: Check uv source installations
+        env:
+          # Run last: these checks replace and hide the shared target directory.
+          MCP_CONSOLE_SANDBOX_SOURCE: ${{ github.workspace }}/.sandbox-runner-source
+          UV_CACHE_DIR: ${{ runner.temp }}/mcp-console-cache
+          UV_PYTHON_DOWNLOADS: never
+          UV_NO_CONFIG: "1"
+        run: python3 tests/install.py
 
       - name: Save R environments
         if: >-
