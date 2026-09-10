@@ -7,7 +7,11 @@ use std::process::{Command, ExitCode};
 
 const CONFIGURATION: &str = "MCP_CONSOLE_SANDBOX_CONFIG";
 
-pub(super) fn run(command: &[OsString], parent: Option<u32>) -> Result<ExitCode, String> {
+pub(super) fn run(
+    command: &[OsString],
+    parent: Option<u32>,
+    config_env: Option<&str>,
+) -> Result<ExitCode, String> {
     if let Some(pid) = parent
         && unsafe { libc::getppid() } as u32 != pid
     {
@@ -42,13 +46,26 @@ pub(super) fn run(command: &[OsString], parent: Option<u32>) -> Result<ExitCode,
             "cleanup_timeout_ms": 1000,
         },
     });
-    let error = Command::new(installation::private_runner()?)
-        .args(["--config-env", CONFIGURATION, "--"])
+    let mut runner = Command::new(installation::private_runner()?);
+    if config_env.is_none() {
+        // This is also the serve path: an ambient value never selects policy.
+        runner.env(CONFIGURATION, configuration.to_string());
+    } else if config_env != Some(CONFIGURATION) {
+        runner.env_remove(CONFIGURATION);
+    }
+    if config_env != Some("MCP_CONSOLE_SANDBOX") {
+        runner.env("MCP_CONSOLE_SANDBOX", "1");
+    }
+    let error = runner
+        .args(["--config-env", config_env.unwrap_or(CONFIGURATION), "--"])
         .args(command)
-        .env(CONFIGURATION, configuration.to_string())
-        .env("MCP_CONSOLE_SANDBOX", "1")
         .env_remove("DYLD_INSERT_LIBRARIES")
         .env_remove("LD_PRELOAD")
         .exec();
-    Err(format!("failed to launch private sandbox runner: {error}"))
+    let detail = if error.raw_os_error() == Some(libc::E2BIG) {
+        "argument/environment size limit exceeded (E2BIG); reduce the launch environment or use the private runner descriptor transport".to_owned()
+    } else {
+        error.to_string()
+    };
+    Err(format!("failed to launch private sandbox runner: {detail}"))
 }

@@ -54,7 +54,8 @@ fn main() -> ExitCode {
         cli::Command::Sandbox {
             exit_with_parent,
             command,
-        } => match sandbox::run(&command, exit_with_parent) {
+            config_env,
+        } => match sandbox::run(&command, exit_with_parent, config_env.as_deref()) {
             Ok(exit_code) => exit_code,
             Err(error) => exit_with_error(error),
         },

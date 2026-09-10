@@ -17,6 +17,7 @@ Source and public acceptance tests remain the final authority when prose disagre
 
 - [Implemented architecture](ARCHITECTURE.md) is the source of truth for the current process structure, responsibility boundaries, worker-generation ownership, and lifecycle at an architectural level.
 - [Sandbox integration](SANDBOX.md) describes Console policy defaults, the verified executable handoff, native platform requirements, and lifetime limits.
+- [Sandbox configuration](SANDBOX_CONFIGURATION.md) defines explicit JSON environment input, target overrides, lifecycle settings, and shell, Python, and R callers.
 - [Worker protocol](WORKER_PROTOCOL.md) is the exact relay-worker wire protocol and custom-worker contract.
 - [Relay protocol](RELAY_PROTOCOL.md) is the exact private server-relay JSONL protocol.
 - [MCP tool description guidance](TOOL_DESCRIPTIONS.md) covers editorial rules and links to the canonical `tools/list` snapshot.

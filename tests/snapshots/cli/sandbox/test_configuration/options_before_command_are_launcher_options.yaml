@@ -1,0 +1,23 @@
+---
+option: --bootstrap-fd
+exit_code: 2
+stderr: |
+  error: unexpected argument '--bootstrap-fd' found
+
+    tip: to pass '--bootstrap-fd' as a value, use '-- --bootstrap-fd'
+
+  Usage: mcp-console sandbox --config-env <NAME> <COMMAND>...
+
+  For more information, try '--help'.
+---
+option: --config-file
+exit_code: 2
+stderr: |
+  error: unexpected argument '--config-file' found
+
+    tip: a similar argument exists: '--config-env'
+    tip: to pass '--config-file' as a value, use '-- --config-file'
+
+  Usage: mcp-console sandbox --config-env <NAME> <COMMAND>...
+
+  For more information, try '--help'.

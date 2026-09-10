@@ -1,0 +1,14 @@
+---
+inherit_environment: true
+stdout: >
+  {"inherited": "from launcher", "value": "雪, café; 'quoted' \"double\"
+  $() `literal` \\ newline\nend", "arguments": ["雪, café; 'quoted'
+  \"double\" $() `literal` \\ newline\nend", "--config-env",
+  "ANOTHER_POLICY", "--bootstrap-fd", "3"]}
+---
+inherit_environment: false
+stdout: >
+  {"inherited": null, "value": "雪, café; 'quoted' \"double\" $() `literal`
+  \\ newline\nend", "arguments": ["雪, café; 'quoted' \"double\" $()
+  `literal` \\ newline\nend", "--config-env", "ANOTHER_POLICY",
+  "--bootstrap-fd", "3"]}

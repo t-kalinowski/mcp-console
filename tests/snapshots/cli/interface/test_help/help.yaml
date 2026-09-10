@@ -9,7 +9,7 @@ stderr: |
 
   Commands:
     serve    Run the MCP server over standard input and output
-    sandbox  Run a command with the MCP Console sandbox policy
+    sandbox  Run a command with the default or an explicit sandbox policy
     help     Print this message or the help of the given subcommand(s)
 
   Options:
@@ -28,7 +28,7 @@ stdout: |
 
   Commands:
     serve    Run the MCP server over standard input and output
-    sandbox  Run a command with the MCP Console sandbox policy
+    sandbox  Run a command with the default or an explicit sandbox policy
     help     Print this message or the help of the given subcommand(s)
 
   Options:
@@ -71,15 +71,16 @@ stderr: |
 ---
 command: mcp-console sandbox --help
 stdout: |
-  Run a command with the MCP Console sandbox policy
+  Run a command with the default or an explicit sandbox policy
 
-  Usage: mcp-console sandbox <COMMAND>...
+  Usage: mcp-console sandbox [OPTIONS] <COMMAND>...
 
   Arguments:
     <COMMAND>...  Command and arguments to run
 
   Options:
-    -h, --help  Print help
+        --config-env <NAME>  Read the runner configuration as JSON from this launch environment variable
+    -h, --help               Print help
 
   Examples:
     mcp-console sandbox -- Rscript analysis.R
