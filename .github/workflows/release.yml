@@ -40,8 +40,10 @@ jobs:
             target: x86_64-apple-darwin
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
+            runner_target: aarch64-unknown-linux-musl
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
+            runner_target: x86_64-unknown-linux-musl
 
     steps:
       - name: Check out repository
@@ -101,11 +103,31 @@ jobs:
           "${{ steps.sandbox-pin.outputs.rust_toolchain }}"
           --profile minimal
 
+      - name: Install the release Zig compiler
+        if: runner.os == 'Linux'
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.14.0
+
+      - name: Prepare the pinned Linux release recipe
+        if: runner.os == 'Linux'
+        env:
+          TARGET: ${{ matrix.runner_target }}
+        run: |
+          rustup target add --toolchain '${{ steps.sandbox-pin.outputs.rust_toolchain }}' "$TARGET"
+          # Scope the compilers to staging. Actions reserves GITHUB_ENV in env:.
+          GITHUB_ENV='${{ runner.temp }}/sandbox-musl.env' \
+            bash .sandbox-runner-source/.github/scripts/install-musl-build-tools.sh
+          echo 'AWS_LC_SYS_NO_JITTER_ENTROPY=1' >> '${{ runner.temp }}/sandbox-musl.env'
+
       - name: Stage private sandbox runner
-        run: >-
-          scripts/stage-sandbox-runner
-          .sandbox-runner-source
-          --target "${{ matrix.target }}"
+        shell: bash
+        run: |
+          if [[ '${{ runner.os }}' == Linux ]]; then
+            while IFS= read -r setting; do export "${setting?}"; done < '${{ runner.temp }}/sandbox-musl.env'
+          fi
+          scripts/stage-sandbox-runner .sandbox-runner-source \
+            --target '${{ matrix.runner_target || matrix.target }}'
 
       - name: Build wheel
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
@@ -115,6 +137,10 @@ jobs:
           target: ${{ matrix.target }}
           manylinux: off
           args: --release --locked --compatibility pypi --out dist
+
+      - name: Audit Linux wheel dependencies and platform tags
+        if: runner.os == 'Linux'
+        run: python3 scripts/release.py audit-linux-wheel dist/*.whl
 
       - name: Smoke-test wheel
         env:

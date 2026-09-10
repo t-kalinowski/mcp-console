@@ -2,7 +2,9 @@
 
 MCP Console releases are built from tags and published as binary-only PyPI wheels.
 The release workflow publishes native Apple Silicon and Intel macOS wheels and ARM64 and x86-64 Linux wheels.
-Linux wheels are built on Ubuntu 24.04 and require glibc 2.39 or later.
+Linux application wheels are built on Ubuntu 24.04 and require glibc 2.39 or later.
+Their private runner and bubblewrap helper use the pinned release's static musl builds for the same architecture.
+The companion's portability does not lower the application's glibc requirement or establish support for a musl-hosted R/Python/SQL runtime.
 Wheel builds require Maturin 1.15 or later.
 It does not publish a source distribution, Windows wheels, or GitHub release archives.
 
@@ -31,10 +33,13 @@ For the default source checkout, that directory is `target/sandbox-runner-cache/
 Automatic detection of those environment changes is outside the source installer's contract.
 
 For direct Cargo builds or direct Maturin wheel builds, first run `scripts/stage-sandbox-runner`.
-The script stages companions under `wheel-data/data` and records their digests in `target/sandbox-runner-build.json`.
-Use `--target` with `aarch64-apple-darwin`, `x86_64-apple-darwin`, `aarch64-unknown-linux-gnu`, or `x86_64-unknown-linux-gnu` for an explicit target.
+The script stages companions under `wheel-data/data` and records their digests, target, and Linux ELF linkage in `target/sandbox-runner-build.json`.
+Use `--target` with `aarch64-apple-darwin`, `x86_64-apple-darwin`, `aarch64-unknown-linux-gnu`, `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-musl`, or `x86_64-unknown-linux-musl` for an explicit companion target.
+`MCP_CONSOLE_SANDBOX_TARGET` selects the companion target for automatic source installations; an explicit `--target` overrides it.
 Without that option, the script selects the pinned compiler's native target.
-The automatic uv installation path builds for the native target; use explicit staging and Maturin's target options for other targets.
+The automatic uv installation path builds the application for the native target; use explicit staging and Maturin's target options for other application targets.
+An application built for GNU libc may use a verified static musl companion of the same architecture.
+The runner executes in a separate process and does not load the application's libc; different architectures, operating systems, or a GNU runner with a musl application are rejected.
 
 Staging strips the distributed executables with `xcrun strip -S -x` on macOS and `strip --strip-unneeded` on Linux before computing their digests; the original executable remains in the nested Cargo build directory for debugging.
 MCP Console verifies the runner's source revision, target, and SHA-256 of each bundled file before packaging the executable, upstream license, and notice.
@@ -48,9 +53,9 @@ share/licenses/mcp-console/NOTICE
 ```
 
 The main executable resolves the runner relative to its own canonical path and verifies it and license files using streaming SHA-256 with a bounded buffer on every sandbox launch.
-Linux helper verification belongs to native selection: a suitable trusted host helper takes precedence, while a selected bundled helper is hashed and executed through the same open descriptor.
-Missing or modified selected files fail before target execution.
-An unused bundled helper does not block a suitable host helper.
+Every bundled file, including the Linux helper, must pass verification before launch.
+A missing, modified, or non-executable helper fails even when a suitable system helper is available.
+After bundle verification, native helper selection may choose a suitable trusted system helper; when it selects the bundle, it also hashes and executes that helper through the same open descriptor.
 Move the complete bundle when relocating it; a symlink to `bin/mcp-console` also works.
 There is no embedded payload, extraction step, or runtime runner cache.
 Sandbox launches do not download anything or search PATH for the runner.
@@ -83,8 +88,21 @@ Source installation checks still invoke Cargo and can reuse the prepared runner 
 Installation checks cover unstaged sources, compiler-flag changes between reinstalls, relocated bundles, bounded verification allocations, and rejection of missing or modified companions.
 Linux staging first builds and strips the private bubblewrap helper, embeds that exact SHA-256 in the runner build, installs `libexec/bwrap`, and includes its license at `share/licenses/mcp-console/bubblewrap-COPYING`.
 Rebuilding the helper therefore invalidates the runner's tracked digest input.
-Builds require a C compiler, `pkg-config`, and libcap development files (`build-essential pkg-config libcap-dev` on Ubuntu); installations require `libcap.so.2`.
-Linux smoke tests exercise the bundled helper with an empty `PATH` and evaluate R through default sandboxed `serve`.
+Ordinary native GNU source builds require a C compiler, binutils (`readelf` and `strip`), `pkg-config`, libcap development files, and OpenSSL development files; their companions retain the corresponding shared-library dependencies.
+These source builds use the host ABI and do not establish a portable wheel baseline.
+The release workflow instead reuses `.github/scripts/install-musl-build-tools.sh` from the pinned source, including Zig 0.14, musl compiler/linker selection, and the pinned static libcap build with isolated target pkg-config paths.
+The standalone runner enables the same vendored OpenSSL linkage as that release's main executable.
+The musl toolchain environment is scoped to companion staging so it cannot change the GNU application build.
+Staging checks actual ELF architecture, interpreter, `DT_NEEDED`, and version requirements and rejects a musl companion with dynamic dependencies.
+Release companions therefore do not require end users to install libcap or OpenSSL; the build toolchain and development headers are also build prerequisites only.
+Users still need compatible R, Python, language packages, resolver tools, and the native sandbox capabilities below.
+
+After building a Linux wheel, run `python3 scripts/release.py audit-linux-wheel dist/*.whl`.
+This checks the filename and `WHEEL` platform tags, both private executables, the main executable's loader and dependencies, and its required GLIBC symbol versions against the declared manylinux baseline.
+Maturin's application audit alone does not inspect private executables in wheel data.
+The audit does not cover libraries loaded later by R, Python, or SQL.
+The installed-layout suite exercises the bundled helper with an empty `PATH`, relocation, integrity failures, and supported host-helper selection.
+The separate [runtime validation record](docs/LINUX_COMPATIBILITY.md#complete-runtime-results) reports the full R/Python/SQL probes and their limitations.
 CI permits unprivileged namespace setup on its disposable Ubuntu runners by disabling their AppArmor user-namespace restriction.
 A local rehearsal must likewise run in an environment whose policy permits the bundled helper's namespace operations; an approved system `bwrap` alone does not verify that installation path.
 

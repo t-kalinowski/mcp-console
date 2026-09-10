@@ -223,6 +223,8 @@ class InstallationTests(unittest.TestCase):
             )
 
     def test_uv_installs_a_relocatable_bundle_from_unstaged_sources(self) -> None:
+        true = shutil.which("true")
+        assert true is not None
         with tempfile.TemporaryDirectory(prefix="mcp-console-install-") as temporary:
             directory = Path(temporary)
             source = directory / "source"
@@ -316,7 +318,7 @@ class InstallationTests(unittest.TestCase):
                         directory / "uv-bin/mcp-console",
                         "sandbox",
                         "--",
-                        "/usr/bin/true",
+                        true,
                     ],
                     check=False,
                     capture_output=True,

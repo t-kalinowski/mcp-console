@@ -39,7 +39,30 @@ fn bind_private_runner() {
             .expect("private sandbox runner is not staged; use uv tool install --reinstall . or run scripts/stage-sandbox-runner"))
             .expect("invalid private sandbox runner build manifest");
     assert_eq!(build["source_revision"], pin["commit"]);
-    assert_eq!(build["target"].as_str(), Some(target.as_str()));
+    let runner_target = build["target"].as_str().expect("missing runner target");
+    let compatible = runner_target == target
+        || target
+            .strip_suffix("-unknown-linux-gnu")
+            .zip(runner_target.strip_suffix("-unknown-linux-musl"))
+            .is_some_and(|(application, runner)| application == runner);
+    assert!(
+        compatible,
+        "runner target {runner_target} cannot run with application target {target}"
+    );
+    if runner_target.ends_with("-linux-musl") {
+        // The runner is a separate process. A static musl runner can accompany
+        // a GNU application of the same architecture without loading its libc.
+        for name in ["mcp-console-sandbox", "bwrap"] {
+            let linkage = &build["linkage"][name];
+            assert!(
+                linkage["interpreter"].is_null()
+                    && ["needed", "versions"]
+                        .iter()
+                        .all(|key| { linkage[key].as_array().is_some_and(Vec::is_empty) }),
+                "musl artifact {name} lacks verified static linkage; restage the runner"
+            );
+        }
+    }
     let mut artifacts = String::new();
     let mut bundle = vec![
         ("mcp-console-sandbox", "libexec/mcp-console-sandbox"),

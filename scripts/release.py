@@ -301,11 +301,13 @@ def smoke_wheel(args: argparse.Namespace) -> None:
         not public_runner.exists(),
         f"private sandbox runner was installed as a public command: {public_runner}",
     )
+    true = shutil.which("true")
+    require(true is not None, "host `true` is not on `PATH`")
     with tempfile.TemporaryDirectory(prefix="mcp-console-empty-path-") as directory:
         sandbox_env = os.environ.copy()
         sandbox_env["PATH"] = directory
-        run_command([str(cargo_bin), "sandbox", "--", "/usr/bin/true"], env=sandbox_env)
-        run_command([str(installed), "sandbox", "--", "/usr/bin/true"], env=sandbox_env)
+        run_command([str(cargo_bin), "sandbox", "--", true], env=sandbox_env)
+        run_command([str(installed), "sandbox", "--", true], env=sandbox_env)
 
     internal_ir = installed.resolve().with_name("ir")
     require(not internal_ir.exists(), f"wheel contains sibling `ir`: {internal_ir}")
@@ -339,6 +341,100 @@ def smoke_wheel(args: argparse.Namespace) -> None:
             args.startup_timeout_seconds,
             args.response_timeout_seconds,
         )
+
+
+def audit_linux_wheel(args: argparse.Namespace) -> None:
+    """Check release ELF files, including private data Maturin does not audit."""
+    wheel = Path(args.wheel)
+    platforms = wheel.stem.rsplit("-", 1)[1].split(".")
+    policies = [
+        re.fullmatch(r"manylinux_(\d+)_(\d+)_(x86_64|aarch64)", tag)
+        for tag in platforms
+    ]
+    require(all(policies), f"expected explicit manylinux platform tags: {wheel.name}")
+    architecture = policies[0][3]
+    require(
+        all(policy[3] == architecture for policy in policies),
+        "wheel mixes architectures",
+    )
+    machine = (
+        "AArch64" if architecture == "aarch64" else "Advanced Micro Devices X86-64"
+    )
+    interpreter = (
+        "/lib/ld-linux-aarch64.so.1"
+        if architecture == "aarch64"
+        else "/lib64/ld-linux-x86-64.so.2"
+    )
+    prefix = f"mcp_console-{package_version()}"
+    paths = [
+        f"{prefix}.data/scripts/mcp-console",
+        f"{prefix}.data/data/libexec/bwrap",
+        f"{prefix}.data/data/libexec/mcp-console-sandbox",
+    ]
+    report = {}
+    with zipfile.ZipFile(wheel) as archive, tempfile.TemporaryDirectory() as temporary:
+        metadata = archive.read(f"{prefix}.dist-info/WHEEL").decode()
+        require(
+            set(re.findall(r"^Tag: (.+)$", metadata, re.MULTILINE))
+            == {f"py3-none-{tag}" for tag in platforms},
+            "WHEEL metadata tags do not match the wheel filename",
+        )
+        for path in paths:
+            require(
+                archive.namelist().count(path) == 1,
+                f"wheel must contain exactly one {path}",
+            )
+            name = Path(path).name
+            binary = Path(temporary) / name
+            binary.write_bytes(archive.read(path))
+            elf = command_output(["readelf", "-W", "-h", "-l", "-d", "-V", str(binary)])
+            require(
+                re.search(rf"Machine:\s+{re.escape(machine)}\s*$", elf, re.MULTILINE)
+                is not None,
+                f"{name} has the wrong architecture",
+            )
+            loader = re.search(r"Requesting program interpreter: (.+)\]", elf)
+            needed = sorted(re.findall(r"\(NEEDED\).*\[(.+)\]", elf))
+            versions = sorted(set(re.findall(r"Name: (\S+)", elf)))
+            report[name] = {
+                "interpreter": loader[1] if loader else None,
+                "needed": needed,
+                "versions": versions,
+            }
+            if name != "mcp-console":
+                require(
+                    not loader and not needed and not versions,
+                    f"release companion {name} must be static: {report[name]}",
+                )
+                continue
+            require(
+                loader is not None and loader[1] == interpreter,
+                "GNU Console must use its native glibc loader",
+            )
+            require(
+                set(needed)
+                <= {
+                    "libc.so.6",
+                    "libgcc_s.so.1",
+                    "libm.so.6",
+                    "libdl.so.2",
+                    "libpthread.so.0",
+                    "librt.so.1",
+                    Path(interpreter).name,
+                },
+                f"unexpected Console shared libraries: {needed}",
+            )
+            for version in versions:
+                if match := re.fullmatch(r"GLIBC_(\d+)\.(\d+)", version):
+                    require(
+                        all(
+                            tuple(map(int, match.groups()))
+                            <= (int(policy[1]), int(policy[2]))
+                            for policy in policies
+                        ),
+                        f"{name} requires {version}, beyond the wheel platform tag",
+                    )
+    print(json.dumps(report, indent=2))
 
 
 def validate_publish(_: argparse.Namespace) -> None:
@@ -437,6 +533,10 @@ def parser() -> argparse.ArgumentParser:
     smoke.add_argument("--startup-timeout-seconds", type=float, default=1200.0)
     smoke.add_argument("--response-timeout-seconds", type=float, default=30.0)
     smoke.set_defaults(function=smoke_wheel)
+
+    audit = commands.add_parser("audit-linux-wheel")
+    audit.add_argument("wheel")
+    audit.set_defaults(function=audit_linux_wheel)
 
     validate = commands.add_parser("validate-publish")
     validate.set_defaults(function=validate_publish)
