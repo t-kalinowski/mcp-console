@@ -80,18 +80,10 @@ relay:
   kind: evaluate
   language: python
   source: |
-    def child_output():
-        print("fork child stdout", flush=True)
-        sys.stderr.write("fork child stderr\n")
-        sys.stderr.flush()
-
-
-    run_child(child_output)
+    run_child(lambda: logger.warning("cached child log"))
 ---
-stdout: |
-  fork child stdout
 stderr: |
-  fork child stderr
+  cached child log
 ---
 worker:
   kind: completed

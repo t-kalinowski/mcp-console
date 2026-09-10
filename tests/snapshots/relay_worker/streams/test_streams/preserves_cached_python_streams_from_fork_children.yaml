@@ -81,17 +81,18 @@ relay:
   language: python
   source: |
     def child_output():
-        print("fork child stdout", flush=True)
-        sys.stderr.write("fork child stderr\n")
-        sys.stderr.flush()
+        saved_stdout.write("cached child stdout\n")
+        saved_stdout.flush()
+        saved_stderr.write("cached child stderr\n")
+        saved_stderr.flush()
 
 
     run_child(child_output)
 ---
 stdout: |
-  fork child stdout
+  cached child stdout
 stderr: |
-  fork child stderr
+  cached child stderr
 ---
 worker:
   kind: completed

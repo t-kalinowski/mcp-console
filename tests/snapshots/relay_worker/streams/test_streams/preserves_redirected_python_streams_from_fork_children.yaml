@@ -80,18 +80,42 @@ relay:
   kind: evaluate
   language: python
   source: |
-    def child_output():
-        print("fork child stdout", flush=True)
-        sys.stderr.write("fork child stderr\n")
+    import contextlib
+    import tempfile
+
+    with (
+        tempfile.TemporaryFile(mode="w+", encoding="utf-8") as stdout_file,
+        tempfile.TemporaryFile(mode="w+", encoding="utf-8") as stderr_file,
+        contextlib.redirect_stdout(stdout_file),
+        contextlib.redirect_stderr(stderr_file),
+    ):
+        redirected_handler = logging.StreamHandler()
+
+        def child_output():
+            assert sys.stdout is stdout_file
+            assert sys.stderr is stderr_file
+            print("redirected child stdout", flush=True)
+            sys.stderr.write("redirected child stderr\n")
+            sys.stderr.flush()
+            redirected_handler.handle(
+                logging.makeLogRecord({"msg": "redirected child log"})
+            )
+
+        run_child(child_output)
+        assert sys.stdout is stdout_file
+        assert sys.stderr is stderr_file
+        assert redirected_handler.stream is stderr_file
+        print("redirected parent stdout", flush=True)
+        sys.stderr.write("redirected parent stderr\n")
         sys.stderr.flush()
-
-
-    run_child(child_output)
----
-stdout: |
-  fork child stdout
-stderr: |
-  fork child stderr
+        redirected_handler.handle(logging.makeLogRecord({"msg": "redirected parent log"}))
+        stdout_file.seek(0)
+        stderr_file.seek(0)
+        assert stdout_file.read() == "redirected child stdout\nredirected parent stdout\n"
+        assert stderr_file.read() == (
+            "redirected child stderr\nredirected child log\n"
+            "redirected parent stderr\nredirected parent log\n"
+        )
 ---
 worker:
   kind: completed
