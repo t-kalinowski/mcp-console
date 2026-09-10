@@ -72,23 +72,32 @@ fn bind_private_runner() {
         {
             let destination = prefix.join(relative);
             std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
-            // Publish the verified bytes atomically; an active sandbox may
-            // still be using the previous executable during a rebuild.
-            let temporary = destination.with_file_name(format!(".{name}-{}", std::process::id()));
-            std::fs::write(&temporary, &bytes).unwrap();
-            std::fs::set_permissions(&temporary, source.metadata().unwrap().permissions()).unwrap();
-            std::fs::rename(temporary, &destination).unwrap();
+            let permissions = source.metadata().unwrap().permissions();
+            // These files are also tracked inputs. Rewriting identical bytes
+            // would make every following Cargo invocation rebuild the crate.
+            if !destination.exists()
+                || std::fs::read(&destination).unwrap() != bytes
+                || destination.metadata().unwrap().permissions() != permissions
+            {
+                // An active sandbox may still use the previous executable.
+                let temporary =
+                    destination.with_file_name(format!(".{name}-{}", std::process::id()));
+                std::fs::write(&temporary, &bytes).unwrap();
+                std::fs::set_permissions(&temporary, permissions).unwrap();
+                std::fs::rename(temporary, &destination).unwrap();
+            }
             // Restore removed data even when Cargo can reuse the compiled binary.
             println!("cargo:rerun-if-changed={}", destination.display());
         }
     }
     let protocol = pin["protocol_version"].as_u64().unwrap();
-    std::fs::write(
-        output.join("sandbox_runner_installation.rs"),
-        format!(
-            "pub(super) const PROTOCOL_VERSION: u32 = {protocol};\n\
+    let generated = output.join("sandbox_runner_installation.rs");
+    let contents = format!(
+        "pub(super) const PROTOCOL_VERSION: u32 = {protocol};\n\
              const ARTIFACTS: &[(&str, [u8; 32])] = &[{artifacts}];\n",
-        ),
-    )
-    .expect("failed to bind private sandbox runner installation");
+    );
+    if !generated.exists() || std::fs::read(&generated).unwrap() != contents.as_bytes() {
+        std::fs::write(generated, contents)
+            .expect("failed to bind private sandbox runner installation");
+    }
 }
