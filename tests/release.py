@@ -339,9 +339,10 @@ class ReleaseScriptTests(unittest.TestCase):
             "public wheel",
             "public uv",
         ):
-            with self.subTest(
-                defect=defect
-            ), tempfile.TemporaryDirectory() as temporary:
+            with (
+                self.subTest(defect=defect),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
                 directory = Path(temporary)
                 environment, wheel, cargo_bin = self.smoke_environment(directory)
                 if defect in {"missing runner", "missing notice", "not executable"}:
@@ -529,6 +530,26 @@ class ReleaseScriptTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("expected exactly four wheels", result.stderr)
 
+    def test_stage_runner_exports_source_pin_without_a_checkout(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "scripts").mkdir()
+            script = root / "scripts" / STAGE_SCRIPT.name
+            shutil.copyfile(STAGE_SCRIPT, script)
+            pin = {"repository": "fixture/runner", "commit": "a" * 40}
+            (root / "sandbox-runner.json").write_text(json.dumps(pin))
+            output = root / "github-output"
+            result = subprocess.run(
+                [sys.executable, str(script), "--github-output", str(output)],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                output.read_text(),
+                "".join(f"{key}={value}\n" for key, value in pin.items()),
+            )
+
     def test_stage_runner_builds_the_pin_and_records_artifact_integrity(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
@@ -558,13 +579,14 @@ class ReleaseScriptTests(unittest.TestCase):
                 "release": "rust-v0.150.1",
                 "commit": "a" * 40,
                 "protocol_version": 2,
-                "rust_toolchain": "1.95.0",
             }
             (root / "sandbox-runner.json").write_text(json.dumps(pin))
             checkout = directory / "source"
             crate = checkout / "codex-rs" / "mcp-console-sandbox"
             crate.mkdir(parents=True)
             (crate / "Cargo.toml").touch()
+            toolchain_file = checkout / "codex-rs/rust-toolchain.toml"
+            toolchain_file.write_text('[toolchain]\nchannel = "fixture-sandbox"\n')
             (checkout / "LICENSE").write_text("license\n")
             (checkout / "NOTICE").write_text("notice\n")
             vendor = checkout / "codex-rs/vendor/bubblewrap"
@@ -593,7 +615,7 @@ class ReleaseScriptTests(unittest.TestCase):
                 #!/usr/bin/env python3
                 import sys
 
-                assert sys.argv[1:] == ["+1.95.0", "--print", "host-tuple"]
+                assert sys.argv[1:] == ["+fixture-sandbox", "--print", "host-tuple"]
                 print("aarch64-apple-darwin")
                 """,
             )
@@ -622,8 +644,8 @@ class ReleaseScriptTests(unittest.TestCase):
                 import os
                 import sys
 
-                assert sys.argv[1:4] == ["run", "--install", "1.95.0"]
-                os.execvp(sys.argv[4], [sys.argv[4], "+1.95.0", *sys.argv[5:]])
+                assert sys.argv[1:4] == ["run", "--install", "fixture-sandbox"]
+                os.execvp(sys.argv[4], [sys.argv[4], "+fixture-sandbox", *sys.argv[5:]])
                 """,
             )
             for name in ("xcrun", "strip"):
@@ -647,6 +669,7 @@ class ReleaseScriptTests(unittest.TestCase):
                     "FAKE_SOURCE_REVISION": pin["commit"],
                     "FAKE_CARGO_ARGUMENTS": str(directory / "cargo.json"),
                     "CARGO_BUILD_TARGET": "x86_64-apple-darwin",
+                    "RUSTUP_TOOLCHAIN": "fixture-console",
                 }
             )
             command = [
@@ -683,7 +706,7 @@ class ReleaseScriptTests(unittest.TestCase):
                         [
                             {
                                 "arguments": [
-                                    "+1.95.0",
+                                    "+fixture-sandbox",
                                     "build",
                                     "--locked",
                                     "--release",
@@ -780,6 +803,14 @@ class ReleaseScriptTests(unittest.TestCase):
                 )
                 self.assertNotEqual(result.returncode, 0)
                 self.assertFalse((directory / "cargo.json").exists())
+            toolchain_file.unlink()
+            result = subprocess.run(
+                command, env=environment, capture_output=True, text=True
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("FileNotFoundError", result.stderr)
+            self.assertIn("rust-toolchain.toml", result.stderr)
+            self.assertFalse((directory / "cargo.json").exists())
 
     def test_cargo_rejects_changed_staged_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

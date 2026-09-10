@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-from __future__ import annotations
-
 import argparse
 import hashlib
 import json
@@ -10,6 +8,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -63,7 +62,7 @@ def main() -> None:
         fail("sandbox-runner.json must pin a full source commit")
     if args.github_output is not None:
         with args.github_output.open("a", encoding="utf-8") as output:
-            for key in ("repository", "commit", "rust_toolchain"):
+            for key in ("repository", "commit"):
                 output.write(f"{key}={pin[key]}\n")
         return
     if sys.platform not in {"darwin", "linux"}:
@@ -95,7 +94,9 @@ def main() -> None:
     if git_output(checkout, "status", "--porcelain", "--untracked-files=all"):
         fail("source checkout is not clean")
 
-    toolchain = ["rustup", "run", "--install", pin["rust_toolchain"]]
+    with (workspace / "rust-toolchain.toml").open("rb") as stream:
+        channel = tomllib.load(stream)["toolchain"]["channel"]
+    toolchain = ["rustup", "run", "--install", channel]
     target = args.target
     if target is None:
         target = subprocess.check_output(
