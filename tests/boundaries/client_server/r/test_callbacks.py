@@ -1,6 +1,8 @@
 #!/usr/bin/env -S uv run --script
 
+import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -13,7 +15,7 @@ from support.assertions import (
     wait_for_evaluation_output,
     wait_for_idle_output,
 )
-from support.checkpoints import wait_for_worker_file
+from support.checkpoints import FifoCheckpoint, wait_for_worker_file
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
@@ -109,33 +111,55 @@ def test_services_r_input_handlers_at_cell_boundaries(
 def test_services_later_callbacks_while_idle(
     binary: Path, execution: Execution
 ) -> Transcript:
-    client = McpClient(binary, execution.serve())
-    client.initialize_and_list_tools()
-    client.send(requirements={"r": ["later"]})
+    relay = Path(__file__).resolve().parents[3] / "fixtures" / "idle_callback_relay"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        directory = Path(temporary_directory)
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        environment["MCP_CONSOLE_TEST_BINARY"] = str(binary)
+        with McpClient(
+            binary,
+            execution.serve("--worker", str(binary), "--relay", str(relay)),
+            environment,
+        ) as client:
+            client.initialize_and_list_tools()
+            client.send(requirements={"r": ["later"]})
 
-    # fmt: r
-    r = code(r"""
-        callback_gate <- tempfile("mcp-console-callback-gate-")
-        callback_checkpoint <- tempfile("mcp-console-callback-checkpoint-")
-        run_callback <- function() {
-          if (!file.exists(callback_gate)) {
-            later::later(run_callback, delay = 0.01)
-            return(invisible(NULL))
-          }
-          idle_value <<- 42
-          cat("idle callback\n")
-          stopifnot(file.create(callback_checkpoint))
-        }
-        later::later(run_callback, delay = 0.01)
-        cat(callback_gate, callback_checkpoint, sep = "\n")
-        """)
-    client.send(r=r)
-    release_worker_callback_gate(client, "idle callback")
-    client.send(r="idle_value")
-    assert last_tool_text(client) == (
-        "idle callback\n[output produced while idle]\n[1] 42\n"
-    )
-    return client.finish()
+            # fmt: r
+            r = code(r"""
+                callback_gate <- tempfile("mcp-console-callback-gate-")
+                callback_checkpoint <- tempfile("mcp-console-callback-checkpoint-")
+                run_callback <- function() {
+                  if (!file.exists(callback_gate)) {
+                    later::later(run_callback, delay = 0.01)
+                    return(invisible(NULL))
+                  }
+                  idle_value <<- 42
+                  cat("idle callback\n")
+                  stopifnot(file.create(callback_checkpoint))
+                }
+                later::later(run_callback, delay = 0.01)
+                cat(callback_gate, callback_checkpoint, sep = "\n")
+                """)
+            client.send(r=r)
+            checkpoint = FifoCheckpoint.attach(
+                wait_for_worker_file(
+                    directory, "idle-callback-output-processed", client
+                )
+            )
+            try:
+                release_worker_callback_gate(client, "idle callback")
+                # A worker-local file does not prove the server has received
+                # its output. Wait for the relay's server round trip as well.
+                checkpoint.wait()
+                client.send(r="idle_value")
+                output = last_tool_text(client)
+                assert output == (
+                    "idle callback\n[output produced while idle]\n[1] 42\n"
+                ), repr(output)
+                return client.finish()
+            finally:
+                checkpoint.close()
 
 
 @executions(DIRECT, SANDBOXED)
