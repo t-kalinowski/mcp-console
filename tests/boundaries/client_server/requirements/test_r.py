@@ -460,8 +460,7 @@ def test_evaluates_with_default_managed_r(
               identical(dirname(find.package("duckdb")), .libPaths()[[1L]]),
               identical(dirname(find.package("arrow")), .libPaths()[[1L]]),
               identical(dirname(find.package("nanoarrow")), .libPaths()[[1L]]),
-              identical(packageDescription("reticulate")$RemoteType, "github"),
-              nzchar(packageDescription("reticulate")$RemoteSha),
+              identical(packageDescription("reticulate")$Repository, "CRAN"),
               vapply(
                 c("ggplot2", "dplyr", "readr", "jsonlite"),
                 requireNamespace,

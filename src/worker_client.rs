@@ -38,7 +38,7 @@ use output::{OutputTape, SendFailure, SendResponse};
 
 pub(crate) const DEFAULT_R_REQUIREMENTS: &[&str] = &[
     "tidyverse",
-    "github::rstudio/reticulate",
+    "reticulate",
     "DBI",
     "duckdb",
     "arrow",
