@@ -154,6 +154,34 @@ def test_rejects_invalid_writable_roots_before_starting(binary: Path) -> Transcr
     return transcript
 
 
+@requires(SANDBOX)
+def test_rejects_non_utf8_writable_roots_before_starting(binary: Path) -> Transcript:
+    transcript = []
+    for command in (b"serve", b"sandbox"):
+        arguments = [command, b"--writable-root", b"non-utf8-\xff"]
+        if command == b"sandbox":
+            arguments += [b"--", b"/bin/echo", b"workload started"]
+        result = subprocess.run(
+            [os.fsencode(binary), *arguments],
+            input="",
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 1, result.stderr
+        assert result.stdout == ""
+        assert result.stderr == "writable root 'non-utf8-�' is not valid UTF-8\n", (
+            result.stderr
+        )
+        transcript.append(
+            {
+                "arguments_bytes": repr(arguments),
+                "exit_code": result.returncode,
+                "stderr": result.stderr,
+            }
+        )
+    return transcript
+
+
 def test_rejects_conflicting_writable_root_options(binary: Path) -> Transcript:
     transcript = []
     for arguments in (

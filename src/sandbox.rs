@@ -17,6 +17,13 @@ pub fn resolve_writable_roots(roots: Vec<PathBuf>) -> Result<Vec<PathBuf>, Strin
             let root = std::path::absolute(&path).map_err(|error| {
                 format!("cannot resolve writable root '{}': {error}", path.display())
             })?;
+            // The runner configuration carries paths as JSON strings.
+            if root.to_str().is_none() {
+                return Err(format!(
+                    "writable root '{}' is not valid UTF-8",
+                    path.display()
+                ));
+            }
             let metadata = root.metadata().map_err(|error| {
                 format!("cannot access writable root '{}': {error}", path.display())
             })?;

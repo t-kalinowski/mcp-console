@@ -25,6 +25,7 @@ mcp-console serve --writable-root './output files' --writable-root /path/to/cach
 
 This temporary argument does not define the eventual configuration interface.
 Each path must name an existing directory; Console does not create it.
+Paths must be valid UTF-8 to fit the runner's configuration transport.
 Relative paths resolve against the launch working directory before workload startup, and the server retains the absolute paths across worker restarts and replacements.
 Paths remain separate arguments, including spaces and Unicode; symlink components remain subject to the runner's native writable-root validation.
 
