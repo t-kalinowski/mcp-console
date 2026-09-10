@@ -52,9 +52,9 @@ async def main() -> None:
         chat.register_tool(console.send)
         assert await chat.get_tools()[0].func(r="echo installed wheel") == expected
         assert Agent(name="test", tools=[tool]).tools == [tool]
-    server = mcp_console.openai_agents_server()
+    server = mcp_console.openai.agents_server()
     assert Agent(name="test", mcp_servers=[server]).mcp_servers == [server]
-    ThreadStartParams(config={"mcp_servers": {"console": mcp_console.codex_server()}})
+    ThreadStartParams(config={"mcp_servers": {"console": mcp_console.codex.server()}})
 
 
 sync_main()

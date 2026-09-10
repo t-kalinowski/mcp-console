@@ -43,19 +43,3 @@ def result_text(result: CallToolResult) -> str:
     if result.is_error:
         raise RuntimeError(text or "MCP Console returned an error")
     return text
-
-
-def openai_result_output(result: CallToolResult) -> str | list[dict]:
-    text = result_text(result)
-    if all(item.type == "text" for item in result.content):
-        return text
-    return [
-        {
-            "type": "input_image",
-            "detail": "auto",
-            "image_url": f"data:{item.mime_type};base64,{item.data}",
-        }
-        if item.type == "image"
-        else {"type": "input_text", "text": content_text(item)}
-        for item in result.content
-    ]

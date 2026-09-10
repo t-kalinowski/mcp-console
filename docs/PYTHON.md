@@ -18,24 +18,25 @@ Each framework extra declares the minimum SDK release used by the integration te
 All helpers default to the executable installed in the current Python environment, then search `PATH`, and launch it with `serve`.
 Pass `command=` and `args=` to override the command.
 The application owns its model clients, agents, chats, and tool loops.
+The callable clients are available at the package root; framework helpers live in the `chatlas`, `openai`, `anthropic`, and `codex` submodules.
 
 ## Callable clients
 
 Use `MCPConsole` for synchronous code:
 
 ```python
-import mcp_console
+from mcp_console import MCPConsole
 
-with mcp_console.MCPConsole() as console:
+with MCPConsole() as console:
     print(console.send(r="answer <- 42; answer"))
 ```
 
 Use `AsyncMCPConsole` for async code:
 
 ```python
-import mcp_console
+from mcp_console import AsyncMCPConsole
 
-async with mcp_console.AsyncMCPConsole() as console:
+async with AsyncMCPConsole() as console:
     print(await console.send(python="answer = 42; answer"))
 ```
 
@@ -60,11 +61,11 @@ Pass native stdio settings such as `env` and `cwd` through `server_parameters=`.
 Register the synchronous callable on an existing chat:
 
 ```python
-import mcp_console
 from chatlas import ChatOpenAI
+from mcp_console import MCPConsole
 
 chat = ChatOpenAI()
-with mcp_console.MCPConsole() as console:
+with MCPConsole() as console:
     chat.register_tool(console.send)
     chat.chat("Use the console to calculate 20!.")
 ```
@@ -77,7 +78,7 @@ from chatlas import ChatOpenAI
 
 chat = ChatOpenAI()
 try:
-    await mcp_console.register_chatlas(chat)
+    await mcp_console.chatlas.register(chat)
     await chat.chat_async("Use the console to calculate 20!.")
 finally:
     await chat.cleanup_mcp_tools()
@@ -96,11 +97,11 @@ Its `definition` goes in `responses.create(tools=...)`, and calling it with a fu
 Use the synchronous OpenAI client with `MCPConsole`:
 
 ```python
-import mcp_console
+from mcp_console import MCPConsole
 from openai import OpenAI
 
 client = OpenAI()
-with mcp_console.MCPConsole() as console:
+with MCPConsole() as console:
     tool = console.openai_responses_tool()
     response = client.responses.create(
         model="your-model",
@@ -121,7 +122,7 @@ with mcp_console.MCPConsole() as console:
     print(response.output_text)
 ```
 
-For async code, use `AsyncOpenAI` and `async with mcp_console.AsyncMCPConsole()`.
+For async code, import `AsyncOpenAI` and `AsyncMCPConsole` and use `async with AsyncMCPConsole()`.
 Await `client.responses.create(...)` and each `tool(call)`.
 The application owns the [Responses function-calling loop](https://developers.openai.com/api/docs/guides/function-calling).
 The adapter keeps the optional MCP arguments in a non-strict schema.
@@ -131,10 +132,10 @@ The adapter keeps the optional MCP arguments in a non-strict schema.
 Use a synchronous console with `Runner.run_sync`:
 
 ```python
-import mcp_console
 from agents import Agent, Runner
+from mcp_console import MCPConsole
 
-with mcp_console.MCPConsole() as console:
+with MCPConsole() as console:
     agent = Agent(name="Data analyst", tools=[console.openai_agents_tool()])
     result = Runner.run_sync(agent, "Use the console to calculate 20!.")
     print(result.final_output)
@@ -149,7 +150,7 @@ To use the SDK's native MCP support, supply its server to an agent:
 import mcp_console
 from agents import Agent, Runner
 
-async with mcp_console.openai_agents_server() as server:
+async with mcp_console.openai.agents_server() as server:
     agent = Agent(name="Data analyst", mcp_servers=[server])
     result = await Runner.run(agent, "Use the console to calculate 20!.")
     print(result.final_output)
@@ -164,11 +165,11 @@ Pass stdio settings through `params=` and other native SDK options as keyword ar
 Use the synchronous client and runner with a console callable:
 
 ```python
-import mcp_console
 from anthropic import Anthropic
+from mcp_console import MCPConsole
 
 client = Anthropic()
-with mcp_console.MCPConsole() as console:
+with MCPConsole() as console:
     runner = client.beta.messages.tool_runner(
         model="your-model",
         max_tokens=4096,
@@ -189,7 +190,7 @@ import mcp_console
 from anthropic import AsyncAnthropic
 
 client = AsyncAnthropic()
-async with mcp_console.anthropic_tools() as tools:
+async with mcp_console.anthropic.tools() as tools:
     runner = client.beta.messages.tool_runner(
         model="your-model",
         max_tokens=4096,
@@ -204,20 +205,25 @@ Pass stdio settings through `server_parameters=` and native conversion options t
 
 ## Official thread SDK
 
-`mcp_console.codex_server()` returns one stdio server entry for the official `openai-codex` package.
+`mcp_console.codex.server()` returns one stdio server entry for the official `openai-codex` package.
 Place it inside your own configuration, alongside other settings and servers:
 
 ```python
 import mcp_console
+from openai_codex import Codex
 
 config = {
     "model": "your-model",
     "mcp_servers": {
-        "mcp-console": mcp_console.codex_server(),
+        "mcp-console": mcp_console.codex.server(),
     },
 }
+
+with Codex() as client:
+    thread = client.thread_start(config=config)
+    result = thread.run("Use MCP Console to calculate 20!.")
+    print(result.final_response)
 ```
 
-Pass this mapping to your existing client's `thread_start(config=config)` call.
 Use `server_parameters=` for the Console entry's stdio configuration.
 The helper creates no client, thread, subprocess, or temporary launcher.

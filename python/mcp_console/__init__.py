@@ -1,22 +1,15 @@
 """Composable Python integrations for the MCP Console stdio server."""
 
-from ._client import AsyncMCPConsole, AsyncOpenAIResponsesTool, Requirements
-from ._integrations import (
-    anthropic_tools,
-    codex_server,
-    openai_agents_server,
-    register_chatlas,
-)
-from ._sync import MCPConsole, OpenAIResponsesTool
+from . import anthropic, chatlas, codex, openai
+from ._client import AsyncMCPConsole, Requirements
+from ._sync import MCPConsole
 
 __all__ = [
     "AsyncMCPConsole",
-    "AsyncOpenAIResponsesTool",
     "MCPConsole",
-    "OpenAIResponsesTool",
     "Requirements",
-    "anthropic_tools",
-    "codex_server",
-    "openai_agents_server",
-    "register_chatlas",
+    "anthropic",
+    "chatlas",
+    "codex",
+    "openai",
 ]

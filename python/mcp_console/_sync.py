@@ -3,13 +3,9 @@ from contextlib import ExitStack
 from functools import partial
 from typing import TYPE_CHECKING, Any, Literal, Self
 
-from ._client import (
-    AsyncMCPConsole,
-    AsyncOpenAIResponsesTool,
-    Requirements,
-    TimeoutMilliseconds,
-)
+from ._client import AsyncMCPConsole, Requirements, TimeoutMilliseconds
 from ._common import Command
+from .openai import ResponsesTool
 
 if TYPE_CHECKING:
     from anyio.from_thread import BlockingPortal
@@ -94,9 +90,9 @@ class MCPConsole:
     send.__doc__ = AsyncMCPConsole.send.__doc__
     __call__ = send
 
-    def openai_responses_tool(self) -> "OpenAIResponsesTool":
+    def openai_responses_tool(self) -> "ResponsesTool":
         """Return a synchronous tool for an OpenAI Responses tool loop."""
-        return OpenAIResponsesTool(self, self._run(self._async.openai_responses_tool))
+        return ResponsesTool(self, self._run(self._async.openai_responses_tool))
 
     def openai_agents_tool(self, *, strict_mode: bool = False, **kwargs: Any) -> Any:
         """Return a native OpenAI Agents function tool wrapping ``send``."""
@@ -109,26 +105,3 @@ class MCPConsole:
         from anthropic import beta_tool
 
         return beta_tool(self.send, **kwargs)
-
-
-class OpenAIResponsesTool:
-    """A synchronous function tool for the OpenAI Responses API."""
-
-    def __init__(self, console: MCPConsole, tool: AsyncOpenAIResponsesTool) -> None:
-        self._console = console
-        self._async = tool
-
-    @property
-    def definition(self) -> dict[str, Any]:
-        """Function-tool definition to place in ``responses.create(tools=...)``."""
-        return self._async.definition
-
-    def call(self, arguments: str | Mapping[str, Any]) -> str | list[dict]:
-        """Execute one function call's JSON arguments and preserve rich output."""
-        return self._console._run(self._async.call, arguments)
-
-    def output(self, call: Any) -> dict[str, Any]:
-        """Return one ``function_call_output`` item for an OpenAI call."""
-        return self._console._run(self._async.output, call)
-
-    __call__ = output

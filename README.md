@@ -77,9 +77,9 @@ pip install "mcp-console[client]"
 ```
 
 ```python
-import mcp_console
+from mcp_console import MCPConsole
 
-with mcp_console.MCPConsole() as console:
+with MCPConsole() as console:
     print(console.send(r="answer <- 42; answer"))
 ```
 

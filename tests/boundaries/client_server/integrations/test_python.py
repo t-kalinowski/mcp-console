@@ -12,13 +12,7 @@ sys.path.insert(0, str(ROOT / "tests"))
 sys.path.insert(0, str(ROOT / "python"))
 
 import mcp_console
-from mcp_console import (
-    AsyncMCPConsole,
-    MCPConsole,
-    anthropic_tools,
-    openai_agents_server,
-    register_chatlas,
-)
+from mcp_console import AsyncMCPConsole, MCPConsole
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.records import Transcript
 from support.requirements import WORKER, requires
@@ -137,6 +131,7 @@ def test_responses_preserves_schema_text_and_images(
     async def exercise():
         async with AsyncMCPConsole(**options(binary, execution)) as console:
             tool = console.openai_responses_tool()
+            assert isinstance(tool, mcp_console.openai.AsyncResponsesTool)
             schema = tool.definition["parameters"]
             assert set(schema["properties"]) == {
                 "r",
@@ -207,7 +202,9 @@ def test_native_openai_agents_server(binary: Path, execution: Execution) -> Tran
     async def exercise():
         settings = options(binary, execution)
         parameters = settings.pop("server_parameters")
-        async with openai_agents_server(**settings, params=parameters) as server:
+        async with mcp_console.openai.agents_server(
+            **settings, params=parameters
+        ) as server:
             assert isinstance(server, MCPServerStdio)
             agent = Agent(name="test", mcp_servers=[server])
             assert agent.mcp_servers == [server]
@@ -231,7 +228,7 @@ def test_anthropic_callable_and_native_tools(
             assert tool.to_dict()["name"] == "send"
             assert_callable_schema(tool.to_dict()["input_schema"])
             text = await tool.call({"r": "echo anthropic"})
-        async with anthropic_tools(
+        async with mcp_console.anthropic.tools(
             **options(binary, execution), tool_kwargs={"defer_loading": True}
         ) as tools:
             assert len(tools) == 1
@@ -249,7 +246,9 @@ def test_native_openai_agents_waits_for_console_output(
     async def exercise():
         settings = options(binary, execution)
         parameters = settings.pop("server_parameters")
-        async with openai_agents_server(**settings, params=parameters) as server:
+        async with mcp_console.openai.agents_server(
+            **settings, params=parameters
+        ) as server:
             # The fixture stays blocked beyond the SDK's five-second default.
             result = await server.call_tool("send", {"r": "stall", "timeout_ms": 6_000})
             return [result.model_dump(mode="json", by_alias=True, exclude_none=True)]
@@ -268,7 +267,9 @@ def test_chatlas_registers_on_existing_chat(
         settings = options(binary, execution)
         parameters = settings.pop("server_parameters")
         try:
-            await register_chatlas(chat, **settings, transport_kwargs=parameters)
+            await mcp_console.chatlas.register(
+                chat, **settings, transport_kwargs=parameters
+            )
             tools = chat.get_tools()
             assert len(tools) == 1
             result = await tools[0].func(r="echo chatlas")
@@ -367,6 +368,7 @@ def test_sync_responses_preserves_text_and_images(
 
     with MCPConsole(**options(binary, execution)) as console:
         tool = console.openai_responses_tool()
+        assert isinstance(tool, mcp_console.openai.ResponsesTool)
         assert tool.definition["name"] == "send"
         assert tool.definition["strict"] is False
         outputs = []
@@ -393,7 +395,7 @@ def test_thread_configuration_preserves_existing_servers(binary: Path) -> Transc
         "model": "caller-selected-model",
         "mcp_servers": {
             "existing": {"command": "other"},
-            "console": mcp_console.codex_server(
+            "console": mcp_console.codex.server(
                 command="custom-console",
                 server_parameters=parameters,
             ),

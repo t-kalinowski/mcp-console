@@ -1,4 +1,3 @@
-import json
 from collections.abc import Mapping, Sequence
 from contextlib import AsyncExitStack
 from typing import TYPE_CHECKING, Annotated, Any, Literal, Self
@@ -6,7 +5,8 @@ from typing import TYPE_CHECKING, Annotated, Any, Literal, Self
 from annotated_types import Ge, Le
 from typing_extensions import TypeAliasType, TypedDict
 
-from ._common import Command, openai_result_output, result_text, stdio_command
+from ._common import Command, result_text, stdio_command
+from .openai import AsyncResponsesTool
 
 if TYPE_CHECKING:
     from mcp import Client
@@ -134,13 +134,13 @@ class AsyncMCPConsole:
 
     __call__ = send
 
-    def openai_responses_tool(self) -> "AsyncOpenAIResponsesTool":
+    def openai_responses_tool(self) -> "AsyncResponsesTool":
         """Return an object for a standard OpenAI Responses tool loop."""
         if self._send_tool is None:
             raise RuntimeError(
                 "AsyncMCPConsole must be connected before creating an OpenAI tool"
             )
-        return AsyncOpenAIResponsesTool(self, self._send_tool)
+        return AsyncResponsesTool(self, self._send_tool)
 
     def openai_agents_tool(self, *, strict_mode: bool = False, **kwargs: Any) -> Any:
         """Return a native OpenAI Agents function tool wrapping ``send``."""
@@ -154,43 +154,3 @@ class AsyncMCPConsole:
         from anthropic import beta_async_tool
 
         return beta_async_tool(self.send, **kwargs)
-
-
-class AsyncOpenAIResponsesTool:
-    """MCP Console as one function tool for the OpenAI Responses API."""
-
-    def __init__(self, console: AsyncMCPConsole, tool: "Tool") -> None:
-        self._console = console
-        self._tool = tool
-
-    @property
-    def definition(self) -> dict[str, Any]:
-        """Function-tool definition to place in ``responses.create(tools=...)``."""
-        return {
-            "type": "function",
-            "name": self._tool.name,
-            "description": self._tool.description,
-            "parameters": self._tool.input_schema,
-            "strict": False,
-        }
-
-    async def call(self, arguments: str | Mapping[str, Any]) -> str | list[dict]:
-        """Execute one function call's JSON arguments and preserve rich output."""
-        parsed = json.loads(arguments) if isinstance(arguments, str) else arguments
-        if not isinstance(parsed, Mapping):
-            raise TypeError("OpenAI function arguments must decode to a JSON object")
-        return openai_result_output(await self._console._call_send(parsed))
-
-    async def output(self, call: Any) -> dict[str, Any]:
-        """Return one ``function_call_output`` item for an OpenAI call."""
-        if isinstance(call, Mapping):
-            call_id, arguments = call["call_id"], call["arguments"]
-        else:
-            call_id, arguments = call.call_id, call.arguments
-        return {
-            "type": "function_call_output",
-            "call_id": call_id,
-            "output": await self.call(arguments),
-        }
-
-    __call__ = output
