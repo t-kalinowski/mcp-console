@@ -166,6 +166,8 @@ For this native bundle, use `CARGO_TARGET_DIR` or `--target-dir` to change the b
 [RELEASE.md](RELEASE.md) describes the bundle and build caches.
 See [AGENTS.md](https://github.com/t-kalinowski/mcp-console/blob/main/AGENTS.md) for development rules and the repository map, and the [boundary test guide](https://github.com/t-kalinowski/mcp-console/blob/main/tests/boundaries/README.md) for test selection and snapshot updates.
 The standalone `mcp-console sandbox -- COMMAND [ARG]...` command is also available for development on macOS and Linux.
+Use `mcp-console sandbox --config-env NAME -- COMMAND [ARG]...` to select a complete runner configuration from a child-specific JSON environment value.
+See [sandbox configuration](docs/SANDBOX_CONFIGURATION.md) for its schema, defaults, and runnable shell, Python, and R examples.
 [Sandbox integration](docs/SANDBOX.md) defines its policy, executable handoff, terminal behavior, and lifetime limits.
 
 ## Documentation

@@ -7,15 +7,19 @@ The [integration validation record](SANDBOX_RUNNER_INTEGRATION.md) records the b
 
 ## Application policy and launch
 
-The pin in `sandbox-runner.json` is `b5a1c9f76a9c6ca2909105aecbc78555a26fda01`, protocol 2, Rust 1.95.0.
+The pin in `sandbox-runner.json` selects the runner source commit, protocol 2, and Rust 1.95.0.
 The executable contract and acceptance tests at that commit are the source of truth for runner behavior.
-Console uses `--config-env MCP_CONSOLE_SANDBOX_CONFIG -- COMMAND [ARG]...`.
+Without a public configuration option, Console uses `--config-env MCP_CONSOLE_SANDBOX_CONFIG -- COMMAND [ARG]...`.
 The selected variable contains one immutable JSON object, consumed by the runner and removed from the target environment.
 It is reserved for this private handoff.
 Arguments, cwd, and the rest of the environment remain ordinary executable inputs.
 There is no configuration file, mutable path reference, bootstrap writer process, or persistent control channel.
 
-Console requests:
+The public `sandbox --config-env NAME -- COMMAND [ARG]...` option selects an explicit complete configuration using the runner's canonical schema.
+See [sandbox configuration](SANDBOX_CONFIGURATION.md) for fields, defaults, trust boundaries, size limits, and runnable shell, Python, and R examples.
+`serve` always supplies the default configuration explicitly; ambient values never select its policy.
+
+By default, Console requests:
 
 - restricted filesystem access with host reads;
 - restricted networking, without a managed proxy;
@@ -37,9 +41,9 @@ Cancellation before worker readiness also requests runner retirement and waits f
 The runner inherits the original fd 0, 1, and 2; Console does not copy, frame, relay, or retain those streams.
 The runner restores target signal state and handles native terminal ownership.
 Version 2 requires UTF-8 executable arguments, paths, and environment values.
-Console adds no application-level request-size cap; the fixed configuration and ordinary launch inputs share the native exec byte budget.
-Exact maximum-size parity with the former handoff was not tested.
-The runner's separate framed-descriptor interface still accepts requests up to 1 MiB and is exercised by installation tests, but Console does not need it for its small fixed policy.
+The selected JSON is limited to 1 MiB and shares the native exec byte budget with arguments and the launch environment.
+The runner's separate private framed-descriptor interface still accepts requests up to 1 MiB independently of stdin.
+It remains available for larger integrations; Console uses environment transport for its small default policy.
 
 Installation-relative lookup, source provenance, target validation, executable digests, and bundled Linux helper verification remain in Console.
 A missing or mismatched artifact fails before launch.

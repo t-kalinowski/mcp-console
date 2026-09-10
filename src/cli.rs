@@ -60,9 +60,13 @@ pub enum Command {
         command: Vec<OsString>,
     },
 
-    /// Run a command with the MCP Console sandbox policy
+    /// Run a command with the default or an explicit sandbox policy
     #[command(after_help = SANDBOX_EXAMPLES)]
     Sandbox {
+        /// Read the runner configuration as JSON from this launch environment variable
+        #[arg(long, value_name = "NAME", conflicts_with = "exit_with_parent")]
+        config_env: Option<String>,
+
         /// Retire the sandbox when this parent process exits
         #[arg(long, hide = true, value_name = "PID")]
         exit_with_parent: Option<u32>,
@@ -72,7 +76,6 @@ pub enum Command {
             value_name = "COMMAND",
             required = true,
             num_args = 1..,
-            allow_hyphen_values = true,
             trailing_var_arg = true
         )]
         command: Vec<OsString>,
