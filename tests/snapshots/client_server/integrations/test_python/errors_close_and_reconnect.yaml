@@ -5,8 +5,8 @@ recovery: |
   zod: recovered
 ---
 closed: >-
-  MCPConsole is not connected; use `async with MCPConsole() as console` or
-  call `await console.connect()` first
+  AsyncMCPConsole is not connected; use `async with AsyncMCPConsole() as
+  console` or call `await console.connect()` first
 ---
 reconnected: |
   zod: reconnected

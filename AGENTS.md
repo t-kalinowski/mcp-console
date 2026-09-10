@@ -16,7 +16,7 @@ The documents under `design-sketches/` describe intended behavior, not the curre
 - `docs/SANDBOX_CONFIGURATION.md` defines the public configuration interface, environment ownership, caller examples, and transport integrity.
 - `docs/LINUX_COMPATIBILITY.md` records capability requirements, security comparisons, native backend differences, and tested Linux baselines.
 - `docs/SANDBOX_RUNNER_INTEGRATION.md` records the migration baseline, fixture changes, supported-host validation, and changed guarantees.
-- `docs/PYTHON.md` describes the Python client and framework integrations.
+- `docs/PYTHON.md` describes the synchronous and asynchronous Python clients and framework integrations.
 - `docs/BUILTIN_RUNTIME.md` describes user-visible behavior of the built-in mixed-language console.
 - `docs/SEND_OPERATIONS.md` defines validation, preparation, control, input, and timeout ordering for `send`.
 - `docs/REQUIREMENTS.md` describes dependency and environment behavior and its trust boundary.
@@ -119,7 +119,7 @@ Keep these invariants intact:
 - `src/main.rs`, `src/cli.rs` — binary entry point and command definitions.
 - `src/server.rs`, `src/server_transport.rs` — MCP tools, stdio transport, and response-delivery ownership.
 - `src/transcript.rs`, `src/transcript/{event,markdown,output}.rs` — typed recording events, append-only tool journal, Markdown and source-only Quarto projections, cell output files, and image artifacts.
-- `python/mcp_console/` — callable MCP client and framework integrations.
+- `python/mcp_console/` — synchronous and asynchronous MCP clients and composable framework adapters.
 - `r/` — thin ellmer package that resolves and manages `mcp-console serve` as a persistent tool.
 
 ### Protocols, relay, and worker orchestration

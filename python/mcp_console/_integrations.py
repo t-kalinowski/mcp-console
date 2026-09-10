@@ -64,17 +64,12 @@ async def anthropic_tools(
         ]
 
 
-def codex_config(
+def codex_server(
     *,
     command: Command | None = None,
     args: Sequence[Command] | None = None,
-    server_name: str = "mcp-console",
-    config: Mapping[str, Any] | None = None,
     server_parameters: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Return configuration for ``openai_codex.Codex.thread_start(config=...)``."""
+    """Return one stdio server entry for the thread SDK's ``mcp_servers`` config."""
     command, args = stdio_command(command, args)
-    result = dict(config or {})
-    server = dict(server_parameters or {}) | {"command": command, "args": args}
-    result["mcp_servers"] = dict(result.get("mcp_servers", {})) | {server_name: server}
-    return result
+    return dict(server_parameters or {}) | {"command": command, "args": args}

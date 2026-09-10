@@ -19,7 +19,7 @@ class Requirements(TypedDict, total=False, closed=True):
     duckdb: list[str]
 
 
-class MCPConsole:
+class AsyncMCPConsole:
     """A persistent, callable connection to ``mcp-console serve``.
 
     Enter and close the connection in the same async task. The application owns
@@ -80,7 +80,7 @@ class MCPConsole:
     async def _call_send(self, arguments: Mapping[str, Any]) -> "CallToolResult":
         if self._client is None:
             raise RuntimeError(
-                "MCPConsole is not connected; use `async with MCPConsole() as console` "
+                "AsyncMCPConsole is not connected; use `async with AsyncMCPConsole() as console` "
                 "or call `await console.connect()` first"
             )
         return await self._client.call_tool("send", dict(arguments))
@@ -98,6 +98,9 @@ class MCPConsole:
         timeout_ms: int = 60_000,
     ) -> str:
         """Run or control the persistent R, Python, and SQL console.
+
+        If output ends in ``[running; poll with an empty send]``, call again
+        without code or stdin until completion before submitting another cell.
 
         Args:
             r: One complete R cell.
@@ -125,13 +128,13 @@ class MCPConsole:
 
     __call__ = send
 
-    def openai_responses_tool(self) -> "OpenAIResponsesTool":
+    def openai_responses_tool(self) -> "AsyncOpenAIResponsesTool":
         """Return an object for a standard OpenAI Responses tool loop."""
         if self._send_tool is None:
             raise RuntimeError(
-                "MCPConsole must be connected before creating an OpenAI tool"
+                "AsyncMCPConsole must be connected before creating an OpenAI tool"
             )
-        return OpenAIResponsesTool(self, self._send_tool)
+        return AsyncOpenAIResponsesTool(self, self._send_tool)
 
     def openai_agents_tool(self, *, strict_mode: bool = False, **kwargs: Any) -> Any:
         """Return a native OpenAI Agents function tool wrapping ``send``."""
@@ -147,10 +150,10 @@ class MCPConsole:
         return beta_async_tool(self.send, **kwargs)
 
 
-class OpenAIResponsesTool:
+class AsyncOpenAIResponsesTool:
     """MCP Console as one function tool for the OpenAI Responses API."""
 
-    def __init__(self, console: MCPConsole, tool: "Tool") -> None:
+    def __init__(self, console: AsyncMCPConsole, tool: "Tool") -> None:
         self._console = console
         self._tool = tool
 

@@ -68,7 +68,7 @@ It waits for MCP protocol input rather than presenting an interactive terminal p
 
 ## Python integrations
 
-The Python package provides a persistent callable client and adapters for chatlas, OpenAI Responses, OpenAI Agents, Anthropic, and the official thread SDK.
+The Python package provides synchronous and asynchronous callable clients and adapters for chatlas, OpenAI Responses, OpenAI Agents, Anthropic, and the official thread SDK.
 Python 3.10 or newer is required.
 
 ```sh
@@ -76,11 +76,10 @@ pip install "mcp-console[client]"
 ```
 
 ```python
-from mcp_console import MCPConsole
+import mcp_console
 
-async with MCPConsole() as console:
-    print(await console.send(r="answer <- 42; answer"))
-    print(await console.send(python="r.answer + 1"))
+with mcp_console.MCPConsole() as console:
+    print(console.send(r="answer <- 42; answer"))
 ```
 
 See [Python integrations](docs/PYTHON.md) for optional dependencies, framework examples, and connection ownership.
