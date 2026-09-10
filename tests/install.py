@@ -438,6 +438,7 @@ class InstallationTests(unittest.TestCase):
                             [
                                 python,
                                 str(ROOT / "tests/fixtures/python_api_smoke.py"),
+                                sys.executable,
                             ],
                         ):
                             result = subprocess.run(

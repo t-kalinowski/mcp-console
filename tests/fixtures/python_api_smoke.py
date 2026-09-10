@@ -17,11 +17,15 @@ assert Path(mcp_console.__file__).is_relative_to(sys.prefix), mcp_console.__file
 
 
 async def main() -> None:
-    async with MCPConsole() as console:
-        expected = await console.send(r="6 * 7")
-        assert expected == "[1] 42\n", expected
+    async with MCPConsole(
+        args=["serve", "--worker", str(Path(__file__).with_name("zod"))],
+        # Run the fixture with the harness interpreter, independently of the client.
+        server_parameters={"env": {"MCP_CONSOLE_TEST_PYTHON": sys.argv[1]}},
+    ) as console:
+        expected = await console.send(r="echo installed wheel")
+        assert expected == "zod: installed wheel\n", expected
         tool = console.openai_agents_tool(failure_error_function=None)
-        arguments = json.dumps({"r": "6 * 7"})
+        arguments = json.dumps({"r": "echo installed wheel"})
         context = ToolContext(
             context=None,
             tool_name="send",
@@ -29,11 +33,14 @@ async def main() -> None:
             tool_arguments=arguments,
         )
         assert await tool.on_invoke_tool(context, arguments) == expected
-        assert await console.anthropic_tool().call({"r": "6 * 7"}) == expected
+        assert (
+            await console.anthropic_tool().call({"r": "echo installed wheel"})
+            == expected
+        )
         assert await console.openai_responses_tool().call(arguments) == expected
         chat = ChatOpenAI(model="unused", api_key="unused")
         chat.register_tool(console.send)
-        assert await chat.get_tools()[0].func(r="6 * 7") == expected
+        assert await chat.get_tools()[0].func(r="echo installed wheel") == expected
         assert Agent(name="test", tools=[tool]).tools == [tool]
     server = openai_agents_server()
     assert Agent(name="test", mcp_servers=[server]).mcp_servers == [server]
