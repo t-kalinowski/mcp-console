@@ -15,7 +15,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  # Preserve compiler state for debug/test builds across PR revisions.
+  # Preserve compiler state for debug, test, and release builds across revisions.
   CARGO_INCREMENTAL: "1"
   IR_LATEST_RESOLUTION_MAX_AGE_SECONDS: "604800"
   UV_VERSION: 0.12.4
@@ -217,7 +217,6 @@ jobs:
 
       - name: Stage private sandbox runner
         env:
-          CARGO_INCREMENTAL: "0"
           CARGO_LOG: cargo::core::compiler::fingerprint=info
         run: scripts/stage-sandbox-runner .sandbox-runner-source
 
@@ -247,8 +246,8 @@ jobs:
             target/libexec
             target/share/licenses
             dist
-          # Exact matches only: the wheel and complete native bundle must
-          # describe all current compiled and packaging inputs.
+          # Only exact matches skip packaging. On a miss, Maturin invokes Cargo
+          # using the build data restored above, including earlier revisions.
           key: >-
             release-v1-${{ steps.cache-epoch.outputs.image }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.setup-r.outputs.installed-r-version }}-py-${{ steps.python.outputs.python-version }}-${{ hashFiles('src/**', 'Cargo.toml', 'Cargo.lock', '.cargo/**', 'build.rs', 'build_backend.py', 'pyproject.toml', 'sandbox-runner.json', 'target/sandbox-runner-build.json', 'scripts/stage-sandbox-runner', 'README.md', 'LICENSE', '.github/workflows/ci.yaml') }}
 
@@ -262,7 +261,6 @@ jobs:
         if: steps.release-cache.outputs.cache-hit != 'true'
         shell: bash
         env:
-          CARGO_INCREMENTAL: "0"
           GITHUB_PAT: ${{ github.token }}
           UV_TOOL_DIR: ${{ runner.temp }}/mcp-console-tool
           UV_TOOL_BIN_DIR: ${{ runner.temp }}/mcp-console-bin
@@ -344,7 +342,6 @@ jobs:
 
       - name: Check R package
         env:
-          CARGO_INCREMENTAL: "0"
           MCP_CONSOLE_TEST_BINARY: ${{ github.workspace }}/target/release/mcp-console
           R_LIBS_USER: ${{ runner.temp }}/mcp-console-r-package
           _R_CHECK_TESTS_NLINES_: "0"
@@ -382,7 +379,6 @@ jobs:
 
       - name: Run transcripts
         env:
-          CARGO_INCREMENTAL: "0"
           GITHUB_PAT: ${{ github.token }}
         # Use the prepared executable; scripts/test also invokes Cargo.
         run: uv run --script tests/boundaries/_run.py --jobs 6
@@ -390,7 +386,6 @@ jobs:
       - name: Check uv source installations
         env:
           # Run last: these checks replace and hide the shared target directory.
-          CARGO_INCREMENTAL: "0"
           MCP_CONSOLE_SANDBOX_SOURCE: ${{ github.workspace }}/.sandbox-runner-source
           UV_CACHE_DIR: ${{ runner.temp }}/mcp-console-cache
           UV_PYTHON_DOWNLOADS: never
