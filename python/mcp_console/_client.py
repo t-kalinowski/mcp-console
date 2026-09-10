@@ -124,6 +124,7 @@ class AsyncMCPConsole:
     ) -> str:
         """Run or control the persistent R, Python, and SQL console.
 
+        Send at most one of r, python, or sql per call.
         If output ends in ``[running; poll with an empty send]``, call again
         without code or stdin until completion before submitting another cell.
 

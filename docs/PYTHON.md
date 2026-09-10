@@ -44,6 +44,10 @@ Both clients have the same `send()` arguments; calling the console object is equ
 It returns text, represents images with a MIME-type placeholder, and raises `RuntimeError` for MCP tool errors.
 The native MCP integrations and Responses adapters preserve image content.
 
+Supply at most one of `r`, `python`, or `sql` per call.
+The server returns a tool error if multiple code fields are supplied.
+SDK-generated callable schemas leave this cross-field validation to the server, as the native MCP schema does.
+
 `timeout_ms` limits the wait, not the evaluation.
 If the response ends in `[running; poll with an empty send]`, call `send()` again without code or stdin until the evaluation finishes before submitting another cell.
 Each poll returns new output.

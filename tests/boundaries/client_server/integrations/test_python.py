@@ -29,9 +29,10 @@ def options(binary: Path, execution: Execution) -> dict:
     }
 
 
-def assert_callable_schema(schema: dict) -> None:
+def assert_callable_schema(schema: dict, description: str) -> None:
     from jsonschema import Draft202012Validator
 
+    assert "Send at most one of r, python, or sql per call." in description, description
     validator = Draft202012Validator(schema)
     # Supply all fields for SDKs that generate strict schemas.
     arguments = dict.fromkeys(schema["properties"])
@@ -223,7 +224,7 @@ def test_openai_agents_callable_preserves_optional_arguments(
             strict_mode=False, failure_error_function=None
         )
         assert isinstance(tool, FunctionTool)
-        assert_callable_schema(tool.params_json_schema)
+        assert_callable_schema(tool.params_json_schema, tool.description)
         validate({"requirements": {"python": ["numpy"]}}, tool.params_json_schema)
         agent = Agent(name="test", tools=[tool])
         assert agent.tools == [tool]
@@ -273,7 +274,9 @@ def test_anthropic_callable_and_native_tools(
         async with AsyncMCPConsole(**options(binary, execution)) as console:
             tool = console.anthropic_tool()
             assert tool.to_dict()["name"] == "send"
-            assert_callable_schema(tool.to_dict()["input_schema"])
+            assert_callable_schema(
+                tool.to_dict()["input_schema"], tool.to_dict()["description"]
+            )
             text = await tool.call({"r": "echo anthropic"})
         async with mcp_console.anthropic.tools(
             **options(binary, execution), tool_kwargs={"defer_loading": True}
@@ -339,7 +342,10 @@ def test_chatlas_callable_registers_concrete_schema(
         chat.register_tool(console.send)
         tools = chat.get_tools()
         assert [tool.name for tool in tools] == ["send"]
-        assert_callable_schema(tools[0].schema["function"]["parameters"])
+        assert_callable_schema(
+            tools[0].schema["function"]["parameters"],
+            tools[0].schema["function"]["description"],
+        )
         async with console:
             return [{"output": await tools[0].func(r="echo callable chatlas")}]
 
@@ -371,15 +377,21 @@ def test_sync_callable_and_framework_tools(
         chat.register_tool(console.send)
         chat_tool = chat.get_tools()[0]
         assert not inspect.iscoroutinefunction(chat_tool.func)
-        assert_callable_schema(chat_tool.schema["function"]["parameters"])
+        assert_callable_schema(
+            chat_tool.schema["function"]["parameters"],
+            chat_tool.schema["function"]["description"],
+        )
         transcript.append({"chatlas": chat_tool.func(r="echo chatlas")})
 
         anthropic_tool = console.anthropic_tool()
-        assert_callable_schema(anthropic_tool.to_dict()["input_schema"])
+        assert_callable_schema(
+            anthropic_tool.to_dict()["input_schema"],
+            anthropic_tool.to_dict()["description"],
+        )
         transcript.append({"anthropic": anthropic_tool.call({"r": "echo anthropic"})})
 
         agent_tool = console.openai_agents_tool(failure_error_function=None)
-        assert_callable_schema(agent_tool.params_json_schema)
+        assert_callable_schema(agent_tool.params_json_schema, agent_tool.description)
         validate({"requirements": {"python": ["numpy"]}}, agent_tool.params_json_schema)
         arguments = json.dumps({"r": "echo agent"})
         context = ToolContext(
