@@ -339,9 +339,10 @@ class ReleaseScriptTests(unittest.TestCase):
             "public wheel",
             "public uv",
         ):
-            with self.subTest(
-                defect=defect
-            ), tempfile.TemporaryDirectory() as temporary:
+            with (
+                self.subTest(defect=defect),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
                 directory = Path(temporary)
                 environment, wheel, cargo_bin = self.smoke_environment(directory)
                 if defect in {"missing runner", "missing notice", "not executable"}:
@@ -642,15 +643,9 @@ class ReleaseScriptTests(unittest.TestCase):
                 #!/usr/bin/env python3
                 import os
                 import sys
-                import tomllib
-                from pathlib import Path
 
-                toolchain = tomllib.loads(Path("rust-toolchain.toml").read_text())["toolchain"]["channel"]
-                if sys.argv[1:] == ["show", "active-toolchain"]:
-                    print(os.environ.get("RUSTUP_TOOLCHAIN", toolchain), "(fixture)")
-                else:
-                    assert sys.argv[1:4] == ["run", "--install", toolchain]
-                    os.execvp(sys.argv[4], [sys.argv[4], "+" + toolchain, *sys.argv[5:]])
+                assert sys.argv[1:4] == ["run", "--install", "fixture-sandbox"]
+                os.execvp(sys.argv[4], [sys.argv[4], "+fixture-sandbox", *sys.argv[5:]])
                 """,
             )
             for name in ("xcrun", "strip"):
@@ -789,7 +784,8 @@ class ReleaseScriptTests(unittest.TestCase):
                 command, env=environment, capture_output=True, text=True
             )
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("missing sandbox toolchain configuration", result.stderr)
+            self.assertIn("FileNotFoundError", result.stderr)
+            self.assertIn("rust-toolchain.toml", result.stderr)
             self.assertFalse((directory / "cargo.json").exists())
 
     def test_cargo_rejects_changed_staged_artifacts(self) -> None:

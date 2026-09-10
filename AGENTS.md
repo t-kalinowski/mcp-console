@@ -39,6 +39,7 @@ Windows is not supported.
 Other Unix operating systems are not supported build or runtime targets; shared `cfg(unix)` modules do not imply support for them.
 Retain platform conditionals for modules that use OS-specific APIs and for selecting different implementations or unsupported-platform stubs; avoid redundant gates on shared code.
 CI runs core checks and all capability-applicable transcript modes on macOS and Linux.
+Python package builds and installations require Python 3.11 or later.
 
 macOS and Linux uv source installations prepare the pinned sandbox companion before invoking the application's Cargo build, using a dedicated checkout under `target`.
 The pinned checkout's `codex-rs/rust-toolchain.toml` owns the runner's compiler configuration; Console's toolchain selection is independent.

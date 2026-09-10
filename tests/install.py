@@ -12,6 +12,7 @@ import tempfile
 import textwrap
 import unittest
 import zipfile
+from email.parser import BytesParser
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -67,17 +68,17 @@ class InstallationTests(unittest.TestCase):
             runner_source = directory / "runner"
             workspace = runner_source / "codex-rs"
             workspace.mkdir(parents=True)
-            console_toolchain = subprocess.check_output(
+            runner_toolchain = subprocess.check_output(
                 ["rustup", "show", "active-toolchain"], text=True
             ).split()[0]
-            # Select the available compiler by path in the runner checkout,
-            # independently of the caller's named toolchain. This avoids
+            # The caller selects the available compiler by path while the
+            # runner checkout selects its named toolchain. This avoids
             # downloading a second compiler just for this fixture.
-            runner_toolchain = subprocess.check_output(
+            console_toolchain = subprocess.check_output(
                 ["rustc", "--print", "sysroot"], text=True
             ).strip()
             (workspace / "rust-toolchain.toml").write_text(
-                f"[toolchain]\npath = {json.dumps(runner_toolchain)}\n"
+                f"[toolchain]\nchannel = {json.dumps(runner_toolchain)}\n"
             )
             (runner_source / ".gitignore").write_text("/codex-rs/target\n")
             (workspace / "Cargo.toml").write_text(
@@ -371,6 +372,13 @@ class InstallationTests(unittest.TestCase):
                 wheels = list((directory / "dist").glob("*.whl"))
                 self.assertEqual(len(wheels), 1)
                 with zipfile.ZipFile(wheels[0]) as archive:
+                    metadata_path = next(
+                        name
+                        for name in archive.namelist()
+                        if name.endswith(".dist-info/METADATA")
+                    )
+                    metadata = BytesParser().parsebytes(archive.read(metadata_path))
+                    self.assertEqual(metadata["Requires-Python"], ">=3.11")
                     actual = sorted(
                         name.split(".data/data/", 1)[1]
                         for name in archive.namelist()

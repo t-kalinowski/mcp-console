@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-from __future__ import annotations
-
 import argparse
 import hashlib
 import json
@@ -9,6 +7,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -83,25 +82,14 @@ def main() -> None:
     if git_output(checkout, "status", "--porcelain", "--untracked-files=all"):
         fail("source checkout is not clean")
 
-    if not (workspace / "rust-toolchain.toml").is_file():
-        fail(f"missing sandbox toolchain configuration: {workspace / 'rust-toolchain.toml'}")
-    # Let rustup read the pinned workspace's complete toolchain configuration,
-    # independently of the caller's toolchain selection for Console.
-    environment = os.environ.copy()
-    environment.pop("RUSTUP_TOOLCHAIN", None)
-    selected_toolchain = subprocess.check_output(
-        ["rustup", "show", "active-toolchain"],
-        cwd=workspace,
-        env=environment,
-        text=True,
-    ).split()[0]
-    toolchain = ["rustup", "run", "--install", selected_toolchain]
+    with (workspace / "rust-toolchain.toml").open("rb") as stream:
+        channel = tomllib.load(stream)["toolchain"]["channel"]
+    toolchain = ["rustup", "run", "--install", channel]
     target = args.target
     if target is None:
         target = subprocess.check_output(
             [*toolchain, "rustc", "--print", "host-tuple"],
             cwd=workspace,
-            env=environment,
             text=True,
         ).strip()
         if target not in TARGETS:
@@ -111,6 +99,7 @@ def main() -> None:
     # Changes to external tools selected through PATH can require cleaning the
     # runner's target directory; see RELEASE.md. No local completed-runner cache
     # bypasses Cargo.
+    environment = os.environ.copy()
     environment["CARGO_TARGET_DIR"] = str(workspace / "target")
     binaries = workspace / "target" / target / "release"
     staged_helper = ROOT / "target/sandbox-runner-bwrap" / target / "bwrap"

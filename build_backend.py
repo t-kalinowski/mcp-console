@@ -1,7 +1,5 @@
 """Prepare the private companion before Maturin builds a wheel."""
 
-from __future__ import annotations
-
 import fcntl
 import subprocess
 import sys
