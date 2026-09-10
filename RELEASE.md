@@ -96,7 +96,7 @@ All CI builds enable incremental compilation, including release builds and sourc
 An exact match of source, packaging inputs, toolchain, R and Python versions, and runner image additionally permits skipping the release build and using the finished wheel and native bundle directly.
 Otherwise, Maturin invokes Cargo with the restored build data and packages the updated output.
 Unrelated workflow edits do not change cache keys.
-Bump `CI_BUILD_RECIPE` in `.github/workflows/ci.yaml` when changing native dependency setup or build commands or flags; the version invalidates build data and finished outputs together.
+Bump `CI_BUILD_CACHE_VERSION` in `.github/workflows/ci.yaml` when changing build inputs outside the hashed files, such as workflow build flags or native dependency setup; the version invalidates build data and finished outputs together.
 Runner source archives preserve the timestamps used by Cargo while excluding Git metadata and the separately cached build directory.
 PR and main runs save completed builds, including Clippy preparation, before tests.
 R package checks use a separate cached library, and packaging and runtime preparation share a uv cache that retains downloaded wheels.

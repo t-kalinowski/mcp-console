@@ -46,7 +46,7 @@ Ordinary source edits reuse one cached baseline per dependency set rather than s
 Keep `main` caches reusable by PRs and remove caches for closed PRs.
 Cargo determines which crates need rebuilding.
 An exact match of compiled and packaging inputs additionally lets CI skip the release build and reuse a finished wheel and native bundle; it still runs the current tests.
-Bump `CI_BUILD_RECIPE` in `.github/workflows/ci.yaml` when native dependency setup or build commands or flags change; unrelated workflow edits must not invalidate build caches.
+Bump `CI_BUILD_CACHE_VERSION` in `.github/workflows/ci.yaml` when build inputs outside the hashed files change, such as workflow build flags or native dependency setup; unrelated workflow edits must not invalidate build caches.
 Source installation checks run after the other checks because they replace and hide the shared Cargo target directory.
 Python package builds and installations require Python 3.11 or later.
 
