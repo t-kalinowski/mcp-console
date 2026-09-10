@@ -106,11 +106,11 @@ base::local(
       }
       pillar_shaft <- function(x, ...) {
         type <- attr(x, "arrow_type", exact = TRUE)
-        quote <- if (grepl("^(large_)?string|^string_view", type)) "\"" else ""
-        formatted <- encodeString(
+        # MCP displays UTF-8 independently of the R process locale.
+        formatted <- utf8::utf8_encode(
           unclass(x),
-          quote = quote,
-          na.encode = FALSE
+          quote = grepl("^(large_)?string|^string_view", type),
+          utf8 = TRUE
         )
         align <- if (grepl("^(u?int|float|double|decimal)", type)) {
           "right"
@@ -410,7 +410,8 @@ base::local(
           more_rows
         )
         if (nchar(output, type = "bytes") + 1L <= response_bytes) {
-          cat(output, "\n", sep = "")
+          # MCP carries UTF-8 even when R runs in the C locale.
+          writeLines(enc2utf8(output), useBytes = TRUE)
           return(invisible(NULL))
         }
         if (visible_rows > 0L) {

@@ -212,7 +212,7 @@ def test_first_cell_prepares_defaults_after_running_response(
             if argument == "--with"
         } == {
             "tidyverse",
-            "github::rstudio/reticulate",
+            "reticulate",
             "DBI",
             "duckdb",
             "arrow",

@@ -1,6 +1,5 @@
 #!/usr/bin/env -S uv run --script
 
-import json
 import os
 import select
 import shutil
@@ -15,59 +14,20 @@ from support.assertions import entry_result_text, last_result_text
 from support.checkpoints import FifoCheckpoint, wait_for_worker_file
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.normalization import code
 from support.processes import (
     capture_process_identity,
     child_process_identities,
     live_processes,
 )
-from support.normalization import code
-from support.r import r_test_environment
 from support.records import Transcript
 from support.requirements import PROCESS_EVENTS, command, requires
+from support.resolvers import (
+    ir_requirements,
+    ir_run_records,
+    recording_ir_environment,
+)
 from support.suites import run_this_suite
-
-
-def recording_ir_environment(
-    directory: Path,
-    *,
-    fail_requirement: str | None = None,
-) -> tuple[dict[str, str], Path]:
-    environment, _ = r_test_environment()
-    environment["RETICULATE_PYTHON"] = ""
-    real_ir = shutil.which("ir")
-    assert real_ir is not None, "real `ir` is required"
-    fake_bin = directory / "bin"
-    fake_bin.mkdir()
-    fixture = Path(__file__).resolve().parents[3] / "fixtures" / "record_ir"
-    (fake_bin / "ir").symlink_to(fixture)
-    path = environment.get("PATH")
-    assert path is not None, "PATH is required"
-    environment["PATH"] = os.pathsep.join((str(fake_bin), path))
-    record = directory / "ir.jsonl"
-    environment["MCP_CONSOLE_TEST_REAL_IR"] = real_ir
-    environment["MCP_CONSOLE_TEST_IR_RECORD"] = str(record)
-    if fail_requirement is not None:
-        environment["MCP_CONSOLE_TEST_IR_FAIL_REQUIREMENT"] = fail_requirement
-    return environment, record
-
-
-def ir_run_records(record: Path) -> list[dict[str, object]]:
-    if not record.exists():
-        return []
-    records = [
-        json.loads(line) for line in record.read_text(encoding="utf-8").splitlines()
-    ]
-    return [entry for entry in records if entry["arguments"][0] == "run"]
-
-
-def ir_requirements(record: dict[str, object]) -> list[str]:
-    arguments = record["arguments"]
-    assert isinstance(arguments, list), arguments
-    return [
-        arguments[index + 1]
-        for index, argument in enumerate(arguments[:-1])
-        if argument == "--with"
-    ]
 
 
 def fixture_r_libraries(

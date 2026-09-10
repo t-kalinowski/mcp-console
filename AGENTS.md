@@ -16,6 +16,7 @@ The documents under `design-sketches/` describe intended behavior, not the curre
 - `docs/SANDBOX_CONFIGURATION.md` defines the public configuration interface, environment ownership, caller examples, and transport integrity.
 - `docs/LINUX_COMPATIBILITY.md` records capability requirements, security comparisons, native backend differences, and tested Linux baselines.
 - `docs/SANDBOX_RUNNER_INTEGRATION.md` records the migration baseline, fixture changes, supported-host validation, and changed guarantees.
+- `docs/PYTHON.md` describes the synchronous and asynchronous Python clients and framework integrations.
 - `docs/BUILTIN_RUNTIME.md` describes user-visible behavior of the built-in mixed-language console.
 - `docs/SEND_OPERATIONS.md` defines validation, preparation, control, input, and timeout ordering for `send`.
 - `docs/REQUIREMENTS.md` describes dependency and environment behavior and its trust boundary.
@@ -124,6 +125,9 @@ Keep these invariants intact:
 - `src/main.rs`, `src/cli.rs` — binary entry point and command definitions.
 - `src/server.rs`, `src/server_transport.rs` — MCP tools, stdio transport, and response-delivery ownership.
 - `src/transcript.rs`, `src/transcript/{event,markdown,output}.rs` — typed recording events, append-only tool journal, Markdown and source-only Quarto projections, cell output files, and image artifacts.
+- `python/mcp_console/` — synchronous and asynchronous MCP clients and composable framework adapters.
+  The public `openai.py`, `anthropic.py`, `chatlas.py`, and `codex.py` modules group adapters by product or SDK.
+  SDK registration uses these adapters with the live MCP schema; `send()` and the callable console object are ordinary Python interfaces, not SDK schema providers.
 - `r/` — thin ellmer package that resolves and manages `mcp-console serve` as a persistent tool.
 
 ### Protocols, relay, and worker orchestration
@@ -156,7 +160,7 @@ Keep these invariants intact:
 
 - `tests/support/` — shared capability requirements, explicit execution fixtures, transcript records, snapshots, normalization, checkpoints, capture, process, platform event, native fixture, macOS, assertion, R, resolver, client, and direct-suite helpers.
 - `tests/fixtures/` — deterministic workers, resolvers, package fixtures, searchable native interposers, and boundary-specific relay and worker programs.
-- `tests/boundaries/client_server/` — public MCP client-server behavior.
+- `tests/boundaries/client_server/` — public MCP client-server behavior, including real Python SDK integrations under `integrations/`.
 - `tests/boundaries/server_relay/` — private server-relay wire behavior.
 - `tests/boundaries/relay_worker/` — worker sideband and standard-stream behavior through the relay.
 - `tests/boundaries/cli/` — direct CLI behavior.

@@ -17,9 +17,19 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: MacOS",
     "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
     "Programming Language :: Rust",
     "Topic :: Scientific/Engineering",
 ]
+
+[project.optional-dependencies]
+anthropic = ["anthropic[mcp]>=1.4.0", "anyio>=4.9", "mcp>=2.2.0,<3"]
+chatlas = ["chatlas[mcp]>=0.23.0", "anyio>=4.9", "mcp>=2.2.0,<3"]
+client = ["anyio>=4.9", "mcp>=2.2.0,<3"]
+codex = ["openai-codex>=0.147.0"]
+openai = ["openai>=3.11.0", "anyio>=4.9", "mcp>=2.2.0,<3"]
+openai-agents = ["openai-agents>=0.22.2", "anyio>=4.9", "mcp>=2.2.0,<3"]
 
 [project.urls]
 Homepage = "https://github.com/t-kalinowski/mcp-console"
@@ -30,6 +40,8 @@ Issues = "https://github.com/t-kalinowski/mcp-console/issues"
 bindings = "bin"
 compatibility = "pypi"
 locked = true
+module-name = "mcp_console"
+python-source = "python"
 data = "wheel-data"
 include = [
     { path = "wheel-data/data/.gitignore", format = "sdist" },

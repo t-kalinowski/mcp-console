@@ -1,6 +1,14 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["py-yaml12>=0.2.0"]
+# dependencies = [
+#     "py-yaml12>=0.2.0",
+#     "mcp==2.2.0",
+#     "anthropic[mcp]==1.4.0",
+#     "chatlas[mcp]==0.23.0",
+#     "openai==3.11.0",
+#     "openai-agents==0.22.2",
+#     "openai-codex==0.147.0",
+# ]
 # ///
 
 import argparse

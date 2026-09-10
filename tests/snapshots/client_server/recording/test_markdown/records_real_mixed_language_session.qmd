@@ -8,7 +8,7 @@ ir:
   isolated: true
   packages:
     - tidyverse
-    - github::rstudio/reticulate
+    - reticulate
     - DBI
     - duckdb
     - arrow

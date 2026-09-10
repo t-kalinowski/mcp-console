@@ -67,6 +67,24 @@ See [release preparation](RELEASE.md#private-sandbox-executable) for build depen
 `mcp-console serve` communicates with its MCP client over standard input and output.
 It waits for MCP protocol input rather than presenting an interactive terminal prompt.
 
+## Python integrations
+
+The Python package provides synchronous and asynchronous clients and adapters for chatlas, OpenAI Responses, OpenAI Agents, Anthropic, and the official thread SDK.
+Python 3.11 or newer is required.
+
+```sh
+pip install "mcp-console[client]"
+```
+
+```python
+from mcp_console import MCPConsole
+
+with MCPConsole() as console:
+    print(console.send(r="answer <- 42; answer"))
+```
+
+See [Python integrations](docs/PYTHON.md) for optional dependencies, framework examples, and connection ownership.
+
 ## Working with the console
 
 The MCP interface exposes one tool: `send`.

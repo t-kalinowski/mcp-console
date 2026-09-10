@@ -363,6 +363,7 @@ The preview:
 
 The renderer reports omitted rows, columns, and truncated cells.
 It does not count the complete query result.
+Preview text is emitted as UTF-8, including when the R process uses the C locale.
 Queries with result columns but zero rows still return column names and `[0 rows]`; the R provider also reports Arrow types.
 Results with no columns return no preview and do not report affected-row counts.
 

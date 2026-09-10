@@ -5,17 +5,58 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from support.native import LOADER_VARIABLE, build_interposer
 from support.assertions import last_result_text
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
 from support.execution import Execution
+from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
 from support.r import r_test_environment
 
-
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 PYTHON_DOWNLOAD_URL = "https://example.invalid/python.tar.zst"
+
+
+def recording_ir_environment(
+    directory: Path,
+    *,
+    fail_requirement: str | None = None,
+) -> tuple[dict[str, str], Path]:
+    environment, _ = r_test_environment()
+    environment["RETICULATE_PYTHON"] = ""
+    real_ir = shutil.which("ir")
+    assert real_ir is not None, "real `ir` is required"
+    fake_bin = directory / "bin"
+    fake_bin.mkdir()
+    (fake_bin / "ir").symlink_to(FIXTURES / "record_ir")
+    path = environment.get("PATH")
+    assert path is not None, "PATH is required"
+    environment["PATH"] = os.pathsep.join((str(fake_bin), path))
+    record = directory / "ir.jsonl"
+    environment["MCP_CONSOLE_TEST_REAL_IR"] = real_ir
+    environment["MCP_CONSOLE_TEST_IR_RECORD"] = str(record)
+    if fail_requirement is not None:
+        environment["MCP_CONSOLE_TEST_IR_FAIL_REQUIREMENT"] = fail_requirement
+    return environment, record
+
+
+def ir_run_records(record: Path) -> list[dict[str, object]]:
+    if not record.exists():
+        return []
+    records = [
+        json.loads(line) for line in record.read_text(encoding="utf-8").splitlines()
+    ]
+    return [entry for entry in records if entry["arguments"][0] == "run"]
+
+
+def ir_requirements(record: dict[str, object]) -> list[str]:
+    arguments = record["arguments"]
+    assert isinstance(arguments, list), arguments
+    return [
+        arguments[index + 1]
+        for index, argument in enumerate(arguments[:-1])
+        if argument == "--with"
+    ]
 
 
 def checkpoint_uv_environment(
