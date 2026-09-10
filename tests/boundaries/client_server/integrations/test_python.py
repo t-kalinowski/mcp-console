@@ -33,6 +33,21 @@ def options(binary: Path, execution: Execution) -> dict:
     }
 
 
+def assert_requirement_keys(schema: dict) -> None:
+    from jsonschema import Draft202012Validator
+
+    validator = Draft202012Validator(schema)
+    # Supply all fields for SDKs that generate strict schemas.
+    arguments = dict.fromkeys(schema["properties"])
+    arguments.update(
+        timeout_ms=60_000,
+        requirements={"r": [], "python": ["numpy"], "duckdb": ["spatial"]},
+    )
+    validator.validate(arguments)
+    arguments["requirements"]["pip"] = ["numpy"]
+    assert not validator.is_valid(arguments), schema
+
+
 @requires(WORKER)
 @executions(DIRECT, SANDBOXED)
 def test_callable_preserves_mixed_language_state(
@@ -132,10 +147,8 @@ def test_openai_agents_callable_preserves_optional_arguments(
             strict_mode=False, failure_error_function=None
         )
         assert isinstance(tool, FunctionTool)
-        validate(
-            {"r": "echo agent", "requirements": {"python": ["numpy"]}},
-            tool.params_json_schema,
-        )
+        assert_requirement_keys(tool.params_json_schema)
+        validate({"requirements": {"python": ["numpy"]}}, tool.params_json_schema)
         agent = Agent(name="test", tools=[tool])
         assert agent.tools == [tool]
         async with console:
@@ -182,6 +195,7 @@ def test_anthropic_callable_and_native_tools(
         async with MCPConsole(**options(binary, execution)) as console:
             tool = console.anthropic_tool()
             assert tool.to_dict()["name"] == "send"
+            assert_requirement_keys(tool.to_dict()["input_schema"])
             text = await tool.call({"r": "echo anthropic"})
         async with anthropic_tools(
             **options(binary, execution), tool_kwargs={"defer_loading": True}
@@ -243,6 +257,7 @@ def test_chatlas_callable_registers_concrete_schema(
         chat.register_tool(console.send)
         tools = chat.get_tools()
         assert [tool.name for tool in tools] == ["send"]
+        assert_requirement_keys(tools[0].schema["function"]["parameters"])
         async with console:
             return [{"output": await tools[0].func(r="echo callable chatlas")}]
 

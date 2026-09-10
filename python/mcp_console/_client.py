@@ -3,6 +3,8 @@ from collections.abc import Mapping, Sequence
 from contextlib import AsyncExitStack
 from typing import TYPE_CHECKING, Any, Literal
 
+from typing_extensions import TypedDict
+
 from ._common import Command, openai_result_output, result_text, stdio_command
 
 if TYPE_CHECKING:
@@ -10,7 +12,11 @@ if TYPE_CHECKING:
     from mcp.types import CallToolResult, Tool
     from typing_extensions import Self
 
-Requirements = dict[str, list[str]]
+
+class Requirements(TypedDict, total=False, closed=True):
+    r: list[str]
+    python: list[str]
+    duckdb: list[str]
 
 
 class MCPConsole:
