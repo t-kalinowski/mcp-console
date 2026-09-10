@@ -97,7 +97,7 @@ Neither may also be a private-directory export.
 
 ## Configuration fields and defaults
 
-The pinned [runner protocol](https://github.com/t-kalinowski/codex/blob/7aacbcf1bca0f173f036617a5ee8ae71e18fb8cc/codex-rs/mcp-console-sandbox/PROTOCOL.md) defines the canonical schema.
+The pinned [runner protocol](https://github.com/t-kalinowski/codex/blob/689f48c30deeb6aaa95a193e31e5971dd6820465/codex-rs/mcp-console-sandbox/PROTOCOL.md) defines the canonical schema.
 Its filesystem and proxy fields use the upstream types and validators directly.
 
 | Field                              | Environment-mode contract                                                                                                                                                            |
