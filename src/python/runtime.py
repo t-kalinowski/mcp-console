@@ -614,3 +614,21 @@ _mcp_console.dispatch = _mcp_console_dispatch
 _sys.modules[_mcp_console.__name__] = _mcp_console
 _builtins.__dict__["_mcp_console_dispatch"] = _mcp_console_dispatch
 _mcp_console_configure_psutil()
+
+
+def _mcp_console_detach_output_streams(
+    _streams=(_sys.stdout, _sys.stderr),
+    _OutputRemap=_sys.modules["rpytools.output"].OutputRemap,
+):
+    # Reticulate restores sys.stdout/stderr after fork. Detach the original
+    # console objects too: user code and logging handlers may still hold them.
+    # Only the child's copies change; writes must not call back into R.
+    for stream in _streams:
+        if isinstance(stream, _OutputRemap):
+            stream.handler = stream.target.write
+            stream.flush = stream.target.flush
+            # Do not probe a possibly closed target during detachment.
+            stream.isatty = stream.target.isatty
+
+
+_os.register_at_fork(after_in_child=_mcp_console_detach_output_streams)

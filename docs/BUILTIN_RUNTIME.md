@@ -231,6 +231,10 @@ Reticulate maps ordinary Python standard output and diagnostics into the R conso
 Writes to binary stream buffers, native fd 1 or 2, and descendant process streams use the captured standard streams instead.
 There is no guaranteed chronology between independent sideband, stdout, and stderr sources, although each source's order is preserved.
 
+After Python's `os.fork()`, cached console stream objects and logging handlers write to the child's standard streams without calling R or using the worker sideband.
+Explicit stdout and stderr redirection remains effective, and the parent's streams and logging retain their behavior.
+This output support does not make arbitrary R execution or native-extension code safe in a fork child.
+
 Asynchronous Python work runs only when user code starts and manages it explicitly.
 MCP Console does not add notebook event-loop behavior.
 

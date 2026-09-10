@@ -93,18 +93,26 @@ relay:
   kind: evaluate
   language: python
   source: |
+    saved_stdout.buffer.close()
+
+
     def child_output():
-        print("fork child stdout", flush=True)
-        sys.stderr.write("fork child stderr\n")
-        sys.stderr.flush()
+        try:
+            saved_stdout.write("closed child stdout\n")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("closed stdout accepted a write")
+        saved_stderr.write("child stderr after stdout closed\n")
+        saved_stderr.flush()
+        logger.warning("child log after stdout closed")
 
 
     run_child(child_output)
 ---
-stdout: |
-  fork child stdout
 stderr: |
-  fork child stderr
+  child stderr after stdout closed
+  child log after stdout closed
 ---
 worker:
   kind: completed
