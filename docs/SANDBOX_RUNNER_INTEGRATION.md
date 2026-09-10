@@ -1,5 +1,8 @@
 # Standalone runner integration record
 
+This document records the supervision migration and its earlier pins.
+The subsequent [Linux compatibility review](LINUX_COMPATIBILITY.md) supersedes its host-subreaper, mandatory-pidfd, and fresh-procfs requirements; current contracts are in [sandbox integration](SANDBOX.md).
+
 This migration leaves Console responsible for application policy, verified installation, and ordinary child-process integration.
 The private runner owns native enforcement, lifetime supervision, and storage.
 This record distinguishes preserved behavior, changed fixture observation, and intentionally removed supervisor-death recovery.

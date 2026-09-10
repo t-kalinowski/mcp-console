@@ -47,8 +47,10 @@ share/licenses/mcp-console/LICENSE
 share/licenses/mcp-console/NOTICE
 ```
 
-The main executable resolves the runner relative to its own canonical path and verifies all companion files using streaming SHA-256 with a bounded buffer on every sandbox launch.
-Missing or modified files produce an installation error.
+The main executable resolves the runner relative to its own canonical path and verifies it and license files using streaming SHA-256 with a bounded buffer on every sandbox launch.
+Linux helper verification belongs to native selection: a suitable trusted host helper takes precedence, while a selected bundled helper is hashed and executed through the same open descriptor.
+Missing or modified selected files fail before target execution.
+An unused bundled helper does not block a suitable host helper.
 Move the complete bundle when relocating it; a symlink to `bin/mcp-console` also works.
 There is no embedded payload, extraction step, or runtime runner cache.
 Sandbox launches do not download anything or search PATH for the runner.
@@ -79,7 +81,8 @@ CI separately caches completed staged runners and Cargo dependencies for both wo
 PR and main runs save a newly built runner before tests, and Cargo dependencies can be saved when later checks fail.
 Source installation checks still invoke Cargo and can reuse the prepared runner workspace.
 Installation checks cover unstaged sources, compiler-flag changes between reinstalls, relocated bundles, bounded verification allocations, and rejection of missing or modified companions.
-Linux staging also builds the private bubblewrap helper, installs `libexec/bwrap`, and includes its license at `share/licenses/mcp-console/bubblewrap-COPYING`.
+Linux staging first builds and strips the private bubblewrap helper, embeds that exact SHA-256 in the runner build, installs `libexec/bwrap`, and includes its license at `share/licenses/mcp-console/bubblewrap-COPYING`.
+Rebuilding the helper therefore invalidates the runner's tracked digest input.
 Builds require a C compiler, `pkg-config`, and libcap development files (`build-essential pkg-config libcap-dev` on Ubuntu); installations require `libcap.so.2`.
 Linux smoke tests exercise the bundled helper with an empty `PATH` and evaluate R through default sandboxed `serve`.
 CI permits unprivileged namespace setup on its disposable Ubuntu runners by disabling their AppArmor user-namespace restriction.

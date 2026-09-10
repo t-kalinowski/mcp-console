@@ -14,6 +14,7 @@ The documents under `design-sketches/` describe intended behavior, not the curre
 - `docs/ARCHITECTURE.md` describes the implemented process structure, ownership, and lifecycle.
 - `docs/SANDBOX.md` describes application policy, runner integration, supported hosts, and lifetime guarantees.
 - `docs/SANDBOX_CONFIGURATION.md` defines the public configuration interface, environment ownership, caller examples, and transport integrity.
+- `docs/LINUX_COMPATIBILITY.md` records capability requirements, security comparisons, native backend differences, and tested Linux baselines.
 - `docs/SANDBOX_RUNNER_INTEGRATION.md` records the migration baseline, fixture changes, supported-host validation, and changed guarantees.
 - `docs/BUILTIN_RUNTIME.md` describes user-visible behavior of the built-in mixed-language console.
 - `docs/SEND_OPERATIONS.md` defines validation, preparation, control, input, and timeout ordering for `send`.
@@ -32,7 +33,8 @@ Do not treat `design-sketches/` as evidence of implemented behavior.
 
 The worker relay, built-in worker, and managed resolvers support macOS and Linux.
 The default sandbox and standalone sandbox command support both platforms.
-Linux requires kernel 5.11 or later, procfs, and host permission for user, mount, PID, and network namespaces.
+Linux requires procfs, permitted native namespace operations, and the selected policy enforcement capabilities; see `docs/LINUX_COMPATIBILITY.md` for tested baselines and constrained-host behavior.
+Do not infer support from a kernel version alone.
 Windows is not supported.
 Other Unix operating systems are not supported build or runtime targets; shared `cfg(unix)` modules do not imply support for them.
 Retain platform conditionals for modules that use OS-specific APIs and for selecting different implementations or unsupported-platform stubs; avoid redundant gates on shared code.
