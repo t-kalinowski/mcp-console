@@ -104,3 +104,35 @@ def landlock_available() -> bool:
     # ABI 3 adds truncate enforcement required by the runner's write policy.
     library = ctypes.CDLL(None, use_errno=True)
     return library.syscall(444, 0, 0, 1) >= 3
+
+
+def without_landlock(directory: Path) -> Path:
+    source = Path(__file__).resolve().parents[1] / "fixtures/native/without_landlock.c"
+    wrapper = directory / "without-landlock"
+    subprocess.run(
+        [
+            "cc",
+            "-std=c11",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-o",
+            str(wrapper),
+            str(source),
+        ],
+        check=True,
+    )
+    return wrapper
+
+
+def root_metadata_prefix(directory: Path) -> list[str]:
+    # Native root-write policies protect these names even when absent. Supply
+    # read-only mount targets in an outer namespace, without creating host /.*
+    # directories or changing the policy under test.
+    metadata = directory / "metadata"
+    metadata.mkdir()
+    command = inherited_procfs_command([])
+    mounts = []
+    for name in (".git", ".agents", ".codex"):
+        mounts.extend(["--ro-bind", str(metadata), f"/{name}"])
+    return [*command[:-1], *mounts, "--"]

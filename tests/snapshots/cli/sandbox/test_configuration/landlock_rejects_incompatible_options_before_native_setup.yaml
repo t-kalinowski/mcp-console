@@ -1,0 +1,33 @@
+---
+scenario: direct full-write positive control
+stdout: |
+  target started
+---
+scenario: private storage without exports
+stderr: >
+  mcp-console-sandbox: landlock does not provide supervised lifetime; omit
+  lifecycle options
+exit_code: 1
+---
+scenario: caller-death observation
+stderr: >
+  mcp-console-sandbox: landlock does not provide supervised lifetime; omit
+  lifecycle options
+exit_code: 1
+---
+scenario: retirement SIGTERM
+stderr: >
+  mcp-console-sandbox: landlock does not provide supervised lifetime; omit
+  lifecycle options
+exit_code: 1
+---
+scenario: explicit default deadline
+stderr: >
+  mcp-console-sandbox: landlock does not provide supervised lifetime; omit
+  lifecycle options
+exit_code: 1
+---
+scenario: managed proxy
+stderr: |
+  mcp-console-sandbox: landlock does not support managed proxy routing
+exit_code: 1

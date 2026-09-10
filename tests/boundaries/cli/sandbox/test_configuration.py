@@ -3,6 +3,7 @@
 import errno
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -13,7 +14,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.normalization import code
 from support.records import Transcript
-from support.requirements import LANDLOCK, MACOS_SANDBOX, SANDBOX, requires
+from support.requirements import (
+    LANDLOCK,
+    LINUX_NATIVE,
+    LINUX_SANDBOX,
+    MACOS_SANDBOX,
+    NESTED_PROCFS,
+    SANDBOX,
+    requires,
+)
+from support.linux_sandbox import root_metadata_prefix, without_landlock
 from support.suites import run_this_suite
 
 
@@ -33,9 +43,17 @@ def configuration() -> dict:
     }
 
 
-def invoke(binary: Path, config: dict | str, *command: str, **kwargs):
+def invoke(binary: Path, config: dict | str, *command: str, launch_prefix=(), **kwargs):
     return subprocess.run(
-        [binary, "sandbox", "--config-env", "TEST_POLICY", "--", *command],
+        [
+            *launch_prefix,
+            binary,
+            "sandbox",
+            "--config-env",
+            "TEST_POLICY",
+            "--",
+            *command,
+        ],
         env={
             **os.environ,
             "TEST_POLICY": config if isinstance(config, str) else json.dumps(config),
@@ -72,8 +90,8 @@ def test_explicit_policy_controls_filesystem_and_network(binary: Path) -> Transc
     with TemporaryDirectory() as directory, socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         listener.listen()
-        config = configuration()
-        for allowed in (False, True):
+        for allowed, network in ((False, False), (True, True), (False, True)):
+            config = configuration()
             if allowed:
                 config["filesystem"]["entries"].append(
                     {
@@ -84,6 +102,7 @@ def test_explicit_policy_controls_filesystem_and_network(binary: Path) -> Transc
                         "access": "write",
                     }
                 )
+            if network:
                 config["network"] = "enabled"
             result = invoke(
                 binary,
@@ -97,9 +116,21 @@ def test_explicit_policy_controls_filesystem_and_network(binary: Path) -> Transc
             assert result.returncode == 0, result.stderr
             assert result.stderr == ""
             permission = "allowed" if allowed else "denied"
-            assert result.stdout == f"write {permission}\nnetwork {permission}\n"
+            network_permission = "allowed" if network else "denied"
+            assert (
+                result.stdout == f"write {permission}\nnetwork {network_permission}\n"
+            )
             assert (Path(directory) / "created").exists() == allowed
-            transcript.append({"scenario": permission, "stdout": result.stdout})
+            if allowed:
+                (Path(directory) / "created").unlink()
+            transcript.append(
+                {
+                    "scenario": "network only"
+                    if network and not allowed
+                    else permission,
+                    "stdout": result.stdout,
+                }
+            )
     return transcript
 
 
@@ -452,6 +483,286 @@ def test_explicit_landlock_preserves_policy_and_rejects_supervised_lifetime(
     assert result.returncode == 1 and not result.stdout, result
     assert "landlock does not provide supervised lifetime" in result.stderr
     transcript.append({"stderr": result.stderr, "exit_code": result.returncode})
+    for lifecycle in (
+        {},
+        {
+            "parent_pid": None,
+            "private_tmp": None,
+            "cleanup_timeout_ms": None,
+            "sigterm": "forward",
+        },
+    ):
+        config["lifecycle"] = lifecycle
+        result = invoke(binary, config, "/bin/echo", "explicit Landlock defaults")
+        assert (result.returncode, result.stdout, result.stderr) == (
+            0,
+            "explicit Landlock defaults\n",
+            "",
+        ), result
+        transcript.append({"lifecycle": lifecycle, "stdout": result.stdout})
+    return transcript
+
+
+def target_start_control(binary: Path, *, launch_prefix=()) -> Transcript:
+    # Full-write direct execution needs neither namespaces nor Landlock FS
+    # support. Stdout proves the marker works independently of file permissions.
+    config = {
+        **configuration(),
+        "linux_backend": "landlock",
+        "filesystem": {"kind": "unrestricted"},
+        "network": "enabled",
+    }
+    result = invoke(
+        binary, config, "/bin/echo", "target started", launch_prefix=launch_prefix
+    )
+    assert (result.returncode, result.stdout, result.stderr) == (
+        0,
+        "target started\n",
+        "",
+    ), result
+    return [{"scenario": "direct full-write positive control", "stdout": result.stdout}]
+
+
+@requires(LINUX_SANDBOX)
+def test_supervised_linux_rejects_full_write_policies(binary: Path) -> Transcript:
+    # These checks precede native namespace setup; no working backend is needed.
+    transcript = target_start_control(binary)
+    root = {**configuration()["filesystem"]["entries"][0], "access": "write"}
+    path = {"type": "path", "path": "/tmp"}
+    for backend in (None, "bubblewrap"):
+        for network in ("restricted", "enabled"):
+            for name, filesystem in (
+                ("unrestricted", {"kind": "unrestricted"}),
+                ("external sandbox", {"kind": "external-sandbox"}),
+                ("root write", {"kind": "restricted", "entries": [root]}),
+                (
+                    "shadowed read carveout",
+                    {
+                        "kind": "restricted",
+                        "entries": [
+                            root,
+                            {"path": path, "access": "read"},
+                            {"path": path, "access": "write"},
+                        ],
+                    },
+                ),
+            ):
+                config = {
+                    **configuration(),
+                    "filesystem": filesystem,
+                    "network": network,
+                }
+                if backend is not None:
+                    config["linux_backend"] = backend
+                result = invoke(binary, config, "/bin/echo", "target started")
+                assert result.returncode == 1 and result.stdout == "", result
+                assert result.stderr == (
+                    "mcp-console-sandbox: supervised Linux execution requires "
+                    "a restricted filesystem policy\n"
+                ), result
+                transcript.append(
+                    {
+                        "backend": backend,
+                        "network": network,
+                        "filesystem": name,
+                        "stderr": result.stderr,
+                        "exit_code": result.returncode,
+                    }
+                )
+    return transcript
+
+
+@requires(LINUX_SANDBOX)
+def test_landlock_rejects_incompatible_options_before_native_setup(
+    binary: Path,
+) -> Transcript:
+    transcript = target_start_control(binary)
+    for name, options, diagnostic in (
+        (
+            "private storage without exports",
+            {"lifecycle": {"private_tmp": {"environment": []}}},
+            "landlock does not provide supervised lifetime; omit lifecycle options",
+        ),
+        (
+            "caller-death observation",
+            {"lifecycle": {"parent_pid": os.getpid()}},
+            "landlock does not provide supervised lifetime; omit lifecycle options",
+        ),
+        (
+            "retirement SIGTERM",
+            {"lifecycle": {"sigterm": "retire"}},
+            "landlock does not provide supervised lifetime; omit lifecycle options",
+        ),
+        (
+            "explicit default deadline",
+            {"lifecycle": {"cleanup_timeout_ms": 1000}},
+            "landlock does not provide supervised lifetime; omit lifecycle options",
+        ),
+        (
+            "managed proxy",
+            {
+                "proxy": {
+                    "enabled": True,
+                    "enableSocks5": True,
+                    "enableSocks5Udp": False,
+                    "allowUpstreamProxy": False,
+                    "dangerouslyAllowAllUnixSockets": False,
+                    "mode": "full",
+                    "domains": {"127.0.0.1": "allow"},
+                    "unixSockets": None,
+                    "allowLocalBinding": True,
+                }
+            },
+            "landlock does not support managed proxy routing",
+        ),
+    ):
+        result = invoke(
+            binary,
+            {**configuration(), "linux_backend": "landlock", **options},
+            "/bin/echo",
+            "target started",
+        )
+        assert result.returncode == 1 and result.stdout == "", result
+        assert result.stderr == f"mcp-console-sandbox: {diagnostic}\n", result
+        transcript.append(
+            {"scenario": name, "stderr": result.stderr, "exit_code": result.returncode}
+        )
+    return transcript
+
+
+@requires(LINUX_NATIVE)
+def test_landlock_requires_truncate_capability_before_target_execution(
+    binary: Path,
+) -> Transcript:
+    with TemporaryDirectory() as directory:
+        prefix = (str(without_landlock(Path(directory))),)
+        transcript = target_start_control(binary, launch_prefix=prefix)
+        result = invoke(
+            binary,
+            {**configuration(), "linux_backend": "landlock"},
+            "/bin/echo",
+            "target started",
+            launch_prefix=prefix,
+        )
+        assert result.returncode == 1 and result.stdout == "", result
+        assert result.stderr == (
+            "mcp-console-sandbox: Landlock filesystem policy requires "
+            "truncate enforcement (ABI 3 or later)\n"
+        ), result
+        transcript.append({"stderr": result.stderr, "exit_code": result.returncode})
+        return transcript
+
+
+@requires(LANDLOCK)
+def test_landlock_rejects_policies_requiring_direct_enforcement(
+    binary: Path,
+) -> Transcript:
+    transcript = target_start_control(binary)
+    with TemporaryDirectory() as directory:
+        for root_access, carveout in (
+            (None, None),
+            ("read", "deny"),
+            ("write", "read"),
+            ("write", "deny"),
+        ):
+            config = {**configuration(), "linux_backend": "landlock"}
+            if root_access:
+                config["filesystem"]["entries"][0]["access"] = root_access
+                config["filesystem"]["entries"].append(
+                    {
+                        "path": {
+                            "type": "path",
+                            "path": str(Path(directory).resolve()),
+                        },
+                        "access": carveout,
+                    }
+                )
+            else:
+                config["filesystem"]["entries"] = []
+            result = invoke(binary, config, "/bin/echo", "target started")
+            assert result.returncode == 101 and result.stdout == "", result
+            assert (
+                "permission profiles requiring direct runtime enforcement are "
+                "incompatible with --use-legacy-landlock"
+            ) in result.stderr, result
+            stderr = re.sub(
+                r"(thread 'main' \()\d+(\) panicked at)",
+                r"\1<runner pid>\2",
+                result.stderr,
+            )
+            transcript.append(
+                {
+                    "root_access": root_access,
+                    "carveout": carveout,
+                    "stderr": stderr,
+                    "exit_code": result.returncode,
+                    "transcript_normalization": {"runner_pid": "omitted"},
+                }
+            )
+    return transcript
+
+
+@requires(LINUX_SANDBOX, NESTED_PROCFS)
+def test_bubblewrap_enforces_root_write_carveouts(binary: Path) -> Transcript:
+    script = code(r"""
+        import errno
+        from pathlib import Path
+        import sys
+
+        print("target started", flush=True)
+        allowed, protected = map(Path, sys.argv[1:3])
+        allowed.write_text("allowed")
+        try:
+            protected.write_text("escaped")
+        except OSError as error:
+            assert error.errno in (errno.EPERM, errno.EACCES, errno.EROFS)
+            print("carveout write denied")
+        else:
+            raise AssertionError("carveout write succeeded")
+        try:
+            assert protected.read_text() == "protected"
+            print("carveout read allowed")
+        except OSError as error:
+            assert error.errno in (errno.EPERM, errno.EACCES)
+            print("carveout read denied")
+        """)
+    transcript = []
+    with TemporaryDirectory() as directory:
+        prefix = root_metadata_prefix(Path(directory))
+        allowed = Path(directory).resolve() / "allowed"
+        protected = Path(directory).resolve() / "protected"
+        protected.write_text("protected")
+        for backend in (None, "bubblewrap"):
+            for access in ("read", "deny"):
+                config = configuration()
+                config["filesystem"]["entries"][0]["access"] = "write"
+                config["filesystem"]["entries"].append(
+                    {"path": {"type": "path", "path": str(protected)}, "access": access}
+                )
+                if backend is not None:
+                    config["linux_backend"] = backend
+                result = invoke(
+                    binary,
+                    config,
+                    sys.executable,
+                    "-c",
+                    script,
+                    str(allowed),
+                    str(protected),
+                    launch_prefix=prefix,
+                )
+                assert result.returncode == 0 and result.stderr == "", result
+                permission = "allowed" if access == "read" else "denied"
+                assert result.stdout == (
+                    "target started\ncarveout write denied\n"
+                    f"carveout read {permission}\n"
+                ), result
+                assert allowed.read_text() == "allowed"
+                assert protected.read_text() == "protected"
+                allowed.unlink()
+                transcript.append(
+                    {"backend": backend, "carveout": access, "stdout": result.stdout}
+                )
     return transcript
 
 

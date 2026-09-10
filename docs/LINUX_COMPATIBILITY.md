@@ -1,9 +1,58 @@
 # Linux host compatibility
 
-This review starts at MCP Console main `f35a304d` and its actual runner pin `d488fc969da435f93ea5937c7f284fa91a8c2575`.
-The coordinated [runner changes](https://github.com/t-kalinowski/codex/compare/d488fc969da435f93ea5937c7f284fa91a8c2575...7aacbcf1bca0f173f036617a5ee8ae71e18fb8cc) advance the pin to `7aacbcf1bca0f173f036617a5ee8ae71e18fb8cc`.
-Default execution still uses bubblewrap and the requested filesystem/network policy.
-Namespace or policy failure never selects an unrestricted target or a different backend.
+The policy contract below was inspected at Console main `27bb7cfc4f98c70bb9909917ee861108320f2706` and runner pin `689f48c30deeb6aaa95a193e31e5971dd6820465` from [`sandbox-runner.json`](../sandbox-runner.json).
+It describes that pinned implementation, independently of later runner development.
+
+## Policy and backend contract
+
+Use `mcp-console sandbox --config-env NAME -- COMMAND ARGS...` to supply a complete policy.
+Omitting `linux_backend` and explicitly selecting `"bubblewrap"` both use the supervised namespace path.
+Selecting `"landlock"` uses direct native execution, with no bubblewrap process isolation or supervised descendant retirement.
+Neither backend switches automatically or retries the target without enforcement.
+The native inherited-procfs alternative retains bubblewrap and the selected policy.
+
+| Source of behavior                | Contract                                                                                                                                                                                            |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Console defaults                  | Host reads, restricted networking, private writable `TMPDIR`, and bubblewrap supervision. Home and the working directory receive no write grant. An explicit configuration replaces these defaults. |
+| Native bubblewrap/seccomp backend | Filesystem mounts and masks, namespace isolation, and requested network restrictions. Writable roots retain native metadata protections and mount prerequisites.                                    |
+| Runner integration                | Supervised launch and descendant retirement, optional caller-death observation and private storage, and rejection of policies classified as full-filesystem write access.                           |
+| Native Landlock/seccomp backend   | Direct filesystem/network enforcement, with native rejection of restricted-read and other policies that its legacy representation cannot preserve. No namespace process isolation.                  |
+| Runner's Landlock integration     | Rejects supervised lifecycle options and managed proxy routing. Policies requiring filesystem restrictions must have truncate enforcement (Landlock ABI 3 or later).                                |
+
+Networking and filesystem access are independent: `network: "enabled"` does not grant writes.
+The [configuration reference](SANDBOX_CONFIGURATION.md#explicit-linux-backend-selection) distinguishes omitted lifecycle defaults from explicit requests.
+
+### Filesystem classification
+
+The runner converts the raw policy into the native policy type and checks `has_full_disk_write_access()` before native helper launch.
+This is not a check of the `kind` string alone.
+Here, **root** means the special entry `{"type":"special","value":{"kind":"root"}}`.
+
+| Filesystem policy                                                               | Supervised Linux execution                                                                                                  |
+| ------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `kind: "unrestricted"` or `"external-sandbox"`                                  | Rejected, including when entries accompany that kind. Entries do not narrow these policies.                                 |
+| `kind: "restricted"`, root `write`, no effective narrower rule                  | Rejected with `supervised Linux execution requires a restricted filesystem policy`.                                         |
+| Root `write` plus a path `read` overridden by `write` at the same target        | Still full write access; rejected. A root `read` alongside root `write` likewise does not narrow writes.                    |
+| `kind: "restricted"`, root `write` with effective read-only or denied carveouts | Passes this guard and proceeds to native policy/mount validation. Supported carveouts retain their read/write restrictions. |
+| Root `read`, optionally with explicit writable directories                      | Supported subject to the native writable-root and host requirements.                                                        |
+
+Native precedence matters: a same-target `write` overrides `read`, while `deny` takes precedence over both.
+The predicate recognizes the special root grant; a literal path entry for `/` is not that special entry and proceeds through writable-root preparation.
+Passing this guard alone does not establish that native setup can execute a policy.
+For example, root writable mounts still prepare protected metadata locations (`/.git`, `/.agents`, `/.codex`); absent mount targets can fail to be created on the host.
+The public carveout regression supplies those targets as read-only mounts in an outer test namespace, without modifying the host root.
+
+The remaining full-write restriction belongs to the runner integration, not a general inability of bubblewrap to mount a writable filesystem.
+The pinned native full-filesystem builder binds `/` writable and can return an unwrapped command when networking is enabled.
+That path does not establish the restricted namespace setup on which the runner's private control channel and retirement barrier depend; writable inherited procfs could also expose the host supervisor.
+Supporting full-write supervision requires a separate integration change; removing the guard would not supply that contract.
+The source boundaries are the pinned [runner policy check](https://github.com/t-kalinowski/codex/blob/689f48c30deeb6aaa95a193e31e5971dd6820465/codex-rs/mcp-console-sandbox/src/codex.rs), [policy classification and precedence](https://github.com/t-kalinowski/codex/blob/689f48c30deeb6aaa95a193e31e5971dd6820465/codex-rs/protocol/src/permissions.rs), and [native mount builder](https://github.com/t-kalinowski/codex/blob/689f48c30deeb6aaa95a193e31e5971dd6820465/codex-rs/linux-sandbox/src/bwrap.rs).
+
+## Earlier host compatibility comparison
+
+The following comparison and validation record started at Console main `f35a304d` and runner `d488fc969da435f93ea5937c7f284fa91a8c2575`.
+The coordinated [runner changes](https://github.com/t-kalinowski/codex/compare/d488fc969da435f93ea5937c7f284fa91a8c2575...7aacbcf1bca0f173f036617a5ee8ae71e18fb8cc) advanced that pin to `7aacbcf1bca0f173f036617a5ee8ae71e18fb8cc`.
+These are historical host results, not validation of every later revision.
 
 | Host condition                                            | Previous integration                                      | Current behavior                                                                              |
 | --------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------------------------------------------- |

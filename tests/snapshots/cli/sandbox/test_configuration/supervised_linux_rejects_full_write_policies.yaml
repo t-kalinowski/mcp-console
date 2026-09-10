@@ -1,0 +1,132 @@
+---
+scenario: direct full-write positive control
+stdout: |
+  target started
+---
+backend: ~
+network: restricted
+filesystem: unrestricted
+stderr: >
+  mcp-console-sandbox: supervised Linux execution requires a restricted
+  filesystem policy
+exit_code: 1
+---
+backend: ~
+network: restricted
+filesystem: external sandbox
+stderr: >
+  mcp-console-sandbox: supervised Linux execution requires a restricted
+  filesystem policy
+exit_code: 1
+---
+backend: ~
+network: restricted
+filesystem: root write
+stderr: >
+  mcp-console-sandbox: supervised Linux execution requires a restricted
+  filesystem policy
+exit_code: 1
+---
+backend: ~
+network: restricted
+filesystem: shadowed read carveout
+stderr: >
+  mcp-console-sandbox: supervised Linux execution requires a restricted
+  filesystem policy
+exit_code: 1
+---
+backend: ~
+network: enabled
+filesystem: unrestricted
+stderr: >
+  mcp-console-sandbox: supervised Linux execution requires a restricted
+  filesystem policy
+exit_code: 1
+---
+backend: ~
+network: enabled
+filesystem: external sandbox
+stderr: >
+  mcp-console-sandbox: supervised Linux execution requires a restricted
+  filesystem policy
+exit_code: 1
+---
+backend: ~
+network: enabled
+filesystem: root write
+stderr: >
+  mcp-console-sandbox: supervised Linux execution requires a restricted
+  filesystem policy
+exit_code: 1
+---
+backend: ~
+network: enabled
+filesystem: shadowed read carveout
+stderr: >
+  mcp-console-sandbox: supervised Linux execution requires a restricted
+  filesystem policy
+exit_code: 1
+---
+backend: bubblewrap
+network: restricted
+filesystem: unrestricted
+stderr: >
+  mcp-console-sandbox: supervised Linux execution requires a restricted
+  filesystem policy
+exit_code: 1
+---
+backend: bubblewrap
+network: restricted
+filesystem: external sandbox
+stderr: >
+  mcp-console-sandbox: supervised Linux execution requires a restricted
+  filesystem policy
+exit_code: 1
+---
+backend: bubblewrap
+network: restricted
+filesystem: root write
+stderr: >
+  mcp-console-sandbox: supervised Linux execution requires a restricted
+  filesystem policy
+exit_code: 1
+---
+backend: bubblewrap
+network: restricted
+filesystem: shadowed read carveout
+stderr: >
+  mcp-console-sandbox: supervised Linux execution requires a restricted
+  filesystem policy
+exit_code: 1
+---
+backend: bubblewrap
+network: enabled
+filesystem: unrestricted
+stderr: >
+  mcp-console-sandbox: supervised Linux execution requires a restricted
+  filesystem policy
+exit_code: 1
+---
+backend: bubblewrap
+network: enabled
+filesystem: external sandbox
+stderr: >
+  mcp-console-sandbox: supervised Linux execution requires a restricted
+  filesystem policy
+exit_code: 1
+---
+backend: bubblewrap
+network: enabled
+filesystem: root write
+stderr: >
+  mcp-console-sandbox: supervised Linux execution requires a restricted
+  filesystem policy
+exit_code: 1
+---
+backend: bubblewrap
+network: enabled
+filesystem: shadowed read carveout
+stderr: >
+  mcp-console-sandbox: supervised Linux execution requires a restricted
+  filesystem policy
+exit_code: 1
