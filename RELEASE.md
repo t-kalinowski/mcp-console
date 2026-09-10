@@ -86,7 +86,11 @@ Source distributions include the packaging backend, staging script, source pin, 
 
 CI separately caches completed staged runners, release wheels and native bundles, and Cargo build data for both workspaces.
 Runner build-cache keys include the toolchain file from the checked-out source.
-Completed release outputs require an exact match of source, packaging inputs, toolchain, R and Python versions, and runner image.
+Cargo build data is restored across source, pin, and dependency changes within the same platform, toolchain, runner image, applicable R version, and UTC week.
+The build caches intentionally reset each Monday.
+All CI builds enable incremental compilation, including release builds and source installation checks; Cargo decides which tracked inputs require rebuilding.
+An exact match of source, packaging inputs, toolchain, R and Python versions, and runner image additionally permits skipping the release build and using the finished wheel and native bundle directly.
+Otherwise, Maturin invokes Cargo with the restored build data and packages the updated output.
 Runner source archives preserve the timestamps used by Cargo while excluding Git metadata and the separately cached build directory.
 PR and main runs save completed builds, including Clippy preparation, before tests.
 R package checks use a separate cached library, and packaging and runtime preparation share a uv cache that retains downloaded wheels.

@@ -40,7 +40,10 @@ Other Unix operating systems are not supported build or runtime targets; shared 
 Retain platform conditionals for modules that use OS-specific APIs and for selecting different implementations or unsupported-platform stubs; avoid redundant gates on shared code.
 CI runs core checks and all capability-applicable transcript modes on macOS and Linux.
 Keep one CI job per platform.
-CI can reuse complete release outputs only when their source, packaging, toolchain, and runner image inputs match; it still runs the current tests.
+CI restores Cargo build data across source and dependency changes within the same native build environment and UTC week, with incremental compilation enabled.
+Keep the intentional weekly build-cache reset.
+Cargo determines which crates need rebuilding.
+An exact match of compiled and packaging inputs additionally lets CI skip the release build and reuse a finished wheel and native bundle; it still runs the current tests.
 Source installation checks run after the other checks because they replace and hide the shared Cargo target directory.
 Python package builds and installations require Python 3.11 or later.
 
