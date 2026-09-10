@@ -46,8 +46,38 @@ def assert_callable_schema(schema: dict) -> None:
         assert not validator.is_valid(arguments | {"timeout_ms": timeout}), schema[
             "properties"
         ]["timeout_ms"]
+    requirements = arguments["requirements"]
+    for language in ("r", "python", "duckdb"):
+        for packages in ([], ["a"] * 64, ["a" * (64 if language == "duckdb" else 65)]):
+            validator.validate(
+                arguments | {"requirements": requirements | {language: packages}}
+            )
+        for packages in ([""], ["a"] * 65):
+            assert not validator.is_valid(
+                arguments | {"requirements": requirements | {language: packages}}
+            ), schema
+    assert not validator.is_valid(
+        arguments | {"requirements": requirements | {"duckdb": ["a" * 65]}}
+    ), schema
     arguments["requirements"]["pip"] = ["numpy"]
     assert not validator.is_valid(arguments), schema
+
+
+@executions(DIRECT, SANDBOXED)
+def test_callable_preserves_line_breaks_around_images(
+    binary: Path, execution: Execution
+) -> Transcript:
+    async def exercise():
+        async with AsyncMCPConsole(**options(binary, execution)) as console:
+            return await console.send(r="emit image")
+
+    asynchronous = asyncio.run(exercise())
+    with MCPConsole(**options(binary, execution)) as console:
+        synchronous = console.send(r="emit image")
+    assert (
+        synchronous == asynchronous == "before image\n[image/png output]\nafter image\n"
+    )
+    return [{"output": synchronous}]
 
 
 @requires(WORKER)

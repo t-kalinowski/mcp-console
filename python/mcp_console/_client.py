@@ -2,7 +2,7 @@ from collections.abc import Mapping, Sequence
 from contextlib import AsyncExitStack
 from typing import TYPE_CHECKING, Annotated, Any, Literal, Self
 
-from annotated_types import Ge, Le
+from annotated_types import Ge, Le, MaxLen, MinLen
 from typing_extensions import TypeAliasType, TypedDict
 
 from ._common import Command, result_text, stdio_command
@@ -20,9 +20,9 @@ TimeoutMilliseconds = TypeAliasType(
 
 
 class Requirements(TypedDict, total=False, closed=True):
-    r: list[str]
-    python: list[str]
-    duckdb: list[str]
+    r: Annotated[list[Annotated[str, MinLen(1)]], MaxLen(64)]
+    python: Annotated[list[Annotated[str, MinLen(1)]], MaxLen(64)]
+    duckdb: Annotated[list[Annotated[str, MinLen(1), MaxLen(64)]], MaxLen(64)]
 
 
 class AsyncMCPConsole:

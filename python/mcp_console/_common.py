@@ -39,7 +39,12 @@ def content_text(content: ContentBlock) -> str:
 
 
 def result_text(result: CallToolResult) -> str:
-    text = "\n".join(content_text(item) for item in result.content)
+    text = ""
+    for item in result.content:
+        part = content_text(item)
+        if text and part and not text.endswith("\n") and not part.startswith("\n"):
+            text += "\n"
+        text += part
     if result.is_error:
         raise RuntimeError(text or "MCP Console returned an error")
     return text
