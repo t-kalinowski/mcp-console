@@ -1,0 +1,9 @@
+---
+scenario: direct full-write positive control
+stdout: |
+  target started
+---
+stderr: >
+  mcp-console-sandbox: Landlock filesystem policy requires truncate
+  enforcement (ABI 3 or later)
+exit_code: 1

@@ -8,3 +8,8 @@ scenario: allowed
 stdout: |
   write allowed
   network allowed
+---
+scenario: network only
+stdout: |
+  write denied
+  network allowed

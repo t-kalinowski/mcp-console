@@ -1,0 +1,48 @@
+---
+scenario: direct full-write positive control
+stdout: |
+  target started
+---
+root_access: ~
+carveout: ~
+stderr: |
+
+  thread 'main' (<runner pid>) panicked at linux-sandbox/src/linux_run_main.rs:468:9:
+  permission profiles requiring direct runtime enforcement are incompatible with --use-legacy-landlock
+  note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+exit_code: 101
+transcript_normalization:
+  runner_pid: omitted
+---
+root_access: read
+carveout: deny
+stderr: |
+
+  thread 'main' (<runner pid>) panicked at linux-sandbox/src/linux_run_main.rs:468:9:
+  permission profiles requiring direct runtime enforcement are incompatible with --use-legacy-landlock
+  note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+exit_code: 101
+transcript_normalization:
+  runner_pid: omitted
+---
+root_access: write
+carveout: read
+stderr: |
+
+  thread 'main' (<runner pid>) panicked at linux-sandbox/src/linux_run_main.rs:468:9:
+  permission profiles requiring direct runtime enforcement are incompatible with --use-legacy-landlock
+  note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+exit_code: 101
+transcript_normalization:
+  runner_pid: omitted
+---
+root_access: write
+carveout: deny
+stderr: |
+
+  thread 'main' (<runner pid>) panicked at linux-sandbox/src/linux_run_main.rs:468:9:
+  permission profiles requiring direct runtime enforcement are incompatible with --use-legacy-landlock
+  note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+exit_code: 101
+transcript_normalization:
+  runner_pid: omitted
