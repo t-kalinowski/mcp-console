@@ -19,7 +19,9 @@ from support.requirements import LINUX_SANDBOX, MACOS_SANDBOX, NATIVE_FIXTURES, 
 from support.suites import run_this_suite
 
 
-def _writable_roots_reach_every_runner_launch(binary: Path) -> TranscriptWithCompanions:
+def _writable_roots_reach_every_runner_launch(
+    binary: Path, *, macos: bool
+) -> TranscriptWithCompanions:
     exercise = code(r"""
         import errno
         import os
@@ -50,12 +52,17 @@ def _writable_roots_reach_every_runner_launch(binary: Path) -> TranscriptWithCom
         os.chdir(host / "output café 雪")
         print("both grants and subprocess writes verified; neighboring and symlink writes denied")
         """)
+    write_future = code(r"""
+        _ = (host / "future output" / "persistent").write_text("user data")
+        print("future root is writable after restart")
+        """)
     with TemporaryDirectory() as directory:
         host = Path(directory).resolve()
         roots = [host / "output café 雪", host / "cache"]
         for root in [*roots, host / "neighbor"]:
             root.mkdir()
         (roots[0] / "escape").symlink_to(host / "neighbor", target_is_directory=True)
+        future = host / "future output"
         capture = host / "runner-configurations.jsonl"
         environment = {
             **os.environ,
@@ -63,7 +70,14 @@ def _writable_roots_reach_every_runner_launch(binary: Path) -> TranscriptWithCom
             "MCP_CONSOLE_TEST_RUNNER_CONFIGURATION": str(capture),
             "MCP_CONSOLE_TEST_HOST": str(host),
         }
-        options = ("--writable-root", roots[0].name, "--writable-root", str(roots[1]))
+        options = (
+            "--writable-root",
+            roots[0].name,
+            "--writable-root",
+            str(roots[1]),
+            "--writable-root",
+            future.name,
+        )
         for arguments in ((), options):
             result = subprocess.run(
                 [binary, "sandbox", *arguments, "--", sys.executable, "-c", "pass"],
@@ -74,6 +88,7 @@ def _writable_roots_reach_every_runner_launch(binary: Path) -> TranscriptWithCom
             )
             assert result.returncode == 0, result.stderr
             assert result.stdout == result.stderr == ""
+            assert not future.exists()
 
         with McpClient(binary, SANDBOXED.serve(*options), environment, host) as client:
             client.initialize_and_list_tools()
@@ -81,6 +96,20 @@ def _writable_roots_reach_every_runner_launch(binary: Path) -> TranscriptWithCom
             assert last_tool_text(client).endswith(
                 "both grants and subprocess writes verified; neighboring and symlink writes denied\n"
             ), last_tool_text(client)
+            assert not future.exists(), "launcher created a writable root"
+            client.send(
+                python=code(r"""
+                try:
+                    Path("../future output").mkdir()
+                except OSError as error:
+                    assert error.errno in (errno.EPERM, errno.EACCES, errno.EROFS)
+                    print(error)
+                else:
+                    print("runtime created the writable root")
+                """)
+            )
+            assert future.is_dir() == macos, last_tool_text(client)
+            future.mkdir(exist_ok=True)
             temporary = Path((roots[1] / "temporary-path").read_text())
             client.send(control="restart")
             assert not temporary.exists(), "restart retained private storage"
@@ -89,6 +118,8 @@ def _writable_roots_reach_every_runner_launch(binary: Path) -> TranscriptWithCom
             assert last_tool_text(client).endswith(
                 "both grants and subprocess writes verified; neighboring and symlink writes denied\n"
             ), last_tool_text(client)
+            client.send(python=write_future)
+            assert last_tool_text(client) == "future root is writable after restart\n"
             temporary = Path((roots[1] / "temporary-path").read_text())
             client.send(python="os._exit(17)")
             assert not temporary.exists(), "replacement retained private storage"
@@ -98,6 +129,9 @@ def _writable_roots_reach_every_runner_launch(binary: Path) -> TranscriptWithCom
             assert last_tool_text(client).endswith(
                 "both grants and subprocess writes verified; neighboring and symlink writes denied\n"
             ), last_tool_text(client)
+            assert (future / "persistent").read_text() == "user data"
+            client.send(python=write_future)
+            assert last_tool_text(client) == "future root is writable after restart\n"
             temporary = Path((roots[1] / "temporary-path").read_text())
             transcript = client.finish()
         assert not temporary.exists(), "shutdown retained private storage"
@@ -106,6 +140,7 @@ def _writable_roots_reach_every_runner_launch(binary: Path) -> TranscriptWithCom
             assert (root / "child").is_file()
         assert not (host / "neighbor" / "created").exists()
         assert not (host / "parent-write").exists()
+        assert (future / "persistent").read_text() == "user data"
 
         payloads = [json.loads(line) for line in capture.read_text().splitlines()]
         assert len(payloads) == 5, payloads
@@ -129,11 +164,12 @@ def _writable_roots_reach_every_runner_launch(binary: Path) -> TranscriptWithCom
             assert entries[1:] == (
                 [
                     {"path": {"type": "path", "path": str(root)}, "access": "write"}
-                    for root in roots
+                    for root in [*roots, future]
                 ]
                 if scenario != "sandbox defaults"
                 else []
             )
+            assert ("macos_seatbelt_profile_extension" in payload) == macos
             parent = payload["lifecycle"]["parent_pid"]
             assert parent == (
                 client.process.pid if scenario.startswith("serve") else None
@@ -158,19 +194,19 @@ def _writable_roots_reach_every_runner_launch(binary: Path) -> TranscriptWithCom
 
 
 # The payload itself differs: macOS includes the complete Seatbelt extension;
-# Linux sends null. Both cases run the same runtime and restart assertions.
+# Linux omits it and applies missing roots only on a later sandbox launch.
 @requires(MACOS_SANDBOX, NATIVE_FIXTURES)
 def test_writable_roots_reach_every_runner_launch_on_macos(
     binary: Path,
 ) -> TranscriptWithCompanions:
-    return _writable_roots_reach_every_runner_launch(binary)
+    return _writable_roots_reach_every_runner_launch(binary, macos=True)
 
 
 @requires(LINUX_SANDBOX, NATIVE_FIXTURES)
 def test_writable_roots_reach_every_runner_launch_on_linux(
     binary: Path,
 ) -> TranscriptWithCompanions:
-    return _writable_roots_reach_every_runner_launch(binary)
+    return _writable_roots_reach_every_runner_launch(binary, macos=False)
 
 
 if __name__ == "__main__":

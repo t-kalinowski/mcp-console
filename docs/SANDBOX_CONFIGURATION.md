@@ -15,29 +15,35 @@ Without `--config-env`, `sandbox` uses the [Console defaults](SANDBOX.md#applica
 `serve` supplies the same policy and never selects a policy from ambient environment state.
 Setting `MCP_CONSOLE_SANDBOX_CONFIG` alone does not change either command's policy.
 
-## Additional writable directories
+## Additional writable paths
 
-`serve` and `sandbox` accept repeatable `--writable-root DIR` arguments:
+`serve` and `sandbox` accept repeatable `--writable-root PATH` arguments:
 
 ```sh
 mcp-console serve --writable-root './output files' --writable-root /path/to/cache
 ```
 
 This temporary argument does not define the eventual configuration interface.
-Each path must name an existing directory; Console does not create it.
+Paths may name directories, individual files, or locations that do not exist yet.
+Console does not inspect, create, or remove them; it leaves filesystem handling to the runner.
 Paths must be valid UTF-8 to fit the runner's configuration transport.
 Relative paths resolve against the launch working directory before workload startup, and the server retains the absolute paths across worker restarts and replacements.
 Paths remain separate arguments, including spaces and Unicode; symlink components remain subject to the runner's native writable-root validation.
 
-The directories augment the default filesystem policy for the workload and its subprocesses.
+The paths augment the default filesystem policy for the workload and its subprocesses.
 Their parents, the working directory, and home receive no implicit write grant.
 The runner's native safeguards, network restrictions, macOS extensions, private temporary storage, and lifecycle cleanup still apply.
-These directories contain persistent user data; retirement removes only runner-owned private storage.
+These paths contain persistent user data; retirement removes only runner-owned private storage.
 Omitting the argument preserves the default permissions.
+
+On macOS, a missing path can be created by the workload under the native path rule.
+On Linux, the runner skips paths absent at sandbox startup; a directory created later becomes writable on a new sandbox launch, such as a worker restart.
+macOS supports individual file grants; the pinned Linux runner currently fails on existing file roots while preparing its directory metadata protections.
+Console does not substitute a parent-directory grant or change backends for these paths.
 
 `serve --no-sandbox` and `sandbox --config-env` each conflict with `--writable-root`.
 An explicit `--config-env` value supplies a complete policy; no merging or precedence is defined.
-There is no environment-variable interface for the directory list or automatic configuration lookup.
+There is no environment-variable interface for the path list or automatic configuration lookup.
 The launch code accepts a path list independently of argument parsing so a later configuration front end can supply the same list.
 
 ## Command and environment

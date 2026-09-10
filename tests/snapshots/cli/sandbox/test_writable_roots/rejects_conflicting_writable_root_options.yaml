@@ -5,10 +5,13 @@ arguments:
   - --writable-root
   - .
 exit_code: 2
-stderr: |
-  error: the argument '--no-sandbox' cannot be used with '--writable-root <DIR>'
+stderr: >
+  error: the argument '--no-sandbox' cannot be used with '--writable-root
+  <PATH>'
+
 
   Usage: mcp-console serve --no-sandbox
+
 
   For more information, try '--help'.
 ---
@@ -24,7 +27,7 @@ arguments:
 exit_code: 2
 stderr: >
   error: the argument '--config-env <NAME>' cannot be used with '--writable-root
-  <DIR>'
+  <PATH>'
 
 
   Usage: mcp-console sandbox --config-env <NAME> <COMMAND>...

@@ -24,15 +24,6 @@ pub fn resolve_writable_roots(roots: Vec<PathBuf>) -> Result<Vec<PathBuf>, Strin
                     path.display()
                 ));
             }
-            let metadata = root.metadata().map_err(|error| {
-                format!("cannot access writable root '{}': {error}", path.display())
-            })?;
-            if !metadata.is_dir() {
-                return Err(format!(
-                    "writable root '{}' is not a directory",
-                    path.display()
-                ));
-            }
             Ok(root)
         })
         .collect()

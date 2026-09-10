@@ -2,45 +2,22 @@
 arguments:
   - serve
   - --writable-root
-  - .
-  - --writable-root
-  - missing
-exit_code: 1
+  - ""
+exit_code: 2
 stderr: |
-  cannot access writable root 'missing': No such file or directory (os error 2)
----
-arguments:
-  - serve
-  - --writable-root
-  - .
-  - --writable-root
-  - file
-exit_code: 1
-stderr: |
-  writable root 'file' is not a directory
+  error: a value is required for '--writable-root <PATH>' but none was supplied
+
+  For more information, try '--help'.
 ---
 arguments:
   - sandbox
   - --writable-root
-  - .
-  - --writable-root
-  - missing
+  - ""
   - --
   - /bin/echo
   - workload started
-exit_code: 1
+exit_code: 2
 stderr: |
-  cannot access writable root 'missing': No such file or directory (os error 2)
----
-arguments:
-  - sandbox
-  - --writable-root
-  - .
-  - --writable-root
-  - file
-  - --
-  - /bin/echo
-  - workload started
-exit_code: 1
-stderr: |
-  writable root 'file' is not a directory
+  error: a value is required for '--writable-root <PATH>' but none was supplied
+
+  For more information, try '--help'.

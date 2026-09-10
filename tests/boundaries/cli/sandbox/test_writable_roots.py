@@ -1,6 +1,7 @@
 #!/usr/bin/env -S uv run --script
 
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -11,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.normalization import code
 from support.records import Transcript
-from support.requirements import SANDBOX, requires
+from support.requirements import LINUX_SANDBOX, MACOS_SANDBOX, SANDBOX, requires
 from support.suites import run_this_suite
 
 
@@ -122,35 +123,105 @@ def test_writable_roots_augment_default_permissions(binary: Path) -> Transcript:
     return transcript
 
 
-@requires(SANDBOX)
-def test_rejects_invalid_writable_roots_before_starting(binary: Path) -> Transcript:
-    transcript = []
+def _file_and_missing_writable_roots(binary: Path, *, supported: bool) -> Transcript:
+    script = code(r"""
+        import errno
+        from pathlib import Path
+
+        assert not Path("future output").exists()
+        file = Path("output café 雪.txt")
+        assert file.read_text() == "original"
+        _ = file.write_text("updated")
+        assert file.read_text() == "updated"
+        print("single file updated; missing root was not created")
+        for path in (Path("neighbor"), Path("unlisted")):
+            try:
+                _ = path.write_text("must not be written")
+            except OSError as error:
+                assert error.errno in (errno.EPERM, errno.EACCES, errno.EROFS)
+                print(f"write denied: {path}")
+            else:
+                raise AssertionError(f"unexpected write: {path}")
+        """)
+    arguments = [
+        "sandbox",
+        "--writable-root",
+        "output café 雪.txt",
+        "--writable-root",
+        "future output",
+    ]
     with TemporaryDirectory() as directory:
         host = Path(directory)
-        (host / "file").write_text("not a directory")
-        for command in ("serve", "sandbox"):
-            for root in ("missing", "file"):
-                arguments = [command, "--writable-root", ".", "--writable-root", root]
-                if command == "sandbox":
-                    arguments += ["--", "/bin/echo", "workload started"]
-                result = subprocess.run(
-                    [binary, *arguments],
-                    cwd=host,
-                    input="",
-                    capture_output=True,
-                    text=True,
-                )
-                assert result.returncode == 1, result.stderr
-                assert result.stdout == ""
-                assert f"writable root '{root}'" in result.stderr
-                assert not (host / "missing").exists()
-                transcript.append(
-                    {
-                        "arguments": arguments,
-                        "exit_code": result.returncode,
-                        "stderr": result.stderr,
-                    }
-                )
+        for name in ("output café 雪.txt", "neighbor"):
+            (host / name).write_text("original")
+        result = subprocess.run(
+            [binary, *arguments, "--", sys.executable, "-c", script],
+            cwd=host,
+            capture_output=True,
+            text=True,
+        )
+        if supported:
+            assert result.returncode == 0, result.stderr
+            assert result.stderr == ""
+        else:
+            # The pinned Linux runner treats file roots as metadata directories.
+            # Preserve its failure until a runner update adds file-root support.
+            assert result.returncode == 101, result.stderr
+            assert result.stdout == ""
+            assert "Not a directory" in result.stderr
+        assert (host / "output café 雪.txt").read_text() == (
+            "updated" if supported else "original"
+        )
+        assert (host / "neighbor").read_text() == "original"
+        assert not (host / "future output").exists()
+        assert not (host / "unlisted").exists()
+        stderr = result.stderr.replace(str(host), "<host directory>")
+        stderr = re.sub(
+            r"(thread 'main' \()\d+(\) panicked at)", r"\1<runner pid>\2", stderr
+        )
+    return [
+        {
+            "arguments": arguments,
+            "python": script,
+            "exit_code": result.returncode,
+            "stdout": result.stdout,
+            "stderr": stderr,
+        }
+    ]
+
+
+@requires(MACOS_SANDBOX)
+def test_accepts_file_and_missing_writable_roots_on_macos(binary: Path) -> Transcript:
+    return _file_and_missing_writable_roots(binary, supported=True)
+
+
+@requires(LINUX_SANDBOX)
+def test_reports_linux_runner_file_root_limitation(binary: Path) -> Transcript:
+    return _file_and_missing_writable_roots(binary, supported=False)
+
+
+def test_rejects_invalid_writable_roots_before_starting(binary: Path) -> Transcript:
+    transcript = []
+    for command in ("serve", "sandbox"):
+        arguments = [command, "--writable-root", ""]
+        if command == "sandbox":
+            arguments += ["--", "/bin/echo", "workload started"]
+        result = subprocess.run(
+            [binary, *arguments],
+            input="",
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 2, result.stderr
+        assert result.stdout == ""
+        assert "a value is required for '--writable-root" in result.stderr
+        transcript.append(
+            {
+                "arguments": arguments,
+                "exit_code": result.returncode,
+                "stderr": result.stderr,
+            }
+        )
     return transcript
 
 

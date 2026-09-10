@@ -33,8 +33,8 @@ pub enum Command {
         #[arg(long)]
         no_sandbox: bool,
 
-        /// Allow writes in an additional existing directory (temporary launch option)
-        #[arg(long, value_name = "DIR", conflicts_with = "no_sandbox")]
+        /// Allow writes to an additional path (temporary launch option)
+        #[arg(long, value_name = "PATH", conflicts_with = "no_sandbox")]
         writable_root: Vec<PathBuf>,
 
         /// Replace the runtime worker during development
@@ -71,8 +71,8 @@ pub enum Command {
         #[arg(long, value_name = "NAME", conflicts_with = "exit_with_parent")]
         config_env: Option<String>,
 
-        /// Allow writes in an additional existing directory (temporary launch option)
-        #[arg(long, value_name = "DIR", conflicts_with = "config_env")]
+        /// Allow writes to an additional path (temporary launch option)
+        #[arg(long, value_name = "PATH", conflicts_with = "config_env")]
         writable_root: Vec<PathBuf>,
 
         /// Retire the sandbox when this parent process exits

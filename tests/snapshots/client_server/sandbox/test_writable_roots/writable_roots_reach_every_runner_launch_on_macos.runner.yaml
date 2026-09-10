@@ -12,6 +12,13 @@ runner_configuration:
         access: read
   network: restricted
   proxy: ~
+  lifecycle:
+    parent_pid: ~
+    sigterm: forward
+    private_tmp:
+      environment:
+        - TMPDIR
+    cleanup_timeout_ms: 1000
   macos_seatbelt_profile_extension: |
     ; MCP Console additions to the pinned native macOS sandbox policy.
     ; SPDX-License-Identifier: MIT
@@ -80,13 +87,6 @@ runner_configuration:
       ; Darwin notification endpoint also probed during that uv startup workflow.
       ; Distinct from logd; the exact framework registration remains unconfirmed.
       (global-name "com.apple.system.notification_center"))
-  lifecycle:
-    parent_pid: ~
-    sigterm: forward
-    private_tmp:
-      environment:
-        - TMPDIR
-    cleanup_timeout_ms: 1000
 transcript_normalization:
   host_directory: omitted
   server_pid: omitted
@@ -110,8 +110,19 @@ runner_configuration:
           type: path
           path: <host directory>/cache
         access: write
+      - path:
+          type: path
+          path: <host directory>/future output
+        access: write
   network: restricted
   proxy: ~
+  lifecycle:
+    parent_pid: ~
+    sigterm: forward
+    private_tmp:
+      environment:
+        - TMPDIR
+    cleanup_timeout_ms: 1000
   macos_seatbelt_profile_extension: |
     ; MCP Console additions to the pinned native macOS sandbox policy.
     ; SPDX-License-Identifier: MIT
@@ -180,13 +191,6 @@ runner_configuration:
       ; Darwin notification endpoint also probed during that uv startup workflow.
       ; Distinct from logd; the exact framework registration remains unconfirmed.
       (global-name "com.apple.system.notification_center"))
-  lifecycle:
-    parent_pid: ~
-    sigterm: forward
-    private_tmp:
-      environment:
-        - TMPDIR
-    cleanup_timeout_ms: 1000
 transcript_normalization:
   host_directory: omitted
   server_pid: omitted
@@ -210,8 +214,19 @@ runner_configuration:
           type: path
           path: <host directory>/cache
         access: write
+      - path:
+          type: path
+          path: <host directory>/future output
+        access: write
   network: restricted
   proxy: ~
+  lifecycle:
+    parent_pid: <server pid>
+    sigterm: retire
+    private_tmp:
+      environment:
+        - TMPDIR
+    cleanup_timeout_ms: 1000
   macos_seatbelt_profile_extension: |
     ; MCP Console additions to the pinned native macOS sandbox policy.
     ; SPDX-License-Identifier: MIT
@@ -280,13 +295,6 @@ runner_configuration:
       ; Darwin notification endpoint also probed during that uv startup workflow.
       ; Distinct from logd; the exact framework registration remains unconfirmed.
       (global-name "com.apple.system.notification_center"))
-  lifecycle:
-    parent_pid: <server pid>
-    sigterm: retire
-    private_tmp:
-      environment:
-        - TMPDIR
-    cleanup_timeout_ms: 1000
 transcript_normalization:
   host_directory: omitted
   server_pid: omitted
@@ -310,8 +318,19 @@ runner_configuration:
           type: path
           path: <host directory>/cache
         access: write
+      - path:
+          type: path
+          path: <host directory>/future output
+        access: write
   network: restricted
   proxy: ~
+  lifecycle:
+    parent_pid: <server pid>
+    sigterm: retire
+    private_tmp:
+      environment:
+        - TMPDIR
+    cleanup_timeout_ms: 1000
   macos_seatbelt_profile_extension: |
     ; MCP Console additions to the pinned native macOS sandbox policy.
     ; SPDX-License-Identifier: MIT
@@ -380,13 +399,6 @@ runner_configuration:
       ; Darwin notification endpoint also probed during that uv startup workflow.
       ; Distinct from logd; the exact framework registration remains unconfirmed.
       (global-name "com.apple.system.notification_center"))
-  lifecycle:
-    parent_pid: <server pid>
-    sigterm: retire
-    private_tmp:
-      environment:
-        - TMPDIR
-    cleanup_timeout_ms: 1000
 transcript_normalization:
   host_directory: omitted
   server_pid: omitted
@@ -410,8 +422,19 @@ runner_configuration:
           type: path
           path: <host directory>/cache
         access: write
+      - path:
+          type: path
+          path: <host directory>/future output
+        access: write
   network: restricted
   proxy: ~
+  lifecycle:
+    parent_pid: <server pid>
+    sigterm: retire
+    private_tmp:
+      environment:
+        - TMPDIR
+    cleanup_timeout_ms: 1000
   macos_seatbelt_profile_extension: |
     ; MCP Console additions to the pinned native macOS sandbox policy.
     ; SPDX-License-Identifier: MIT
@@ -480,13 +503,6 @@ runner_configuration:
       ; Darwin notification endpoint also probed during that uv startup workflow.
       ; Distinct from logd; the exact framework registration remains unconfirmed.
       (global-name "com.apple.system.notification_center"))
-  lifecycle:
-    parent_pid: <server pid>
-    sigterm: retire
-    private_tmp:
-      environment:
-        - TMPDIR
-    cleanup_timeout_ms: 1000
 transcript_normalization:
   host_directory: omitted
   server_pid: omitted

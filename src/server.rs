@@ -139,7 +139,7 @@ struct SendArguments {
     /// dialect and type mappings. Use DBI from an R cell for commands that require the statement
     /// interface. Managed DuckDB conveniences and extension requirements apply only to the managed
     /// backend. With the sandbox enabled, use `ATTACH 'path' AS name (READ_ONLY)` for existing DuckDB
-    /// databases outside the sandbox's writable directories; the sandbox blocks DuckDB's
+    /// databases outside the sandbox's writable paths; the sandbox blocks DuckDB's
     /// default writable mode for those paths. Use `SHOW TABLES`, `DESCRIBE`, `SUMMARIZE`, and `EXPLAIN`
     /// for DuckDB discovery. DuckDB CLI dot commands are not supported. Omit this field for polling
     /// or stdin-only calls.
@@ -291,7 +291,7 @@ impl ConsoleServer {
         let security = if no_sandbox {
             "Evaluated code runs without a sandbox, with the server's permissions, including filesystem and network access. Dependency resolution, when available, may execute installation or build code; use only trusted dependencies."
         } else {
-            "Evaluated code can read host files, cannot directly access the network, and can write in the worker's private temporary directory and any directories explicitly allowed by the launcher. Dependency resolution, when available, runs outside the sandbox and may execute installation or build code; use only trusted dependencies."
+            "Evaluated code can read host files, cannot directly access the network, and can write in the worker's private temporary directory and to paths explicitly allowed by the launcher. Dependency resolution, when available, runs outside the sandbox and may execute installation or build code; use only trusted dependencies."
         };
         description.push_str(security);
         let schema = Arc::make_mut(&mut send.attr.input_schema);
