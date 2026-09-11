@@ -1,8 +1,10 @@
 # AGENTS.md
 
-This file is the durable project context for coding agents working on MCP Console.
-Keep it current as the repository changes.
-It should be sufficient to understand the product direction, locate the relevant implementation, and avoid reopening settled architectural decisions.
+This file records an exploratory product sketch for MCP Console.
+It is not repository-wide implementation guidance or documentation of current behavior.
+Files in this directory may describe different directions and need not be complete or mutually consistent.
+Production correctness and consistency requirements apply when a proposal is implemented; a sketch does not need to settle every edge case or update every related draft.
+Use the repository-root `AGENTS.md` and `docs/README.md` for the implemented system.
 
 ## Product intent
 
@@ -38,7 +40,7 @@ It is not a persistent daemon and does not keep the MCP server alive.
 MCP Console is effectively shell-class capability.
 Safety is enforced around the worker process and its descendants, not by filtering language source.
 
-## Settled product decisions
+## Decisions in this sketch
 
 - Product and binary name: `mcp-console`.
 - MCP initialization identity: `mcp-console`.
@@ -247,8 +249,8 @@ Create focused documents only when a subsystem has enough detail to justify a se
 
 1. Preserve the two-tool MCP surface.
    Viewer and integration capabilities belong on the local sidecar API, not as more globally visible MCP tools.
-2. Treat `docs/MCP_INTERFACE.md` as the normative MCP contract and `docs/SIDECAR_API.md` as the normative local-integration design.
-   Behavior changes require corresponding integration tests and documentation in the same patch.
+2. `docs/MCP_INTERFACE.md` and `docs/SIDECAR_API.md` are related interface sketches, not production contracts.
+   Reconcile the relevant interface, integration tests, and implemented documentation when implementing a proposal; exploratory edits do not require synchronizing every draft.
 3. Keep complete cells separate from `stdin`.
    Never route top-level code through the runtime input queue.
 4. Never infer idle, completion, debugger state, or input state from visible prompt strings.

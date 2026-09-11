@@ -5,6 +5,9 @@ Keep it synchronized with implemented code.
 Detailed current behavior belongs in the documents indexed by `docs/README.md`, source, and public transcript tests.
 
 The documents under `design-sketches/` describe intended behavior, not the current implementation.
+They are exploratory sketches, not production specifications, and need not be complete or mutually consistent.
+Do not apply the same correctness and consistency requirements to sketches as to production code and documentation of implemented behavior.
+Reconcile the relevant contracts, tests, and current documentation when implementing a proposal.
 
 ## Sources of truth
 

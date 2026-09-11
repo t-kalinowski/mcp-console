@@ -9,9 +9,12 @@
 This document proposes a configuration language and its intended semantics.
 It covers both near-term configuration and capabilities that will arrive through later pull requests.
 Examples describe the proposed interface, not commands or options that can all be used in the current release.
+This is an exploratory sketch: it need not settle every edge case or agree with other sketches.
+Production code and documentation of implemented behavior retain their normal correctness and consistency requirements.
 
 The design has one central unit: **a profile is a complete session definition**.
-It describes permissions, where the relay and worker run, how they are sandboxed, their language environments, resource limits, and storage settings.
+It describes permissions, where the relay and worker run, how they are sandboxed, their language environments, and resource limits.
+Recording and cleanup settings apply to the project's one Console directory, independently of the selected profile.
 Most configurations define that profile directly, without a `profiles` wrapper.
 Reusable definitions are available when duplication becomes inconvenient.
 
@@ -48,7 +51,7 @@ Do not require users to understand Codex internal structs or platform-specific s
 The most consequential choices are:
 
 - No configuration means `read_only`, with a private writable temporary directory and no worker-initiated network access.
-- Project configuration requests capabilities; it does not authorize itself.
+- Console reads the selected configuration and passes its requested policy to the sandbox.
 - `.agents/console/` is always write-denied to sandboxed workers, including with workspace write access.
 - Workers can read the whole managed directory, including current and previous session records, unless the user explicitly restricts reads.
 - The configuration contains no secrets; SSH uses an already configured passwordless connection.
@@ -82,7 +85,7 @@ The two read denials are illustrative defaults in the generated file, not a clai
 The `.agents/console/` denial is always included in sandboxed launches, even if it is omitted from the file or another rule grants workspace writes.
 It covers the config, transcripts, logs, projection artifacts, and preparation caches together.
 The controller writes these files outside the worker sandbox.
-See [Configuration authority](#5-configuration-authority).
+See [Loading and managed files](#5-loading-and-managed-files).
 
 For a project that needs only one API, replace the `network` block with:
 
@@ -139,12 +142,13 @@ Adapters may map configuration fields to a provider's API, but Console does not 
 
 ### Current MCP Console
 
-The inspected baseline is `main` at `c3027d71a86f837804ff3234dd1fab5c9103ff40`.
-Its documented sandbox already allows host reads, restricts ordinary writes to private temporary storage, and denies direct networking.
-Package preparation happens outside the worker sandbox, and `--no-sandbox` currently omits sandbox descendant cleanup.[3]
+The inspected baseline is `main` at `d6da3c31`, after the initial project YAML support and managed-directory migration.
+It reads `.agents/console/config.yaml` in the launch working directory and records sessions under `.agents/console/sessions/`.
+The current configuration interface and its supported fields are documented in [`docs/SANDBOX_CONFIGURATION.md`](../docs/SANDBOX_CONFIGURATION.md).
 
-The proposed YAML loader, profiles, targets, and resource controls must not be presented as existing features.
-The current CLI does not expose this proposed configuration interface.[4] This document also proposes some intentional behavior changes, identified below, rather than treating them as compatibility facts.
+Package preparation intentionally happens outside the worker sandbox, and `--no-sandbox` omits sandbox descendant cleanup.
+The profiles, target adapters, expanded controls, and nested log layout below remain proposals.
+Earlier inspected source references are retained for context.[3][4]
 
 ## 4. File shape, discovery, and profiles
 
@@ -159,6 +163,7 @@ A file has document-level keys and session-level keys:
 | `profiles`         | Optional map of named session profiles.                                |
 | `definitions`      | Optional reusable `targets`, `permissions`, and `environments`.        |
 | `server`           | Controller-wide settings such as session admission limits.             |
+| `storage`          | Project-wide log retention and managed-cache cleanup.                  |
 
 All other recognized top-level keys form the implicit `default` profile:
 
@@ -174,23 +179,24 @@ All other recognized top-level keys form the implicit `default` profile:
 | `packages`        | Preparation, resolution, repositories, and source policy.             |
 | `resources`       | Per-session hard limits and scheduling preferences.                   |
 | `env`             | Deliberately forwarded or assigned worker environment variables.      |
-| `storage`         | Session records and cache routing/retention.                          |
 
 Do not require a `session:` or `profiles.default:` wrapper for a one-profile configuration.
 Do not allow the same implicit profile to be defined again as `profiles.default`.
+`storage` is document-wide and is not inherited or overridden by session profiles.
 
 ### Discovery
 
 The canonical and only discovered project path is `.agents/console/config.yaml`.
 `config init` creates that file in the same managed directory used for transcripts, logs, projections, and other Console artifacts.
 There is no alternate project filename or separate user-level Console configuration directory.
+Whether generated files are tracked or ignored by version control is the user's choice.
+Initialization does not create or edit Git ignore rules.
 
 Choose the project root once at startup: an explicit workspace argument, then the discovered project configuration's parent project, then the invocation working directory.
 Search upward only within the initial repository/workspace boundary; do not keep discovering new configuration after a worker changes directory.
 Do not load a chain of ancestor project files implicitly.
 
 Recommended precedence for ordinary session settings is built-in defaults, the selected project file, and explicit controller CLI settings.
-Project settings still require authorization; precedence is not an authorization rule.
 Trusted sandbox requirements supplied by the caller remain the sandbox's responsibility to apply.
 
 Select another project through an explicit workspace argument, which selects that project's `.agents/console/` directory.
@@ -238,7 +244,7 @@ Reject unknown parents and cycles.
 Do not support multiple profile inheritance or implicit cross-products of profiles.
 
 Selecting a built-in directly produces its default local target, not the target from the implicit project profile.
-The selection UI and approval must show this.
+`config explain` shows the selected target.
 To remove sandboxing while retaining an already selected remote target, use the explicit policy-only override described under `full_access`, not an unrelated profile selection.
 
 ### Optional reusable definitions
@@ -284,41 +290,22 @@ Sibling fields overlay the expanded value using the same merge rules as profile 
 A component accepts one `use`, not a list.
 Definitions may themselves use one parent definition; cycles are errors.
 
-Definitions are conveniences, not additional authorization scopes.
-Selecting a new combination of target and permissions must still be authorized as that combination.
-Approval for a writable container is not approval for the same write policy on a production SSH host.
+Definitions reuse ordinary settings.
+The resulting target and requested permissions still pass through the selected sandbox/provider interface.
 
 The three namespaces are enough initially.
 Do not introduce separate registries for every small object, or force ordinary files to spread state across them.
 
-## 5. Configuration authority
+## 5. Loading and managed files
 
-**A project file is a request, not a source of authority.** This matters even if MCP Console itself cannot write that file: another agent tool, a checkout, or a package script might change it.
+Console reads the project configuration as data, selects the profile, and passes the requested policy to the sandbox/provider.
+The sandbox owns policy parsing, validation, and enforcement; Console returns its result or error.
+There is no separate Console authorization step, approval dialog, trust record, or per-operation permission workflow in this sketch.
+Any policy requirements supplied by the caller use the sandbox's existing interface.
 
-The controller presents the selected configuration and the sandbox/provider's reported policy and target identity through the trusted CLI or MCP-client approval channel.
-Where resolving identities requires network access or executable probes, that channel first authorizes the limited probe operations.
-Final authorization follows the provider's identity resolution and precedes preparation and launch.
-The sandbox/provider owns identity checks and any policy normalization; Console passes the result and authorization along.
-Any Console-owned approval metadata belongs under `.agents/console/state/`; the trusted caller supplies authorization, not a flag in the project config.
-
-Loading or parsing an untrusted project file must not run its SSH command, Docker build, executable probe, package installer, or other configured program.
-Authorization comes before side-effecting target preparation.
-
-An agent may request a different authorized profile or propose configuration edits.
-Neither action authorizes additional access.
-If an agent is deliberately allowed to edit configuration, those edits still go through the same review.
-There is no meaningful way to distinguish a safe policy change by whether a human or an agent happened to write its bytes.
-
-Referencing a profile or provider does not supply authorization.
-The trusted caller authorizes the complete selected session, including any request for `full_access`.
-
-Prefer approval of the effective configuration over approval of raw file formatting.
-A change in comments need not invalidate approval.
-A changed target, mount, provider, executable, environment forwarding rule, package source, manifest, service exposure, or policy dependency does.
-When the sandbox/provider reports changed execution inputs, present that change through the caller's approval flow.
-
-Console does not compare policies to prove that a change is narrower or implement its own authorization lattice.
-It presents changes through the caller's approval flow and forwards the sandbox/provider's checks and diagnostics.
+Ordinary configuration loading and profile listing do not execute configured programs.
+Target setup, builds, and package preparation happen when the selected operation needs them, through the existing adapters.
+Pass the loaded configuration values through the launcher's existing setup interface, keeping relay stdin/stdout/stderr available for their normal streams.
 
 ### Protected managed directory
 
@@ -331,25 +318,13 @@ The controller and trusted preparation processes write config, state, records, a
 Workers return outputs to the controller for recording rather than receiving a write exception for a subdirectory.
 For remote or container execution, pass the denial for the managed directory in the corresponding target namespace as well.
 
-Workers have full read access to `.agents/console/` by default, including configuration, approval metadata, and every current and previous session's journal, projections, logs, outputs, and artifacts.
+Workers have full read access to `.agents/console/` by default, including configuration and every current and previous session's journal, projections, logs, outputs, and artifacts.
 Session and generation identities organize records; they do not imply filesystem read isolation.
 Only an explicit user read restriction changes that access, through the selected sandbox's policy.
-The config contains no secrets, but a transcript can contain anything the submitted code prints, including secrets.
-Console does not hide those records automatically or promise confidentiality between sessions.
 `full_access` and the explicit `--no-sandbox` override omit the managed-directory write denial.
 Other unsandboxed processes running as the same OS user are outside that boundary.
 
-### Snapshot before launch
-
-Load the selected configuration as data, resolve ordinary profile settings, and pass the requested policy to the sandbox.
-After any authorized probes and input capture, use the sandbox/provider's reported policy and identities and the preparation adapter's captured inputs for final authorization.
-Pass those same configuration values to the launcher.
-Do not approve a pathname and then have the sandbox reopen that mutable file later.
-
-For local launches, use an inherited setup descriptor or an inline, non-secret serialized argument.
-Keep target stdin/stdout/stderr as the target's streams.
-For remote launches, use an authenticated setup channel or safely encoded and quoted bounded arguments.
-Do not introduce a writable temporary policy file or recreate complicated setup-payload forwarding on the relay's stdin.
+### Referenced files
 
 For sandboxed sessions, referenced preparation inputs must have the same protection from worker writes as the config file.
 This includes Dockerfiles, complete build contexts, requirements manifests, lockfiles, and files they refer to that a trusted builder or installer will consume.
@@ -359,24 +334,9 @@ An ordinary file or build context in a writable project directory is rejected; s
 When replacing a running worker, protection must also cover that worker's current access.
 The sandbox/provider owns this access check; Console uses its result without implementing a path matcher or filesystem safety checks.
 
-Write protection from the worker does not prevent another user tool from changing the source.
-Before final authorization, the selected preparation adapter captures the complete referenced inputs and reports their content identities with the requested preparation.
-Authorization binds those captured contents, not only their pathnames.
-Preparation consumes that exact capture; it does not reopen the original paths after approval.
-An adapter that cannot capture a supported input fails before preparation rather than accepting a mutable reference.
-Retained captures belong under `.agents/console/` on the host that prepares them.
-The unrestricted opt-out omits worker-write protection, but does not omit capture and authorization of preparation inputs.
-
-### Approval settings
-
-Approval behavior comes from the trusted CLI caller or MCP client, outside project YAML.
-There is no `server.approval_policy` field in the project schema and no second Console config file for it.
-The caller decides whether to offer an approval interaction or deny requests outside already authorized capabilities.
-In noninteractive operation, an unapproved configuration is an actionable error.
-Do not silently ignore the file and continue under a different profile.
-
-The sandbox interprets any trusted policy requirements supplied by that caller and reports incompatible requests.
-Console forwards those diagnostics and does not implement an additional policy ceiling or clipping algorithm.
+Preparation adapters read the referenced inputs through their ordinary file and build interfaces.
+Console does not add an approval-bound snapshot store, a separate authorization step for reading files, or private staging rules for unapproved captures.
+File-loading and preparation errors propagate from the adapter.
 
 ## 6. Built-in profiles and merge semantics
 
@@ -432,13 +392,13 @@ version: 1
 extends: full_access
 ```
 
-It may add a target, environments, resources, and storage.
+It may add a target, environments, and resources; document-wide storage settings still apply.
 It must not also claim enforced filesystem or network restrictions.
 Such contradictory configurations are errors.
 A hard resource limit can still be enforced by a separate supervisor or compute provider.
 
 Also support `mcp-console serve --no-sandbox` as a deliberate policy-only override: retain the selected target and environment, disable the worker sandbox, and clearly report that configured worker permission rules are not enforced.
-It remains subject to trusted approval and managed requirements.
+Managed requirements still use the configured resolver path.
 This is an explicit user action, never an error-recovery path.
 
 Internally `full_access` selects `sandbox.provider: none`.
@@ -569,7 +529,7 @@ permissions:
 ```
 
 A `url` rule with a path or `methods` requires HTTP-aware enforcement.
-HTTPS requires an explicitly approved TLS-terminating proxy or equivalent trusted application gateway.
+HTTPS requires a configured TLS-terminating proxy or equivalent trusted application gateway.
 The example requests TLS inspection; it does not assume a CONNECT tunnel can see encrypted paths.
 SRT's optional TLS termination is one possible upstream building block, not an assurance that every provider has this capability.[2]
 
@@ -590,8 +550,8 @@ The sandbox/provider owns proxy failure behavior and tunnel lifetime.
 Console reports its status and does not retry with a less restricted policy.
 
 Transport and preparation traffic are separate.
-The controller can make the approved SSH connection even when the worker's network mode is `none`.
-Image pulls and package downloads have their own authority and must appear separately in the effective configuration.
+The controller can make the configured SSH connection even when the worker's network mode is `none`.
+Image pulls and package downloads use the preparation path's settings, independently of the worker's network restrictions.
 
 ## 9. Local development: listeners, publishing, and IPC
 
@@ -636,7 +596,7 @@ Publishing a container port that cannot reach a loopback-only app is not an acce
 
 Return the reachable URL, service name, session/generation, and access scope in session metadata.
 A browser tool running on the controller host can use that URL.
-A cloud browser cannot reach the user's loopback address merely because a port is open: it needs a separately approved authenticated tunnel/exporter.
+A cloud browser cannot reach the user's loopback address merely because a port is open: it needs a separately configured authenticated tunnel/exporter.
 Reserve `scope: authenticated_tunnel` for such a provider, with explicit recipient/authentication and lifetime.
 Never default to a public URL or a non-loopback bind to make an otherwise unreachable browser work.
 
@@ -659,7 +619,7 @@ permissions:
 
 This permits the bind only.
 It neither publishes the port nor authorizes connections to unrelated host services.
-Non-loopback binding must be explicit and separately authorized.
+Non-loopback binding must be explicitly configured.
 
 Automatic allocation is safe when the manager owns the listening socket, as for `publish.port: auto`.
 For an application-owned listener, the application must bind port zero and report its bound endpoint, or accept a supported socket handoff.
@@ -683,7 +643,7 @@ Filesystem visibility of a socket does not itself authorize connection.
 Do not include the Docker daemon socket or SSH agent socket in defaults.
 Authorizing an IPC endpoint authorizes the service behind it; it is not merely file access.
 A Docker API socket can defeat a container's intended host boundary.
-Such grants need explicit high-risk approval and must not be described as narrow just because they name one filesystem path.
+Such grants must be explicit and must not be described as narrow just because they name one filesystem path.
 
 ## 10. Targets: local, SSH, Docker, and other compute
 
@@ -728,10 +688,10 @@ OpenSSH and the host's existing key or credential facilities own authentication,
 Invoke SSH in batch mode and forward authentication or connection errors; do not add password prompts, private keys, or SSH credential fields to Console configuration.
 Do not forward the SSH agent as an implementation convenience.
 
-A future `setup.install: if_missing` may stage a version-matched, integrity- verified executable and runtime assets after approval.
+A future `setup.install: if_missing` may stage a version-matched executable and runtime assets when selected.
 It is not an unpinned `curl | sh`.
 Pin/check the protocol and runtime compatibility before launching the relay.
-Binary download, staging, and package preparation are visible setup operations with their own network authority.
+Binary download, staging, and package preparation are setup operations separate from worker networking.
 
 The controller launches the remote manager through the public launcher boundary; the manager applies the remote sandbox and then starts relay and worker.
 The server is not taught the details of a remote Seatbelt, bubblewrap, Windows, or third-party sandbox implementation.
@@ -743,10 +703,11 @@ A local PID ownership flag alone cannot enforce remote cleanup after a network p
 
 The remote host is trusted with submitted code, data, and any explicitly forwarded credentials.
 A sandbox on that host does not protect the session from its administrator.
-Remote ambient MCP Console configuration must not broaden the controller-authorized policy; trusted target-local requirements may further restrict it and must be disclosed.
+The remote launcher uses the controller-selected policy rather than discovering another Console configuration on the remote host.
+The sandbox applies any target-local requirements through its own interface.
 
 There is no implicit project synchronization.
-Optional later synchronization must specify source, destination, direction, deletion/conflict policy, excluded control/secret files, and authorization for writeback.
+Optional later synchronization needs an explicit source, destination, direction, and conflict policy.
 An existing remote workspace is sufficient for the first SSH implementation.
 
 ### Docker container
@@ -772,9 +733,9 @@ A read-only profile still requires read-only effective access.
 A workspace-write profile still protects its denied subpaths.
 The selected sandbox/provider validates the requested mount and policy combination; Console forwards its result.
 
-Pin the resolved image digest in the approved launch plan.
+Record the resolved image digest with the launch settings.
 Pull/build policy should distinguish `never`, `if_missing`, and an explicit refresh; do not silently move a running profile to a different mutable tag.
-Images must contain or receive compatible runtime components through the approved setup path.
+Images must contain or receive compatible runtime components through the configured setup path.
 
 Use typed fields for image, mounts, user, working directory, devices/GPU access, resource limits, and lifecycle.
 Do not default to privileged mode, a host PID or network namespace, a daemon socket mount, or unnecessary capabilities.
@@ -859,8 +820,8 @@ The examples keep the Dockerfile and build context under `.agents/console/`.
 A separate Dockerfile or context outside that directory is allowed only when it meets the protected-input rules in section 5.
 The whole writable project is not an eligible build context for a sandboxed session.
 
-The selected build adapter captures the Dockerfile and complete context before final authorization and builds from that same capture afterward.
-Remote builds require explicit staging of the approved capture.
+The selected build adapter reads the Dockerfile and context through its ordinary build interface.
+Remote builds require explicit context staging through that adapter.
 Build-time network and secret access are separate from runtime permissions.
 Image builds are code execution, not inert configuration parsing.
 
@@ -884,7 +845,7 @@ sandbox:
 ```
 
 This adapter is trusted executable configuration.
-It receives the requested policy, target argv, approved environment, resource requirements, and lifecycle parameters through a versioned setup contract.
+It receives the requested policy, target argv, configured environment, resource requirements, and lifecycle parameters through a versioned setup contract.
 The adapter owns parsing and validation of its policy input and returns its diagnostics to Console.
 `${setup_fd}` is an injected placeholder, not general template evaluation.
 The adapter launches the exact provided argv without reconstructing it through a shell.
@@ -945,7 +906,7 @@ These packages are available, not attached, imported, or executed automatically 
 
 A session-lifetime environment can reuse immutable cached artifacts.
 It need not redownload everything at each start.
-Worker mutation of shared installed packages is not permitted; dynamic additions produce an approved managed environment update or overlay, rather than editing a user's unrelated library.
+Worker mutation of shared installed packages is not permitted; dynamic additions use a managed environment update or overlay, leaving unrelated user libraries unchanged.
 
 Engine-required bridge/runtime packages are distinct from user packages and are reported explicitly.
 A user list does not remove runtime components necessary for the chosen language configuration.
@@ -987,7 +948,7 @@ Inline `requirements` and `requirements_file` are mutually exclusive within a la
 Manifest paths are controller paths, relative to the controller project root, just like referenced Dockerfiles and build contexts.
 The example therefore reads the `requirements.yaml` beside the discovered config even for an SSH or container target.
 Absolute controller paths are also allowed if they meet the protected-input rules in section 5.
-The preparation adapter captures the manifest before final authorization and passes that capture to target-side preparation through the authorized setup channel.
+The preparation adapter reads the manifest and supplies its requirements to target-side preparation through its normal setup channel.
 It does not look for a similarly named target file or implicitly synchronize the project.
 
 Additional explicit formats can include `requirements_txt` for Python and a supported data-only `ir` manifest format for R.
@@ -1019,8 +980,8 @@ Missing packages produce ordinary actionable errors.
 An explicit interpreter must be compatible with its selected library/environment; conflicting selectors are an error, not competing priorities.
 
 A future managed installation selector can use `version` instead of `executable`.
-`version` does not silently download an interpreter unless preparation policy authorizes that action.
-Interpreter downloads are not package index access and need their own approved source.
+`version` does not download an interpreter unless the preparation settings enable it.
+Interpreter downloads use the configured runtime source, independently of package indexes.
 
 Typed configuration takes precedence over ambient `R_HOME`, `RETICULATE_PYTHON`, and virtual-environment hints.
 Conflicts must be reported; do not depend on accidental environment-variable ordering.
@@ -1052,17 +1013,17 @@ environments:
 
 `mutation: never` means use an existing project environment without changing its contents or lock.
 A requested preparation that would modify it fails with instructions.
-`mutation: overlay` may prepare a separate managed environment from the locked project plus approved additions, leaving the project unchanged.
-`mutation: project` is an explicit request to prepare/update the project environment and requires the corresponding authority.
+`mutation: overlay` may prepare a separate managed environment from the locked project plus requested additions, leaving the project unchanged.
+`mutation: project` explicitly selects preparation/update of the project environment.
 
 Project-environment paths and lockfiles remain in the target namespace.
 Using an existing environment does not authorize a trusted preparation process to consume worker-writable project files.
-Any preparation from a project lock or its referenced files must satisfy section 5's protection and capture rules; a writable project requires protected preparation inputs before that operation can proceed.
+Preparation from a project lock or its referenced files follows section 5's protected-input rule.
 
 Explicit project selection wins over discovery.
 An optional `kind: auto` can perform documented discovery on the target; it must report the selected manager and reject ambiguous competing environments.
 Do not activate arbitrary project startup code on the trusted controller while detecting an environment.
-R startup files and Python startup hooks execute only within their appropriate approved execution boundary.
+R startup files and Python startup hooks execute in the selected runtime, inside the worker sandbox when enabled.
 
 Do not implement “always available” Python packages by stacking unrelated virtual environments on `PYTHONPATH`.
 Resolve the project and required additions as one environment, or reject incompatible requirements.
@@ -1073,7 +1034,7 @@ Additive package updates may preserve live state only where the runtime's existi
 A failed preparation must not half-commit a new environment or replay user code automatically.
 Current MCP Console already distinguishes preparation from import/attachment and has explicit retained-environment transitions.[7]
 
-## 13. Package resolution, mirrors, and preparation authority
+## 13. Package resolution, mirrors, and preparation
 
 ### Resolution modes
 
@@ -1098,12 +1059,14 @@ These controls cover MCP Console's resolver path, including R, Python, and DuckD
 They cannot stop arbitrary evaluated code from implementing an installer if its ordinary filesystem and network permissions allow that.
 Runtime enforcement remains the sandbox's responsibility.
 
-**Recommendation:** make `explicit` the new configuration-era default.
-This is an intentional change from current automatic missing-package resolution.[7] Keeping `automatic` as a compatibility default is a reasonable alternative; choose that independently from the filesystem profile, and document that a read-only worker can still request separately authorized preparation.
+`automatic` preserves the current default and runtime missing-package behavior.[7] The host resolver handles supported inferred requirements outside the worker sandbox, using its configured sources and existing resolver rules.
+It may install packages and run accepted installation or build code with server permissions.
+There is no additional Console approval step for an inferred package, its transitive dependencies, or its artifact downloads.
+A read-only worker or a worker with networking disabled can still use this resolver path.
+Choose `explicit` to disable missing-package inference, or `disabled` to disable resolution entirely.
 
-For the first configuration implementation, make the existing preparation trust visible rather than implying a new boundary: the compatibility preparation default is `network: sources` and `builds: trusted_host`.
-This is separate from the recommendation to use `resolution: explicit`.
-Host preparation requires approval of that authority; an approved worker network rule is not enough.
+The compatibility preparation default remains `network: sources` and `builds: trusted_host`.
+Worker permissions do not constrain this host-side preparation process.
 Use `builds: isolated` for untrusted source builds once supported, or `builds: disabled` to require suitable prebuilt artifacts.
 An eventual change to isolated preparation by default is a separate migration, not something the YAML loader alone delivers.
 
@@ -1136,24 +1099,20 @@ Do not append public PyPI or CRAN as a fallback.
 Python index ordering is significant; `first_index` selects the first index containing a package, rather than choosing competing versions across all indexes.
 This follows the safety motivation documented by uv.[8]
 
-Mirror preference is not complete package approval.
 The selected preparation adapter owns package-source handling for direct and transitive requirements and build dependencies.
-Network and filesystem restrictions around preparation belong to its sandbox/provider, not a second enforcement layer in Console.
+If isolated preparation is selected, its sandbox/provider owns the requested network and filesystem restrictions.
 Project package-manager configuration and ambient index/repository variables cannot silently add a source outside this policy.
 A corporate configuration may require different approved copies of built-in runtime dependencies; missing approved artifacts are errors, not permission to bypass the mirror.
 
 With `builds: trusted_host`, retain the current accepted inputs: documented trusted `ir` references with `IR_NO_LOCAL_SOURCES=1`, named Python PEP 508 registry requirements, and validated DuckDB extension names.
 `source_policy` may further restrict those inputs; it cannot authorize local sources, Python URL/VCS direct references, or arbitrary DuckDB source selectors on this path.
-Supporting additional source kinds requires a separately implemented isolated preparation boundary and explicit approval of that expanded authority; reject them until both exist.
+Supporting additional source kinds requires a separately implemented isolated preparation path; reject them on the trusted-host path.
 
-`network: sources` gives the trusted preparation path access only to the resolved approved repository/artifact destinations.
-Repository redirects and separate artifact/CDN hosts must be explicitly admitted or supplied by trusted repository metadata under a defined policy; an arbitrary redirect is not an automatic grant.
+`network: sources` uses the configured repositories and the resolver's ordinary handling of transitive requirements, redirects, and artifact downloads.
 Proxy credentials and repository authentication are held by the preparation path, not automatically exposed to the worker.
 
-There are three distinct controls: which packages can be requested, where their artifacts may come from, and what installation/build code can do.
-A registry allowlist alone does not make package installation safe.
-Approval must bind a requirement to its permitted ordered sources and fallback behavior, not accept the cross-product of independently approved package names and registries.
-Apply this to declared, transitive, and runtime-inferred requirements before installation or cache activation.
+Source selection and build isolation are separate settings.
+The existing resolver input contracts still apply to declared and runtime-inferred requirements; this sketch does not add a package-approval system.
 
 `builds: isolated` requests isolated preparation with a bounded source snapshot, controlled network, resource limits, and owned output directories.
 If unavailable, fail when a build is needed.
@@ -1170,7 +1129,7 @@ A command adapter supporting only relay launch must use pre-existing environment
 Requests that need unsupported preparation fail.
 
 Cache keys include the effective manifest/lock, selected runtime and ABI, target platform/architecture, source policy, and artifact integrity information.
-Do not reuse artifacts from an unapproved public source simply because the name and version match a corporate package.
+Do not reuse artifacts from a different configured source simply because the name and version match a corporate package.
 
 ## 14. SQL installations and connections
 
@@ -1345,7 +1304,7 @@ env:
 ```
 
 Use a controlled baseline needed to launch the selected runtimes, not automatic inheritance of every controller environment variable.
-`inherit` names variables from the controller's approved environment; values are deliberately forwarded to the target.
+`inherit` names variables from the controller's environment; values are deliberately forwarded to the target.
 `from_env` is an explicit credential/value reference evaluated on the controller unless a later secret-provider type says otherwise.
 
 Resolved secret values go through protected setup channels, not command-line arguments or routine configuration dumps.
@@ -1360,9 +1319,9 @@ Provider-specific environment variables belong to the provider's `command.env`, 
 
 Worker `env` values belong only to the worker and its descendants, not the controller, SSH/Docker launcher, provider, relay, or resolver.
 In sandboxed sessions, the sandbox injects them after enforcement is established.
-Helpers use an implementation-owned baseline plus separately approved helper configuration.
+Helpers use an implementation-owned baseline plus their configured helper settings.
 A worker `LD_PRELOAD` assignment must not affect an unsandboxed launcher.
-Provider `command.env`, executable, argv, and working directory are authority-bearing configuration: a project overlay requires authorization even when the underlying provider is user-defined.
+Provider `command.env`, executable, argv, and working directory are launcher settings, separate from the worker environment.
 A restricted profile fails if its provider cannot keep helper and worker environments separate.
 
 Do not add inline secret fields, a Console credential store, password prompting, or executable secret lookup to this configuration.
@@ -1378,8 +1337,8 @@ The configuration names existing environment variables or external tool identiti
 .agents/console/
   config.yaml
   state/
-  logs/
-    <server-session-id>/
+  sessions/
+    <timestamp>-<pid>/
       journal.jsonl
       01/
         transcript.md
@@ -1404,19 +1363,22 @@ Only completely unrestricted execution omits that protection.
 The sandbox implements it; Console supplies the denial and forwards any error.
 
 The controller records transcripts, logs, projections, output files, and image artifacts from worker responses.
-Recording does not grant the worker direct write access to `logs/` or any other part of the managed directory.
+Recording does not grant the worker direct write access to `sessions/` or any other part of the managed directory.
 Records for a remote worker are collected in the controller project's managed directory.
 If trusted preparation needs target-side artifacts, it uses the target workspace's `.agents/console/`, covered by the same sandbox write denial.
 
 ### Logs and session records
 
-Each server process launch creates a new, unique `.agents/console/logs/<server-session-id>/` directory.
+Keep the canonical `.agents/console/sessions/` location.
+Each server process launch creates its own `<timestamp>-<pid>/` directory there, using the startup timestamp and server PID.
 Its `journal.jsonl` is the append-only record for that entire server lifetime, including calls, control events, worker restarts, and crashes.
 The server records a crash or retirement before recording the replacement generation.
 A new server process creates a new directory and journal rather than appending to a previous server's record.
 
 Every worker generation gets a subdirectory numbered in creation order within that server lifetime: `01`, `02`, `03`, and so on.
 The journal associates each generation with its directory and session/profile identity.
+Profile names are journal metadata, not separate storage locations or retention namespaces.
+Tools can parse the JSONL and filter by profile to create a view or projection.
 Each generation directory holds its own `transcript.md`, source-only `transcript.qmd`, output files, images, and other artifacts.
 These projections cover that generation's cells and output, so a later export can select a generation without mixing separate runtime lifetimes.
 Restarting or replacing a worker preserves the server journal and all earlier generation directories; it does not truncate or overwrite them.
@@ -1431,7 +1393,9 @@ storage:
       sweep_interval: 24h
 ```
 
-This block configures retention for records under `.agents/console/`; it does not select another directory.
+`storage` is a document-level setting for the shared project store, independent of session profiles.
+Every profile uses the same log retention and cache cleanup settings; selecting a profile cannot replace them.
+This block configures retention for records under `.agents/console/sessions/`; it does not select another directory.
 Target-manager diagnostics are returned to the controller for recording there.
 
 Retention operates on complete retired server-session directories, including the journal and every generation's projections and referenced artifacts, not arbitrary files selected by a glob.
@@ -1444,8 +1408,7 @@ This is not a promise of a background daemon while MCP Console is stopped.
 Coordinate cleaners with locks.
 A user-invoked prune command may force an eligible sweep and show a dry run.
 
-Logs may contain code, input, output, and secrets printed by the user program.
-Known-secret redaction can be offered as best effort, not a confidentiality guarantee.
+Logs and transcripts are visible records of the session's code, input, output, and artifacts.
 The managed-directory denial protects controller records from worker mutation.
 All current and previous records remain readable by default, as described in section 5; retention and generation boundaries do not add read denials.
 Do not execute an exported transcript as part of recording or cleanup.
@@ -1471,9 +1434,10 @@ Worker application caches and database spill files use the sandbox's private tem
 That temporary storage is runner-owned scratch, not another persistent Console state directory.
 Runtime settings such as cooperating R packages' user cache location are distinct from installer settings.[10] DuckDB's writable spill directory is likewise separate from its prepared extension artifacts.[9]
 
+The cache cleanup settings above are also document-wide.
 There is no worker-writable cache exception under `.agents/console/`.
 The worker may read prepared artifacts as allowed by the sandbox policy, but trusted preparation never consumes the worker's scratch cache as its own package or executable cache.
-Publishing selected runtime output under `logs/<server-session-id>/` is a controller recording operation, not promotion into a preparation cache.
+Publishing selected runtime output under `sessions/<timestamp>-<pid>/` is a controller recording operation, not promotion into a preparation cache.
 Tool-specific routing remains with the corresponding adapter, and filesystem validation remains with the sandbox.
 
 ### Ownership and cleanup safety
@@ -1491,7 +1455,7 @@ Respect tool locks and use supported pruning APIs.
 uv specifically documents its cache-management commands and concurrency expectations.[14]
 
 Unused owned entries may be removed when due or to satisfy `max_size`; never indiscriminately clear every cache on a timer.
-Cleanup never removes `config.yaml`, approval metadata, or active session records as a cache entry.
+Cleanup never removes `config.yaml` or active session records as a cache entry.
 
 ## 18. Resolution, validation, and switching
 
@@ -1499,21 +1463,17 @@ The conceptual pipeline is:
 
 ```text
 load selected YAML as data
-  -> select the profile, ordinary session settings, and .agents/console paths
+  -> select the profile, session settings, and document-wide storage settings
   -> include the managed-directory write denial for a sandboxed launch
-  -> obtain limited probe authorization from the trusted caller if needed
-  -> sandbox/provider validates policy and reports resolved identities and capabilities
-  -> sandbox/provider checks referenced-input write protection; preparation adapters capture inputs
-  -> obtain final authorization for the reported policy, identities, settings, and captured inputs
-  -> preparation adapters prepare approved environments/images/storage
-  -> sandbox/provider rechecks identities and launches with its enforcement
+  -> pass the requested policy and path requirements to the sandbox/provider
+  -> use its validation result or return its error
+  -> preparation adapters prepare configured environments/images/storage as needed
+  -> sandbox/provider launches with its enforcement
   -> controller appends to the server journal and records projections in the generation directory
 ```
 
-A side-effect-free structural check is distinct from an authorized target probe.
-Probing may resolve a Docker tag to a digest, verify an SSH host identity, or inspect an approved command-provider executable; it does not authorize preparation or launch.
-If the sandbox/provider reports an identity change after final authorization, forward that result for renewed authorization before continuing.
-Preparation uses the approved input captures even if another tool subsequently edits the original source files.
+The sandbox/provider owns target checks and any required probes through its normal launch interface.
+Console does not wrap them in another authorization protocol.
 Do not contact every SSH host or build every image just to list profiles.
 Console can attach the selected config path and profile to a diagnostic while preserving the sandbox/provider's error details.
 It does not rerun those checks with a separate validator or turn an upstream acceptance into a stronger security claim.
@@ -1528,30 +1488,23 @@ mcp-console profiles list
 mcp-console serve --profile remote
 ```
 
-`config explain` should show the selected target, workspace, provider, the sandbox's reported permissions, package preparation authority, secret references and recipients, managed storage paths, and limits.
+`config explain` should show the selected target, workspace, provider, the sandbox's reported permissions, package preparation settings, environment references, canonical storage paths, and limits.
 Pending or failed policy checks are reported using the sandbox/provider's result.
-Its default operation is redacted and non-executing; an explicit probe requires authorization.
+Its default operation reports settings without starting a worker or preparing environments.
 A machine-readable JSON form is useful for clients and tests, but the on-disk format remains YAML.
 
-For the MCP interface, add a profile selection field to the existing session start/restart flow rather than immediately creating an independent collection of configuration-management tools.
-A running-session profile change requires an explicit restart action.
-Report that in-memory objects, connections, and services will be lost; do not silently serialize and restore arbitrary state.
-
-Preflight and preparation should leave the old worker usable when possible.
-After approval and successful preparation, stop admission, retire the old worker and its descendants/services, then start the replacement.
-A failed replacement is reported as such.
-Do not silently revive the old, more privileged profile as a fallback.
-Account for any staged resources without exceeding controller capacity limits.
-
-Even a permission reduction requires replacement: an existing process may already hold open files, sockets, loaded code, or sensitive memory.
+Select a profile at server startup with `serve --profile`; the first worker uses that profile directly.
+This sketch does not add named-session creation operations or change the MCP `send`/`prepare` schema.
+Any future MCP profile-selection interface belongs in that interface's implementation work.
+Switching an existing worker's profile would require replacement, since it may already hold open files, sockets, or loaded code from its current environment.
 File edits do not hot-reload into a running session.
-Approved changes become effective at a new generation boundary.
 
 ## 19. Schema evolution and implementation slices
 
 ### Review boundary
 
-This sketch chooses the user-facing configuration, the managed-directory layout, and the boundary between Console and its sandbox.
+This sketch explores the user-facing configuration, the managed-directory layout, and the boundary between Console and its sandbox.
+It is not a complete specification or a requirement to synchronize every other design sketch.
 Review Console's file discovery, session settings, policy forwarding, storage ownership, and reporting of upstream errors here.
 Policy parsing, filesystem safety, network mediation, and enforcement are sandbox responsibilities and are developed and tested there.
 An accepted configuration carries the sandbox's guarantees and limitations; Console does not independently verify or extend them.
@@ -1562,7 +1515,7 @@ Use an existing YAML 1.2 library's data-only loader and its normal protections a
 Load the Console fields needed to select a session and fail on errors from that loader or the selected adapter.
 Propagate those errors without requiring a custom diagnostic or recovery layer.
 Console does not add a YAML pre-scanner, expansion or nesting budgets, or a separate validator for aliases, merge keys, or tags.
-Parser resource handling stays with the chosen library; this sketch does not promise additional resistance to malicious YAML resource exhaustion.
+Parser resource handling stays with the chosen library.
 Keep validation to the ordinary field and profile checks needed for the supported happy path.
 Do not build a custom parser, executable YAML features, an include language, or a policy normalization engine.
 
@@ -1573,7 +1526,7 @@ Do not duplicate the sandbox's validators in Console or silently discard fields 
 
 Only the selected profile needs a sandbox/provider operation; listing profiles does not probe every target.
 Provider `options` belong to that provider's parser.
-`config check` loads the file and delegates policy checking; target operations still use the caller's approval flow.
+`config check` loads the file and delegates policy checking to the sandbox/provider.
 Ordinary language, package, and connection adapters retain their existing input contracts, without acquiring sandbox enforcement responsibilities.
 
 ### Suggested sequence of pull requests
@@ -1585,7 +1538,7 @@ Ordinary language, package, and connection adapters retain their existing input 
 | 3     | Expose the sandbox's supported proxy and destination settings                                                           | No Console network validator or enforcement layer                                  |
 | 4     | Language selection, resolution controls, explicit manifests and repository policy                                       | Preserve current activation contracts; disclose existing host-build trust          |
 | 5     | Retention, protected preparation caches, runtime scratch routing, scheduling hints                                      | No worker write exception under the managed directory                              |
-| 6     | SSH target, approved setup, remote manager lifecycle, path mapping                                                      | Passwordless host setup and an existing remote workspace; no credential management |
+| 6     | SSH target, configured setup, remote manager lifecycle, path mapping                                                    | Passwordless host setup and an existing remote workspace; no credential management |
 | 7     | Services/forwarding and exact local-IPC grants                                                                          | No blanket localhost/LAN allowance                                                 |
 | 8     | Docker, Docker Sandbox, and versioned command adapters                                                                  | No silent policy dilution by provider flags                                        |
 | 9     | Forward provider resource limits, add session admission and SQL adapters, expose additional proxy features              | Enforcement remains in the sandbox/provider                                        |
@@ -1603,11 +1556,13 @@ The starter uses settings accepted by the bundled sandbox; any unsupported polic
 Test the public configuration and launcher workflow: discover and initialize the single config path, select profiles, and forward the requested policy with the managed-directory denial.
 Cover that denial with omitted config, read-only and workspace-write profiles, explicit write grants, and the unrestricted exception.
 Cover default reads of current and previous records and forwarding of explicit user read restrictions.
-Verify that approval behavior cannot be set by project YAML, and that loader and adapter failures reach the caller.
-Check controller-relative manifests for local and remote targets, rejection of worker-writable preparation inputs using the sandbox/provider's result, and preparation from the exact input capture approved by the caller.
+Verify that loader and adapter failures reach the caller without an additional Console approval workflow.
+Check controller-relative manifests for local and remote targets and forward the sandbox/provider's result for protected preparation inputs.
+Preserve automatic runtime resolution outside the worker sandbox through the existing resolver contracts.
 Verify that controller recording stays under `.agents/console/`, preparation caches remain separate from writable runtime scratch, and configuration uses credential references with passwordless SSH.
 Across restart and crash recovery, verify one server journal, successive generation directories with separate projections, preservation of earlier generations, and a fresh journal for a new server process.
 Retention removes only complete retired server record sets.
+Different profiles use the same canonical storage and document-wide cleanup policy, with profile identity available in the journal for filtering.
 
 Use the public launcher boundary to check that sandbox acceptance, rejection, and error details reach the caller unchanged, without a different policy being substituted.
 Keep session switching, package-input contracts, cache retention, and service lifecycle tests at their existing public boundaries.
@@ -1664,20 +1619,11 @@ Prefer it if the simpler entry point outweighs independently reusable transport 
 URI shorthands are optional: a short mapping with an explicit remote workspace avoids inventing an implicit workspace or synchronization policy.
 Keep any shorthand equivalent under inheritance, not merely when read in isolation.
 
-### Strict project approval versus trusted-workspace auto-loading
-
-**Recommended:** approve effective configuration and target identity, and reapprove changes that expand or materially alter authority.
-
-**Reasonable alternative:** explicit opt-in to trust all configuration changes in a workspace.
-It is convenient, but gives every tool/process that can edit that configuration the ability to request new host execution authority.
-It is not a safe default for an agent-writable project.
-A delegation policy limited to specific roots/endpoints is narrower than trusting all future edits.
-
 ### Default package behavior
 
-**Recommended:** `resolution: explicit`, preserving declarative initial preparation but disabling surprise missing-import installs.
+**Recommended:** retain `resolution: automatic` and the existing host resolver behavior.
 
-**Reasonable alternative:** retain `automatic` for compatibility with the current workflow, with visible separate preparation authority and strict source controls.
+**Reasonable alternative:** select `explicit` when only declared or explicitly requested packages should be prepared.
 This is a product/workflow decision, not a reason to conflate worker network permissions with installer access.
 
 ### Exact URL filtering now versus destination filtering first
@@ -1697,7 +1643,7 @@ The configuration should describe a session and its requested capabilities, not 
 ## References
 
 External details were checked on 2026-09-09.
-Upstream pages are evolving; the normative recommendations in this document are MCP Console proposals rather than claims of source compatibility.
+Upstream pages are evolving; the ideas in this document are MCP Console proposals rather than claims of source compatibility.
 
 | Source | Reference                                                                    |
 | ------ | ---------------------------------------------------------------------------- |

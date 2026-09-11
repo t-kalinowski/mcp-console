@@ -4,6 +4,10 @@
 **Date:** 2026-07-27 \
 **Scope:** Agent-facing MCP tools and observable behavior
 
+This is an exploratory interface sketch, not the current public contract.
+Its transcript paths reflect an earlier layout; [`CONFIGURATION.md`](../CONFIGURATION.md#17-logs-caches-and-retention) proposes the canonical Console directory and a journal spanning each server lifetime.
+These drafts need not be synchronized before implementation; current behavior is documented under [`docs/`](../../docs/README.md).
+
 ## 1. Interface summary
 
 MCP Console exposes two text-returning tools:
