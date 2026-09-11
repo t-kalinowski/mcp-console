@@ -27,7 +27,9 @@ Common calls should look like:
 The empty object waits for or polls the default session.
 Replies are bounded text.
 Complete explicit stream output and generated artifacts live in managed session files.
-Each session maintains a generated `transcript.md` that an agent can read after context compaction, plus an executable `transcript.qmd` containing only submitted code cells for later source reuse or reproducible rendering.
+Each server lifetime maintains one durable JSONL journal across worker restarts.
+Every worker generation has its own generated `transcript.md` that an agent can read after context compaction, plus an executable `transcript.qmd` containing only that generation's submitted code cells for later source reuse or reproducible rendering.
+The nested layout and retention rules are described in [`CONFIGURATION.md`](CONFIGURATION.md).
 
 Humans may attach to the live MCP server through a process-scoped local API.
 That API supports observation, structured inspection, plot viewing, bounded live-table exploration, point-in-time snapshots, and explicitly attributed external control without adding more MCP tools or flooding model context.
@@ -60,11 +62,11 @@ Safety is enforced around the worker process and its descendants, not by filteri
 - MCP results are text-only; v1 has no `outputSchema`, structured-content mirror, MCP resource dependency, or inline image result.
 - Oversized explicit output is retained in bounded session spools; each response contains only a bounded current excerpt.
 - Large values and SQL relations are previewed structurally before full textual materialization.
-- The agent-facing durable record is `transcript.md`; `transcript.qmd` is the source-only code-cell projection, and a granular JSONL journal is internal implementation state.
+- The agent-facing durable records are the retained generations' `transcript.md` files; each `transcript.qmd` is a source-only code-cell projection, and one granular JSONL journal spans the server lifetime.
 - Requirements are additive logical-session configuration managed by `session`.
   They survive runtime restarts and are not accepted on ordinary `send` calls.
 - Interrupt, restart, close, and worker crash are distinct observable events.
-  `restart` loses in-memory R, Python, SQL, debugger, and process state while retaining requirements, workspace files, and transcript.
+  `restart` loses in-memory R, Python, SQL, debugger, and process state while retaining requirements, workspace files, the server journal, and all earlier generation projections.
   A crash fails the active evaluation and is recorded before the next evaluation starts a fresh worker generation.
 
 See [`VISION.md`](VISION.md) for the fuller rationale and [`docs/MCP_INTERFACE.md`](docs/MCP_INTERFACE.md) for normative MCP behavior.
@@ -268,6 +270,7 @@ Create focused documents only when a subsystem has enough detail to justify a se
 13. Slow or disconnected viewers must never block evaluation, transcript writing, or event publication.
     Use bounded queues, cursors, replay, and explicit resynchronization.
 14. Never let object handles, table views, or artifacts escape their instance, session, generation, revision, and retention boundaries.
+    These are local-API identity boundaries; managed files remain readable across sessions and generations unless the user explicitly restricts filesystem reads, as described in [`CONFIGURATION.md`](CONFIGURATION.md).
 15. Do not serve arbitrary paths.
     Local API clients fetch only supervisor-managed output, artifact, transcript, and snapshot IDs.
 16. Test through the built binary and real runtimes.
