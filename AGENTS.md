@@ -137,6 +137,7 @@ Keep these invariants intact:
 ### Protocols, relay, and worker orchestration
 
 - `src/worker_protocol.rs`, `src/sideband.rs` — relay-worker message and framing contract.
+- `src/readiness.rs` — shared blocking descriptor readiness and cancellation waits.
 - `src/relay_protocol.rs` — server-relay JSONL message and framing contract.
 - `src/worker_relay.rs`, `src/worker_relay/event_writer.rs` — worker launch, I/O forwarding, ordered event output, direct-worker signaling, termination, and reaping.
 - `src/worker_client.rs`, `src/worker_client/` — session coordination and send planning, server-owned environment, evaluation, lifecycle, ordinary launcher child ownership, ordered event dispatch, output tape, shared Unix relay transport, and platform-specific startup observation.

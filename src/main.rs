@@ -18,6 +18,8 @@ mod r_environment;
 #[cfg(unix)]
 mod r_graphics;
 mod r_package_name;
+#[cfg(unix)]
+mod readiness;
 mod relay_protocol;
 mod resolver;
 mod sandbox;

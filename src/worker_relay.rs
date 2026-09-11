@@ -16,7 +16,7 @@ pub(crate) fn run(command_line: &[OsString]) -> Result<(), String> {
 #[cfg(unix)]
 mod platform {
     use std::io::{Read, Write};
-    use std::os::fd::{AsRawFd, RawFd};
+    use std::os::fd::AsRawFd;
     use std::os::unix::process::ExitStatusExt as _;
     use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -25,6 +25,7 @@ mod platform {
     use std::time::{Duration, Instant};
 
     use super::event_writer::{self, EventSender, EventWriter};
+    use crate::readiness::wait_for_io;
     use crate::relay_protocol::{EncodedBytes, RelayCommand, RelayEvent};
     use crate::worker_protocol::{ServerMessage, WorkerMessage};
 
@@ -712,7 +713,8 @@ mod platform {
                 let mut input = std::io::stdin();
                 let mut buffer = Vec::new();
                 loop {
-                    let ready = match wait_for_io(input.as_raw_fd(), libc::POLLIN, &cancelled) {
+                    let ready = match wait_for_io(input.as_raw_fd(), libc::POLLIN, Some(&cancelled))
+                    {
                         Ok(ready) => ready,
                         Err(error) => {
                             failures.report(format!("relay stdin read failed: {error}"));
@@ -992,14 +994,15 @@ mod platform {
                         }
                     }
 
-                    let ready = match wait_for_io(reader.as_raw_fd(), libc::POLLIN, &cancelled) {
-                        Ok(ready) => ready,
-                        Err(error) => {
-                            sideband_failure =
-                                Some(format!("worker sideband read failed: {error}"));
-                            break;
-                        }
-                    };
+                    let ready =
+                        match wait_for_io(reader.as_raw_fd(), libc::POLLIN, Some(&cancelled)) {
+                            Ok(ready) => ready,
+                            Err(error) => {
+                                sideband_failure =
+                                    Some(format!("worker sideband read failed: {error}"));
+                                break;
+                            }
+                        };
                     if ready.cancelled {
                         if let Err(error) = drain_retiring_sideband(
                             &mut reader,
@@ -1126,7 +1129,7 @@ mod platform {
                                 let ready = match wait_for_io(
                                     stream.as_raw_fd(),
                                     libc::POLLOUT,
-                                    &cancelled,
+                                    Some(&cancelled),
                                 ) {
                                     Ok(ready) => ready,
                                     Err(error) => {
@@ -1228,13 +1231,14 @@ mod platform {
             let thread = thread::spawn(move || {
                 let mut buffer = [0_u8; READ_CHUNK_SIZE];
                 loop {
-                    let ready = match wait_for_io(stream.as_raw_fd(), libc::POLLIN, &cancelled) {
-                        Ok(ready) => ready,
-                        Err(error) => {
-                            failures.report(format!("worker output read failed: {error}"));
-                            break;
-                        }
-                    };
+                    let ready =
+                        match wait_for_io(stream.as_raw_fd(), libc::POLLIN, Some(&cancelled)) {
+                            Ok(ready) => ready,
+                            Err(error) => {
+                                failures.report(format!("worker output read failed: {error}"));
+                                break;
+                            }
+                        };
                     if ready.cancelled {
                         if let Err(error) = drain_buffered_output(
                             &mut stream,
@@ -1351,44 +1355,6 @@ mod platform {
             format!("failed to create {description} cancellation pipe: {error}")
         })?;
         Ok((reader, Cancellation(Arc::new(Mutex::new(Some(writer))))))
-    }
-
-    struct ReadyIo {
-        stream: bool,
-        cancelled: bool,
-    }
-
-    fn wait_for_io(
-        descriptor: RawFd,
-        events: libc::c_short,
-        cancelled: &std::io::PipeReader,
-    ) -> std::io::Result<ReadyIo> {
-        loop {
-            let mut descriptors = [
-                libc::pollfd {
-                    fd: descriptor,
-                    events,
-                    revents: 0,
-                },
-                libc::pollfd {
-                    fd: cancelled.as_raw_fd(),
-                    events: libc::POLLIN,
-                    revents: 0,
-                },
-            ];
-            // SAFETY: both descriptors remain open for this call and the array
-            // pointer and length describe initialized storage exactly.
-            if unsafe { libc::poll(descriptors.as_mut_ptr(), descriptors.len() as _, -1) } >= 0 {
-                return Ok(ReadyIo {
-                    stream: descriptors[0].revents != 0,
-                    cancelled: descriptors[1].revents != 0,
-                });
-            }
-            let error = std::io::Error::last_os_error();
-            if error.kind() != std::io::ErrorKind::Interrupted {
-                return Err(error);
-            }
-        }
     }
 
     fn set_nonblocking(descriptor: &impl AsRawFd) -> Result<(), String> {
