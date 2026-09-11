@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
-use std::io::BufReader;
+use std::io::{BufReader, Read, Write};
 use std::os::fd::{AsFd as _, AsRawFd as _, OwnedFd};
 use std::os::unix::process::ExitStatusExt as _;
 use std::process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
@@ -58,6 +58,7 @@ struct RelayConnection {
     child: Arc<Mutex<RelayProcess>>,
     commands: RelayCommandSender,
     tasks: Option<Box<RelayTasks>>,
+    ssh: Option<Box<(crate::ssh::Session, crate::ssh::Retirement)>>,
 }
 
 struct RelayProcess {
@@ -70,6 +71,7 @@ struct RelayProcess {
     relay_exit_recovery_expected: bool,
     retirement_requested: bool,
     retirement: Option<Result<(), String>>,
+    ssh: bool,
 }
 
 struct RelayTasks {
@@ -135,6 +137,7 @@ impl WorkerRuntime {
         on_ready: impl FnOnce() -> Result<(), String>,
     ) -> Result<Worker, SendFailure> {
         let super::WorkerSpec {
+            ssh,
             executable,
             arguments,
             relay,
@@ -146,10 +149,15 @@ impl WorkerRuntime {
             callbacks,
         } = spec;
 
+        let bootstrap = ssh
+            .map(|ssh| ssh.bootstrap(sandbox_settings, no_sandbox))
+            .transpose()?;
         let current_executable = std::env::current_exe()
             .map_err(|error| format!("failed to locate the current executable: {error}"))?;
         let target = relay_command_line(&current_executable, executable, arguments, relay);
-        let mut command = if no_sandbox {
+        let mut command = if let Some(ssh) = ssh {
+            ssh.command()?
+        } else if no_sandbox {
             let mut command = Command::new(&target[0]);
             command
                 .args(&target[1..])
@@ -165,24 +173,26 @@ impl WorkerRuntime {
             command.arg("--").args(target);
             command
         };
-        if let Some(python) = python {
-            python.configure_worker(&mut command);
-        }
-        if let Some(managed_r) = managed_r {
-            managed_r.configure_worker(&mut command)?;
-        }
-        command.env(
-            "MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION",
-            if dynamic_resolution { "1" } else { "0" },
-        );
-        if !no_sandbox {
-            let mut settings = sandbox_settings.clone();
-            crate::settings::preserve_environment(&mut settings, command.get_envs())?;
+        if ssh.is_none() {
+            if let Some(python) = python {
+                python.configure_worker(&mut command);
+            }
+            if let Some(managed_r) = managed_r {
+                managed_r.configure_worker(&mut command)?;
+            }
             command.env(
-                crate::settings::ENVIRONMENT,
-                serde_json::to_string(&settings)
-                    .map_err(|error| format!("cannot encode sandbox settings: {error}"))?,
+                "MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION",
+                if dynamic_resolution { "1" } else { "0" },
             );
+            if !no_sandbox {
+                let mut settings = sandbox_settings.clone();
+                crate::settings::preserve_environment(&mut settings, command.get_envs())?;
+                command.env(
+                    crate::settings::ENVIRONMENT,
+                    serde_json::to_string(&settings)
+                        .map_err(|error| format!("cannot encode sandbox settings: {error}"))?,
+                );
+            }
         }
         command
             .stdin(Stdio::piped())
@@ -197,7 +207,7 @@ impl WorkerRuntime {
         let child = command
             .spawn()
             .map_err(|error| format!("failed to launch worker relay: {error}"))?;
-        let mut child = RelayProcess::new(child, no_sandbox, notify_output_exit)
+        let mut child = RelayProcess::new(child, no_sandbox, ssh.is_some(), notify_output_exit)
             .map_err(|error| format!("failed to monitor worker relay: {error}"))?;
         let relay_stdin = child
             .take_stdin()
@@ -218,9 +228,11 @@ impl WorkerRuntime {
         let ready_commit = ReadyCommit(Arc::new(Mutex::new(Some(ready_commit_sender))));
         let shutdown_started = ShutdownAcceptance::default();
 
+        let remote = ssh.map(|session| (session.clone(), crate::ssh::Retirement::default()));
         let (commands, command_writer) =
-            start_relay_command_writer(relay_stdin, worker_events.clone());
-        let event_reader = start_relay_event_reader(relay_stdout, output_exit, worker_events);
+            start_relay_command_writer(relay_stdin, worker_events.clone(), bootstrap);
+        let event_reader =
+            start_relay_event_reader(relay_stdout, output_exit, worker_events, remote.clone());
         let dispatcher = WorkerEventDispatcher::start(
             worker_event_receiver,
             operation.clone(),
@@ -234,6 +246,7 @@ impl WorkerRuntime {
         );
 
         let relay = RelayConnection {
+            ssh: remote.map(Box::new),
             child,
             commands: commands.clone(),
             tasks: Some(Box::new(RelayTasks {
@@ -256,13 +269,28 @@ impl WorkerRuntime {
             let error = worker.startup_failure(error);
             return Err(error);
         }
-        match startup_receiver.recv() {
+        let started = if ssh.is_some() {
+            startup_receiver
+                .recv_timeout(crate::ssh::SETUP_TIMEOUT)
+                .map_err(|error| match error {
+                    mpsc::RecvTimeoutError::Timeout => {
+                        "SSH connection/bootstrap deadline exceeded".to_string()
+                    }
+                    mpsc::RecvTimeoutError::Disconnected => {
+                        "worker event dispatcher stopped before readiness".to_string()
+                    }
+                })
+        } else {
+            startup_receiver
+                .recv()
+                .map_err(|_| "worker event dispatcher stopped before readiness".to_string())
+        };
+        match started {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
                 return Err(worker.startup_failure(error));
             }
-            Err(_) => {
-                let error = "worker event dispatcher stopped before readiness".to_string();
+            Err(error) => {
                 return Err(worker.startup_failure(error));
             }
         }
@@ -304,6 +332,7 @@ impl RelayProcess {
     fn new(
         child: Child,
         no_sandbox: bool,
+        ssh: bool,
         notify_output_exit: std::io::PipeWriter,
     ) -> Result<Self, String> {
         let exit =
@@ -318,6 +347,7 @@ impl RelayProcess {
         Ok(Self {
             child,
             no_sandbox,
+            ssh,
             exit,
             exited: false,
             reaped: false,
@@ -371,9 +401,13 @@ impl RelayProcess {
             return self.retirement.clone().unwrap_or(Ok(()));
         }
         // Startup cancellation can reach the I/O join before the shutdown
-        // thread takes this lock. Give the direct child its retirement request
-        // and grace period here too; killing the runner bypasses its cleanup.
-        let requested = self.request_retirement();
+        // thread takes this lock. A local runner handles SIGTERM, but SSH must
+        // remain connected for the queued shutdown and remote acknowledgment.
+        let requested = if self.ssh {
+            Ok(())
+        } else {
+            self.request_retirement()
+        };
         let cleanup = match self.wait_timeout_without_reaping(LAUNCHER_RETIREMENT_GRACE) {
             Ok(true) => self.reap(),
             outcome => {
@@ -480,6 +514,13 @@ impl RelayProcess {
     fn finish_reaped_status(&mut self, status: ExitStatus) -> Result<(), String> {
         self.exited = true;
         self.reaped = true;
+        if self.ssh {
+            return if status.success() {
+                Ok(())
+            } else {
+                Err(format!("SSH process exited with {status}"))
+            };
+        }
         // A direct relay's exit is redundant when its EOF established the
         // worker failure. The sandbox runner still owes cleanup; status 137
         // records a target SIGKILL already reported by that same relay failure.
@@ -785,8 +826,9 @@ fn receive_operation(
 }
 
 fn start_relay_command_writer(
-    relay_stdin: std::process::ChildStdin,
+    mut relay_stdin: std::process::ChildStdin,
     events: mpsc::Sender<WorkerEvent>,
+    bootstrap: Option<Vec<u8>>,
 ) -> (RelayCommandSender, RelayCommandThread) {
     let (writer, receiver) = mpsc::channel();
     let sender = RelayCommandSender {
@@ -794,6 +836,14 @@ fn start_relay_command_writer(
         events: events.clone(),
     };
     let thread = thread::spawn(move || {
+        if let Some(bootstrap) = bootstrap
+            && let Err(error) = relay_stdin.write_all(&bootstrap)
+        {
+            let _ = events.send(WorkerEvent::TransportFailure(format!(
+                "SSH bootstrap write failed: {error}"
+            )));
+            return;
+        }
         let mut writer = JsonlWriter::new(relay_stdin);
         for message in receiver {
             let (command, completed) = match message {
@@ -831,9 +881,18 @@ fn start_relay_event_reader(
     relay_stdout: std::process::ChildStdout,
     output_exit: std::io::PipeReader,
     events: mpsc::Sender<WorkerEvent>,
+    ssh: Option<(crate::ssh::Session, crate::ssh::Retirement)>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
-        let output = super::relay_output::RelayOutput::new(relay_stdout, output_exit);
+        let output = crate::process_output::RelayOutput::new(relay_stdout, output_exit);
+        let output: Box<dyn Read> = match ssh.as_ref() {
+            Some((session, retirement)) => Box::new(crate::ssh::Output::new(
+                output,
+                session.clone(),
+                retirement.clone(),
+            )),
+            None => Box::new(output),
+        };
         let mut reader = JsonlReader::new(BufReader::new(output));
         let result = (|| -> Result<(), String> {
             while let Some(event) = reader
@@ -847,6 +906,11 @@ fn start_relay_event_reader(
             Ok(())
         })();
         if let Err(error) = result {
+            let _ = events.send(WorkerEvent::TransportFailure(error));
+        }
+        if let Some((session, retirement)) = ssh
+            && let Err(error) = retirement.check(&session)
+        {
             let _ = events.send(WorkerEvent::TransportFailure(error));
         }
         let _ = events.send(WorkerEvent::RelayClosed);
@@ -1271,6 +1335,12 @@ impl RelayConnection {
             }
             (None, _) => Ok(None),
         };
+        let cleanup = combine_shutdown_results(
+            cleanup,
+            self.ssh
+                .as_deref()
+                .map_or(Ok(()), |(session, retirement)| retirement.check(session)),
+        );
         match (tasks, cleanup) {
             (Ok(outcome), Ok(())) => Ok(outcome),
             (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),

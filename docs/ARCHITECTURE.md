@@ -45,7 +45,22 @@ The [sandbox integration](SANDBOX.md) defines Console policy defaults, installat
 The [migration record](SANDBOX_RUNNER_INTEGRATION.md) records the baseline, validation, and changed lifetime guarantees.
 
 With `serve --no-sandbox`, the server launches the relay directly with host permissions and the host temporary-directory environment.
-R, Python, and DuckDB dependency resolution always runs in separate host processes; [requirements and environments](REQUIREMENTS.md) defines its trust boundary.
+Available R, Python, and DuckDB dependency resolution runs in separate host processes; [requirements and environments](REQUIREMENTS.md) defines its trust boundary.
+
+For a configured SSH target, the process chain is:
+
+```text
+local MCP server → local OpenSSH → remote ssh-launch helper
+    → public sandbox frontend / private runner → relay → built-in worker
+```
+
+The logical session, admission, output handling, and recording remain local.
+The remote helper owns only its ordinary launcher child and connection lifetime.
+It consumes captured user policy, applies remote application defaults and preflight, and passes its own remote PID as the sandbox owner.
+The runner retains enforcement, private storage, and descendant cleanup.
+Direct SSH execution skips the sandbox at the same target.
+Remote execution uses preinstalled environments and never enters controller runtime discovery or resolver processes.
+See [SSH execution](SSH.md) for configuration and prerequisites.
 
 ## Communication boundaries
 
@@ -77,7 +92,7 @@ The frontend supplies immutable environment configuration through the runner's e
 Only policy and lifecycle choices enter this JSON object.
 Command arguments, cwd, environment, and standard streams remain ordinary process-launch inputs.
 The runner consumes the selected configuration variable and owns all subsequent native setup, target signal restoration, descendant retirement, and private storage.
-Console has no setup pipe, target wrapper, manager socket, recovery monitor, or sandbox-owned path state.
+At this native boundary, Console has no setup pipe, target wrapper, manager socket, recovery monitor, or sandbox-owned path state.
 
 ### Server and relay
 
@@ -85,7 +100,10 @@ The server sends commands to the relay's standard input and receives JSONL event
 Relay standard error is inherited separately and is not part of that protocol.
 The server's ordinary child-exit observer also wakes the relay reader.
 On launcher exit, that reader drains already-queued bytes and ends the generation even if an unsupervised descendant retains stdout.
-The server joins the reader and dispatcher before replacement; a reaped launcher permits replacement while any cleanup failure is still reported.
+The server joins the reader and dispatcher before replacement; a reaped local launcher permits replacement while any cleanup failure is still reported.
+For SSH, an adapter removes explicit bootstrap and retirement frames around relay bytes.
+It requires remote cleanup acknowledgment before replacement; local SSH exit alone leaves retirement unconfirmed and blocks another generation.
+The remote helper monitors connection loss independently of both forwarding directions, so backpressured output does not hide closure.
 The transport is private and keeps worker connections and direct-worker supervision in the relay, inside the sandbox by default.
 [`RELAY_PROTOCOL.md`](RELAY_PROTOCOL.md) defines its commands, events, framing, and retirement behavior.
 
@@ -340,6 +358,7 @@ Recording is a server responsibility and does not add messages to either private
 On the first `send` call, the server creates a private run directory under `.agents/console/sessions/` in its working directory.
 It appends tool calls and assembled results to `internal/events.jsonl`.
 The initial `session_started` event records whether dynamic environment resolution is available, and the Quarto projection derives its managed defaults from that capability.
+For SSH sessions, it also records `target.transport` and the initial remote `target.workspace` separately from the local `working_directory` that owns the recording.
 Each `tool_result` is appended before the MCP transport attempts the corresponding response write.
 It records server assembly, not whether the transport write succeeded or the client received the response.
 
@@ -352,17 +371,21 @@ Both documents are emitted in Yamark-formatted form without rewriting submitted 
 The Markdown document presents R, Python, and SQL source as syntax-highlighted code fences, stdin and result text as literal text fences, call options as JSON, and artifacts through relative links.
 Fences expand when literal content contains backticks.
 It is a chronological call ledger: a timed-out cell, later polls, and eventual results remain separate calls because the journal does not infer evaluation-level grouping.
-The executable Quarto document contains the source from calls with exactly one submitted R, Python, or SQL field in call order; it omits stdin, options, results, errors, polls, and artifacts.
+The source-only Quarto document contains the source from calls with exactly one submitted R, Python, or SQL field in call order; it omits stdin, options, results, errors, polls, and artifacts.
 It includes qualifying source from rejected calls and failed evaluations.
 Its `ir` front matter declares the managed built-in R and Python requirements followed by cumulative explicit declarations from recorded calls.
 Bare sessions omit both managed defaults and rejected requirement payloads.
 It does not declare a Python version, so `ir render transcript.qmd` uses reticulate's default managed Python selection.
 The declarations are submitted inputs, not a lockfile or an exact record of successful retained and automatically inferred requirements.
-Rendering executes the captured client-authored cells in order in a fresh Quarto/knitr runtime outside the MCP Console worker sandbox and exports their new output.
+For local sessions, rendering executes the captured client-authored cells in order in a fresh Quarto/knitr runtime outside the MCP Console worker sandbox and exports their new output.
 Rendering does not reconstruct session control, stdin, recorded results, or artifacts.
 SQL chunks require a DBI connection supplied by the document user.
 
-From the recording directory, render the source projection with:
+SSH projections identify the remote target, omit the local execution root, and set `execute.eval: false`.
+By default, rendering them locally displays the captured source without executing it.
+Replaying remote cells requires the user to select and provision an appropriate execution environment; the document does not reproduce remote files.
+
+For a local session, render the source projection from the recording directory with:
 
 ```sh
 uv tool run --from r-lib-ir ir render transcript.qmd

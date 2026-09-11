@@ -17,6 +17,7 @@ Reconcile the relevant contracts, tests, and current documentation when implemen
 - `docs/ARCHITECTURE.md` describes the implemented process structure, ownership, and lifecycle.
 - `docs/SANDBOX.md` describes application policy, runner integration, supported hosts, and lifetime guarantees.
 - `docs/SANDBOX_CONFIGURATION.md` defines the public configuration interface, environment ownership, caller examples, and transport integrity.
+- `docs/SSH.md` defines remote target configuration, preinstalled runtime requirements, launch framing, retirement confirmation, and local recording semantics.
 - `docs/LINUX_COMPATIBILITY.md` records capability requirements, security comparisons, native backend differences, and tested Linux baselines.
 - `docs/SANDBOX_RUNNER_INTEGRATION.md` records the migration baseline, fixture changes, supported-host validation, and changed guarantees.
 - `docs/PYTHON.md` describes the synchronous and asynchronous Python clients and framework integrations.
@@ -41,6 +42,12 @@ Capture the workspace once at trusted launch and retain it across worker generat
 Reuse native constructors and path handling, and keep explicit native adjustments subject to native precedence.
 Console adds `.claude` as a read entry and excludes shared temporary write grants by default for `":workspace"`; metadata defaults are deliberately overridable.
 Recorded sessions, transcripts, outputs, and artifacts are written beneath `.agents/console/sessions/`.
+
+An optional `target` selects one SSH destination for `serve`, including `--no-sandbox`.
+Capture its required absolute remote workspace, executable prefix, and raw user policy locally once; materialize paths, platform additions, and native preflight on that execution host without rediscovering YAML.
+SSH uses preinstalled bare runtimes and must not discover controller interpreters or invoke controller resolvers.
+Standalone `sandbox` remains local.
+SSH exit alone cannot confirm remote retirement; require the remote launcher's terminal acknowledgment before replacement, and block replacement after unconfirmed cleanup.
 
 The worker relay, built-in worker, and managed resolvers support macOS and Linux.
 The default sandbox and standalone sandbox command support both platforms.
@@ -137,6 +144,7 @@ Keep these invariants intact:
 
 - `src/main.rs`, `src/cli.rs` — binary entry point and command definitions.
 - `src/settings.rs`, `src/settings/yaml.rs` — trusted project YAML discovery, node loading, and application settings retained across worker launches; native policy values remain JSON; the sandbox layer adds application launch requirements and delegates validation and defaults to the runner.
+- `src/ssh.rs`, `src/ssh/launch.rs`, `src/ssh/launch_io.rs` — configured OpenSSH transport, bounded bootstrap and relay envelope, compatibility checks, remote ordinary launcher ownership, cancellable transfer, and retirement confirmation.
 - `src/server.rs`, `src/server_transport.rs` — MCP tools, stdio transport, and response-delivery ownership.
 - `src/transcript.rs`, `src/transcript/{event,markdown,output}.rs` — typed recording events, append-only tool journal, Markdown and source-only Quarto projections, cell output files, and image artifacts.
 - `python/mcp_console/` — synchronous and asynchronous MCP clients and composable framework adapters.
@@ -152,7 +160,7 @@ Keep these invariants intact:
 - `src/worker_relay.rs`, `src/worker_relay/event_writer.rs` — worker launch, I/O forwarding, ordered event output, direct-worker signaling, termination, and reaping.
 - `src/worker_client.rs`, `src/worker_client/` — session coordination and send planning, server-owned environment, evaluation, lifecycle, ordinary launcher child ownership, ordered event dispatch, output tape, shared Unix relay transport, and platform-specific startup observation.
 - `src/process_exit.rs` — ordinary direct-child exit observation without reaping, used by server launcher ownership.
-- `src/worker_client/relay_output.rs` — relay output draining bounded by ordinary launcher exit, including a surviving inherited writer.
+- `src/process_output.rs` — output draining bounded by an owned child exit, including a surviving inherited writer; used for local launchers, the SSH child, and the remote helper's launcher without equating their cleanup guarantees.
 - `src/sandbox.rs`, `src/sandbox/{installation,runner,unsupported}.rs` — thin sandbox frontend, verified runner selection, application policy, and unsupported-platform errors.
 - `src/worker.rs`, `src/worker/core.rs`, `src/worker/embedded_r.rs`, `src/r_repl.c` — worker-facing facade, shared process services, current embedded-R backend, cell dispatch, console callbacks, and the C-owned DLL-REPL boundary.
 

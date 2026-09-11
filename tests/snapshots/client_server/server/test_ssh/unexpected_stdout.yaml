@@ -1,0 +1,35 @@
+---
+send:
+  r: one_cell_only <- TRUE
+result:
+  content:
+    - type: text
+      text: >-
+        [worker relay stdout read failed: unexpected stdout in SSH launch
+        protocol; additionally failed to stop the worker: remote retirement is
+        unconfirmed (SSH exit is not a cleanup barrier)]
+  isError: true
+---
+send:
+  r: must_not_replay <- TRUE
+result:
+  content:
+    - type: text
+      text: >-
+        [SSH target 'console-test' retirement is unconfirmed; this session
+        cannot start a replacement]
+  isError: true
+---
+send:
+  control: restart
+  r: must_not_replace <- TRUE
+result:
+  content:
+    - type: text
+      text: |-
+        [starting new worker]
+        [SSH target 'console-test' retirement is unconfirmed; this session cannot start a replacement]
+        session restart did not complete; cell was not run
+  isError: true
+---
+standard_error: ""

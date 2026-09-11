@@ -1,0 +1,12 @@
+---
+input: "00100001"
+error: |
+  SSH frame exceeds 1048576 bytes
+---
+input: 000000047b7d
+error: |
+  truncated SSH frame payload: failed to fill whole buffer
+---
+input: 000000027b7d
+error: |
+  invalid SSH bootstrap: missing field `version` at line 1 column 2

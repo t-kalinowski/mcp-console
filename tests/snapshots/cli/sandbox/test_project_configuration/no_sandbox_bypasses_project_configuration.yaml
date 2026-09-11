@@ -2,4 +2,4 @@
 arguments:
   - serve
   - --no-sandbox
-invalid_config_ignored: true
+invalid_native_policy_ignored: true

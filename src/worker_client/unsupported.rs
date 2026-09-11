@@ -12,6 +12,7 @@ impl WorkerRuntime {
         _on_ready: impl FnOnce() -> Result<(), String>,
     ) -> Result<Worker, super::output::SendFailure> {
         let super::WorkerSpec {
+            ssh,
             executable,
             arguments,
             relay,
@@ -23,6 +24,7 @@ impl WorkerRuntime {
             callbacks,
         } = spec;
         let _ = (
+            ssh,
             executable,
             arguments,
             relay,

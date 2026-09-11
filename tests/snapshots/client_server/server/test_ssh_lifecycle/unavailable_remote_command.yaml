@@ -1,0 +1,15 @@
+---
+send:
+  r: must_not_run <- TRUE
+result:
+  content:
+    - type: text
+      text: >-
+        [worker relay stdout read failed: SSH launch stream ended before
+        confirmed retirement: failed to fill whole buffer; additionally failed
+        to stop the worker: SSH process exited with exit status: 127;
+        additionally failed to retire worker I/O: remote retirement is
+        unconfirmed (SSH exit is not a cleanup barrier)]
+  isError: true
+---
+remote_shell_diagnostic_retained: true

@@ -159,9 +159,31 @@ Internal launches explicitly select the captured application settings through a 
 The sandbox layer adds application launch requirements and strips the private settings transport before launching the runner and workload.
 Ambient `MCP_CONSOLE_SANDBOX_SETTINGS` or `MCP_CONSOLE_SANDBOX_CONFIG` values do not select policy, and the server's global environment is not modified.
 
-`serve --no-sandbox` bypasses sandbox configuration entirely.
+`serve --no-sandbox` reads project configuration to retain target selection but does not enforce sandbox permission settings.
+Malformed YAML and invalid target configuration are errors in this mode.
 Explicit `sandbox --config-env NAME` also bypasses discovery and retains the complete-policy interface below.
 Both still conflict with explicit `--writable-root` arguments.
+
+### SSH target placement
+
+Top-level `target` selects SSH execution for `serve` only; it does not select a permission policy.
+For example:
+
+```yaml
+extends: ":workspace"
+target:
+  transport: {kind: ssh, host: mule}
+  workspace: /srv/projects/analysis
+  command: [uvx, mcp-console]
+```
+
+The server reads YAML locally and captures the target and user policy once.
+It sends these settings as bounded structured data; the remote helper verifies the existing absolute workspace and materializes policy there without discovering remote YAML.
+Platform defaults, relative filesystem entries, workspace special paths, and `serve --writable-root` use the remote host and workspace.
+The native sandbox and any proxy run remotely.
+`sandbox.environment` and `inherit_environment` retain their target-only meaning, including with direct SSH execution; they never configure trusted SSH or bootstrap setup.
+Standalone `sandbox` still uses local paths and local policy materialization.
+See [SSH execution](SSH.md) for every target field, defaults, error behavior, preinstalled-runtime prerequisites, and lifecycle limits.
 
 ## Explicit complete policy
 

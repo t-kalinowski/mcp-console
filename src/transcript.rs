@@ -31,6 +31,7 @@ pub(crate) struct Transcript(Arc<Mutex<TranscriptState>>);
 struct TranscriptState {
     working_directory: Result<PathBuf, String>,
     dynamic_resolution: bool,
+    target: Option<serde_json::Value>,
     active: Option<ActiveTranscript>,
     failure: Option<String>,
 }
@@ -60,11 +61,17 @@ pub(crate) struct Artifact {
 }
 
 impl Transcript {
+    #[cfg(test)]
     pub(crate) fn new(dynamic_resolution: bool) -> Self {
+        Self::with_target(dynamic_resolution, None)
+    }
+
+    pub(crate) fn with_target(dynamic_resolution: bool, target: Option<serde_json::Value>) -> Self {
         Self(Arc::new(Mutex::new(TranscriptState {
             working_directory: std::env::current_dir()
                 .map_err(|error| format!("failed to find the current working directory: {error}")),
             dynamic_resolution,
+            target,
             active: None,
             failure: None,
         })))
@@ -195,6 +202,7 @@ impl TranscriptState {
             self.active = Some(ActiveTranscript::create(
                 &working_directory,
                 self.dynamic_resolution,
+                self.target.as_ref(),
             )?);
         }
         self.active()
@@ -217,7 +225,11 @@ impl TranscriptState {
 }
 
 impl ActiveTranscript {
-    fn create(working_directory: &Path, dynamic_resolution: bool) -> Result<Self, String> {
+    fn create(
+        working_directory: &Path,
+        dynamic_resolution: bool,
+        target: Option<&serde_json::Value>,
+    ) -> Result<Self, String> {
         let working_directory_text = working_directory.to_string_lossy();
         let started_at = Utc::now();
         let run_id = format!(
@@ -267,6 +279,7 @@ impl ActiveTranscript {
                 quarto_path,
                 working_directory,
                 dynamic_resolution,
+                target,
             ))
         })();
         let (projections, pending_projection_failure) = match projections {
@@ -289,6 +302,7 @@ impl ActiveTranscript {
                 session: "default",
                 working_directory: &working_directory_text,
                 dynamic_resolution,
+                target,
             },
             started_at,
         )?;

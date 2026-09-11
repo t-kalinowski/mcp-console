@@ -50,6 +50,10 @@ pub enum Command {
     #[command(hide = true)]
     Worker,
 
+    /// Launch the built-in runtime for an authenticated SSH controller
+    #[command(hide = true)]
+    SshLaunch,
+
     /// Run the internal worker relay
     #[command(hide = true)]
     WorkerRelay {
