@@ -1,6 +1,7 @@
 /target
 /dist
 /.sandbox-runner-source
+.mcp-console
 **/.agents/console/sessions/
 __pycache__/
 .codex
