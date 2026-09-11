@@ -133,6 +133,16 @@ Linux smoke tests exercise the bundled helper with an empty `PATH` and evaluate 
 CI permits unprivileged namespace setup on its disposable Ubuntu runners by disabling their AppArmor user-namespace restriction.
 A local rehearsal must likewise run in an environment whose policy permits the bundled helper's namespace operations; an approved system `bwrap` alone does not verify that installation path.
 
+On Ubuntu with `kernel.apparmor_restrict_unprivileged_userns=1`, a path-specific profile for `/usr/bin/bwrap` can allow ordinary sandbox runs while the relocated bundled helper fails with `RTM_NEWADDR: Operation not permitted`.
+Check the kernel AppArmor records for a `net_admin` denial under the `unprivileged_userns` profile.
+Keep the empty-`PATH` smoke checks: they verify that the installed bundle works without a host helper.
+
+For local installation checks on such a host, use a disposable development container with the build prerequisites above and an isolated checkout.
+Start it as container root with `--cap-add SYS_ADMIN --security-opt apparmor=unconfined --security-opt seccomp=unconfined`, then run `scripts/check` inside it.
+These settings permit the nested namespace operations without changing the host's AppArmor policy.
+Keep the checkout and `TMPDIR` on the same writable filesystem because the installation tests rename build artifacts into their temporary directory.
+A non-root container with these flags can still encounter the host's unprivileged-user-namespace restriction.
+
 ## One-time PyPI setup
 
 Before the first release:
