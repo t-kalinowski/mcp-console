@@ -92,7 +92,6 @@ def test_renders_generated_document(binary: Path) -> Transcript:
                 "--output",
                 "prewarm.html",
                 "--no-execute",
-                "--quiet",
             ],
             cwd=session,
             env=render_environment,
@@ -101,6 +100,7 @@ def test_renders_generated_document(binary: Path) -> Transcript:
             text=True,
         )
         assert prewarm.returncode == 0, {
+            "exit_code": prewarm.returncode,
             "stdout": prewarm.stdout,
             "stderr": prewarm.stderr,
             "document": document.read_text(encoding="utf-8"),
@@ -131,6 +131,7 @@ exec ir render transcript.qmd --to html --output - --quiet
             text=True,
         )
         assert rendering.returncode == 0, {
+            "exit_code": rendering.returncode,
             "stdout": rendering.stdout,
             "stderr": rendering.stderr,
             "document": document.read_text(encoding="utf-8"),
