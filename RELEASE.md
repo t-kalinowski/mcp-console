@@ -52,7 +52,8 @@ share/licenses/mcp-console/LICENSE
 share/licenses/mcp-console/NOTICE
 ```
 
-Linux bundles also contain `libexec/bwrap` and include `bubblewrap-COPYING` and `bubblewrap-SOURCE.json` in the license directory.
+Linux bundles also contain `libexec/bwrap` and include `bubblewrap-COPYING`, `bubblewrap-NOTICE`, and `bubblewrap-SOURCE.json` in the license directory.
+The notice reproduces the copyright header from the pinned Bubblewrap source and identifies its source archive, build location, and Rust toolchain.
 The generated source record identifies the pinned repository and revision, the vendored Bubblewrap directory, its Rust wrapper and build script, the stripped helper digest, and its ELF `DT_NEEDED` dependencies.
 Staging rejects inherited `CODEX_BWRAP_SOURCE_DIR` and `CODEX_SKIP_BWRAP_BUILD` values, including empty values, before invoking Cargo for a Linux target.
 Unset these options for package builds.
@@ -64,7 +65,8 @@ A `libcap.so.*` dependency records dynamic linkage; that system library is not b
 When libcap is linked statically, staging also verifies a defined libcap symbol in the unstripped helper and requires `MCP_CONSOLE_LIBCAP_NOTICE` to name a nonempty file containing the applicable redistribution notice for the libcap used by that build.
 It packages that file as `libcap-NOTICE`; a subsequent dynamic build removes it.
 Staging does not change the linking strategy, identify a libcap package version from its SONAME, or certify builder-supplied license text.
-Release wheel smoke checks required notices, the current source pin and source/build locations, the stripped helper digest, and the recorded linkage against the wheel's actual ELF dependencies.
+Release wheel smoke rejects empty or missing notices and a notice pointing to an obsolete source archive.
+It checks the current source pin and source/build locations, the stripped helper digest, and the recorded linkage against the wheel's actual ELF dependencies.
 
 The main executable resolves the runner relative to its own canonical path and verifies it and license files using streaming SHA-256 with a bounded buffer on every sandbox launch.
 Linux helper verification belongs to native selection: a suitable trusted host helper takes precedence, while a selected bundled helper is hashed and executed through the same open descriptor.

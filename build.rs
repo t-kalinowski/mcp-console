@@ -54,6 +54,10 @@ fn bind_private_runner() {
                 "share/licenses/mcp-console/bubblewrap-COPYING",
             ),
             (
+                "bubblewrap-NOTICE",
+                "share/licenses/mcp-console/bubblewrap-NOTICE",
+            ),
+            (
                 "bubblewrap-SOURCE.json",
                 "share/licenses/mcp-console/bubblewrap-SOURCE.json",
             ),

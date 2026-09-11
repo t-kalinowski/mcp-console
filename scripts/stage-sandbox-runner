@@ -191,6 +191,29 @@ def main() -> None:
     notices = [(checkout / name, name) for name in ("LICENSE", "NOTICE")]
     if "linux" in target:
         notices.append((workspace / "vendor/bubblewrap/COPYING", "bubblewrap-COPYING"))
+        header, terminator, _ = (
+            (workspace / "vendor/bubblewrap/bubblewrap.c")
+            .read_text(encoding="utf-8")
+            .partition("*/")
+        )
+        if not terminator or not header.startswith("/*") or "Copyright" not in header:
+            fail("expected the pinned Bubblewrap copyright header in bubblewrap.c")
+        notice = licenses / "bubblewrap-NOTICE"
+        write_if_changed(
+            notice,
+            (
+                "Bubblewrap companion\n\n"
+                f"Source archive: https://github.com/{pin['repository']}/archive/{head}.tar.gz\n"
+                "C source: codex-rs/vendor/bubblewrap\n"
+                "Build integration: codex-rs/bwrap\n"
+                "License text: bubblewrap-COPYING\n"
+                f"Rust toolchain: {channel} (codex-rs/rust-toolchain.toml)\n\n"
+                f"{header}*/\n"
+            ).encode(),
+            0o644,
+        )
+        artifacts.append(notice)
+
         # Inspect the shipped ELF, not pkg-config's requested linkage. The pinned
         # build script emits unqualified rustc-link-lib directives for libcap.
         dynamic = subprocess.check_output(

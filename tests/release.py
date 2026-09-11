@@ -30,6 +30,20 @@ def write_executable(path: Path, source: str) -> None:
     path.chmod(0o755)
 
 
+def bubblewrap_notice(
+    pin: dict[str, object], toolchain: str = "fixture-sandbox"
+) -> str:
+    return (
+        "Bubblewrap companion\n\n"
+        f"Source archive: https://github.com/{pin['repository']}/archive/{pin['commit']}.tar.gz\n"
+        "C source: codex-rs/vendor/bubblewrap\n"
+        "Build integration: codex-rs/bwrap\n"
+        "License text: bubblewrap-COPYING\n"
+        f"Rust toolchain: {toolchain} (codex-rs/rust-toolchain.toml)\n\n"
+        "/* Copyright fixture author; SPDX-License-Identifier: LGPL-2.0-or-later */\n"
+    )
+
+
 def helper_metadata(pin: dict[str, object], helper: bytes) -> dict[str, object]:
     return {
         "source_repository": pin["repository"],
@@ -353,7 +367,12 @@ class ReleaseScriptTests(unittest.TestCase):
             archive.writestr("mcp_console-0.0.2.data/scripts/mcp-console", "fixture\n")
             names = ("mcp-console-sandbox", "LICENSE", "NOTICE")
             if "linux" in wheel.name:
-                names += ("bwrap", "bubblewrap-COPYING", "bubblewrap-SOURCE.json")
+                names += (
+                    "bwrap",
+                    "bubblewrap-COPYING",
+                    "bubblewrap-NOTICE",
+                    "bubblewrap-SOURCE.json",
+                )
             for name in names:
                 if name == omit:
                     continue
@@ -368,6 +387,10 @@ class ReleaseScriptTests(unittest.TestCase):
                 mode = 0o755 if directory == "libexec" and executable else 0o644
                 info.external_attr = (stat.S_IFREG | mode) << 16
                 contents = "fixture\n"
+                if name == "bubblewrap-NOTICE":
+                    contents = bubblewrap_notice(
+                        json.loads((ROOT / "sandbox-runner.json").read_text())
+                    )
                 if name == "bubblewrap-SOURCE.json":
                     pin = json.loads((ROOT / "sandbox-runner.json").read_text())
                     contents = json.dumps(helper_metadata(pin, b"fixture\n"))
@@ -548,6 +571,7 @@ class ReleaseScriptTests(unittest.TestCase):
                 "mcp-console-sandbox",
                 "bwrap",
                 "bubblewrap-COPYING",
+                "bubblewrap-NOTICE",
                 "bubblewrap-SOURCE.json",
             ):
                 with self.subTest(missing=missing):
@@ -582,6 +606,25 @@ class ReleaseScriptTests(unittest.TestCase):
                     result = self.run_script(*command, cwd=directory, env=environment)
                     self.assertNotEqual(result.returncode, 0, result.stderr)
                     self.assertIn("provenance", result.stderr)
+
+            for notice_name, replacement in (
+                ("bubblewrap-NOTICE", b"notice for obsolete source"),
+                ("bubblewrap-NOTICE", b""),
+                ("bubblewrap-COPYING", b""),
+            ):
+                self.write_wheel(linux_wheel)
+                with zipfile.ZipFile(linux_wheel) as archive:
+                    entries = [
+                        (info, archive.read(info)) for info in archive.infolist()
+                    ]
+                with zipfile.ZipFile(linux_wheel, "w") as archive:
+                    for info, contents in entries:
+                        if info.filename.endswith("/" + notice_name):
+                            contents = replacement
+                        archive.writestr(info, contents)
+                result = self.run_script(*command, cwd=directory, env=environment)
+                self.assertNotEqual(result.returncode, 0, result.stderr)
+                self.assertIn(notice_name, result.stderr)
 
             for missing_notice in (True, False):
                 self.write_wheel(linux_wheel)
@@ -700,6 +743,9 @@ class ReleaseScriptTests(unittest.TestCase):
             vendor = checkout / "codex-rs/vendor/bubblewrap"
             vendor.mkdir(parents=True)
             (vendor / "COPYING").write_text("bwrap license\n")
+            (vendor / "bubblewrap.c").write_text(
+                "/* Copyright fixture author; SPDX-License-Identifier: LGPL-2.0-or-later */\n"
+            )
             commands = directory / "commands"
             commands.mkdir()
             write_executable(
@@ -892,6 +938,9 @@ class ReleaseScriptTests(unittest.TestCase):
                                                 + "\n"
                                             ).encode()
                                         ).hexdigest(),
+                                        "bubblewrap-NOTICE": hashlib.sha256(
+                                            bubblewrap_notice(pin).encode()
+                                        ).hexdigest(),
                                         "bubblewrap-COPYING": hashlib.sha256(
                                             b"bwrap license\n"
                                         ).hexdigest(),
@@ -1058,6 +1107,7 @@ class ReleaseScriptTests(unittest.TestCase):
             if sys.platform == "linux":
                 artifacts["bwrap"] = b"bwrap bytes"
                 artifacts["bubblewrap-COPYING"] = b"bwrap license"
+                artifacts["bubblewrap-NOTICE"] = bubblewrap_notice(pin).encode()
                 artifacts["bubblewrap-SOURCE.json"] = json.dumps(
                     helper_metadata(pin, b"bwrap bytes")
                 ).encode()

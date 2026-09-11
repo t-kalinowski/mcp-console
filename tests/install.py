@@ -151,6 +151,9 @@ class InstallationTests(unittest.TestCase):
                 (runner_source / name).write_text(name)
             (workspace / "vendor/bubblewrap").mkdir(parents=True)
             (workspace / "vendor/bubblewrap/COPYING").write_text("fixture license")
+            (workspace / "vendor/bubblewrap/bubblewrap.c").write_text(
+                "/* Copyright fixture author; SPDX-License-Identifier: LGPL-2.0-or-later */\n"
+            )
             subprocess.run(
                 ["cargo", "generate-lockfile", "--offline"],
                 cwd=workspace,
@@ -311,6 +314,7 @@ class InstallationTests(unittest.TestCase):
                     (
                         "libexec/bwrap",
                         "share/licenses/mcp-console/bubblewrap-COPYING",
+                        "share/licenses/mcp-console/bubblewrap-NOTICE",
                         "share/licenses/mcp-console/bubblewrap-SOURCE.json",
                     )
                     if sys.platform == "linux"

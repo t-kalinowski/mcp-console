@@ -167,6 +167,7 @@ class SandboxInstallationTests(unittest.TestCase):
                 (
                     "libexec/bwrap",
                     "share/licenses/mcp-console/bubblewrap-COPYING",
+                    "share/licenses/mcp-console/bubblewrap-NOTICE",
                     "share/licenses/mcp-console/bubblewrap-SOURCE.json",
                 )
                 if sys.platform == "linux"

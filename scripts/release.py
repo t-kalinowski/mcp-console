@@ -232,17 +232,32 @@ def inspect_wheel_commands(wheel: Path, *, linux: bool) -> None:
         for name in (
             "LICENSE",
             "NOTICE",
-            *(["bubblewrap-COPYING", "bubblewrap-SOURCE.json"] if linux else []),
+            *(
+                ["bubblewrap-COPYING", "bubblewrap-NOTICE", "bubblewrap-SOURCE.json"]
+                if linux
+                else []
+            ),
         ):
             require(
                 f"{data}/share/licenses/mcp-console/{name}" in members,
                 f"private sandbox runner is missing {name}",
+            )
+            require(
+                bool(archive.read(f"{data}/share/licenses/mcp-console/{name}").strip()),
+                f"private sandbox runner has empty {name}",
             )
 
         if linux:
             prefix = f"{data}/share/licenses/mcp-console"
             provenance = json.loads(archive.read(f"{prefix}/bubblewrap-SOURCE.json"))
             pin = json.loads(Path("sandbox-runner.json").read_text())
+            source_archive = (
+                f"https://github.com/{pin['repository']}/archive/{pin['commit']}.tar.gz"
+            )
+            require(
+                source_archive.encode() in archive.read(f"{prefix}/bubblewrap-NOTICE"),
+                "bubblewrap-NOTICE does not identify the pinned source archive",
+            )
             helper = archive.read(f"{data}/libexec/bwrap")
             for key, expected in {
                 "source_repository": pin["repository"],
