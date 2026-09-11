@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from support.checkpoints import FifoCheckpoint
 from support.normalization import code
+from support.processes import capture_process_identity, host_process_id, live_processes
 from support.r import r_test_environment
 from support.records import Transcript
 from support.requirements import SANDBOX, WORKER, requires
@@ -100,18 +101,14 @@ def _connection_closed(
                 process.stdin.flush()
             checkpoint.wait("remote worker entered the gated operation")
             pid, private = state.read_text().splitlines()
+            worker = capture_process_identity(host_process_id(int(pid), process.pid))
             if sandbox:
                 assert Path(private).is_dir()
             process.stdin.close()
             process.wait(timeout=10)
-            try:
-                os.kill(int(pid), 0)
-            except ProcessLookupError:
-                pass
-            else:
-                raise AssertionError(
-                    "remote worker survived observed connection closure"
-                )
+            assert not live_processes([worker]), (
+                "remote worker survived observed connection closure"
+            )
             if sandbox:
                 assert not Path(private).exists(), private
             assert "SSH connection closed" in process.stderr.read().decode()

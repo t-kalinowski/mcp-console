@@ -13,6 +13,7 @@ from support.checkpoints import FifoCheckpoint
 from support.assertions import last_result_text
 from support.client import McpClient
 from support.normalization import code
+from support.processes import capture_process_identity, host_process_id, live_processes
 from support.records import Transcript
 from support.requirements import SANDBOX, WORKER, requires
 from support.ssh import SSH, configure, localhost
@@ -67,6 +68,11 @@ def test_startup_cancellation_preserves_shared_connection(binary: Path) -> Trans
                     client.start_send(r="must_not_run <- TRUE")
                     checkpoint.wait("remote worker is gated before readiness")
                     pid, private = state.read_text().splitlines()
+                    # The test owns sshd; its remote worker is not a descendant
+                    # of the local MCP client or the shared SSH connection.
+                    worker = capture_process_identity(
+                        host_process_id(int(pid), os.getpid())
+                    )
                     client.stdin.close()
                     output = client.stdout.read(timeout=12)
                     errors = client.stderr.read(timeout=12)
@@ -74,14 +80,9 @@ def test_startup_cancellation_preserves_shared_connection(binary: Path) -> Trans
                     assert client.process.returncode == 0, (output, errors)
                     assert not errors, errors
                     assert not Path(private).exists(), private
-                    try:
-                        os.kill(int(pid), 0)
-                    except ProcessLookupError:
-                        pass
-                    else:
-                        raise AssertionError(
-                            "remote worker survived startup cancellation"
-                        )
+                    assert not live_processes([worker]), (
+                        "remote worker survived startup cancellation"
+                    )
                 subprocess.run(
                     [ssh, "-O", "check", "console-test"],
                     check=True,
