@@ -37,6 +37,12 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
 
+      - name: Select weekly cache epoch
+        id: cache-epoch
+        run: |
+          printf 'value=%s\n' "$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+          printf 'image=%s-%s\n' "${ImageOS:?}" "${ImageVersion:?}" >> "$GITHUB_OUTPUT"
+
       - name: Install Python
         id: python
         uses: actions/setup-python@v7
@@ -59,7 +65,7 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: ${{ runner.temp }}/sandbox-source.tar
-          key: sandbox-source-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.sandbox-pin.outputs.commit }}
+          key: sandbox-source-v1-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.sandbox-pin.outputs.commit }}
 
       - name: Prepare private sandbox source archive
         run: |
@@ -86,7 +92,7 @@ jobs:
         with:
           version: ${{ env.UV_VERSION }}
           cache-local-path: ${{ runner.temp }}/mcp-console-cache
-          cache-suffix: runtime-v2
+          cache-suffix: runtime-v2-${{ steps.cache-epoch.outputs.value }}
           prune-cache: false
           save-cache: true
 
@@ -134,12 +140,6 @@ jobs:
           sudo apt-get install -y build-essential pkg-config libcurl4-openssl-dev libcap-dev
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
-      - name: Select weekly cache epoch
-        id: cache-epoch
-        run: |
-          printf 'value=%s\n' "$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
-          printf 'image=%s-%s\n' "${ImageOS:?}" "${ImageVersion:?}" >> "$GITHUB_OUTPUT"
-
       - name: Configure R cache paths
         run: |
           printf 'IR_CACHE_DIR=%s\n' "$RUNNER_TEMP/mcp-console-r-cache/ir" >> "$GITHUB_ENV"
@@ -152,10 +152,9 @@ jobs:
           # v3 covers the inline prewarm contract. Bump it when that contract changes.
           path: ${{ runner.temp }}/mcp-console-r-cache
           key: >-
-            ir-v3-${{ runner.os }}-${{ runner.arch }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ steps.tools.outputs.ir_version }}-${{ hashFiles('src/worker_client.rs', 'src/resolver/managed_r.rs', 'tests/boundaries/client_server/requirements/test_r_automatic.py', 'tests/boundaries/client_server/requirements/test_r.py') }}-${{ steps.cache-epoch.outputs.value }}
+            ir-v3-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ steps.tools.outputs.ir_version }}-${{ hashFiles('src/worker_client.rs', 'src/resolver/managed_r.rs', 'tests/boundaries/client_server/requirements/test_r_automatic.py', 'tests/boundaries/client_server/requirements/test_r.py') }}
           restore-keys: |
-            ir-v3-${{ runner.os }}-${{ runner.arch }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ steps.tools.outputs.ir_version }}-${{ hashFiles('src/worker_client.rs', 'src/resolver/managed_r.rs', 'tests/boundaries/client_server/requirements/test_r_automatic.py', 'tests/boundaries/client_server/requirements/test_r.py') }}-
-            ir-v3-${{ runner.os }}-${{ runner.arch }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ steps.tools.outputs.ir_version }}-
+            ir-v3-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ steps.tools.outputs.ir_version }}-
 
       - name: Restore Cargo downloads
         id: cargo-downloads
@@ -164,11 +163,10 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          # Downloads survive the weekly build-cache reset.
           key: >-
-            cargo-downloads-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '.sandbox-runner-source/codex-rs/Cargo.lock') }}
+            cargo-downloads-v1-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '.sandbox-runner-source/codex-rs/Cargo.lock') }}
           restore-keys: |
-            cargo-downloads-v1-${{ runner.os }}-${{ runner.arch }}-
+            cargo-downloads-v1-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Restore Rust build data
         id: rust-cache
@@ -196,7 +194,7 @@ jobs:
             target/sandbox-runner-build.json
           # The pin, runner image, and recipe identify the native build inputs.
           key: >-
-            sandbox-runner-v3-${{ steps.cache-epoch.outputs.image }}-${{ runner.os }}-${{ runner.arch }}-recipe-${{ env.CI_BUILD_CACHE_VERSION }}-${{ hashFiles('sandbox-runner.json', 'scripts/stage-sandbox-runner') }}
+            sandbox-runner-v3-${{ steps.cache-epoch.outputs.value }}-${{ steps.cache-epoch.outputs.image }}-${{ runner.os }}-${{ runner.arch }}-recipe-${{ env.CI_BUILD_CACHE_VERSION }}-${{ hashFiles('sandbox-runner.json', 'scripts/stage-sandbox-runner') }}
 
       - name: Restore private sandbox build data
         id: sandbox-build-cache
@@ -248,7 +246,7 @@ jobs:
           # Only exact matches skip packaging. On a miss, Maturin invokes Cargo
           # using the build data restored above, including earlier revisions.
           key: >-
-            release-v1-${{ steps.cache-epoch.outputs.image }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.setup-r.outputs.installed-r-version }}-py-${{ steps.python.outputs.python-version }}-recipe-${{ env.CI_BUILD_CACHE_VERSION }}-${{ hashFiles('src/**', 'python/**', 'Cargo.toml', 'Cargo.lock', '.cargo/**', 'build.rs', 'build_backend.py', 'pyproject.toml', 'sandbox-runner.json', 'target/sandbox-runner-build.json', 'scripts/stage-sandbox-runner', 'README.md', 'LICENSE') }}
+            release-v1-${{ steps.cache-epoch.outputs.value }}-${{ steps.cache-epoch.outputs.image }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.setup-r.outputs.installed-r-version }}-py-${{ steps.python.outputs.python-version }}-recipe-${{ env.CI_BUILD_CACHE_VERSION }}-${{ hashFiles('src/**', 'python/**', 'Cargo.toml', 'Cargo.lock', '.cargo/**', 'build.rs', 'build_backend.py', 'pyproject.toml', 'sandbox-runner.json', 'target/sandbox-runner-build.json', 'scripts/stage-sandbox-runner', 'README.md', 'LICENSE') }}
 
       - name: Build Rust test targets
         run: cargo test --locked --no-run --all-targets --all-features
@@ -333,7 +331,7 @@ jobs:
           R_LIBS_USER: ${{ runner.temp }}/mcp-console-r-package
         with:
           cache: always
-          cache-version: r-package-v1
+          cache-version: r-package-v1-${{ steps.cache-epoch.outputs.value }}
           working-directory: r
           upgrade: "FALSE"
           packages: |
@@ -352,6 +350,7 @@ jobs:
       - name: Install transcript dependencies
         uses: r-lib/actions/setup-r-dependencies@v2
         with:
+          cache-version: transcripts-v1-${{ steps.cache-epoch.outputs.value }}
           install-quarto: true
           upgrade: "FALSE"
           packages: |
@@ -398,5 +397,4 @@ jobs:
         uses: actions/cache/save@v6
         with:
           path: ${{ runner.temp }}/mcp-console-r-cache
-          key: >-
-            ir-v3-${{ runner.os }}-${{ runner.arch }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ steps.tools.outputs.ir_version }}-${{ hashFiles('src/worker_client.rs', 'src/resolver/managed_r.rs', 'tests/boundaries/client_server/requirements/test_r_automatic.py', 'tests/boundaries/client_server/requirements/test_r.py') }}-${{ steps.cache-epoch.outputs.value }}
+          key: ${{ steps.ir-cache.outputs.cache-primary-key }}
