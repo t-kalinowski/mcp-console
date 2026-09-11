@@ -41,7 +41,9 @@ jobs:
         id: cache-epoch
         run: |
           printf 'value=%s\n' "$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
-          printf 'image=%s-%s\n' "${ImageOS:?}" "${ImageVersion:?}" >> "$GITHUB_OUTPUT"
+          # Reuse caches across image revisions within the same OS version.
+          printf 'image=%s\n' "${ImageOS:?}" >> "$GITHUB_OUTPUT"
+          printf 'Runner image: %s-%s\n' "$ImageOS" "${ImageVersion:?}"
 
       - name: Install Python
         id: python
@@ -192,7 +194,7 @@ jobs:
           path: |
             wheel-data
             target/sandbox-runner-build.json
-          # The pin, runner image, and recipe identify the native build inputs.
+          # The pin, OS version, and recipe identify the cached native artifacts.
           key: >-
             sandbox-runner-v3-${{ steps.cache-epoch.outputs.value }}-${{ steps.cache-epoch.outputs.image }}-${{ runner.os }}-${{ runner.arch }}-recipe-${{ env.CI_BUILD_CACHE_VERSION }}-${{ hashFiles('sandbox-runner.json', 'scripts/stage-sandbox-runner') }}
 

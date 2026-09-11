@@ -104,7 +104,8 @@ CI separately caches completed staged runners, release wheels and native bundles
 Runner build-cache keys include the toolchain file from the checked-out source.
 CI skips runner staging when both the finished runner and its build data are exact cache hits.
 If either cache misses, staging invokes Cargo and saves the completed outputs before tests; a build-data miss still prepares the workspace for later source-install checks.
-Cargo build data is restored across source, pin, and dependency changes within the same platform, toolchain, runner image, applicable R version, and UTC week.
+Cargo build data is restored across source, pin, and dependency changes within the same OS version, architecture, toolchain, applicable R version, and UTC week.
+Cache keys use `ImageOS`, such as `macos26` or `ubuntu24`, so routine runner image revisions can reuse the same caches; the full `ImageVersion` remains in the logs.
 Console keeps one cached build baseline per dependency set during that week.
 Ordinary source edits reuse the baseline without uploading another large target-directory snapshot; Cargo updates the restored files for the current checkout.
 This lets new PRs, later commits to a PR, and merge commits reuse the same baseline from `main`.
@@ -112,10 +113,11 @@ PR-specific caches remain available to that PR; the cache cleanup workflow delet
 All GitHub Actions caches intentionally reset each Monday in UTC, including uv, IR/renv, R package libraries, Cargo downloads, source archives, build data, and finished runners and wheels.
 Every restore prefix includes the UTC ISO week, so a cache miss cannot restore data from an earlier week.
 All CI builds enable incremental compilation, including release builds and source installation checks; Cargo decides which tracked inputs require rebuilding.
-An exact match of source, packaging inputs, toolchain, R and Python versions, and runner image additionally permits skipping the release build and using the finished wheel and native bundle directly.
+An exact match of source, packaging inputs, toolchain, R and Python versions, and OS version additionally permits skipping the release build and using the finished wheel and native bundle directly.
 Otherwise, Maturin invokes Cargo with the restored build data and packages the updated output.
 Unrelated workflow edits do not change cache keys.
 Bump `CI_BUILD_CACHE_VERSION` in `.github/workflows/ci.yaml` when changing build inputs outside the hashed files, such as workflow build flags or native dependency setup; the version invalidates build data and finished outputs together.
+Runner image updates can change native tools or libraries that Cargo does not track; bump this version if those changes require a fresh build before the next weekly reset.
 Runner source archives preserve the timestamps used by Cargo while excluding Git metadata and the separately cached build directory.
 PR and main runs save completed builds, including Clippy preparation, before tests.
 R package checks use a separate cached library, and packaging and runtime preparation share a uv cache that retains downloaded wheels within the current week.
