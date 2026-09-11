@@ -1,8 +1,10 @@
 # MCP Console configuration
 
 **Status:** Design sketch, not implemented configuration documentation. \
-**Proposed file:** `.mcp-console/config.yaml` \
+**Proposed file:** `.agents/console/config.yaml` \
 **Design date:** 2026-09-09
+
+**Revised:** 2026-09-11
 
 This document proposes a configuration language and its intended semantics.
 It covers both near-term configuration and capabilities that will arrive through later pull requests.
@@ -15,9 +17,15 @@ Reusable definitions are available when duplication becomes inconvenient.
 
 ## 1. Recommendation
 
-Use YAML as the canonical format, with a small, strictly validated subset.
-Keep permissions declarative and independent of the sandbox implementation.
-Compose compute placement with permissions, but validate the resulting combination before starting anything.
+Use YAML for ordinary configuration loading and profile selection.
+Keep all MCP Console-managed configuration, state, records, and preparation artifacts under `.agents/console/`.
+Every sandboxed launch includes a write denial for that whole directory, regardless of the selected profile; completely unrestricted execution is the exception.
+
+MCP Console is a thin intermediary between the user and the extracted sandbox runner.
+It passes the requested policy and the managed-directory denial to the sandbox, which owns policy parsing, normalization, compatibility checks, and enforcement.
+Console forwards the sandbox's result and diagnostics without independently deciding whether a policy combination is safe.
+Ordinary YAML loading, selecting a session, and arranging its inputs do not require another policy engine.
+The permission examples below illustrate the proposed user interface; their supported forms and semantics come from the sandbox.
 
 Use these terms consistently:
 
@@ -41,9 +49,9 @@ The most consequential choices are:
 
 - No configuration means `read_only`, with a private writable temporary directory and no worker-initiated network access.
 - Project configuration requests capabilities; it does not authorize itself.
-- Ordinary permission layers accumulate, and explicit denials win.
-  Removing an inherited rule is an explicit operation, not an effect of list ordering.
-- Unsupported restrictions fail before launch.
+- `.agents/console/` is always write-denied to sandboxed workers, including with workspace write access.
+- The configuration contains no secrets; SSH uses an already configured passwordless connection.
+- The sandbox decides which policy combinations it accepts; Console forwards any rejection to the caller.
   There is no automatic unsandboxed or unrestricted-network fallback.
 - A profile or target change replaces the worker generation.
   It does not mutate the security boundary around an existing R/Python session.
@@ -58,7 +66,7 @@ extends: read_only
 permissions:
   filesystem:
     allow_write: [.]
-    deny_write: [.git, .agents, .codex]
+    deny_write: [.git, .agents/console, .codex]
     deny_read: [.env, ~/.ssh]
   network:
     mode: none
@@ -70,8 +78,9 @@ The two read denials are illustrative defaults in the generated file, not a clai
 
 `.` means the fixed session workspace, not whichever directory evaluated code has most recently selected with `setwd()` or `os.chdir()`.
 
-The loaded configuration and its policy-bearing dependencies are additionally protected by the launcher.
-They are not made writable just because `.` is writable.
+The `.agents/console/` denial is always included in sandboxed launches, even if it is omitted from the file or another rule grants workspace writes.
+It covers the config, transcripts, logs, projection artifacts, and preparation caches together.
+The controller writes these files outside the worker sandbox.
 See [Configuration authority](#5-configuration-authority).
 
 For a project that needs only one API, replace the `network` block with:
@@ -104,7 +113,7 @@ They are meant to be merged into the surrounding file, not appended as duplicate
 
 Codex currently exposes built-in permission profiles named `:read-only`, `:workspace`, and `:danger-full-access`, as well as custom permission profiles with `extends`, filesystem rules, and network rules.
 Its newer permission profiles are distinct from its older `sandbox_mode` settings.
-This design takes those user-facing concepts without adopting two parallel permission models.[1]
+The extracted sandbox runner owns the supported policy model; Console exposes those settings without implementing a second permission model.[1]
 
 MCP Console uses the names requested for this project:
 
@@ -123,8 +132,9 @@ Its `allowWrite`, `denyWrite`, `denyRead`, domain rules, local binding, and Unix
 MCP Console uses snake_case equivalents and makes listener publishing a separate concern.
 SRT also distinguishes filesystem and proxy-mediated network enforcement.[2]
 
-Neither upstream's configuration is included verbatim or loaded implicitly.
-Provider adapters translate one normalized MCP Console policy into their respective APIs.
+The native runner is the implementation boundary for the proposed configuration.
+An alternative provider remains exploratory and must own its policy interpretation and enforcement.
+Adapters may map configuration fields to a provider's API, but Console does not supply a shared security validator or evaluator for them.
 
 ### Current MCP Console
 
@@ -170,23 +180,20 @@ Do not allow the same implicit profile to be defined again as `profiles.default`
 
 ### Discovery
 
-The canonical project path is `.mcp-console/config.yaml`.
-Support `.agents/mcp-console.yaml` as an alternative project path, not an additional automatic layer.
-Finding both is an error that names the files and asks the user to select one with `--config` or consolidate them.
+The canonical and only discovered project path is `.agents/console/config.yaml`.
+`config init` creates that file in the same managed directory used for transcripts, logs, projections, and other Console artifacts.
+There is no alternate project filename or separate user-level Console configuration directory.
 
 Choose the project root once at startup: an explicit workspace argument, then the discovered project configuration's parent project, then the invocation working directory.
 Search upward only within the initial repository/workspace boundary; do not keep discovering new configuration after a worker changes directory.
 Do not load a chain of ancestor project files implicitly.
 
-A user-level configuration may live in the platform configuration directory, for example `~/.config/mcp-console/config.yaml`.
-Managed administrator requirements are a separate trusted input, not a project override.
-
-Recommended precedence for ordinary settings is built-in defaults, user-level configuration, the one selected project file, and explicit controller CLI settings.
+Recommended precedence for ordinary session settings is built-in defaults, the selected project file, and explicit controller CLI settings.
 Project settings still require authorization; precedence is not an authorization rule.
-Administrator requirements are constraints on the result, not merely a lower-precedence configuration layer.
+Trusted sandbox requirements supplied by the caller remain the sandbox's responsibility to apply.
 
-An explicitly selected `--config` replaces project discovery.
-It does not bypass user policy, administrator requirements, or trust checks.
+Select another project through an explicit workspace argument, which selects that project's `.agents/console/` directory.
+Do not add a config-path or storage-root override that scatters Console-managed files across unrelated locations.
 
 ### Named profiles
 
@@ -196,7 +203,7 @@ extends: read_only
 permissions:
   filesystem:
     allow_write: [.]
-    deny_write: [.git, .agents, .codex]
+    deny_write: [.git, .agents/console, .codex]
 
 profiles:
   review:
@@ -250,7 +257,7 @@ definitions:
     project_edits:
       filesystem:
         allow_write: [.]
-        deny_write: [.git, .agents, .codex]
+        deny_write: [.git, .agents/console, .codex]
 
   environments:
     analysis:
@@ -287,12 +294,11 @@ Do not introduce separate registries for every small object, or force ordinary f
 
 **A project file is a request, not a source of authority.** This matters even if MCP Console itself cannot write that file: another agent tool, a checkout, or a package script might change it.
 
-On first use of a project configuration, the controller should show a normalized summary and obtain authorization through a trusted CLI or MCP-client approval channel.
-When resolving target/provider identities requires network access or executable probes, first obtain limited authorization for those probe operations.
-That authorization identifies the permitted endpoints, credentials, and probe executable identities; it does not authorize image preparation, package installation, or worker launch.
-After resolving the target, executable, and image identities, obtain final authorization for the effective configuration bound to those identities before preparation or launch.
-The trust record belongs outside the project, in controller-owned state.
-It binds at least the project identity, selected profile's effective configuration, target identity, and relevant executable or image identities.
+The controller presents the selected configuration and the sandbox/provider's reported policy and target identity through the trusted CLI or MCP-client approval channel.
+Where resolving identities requires network access or executable probes, that channel first authorizes the limited probe operations.
+Final authorization follows the provider's identity resolution and precedes preparation and launch.
+The sandbox/provider owns identity checks and any policy normalization; Console passes the result and authorization along.
+Any Console-owned approval metadata belongs under `.agents/console/state/`; the trusted caller supplies authorization, not a flag in the project config.
 
 Loading or parsing an untrusted project file must not run its SSH command, Docker build, executable probe, package installer, or other configured program.
 Authorization comes before side-effecting target preparation.
@@ -302,38 +308,38 @@ Neither action authorizes additional access.
 If an agent is deliberately allowed to edit configuration, those edits still go through the same review.
 There is no meaningful way to distinguish a safe policy change by whether a human or an agent happened to write its bytes.
 
-Referencing a trusted user's profile or provider does not inherit its authority.
-Attribute the complete resolved request, including overlays, to the actor selecting it.
-A project cannot gain `full_access` merely by naming a user-defined profile; that selection still needs authorization.
+Referencing a profile or provider does not supply authorization.
+The trusted caller authorizes the complete selected session, including any request for `full_access`.
 
 Prefer approval of the effective configuration over approval of raw file formatting.
 A change in comments need not invalidate approval.
 A changed target, mount, provider, executable, environment forwarding rule, package source, manifest, service exposure, or policy dependency does.
-Cached approval must also be invalidated when a mutable input changes what would actually execute.
+When the sandbox/provider reports changed execution inputs, present that change through the caller's approval flow.
 
-An implementation may automatically accept a provably narrower permission change within an existing approved target and execution definition.
-When the comparison is uncertain, ask again.
-Do not attempt to infer that arbitrary Docker arguments or commands are “narrower.”
+Console does not compare policies to prove that a change is narrower or implement its own authorization lattice.
+It presents changes through the caller's approval flow and forwards the sandbox/provider's checks and diagnostics.
 
-### Protected control inputs
+### Protected managed directory
 
-In sandboxed profiles, protect the loaded configuration, loaded local configuration fragments, trusted policy state, launcher/provider definitions, and other files whose later privileged interpretation would grant authority.
-Protect their identities and the relevant replacement operations, not only file-content writes.
-Prevent bypass through a symlink, directory rename, or replacement of an ancestor entry.
+The whole `.agents/console/` directory is private to Console's trusted management processes for writing.
+Every sandboxed launch includes its write denial after the selected session settings are assembled, even when the config is absent or the profile otherwise permits workspace writes.
+A profile cannot remove this application-supplied denial.
+The sandbox owns its interpretation and enforcement; Console forwards a sandbox rejection without substituting a different policy or adding a local enforcement mechanism.
 
-`.mcp-console/` is not blanket read-only: it may contain requested writable cache and output directories.
-Protect its control inputs specifically.
-The starter explicitly denies writes to `.git`, `.agents`, and `.codex`, while the launcher also protects the configuration path itself.
-Resolve Git worktree indirections when applying repository-metadata protections.
+The controller and trusted preparation processes write config, state, records, and preparation artifacts there from outside the worker sandbox.
+Workers return outputs to the controller for recording rather than receiving a write exception for a subdirectory.
+For remote or container execution, pass the denial for the managed directory in the corresponding target namespace as well.
 
-A full-access process does not have these worker-side protections.
-Trust-store integrity against another unsandboxed process running as the same OS user is outside the promise of a worker sandbox.
-Managed enforcement may require a separate identity or service.
+This is write protection, not an automatic read denial.
+The config contains no secrets, and a transcript can contain anything the submitted code prints.
+`full_access` and the explicit `--no-sandbox` override omit this worker-side protection.
+Other unsandboxed processes running as the same OS user are outside that boundary.
 
 ### Snapshot before launch
 
-Read configuration inputs into a bounded, validated snapshot, resolve the profile and target/provider identities under any required probe authorization, and obtain final authorization for that exact effective snapshot and its resolved identities.
-Pass the resulting normalized policy to the launcher.
+Load the selected configuration as data, resolve ordinary profile settings, and pass the requested policy to the sandbox.
+After any authorized probes, use the sandbox/provider's reported policy and identities for final authorization.
+Pass those same configuration values to the launcher.
 Do not approve a pathname and then have the sandbox reopen that mutable file later.
 
 For local launches, use an inherited setup descriptor or an inline, non-secret serialized argument.
@@ -341,11 +347,9 @@ Keep target stdin/stdout/stderr as the target's streams.
 For remote launches, use an authenticated setup channel or safely encoded and quoted bounded arguments.
 Do not introduce a writable temporary policy file or recreate complicated setup-payload forwarding on the relay's stdin.
 
-Referenced build files and manifests need an equivalent snapshot/content-hash boundary when they are subsequently used by a trusted builder.
-Admit referenced configuration and manifest files before reading them: require bounded regular files in an authorized path namespace, not devices, FIFOs, or unbounded streams.
-External file access needs approval; approval does not remove read/parser bounds.
-Target-side reads require the corresponding authorized target operation.
-This does not mean freezing all ordinary project source code for an interactive session.
+Referenced build files and manifests are inputs to the selected preparation adapter.
+That adapter owns preparation-specific input handling and reports its requirements and failures to the controller.
+Console does not duplicate sandbox or provider security checks around those inputs.
 
 ### Approval settings
 
@@ -359,28 +363,19 @@ server:
 In noninteractive operation, an unapproved configuration is an actionable error.
 Do not silently ignore the file and continue under a different profile.
 
-Project configuration cannot set its own trust status, approve providers, replace managed requirements, or weaken controller approval behavior.
-Such fields are trusted-user/administrator settings even if the same YAML schema represents them in a user-level file.
-
-Managed requirements can constrain permitted profiles and targets, maximum writable roots, mandatory denials, network destinations, package sources, resource ceilings, and whether unsandboxed execution is permitted.
-An incompatible request fails with its provenance; it is not silently clipped.
-
-Configuration precedence and authority are separate.
-Built-in and ordinary profile defaults are not mandatory ceilings; they remain extensible after authorization.
-Only explicitly designated managed requirements impose non-widenable ceilings, whether supplied by a user, administrator, or organization.
-A network ceiling includes the denial of destinations outside its allowlist, not just explicit deny entries.
-Project approval cannot override it.
-In particular, the built-in empty network allowlist must not make every later network allowance impossible.
+Approval behavior is a trusted caller setting, not a project override that can approve itself.
+The sandbox interprets any trusted policy requirements supplied by that caller and reports incompatible requests.
+Console forwards those diagnostics and does not implement an additional policy ceiling or clipping algorithm.
 
 ## 6. Built-in profiles and merge semantics
 
 ### Built-ins
 
-| Profile           | Filesystem                                                                                 | Worker outbound network     | Sandbox             |
-| ----------------- | ------------------------------------------------------------------------------------------ | --------------------------- | ------------------- |
-| `read_only`       | Read the visible target filesystem; write only private session temporary storage           | None                        | Required            |
-| `workspace_write` | `read_only` plus workspace writes; protect `.git`, `.agents`, `.codex`, and control inputs | None                        | Required            |
-| `full_access`     | No MCP Console filesystem restrictions                                                     | Unrestricted by MCP Console | Disabled explicitly |
+| Profile           | Filesystem                                                                                     | Worker outbound network     | Sandbox             |
+| ----------------- | ---------------------------------------------------------------------------------------------- | --------------------------- | ------------------- |
+| `read_only`       | Read the visible target filesystem; write only private session temporary storage               | None                        | Required            |
+| `workspace_write` | `read_only` plus workspace writes; include denials for `.git`, `.agents/console`, and `.codex` | None                        | Required            |
+| `full_access`     | No MCP Console filesystem restrictions                                                         | Unrestricted by MCP Console | Disabled explicitly |
 
 Read-only is a mutation restriction, **not** a confidentiality guarantee.
 Use read denials, `read: minimal`, a container, or a combination when host files must not be visible.
@@ -389,69 +384,33 @@ OS permissions and an outer host/container boundary always remain in force.
 Private temporary storage is an explicit built-in exception.
 Do not make all of shared `/tmp` writable.
 Engine-owned logs and package preparation are separate from worker write permissions and must be reported separately.
+The managed-directory write denial applies to every sandboxed profile, including `read_only`, and has no writable runtime-cache or output exception.
 
 The starter derives from `read_only` and explicitly adds workspace access to make its policy obvious.
 Deriving from `workspace_write` is equally supported; repeating its protected paths is harmless and keeps the example self-explanatory.
 
-### Ordinary values versus policy sets
+### Profile composition and sandbox policy
 
 For ordinary configuration, omitted values inherit, scalar values replace, mappings merge by key, and sequences replace.
 Changing a tagged object's `kind` replaces that whole object rather than retaining incompatible fields from its old kind.
 For example, changing a Python environment from `managed` to `existing` does not retain the managed requirements list.
 
-Permission lists are different: `allow_read`, `allow_write`, `deny_read`, `deny_write`, network `allow`/`deny`, listener grants, and local-socket grants are sets that **accumulate** and deduplicate.
-A plain `[]` adds nothing; it does not erase inherited protections.
-
-To remove an inherited set member, use the explicit delta form:
+Permission blocks describe the policy requested from the sandbox.
+Console does not evaluate access rules, compare permissions, or add a separate set-delta language.
+Use a profile with the desired baseline and supply its requested rules:
 
 ```yaml
 profiles:
   write_results_only:
-    extends: default
+    extends: read_only
     permissions:
       filesystem:
-        allow_write:
-          remove: [.]
-          add: [results]
+        allow_write: [results]
 ```
 
-The same set field accepts either a sequence, meaning additions, or `{remove: [...], add: [...]}`.
-Apply removals and then additions within a layer.
-Unknown removals are errors, which catches misspellings.
-Structured network rules are matched by their normalized complete value.
-Do not add ordering-based `!pattern` negation or YAML-specific merge tags.
-
-Removing an inherited denial is a potentially broader request and requires authorization.
-Mandatory managed denials and launcher control-input protections cannot be removed by a project delta.
-An explicit profile based on a different built-in is another way to avoid unwanted ordinary inherited grants.
-
-### Permission evaluation
-
-Filesystem grants are evaluated as sets, not as an ordered program:
-
-```text
-can_read(path) = matches(read_baseline OR allow_read OR allow_write)
-                AND NOT matches(deny_read)
-
-can_write(path) = matches(allow_write OR private_session_tmp)
-                 AND NOT matches(deny_write OR deny_read)
-```
-
-Underlying OS/compute restrictions and administrator constraints also apply.
-`allow_write` implies read access.
-`deny_read` means no content access and also blocks writes to the denied location; a blind-write capability is not part of this format.
-`deny_write` leaves permitted reads intact.
-
-A denial wins even against a more specific allowance.
-There is no automatic reopening of a child under a denied parent.
-Use a less broad denial or explicitly remove the inherited rule.
-This intentionally favors an easy-to-audit policy over a general exception language.
-
-The absence of a grant is not an explicit denial.
-Thus `read_only` can be extended with a write grant; an explicit `deny_write: ["."]` cannot be defeated by adding `allow_write: ["results"]`.
-
-For network allowlists, any matching explicit deny wins, then at least one matching allow is required.
-`mode: none` disables all outbound allows without needing to remove them; diagnostics show that they are inactive.
+The sandbox's schema owns the meaning of grants, denials, precedence, and supported combinations.
+Console supplies the selected rules plus its mandatory `.agents/console/` write denial to that schema and returns the sandbox's result.
+Do not implement a second rule matcher or promise access semantics beyond those provided by the selected sandbox.
 
 ### Full access and no sandbox
 
@@ -488,42 +447,32 @@ permissions:
     allow_read: []
     allow_write: [results, /scratch/analysis]
     deny_read: [~/.ssh, secrets, "**/.env", "**/.env.*"]
-    deny_write: [.git, .agents, .codex, data/raw]
+    deny_write: [.git, .agents/console, .codex, data/raw]
 ```
 
 `read` is `all` or `minimal`.
-`minimal` includes only the declared runtime's necessary executable/library/platform support paths; add project/data reads with `allow_read`.
-The launcher must enumerate its runtime support grants in `config explain`.
-It cannot silently override a user denial because it happens to need a file there; choose a different environment location or fail.
+`minimal` requests the sandbox's supported runtime baseline; add project/data reads with `allow_read`.
+`config explain` presents the sandbox's reported grants and diagnostics.
+If the sandbox rejects a requested combination, Console forwards the error.
 
-Literal paths name a file or an entire subtree.
-No trailing `/**` is required for an ordinary directory.
-This also covers descendants created after launch.
-
-For glob rules, specify one portable grammar: `/` as the logical separator, `*` within one component, `?` for one nonseparator character, and `**` across components.
-Dotfiles are included.
-All other glob-like constructs are rejected initially; there is no brace expansion, regex, tilde-user lookup, or shell expansion.
-Quote patterns in YAML.
-A matched directory protects its subtree.
-
-**Glob denials describe runtime policy, not just startup search results.** A provider that can only snapshot existing matches cannot claim to enforce a rule against future matching files or renames.
-Reject that rule or require exact literal/subtree rules until it can be enforced.
-Do not turn an implementation scan-depth limit into an undocumented hole in the configuration semantics.
+Paths and quoted patterns are passed to the sandbox using its supported rule syntax.
+The sandbox owns path interpretation and filesystem safety, including whether a requested combination is supported.
+Console does not expand policy patterns by scanning the filesystem or inspect filesystem objects to decide whether access is safe.
 
 Path namespaces are determined by the field:
 
-| Field                                                     | Namespace and relative base                                                      |
-| --------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `permissions.filesystem.*`                                | Final worker filesystem; relative to `target.workspace`                          |
-| Language executable, library, project, and database paths | Final worker filesystem; relative to the workspace                               |
-| Unix socket paths                                         | Final worker filesystem; normally absolute                                       |
-| `target.workspace` with host compute                      | Destination host filesystem; must exist unless creation was explicitly requested |
-| Docker mount `source`                                     | Compute host reached by the transport                                            |
-| Docker mount `target`                                     | Container filesystem                                                             |
-| SSH identity/configuration file                           | Controller filesystem                                                            |
-| Dockerfile/build context read from the project            | Controller filesystem unless an explicit target-side source is selected          |
-| `storage.logs.directory`                                  | Controller filesystem; relative to the controller's project root                 |
-| Cache directories                                         | Target-side logical storage; relative to the worker workspace                    |
+| Field                                                            | Namespace and relative base                                                      |
+| ---------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `permissions.filesystem.*`                                       | Final worker filesystem; relative to `target.workspace`                          |
+| Language executable, library, project, and database paths        | Final worker filesystem; relative to the workspace                               |
+| Unix socket paths                                                | Final worker filesystem; normally absolute                                       |
+| `target.workspace` with host compute                             | Destination host filesystem; must exist unless creation was explicitly requested |
+| Docker mount `source`                                            | Compute host reached by the transport                                            |
+| Docker mount `target`                                            | Container filesystem                                                             |
+| SSH host alias                                                   | Controller's existing OpenSSH configuration                                      |
+| Dockerfile/build context read from the project                   | Controller filesystem unless an explicit target-side source is selected          |
+| Console configuration, state, logs, transcripts, and projections | Controller project's `.agents/console/`                                          |
+| Console preparation caches                                       | `.agents/console/cache/` on the host where preparation runs                      |
 
 Support a small set of explicit path substitutions: `${project}` for the controller project root, `${workspace}` for the final worker workspace, and `${session_tmp}` for private target temporary storage.
 `~` resolves in the field's own namespace.
@@ -531,13 +480,15 @@ Do not expand arbitrary environment variables in policy paths; an agent must not
 
 A controller `${project}` path is not automatically a valid remote mount source.
 Reject cross-machine substitutions unless a declared staging operation provides the mapping.
-Resolve physical cache backing paths in the launch plan, not through guesses made by the relay.
-
-Normalization must account for symlinks, filesystem case rules, Windows drive and UNC roots, mount aliases, and not-yet-existing descendants.
-A write grant to a directory must not authorize access to a symlink's unrelated target.
-Read-denial guarantees are about objects reached through the enforced filesystem boundary; they are not a data-loss-prevention system that can erase previous copies, memory, or previously disclosed contents.
+Console supplies the declared paths and namespace mappings to the sandbox.
+The sandbox owns normalization, policy validation, and enforcement, and its filesystem restrictions and limitations apply as reported.
+Console forwards an error if the sandbox rejects the request; it does not independently certify an accepted policy.
 
 ## 8. Outbound networking
+
+The sandbox and its proxy own network-rule parsing, validation, and enforcement.
+Console passes the requested settings through the provider interface and returns its diagnostics.
+The examples describe requested capabilities, not a separate Console network policy language.
 
 ### Three explicit modes
 
@@ -554,9 +505,9 @@ permissions:
 The mode defaults to `none`.
 Adding an allow rule does not silently change it.
 An inactive rule produces a diagnostic.
-`unrestricted` with explicit filter rules is a validation error, rather than a configuration that appears filtered.
+The sandbox reports incompatible combinations such as unrestricted networking with filter rules.
 
-In `allowlist` mode the launcher starts the managed proxy automatically.
+In `allowlist` mode the launcher requests the sandbox's managed proxy.
 There is no separate feature flag whose omission leaves listed restrictions unenforced.
 This intentionally differs from Codex's separately enabled proxy feature.[1]
 
@@ -578,29 +529,17 @@ permissions:
       - https://tracking.data.example.org
 ```
 
-A string is an origin-shaped destination rule: a scheme, hostname pattern, and optional port, with no meaningful path or user information.
-`https` supplies port 443 and `http` port 80.
-A trailing `/` is allowed.
-A bare hostname is rejected because its port scope would be ambiguous.
-
-For host patterns, support exact names, `*.example.org` for subdomains but not the apex, and `**.example.org` for both.
-Do not accept arbitrary regexes or substring matching.
-Match complete normalized DNS labels; normalize case and a trailing dot.
-IPv6 literals use brackets in origin strings.
-A global `*` grant requires the explicit unrestricted mode instead.
+A string requests an origin-shaped destination rule; a structured entry requests a specific TCP endpoint.
+Supported schemes, patterns, addresses, and ports follow the sandbox/proxy schema.
+Console does not introduce its own hostname matcher or address classifier.
 
 An HTTPS destination grant authorizes an opaque connection to that host and port.
 It is **not** a promise to restrict HTTP methods, URL paths, request bodies, or the application protocol sent over that connection.
 The scheme shorthand must not disguise the limits of a non-intercepting CONNECT proxy.
 
-A structured TCP rule requires a host and exact port.
-`addresses`, when given, is an additional intersection with allowed destination CIDRs, not an alternate way to reach any host in those ranges.
-Private, loopback, and link-local addresses are blocked by default; `allow_private: true` applies only to that rule.
-Exact private-address allowances should be preferred for sensitive endpoints.
-Do not turn on access to the entire LAN to reach one database.
-
-Only TCP and HTTP(S)-style destinations are in the initial network grammar.
-UDP, QUIC, and arbitrary raw sockets remain denied unless a later explicit rule type and capable provider support them.
+The structured example requests one database endpoint, including its private-address allowance.
+The provider determines whether it supports those fields and what network protocols it can mediate.
+Forward unsupported-field and capability errors to the user.
 
 ### URL paths and methods
 
@@ -622,30 +561,21 @@ HTTPS requires an explicitly approved TLS-terminating proxy or equivalent truste
 The example requests TLS inspection; it does not assume a CONNECT tunnel can see encrypted paths.
 SRT's optional TLS termination is one possible upstream building block, not an assurance that every provider has this capability.[2]
 
-Path rules match a defined normalized URL path, never a fragment.
-The provider must specify percent-encoding and dot-segment normalization, reject ambiguous request-target forms, and authorize redirects independently.
-Query and body filtering are not implied.
-A path restriction is not a complete exfiltration control, even with `GET` only.
-
-Do not mix an opaque whole-destination grant with path restrictions on that same destination when the opaque path would bypass them.
-Reject an unenforceable combination.
-Do not bypass inspection for a certificate-pinned or mTLS client while still reporting the URL restriction as effective.
+URL parsing, rule interactions, and TLS compatibility are provider responsibilities.
+Console passes these settings to a supporting sandbox/proxy and forwards its acceptance or rejection without adding HTTP inspection of its own.
 
 ### Enforcement and failure behavior
 
-The sandbox must block direct bypasses, including raw sockets, alternate DNS, IPv6, UDP, and proxy-variable changes.
-Proxy environment variables alone are not enforcement.
-Validate the requested hostname and the actual resolved address together on each connection; handle DNS changes without turning a hostname allowance into arbitrary local-network access.
+Network isolation and mediation belong to the sandbox and its proxy.
+Console does not add connection-time checks or independently verify the sandbox's enforcement.
 
 A non-proxy-aware database driver must work through an enforced endpoint route, a transparent compatible provider, or a managed TCP forward used by its connection adapter.
 Merely setting `ALL_PROXY` is not enough.
-When a provider cannot supply the required path, fail and explain the missing capability.
+When a provider reports that it cannot supply the requested route, forward that error.
 Preserve the intended server name and certificate verification if the logical endpoint is routed through a local forward.
 
-Proxy failure closes existing mediation paths and blocks new access; it never opens direct access.
-The manager owns proxy/tunnel lifetime and attribution.
-Do not honor ambient `NO_PROXY` as an escape from policy.
-Approved upstream corporate proxies may be used, but only behind the same destination enforcement.
+The sandbox/provider owns proxy failure behavior and tunnel lifetime.
+Console reports its status and does not retry with a less restricted policy.
 
 Transport and preparation traffic are separate.
 The controller can make the approved SSH connection even when the worker's network mode is `none`.
@@ -674,7 +604,7 @@ services:
 
 A service declaration explicitly requests its exact listener and a managed publication route.
 It is therefore a capability request, not just documentation.
-The expanded policy lists the derived listener/forward grants and checks them against managed requirements.
+The sandbox/provider interprets the requested listener/forward grants and checks them against its policy requirements.
 Users do not have to repeat those grants in a second list.
 It does not grant arbitrary outbound loopback access.
 
@@ -757,7 +687,7 @@ sandbox:
 ```
 
 This is the ordinary default.
-`auto` selects an available provider that can honor the complete policy.
+`auto` selects the default provider for the target, ordinarily the bundled native runner, which validates the requested policy.
 It does not mean “try something, then run without a sandbox.” Report the selected provider and effective capabilities before launch.
 
 ### SSH host
@@ -780,10 +710,11 @@ sandbox:
   provider: auto
 ```
 
-The minimal form in section 2 inherits these conservative behaviors: use the host's OpenSSH configuration, require an existing compatible target executable, and do not detach work by default.
-Support explicit `user`, `port`, and `identity_file` overrides, with the latter interpreted on the controller.
-Perform normal host-key verification.
-Do not disable it or forward the SSH agent as an implementation convenience.
+The minimal form in section 2 uses the controller host's existing OpenSSH configuration and requires an existing compatible target executable.
+The user sets up passwordless, noninteractive SSH before selecting this target.
+OpenSSH and the host's existing key or credential facilities own authentication, identities, and host-key verification.
+Invoke SSH in batch mode and forward authentication or connection errors; do not add password prompts, private keys, or SSH credential fields to Console configuration.
+Do not forward the SSH agent as an implementation convenience.
 
 A future `setup.install: if_missing` may stage a version-matched, integrity- verified executable and runtime assets after approval.
 It is not an unpinned `curl | sh`.
@@ -827,7 +758,7 @@ sandbox:
 The mount exposes a path to the compute environment; `access: read_write` is an upper bound, not a replacement for the session filesystem policy.
 A read-only profile still requires read-only effective access.
 A workspace-write profile still protects its denied subpaths.
-Fail if the selected enforcement stack cannot honor that combination.
+The selected sandbox/provider validates the requested mount and policy combination; Console forwards its result.
 
 Pin the resolved image digest in the approved launch plan.
 Pull/build policy should distinguish `never`, `if_missing`, and an explicit refresh; do not silently move a running profile to a different mutable tag.
@@ -837,9 +768,9 @@ Use typed fields for image, mounts, user, working directory, devices/GPU access,
 Do not default to privileged mode, a host PID or network namespace, a daemon socket mount, or unnecessary capabilities.
 A container is compute placement and isolation, not automatically an exact implementation of all requested permissions.
 
-`extra_args` may exist as a trusted escape hatch, but arguments conflicting with normalized mounts, networking, lifecycle, or limits must be rejected for a restricted profile.
-Do not silently let raw provider flags override the policy.
-An arbitrary container wrapper belongs under the explicit command-provider contract when it cannot be validated structurally.
+Any provider-specific arguments belong to that provider's supported interface and validation.
+Console does not parse arbitrary Docker flags to decide whether they preserve a permission boundary.
+An arbitrary container wrapper belongs under the explicit command-provider contract.
 
 ### Docker on an SSH host
 
@@ -881,7 +812,7 @@ sandbox:
 Use a distinct compute kind.
 Docker's current Sandboxes documentation describes a microVM-backed execution environment, not merely a synonym for an ordinary Docker container.[6] MCP Console should hide the particular vendor CLI spelling behind its adapter instead of incorporating changing command names into the common schema.
 
-`provider: compute` asks that provider to enforce the normalized permissions.
+`provider: compute` asks that provider to interpret and enforce the requested permissions.
 If it cannot enforce an exact read denial, network rule, or other requested restriction, it fails or requires an explicit compatible inner provider.
 It does not report a broad outer boundary as if the narrower policy were enforced.
 A workspace mapping must be specified or supplied by an explicit adapter default that maps the project only and appears in the launch plan.
@@ -894,7 +825,7 @@ target:
     kind: docker
     build:
       context: .
-      dockerfile: .mcp-console/Dockerfile
+      dockerfile: .agents/console/Dockerfile
 ```
 
 For very small definitions, permit an alternative:
@@ -912,9 +843,9 @@ target:
 
 `dockerfile` and `dockerfile_inline` are mutually exclusive.
 Prefer the separate file once the definition grows beyond a few lines; it gets normal Dockerfile editing, review, and linting.
-Both remain under `.mcp-console/` when desired.
+Both are stored under `.agents/console/`, either in the config or in its adjacent Dockerfile.
 
-The controller must authorize/snapshot the build inputs, bound the context, respect exclusions, and avoid uploading secrets or excluded control files.
+The selected build adapter owns build-input handling and reports the context and requested preparation to the controller for authorization.
 Remote builds require explicit context staging.
 Build-time network and secret access are separate from runtime permissions.
 Image builds are code execution, not inert configuration parsing.
@@ -939,7 +870,8 @@ sandbox:
 ```
 
 This adapter is trusted executable configuration.
-It receives the normalized policy, target argv, approved environment, resource requirements, and lifecycle parameters through a versioned setup contract.
+It receives the requested policy, target argv, approved environment, resource requirements, and lifecycle parameters through a versioned setup contract.
+The adapter owns parsing and validation of its policy input and returns its diagnostics to Console.
 `${setup_fd}` is an injected placeholder, not general template evaluation.
 The adapter launches the exact provided argv without reconstructing it through a shell.
 
@@ -953,7 +885,7 @@ It must support cancellation, exit status, signal/interrupt forwarding, environm
 Capability negotiation takes place before execution, not after a partially unconfined worker has started.
 
 For simple existing wrappers, a command passthrough form may accept an argv placeholder and report **externally managed** enforcement.
-It must not claim MCP Console's normalized policy is enforced just because a command exits successfully.
+It reports the wrapper's stated enforcement without treating command success as a Console verification of the policy.
 Supporting restricted profiles requires a trusted policy-aware adapter or a separately enforced inner sandbox.
 Provider self-reporting is a compatibility check, not proof that an untrusted executable is safe.
 
@@ -967,7 +899,8 @@ The launcher subsystem owns provider selection and proxy setup through its adapt
 Sandbox/provider process-tree supervision and cleanup belong to the selected runner or manager.
 The server retains logical relay lifetime orchestration and retirement; the relay retains direct-worker signal delivery, bounded termination, and reaping.
 The relay remains unaware of sandbox implementation.
-Keep the normalized policy and adapter contract independent of upstream Codex internals so a rolling upstream patch set can remain small and isolated.
+Use the extracted runner's configuration interface and keep its implementation details behind that boundary.
+Changes to sandbox policy validation or enforcement belong in the sandbox, not in a Console adapter.
 
 ## 12. R and Python environments
 
@@ -1018,13 +951,13 @@ environments:
       kind: managed
       requirements_file:
         format: mcp_console
-        path: .mcp-console/requirements.yaml
+        path: .agents/console/requirements.yaml
   python:
     environment:
       kind: managed
       requirements_file:
         format: mcp_console
-        path: .mcp-console/requirements.yaml
+        path: .agents/console/requirements.yaml
 ```
 
 The referenced `requirements.yaml` uses a separate, data-only manifest schema:
@@ -1035,7 +968,7 @@ r: [dplyr, ggplot2]
 python: [numpy>=2, pandas]
 ```
 
-Each language consumes its own list, and the complete manifest is strictly validated.
+Each language consumes its own list through the preparation adapter's existing manifest parser.
 Inline `requirements` and `requirements_file` are mutually exclusive within a language environment.
 Manifest paths refer to the target workspace; read and snapshot them through the authorized target path, not accidentally from the controller's similarly named directory.
 
@@ -1182,7 +1115,8 @@ Python index ordering is significant; `first_index` selects the first index cont
 This follows the safety motivation documented by uv.[8]
 
 Mirror preference is not complete package approval.
-Enforce `source_policy` on all direct and transitive requirements and build dependencies, checking source kinds as well as approved repositories.
+The selected preparation adapter owns package-source handling for direct and transitive requirements and build dependencies.
+Network and filesystem restrictions around preparation belong to its sandbox/provider, not a second enforcement layer in Console.
 Project package-manager configuration and ambient index/repository variables cannot silently add a source outside this policy.
 A corporate configuration may require different approved copies of built-in runtime dependencies; missing approved artifacts are errors, not permission to bypass the mirror.
 
@@ -1293,7 +1227,7 @@ environments:
 ```
 
 Connection selection and network authorization remain separate.
-Validation checks that the requested endpoint has a usable allowed route and provides a focused diagnostic rather than broadening network access.
+The sandbox/provider checks the requested route and returns any policy error through Console.
 Configuring a default connection does not prohibit user code from making other connections that its permissions allow.
 
 `access: read_only` asks the adapter to open a read-only connection; it is not an independent security boundary against arbitrary R/Python/SQL.
@@ -1345,6 +1279,7 @@ resources:
 ```
 
 Hard resource limits apply to the aggregate worker/relay process tree, not just the initial PID.
+The sandbox/provider validates and enforces these limits; Console forwards the settings and its diagnostics.
 `memory` is a memory limit, `cpus` is CPU-time bandwidth in core equivalents, and `processes` limits process creation.
 `cpus: 2` means at most two cores' worth of CPU time over the provider's quota interval, not “use CPU numbers 0 and 1” and not “2% of the machine.” Avoid an ambiguous `max_cpu_percent` setting.
 
@@ -1372,6 +1307,12 @@ Do not claim this per-controller setting provides one.
 
 ## 16. Environment variables and secrets
 
+`config.yaml` contains no secret values.
+Passwords, tokens, private keys, and other credentials remain in the host's existing environment, authentication configuration, or OS credential facilities.
+Credential fields accept references such as `from_env`, never inline literals.
+Literal environment settings below are for non-secret values.
+The config remains readable according to the sandbox's ordinary read policy; its write protection is not a secret-storage mechanism.
+
 ```yaml
 env:
   inherit: [LANG, LC_ALL, TZ]
@@ -1388,40 +1329,72 @@ Use a controlled baseline needed to launch the selected runtimes, not automatic 
 Resolved secret values go through protected setup channels, not command-line arguments or routine configuration dumps.
 `config explain` shows the reference and recipient, not the secret.
 A secret intentionally given to the worker is readable by arbitrary code in that worker; do not imply stronger isolation.
-Database credentials are delivered only when the connection is prepared, and provider/SSH/package-proxy credentials stay out of the worker unless explicitly requested.
+Database credentials are delivered only when the connection is prepared, and provider/package-proxy credentials are delivered only to their intended recipient.
+SSH authentication remains entirely with the host's already configured passwordless OpenSSH connection.
 
 Environment values are not a route to change managed cache destinations, interpreter choice, proxy enforcement, or library paths behind the typed schema.
 Reject conflicting assignments to fields controlled by typed configuration.
 Provider-specific environment variables belong to the provider's `command.env`, not the worker `env` map.
 
 Worker `env` values belong only to the worker and its descendants, not the controller, SSH/Docker launcher, provider, relay, or resolver.
-In sandboxed sessions, inject them after enforcement is established.
+In sandboxed sessions, the sandbox injects them after enforcement is established.
 Helpers use an implementation-owned baseline plus separately approved helper configuration.
 A worker `LD_PRELOAD` assignment must not affect an unsandboxed launcher.
 Provider `command.env`, executable, argv, and working directory are authority-bearing configuration: a project overlay requires authorization even when the underlying provider is user-defined.
 A restricted profile fails if its provider cannot keep helper and worker environments separate.
 
-Prefer secret references to inline secrets.
-Do not add a general-purpose `$(command)` interpolation or executable secret lookup in untrusted project configuration.
-A future secret provider is another explicitly authorized adapter, not shell expansion.
+Do not add inline secret fields, a Console credential store, password prompting, or executable secret lookup to this configuration.
+The configuration names existing environment variables or external tool identities; authentication setup belongs to the host and the selected tools.
 
 ## 17. Logs, caches, and retention
+
+### One managed directory
+
+`.agents/console/` is the only persistent root managed by MCP Console for a project:
+
+```text
+.agents/console/
+  config.yaml
+  state/
+  sessions/
+    <session-id>/
+      <generation-id>/
+        transcript.md
+        transcript.qmd
+        journal.jsonl
+        outputs/
+        artifacts/
+  logs/
+  cache/
+    r/
+    python/
+    duckdb/
+```
+
+Configuration inputs such as a Dockerfile or requirements manifest also live under this directory when Console manages them.
+The exact subdirectory layout may evolve, but there is no separate default state directory or configurable log/cache root elsewhere.
+The root stays write-denied to the entire sandboxed workload, including its descendants, for the session's lifetime.
+Only completely unrestricted execution omits that protection.
+The sandbox implements it; Console supplies the denial and forwards any error.
+
+The controller records transcripts, logs, projections, output files, and image artifacts from worker responses.
+Recording does not grant the worker direct write access to `sessions/`, `logs/`, or any other part of the managed directory.
+Records for a remote worker are collected in the controller project's managed directory.
+If trusted preparation needs target-side artifacts, it uses the target workspace's `.agents/console/`, covered by the same sandbox write denial.
 
 ### Logs and session records
 
 ```yaml
 storage:
   logs:
-    directory: .mcp-console/logs
     retention:
       max_age: 30d
       max_size: 2GiB
       sweep_interval: 24h
 ```
 
-This directory is on the controller.
-Session records from remote workers are still collected by the controller; target-manager diagnostics can be forwarded or kept in a separately disclosed target spool.
-The default without this block is the platform's MCP Console state directory, not an unbounded project folder.
+This block configures retention for records under `.agents/console/`; it does not select another directory.
+Target-manager diagnostics are returned to the controller for recording there.
 
 Store records under project/profile/session/generation identities.
 Retention operates on complete retired record sets, including referenced image artifacts, not arbitrary files selected by a glob.
@@ -1436,102 +1409,74 @@ A user-invoked prune command may force an eligible sweep and show a dry run.
 
 Logs may contain code, input, output, and secrets printed by the user program.
 Known-secret redaction can be offered as best effort, not a confidentiality guarantee.
-Protect controller records from worker mutation; a requested log location does not grant the worker write access to it.
+The managed-directory denial protects controller records from worker mutation.
 Do not execute an exported transcript as part of recording or cleanup.
 
-### Granular cache routing
+### Preparation caches and runtime scratch
 
 ```yaml
 storage:
   cache:
-    directory: default
     cleanup:
       interval: 7d
       unused_for: 30d
       max_size: 10GiB
-    r:
-      directory: .mcp-console/cache/r
-      tools:
-        ir: inherit
-        pak: inherit
-        renv: inherit
-    python:
-      directory: default
-      cleanup: disabled
-    duckdb:
-      directory: default
-      cleanup: disabled
 ```
 
-The R family is placed under the project's `.mcp-console/cache/r`; Python and DuckDB retain their target-side native locations.
-These are cache locations, not selections of an R library, Python interpreter, or persistent SQL database.
-A database file is durable data and is never swept as a cache.
+Console-owned installer downloads, package artifacts, and managed environments use protected storage under `.agents/console/cache/`.
+Preparation adapters route R, Python, and DuckDB artifacts into their respective subdirectories using the tools' supported cache controls.[11][12][13] The `ir` adapter uses its supported controls rather than an invented environment variable.
+If preparation itself runs in a sandbox, it writes runner-owned temporary output and the trusted preparation adapter publishes the completed artifacts into the protected cache.
+Existing user-selected environments remain user-owned inputs; Console does not take over their storage or cleanup.
 
-`directory: default` means use the tool's native target-side location without an override.
-Omitted per-language settings inherit the configured family/root policy.
-`inherit` on a known tool routes it to a tool-specific subdirectory of the R family root.
-A tool may instead have an explicit directory.
-Unknown tool names are errors, not promises that arbitrary packages respect a universal cache variable.
+These preparation mappings are never reused as writable runtime-cache mappings.
+Worker application caches and database spill files use the sandbox's private temporary storage when managed by the session.
+That temporary storage is runner-owned scratch, not another persistent Console state directory.
+Runtime settings such as cooperating R packages' user cache location are distinct from installer settings.[10] DuckDB's writable spill directory is likewise separate from its prepared extension artifacts.[9]
 
-Routing is implemented through tested per-tool adapters.
-Examples include `R_USER_CACHE_DIR` for cooperating R packages, `RENV_PATHS_ROOT`/cache settings for renv, `R_PKG_CACHE_DIR` for pkgcache-backed tooling, and `UV_CACHE_DIR` for uv.[10][11][12][13] The `ir` adapter must use its supported cache controls, not an invented environment variable.
-DuckDB's extension directory is an adapter-controlled setting, separate from its temporary spill directory.[9]
-
-Do not globally change `XDG_CACHE_HOME` just to move R caches; that would also move other tools' caches and violate the example's intent.
-Apply mappings consistently to target-side preparation and worker runtimes, with explicit container mounts/backing storage when their namespaces differ.
-
-No configuration can force every arbitrary R package to honor conventional cache settings.
-Guarantee routing for supported adapters and enumerate them in `config explain`.
-Filesystem policy determines what happens when other code tries another location.
+There is no worker-writable cache exception under `.agents/console/`.
+The worker may read prepared artifacts as allowed by the sandbox policy, but trusted preparation never consumes the worker's scratch cache as its own package or executable cache.
+Publishing selected runtime output under `sessions/` is a controller recording operation, not promotion into a preparation cache.
+Tool-specific routing remains with the corresponding adapter, and filesystem validation remains with the sandbox.
 
 ### Ownership and cleanup safety
 
-Only prune MCP Console-owned cache entries, or entries deleted through an explicitly opted-in native tool cache API.
-A path such as a user's default uv cache is not a license to recursively remove it.
-Natural shared caches are preserved by default; `cleanup: disabled` makes that intent explicit above.
+Only prune Console-owned entries under `.agents/console/cache/`.
+Do not sweep user-owned environments, native tool caches outside that root, or persistent database files.
+`cleanup: disabled` preserves the managed entries when automatic cleanup is unwanted.
 
 The generic cleanup block applies to owned namespaces only.
 Cache age means last use, not file modification time.
 Pin active environments and their artifacts with leases/reference counts so cleanup cannot break a live worker.
 Active-use protection spans every process sharing the cache, not just this controller.
-Coordinate activation, publication, and cleanup across processes; if that cannot be done safely, skip shared-entry cleanup or use a private cache.
+Coordinate activation, publication, and cleanup across processes sharing the managed cache.
 Respect tool locks and use supported pruning APIs.
 uv specifically documents its cache-management commands and concurrency expectations.[14]
 
-Reject dangerous cleanup roots, symlink traversal out of owned roots, and parent directories that contain durable user data.
-Moving a cache creates a new location; it does not silently migrate or delete the old one.
 Unused owned entries may be removed when due or to satisfy `max_size`; never indiscriminately clear every cache on a timer.
-
-Separate mutable worker application caches from trusted installer/download and immutable environment caches.
-A writable project cache must not let worker code poison a shared executable/package cache later consumed with controller permissions.
-Likewise, downloaded runner binaries and provider executables must not be served from a worker-writable cache without protected integrity and ownership guarantees.
-
-Cache routing does not silently widen worker permissions.
-The launch plan may request narrow owned runtime-cache grants, but they are visible capabilities and are checked against denials/managed requirements.
-If a requested cache lies under a denied write subtree, fail or use an explicitly selected nonpersistent session cache; do not ignore the denial.
+Cleanup never removes `config.yaml`, approval metadata, or active session records as a cache entry.
 
 ## 18. Resolution, validation, and switching
 
 The conceptual pipeline is:
 
 ```text
-parse selected inputs without executing them
-  -> resolve configuration layers, definitions, and one profile
-  -> normalize paths and requested capabilities
-  -> apply trusted requirements and obtain limited probe authorization if needed
-  -> resolve target/provider identities and probe capabilities within that authorization
-  -> obtain final authorization bound to the resolved identities and effective configuration
-  -> prepare approved environments/images/storage
-  -> freeze the effective launch plan and recheck identities against final authorization
-  -> launch through mcp-console sandbox
-  -> enforce, supervise, and record the worker generation
+load selected YAML as data
+  -> select the profile, ordinary session settings, and .agents/console paths
+  -> include the managed-directory write denial for a sandboxed launch
+  -> obtain limited probe authorization from the trusted caller if needed
+  -> sandbox/provider validates policy and reports resolved identities and capabilities
+  -> obtain final authorization for the reported policy, identities, and session settings
+  -> preparation adapters prepare approved environments/images/storage
+  -> sandbox/provider rechecks identities and launches with its enforcement
+  -> controller records the worker generation under .agents/console
 ```
 
 A side-effect-free structural check is distinct from an authorized target probe.
 Probing may resolve a Docker tag to a digest, verify an SSH host identity, or inspect an approved command-provider executable; it does not authorize preparation or launch.
-If an identity changes after final authorization, stop and obtain authorization for the newly resolved identity before continuing.
+If the sandbox/provider reports an identity change after final authorization, forward that result for renewed authorization before continuing.
 Do not contact every SSH host or build every image just to list profiles.
-Source provenance survives all steps: a diagnostic should name the file, profile/definition, field, requested behavior, and missing capability.
+Console can attach the selected config path and profile to a diagnostic while preserving the sandbox/provider's error details.
+It does not rerun those checks with a separate validator or turn an upstream acceptance into a stronger security claim.
 
 Proposed commands:
 
@@ -1543,7 +1488,8 @@ mcp-console profiles list
 mcp-console serve --profile remote
 ```
 
-`config explain` should show the selected target, workspace, provider, effective permission grants/denials, package preparation authority, secret recipients, resolved storage paths, limits, and whether trust/capability checks remain pending.
+`config explain` should show the selected target, workspace, provider, the sandbox's reported permissions, package preparation authority, secret references and recipients, managed storage paths, and limits.
+Pending or failed policy checks are reported using the sandbox/provider's result.
 Its default operation is redacted and non-executing; an explicit probe requires authorization.
 A machine-readable JSON form is useful for clients and tests, but the on-disk format remains YAML.
 
@@ -1565,69 +1511,59 @@ Approved changes become effective at a new generation boundary.
 
 ### Review boundary
 
-This sketch chooses terminology, common examples, permission semantics, and ownership boundaries; it is not an exhaustive provider or security implementation specification.
-Correct contradictions in those choices here.
-Settle exact wire formats, locking algorithms, option allowlists, and platform enforcement in the PR that implements each feature, with tests.
-A missing implementation detail can justify deferral, not silently reinterpreting a promised restriction.
-When implementation exposes a better design, revise the proposal explicitly rather than accumulating exceptions.
+This sketch chooses the user-facing configuration, the managed-directory layout, and the boundary between Console and its sandbox.
+Review Console's file discovery, session settings, policy forwarding, storage ownership, and reporting of upstream errors here.
+Policy parsing, filesystem safety, network mediation, and enforcement are sandbox responsibilities and are developed and tested there.
+An accepted configuration carries the sandbox's guarantees and limitations; Console does not independently verify or extend them.
 
 ### Parsing contract
 
-Use YAML 1.2-compatible scalars, mappings with string keys, and sequences.
-Reject duplicate keys, unknown schema keys, custom tags, executable constructors, merge keys, and aliases/anchors initially.
-Bound input size, nesting, and expansion.
-Quoted duration/size strings are accepted alongside unquoted strings; booleans must be actual booleans, not strings that happen to look affirmative.
+Use an existing YAML 1.2 library for ordinary data loading and the Console fields needed to select a session.
+Report syntax errors, duplicate keys, unknown Console options, and invalid profile references through the normal loader.
+Do not build a custom parser, executable YAML features, an include language, or a policy normalization engine.
 
-`version: 1` fixes semantic meaning, not the list of implemented providers.
-Validate unknown keys in every declared profile.
-Check runtime capabilities only for the selected profile; a valid but unsupported SSH profile should not prevent use of a local profile.
-An older parser that does not recognize a future field must reject it rather than run while ignoring it.
-A future `min_version` may improve diagnostics but does not replace strict parsing.
+`version: 1` identifies the Console configuration envelope.
+Sandbox policy types, supported fields, compatibility, and access semantics belong to the selected sandbox's schema and version.
+Pass policy data through its supported interface and surface its parse or validation errors.
+Do not duplicate the sandbox's validators in Console or silently discard fields it rejects.
 
-Provider-specific settings belong in that provider's validated `options` object.
-They cannot shadow common permission keys or become an unvalidated back door.
-Diagnostic metadata, if needed, can live under a clearly inert `metadata` object, not under ignored policy-looking keys.
-
-Support data-file references only where their schemas define them.
-Do not start with an unbounded include system, remote includes, YAML templating, or arbitrary merge scripts.
-Keeping a Dockerfile or lockfile beside the main config is sufficient for the initial use cases.
+Only the selected profile needs a sandbox/provider operation; listing profiles does not probe every target.
+Provider `options` belong to that provider's parser.
+`config check` loads the file and delegates policy checking; target operations still use the caller's approval flow.
+Ordinary language, package, and connection adapters retain their existing input contracts, without acquiring sandbox enforcement responsibilities.
 
 ### Suggested sequence of pull requests
 
-| Slice | Deliverable                                                                                                                             | Deliberate limit                                                          |
-| ----- | --------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| 1     | Strict YAML parser, implicit/default and built-in profiles, normalized configuration, `check`/`explain`, file-discovery and trust model | Only currently enforceable launches; reject unsupported selected behavior |
-| 2     | Filesystem grants/denials, protected control inputs, exact-path semantics, starter config                                               | Do not ship the workspace-write starter until its denials are enforced    |
-| 3     | Managed outbound proxy and exact origin/host-port rules                                                                                 | No HTTPS path filtering claimed through opaque tunnels                    |
-| 4     | Language selection, resolution controls, explicit manifests and repository policy                                                       | Preserve current activation contracts; disclose existing host-build trust |
-| 5     | Storage routing and safe retention, scheduling hints, provider capability reporting                                                     | No recursive deletion of arbitrary shared caches                          |
-| 6     | SSH target, approved setup, remote manager lifecycle, path mapping                                                                      | Existing remote workspace; no implicit synchronization                    |
-| 7     | Services/forwarding and exact local-IPC grants                                                                                          | No blanket localhost/LAN allowance                                        |
-| 8     | Docker, Docker Sandbox, and versioned command adapters                                                                                  | No silent policy dilution by provider flags                               |
-| 9     | Hard resource limits, concurrent-session admission, additional SQL adapters, stronger URL filtering                                     | Each selected capability fails until enforcement exists                   |
+| Slice | Deliverable                                                                                                             | Deliberate limit                                                                   |
+| ----- | ----------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| 1     | Ordinary YAML loading at `.agents/console/config.yaml`, profile selection, sandbox policy forwarding, `check`/`explain` | Reuse the sandbox parser and diagnostics                                           |
+| 2     | Centralized config, state, transcripts, logs, projections, and preparation storage under `.agents/console/`             | Include the whole-directory write denial in every sandboxed launch                 |
+| 3     | Expose the sandbox's supported proxy and destination settings                                                           | No Console network validator or enforcement layer                                  |
+| 4     | Language selection, resolution controls, explicit manifests and repository policy                                       | Preserve current activation contracts; disclose existing host-build trust          |
+| 5     | Retention, protected preparation caches, runtime scratch routing, scheduling hints                                      | No worker write exception under the managed directory                              |
+| 6     | SSH target, approved setup, remote manager lifecycle, path mapping                                                      | Passwordless host setup and an existing remote workspace; no credential management |
+| 7     | Services/forwarding and exact local-IPC grants                                                                          | No blanket localhost/LAN allowance                                                 |
+| 8     | Docker, Docker Sandbox, and versioned command adapters                                                                  | No silent policy dilution by provider flags                                        |
+| 9     | Forward provider resource limits, add session admission and SQL adapters, expose additional proxy features              | Enforcement remains in the sandbox/provider                                        |
 
 These are coherent implementation areas, not a requirement to make exactly nine PRs.
 Split further where needed.
 In particular, parser support does not constitute security-feature implementation.
 
-The first usable config can be as small as `version: 1` plus `extends:
-read_only`, translating to today's boundary.
-The richer ten-line starter becomes available only once write allowances and its read/write denials work.
-Before that point, `config init` must generate only an enforceable template or clearly refuse the requested template.
+The first usable config can be as small as `version: 1` plus `extends: read_only`.
+Every sandboxed launch still supplies the `.agents/console/` write denial.
+The starter uses settings accepted by the bundled sandbox; any unsupported policy is reported through its diagnostics.
 
 ### Acceptance tests that preserve the design
 
-Test the public launcher/workflow boundary, with ordinary cases running on every supported platform and explicit capability requirements for specialized cases.
-Avoid OS-name allowlists where the actual requirement is a sandbox feature.
+Test the public configuration and launcher workflow: discover and initialize the single config path, select profiles, and forward the requested policy with the managed-directory denial.
+Cover that denial with omitted config, read-only and workspace-write profiles, explicit write grants, and the unrestricted exception.
+Verify that controller recording stays under `.agents/console/`, preparation caches remain separate from writable runtime scratch, and configuration uses credential references with passwordless SSH.
 
-Important cases include inherited denial preservation; a denied nested file under a writable root; new files matching a deny glob; symlink and directory- replacement attempts; config modification after approval; a spoofed or changed provider; proxy bypass and crash; private-address/DNS changes; an ordinary database driver through the permitted route; Shiny publishing across a namespace and SSH; disconnect cleanup; container mount/policy intersection; blocked public package fallback; disabled resolution; active-cache pinning; concurrent capacity reservation; and limits covering descendants rather than only the initial PID.
-
-Also test profile-switch failures without silent fallback, full-access reporting, secret redaction in diagnostics, and semantic equality/provenance in `explain`.
+Use the public launcher boundary to check that sandbox acceptance, rejection, and error details reach the caller unchanged, without a different policy being substituted.
+Keep session switching, package-input contracts, cache retention, and service lifecycle tests at their existing public boundaries.
+Native filesystem and network enforcement regressions belong to the sandbox's suite; they do not add path-safety algorithms or exploit-specific fields to Console's configuration.
 Keep repetitive initialization payloads out of per-case transcript snapshots.
-
-For each proposed shorthand, test equality with its expanded mapping under inheritance, including a parent of the same kind.
-Also distinguish an extensible built-in default from an explicit managed ceiling, and an approved definition from an unapproved request to select or modify it.
-Parsing the examples alone does not verify these semantics.
 
 ## 20. Alternatives and decisions worth revisiting
 
@@ -1645,31 +1581,11 @@ Do not auto-merge `config.yaml` and `config.toml`; their coexistence must be an 
 Never let one format express an authority feature the other cannot represent.
 Defer dual-format support until it earns its cost.
 
-### Allow/deny lists versus a Codex-style access map
+### Permission spelling
 
-**Recommended:** `allow_write`, `deny_write`, and `deny_read`, with deny-wins semantics.
-They make the highest-frequency edits obvious and avoid order-dependent review.
-
-**Reasonable alternative:** a path-to-access map:
-
-```yaml
-permissions:
-  filesystem:
-    paths:
-      ".": write
-      ".git": read
-      ".agents": read
-      ".codex": read
-      "~/.ssh": deny
-```
-
-This is more compact for mixed subtrees and closer to Codex's `read`/`write`/ `deny` model.[1] It requires choosing and documenting specificity, tie-breaking, and reopening semantics.
-It is attractive when “deny a broad tree, then reopen one nested area” becomes common.
-Do not expose both syntaxes initially with slightly different precedence.
-
-**Not recommended initially:** ordered interleaving of `allow` and `deny` rules.
-It is expressive but makes inheritance and review harder: moving a line or adding a late broad rule can change many earlier restrictions.
-An explicit rule removal is easier to explain and authorize.
+Expose the sandbox's supported permission model.
+The allow/deny names in these examples are proposed presentation choices; any mapping to the runner's schema must stay mechanical.
+A path-to-access representation may be a closer fit to that schema.[1] Choose the spelling during integration without adding Console-specific precedence, path matching, or safety rules.
 
 ### Complete profiles versus mandatory orthogonal registries
 
@@ -1687,7 +1603,7 @@ Keep the top-level schema slots reserved, rather than implementing an elaborate 
 
 **Recommended:** separate them.
 SSH answers where; Docker answers what compute container; a sandbox answers which permissions are enforced.
-They can compose, subject to capability checks.
+The selected sandbox/provider decides whether it supports their composition.
 
 **Reasonable alternative:** a single `execution.provider` owns everything, including remote placement and security.
 This is simpler for a single vendor sandbox, but either duplicates SSH+Docker combinations or requires inventing a nested provider language.
@@ -1717,12 +1633,12 @@ This is a product/workflow decision, not a reason to conflate worker network per
 
 ### Exact URL filtering now versus destination filtering first
 
-**Recommended:** implement origins and exact TCP endpoints first; reserve the stronger typed URL rule for a capable proxy.
+**Recommended:** expose supported origins and exact TCP endpoints first; reserve the stronger typed URL rule for a capable sandbox/proxy.
 They cover the common API and database cases without silently breaking certificate assumptions.
 
-**Reasonable alternative:** make TLS-terminating mediation a first-class early provider and offer path/method rules immediately.
-It provides finer HTTP controls but adds certificate distribution, mTLS/pinning compatibility, normalization, and auditing concerns.
-The file format above accommodates it without changing the meaning of existing origin rules.
+**Reasonable alternative:** expose a provider's TLS-terminating mediation and path/method rules earlier.
+Certificate handling, compatibility, and URL validation remain with that provider.
+Console does not implement the proxy to support its configuration fields.
 
 ### What should stay out of version 1
 
