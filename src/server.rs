@@ -252,6 +252,13 @@ impl ConsoleServer {
         sandbox_settings: crate::settings::SandboxSettings,
     ) -> Result<Self, String> {
         let languages = Languages::from_environment()?;
+        let network_access = if sandbox_settings.proxy.is_some() {
+            "can access the network subject to the launcher's proxy settings"
+        } else if matches!(sandbox_settings.network, crate::settings::Network::Enabled) {
+            "can directly access the network"
+        } else {
+            "cannot directly access the network"
+        };
         let worker = match (worker, relay) {
             (Some(program), relay) => {
                 crate::worker_client::Client::new(program, relay, no_sandbox, sandbox_settings)?
@@ -261,7 +268,8 @@ impl ConsoleServer {
         };
         let dynamic_resolution = worker.dynamic_resolution();
         let transcript = crate::transcript::Transcript::new(dynamic_resolution);
-        let tool_router = Self::configured_tool_router(languages, dynamic_resolution, no_sandbox);
+        let tool_router =
+            Self::configured_tool_router(languages, dynamic_resolution, no_sandbox, network_access);
         Ok(Self {
             worker,
             transcript,
@@ -275,6 +283,7 @@ impl ConsoleServer {
         languages: Languages,
         dynamic_resolution: bool,
         no_sandbox: bool,
+        network_access: &str,
     ) -> ToolRouter<Self> {
         let mut router = Self::tool_router();
         let send = router
@@ -290,10 +299,13 @@ impl ConsoleServer {
         description.push_str("\n\n");
         let security = if no_sandbox {
             "Evaluated code runs without a sandbox, with the server's permissions, including filesystem and network access. Dependency resolution, when available, may execute installation or build code; use only trusted dependencies."
+                .to_string()
         } else {
-            "Evaluated code can read host files, cannot directly access the network, and can write in the worker's private temporary directory and to paths explicitly allowed by the launcher. Dependency resolution, when available, runs outside the sandbox and may execute installation or build code; use only trusted dependencies."
+            format!(
+                "Evaluated code can read host files, {network_access}, and can write in the worker's private temporary directory and to paths explicitly allowed by the launcher. Dependency resolution, when available, runs outside the sandbox and may execute installation or build code; use only trusted dependencies."
+            )
         };
-        description.push_str(security);
+        description.push_str(&security);
         let schema = Arc::make_mut(&mut send.attr.input_schema);
         let properties = schema
             .get_mut("properties")

@@ -2,6 +2,7 @@
 
 The [canonical handshake snapshot](../tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml) records the registered tools, schemas, and descriptions returned by `tools/list`.
 The registered strings and Rust doc comments in [`src/server.rs`](../src/server.rs) define that prose.
+The security paragraph reflects the session's captured sandbox and network settings.
 Review changes in the snapshot and regenerate it intentionally using the [boundary test guide](../tests/boundaries/README.md).
 Ordinary tests check the committed expectation; they do not regenerate it.
 

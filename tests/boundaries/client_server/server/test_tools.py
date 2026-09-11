@@ -124,6 +124,70 @@ def _initializes_and_lists_tools(
             return client.finish()
 
 
+def test_describes_project_network_access(binary: Path) -> Transcript:
+    cases = (
+        (
+            "restricted",
+            "sandbox: {network: restricted}",
+            False,
+            "cannot directly access the network",
+        ),
+        (
+            "enabled",
+            "sandbox: {network: enabled}",
+            False,
+            "can directly access the network",
+        ),
+        (
+            "proxy",
+            "sandbox: {proxy: {enabled: true}}",
+            False,
+            "network subject to the launcher's proxy settings",
+        ),
+        (
+            "proxy with local binding",
+            "sandbox: {proxy: {enabled: true, allowLocalBinding: true}}",
+            False,
+            "network subject to the launcher's proxy settings",
+        ),
+        (
+            "proxy with network enabled",
+            "sandbox: {network: enabled, proxy: {enabled: true}}",
+            False,
+            "network subject to the launcher's proxy settings",
+        ),
+        (
+            "no sandbox",
+            "sandbox: {network: restricted}",
+            True,
+            "without a sandbox, with the server's permissions, including filesystem and network access",
+        ),
+    )
+    transcript: Transcript = []
+    for name, source, no_sandbox, expected in cases:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            config = workspace / ".mcp-console/config.yaml"
+            config.parent.mkdir()
+            config.write_text(source, encoding="utf-8")
+            arguments = ["serve", "--worker", "unused-worker"]
+            if no_sandbox:
+                arguments.append("--no-sandbox")
+            with McpClient(binary, arguments, current_directory=workspace) as client:
+                client.initialize_and_list_tools()
+                description = client.transcript[-1]["result"]["tools"][0]["description"]
+                assert expected in description, (name, description)
+                if not no_sandbox:
+                    assert "paths explicitly allowed by the launcher" in description
+                    assert "runs outside the sandbox" in description
+                config.write_text("invalid: [", encoding="utf-8")
+                listed = client.request("tools/list")
+                assert listed["result"]["tools"][0]["description"] == description
+                client.finish()
+                transcript.append({"configuration": name, "description": description})
+    return transcript
+
+
 def test_limits_send_languages_from_environment(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     environment = os.environ.copy()
