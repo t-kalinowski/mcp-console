@@ -9,7 +9,7 @@ command:
     local({
       p <- processx::process$new(
         "/bin/sh",
-        c("-c", 'IFS= read -r line && printf "received: %s\\n" "$line"'),
+        c("-c", 'IFS= read -r line && printf "received: %s" "$line"'),
         pty = TRUE,
         pty_options = list(echo = FALSE)
       )
@@ -31,4 +31,4 @@ command:
       stopifnot(identical(p$get_exit_status(), 0L))
       cat(output)
     })
-stdout: "received: sandboxed pty\r\n"
+stdout: "received: sandboxed pty"

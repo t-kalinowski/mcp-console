@@ -355,7 +355,7 @@ def test_allows_processx_pty_processes(binary: Path) -> Transcript:
         local({
           p <- processx::process$new(
             "/bin/sh",
-            c("-c", 'IFS= read -r line && printf "received: %s\\n" "$line"'),
+            c("-c", 'IFS= read -r line && printf "received: %s" "$line"'),
             pty = TRUE,
             pty_options = list(echo = FALSE)
           )
@@ -381,8 +381,8 @@ def test_allows_processx_pty_processes(binary: Path) -> Transcript:
     entry = record(binary, "sandbox", "--", "Rscript", "-e", script)
     assert "exit_code" not in entry, entry
     assert "stderr" not in entry, entry
-    # The PTY maps the child's LF to CRLF; echo is explicitly disabled above.
-    assert entry["stdout"] == "received: sandboxed pty\r\n", entry
+    # Echo is disabled, and the response has no LF for the PTY to map to CRLF.
+    assert entry["stdout"] == "received: sandboxed pty", entry
     return [entry]
 
 
