@@ -31,6 +31,7 @@ def _managed_environment(binary: Path, inherit: bool) -> Transcript:
                 "RETICULATE_PYTHON": "/invalid/project/python",
                 "MCP_CONSOLE_MANAGED_PYTHON": "invalid project manifest",
                 "MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION": "0",
+                "MCP_CONSOLE_SANDBOX": "project override",
             }
         )
     with TemporaryDirectory() as directory:
@@ -63,6 +64,7 @@ def _managed_environment(binary: Path, inherit: bool) -> Transcript:
                 client.send(
                     r=code(r"""
                     stopifnot(
+                      identical(Sys.getenv("MCP_CONSOLE_SANDBOX"), "1"),
                       identical(Sys.getenv("MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION"), "1"),
                       identical(Sys.getenv("RETICULATE_PYTHON"), "managed"),
                       identical(Sys.getenv("MCP_CONSOLE_TEST_PROJECT_ENV"), "project"),

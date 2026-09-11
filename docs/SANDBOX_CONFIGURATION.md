@@ -46,6 +46,7 @@ mcp-console serve
 For an omitted filesystem kind, `kind: restricted`, or the equivalent native representation `kind: {restricted: null}`, Console retains its default host read grant and adds configured filesystem entries and repeated CLI writable roots.
 Other filesystem kinds are forwarded without that grant or the default macOS extension.
 For example, `sandbox: {filesystem: {kind: unrestricted}}` requests unrestricted filesystem access, and `sandbox: {filesystem: {kind: external-sandbox}}` delegates enforcement to an outer sandbox.
+The `send` tool description reflects the selected filesystem and network access.
 See [enforcement modes](#filesystem-and-enforcement-modes).
 
 Console resolves literal filesystem paths (`path: {type: path, path: STRING}`) against the launch working directory, not the metadata directory containing the YAML file.
@@ -78,6 +79,8 @@ For `serve`, Console preserves each worker generation's selected R/Python enviro
 Project overrides cannot replace or reintroduce variables assigned or removed by that selection.
 Host resolver configuration still comes from the server's launch environment.
 Standalone `sandbox` launches apply native environment controls without these worker-generation overrides.
+Both application launch paths retain `MCP_CONSOLE_SANDBOX=1` for runtime integration, including when inheritance is disabled or project environment entries try to replace it.
+The explicit complete-policy interface leaves this marker under caller control.
 
 Configuration must contain exactly one UTF-8 YAML 1.2 mapping document.
 The `sandbox` mapping may be omitted; `{}` preserves defaults.

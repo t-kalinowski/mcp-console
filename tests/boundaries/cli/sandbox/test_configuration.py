@@ -227,6 +227,7 @@ def test_environment_overrides_and_arguments_are_literal(binary: Path) -> Transc
         assert "MCP_CONSOLE_SANDBOX_CONFIG" not in os.environ
         print(json.dumps({
             "inherited": os.environ.get("INHERITED"),
+            "marker": os.environ.get("MCP_CONSOLE_SANDBOX"),
             "value": os.environ["VALUE"],
             "arguments": sys.argv[1:],
         }, ensure_ascii=False))
@@ -237,6 +238,7 @@ def test_environment_overrides_and_arguments_are_literal(binary: Path) -> Transc
         config["inherit_environment"] = inherit
         config["environment"] = {
             "VALUE": value,
+            "MCP_CONSOLE_SANDBOX": value,
             "TEST_POLICY": "attempted reintroduction",
             "MCP_CONSOLE_SANDBOX_CONFIG": "attempted reintroduction",
         }
@@ -246,6 +248,7 @@ def test_environment_overrides_and_arguments_are_literal(binary: Path) -> Transc
         assert result.stderr == ""
         assert json.loads(result.stdout) == {
             "inherited": "from launcher" if inherit else None,
+            "marker": value,
             "value": value,
             "arguments": arguments,
         }

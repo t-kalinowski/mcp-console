@@ -252,6 +252,14 @@ impl ConsoleServer {
         sandbox_settings: crate::settings::SandboxSettings,
     ) -> Result<Self, String> {
         let languages = Languages::from_environment()?;
+        let filesystem_kind = sandbox_settings
+            .policy
+            .get("filesystem")
+            .and_then(|filesystem| filesystem.get("kind"));
+        let restricted_filesystem = filesystem_kind
+            .is_none_or(|kind| crate::settings::native_variant_name(kind) == Some("restricted"));
+        let unrestricted_filesystem = filesystem_kind
+            .is_some_and(|kind| crate::settings::native_variant_name(kind) == Some("unrestricted"));
         let network_access = if sandbox_settings
             .policy
             .get("proxy")
@@ -259,17 +267,7 @@ impl ConsoleServer {
         {
             // The pinned runner enforces managed proxy routing even with network enabled.
             "can access the network subject to the launcher's proxy settings"
-        } else if sandbox_settings
-            .policy
-            .get("filesystem")
-            .and_then(|filesystem| filesystem.get("kind"))
-            .is_some_and(|kind| {
-                !matches!(
-                    crate::settings::native_variant_name(kind),
-                    Some("restricted" | "unrestricted")
-                )
-            })
-        {
+        } else if !(restricted_filesystem || unrestricted_filesystem) {
             "has network access governed by the launcher's sandbox settings"
         } else {
             match sandbox_settings
@@ -286,6 +284,17 @@ impl ConsoleServer {
                 _ => "has network access governed by the launcher's sandbox settings",
             }
         };
+        let sandbox_access = if restricted_filesystem {
+            format!(
+                "can read host files, {network_access}, and can write in the worker's private temporary directory and to paths explicitly allowed by the launcher"
+            )
+        } else if unrestricted_filesystem {
+            format!("has unrestricted filesystem access and {network_access}")
+        } else {
+            format!(
+                "has filesystem access governed by the launcher's sandbox settings and {network_access}"
+            )
+        };
         let worker = match (worker, relay) {
             (Some(program), relay) => {
                 crate::worker_client::Client::new(program, relay, no_sandbox, sandbox_settings)?
@@ -295,8 +304,12 @@ impl ConsoleServer {
         };
         let dynamic_resolution = worker.dynamic_resolution();
         let transcript = crate::transcript::Transcript::new(dynamic_resolution);
-        let tool_router =
-            Self::configured_tool_router(languages, dynamic_resolution, no_sandbox, network_access);
+        let tool_router = Self::configured_tool_router(
+            languages,
+            dynamic_resolution,
+            no_sandbox,
+            &sandbox_access,
+        );
         Ok(Self {
             worker,
             transcript,
@@ -310,7 +323,7 @@ impl ConsoleServer {
         languages: Languages,
         dynamic_resolution: bool,
         no_sandbox: bool,
-        network_access: &str,
+        sandbox_access: &str,
     ) -> ToolRouter<Self> {
         let mut router = Self::tool_router();
         let send = router
@@ -329,7 +342,7 @@ impl ConsoleServer {
                 .to_string()
         } else {
             format!(
-                "Evaluated code can read host files, {network_access}, and can write in the worker's private temporary directory and to paths explicitly allowed by the launcher. Dependency resolution, when available, runs outside the sandbox and may execute installation or build code; use only trusted dependencies."
+                "Evaluated code {sandbox_access}. Dependency resolution, when available, runs outside the sandbox and may execute installation or build code; use only trusted dependencies."
             )
         };
         description.push_str(&security);

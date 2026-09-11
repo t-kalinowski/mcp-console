@@ -24,11 +24,9 @@ description: >-
   specify preparation, control, and timeout ordering.
 
 
-  Evaluated code can read host files, cannot directly access the network, and
-  can write in the worker's private temporary directory and to paths explicitly
-  allowed by the launcher. Dependency resolution, when available, runs outside
-  the sandbox and may execute installation or build code; use only trusted
-  dependencies.
+  Evaluated code has unrestricted filesystem access and cannot directly access
+  the network. Dependency resolution, when available, runs outside the sandbox
+  and may execute installation or build code; use only trusted dependencies.
 ---
 configuration: unrestricted restricted (mapping)
 description: >-
@@ -55,11 +53,9 @@ description: >-
   specify preparation, control, and timeout ordering.
 
 
-  Evaluated code can read host files, cannot directly access the network, and
-  can write in the worker's private temporary directory and to paths explicitly
-  allowed by the launcher. Dependency resolution, when available, runs outside
-  the sandbox and may execute installation or build code; use only trusted
-  dependencies.
+  Evaluated code has unrestricted filesystem access and cannot directly access
+  the network. Dependency resolution, when available, runs outside the sandbox
+  and may execute installation or build code; use only trusted dependencies.
 ---
 configuration: unrestricted enabled (string)
 description: >-
@@ -86,11 +82,9 @@ description: >-
   specify preparation, control, and timeout ordering.
 
 
-  Evaluated code can read host files, can directly access the network, and can
-  write in the worker's private temporary directory and to paths explicitly
-  allowed by the launcher. Dependency resolution, when available, runs outside
-  the sandbox and may execute installation or build code; use only trusted
-  dependencies.
+  Evaluated code has unrestricted filesystem access and can directly access the
+  network. Dependency resolution, when available, runs outside the sandbox and
+  may execute installation or build code; use only trusted dependencies.
 ---
 configuration: unrestricted enabled (mapping)
 description: >-
@@ -117,11 +111,9 @@ description: >-
   specify preparation, control, and timeout ordering.
 
 
-  Evaluated code can read host files, can directly access the network, and can
-  write in the worker's private temporary directory and to paths explicitly
-  allowed by the launcher. Dependency resolution, when available, runs outside
-  the sandbox and may execute installation or build code; use only trusted
-  dependencies.
+  Evaluated code has unrestricted filesystem access and can directly access the
+  network. Dependency resolution, when available, runs outside the sandbox and
+  may execute installation or build code; use only trusted dependencies.
 ---
 configuration: restricted restricted (string)
 description: >-
@@ -272,11 +264,10 @@ description: >-
   specify preparation, control, and timeout ordering.
 
 
-  Evaluated code can read host files, has network access governed by the
-  launcher's sandbox settings, and can write in the worker's private temporary
-  directory and to paths explicitly allowed by the launcher. Dependency
-  resolution, when available, runs outside the sandbox and may execute
-  installation or build code; use only trusted dependencies.
+  Evaluated code has filesystem access governed by the launcher's sandbox
+  settings and has network access governed by the launcher's sandbox settings.
+  Dependency resolution, when available, runs outside the sandbox and may
+  execute installation or build code; use only trusted dependencies.
 ---
 configuration: external-sandbox restricted (mapping)
 description: >-
@@ -303,11 +294,10 @@ description: >-
   specify preparation, control, and timeout ordering.
 
 
-  Evaluated code can read host files, has network access governed by the
-  launcher's sandbox settings, and can write in the worker's private temporary
-  directory and to paths explicitly allowed by the launcher. Dependency
-  resolution, when available, runs outside the sandbox and may execute
-  installation or build code; use only trusted dependencies.
+  Evaluated code has filesystem access governed by the launcher's sandbox
+  settings and has network access governed by the launcher's sandbox settings.
+  Dependency resolution, when available, runs outside the sandbox and may
+  execute installation or build code; use only trusted dependencies.
 ---
 configuration: external-sandbox enabled (string)
 description: >-
@@ -334,11 +324,10 @@ description: >-
   specify preparation, control, and timeout ordering.
 
 
-  Evaluated code can read host files, has network access governed by the
-  launcher's sandbox settings, and can write in the worker's private temporary
-  directory and to paths explicitly allowed by the launcher. Dependency
-  resolution, when available, runs outside the sandbox and may execute
-  installation or build code; use only trusted dependencies.
+  Evaluated code has filesystem access governed by the launcher's sandbox
+  settings and has network access governed by the launcher's sandbox settings.
+  Dependency resolution, when available, runs outside the sandbox and may
+  execute installation or build code; use only trusted dependencies.
 ---
 configuration: external-sandbox enabled (mapping)
 description: >-
@@ -365,11 +354,10 @@ description: >-
   specify preparation, control, and timeout ordering.
 
 
-  Evaluated code can read host files, has network access governed by the
-  launcher's sandbox settings, and can write in the worker's private temporary
-  directory and to paths explicitly allowed by the launcher. Dependency
-  resolution, when available, runs outside the sandbox and may execute
-  installation or build code; use only trusted dependencies.
+  Evaluated code has filesystem access governed by the launcher's sandbox
+  settings and has network access governed by the launcher's sandbox settings.
+  Dependency resolution, when available, runs outside the sandbox and may
+  execute installation or build code; use only trusted dependencies.
 ---
 configuration: restricted
 description: >-
@@ -582,11 +570,10 @@ description: >-
   specify preparation, control, and timeout ordering.
 
 
-  Evaluated code can read host files, has network access governed by the
-  launcher's sandbox settings, and can write in the worker's private temporary
-  directory and to paths explicitly allowed by the launcher. Dependency
-  resolution, when available, runs outside the sandbox and may execute
-  installation or build code; use only trusted dependencies.
+  Evaluated code has filesystem access governed by the launcher's sandbox
+  settings and has network access governed by the launcher's sandbox settings.
+  Dependency resolution, when available, runs outside the sandbox and may
+  execute installation or build code; use only trusted dependencies.
 ---
 configuration: no sandbox
 description: >-

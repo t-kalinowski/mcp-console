@@ -1,9 +1,11 @@
 #!/usr/bin/env -S uv run --script
 
 
+import json
 import os
 import sys
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
@@ -11,16 +13,19 @@ from support.assertions import last_result_text
 from support.client import McpClient
 from support.execution import SANDBOXED
 from support.normalization import code
+from support.r import r_test_environment
 from support.records import Transcript
 from support.requirements import MACOS_SANDBOX, requires
 from support.suites import run_this_suite
 
 
-@requires(MACOS_SANDBOX)
-def test_inspects_sandbox_child_processes_with_psutil(binary: Path) -> Transcript:
-    environment = os.environ.copy()
+def _inspects_sandbox_child_processes(
+    binary: Path,
+    environment: dict[str, str],
+    workspace: Path | None = None,
+) -> Transcript:
     environment.pop("RETICULATE_PYTHON", None)
-    client = McpClient(binary, SANDBOXED.serve(), environment)
+    client = McpClient(binary, SANDBOXED.serve(), environment, workspace)
     client.initialize_and_list_tools()
     # fmt: python
     python = code("""
@@ -79,6 +84,37 @@ def test_inspects_sandbox_child_processes_with_psutil(binary: Path) -> Transcrip
     output = last_result_text(client)
     assert output == "(True, True, True, True, True, True, True)\n", repr(output)
     return client.finish()
+
+
+@requires(MACOS_SANDBOX)
+def test_inspects_sandbox_child_processes_with_psutil(binary: Path) -> Transcript:
+    return _inspects_sandbox_child_processes(binary, os.environ.copy())
+
+
+@requires(MACOS_SANDBOX)
+def test_inspects_child_processes_without_environment_inheritance(
+    binary: Path,
+) -> Transcript:
+    environment, _ = r_test_environment()
+    with TemporaryDirectory() as directory:
+        workspace = Path(directory)
+        config = workspace / ".agents/console/config.yaml"
+        config.parent.mkdir(parents=True)
+        config.write_text(
+            json.dumps(
+                {
+                    "sandbox": {
+                        "inherit_environment": False,
+                        "environment": {
+                            name: environment[name]
+                            for name in ("R_HOME", "R_PROFILE_USER", "HOME", "PATH")
+                        },
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        return _inspects_sandbox_child_processes(binary, environment, workspace)
 
 
 @requires(MACOS_SANDBOX)

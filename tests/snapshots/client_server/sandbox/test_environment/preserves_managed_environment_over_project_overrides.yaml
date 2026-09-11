@@ -16,6 +16,7 @@ result:
 send:
   r: |
     stopifnot(
+      identical(Sys.getenv("MCP_CONSOLE_SANDBOX"), "1"),
       identical(Sys.getenv("MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION"), "1"),
       identical(Sys.getenv("RETICULATE_PYTHON"), "managed"),
       identical(Sys.getenv("MCP_CONSOLE_TEST_PROJECT_ENV"), "project"),
@@ -59,6 +60,7 @@ result:
 send:
   r: |
     stopifnot(
+      identical(Sys.getenv("MCP_CONSOLE_SANDBOX"), "1"),
       identical(Sys.getenv("MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION"), "1"),
       identical(Sys.getenv("RETICULATE_PYTHON"), "managed"),
       identical(Sys.getenv("MCP_CONSOLE_TEST_PROJECT_ENV"), "project"),

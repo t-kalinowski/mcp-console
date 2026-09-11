@@ -6,6 +6,7 @@ use std::os::unix::process::CommandExt as _;
 use std::process::{Command, ExitCode};
 
 const CONFIGURATION: &str = "MCP_CONSOLE_SANDBOX_CONFIG";
+const MARKER: &str = "MCP_CONSOLE_SANDBOX";
 
 pub(super) fn run(
     command: &[OsString],
@@ -89,6 +90,22 @@ pub(super) fn run(
     }
     if config_env.is_none() {
         // This is also the serve path: an ambient value never selects policy.
+        let inherit_environment =
+            configuration.get("inherit_environment") != Some(&serde_json::Value::Bool(false));
+        if (!inherit_environment || configuration.contains_key("environment"))
+            && let Some(environment) = configuration
+                .entry("environment")
+                .or_insert_with(|| serde_json::json!({}))
+                .as_object_mut()
+        {
+            // The runtime uses this application marker after native setup.
+            // Inherited launches already receive it from the runner environment.
+            if inherit_environment {
+                environment.remove(MARKER);
+            } else {
+                environment.insert(MARKER.into(), "1".into());
+            }
+        }
         runner.env(
             CONFIGURATION,
             serde_json::Value::Object(configuration).to_string(),
@@ -96,8 +113,8 @@ pub(super) fn run(
     } else if config_env != Some(CONFIGURATION) {
         runner.env_remove(CONFIGURATION);
     }
-    if config_env != Some("MCP_CONSOLE_SANDBOX") {
-        runner.env("MCP_CONSOLE_SANDBOX", "1");
+    if config_env != Some(MARKER) {
+        runner.env(MARKER, "1");
     }
     let error = runner
         .args(["--config-env", config_env.unwrap_or(CONFIGURATION), "--"])

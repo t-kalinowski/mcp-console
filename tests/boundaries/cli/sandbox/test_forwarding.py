@@ -279,6 +279,64 @@ def test_preserves_native_validation_errors(binary: Path) -> Transcript:
 
 
 @requires(SANDBOX, NATIVE_FIXTURES)
+def test_preserves_application_marker_in_target_environment(binary: Path) -> Transcript:
+    transcript = []
+    with TemporaryDirectory() as directory:
+        host = Path(directory).resolve()
+        config = host / CONFIG
+        config.parent.mkdir(parents=True)
+        capture = host / "payloads.jsonl"
+        environment = {
+            **os.environ,
+            "MCP_CONSOLE_SANDBOX": "ambient marker",
+            LOADER_VARIABLE: str(build_interposer(host, "runner_configuration")),
+            "MCP_CONSOLE_TEST_RUNNER_CONFIGURATION": str(capture),
+        }
+        for inherit in (False, True):
+            for target in (
+                None,
+                {"MCP_CONSOLE_SANDBOX": "project marker", "PROJECT_VALUE": "retained"},
+            ):
+                settings = {"inherit_environment": inherit}
+                if target is not None:
+                    settings["environment"] = target
+                config.write_text(json.dumps({"sandbox": settings}), encoding="utf-8")
+                result = subprocess.run(
+                    [
+                        binary,
+                        "sandbox",
+                        "--",
+                        sys.executable,
+                        "-c",
+                        "import os; print(os.environ.get('MCP_CONSOLE_SANDBOX', 'absent'))",
+                    ],
+                    cwd=host,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                )
+                assert result.returncode == 0 and result.stderr == "", result
+                assert result.stdout == "1\n", result
+                payloads = [
+                    json.loads(line) for line in capture.read_text().splitlines()
+                ]
+                assert len(payloads) == 2, payloads
+                expected = dict(target or {})
+                if inherit:
+                    expected.pop("MCP_CONSOLE_SANDBOX", None)
+                else:
+                    expected["MCP_CONSOLE_SANDBOX"] = "1"
+                for payload in payloads:
+                    if inherit and target is None:
+                        assert "environment" not in payload, payload
+                    else:
+                        assert payload["environment"] == expected, payload
+                capture.unlink()
+                transcript.append({"settings": settings, "stdout": result.stdout})
+    return transcript
+
+
+@requires(SANDBOX, NATIVE_FIXTURES)
 def test_forwards_native_fields_without_proxy_expansion(binary: Path) -> Transcript:
     proxy = {**NATIVE_PROXY, "enableSocks5Udp": True, "unixSockets": {}}
     entries = [
@@ -341,7 +399,10 @@ def test_forwards_native_fields_without_proxy_expansion(binary: Path) -> Transcr
                 "entries": [entries[0], *entries],
                 "glob_scan_max_depth": 1,
             }, payload
-            assert payload["environment"] == settings["environment"], payload
+            assert payload["environment"] == {
+                **settings["environment"],
+                "MCP_CONSOLE_SANDBOX": "1",
+            }, payload
             assert payload["inherit_environment"] is False, payload
             assert payload["macos_seatbelt_profile_extension"] is None, payload
     return [

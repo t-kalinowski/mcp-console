@@ -148,24 +148,31 @@ def _initializes_and_lists_tools(
 
 @requires(SANDBOX)
 def test_describes_project_network_access(binary: Path) -> Transcript:
+    restricted_filesystem = "can write in the worker's private temporary directory and to paths explicitly allowed by the launcher"
+    external_filesystem = (
+        "filesystem access governed by the launcher's sandbox settings"
+    )
     cases = (
         (
             "restricted",
             "sandbox: {network: restricted}",
             False,
             "cannot directly access the network",
+            restricted_filesystem,
         ),
         (
             "enabled",
             "sandbox: {network: enabled}",
             False,
             "can directly access the network",
+            restricted_filesystem,
         ),
         (
             "proxy",
             json.dumps({"sandbox": {"proxy": NATIVE_PROXY}}),
             False,
             "network subject to the launcher's proxy settings",
+            restricted_filesystem,
         ),
         (
             "proxy with local binding",
@@ -174,30 +181,35 @@ def test_describes_project_network_access(binary: Path) -> Transcript:
             ),
             False,
             "network subject to the launcher's proxy settings",
+            restricted_filesystem,
         ),
         (
             "proxy with network enabled",
             json.dumps({"sandbox": {"network": "enabled", "proxy": NATIVE_PROXY}}),
             False,
             "network subject to the launcher's proxy settings",
+            restricted_filesystem,
         ),
         (
             "native network representation",
             "sandbox: {network: {enabled: null}}",
             False,
             "can directly access the network",
+            restricted_filesystem,
         ),
         (
             "external enforcement",
             "sandbox: {filesystem: {kind: external-sandbox}}",
             False,
             "network access governed by the launcher's sandbox settings",
+            external_filesystem,
         ),
         (
             "no sandbox",
             "sandbox: {network: restricted}",
             True,
             "without a sandbox, with the server's permissions, including filesystem and network access",
+            "filesystem and network access",
         ),
     )
     cases = (
@@ -217,15 +229,20 @@ def test_describes_project_network_access(binary: Path) -> Transcript:
                 if kind == "external-sandbox"
                 else ("can" if network == "enabled" else "cannot")
                 + " directly access the network",
+                filesystem_access,
             )
-            for kind in ("unrestricted", "restricted", "external-sandbox")
+            for kind, filesystem_access in (
+                ("unrestricted", "has unrestricted filesystem access"),
+                ("restricted", restricted_filesystem),
+                ("external-sandbox", external_filesystem),
+            )
             for network in ("restricted", "enabled")
             for mapping in (False, True)
         )
         + cases
     )
     transcript: Transcript = []
-    for name, source, no_sandbox, expected in cases:
+    for name, source, no_sandbox, expected, filesystem_access in cases:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             config = workspace / ".agents/console/config.yaml"
@@ -238,8 +255,11 @@ def test_describes_project_network_access(binary: Path) -> Transcript:
                 client.initialize_and_list_tools()
                 description = client.transcript[-1]["result"]["tools"][0]["description"]
                 assert expected in description, (name, description)
+                assert filesystem_access in description, (name, description)
                 if not no_sandbox:
-                    assert "paths explicitly allowed by the launcher" in description
+                    assert (restricted_filesystem in description) == (
+                        filesystem_access == restricted_filesystem
+                    ), (name, description)
                     assert "runs outside the sandbox" in description
                 config.write_text("invalid: [", encoding="utf-8")
                 listed = client.request("tools/list")
