@@ -1,6 +1,6 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
-use std::process::ExitCode;
+use std::process::{Command, ExitCode, Stdio};
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod installation;
@@ -10,10 +10,43 @@ mod runner;
 mod unsupported;
 
 pub fn capture_settings(roots: Vec<PathBuf>) -> Result<crate::settings::SandboxSettings, String> {
-    let mut settings = crate::settings::discover()?;
+    let (source, mut settings) = crate::settings::discover()?;
     settings.writable_roots.extend(roots);
     settings.writable_roots = resolve_writable_roots(settings.writable_roots)?;
+    if let Some(source) = source {
+        preflight(&settings).map_err(|error| format!("{source}: {error}"))?;
+    }
     Ok(settings)
+}
+
+/// Validate native policy and setup before workload startup or server readiness.
+/// The child explicitly consumes the snapshot, so it cannot rediscover settings.
+fn preflight(settings: &crate::settings::SandboxSettings) -> Result<(), String> {
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("cannot locate sandbox launcher: {error}"))?;
+    let payload = serde_json::to_string(settings)
+        .map_err(|error| format!("cannot encode sandbox settings: {error}"))?;
+    let output = Command::new(executable)
+        .args(["sandbox", "--exit-with-parent"])
+        .arg(std::process::id().to_string())
+        .args([
+            "--settings-env",
+            crate::settings::ENVIRONMENT,
+            "--",
+            "/usr/bin/true",
+        ])
+        .env(crate::settings::ENVIRONMENT, payload)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| format!("cannot start sandbox preflight: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "sandbox preflight failed ({}): {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim_end()
+        ));
+    }
+    Ok(())
 }
 
 /// Capture launch-relative paths without hiding symlinks from runner validation.

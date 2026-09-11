@@ -1,6 +1,7 @@
 ---
 initially_configured: true
-identical_launches: 4
+validation_launches: 1
+identical_worker_launches: 4
 writable_roots:
   - output café 雪
   - CLI cache

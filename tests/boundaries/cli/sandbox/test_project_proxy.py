@@ -32,9 +32,9 @@ class Origin(BaseHTTPRequestHandler):
         pass
 
 
-@requires(SANDBOX, NATIVE_FIXTURES)
-def test_normalizes_and_enforces_native_proxy_settings(binary: Path) -> Transcript:
+def _enforces_native_proxy_settings(binary: Path, network: str) -> Transcript:
     script = code(r"""
+        import errno
         import http.client
         import os
         import socket
@@ -57,7 +57,9 @@ def test_normalizes_and_enforces_native_proxy_settings(binary: Path) -> Transcri
             origin = urlsplit(sys.argv[1])
             try:
                 socket.create_connection((origin.hostname, origin.port), timeout=2)
-            except OSError:
+            except OSError as error:
+                # Linux isolates the host listener in a separate network namespace.
+                assert error.errno in (errno.EPERM, errno.EACCES, errno.ECONNREFUSED)
                 print("direct network denied")
             else:
                 raise AssertionError("direct network unexpectedly allowed")
@@ -156,7 +158,14 @@ def test_normalizes_and_enforces_native_proxy_settings(binary: Path) -> Transcri
             )
             for name, options, method, status in cases:
                 config.write_text(
-                    json.dumps({"sandbox": {"proxy": {"enabled": True, **options}}}),
+                    json.dumps(
+                        {
+                            "sandbox": {
+                                "network": network,
+                                "proxy": {"enabled": True, **options},
+                            }
+                        }
+                    ),
                     encoding="utf-8",
                 )
                 result = subprocess.run(
@@ -179,7 +188,7 @@ def test_normalizes_and_enforces_native_proxy_settings(binary: Path) -> Transcri
                 )
                 assert result.returncode == 0 and result.stderr == "", (name, result)
                 payload = json.loads(capture.read_text().splitlines()[-1])
-                assert payload["network"] == "restricted", payload
+                assert payload["network"] == network, payload
                 assert payload["proxy"] == {**defaults, **options}, payload
                 transcript.append(
                     {
@@ -193,6 +202,16 @@ def test_normalizes_and_enforces_native_proxy_settings(binary: Path) -> Transcri
             origin.shutdown()
             thread.join()
     return transcript
+
+
+@requires(SANDBOX, NATIVE_FIXTURES)
+def test_normalizes_and_enforces_native_proxy_settings(binary: Path) -> Transcript:
+    return _enforces_native_proxy_settings(binary, "restricted")
+
+
+@requires(SANDBOX, NATIVE_FIXTURES)
+def test_proxy_enforcement_with_network_enabled(binary: Path) -> Transcript:
+    return _enforces_native_proxy_settings(binary, "enabled")
 
 
 @requires(SANDBOX)

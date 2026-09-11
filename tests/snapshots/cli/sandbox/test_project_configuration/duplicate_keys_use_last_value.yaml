@@ -1,0 +1,13 @@
+---
+yaml: |-
+  sandbox: invalid
+  sandbox: {}
+initialized: true
+---
+yaml: "sandbox: {network: invalid, network: restricted}"
+initialized: true
+---
+yaml: >-
+  sandbox: {proxy: {enabled: true, domains: {example.com: invalid,
+  'example.com': deny}}}
+initialized: true

@@ -794,7 +794,6 @@ dependencies = [
  "rmcp",
  "rust-embed",
  "saphyr",
- "saphyr-parser",
  "semver",
  "serde",
  "serde_json",

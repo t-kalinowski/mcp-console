@@ -1,20 +1,20 @@
 //! Trusted application settings, captured before starting a session or workload.
 
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 mod yaml;
 
 pub const ENVIRONMENT: &str = "MCP_CONSOLE_SANDBOX_SETTINGS";
 
 /// Normalized application inputs. Native policy remains in the sandbox layer.
-#[derive(Default, Deserialize, Serialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SandboxSettings {
     pub writable_roots: Vec<PathBuf>,
-    pub network: Network,
+    pub network: Value,
     pub proxy: Option<Proxy>,
 }
 
@@ -24,11 +24,11 @@ struct Project {
     sandbox: Mapping<Sandbox>,
 }
 
-#[derive(Default, Deserialize)]
+#[derive(Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct Sandbox {
     filesystem: Mapping<Filesystem>,
-    network: StringEnum<Network>,
+    network: Value,
     proxy: Option<Mapping<Proxy>>,
 }
 
@@ -73,63 +73,59 @@ enum PathKind {
     Path,
 }
 
-#[derive(Default, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Network {
-    #[default]
-    Restricted,
-    Enabled,
-}
-
+// Native values remain JSON so the runner owns their types and validation.
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Proxy {
-    #[serde(deserialize_with = "enabled_proxy")]
-    pub enabled: bool,
+    #[serde(default)]
+    pub enabled: Value,
     #[serde(default = "yes")]
-    pub enable_socks5: bool,
+    pub enable_socks5: Value,
+    #[serde(default = "full")]
+    pub mode: Value,
     #[serde(default)]
-    pub mode: StringEnum<ProxyMode>,
-    #[serde(default)]
-    pub domains: Option<BTreeMap<String, StringEnum<DomainPermission>>>,
-    #[serde(default)]
-    pub allow_upstream_proxy: bool,
-    #[serde(default)]
-    pub allow_local_binding: bool,
+    pub domains: Value,
+    #[serde(default = "no")]
+    pub allow_upstream_proxy: Value,
+    #[serde(default = "no")]
+    pub allow_local_binding: Value,
 }
 
-#[derive(Default, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ProxyMode {
-    #[default]
-    Full,
-    Limited,
-}
-
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum DomainPermission {
-    None,
-    Allow,
-    Deny,
-}
-
-fn yes() -> bool {
-    true
-}
-
-fn enabled_proxy<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
-    if bool::deserialize(deserializer)? {
-        Ok(true)
-    } else {
-        Err(serde::de::Error::custom("proxy requires enabled: true"))
+impl Default for Sandbox {
+    fn default() -> Self {
+        Self {
+            filesystem: Mapping::default(),
+            network: "restricted".into(),
+            proxy: None,
+        }
     }
 }
 
-/// Only string wire values are settings, not Serde's tagged enum objects.
-#[derive(Default, Serialize)]
-#[serde(transparent)]
-pub struct StringEnum<T>(T);
+impl Default for SandboxSettings {
+    fn default() -> Self {
+        Self {
+            writable_roots: Vec::new(),
+            network: Sandbox::default().network,
+            proxy: None,
+        }
+    }
+}
+
+fn yes() -> Value {
+    true.into()
+}
+
+fn no() -> Value {
+    false.into()
+}
+
+fn full() -> Value {
+    "full".into()
+}
+
+/// Filesystem entry forms use string discriminants in the additive interface.
+#[derive(Default)]
+struct StringEnum<T>(T);
 
 impl<'de, T: Deserialize<'de>> Deserialize<'de> for StringEnum<T> {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
@@ -164,7 +160,7 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for Mapping<T> {
     }
 }
 
-pub fn discover() -> Result<SandboxSettings, String> {
+pub fn discover() -> Result<(Option<&'static str>, SandboxSettings), String> {
     let mut selected = None;
     for name in [".mcp-console/config.yaml", ".agents/mcp-console.yaml"] {
         // A dangling symlink or an unreadable existing file must reach read_to_string.
@@ -189,7 +185,7 @@ pub fn discover() -> Result<SandboxSettings, String> {
         selected = Some(name);
     }
     let Some(name) = selected else {
-        return Ok(SandboxSettings::default());
+        return Ok((None, SandboxSettings::default()));
     };
     let source =
         std::fs::read_to_string(name).map_err(|error| format!("cannot read '{name}': {error}"))?;
@@ -198,31 +194,34 @@ pub fn discover() -> Result<SandboxSettings, String> {
         serde_path_to_error::deserialize(value).map_err(|error| format!("{name}: {error}"))?;
     let Mapping(Sandbox {
         filesystem,
-        network: StringEnum(network),
+        network,
         proxy,
     }) = project.sandbox;
     let Mapping(Filesystem {
         kind: StringEnum(Restricted::Restricted),
         entries,
     }) = filesystem;
-    Ok(SandboxSettings {
-        writable_roots: entries
-            .into_iter()
-            .map(|Mapping(entry)| {
-                let WriteEntry {
-                    path,
-                    access: StringEnum(Write::Write),
-                } = entry;
-                let Mapping(LiteralPath {
-                    kind: StringEnum(PathKind::Path),
-                    path,
-                }) = path;
-                path
-            })
-            .collect(),
-        network,
-        proxy: proxy.map(|Mapping(proxy)| proxy),
-    })
+    Ok((
+        Some(name),
+        SandboxSettings {
+            writable_roots: entries
+                .into_iter()
+                .map(|Mapping(entry)| {
+                    let WriteEntry {
+                        path,
+                        access: StringEnum(Write::Write),
+                    } = entry;
+                    let Mapping(LiteralPath {
+                        kind: StringEnum(PathKind::Path),
+                        path,
+                    }) = path;
+                    path
+                })
+                .collect(),
+            network,
+            proxy: proxy.map(|Mapping(proxy)| proxy),
+        },
+    ))
 }
 
 pub fn from_environment(name: &str) -> Result<SandboxSettings, String> {

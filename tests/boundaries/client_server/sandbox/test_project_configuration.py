@@ -88,6 +88,9 @@ def _snapshot_survives_replacement(
             binary, ("serve", "--writable-root", "CLI cache"), environment, host
         ) as client:
             client.initialize_and_list_tools()
+            # Configured startup probes the native sandbox without starting a worker.
+            preflights = capture.read_text().splitlines() if capture.exists() else []
+            assert len(preflights) == int(configured), preflights
             # Even the first worker uses the snapshot taken before MCP readiness.
             config.write_text("sandbox: {network: enabled}\n", encoding="utf-8")
             client.send(python=exercise)
@@ -120,7 +123,7 @@ def _snapshot_survives_replacement(
             transcript = client.finish()
 
         payloads = [json.loads(line) for line in capture.read_text().splitlines()]
-        assert len(payloads) == 4, len(payloads)
+        assert len(payloads) == 4 + len(preflights), len(payloads)
         assert all(payload == payloads[0] for payload in payloads), payloads
         payload = payloads[0]
         assert payload["network"] == "restricted"
@@ -145,7 +148,8 @@ def _snapshot_survives_replacement(
                 "settings.yaml": [
                     {
                         "initially_configured": configured,
-                        "identical_launches": len(payloads),
+                        "validation_launches": len(preflights),
+                        "identical_worker_launches": len(payloads) - len(preflights),
                         "writable_roots": expected_roots,
                         "network": payload["network"],
                         "proxy": payload["proxy"],

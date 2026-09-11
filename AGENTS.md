@@ -125,7 +125,7 @@ Keep these invariants intact:
 ### Public interface and records
 
 - `src/main.rs`, `src/cli.rs` — binary entry point and command definitions.
-- `src/settings.rs`, `src/settings/yaml.rs` — trusted project YAML discovery, strict parsing, and application settings retained across worker launches; native policy construction remains in the sandbox layer.
+- `src/settings.rs`, `src/settings/yaml.rs` — trusted project YAML discovery, node loading, and application settings retained across worker launches; native policy construction and startup validation remain in the sandbox layer.
 - `src/server.rs`, `src/server_transport.rs` — MCP tools, stdio transport, and response-delivery ownership.
 - `src/transcript.rs`, `src/transcript/{event,markdown,output}.rs` — typed recording events, append-only tool journal, Markdown and source-only Quarto projections, cell output files, and image artifacts.
 - `python/mcp_console/` — synchronous and asynchronous MCP clients and composable framework adapters.

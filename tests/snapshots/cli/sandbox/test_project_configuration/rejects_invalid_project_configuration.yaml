@@ -1,59 +1,13 @@
 ---
-case: custom core scalar tag
-command: serve
-stderr: |
-  .mcp-console/config.yaml: line 1, column 44: custom tags are unsupported
----
-case: custom core scalar tag
-command: sandbox
-stderr: |
-  .mcp-console/config.yaml: line 1, column 44: custom tags are unsupported
----
 case: invalid tagged scalar
 command: serve
 stderr: |
-  .mcp-console/config.yaml: line 1, column 26: invalid scalar or unsupported tag
+  .mcp-console/config.yaml: line 1, column 26: invalid or unresolved YAML value
 ---
 case: invalid tagged scalar
 command: sandbox
 stderr: |
-  .mcp-console/config.yaml: line 1, column 26: invalid scalar or unsupported tag
----
-case: network mapping
-command: serve
-stderr: >
-  .mcp-console/config.yaml: sandbox.network: invalid type: map, expected a
-  string
----
-case: network mapping
-command: sandbox
-stderr: >
-  .mcp-console/config.yaml: sandbox.network: invalid type: map, expected a
-  string
----
-case: proxy mode mapping
-command: serve
-stderr: >
-  .mcp-console/config.yaml: sandbox.proxy.mode: invalid type: map,
-  expected a string
----
-case: proxy mode mapping
-command: sandbox
-stderr: >
-  .mcp-console/config.yaml: sandbox.proxy.mode: invalid type: map,
-  expected a string
----
-case: domain permission mapping
-command: serve
-stderr: >
-  .mcp-console/config.yaml: sandbox.proxy.domains.example.com: invalid
-  type: map, expected a string
----
-case: domain permission mapping
-command: sandbox
-stderr: >
-  .mcp-console/config.yaml: sandbox.proxy.domains.example.com: invalid
-  type: map, expected a string
+  .mcp-console/config.yaml: line 1, column 26: invalid or unresolved YAML value
 ---
 case: filesystem kind mapping
 command: serve
@@ -287,30 +241,6 @@ stderr: >
   .mcp-console/config.yaml: sandbox.filesystem.entries[0].extra: unknown
   field `extra`, expected `path` or `access`
 ---
-case: network value
-command: serve
-stderr: >
-  .mcp-console/config.yaml: sandbox.network: unknown variant `full`,
-  expected `restricted` or `enabled`
----
-case: network value
-command: sandbox
-stderr: >
-  .mcp-console/config.yaml: sandbox.network: unknown variant `full`,
-  expected `restricted` or `enabled`
----
-case: network type
-command: serve
-stderr: >
-  .mcp-console/config.yaml: sandbox.network: invalid type: boolean `true`,
-  expected a string
----
-case: network type
-command: sandbox
-stderr: >
-  .mcp-console/config.yaml: sandbox.network: invalid type: boolean `true`,
-  expected a string
----
 case: proxy type
 command: serve
 stderr: >
@@ -322,86 +252,6 @@ command: sandbox
 stderr: >
   .mcp-console/config.yaml: sandbox.proxy: invalid type: boolean `true`,
   expected a mapping
----
-case: proxy disabled
-command: serve
-stderr: |
-  .mcp-console/config.yaml: sandbox.proxy.enabled: proxy requires enabled: true
----
-case: proxy disabled
-command: sandbox
-stderr: |
-  .mcp-console/config.yaml: sandbox.proxy.enabled: proxy requires enabled: true
----
-case: proxy missing enabled
-command: serve
-stderr: |
-  .mcp-console/config.yaml: sandbox.proxy: missing field `enabled`
----
-case: proxy missing enabled
-command: sandbox
-stderr: |
-  .mcp-console/config.yaml: sandbox.proxy: missing field `enabled`
----
-case: YAML 1.2 boolean
-command: serve
-stderr: >
-  .mcp-console/config.yaml: sandbox.proxy.enabled: invalid type: string
-  "yes", expected a boolean
----
-case: YAML 1.2 boolean
-command: sandbox
-stderr: >
-  .mcp-console/config.yaml: sandbox.proxy.enabled: invalid type: string
-  "yes", expected a boolean
----
-case: proxy mode
-command: serve
-stderr: >
-  .mcp-console/config.yaml: sandbox.proxy.mode: unknown variant `enabled`,
-  expected `full` or `limited`
----
-case: proxy mode
-command: sandbox
-stderr: >
-  .mcp-console/config.yaml: sandbox.proxy.mode: unknown variant `enabled`,
-  expected `full` or `limited`
----
-case: proxy domains
-command: serve
-stderr: >
-  .mcp-console/config.yaml: sandbox.proxy.domains: invalid type: sequence,
-  expected a map
----
-case: proxy domains
-command: sandbox
-stderr: >
-  .mcp-console/config.yaml: sandbox.proxy.domains: invalid type: sequence,
-  expected a map
----
-case: domain permission
-command: serve
-stderr: >
-  .mcp-console/config.yaml: sandbox.proxy.domains.example.com: unknown
-  variant `ask`, expected one of `none`, `allow`, `deny`
----
-case: domain permission
-command: sandbox
-stderr: >
-  .mcp-console/config.yaml: sandbox.proxy.domains.example.com: unknown
-  variant `ask`, expected one of `none`, `allow`, `deny`
----
-case: proxy option type
-command: serve
-stderr: >
-  .mcp-console/config.yaml: sandbox.proxy.enableSocks5: invalid type:
-  null, expected a boolean
----
-case: proxy option type
-command: sandbox
-stderr: >
-  .mcp-console/config.yaml: sandbox.proxy.enableSocks5: invalid type:
-  null, expected a boolean
 ---
 case: private proxy option
 command: serve
@@ -417,36 +267,6 @@ stderr: >
   `enableSocks5Udp`, expected one of `enabled`, `enableSocks5`, `mode`,
   `domains`, `allowUpstreamProxy`, `allowLocalBinding`
 ---
-case: duplicate top-level
-command: serve
-stderr: |
-  .mcp-console/config.yaml: line 2, column 1: duplicate key 'sandbox'
----
-case: duplicate top-level
-command: sandbox
-stderr: |
-  .mcp-console/config.yaml: line 2, column 1: duplicate key 'sandbox'
----
-case: duplicate nested
-command: serve
-stderr: |
-  .mcp-console/config.yaml: line 1, column 32: duplicate key 'network'
----
-case: duplicate nested
-command: sandbox
-stderr: |
-  .mcp-console/config.yaml: line 1, column 32: duplicate key 'network'
----
-case: duplicate quoted key
-command: serve
-stderr: |
-  .mcp-console/config.yaml: line 1, column 64: duplicate key 'example.com'
----
-case: duplicate quoted key
-command: sandbox
-stderr: |
-  .mcp-console/config.yaml: line 1, column 64: duplicate key 'example.com'
----
 case: custom scalar tag
 command: serve
 stderr: |
@@ -460,12 +280,12 @@ stderr: |
 case: custom collection tag
 command: serve
 stderr: |
-  .mcp-console/config.yaml: line 1, column 18: unsupported mapping tag
+  .mcp-console/config.yaml: line 1, column 18: custom tags are unsupported
 ---
 case: custom collection tag
 command: sandbox
 stderr: |
-  .mcp-console/config.yaml: line 1, column 18: unsupported mapping tag
+  .mcp-console/config.yaml: line 1, column 18: custom tags are unsupported
 ---
 case: non-string key
 command: serve

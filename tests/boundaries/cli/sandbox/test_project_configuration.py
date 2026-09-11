@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -41,25 +42,74 @@ def invoke(binary: Path, host: Path, *arguments: str):
     )
 
 
+@requires(SANDBOX)
+def test_duplicate_keys_use_last_value(binary: Path) -> Transcript:
+    cases = (
+        "sandbox: invalid\nsandbox: {}",
+        "sandbox: {network: invalid, network: restricted}",
+        "sandbox: {proxy: {enabled: true, domains: {example.com: invalid, 'example.com': deny}}}",
+    )
+    with TemporaryDirectory() as directory:
+        host = Path(directory)
+        config = host / LOCATIONS[0]
+        config.parent.mkdir()
+        for yaml in cases:
+            config.write_text(yaml, encoding="utf-8")
+            accepted(binary, host)
+    return [{"yaml": yaml, "initialized": True} for yaml in cases]
+
+
+@requires(SANDBOX)
+def test_native_validation_precedes_server_readiness(binary: Path) -> Transcript:
+    cases = (
+        ("network value", "sandbox: {network: full}"),
+        ("network type", "sandbox: {network: true}"),
+        ("proxy disabled", "sandbox: {proxy: {enabled: false}}"),
+        ("proxy missing enabled", "sandbox: {proxy: {}}"),
+        ("YAML 1.2 boolean", "sandbox: {proxy: {enabled: yes}}"),
+        ("proxy mode", "sandbox: {proxy: {enabled: true, mode: enabled}}"),
+        ("proxy domains", "sandbox: {proxy: {enabled: true, domains: []}}"),
+        (
+            "domain permission",
+            "sandbox: {proxy: {enabled: true, domains: {example.com: ask}}}",
+        ),
+        ("proxy option type", "sandbox: {proxy: {enabled: true, enableSocks5: null}}"),
+        (
+            "native domain pattern",
+            "sandbox: {proxy: {enabled: true, domains: {'[': allow}}}",
+        ),
+    )
+    transcript = []
+    with TemporaryDirectory() as directory:
+        host = Path(directory)
+        config = host / LOCATIONS[0]
+        config.parent.mkdir()
+        for name, yaml in cases:
+            config.write_text(yaml, encoding="utf-8")
+            for arguments in ((), ("sandbox", "--", "/bin/echo", "workload started")):
+                result = invoke(binary, host, *arguments)
+                assert result.returncode == 1 and result.stdout == "", (name, result)
+                assert f"{LOCATIONS[0]}: sandbox preflight failed" in result.stderr, (
+                    name,
+                    result,
+                )
+                # Native JSON offsets include platform policy and the launch PID.
+                stderr = re.sub(
+                    r"(at line [0-9]+, column )[0-9]+", r"\1<column>", result.stderr
+                )
+                transcript.append(
+                    {
+                        "case": name,
+                        "command": arguments[0] if arguments else "serve",
+                        "stderr": stderr,
+                    }
+                )
+    return transcript
+
+
 def test_rejects_invalid_project_configuration(binary: Path) -> Transcript:
     cases = (
-        (
-            "custom core scalar tag",
-            "sandbox: {network: !!python/object:example 'enabled'}",
-            "tag",
-        ),
-        ("invalid tagged scalar", "sandbox: {network: !!int 'enabled'}", "scalar"),
-        ("network mapping", "sandbox: {network: {enabled: null}}", "network"),
-        (
-            "proxy mode mapping",
-            "sandbox: {proxy: {enabled: true, mode: {full: null}}}",
-            "mode",
-        ),
-        (
-            "domain permission mapping",
-            "sandbox: {proxy: {enabled: true, domains: {example.com: {allow: null}}}}",
-            "domains",
-        ),
+        ("invalid tagged scalar", "sandbox: {network: !!int enabled}", "YAML"),
         (
             "filesystem kind mapping",
             "sandbox: {filesystem: {kind: {restricted: null}}}",
@@ -116,39 +166,11 @@ def test_rejects_invalid_project_configuration(binary: Path) -> Transcript:
             "sandbox: {filesystem: {entries: [{path: {type: path, path: ./out}, access: write, extra: true}]}}",
             "extra",
         ),
-        ("network value", "sandbox: {network: full}", "network"),
-        ("network type", "sandbox: {network: true}", "network"),
         ("proxy type", "sandbox: {proxy: true}", "proxy"),
-        ("proxy disabled", "sandbox: {proxy: {enabled: false}}", "enabled"),
-        ("proxy missing enabled", "sandbox: {proxy: {}}", "enabled"),
-        ("YAML 1.2 boolean", "sandbox: {proxy: {enabled: yes}}", "enabled"),
-        ("proxy mode", "sandbox: {proxy: {enabled: true, mode: enabled}}", "mode"),
-        ("proxy domains", "sandbox: {proxy: {enabled: true, domains: []}}", "domains"),
-        (
-            "domain permission",
-            "sandbox: {proxy: {enabled: true, domains: {example.com: ask}}}",
-            "domains",
-        ),
-        (
-            "proxy option type",
-            "sandbox: {proxy: {enabled: true, enableSocks5: null}}",
-            "enableSocks5",
-        ),
         (
             "private proxy option",
             "sandbox: {proxy: {enabled: true, enableSocks5Udp: true}}",
             "enableSocks5Udp",
-        ),
-        ("duplicate top-level", "sandbox: {}\nsandbox: {}", "duplicate"),
-        (
-            "duplicate nested",
-            "sandbox: {network: restricted, network: enabled}",
-            "duplicate",
-        ),
-        (
-            "duplicate quoted key",
-            "sandbox: {proxy: {enabled: true, domains: {example.com: allow, 'example.com': deny}}}",
-            "duplicate",
         ),
         ("custom scalar tag", "sandbox: {network: !custom restricted}", "tag"),
         ("custom collection tag", "sandbox: !custom {}", "tag"),
@@ -203,7 +225,7 @@ def test_discovers_only_launch_directory_configuration(binary: Path) -> Transcri
             metadata.mkdir()
         for location in LOCATIONS:
             config = host / location
-            config.write_text("sandbox: {network: invalid}", encoding="utf-8")
+            config.write_text("sandbox: {unknown: true}", encoding="utf-8")
             result = invoke(binary, host)
             assert result.returncode == 1 and location in result.stderr, result
             transcript.append(
@@ -243,9 +265,10 @@ def test_discovers_only_launch_directory_configuration(binary: Path) -> Transcri
     return transcript
 
 
+@requires(SANDBOX)
 def test_accepts_supported_project_settings(binary: Path) -> Transcript:
     cases = (
-        "sandbox: {proxy: {enabled: !!bool 'true'}}",
+        "sandbox: {proxy: {enabled: !!bool true}}",
         "{}",
         "sandbox: {}",
         "sandbox: {proxy: null}",

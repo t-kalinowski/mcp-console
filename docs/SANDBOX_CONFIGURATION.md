@@ -63,6 +63,8 @@ Console passes domain patterns and permissions to the pinned runner without matc
 The native proxy owns host normalization, pattern matching, local-network checks, and enforcement.
 For example, with local binding disabled, an explicitly allowlisted loopback IP literal can be reached through the proxy; a hostname resolving to a private address remains subject to the native local-network restriction.
 An empty allowlist does not mean unrestricted proxy access.
+When a proxy is supplied, the runner enforces managed proxy routing even with `network: enabled`; that value does not bypass the proxy.
+The native exceptions selected by `allowLocalBinding` still apply.
 
 Console supplies all required runner proxy fields explicitly.
 SOCKS5 UDP, upstream-proxy use, local binding, and Unix-socket exceptions default to disabled; only the exposed switches above can change their corresponding options.
@@ -70,12 +72,18 @@ UDP and Unix-socket controls, listener/control internals, protocol versions, nat
 
 Configuration must contain exactly one UTF-8 YAML 1.2 mapping document.
 The `sandbox` mapping may be omitted; `{}` preserves defaults.
-Unknown fields, duplicate keys at any depth, incorrect types, custom tags, and malformed input are errors.
+Console checks the supported application fields and additive filesystem entry forms, then delegates native policy types, values, and validation to the runner.
+Unknown fields and malformed input are errors; custom tags are unsupported.
+For duplicate keys, the last value wins because of a known limitation of Saphyr's node loader; this behavior is subject to change.
 Booleans use YAML 1.2 values such as `true` and `false`; strings such as `yes` are not Boolean options.
 There are no includes, merge keys, interpolation, shell expansion, layering, or reloads.
-Parsing uses Rust and does not start Python or resolve a Python environment.
+Parsing uses Saphyr's YAML node API in Rust and does not start Python or resolve a Python environment.
+Scalar and tag resolution follow the pinned Saphyr loader.
 
 The trusted outer process reads and normalizes configuration once, before workload startup.
+When a project configuration file exists, it probes the native sandbox with a no-op process using those captured settings.
+This checks native policy validation and sandbox/proxy startup before running the workload or announcing server readiness, without starting a worker.
+Probe failures include the configuration filename and the runner's diagnostic; native JSON error locations refer to the generated runner policy.
 `serve` retains that snapshot for the whole session, including when neither file existed at launch.
 Editing, removing, or creating either file later cannot change the initial worker, a restart that resets its state, recovery after worker failure, or a replacement using newly prepared requirements.
 Internal launches explicitly select the captured application settings through a child-specific environment payload and the public `sandbox` launch boundary; no child rereads a filename.

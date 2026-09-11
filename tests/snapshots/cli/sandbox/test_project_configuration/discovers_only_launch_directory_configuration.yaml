@@ -10,13 +10,13 @@ initialized: true
 ---
 case: .mcp-console/config.yaml
 stderr: >
-  .mcp-console/config.yaml: sandbox.network: unknown variant `invalid`,
-  expected `restricted` or `enabled`
+  .mcp-console/config.yaml: sandbox.unknown: unknown field `unknown`,
+  expected one of `filesystem`, `network`, `proxy`
 ---
 case: .agents/mcp-console.yaml
 stderr: >
-  .agents/mcp-console.yaml: sandbox.network: unknown variant `invalid`,
-  expected `restricted` or `enabled`
+  .agents/mcp-console.yaml: sandbox.unknown: unknown field `unknown`,
+  expected one of `filesystem`, `network`, `proxy`
 ---
 case: ambiguous
 stderr: >

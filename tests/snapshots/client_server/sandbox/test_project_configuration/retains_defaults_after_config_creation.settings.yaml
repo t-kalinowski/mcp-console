@@ -1,6 +1,7 @@
 ---
 initially_configured: false
-identical_launches: 4
+validation_launches: 0
+identical_worker_launches: 4
 writable_roots:
   - CLI cache
 network: restricted

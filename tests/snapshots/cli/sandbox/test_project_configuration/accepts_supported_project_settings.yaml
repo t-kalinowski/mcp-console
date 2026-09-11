@@ -1,5 +1,5 @@
 ---
-yaml: "sandbox: {proxy: {enabled: !!bool 'true'}}"
+yaml: "sandbox: {proxy: {enabled: !!bool true}}"
 initialized: true
 ---
 yaml: "{}"

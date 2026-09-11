@@ -12,7 +12,7 @@ from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript, TranscriptWithCompanions
-from support.requirements import WORKER, requires
+from support.requirements import SANDBOX, WORKER, requires
 from support.resolvers import bare_runtime_environment
 from support.suites import run_this_suite
 
@@ -124,6 +124,7 @@ def _initializes_and_lists_tools(
             return client.finish()
 
 
+@requires(SANDBOX)
 def test_describes_project_network_access(binary: Path) -> Transcript:
     cases = (
         (
@@ -155,6 +156,12 @@ def test_describes_project_network_access(binary: Path) -> Transcript:
             "sandbox: {network: enabled, proxy: {enabled: true}}",
             False,
             "network subject to the launcher's proxy settings",
+        ),
+        (
+            "native network representation",
+            "sandbox: {network: {enabled: null}}",
+            False,
+            "network access governed by the launcher's sandbox settings",
         ),
         (
             "no sandbox",

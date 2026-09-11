@@ -253,11 +253,15 @@ impl ConsoleServer {
     ) -> Result<Self, String> {
         let languages = Languages::from_environment()?;
         let network_access = if sandbox_settings.proxy.is_some() {
+            // The pinned runner enforces managed proxy routing even with network enabled.
             "can access the network subject to the launcher's proxy settings"
-        } else if matches!(sandbox_settings.network, crate::settings::Network::Enabled) {
-            "can directly access the network"
         } else {
-            "cannot directly access the network"
+            match sandbox_settings.network.as_str() {
+                Some("enabled") => "can directly access the network",
+                Some("restricted") => "cannot directly access the network",
+                // Other wire representations are interpreted by the native validator.
+                _ => "has network access governed by the launcher's sandbox settings",
+            }
         };
         let worker = match (worker, relay) {
             (Some(program), relay) => {
