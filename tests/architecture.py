@@ -105,9 +105,10 @@ class SandboxProcessBoundaryTests(unittest.TestCase):
         host_sources = [
             path
             for path in rust_sources(SOURCE_ROOT)
-            # Only CLI dispatch and the sandbox implementation may depend on it.
+            # The remote CLI launch helper also materializes application policy.
             if path.relative_to(SOURCE_ROOT).parts[0]
             not in {"main.rs", "cli.rs", "sandbox.rs", "sandbox"}
+            and path.relative_to(SOURCE_ROOT).as_posix() != "ssh/launch.rs"
         ]
         self.assertTrue(host_sources, "no Rust source files found")
         violations = matching_lines(

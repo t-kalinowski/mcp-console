@@ -20,8 +20,15 @@ Linux namespace init retains a private runner control endpoint that never reache
 The public `sandbox --config-env NAME -- COMMAND [ARG]...` option selects an explicit complete configuration using the runner's canonical schema.
 See [sandbox configuration](SANDBOX_CONFIGURATION.md) for fields, defaults, trust boundaries, size limits, and runnable shell, Python, and R examples.
 `serve` and ordinary `sandbox` invocations discover project YAML beneath the launch working directory and forward its native policy settings, adding Console's application defaults and explicit writable roots.
-`serve` retains one normalized snapshot for every worker launch, including when no configuration file existed.
+For local execution, `serve` retains one normalized snapshot for every worker launch, including when no configuration file existed.
 Ambient values never select its policy.
+
+With [SSH execution](SSH.md), only YAML discovery and user-policy capture happen locally.
+The remote helper materializes application policy and performs native preflight against the fixed remote workspace, then launches the public sandbox entry point with itself as the real parent.
+Remote YAML is never read.
+Native enforcement, proxy addresses, private storage, and descendant cleanup belong to the execution host.
+The local server requires the helper's cleanup acknowledgment before replacement; SSH process exit cannot supply that guarantee.
+Observed connection closure requests runner retirement even while output is backpressured, but an undetected network partition has no lease deadline.
 
 For project edits, `extends: ":workspace"` selects the native workspace constructor and materializes its permissions against the captured launch directory.
 The constructor supplies `.git`, `.agents`, and `.codex` read-only defaults, including Git pointer handling; Console adds `.claude` as an ordinary native read entry and explicitly excludes inherited `TMPDIR` and shared `/tmp` grants.

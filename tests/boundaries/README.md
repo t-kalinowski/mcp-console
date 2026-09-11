@@ -1,5 +1,15 @@
 # Boundary tests
 
+SSH cases use a private localhost OpenSSH server, pinned temporary host and client keys, and a test alias.
+The shared `SSH` capability requires `sshd` and `ssh-keygen`; CI installs the Linux server and prepares `/run/sshd`.
+`MCP_CONSOLE_TEST_SSH_R_LIBS` can supply preinstalled R libraries to this fixture without adding dependency setup to SSH execution.
+Deterministic peers cover wire failures, while real SSH covers remote-shell quoting, runtime state, policy, cancellation, and shared connection ownership.
+
+For cross-host policy validation, set `MCP_CONSOLE_TEST_SSH_EXTERNAL` to a JSON object with `target` (the documented target shape), `environment` (remote worker environment strings), `ssh_config` (an absolute controller OpenSSH configuration path), and `platform` (the expected R `Sys.info()[['sysname']]`).
+The test infrastructure must provision the compatible build, R, and the existing target workspace with `results`, `cli`, and `denied` subdirectories.
+Run `scripts/test client_server/server/test_ssh_policy::external_execution_host_policy`.
+This exercises actual execution-host policy enforcement; an unset variable skips the case and records why.
+
 A boundary suite is a Python file under one of four directories whose relative path has no component beginning with `_`:
 
 - `client_server` records the public MCP JSON-RPC boundary.

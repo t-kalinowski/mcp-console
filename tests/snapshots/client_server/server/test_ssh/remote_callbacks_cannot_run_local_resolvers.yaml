@@ -1,0 +1,13 @@
+---
+send:
+  r: one_cell_only <- TRUE
+result:
+  content:
+    - type: text
+      text: |
+        unexpected remote resolution request: managed preparation is unsupported for SSH targets; provision the remote runtime before starting MCP Console
+        unexpected remote resolution request: managed preparation is unsupported for SSH targets; provision the remote runtime before starting MCP Console
+        unexpected remote resolution request: managed preparation is unsupported for SSH targets; provision the remote runtime before starting MCP Console
+  isError: false
+---
+standard_error: ""

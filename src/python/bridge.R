@@ -9,6 +9,7 @@ base::local(
       ),
       "1"
     )
+    preinstalled <- identical(Sys.getenv("MCP_CONSOLE_PREINSTALLED"), "1")
     # Python 3.9 and older are intentionally outside the bridge contract.
     minimum_python <- base::numeric_version("3.10")
     # Reticulate callable proxies convert results through an interruptible wrapper.
@@ -20,7 +21,12 @@ base::local(
     pending_requirements <- NULL
     source <- NULL
     `%||%` <- function(x, y) if (is.null(x)) y else x
-    managed_python_disabled_message <- if (!dynamic_resolution) {
+    managed_python_disabled_message <- if (preinstalled) {
+      paste0(
+        "managed preparation is unsupported for SSH targets; ",
+        "provision the remote runtime before starting MCP Console"
+      )
+    } else if (!dynamic_resolution) {
       paste0(
         "MCP Console dynamic environment resolution is unavailable. ",
         "Install the distribution into the ambient Python environment, or ",
@@ -334,6 +340,12 @@ base::local(
     initialize_python_runtime <- function(strict = FALSE) {
       if (!is.null(python_module)) {
         return(invisible(TRUE))
+      }
+
+      if (
+        preinstalled && identical(Sys.getenv("RETICULATE_PYTHON"), "managed")
+      ) {
+        stop(managed_python_disabled_message, call. = FALSE)
       }
 
       python_config <- reticulate::py_config()

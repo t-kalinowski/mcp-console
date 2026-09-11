@@ -11,6 +11,12 @@ Prepared requirements configure the built-in worker; they do not attach an R pac
 Runtime use is covered by the [built-in runtime guide](BUILTIN_RUNTIME.md).
 Exact live-worker messages and custom-worker receipts belong to the [worker protocol](WORKER_PROTOCOL.md).
 
+[SSH targets](SSH.md) always use preinstalled environments and the bare-runtime capability model.
+The controller does not discover local R/Python, prepare managed defaults, or run resolvers for remote callbacks.
+`requirements` is absent from the tool schema; explicit preparation fails before code, stdin, or control side effects with an SSH-specific unsupported-preparation error.
+Remote R, Python selection, packages, SQL providers, and extensions must already be available through the remote environment and supported worker-environment configuration.
+Remote dependency setup is not implemented.
+
 On Linux, preparing a managed environment can compile R packages, including the resolver's own `pak` tooling.
 On Debian and Ubuntu, install `build-essential`, `pkg-config`, and `libcurl4-openssl-dev` for that bootstrap.
 Additional R packages can require their own system libraries and development headers.

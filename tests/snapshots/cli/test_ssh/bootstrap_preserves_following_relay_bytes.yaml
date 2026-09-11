@@ -1,0 +1,8 @@
+---
+kind: ready
+---
+kind: console_output
+data: |
+  coalesced frame
+---
+kind: completed

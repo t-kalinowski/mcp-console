@@ -1,0 +1,26 @@
+---
+target: {}
+error: >
+  .agents/console/config.yaml: target.workspace must be an absolute remote
+  directory path
+---
+target:
+  workspace: relative
+error: >
+  .agents/console/config.yaml: target.workspace must be an absolute remote
+  directory path
+---
+target:
+  workspace: /
+  command: []
+error: >
+  .agents/console/config.yaml: target.command must be a nonempty argv with
+  a nonempty executable and no NUL bytes
+---
+target:
+  workspace: /
+  command:
+    - ""
+error: >
+  .agents/console/config.yaml: target.command must be a nonempty argv with
+  a nonempty executable and no NUL bytes

@@ -21,13 +21,13 @@ case: .agents/console/config.yaml
 command: serve
 stderr: >
   .agents/console/config.yaml: unknown: unknown field `unknown`, expected
-  `extends` or `sandbox`
+  one of `extends`, `sandbox`, `target`
 ---
 case: .agents/console/config.yaml
 command: sandbox
 stderr: >
   .agents/console/config.yaml: unknown: unknown field `unknown`, expected
-  `extends` or `sandbox`
+  one of `extends`, `sandbox`, `target`
 ---
 case: ancestors ignored
 initialized: true

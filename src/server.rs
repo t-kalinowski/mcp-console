@@ -250,6 +250,7 @@ impl ConsoleServer {
         relay: Option<PathBuf>,
         no_sandbox: bool,
         sandbox_settings: crate::settings::SandboxSettings,
+        ssh: Option<crate::ssh::Session>,
     ) -> Result<Self, String> {
         let languages = Languages::from_environment()?;
         let policy = &sandbox_settings;
@@ -297,21 +298,49 @@ impl ConsoleServer {
                 "has filesystem access governed by the launcher's sandbox settings and {network_access}"
             ),
         };
-        let worker = match (worker, relay) {
-            (Some(program), relay) => {
-                crate::worker_client::Client::new(program, relay, no_sandbox, sandbox_settings)?
+        let target = ssh.as_ref().map(crate::ssh::Session::metadata);
+        let worker = if let Some(ssh) = ssh {
+            crate::worker_client::Client::ssh(ssh, no_sandbox, sandbox_settings)?
+        } else {
+            match (worker, relay) {
+                (Some(program), relay) => {
+                    crate::worker_client::Client::new(program, relay, no_sandbox, sandbox_settings)?
+                }
+                (None, None) => {
+                    crate::worker_client::Client::builtin(no_sandbox, sandbox_settings)?
+                }
+                (None, Some(_)) => {
+                    return Err("a custom relay requires a custom worker".to_string());
+                }
             }
-            (None, None) => crate::worker_client::Client::builtin(no_sandbox, sandbox_settings)?,
-            (None, Some(_)) => return Err("a custom relay requires a custom worker".to_string()),
         };
         let dynamic_resolution = worker.dynamic_resolution();
-        let transcript = crate::transcript::Transcript::new(dynamic_resolution);
-        let tool_router = Self::configured_tool_router(
+        let transcript =
+            crate::transcript::Transcript::with_target(dynamic_resolution, target.clone());
+        let mut tool_router = Self::configured_tool_router(
             languages,
             dynamic_resolution,
             no_sandbox,
             &sandbox_access,
         );
+        if let Some(target) = target {
+            let description = tool_router
+                .map
+                .get_mut("send")
+                .expect("send is registered")
+                .attr
+                .description
+                .as_mut()
+                .expect("send has a description")
+                .to_mut();
+            *description = description.replace(
+                "with the server's permissions",
+                "with the remote account's permissions",
+            );
+            description.push_str(&format!(
+                "\n\nExecution target: {}. R, Python, and SQL adapters and packages must already be installed there; managed preparation is unsupported for SSH targets. Records and returned images are saved locally beneath .agents/console/sessions/. Files created by code remain remote. The source-only Quarto export does not reproduce the remote filesystem.", target,
+            ));
+        }
         Ok(Self {
             worker,
             transcript,
@@ -596,8 +625,9 @@ pub async fn run(
     relay: Option<PathBuf>,
     no_sandbox: bool,
     sandbox_settings: crate::settings::SandboxSettings,
+    ssh: Option<crate::ssh::Session>,
 ) -> Result<(), Box<dyn Error>> {
-    let server = ConsoleServer::new(worker, relay, no_sandbox, sandbox_settings)
+    let server = ConsoleServer::new(worker, relay, no_sandbox, sandbox_settings, ssh)
         .map_err(std::io::Error::other)?;
     let worker = server.worker.clone();
     let (input_closed, wait_for_input_close) = oneshot::channel();

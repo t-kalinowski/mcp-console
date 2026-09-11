@@ -1,0 +1,38 @@
+---
+send:
+  r: one_cell_only <- TRUE
+result:
+  content:
+    - type: text
+      text: >-
+        [worker relay stdout read failed: SSH launch stream ended before
+        confirmed retirement: failed to fill whole buffer; additionally failed
+        to stop the worker: SSH process exited with exit status: 255;
+        additionally failed to retire worker I/O: remote retirement is
+        unconfirmed (SSH exit is not a cleanup barrier)]
+  isError: true
+---
+send:
+  r: must_not_replay <- TRUE
+result:
+  content:
+    - type: text
+      text: >-
+        [SSH target 'console-test' retirement is unconfirmed; this session
+        cannot start a replacement]
+  isError: true
+---
+send:
+  control: restart
+  r: must_not_replace <- TRUE
+result:
+  content:
+    - type: text
+      text: |-
+        [starting new worker]
+        [SSH target 'console-test' retirement is unconfirmed; this session cannot start a replacement]
+        session restart did not complete; cell was not run
+  isError: true
+---
+standard_error: |
+  Permission denied (publickey).

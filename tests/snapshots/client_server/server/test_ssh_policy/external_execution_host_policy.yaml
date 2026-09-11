@@ -1,0 +1,19 @@
+---
+send:
+  r: |
+    stopifnot(Sys.info()[['sysname']] == "Linux"); writable <- function(path) {
+      tryCatch({writeLines("remote value", path); TRUE}, error = function(error) FALSE)
+    }
+    suppressWarnings(stopifnot(
+      writable("results/value"),
+      writable("cli/value"),
+      !writable("denied/value"),
+      !writable("workspace-value")
+    ))
+    cat("remote relative and CLI grants verified\n")
+result:
+  content:
+    - type: text
+      text: |
+        remote relative and CLI grants verified
+  isError: false

@@ -300,12 +300,12 @@ def test_no_sandbox_bypasses_project_configuration(binary: Path) -> Transcript:
         host = Path(directory)
         config = host / CONFIG
         config.parent.mkdir(parents=True)
-        config.write_text("invalid: [", encoding="utf-8")
+        config.write_text("sandbox: {network: invalid}", encoding="utf-8")
         accepted(binary, host, "serve", "--no-sandbox", "--worker", "unused-worker")
     return [
         {
             "arguments": ["serve", "--no-sandbox"],
-            "invalid_config_ignored": True,
+            "invalid_native_policy_ignored": True,
         }
     ]
 

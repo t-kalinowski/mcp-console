@@ -13,8 +13,6 @@ mod child_exit;
 #[cfg(unix)]
 mod events;
 #[cfg(unix)]
-mod relay_output;
-#[cfg(unix)]
 mod startup;
 
 #[cfg(unix)]
@@ -122,6 +120,7 @@ struct ClientInner {
     lifecycle: Mutex<LifecycleControl>,
     environment: Option<Mutex<Environment>>,
     dynamic_resolution: bool,
+    ssh: Option<crate::ssh::Session>,
 }
 
 #[derive(Clone)]
@@ -150,6 +149,7 @@ struct WorkerSpec<'a> {
     managed_r: Option<&'a crate::resolver::ManagedR>,
     dynamic_resolution: bool,
     callbacks: WorkerCallbacks,
+    ssh: Option<&'a crate::ssh::Session>,
 }
 
 struct IdleResponseSnapshot {
@@ -461,7 +461,28 @@ impl Client {
             lifecycle: Mutex::new(LifecycleControl::new()),
             environment: environment.map(Mutex::new),
             dynamic_resolution,
+            ssh: None,
         }))
+    }
+
+    pub(crate) fn ssh(
+        session: crate::ssh::Session,
+        no_sandbox: bool,
+        policy: crate::settings::SandboxSettings,
+    ) -> Result<Self, String> {
+        // No controller R/Python/uv discovery and no managed environment state.
+        let mut client = Self::with_arguments(
+            std::env::current_exe().map_err(|error| error.to_string())?,
+            Vec::new(),
+            None,
+            no_sandbox,
+            policy,
+            None,
+        );
+        Arc::get_mut(&mut client.0)
+            .expect("new client has one owner")
+            .ssh = Some(session);
+        Ok(client)
     }
 
     pub(crate) fn dynamic_resolution(&self) -> bool {
@@ -470,6 +491,9 @@ impl Client {
 
     /// Interprets preparation, control, evaluation, stdin, and polling for the session.
     pub(crate) async fn send(&self, request: SendRequest) -> Result<Response, String> {
+        if self.0.ssh.is_some() && request.requirements.is_some() {
+            return Err(crate::ssh::PREINSTALLED.into());
+        }
         request.validate(self.dynamic_resolution())?;
         if let Some(control) = request.control {
             return self.send_controlled(control, request).await;
@@ -1513,6 +1537,7 @@ impl Client {
                 .as_ref()
                 .and_then(|environment| environment.r.as_ref());
             let spec = WorkerSpec {
+                ssh: self.0.ssh.as_ref(),
                 executable: &self.0.program,
                 arguments: &self.0.arguments,
                 relay: self.0.relay.as_deref(),
@@ -1551,6 +1576,12 @@ impl WorkerCallbacks {
         &self,
         packages: Vec<String>,
     ) -> Result<crate::resolver::ManagedR, RuntimeRResolutionFailure> {
+        if self.client.0.ssh.is_some() {
+            return Err(RuntimeRResolutionFailure::Ordinary(format!(
+                "unexpected remote resolution request: {}",
+                crate::ssh::PREINSTALLED
+            )));
+        }
         self.client
             .resolve_runtime_r(self.generation.clone(), packages)
     }
@@ -1577,6 +1608,12 @@ impl WorkerCallbacks {
         &self,
         request: crate::worker_protocol::PythonResolveRequest,
     ) -> Result<crate::resolver::ManagedPython, String> {
+        if self.client.0.ssh.is_some() {
+            return Err(format!(
+                "unexpected remote resolution request: {}",
+                crate::ssh::PREINSTALLED
+            ));
+        }
         self.client
             .resolve_runtime_python(self.generation.clone(), request)
     }
@@ -1585,6 +1622,12 @@ impl WorkerCallbacks {
         &self,
         request: crate::worker_protocol::PythonVersionResolveRequest,
     ) -> Result<String, String> {
+        if self.client.0.ssh.is_some() {
+            return Err(format!(
+                "unexpected remote resolution request: {}",
+                crate::ssh::PREINSTALLED
+            ));
+        }
         self.client
             .resolve_runtime_python_version(self.generation.clone(), request)
     }

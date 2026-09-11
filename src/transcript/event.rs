@@ -22,6 +22,8 @@ pub(super) enum Event<'a> {
         session: &'a str,
         working_directory: &'a str,
         dynamic_resolution: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        target: Option<&'a Value>,
     },
     ToolCall {
         call_id: u64,

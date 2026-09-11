@@ -57,13 +57,13 @@ case: top-level field
 command: serve
 stderr: >
   .agents/console/config.yaml: profile: unknown field `profile`, expected
-  `extends` or `sandbox`
+  one of `extends`, `sandbox`, `target`
 ---
 case: top-level field
 command: sandbox
 stderr: >
   .agents/console/config.yaml: profile: unknown field `profile`, expected
-  `extends` or `sandbox`
+  one of `extends`, `sandbox`, `target`
 ---
 case: sandbox type
 command: serve

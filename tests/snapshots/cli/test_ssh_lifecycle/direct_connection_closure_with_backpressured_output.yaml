@@ -1,0 +1,5 @@
+---
+before_readiness: false
+worker_retired: true
+private_storage_removed: false
+local_deadline_seconds: 10

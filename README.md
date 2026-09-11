@@ -25,9 +25,10 @@ The release workflow builds native wheels for Apple Silicon and Intel macOS and 
 Linux wheels require glibc 2.39 or later; building from source uses the host glibc.
 On older Linux kernels or when seccomp denies `close_range` with `EPERM`, inherited-descriptor cleanup requires `/proc` to be mounted.
 
-A working R installation is required.
-Set `R_HOME` or make `R` discoverable on `PATH`.
-Dynamic environment resolution normally starts from either `ir` 0.4.0 or later or `uv` on `PATH`.
+A working R installation is required on the execution host.
+Set `R_HOME` or make `R` discoverable on that host's `PATH`.
+An SSH controller does not need a local R or Python analysis environment.
+For local execution, dynamic environment resolution normally starts from either `ir` 0.4.0 or later or `uv` on `PATH`.
 The first managed server start may download and install the default R and Python requirements.
 If no resolver bootstrap is available, the server starts a bare runtime using installed packages.
 See [Requirements and environments](https://github.com/t-kalinowski/mcp-console/blob/main/docs/REQUIREMENTS.md) for bootstrap options, managed defaults, and bare runtime behavior.
@@ -66,6 +67,9 @@ See [release preparation](RELEASE.md#private-sandbox-executable) for build depen
 
 `mcp-console serve` communicates with its MCP client over standard input and output.
 It waits for MCP protocol input rather than presenting an interactive terminal prompt.
+
+To run cells on an existing SSH host while keeping the server and recordings local, configure an [SSH target](docs/SSH.md).
+The remote workspace and R/Python/SQL environments must already exist; remote dependency preparation is not supported.
 
 ## Python integrations
 

@@ -1,0 +1,18 @@
+---
+error: >
+  cannot access remote target.workspace '<workspace>/missing': No such
+  file or directory (os error 2)
+---
+error: |
+  remote target.workspace '<workspace>/file' is not a directory
+---
+error: |
+  target.workspace must be an absolute remote directory path
+---
+error: >
+  incompatible SSH bootstrap: expected protocol 1, Console 0.0.3; received
+  protocol 999, Console 0.0.3
+---
+error: >
+  incompatible SSH bootstrap: expected protocol 1, Console 0.0.3; received
+  protocol 1, Console incompatible-build

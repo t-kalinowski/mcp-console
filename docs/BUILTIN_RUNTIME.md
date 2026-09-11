@@ -11,6 +11,11 @@ The [canonical handshake snapshot](../tests/snapshots/client_server/server/test_
 ## Session model
 
 MCP Console provides one implicit session.
+That session can use a configured [SSH target](SSH.md) with preinstalled R, Python, and SQL environments.
+Runtime state and arbitrary files then live remotely; the MCP server, output spools, journals, transcripts, and returned image artifacts stay local.
+The tool context and session metadata identify the target and initial remote directory separately from the recording workspace.
+Remote source-only Quarto projections default to evaluation disabled and omit the controller execution root.
+They do not reproduce the remote filesystem when rendered locally.
 Each worker generation contains:
 
 - one persistent R global environment;

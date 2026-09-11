@@ -9,6 +9,8 @@ mod process_descriptors;
 #[cfg(unix)]
 mod process_exit;
 #[cfg(unix)]
+mod process_output;
+#[cfg(unix)]
 mod python;
 mod python_requirement;
 #[cfg(unix)]
@@ -30,6 +32,7 @@ mod settings;
 mod sideband;
 #[cfg(unix)]
 mod sql;
+mod ssh;
 mod transcript;
 mod worker;
 mod worker_client;
@@ -48,6 +51,10 @@ fn main() -> ExitCode {
             Err(error) => exit_with_error(error),
         },
         cli::Command::Worker => match worker::run() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => exit_with_error(error),
+        },
+        cli::Command::SshLaunch => match ssh::run() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
@@ -80,15 +87,22 @@ fn run_server(
     no_sandbox: bool,
     writable_roots: Vec<std::path::PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let settings = if no_sandbox {
+    let (source, policy, target) = settings::discover()?;
+    let ssh = target.map(|target| ssh::Session::new(target, writable_roots.clone()));
+    if ssh.is_some() && (worker.is_some() || relay.is_some()) {
+        return Err("SSH targets require the built-in worker and relay".into());
+    }
+    let settings = if ssh.is_some() {
+        policy
+    } else if no_sandbox {
         settings::SandboxSettings::default()
     } else {
-        sandbox::capture_settings(writable_roots)?
+        sandbox::capture_policy(source, policy, writable_roots)?
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    let result = runtime.block_on(server::run(worker, relay, no_sandbox, settings));
+    let result = runtime.block_on(server::run(worker, relay, no_sandbox, settings, ssh));
     // `server::run` has already joined service and worker shutdown. Tokio's
     // stdout uses a blocking task that cannot be cancelled while the client
     // leaves its output pipe full, so runtime teardown must not wait for it.

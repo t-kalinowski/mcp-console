@@ -1,8 +1,8 @@
 # Server-relay protocol
 
-This document defines the private protocol between `mcp-console serve` and the per-generation worker relay on macOS.
+This document defines the private protocol between `mcp-console serve` and the per-generation worker relay on macOS and Linux.
 It is an exact current interface, but it is neither public nor versioned.
-The message definitions and framing in `src/relay_protocol.rs`, the relay implementation in `src/worker_relay.rs`, and the server-side transport in `src/worker_client/macos.rs` are the source of truth.
+The message definitions and framing in `src/relay_protocol.rs`, the relay implementation in `src/worker_relay.rs`, and the server-side transport in `src/worker_client/unix.rs` are the source of truth.
 Transcript-runner progress lines are test user-interface output and never enter this protocol.
 
 The [implemented architecture](ARCHITECTURE.md) explains why this boundary exists and which process owns each responsibility.
@@ -10,7 +10,7 @@ The [worker protocol](WORKER_PROTOCOL.md) defines the relay's other interface.
 
 ## Process boundary
 
-By default, the server starts the public `mcp-console sandbox` command as its direct child for each worker generation, with the configured relay and worker command line as the target:
+For local execution, the server starts the public `mcp-console sandbox` command as its direct child for each worker generation, with the configured relay and worker command line as the target:
 
 ```text
 server <--> sandbox runner <--> relay <--> worker
@@ -54,7 +54,45 @@ It passes the worker's sideband endpoints through `MCP_CONSOLE_SIDEBAND_READ_FD`
 It owns the direct worker, local transports, sideband translation, direct-worker signals, bounded termination, and direct-worker reaping.
 In sandboxed mode, successful managed launcher exit is the server's sandbox-cleanup barrier.
 In direct mode, the server waits for and reaps the relay; its exit supplies no descendant-cleanup guarantee.
-The server owns generation state and host-side dependency resolution; see [Requirements and environments](REQUIREMENTS.md) for that trust boundary.
+The server owns generation state and available host-side dependency resolution; see [Requirements and environments](REQUIREMENTS.md) for that trust boundary.
+
+## SSH launch envelope
+
+An [SSH target](SSH.md) uses the same relay messages inside a private launch envelope implemented in `src/ssh.rs` and `src/ssh/launch.rs`:
+
+```text
+local server <--> OpenSSH <--> remote ssh-launch <--> sandbox runner <--> relay <--> worker
+```
+
+The hidden `ssh-launch` operation is an ordinary remote parent, not another MCP server.
+It launches the public sandbox command with its own remote PID as `--exit-with-parent`; direct mode omits that launcher.
+The helper materializes the captured policy on the remote host and never discovers project YAML there.
+
+Controller input starts with a four-byte unsigned big-endian length followed by a UTF-8 JSON bootstrap object, limited to 1 MiB.
+Its fields are `version` (currently `1`), `build` (the Console package version), `workspace`, `policy` (the captured native settings object), `writable_roots` (an array), and `no_sandbox` (a boolean).
+The helper consumes exactly this frame and passes every following byte to relay stdin, including bytes received in the same write.
+It checks the protocol and Console versions before starting the worker; the relay's `ready` event is not this compatibility check.
+Incompatible changes to the launch envelope or relay wire contract must increment the SSH protocol version, including between development builds with the same package version.
+
+Helper stdout uses a one-byte tag, a four-byte unsigned big-endian payload length, and the payload.
+Payloads are limited to 64 KiB.
+Tag `1` contains a JSON compatibility response with `version` and `build`; tag `2` contains raw relay stdout bytes, without imposing JSONL boundaries on the chunks; tag `3` contains a terminal JSON object with `confirmed` and nullable `error`.
+A setup rejection may emit tag `3` without tag `1`.
+The terminal frame must be followed by EOF.
+Unexpected stdout, incompatible versions, oversized or truncated frames, and missing retirement acknowledgment are transport errors.
+Setup and SSH diagnostics use stderr.
+
+Only the transport adapter removes this envelope; the existing JSONL parser receives unmodified relay bytes.
+Copy tasks use fixed buffers and preserve stream backpressure.
+The helper independently observes input closure while startup or output forwarding is blocked and requests ordinary launcher retirement.
+The terminal acknowledgment confirms retirement only after the remote launcher completes its cleanup barrier.
+An SSH child exit alone never confirms it, and unconfirmed retirement prevents this session from starting another generation.
+Connection/setup waits have a 30-second deadline independent of `send.timeout_ms`; cancellation and shutdown retain bounded local waits.
+Cleanup after an undetected partition may be delayed until SSH observes connection loss.
+See [SSH execution](SSH.md) for the supported lifecycle and direct-mode limitations.
+
+SSH workers use preinstalled environments.
+They do not request managed preparation, and unexpected resolver callbacks receive an explicit unsupported error without invoking controller resolvers.
 
 ## Framing and raw bytes
 

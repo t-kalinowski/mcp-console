@@ -139,7 +139,8 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libcurl4-openssl-dev libcap-dev
+          sudo apt-get install -y build-essential pkg-config libcurl4-openssl-dev libcap-dev openssh-server
+          sudo mkdir -p /run/sshd
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
       - name: Configure R cache paths
@@ -381,7 +382,7 @@ jobs:
               "$@" \
               -e 'sessionInfo(package = c("tidyverse", "reticulate", "DBI", "duckdb", "arrow", "nanoarrow"))'
           }
-          prewarm_r
+          prewarm_r -e 'cat("MCP_CONSOLE_TEST_SSH_R_LIBS=", paste(.libPaths(), collapse = .Platform$path.sep), "\n", sep = "", file = Sys.getenv("GITHUB_ENV"), append = TRUE)'
           prewarm_r --with praise
           prewarm_r --with praise --with zeallot
 
