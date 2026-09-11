@@ -3,7 +3,6 @@
 use super::installation;
 use std::ffi::OsString;
 use std::os::unix::process::CommandExt as _;
-use std::path::PathBuf;
 use std::process::{Command, ExitCode};
 
 const CONFIGURATION: &str = "MCP_CONSOLE_SANDBOX_CONFIG";
@@ -12,7 +11,8 @@ pub(super) fn run(
     command: &[OsString],
     parent: Option<u32>,
     config_env: Option<&str>,
-    writable_roots: &[PathBuf],
+    settings_env: Option<&str>,
+    settings: &crate::settings::SandboxSettings,
 ) -> Result<ExitCode, String> {
     if let Some(pid) = parent
         && unsafe { libc::getppid() } as u32 != pid
@@ -27,7 +27,7 @@ pub(super) fn run(
         "path": {"type": "special", "value": {"kind": "root"}},
         "access": "read",
     })];
-    entries.extend(writable_roots.iter().map(|root| {
+    entries.extend(settings.writable_roots.iter().map(|root| {
         serde_json::json!({
             "path": {"type": "path", "path": root},
             "access": "write",
@@ -36,8 +36,18 @@ pub(super) fn run(
     let mut configuration = serde_json::json!({
         "version": installation::PROTOCOL_VERSION,
         "filesystem": {"kind": "restricted", "entries": entries},
-        "network": "restricted",
-        "proxy": null,
+        "network": settings.network,
+        "proxy": settings.proxy.as_ref().map(|proxy| serde_json::json!({
+            "enabled": proxy.enabled,
+            "enableSocks5": proxy.enable_socks5,
+            "enableSocks5Udp": false,
+            "allowUpstreamProxy": proxy.allow_upstream_proxy,
+            "dangerouslyAllowAllUnixSockets": false,
+            "mode": proxy.mode,
+            "domains": proxy.domains,
+            "unixSockets": null,
+            "allowLocalBinding": proxy.allow_local_binding,
+        })),
         "lifecycle": {
             "parent_pid": parent,
             "sigterm": if parent.is_some() { "retire" } else { "forward" },
@@ -50,6 +60,12 @@ pub(super) fn run(
             include_str!("policy_extensions.sbpl").into();
     }
     let mut runner = Command::new(installation::private_runner()?);
+    if let Some(name) = settings_env {
+        runner.env_remove(name);
+    }
+    if config_env != Some(crate::settings::ENVIRONMENT) {
+        runner.env_remove(crate::settings::ENVIRONMENT);
+    }
     if config_env.is_none() {
         // This is also the serve path: an ambient value never selects policy.
         runner.env(CONFIGURATION, configuration.to_string());

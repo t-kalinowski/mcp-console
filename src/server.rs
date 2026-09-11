@@ -249,14 +249,14 @@ impl ConsoleServer {
         worker: Option<PathBuf>,
         relay: Option<PathBuf>,
         no_sandbox: bool,
-        writable_roots: Vec<PathBuf>,
+        sandbox_settings: crate::settings::SandboxSettings,
     ) -> Result<Self, String> {
         let languages = Languages::from_environment()?;
         let worker = match (worker, relay) {
             (Some(program), relay) => {
-                crate::worker_client::Client::new(program, relay, no_sandbox, writable_roots)?
+                crate::worker_client::Client::new(program, relay, no_sandbox, sandbox_settings)?
             }
-            (None, None) => crate::worker_client::Client::builtin(no_sandbox, writable_roots)?,
+            (None, None) => crate::worker_client::Client::builtin(no_sandbox, sandbox_settings)?,
             (None, Some(_)) => return Err("a custom relay requires a custom worker".to_string()),
         };
         let dynamic_resolution = worker.dynamic_resolution();
@@ -541,9 +541,9 @@ pub async fn run(
     worker: Option<PathBuf>,
     relay: Option<PathBuf>,
     no_sandbox: bool,
-    writable_roots: Vec<PathBuf>,
+    sandbox_settings: crate::settings::SandboxSettings,
 ) -> Result<(), Box<dyn Error>> {
-    let server = ConsoleServer::new(worker, relay, no_sandbox, writable_roots)
+    let server = ConsoleServer::new(worker, relay, no_sandbox, sandbox_settings)
         .map_err(std::io::Error::other)?;
     let worker = server.worker.clone();
     let (input_closed, wait_for_input_close) = oneshot::channel();

@@ -1,0 +1,7 @@
+---
+initially_configured: false
+identical_launches: 4
+writable_roots:
+  - CLI cache
+network: restricted
+proxy: ~

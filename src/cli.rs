@@ -71,6 +71,10 @@ pub enum Command {
         #[arg(long, value_name = "NAME", conflicts_with = "exit_with_parent")]
         config_env: Option<String>,
 
+        /// Consume the application settings captured by the server
+        #[arg(long, hide = true, value_name = "NAME", conflicts_with_all = ["config_env", "writable_root"])]
+        settings_env: Option<String>,
+
         /// Allow writes to an additional path (temporary launch option)
         #[arg(long, value_name = "PATH", conflicts_with = "config_env")]
         writable_root: Vec<PathBuf>,

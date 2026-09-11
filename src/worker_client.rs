@@ -111,7 +111,7 @@ struct ClientInner {
     arguments: Vec<OsString>,
     relay: Option<PathBuf>,
     no_sandbox: bool,
-    writable_roots: Vec<PathBuf>,
+    sandbox_settings: crate::settings::SandboxSettings,
     worker: Mutex<WorkerState>,
     /// The one evaluation occupying this session, independently of who is polling it.
     evaluation: Mutex<Option<ActiveEvaluation>>,
@@ -145,7 +145,7 @@ struct WorkerSpec<'a> {
     arguments: &'a [OsString],
     relay: Option<&'a std::path::Path>,
     no_sandbox: bool,
-    writable_roots: &'a [PathBuf],
+    sandbox_settings: &'a crate::settings::SandboxSettings,
     python: Option<&'a PythonEnvironment>,
     managed_r: Option<&'a crate::resolver::ManagedR>,
     dynamic_resolution: bool,
@@ -345,14 +345,14 @@ impl Client {
         program: PathBuf,
         relay: Option<PathBuf>,
         no_sandbox: bool,
-        writable_roots: Vec<PathBuf>,
+        sandbox_settings: crate::settings::SandboxSettings,
     ) -> Result<Self, String> {
         Ok(Self::with_arguments(
             program,
             Vec::new(),
             relay,
             no_sandbox,
-            writable_roots,
+            sandbox_settings,
             Some(Environment {
                 custom_worker: true,
                 duckdb_extensions: Default::default(),
@@ -364,18 +364,21 @@ impl Client {
         ))
     }
 
-    pub(crate) fn builtin(no_sandbox: bool, writable_roots: Vec<PathBuf>) -> Result<Self, String> {
+    pub(crate) fn builtin(
+        no_sandbox: bool,
+        sandbox_settings: crate::settings::SandboxSettings,
+    ) -> Result<Self, String> {
         #[cfg(unix)]
         return startup::with_input_owner(|on_started| {
-            Self::builtin_with(no_sandbox, writable_roots, on_started)
+            Self::builtin_with(no_sandbox, sandbox_settings, on_started)
         });
         #[cfg(not(unix))]
-        Self::builtin_with(no_sandbox, writable_roots, &|_| Ok(()))
+        Self::builtin_with(no_sandbox, sandbox_settings, &|_| Ok(()))
     }
 
     fn builtin_with(
         no_sandbox: bool,
-        writable_roots: Vec<PathBuf>,
+        sandbox_settings: crate::settings::SandboxSettings,
         on_started: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
     ) -> Result<Self, String> {
         let mut python_resolver = crate::resolver::ManagedPythonResolverConfiguration::capture();
@@ -420,7 +423,7 @@ impl Client {
             vec![OsString::from("worker")],
             None,
             no_sandbox,
-            writable_roots,
+            sandbox_settings,
             Some(Environment {
                 custom_worker: false,
                 duckdb_extensions,
@@ -437,7 +440,7 @@ impl Client {
         arguments: Vec<OsString>,
         relay: Option<PathBuf>,
         no_sandbox: bool,
-        writable_roots: Vec<PathBuf>,
+        sandbox_settings: crate::settings::SandboxSettings,
         environment: Option<Environment>,
     ) -> Self {
         let dynamic_resolution = environment
@@ -449,7 +452,7 @@ impl Client {
             arguments,
             relay,
             no_sandbox,
-            writable_roots,
+            sandbox_settings,
             worker: Mutex::new(WorkerState::Initial),
             evaluation: Mutex::new(None),
             admission: tokio::sync::RwLock::new(()),
@@ -1514,7 +1517,7 @@ impl Client {
                 arguments: &self.0.arguments,
                 relay: self.0.relay.as_deref(),
                 no_sandbox: self.0.no_sandbox,
-                writable_roots: &self.0.writable_roots,
+                sandbox_settings: &self.0.sandbox_settings,
                 python,
                 managed_r,
                 dynamic_resolution: self.dynamic_resolution(),

@@ -1,0 +1,24 @@
+---
+yaml: "sandbox: {proxy: {enabled: !!bool 'true'}}"
+initialized: true
+---
+yaml: "{}"
+initialized: true
+---
+yaml: "sandbox: {}"
+initialized: true
+---
+yaml: "sandbox: {proxy: null}"
+initialized: true
+---
+yaml: >-
+  sandbox: {filesystem: {entries: [{path: {type: path, path: './future
+  café 雪'}, access: write}]}}
+initialized: true
+---
+yaml: >-
+  sandbox: {network: enabled, proxy: {enabled: true, mode: limited,
+  enableSocks5: false, allowUpstreamProxy: true, allowLocalBinding: true,
+  domains: {'*.example.com': allow, blocked.example.com: deny,
+  ignored.example.com: none}}}
+initialized: true

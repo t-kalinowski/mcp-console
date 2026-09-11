@@ -23,6 +23,7 @@ mod resolver;
 mod sandbox;
 mod server;
 mod server_transport;
+mod settings;
 #[cfg(unix)]
 mod sideband;
 #[cfg(unix)]
@@ -56,11 +57,13 @@ fn main() -> ExitCode {
             exit_with_parent,
             command,
             config_env,
+            settings_env,
             writable_root,
         } => match sandbox::run(
             &command,
             exit_with_parent,
             config_env.as_deref(),
+            settings_env.as_deref(),
             writable_root,
         ) {
             Ok(exit_code) => exit_code,
@@ -75,11 +78,15 @@ fn run_server(
     no_sandbox: bool,
     writable_roots: Vec<std::path::PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let writable_roots = sandbox::resolve_writable_roots(writable_roots)?;
+    let settings = if no_sandbox {
+        settings::SandboxSettings::default()
+    } else {
+        sandbox::capture_settings(writable_roots)?
+    };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    let result = runtime.block_on(server::run(worker, relay, no_sandbox, writable_roots));
+    let result = runtime.block_on(server::run(worker, relay, no_sandbox, settings));
     // `server::run` has already joined service and worker shutdown. Tokio's
     // stdout uses a blocking task that cannot be cancelled while the client
     // leaves its output pipe full, so runtime teardown must not wait for it.
