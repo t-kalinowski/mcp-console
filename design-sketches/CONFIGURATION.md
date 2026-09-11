@@ -1,12 +1,14 @@
 # MCP Console configuration
 
-**Status:** Design sketch, not implemented configuration documentation. \
-**Proposed file:** `.agents/console/config.yaml` \
+**Status:** Exploratory design sketch.
+The small built-in-selection workflow in section 2 is implemented; the broader profile system below remains proposed. \
+**Configuration file:** `.agents/console/config.yaml` \
 **Design date:** 2026-09-09
 
 **Revised:** 2026-09-11
 
-This document proposes a configuration language and its intended semantics.
+This document proposes extensions to the implemented configuration interface.
+Current fields, native composition, and platform limitations are defined in [Sandbox configuration](../docs/SANDBOX_CONFIGURATION.md).
 It covers both near-term configuration and capabilities that will arrive through later pull requests.
 Examples describe the proposed interface, not commands or options that can all be used in the current release.
 This is an exploratory sketch: it need not settle every edge case or agree with other sketches.
@@ -22,10 +24,11 @@ Reusable definitions are available when duplication becomes inconvenient.
 
 Use YAML for ordinary configuration loading and profile selection.
 Keep all MCP Console-managed configuration, state, records, and preparation artifacts under `.agents/console/`.
-Every sandboxed launch includes a write denial for that whole directory, regardless of the selected profile; completely unrestricted execution is the exception.
+The native `":workspace"` profile protects `.agents`, including that whole directory, by default.
+Explicit native write entries can override these defaults; they are not mandatory denial ceilings.
 
 MCP Console is a thin intermediary between the user and the extracted sandbox runner.
-It passes the requested policy and the managed-directory denial to the sandbox, which owns policy parsing, normalization, compatibility checks, and enforcement.
+It passes the native baseline and explicit adjustments to the sandbox, which owns policy parsing, normalization, compatibility checks, and enforcement.
 Console forwards the sandbox's result and diagnostics without independently deciding whether a policy combination is safe.
 Ordinary YAML loading, selecting a session, and arranging its inputs do not require another policy engine.
 The permission examples below illustrate the proposed user interface; their supported forms and semantics come from the sandbox.
@@ -50,9 +53,10 @@ Do not require users to understand Codex internal structs or platform-specific s
 
 The most consequential choices are:
 
-- No configuration means `read_only`, with a private writable temporary directory and no worker-initiated network access.
+- No configuration preserves the existing host-read policy with private writable temporary storage and restricted networking.
 - Console reads the selected configuration and passes its requested policy to the sandbox.
-- `.agents/console/` is always write-denied to sandboxed workers, including with workspace write access.
+- `":workspace"` supplies native metadata defaults for `.git`, `.agents`, and `.codex`; Console adds `.claude` as a native read entry.
+  Deliberate write exceptions follow native precedence.
 - Workers can read the whole managed directory, including current and previous session records, unless the user explicitly restricts reads.
 - The configuration contains no secrets; SSH uses an already configured passwordless connection.
 - The sandbox decides which policy combinations it accepts; Console forwards any rejection to the caller.
@@ -62,30 +66,27 @@ The most consequential choices are:
 
 ## 2. The common case
 
-The proposed `mcp-console config init` writes this ten-line starter file:
+The implemented project-editing configuration is one line:
 
 ```yaml
-version: 1
-extends: read_only
-permissions:
-  filesystem:
-    allow_write: [.]
-    deny_write: [.git, .agents/console, .codex]
-    deny_read: [.env, ~/.ssh]
-  network:
-    mode: none
-# Relative permission paths are rooted at the session workspace.
+extends: ":workspace"
 ```
 
-This starts from the built-in read-only policy, permits project edits, and explicitly lists the three requested write protections.
-The two read denials are illustrative defaults in the generated file, not a claim that these are all possible secret locations.
+This grants writes beneath the fixed launch workspace, with `.git`, `.agents`, `.codex`, and `.claude` readable and protected from writes by default.
+The native constructors supply the first three defaults; Console supplies `.claude` through the native adjustment interface.
+The `.agents` default covers Console's configuration and managed state without a redundant `.agents/console` rule.
+Explicit writes to a protected path or descendant can override these defaults using native precedence.
+An ordinary native `read` entry also grants reads; it is not an independent write-only denial.
+See the implemented documentation for Linux read-mask limitations.
 
-`.` means the fixed session workspace, not whichever directory evaluated code has most recently selected with `setwd()` or `os.chdir()`.
+The colon is part of each native built-in identifier.
+Examples quote the identifiers; valid unquoted YAML is handled by the ordinary parser.
+`extends: ":read-only"` selects the native read-only baseline, and omission preserves the existing no-profile defaults.
+No version field is required.
+The captured workspace stays fixed across worker directory changes and replacements.
+Networking remains restricted by default, and both upstream shared-temp switches are explicitly excluded while runner-owned private temporary storage stays writable.
 
-The `.agents/console/` denial is always included in sandboxed launches, even if it is omitted from the file or another rule grants workspace writes.
-It covers the config, transcripts, logs, projection artifacts, and preparation caches together.
-The controller writes these files outside the worker sandbox.
-See [Loading and managed files](#5-loading-and-managed-files).
+The initializer, custom profiles, additional permission syntax, targets, and other examples below are proposals, not implemented configuration.
 
 For a project that needs only one API, replace the `network` block with:
 
@@ -108,26 +109,20 @@ target:
 The permission paths now refer to the remote workspace and the remote user's home.
 This does **not** upload the local project or select an unsandboxed remote execution path.
 
-These examples are configuration fragments unless shown with `version: 1`.
+The following proposal examples are configuration fragments unless shown with `version: 1`; the implemented one-line starter above is complete.
 They are meant to be merged into the surrounding file, not appended as duplicate YAML keys.
 
 ## 3. Relationship to existing systems
 
 ### Codex
 
-Codex currently exposes built-in permission profiles named `:read-only`, `:workspace`, and `:danger-full-access`, as well as custom permission profiles with `extends`, filesystem rules, and network rules.
+Codex currently exposes built-in permission profiles named `":read-only"`, `":workspace"`, and `":danger-full-access"`, as well as custom permission profiles with `extends`, filesystem rules, and network rules.
 Its newer permission profiles are distinct from its older `sandbox_mode` settings.
 The extracted sandbox runner owns the supported policy model; Console exposes those settings without implementing a second permission model.[1]
 
-MCP Console uses the names requested for this project:
-
-| MCP Console       | Closest Codex permission profile | Older Codex sandbox mode |
-| ----------------- | -------------------------------- | ------------------------ |
-| `read_only`       | `:read-only`                     | `read-only`              |
-| `workspace_write` | `:workspace`                     | `workspace-write`        |
-| `full_access`     | `:danger-full-access`            | `danger-full-access`     |
-
-These are conceptual mappings, not promises of identical baseline rules.
+MCP Console uses the upstream identifiers directly: `":read-only"` and `":workspace"` are implemented.
+`":danger-full-access"` below is a proposal; current unrestricted and external filesystem requests use the native `sandbox.filesystem.kind` interface.
+Rust constructor names are implementation details, not configuration aliases.
 
 ### Anthropic Sandbox Runtime
 
@@ -142,15 +137,15 @@ Adapters may map configuration fields to a provider's API, but Console does not 
 
 ### Current MCP Console
 
-The inspected baseline is `main` at `d6da3c31`, after the initial project YAML support and managed-directory migration.
+The implemented interface includes project YAML, native built-in selection, and managed recording storage.
 It reads `.agents/console/config.yaml` in the launch working directory and records sessions under `.agents/console/sessions/`.
 The current configuration interface and its supported fields are documented in [`docs/SANDBOX_CONFIGURATION.md`](../docs/SANDBOX_CONFIGURATION.md).
 
 Package preparation intentionally happens outside the worker sandbox, and `--no-sandbox` omits sandbox descendant cleanup.
-The profiles, target adapters, expanded controls, and nested log layout below remain proposals.
+Custom profiles, inheritance, target adapters, expanded controls, and the nested log layout below remain proposals.
 Earlier inspected source references are retained for context.[3][4]
 
-## 4. File shape, discovery, and profiles
+## 4. Proposed file shape, discovery, and custom profiles
 
 ### Top-level keys
 
@@ -167,18 +162,18 @@ A file has document-level keys and session-level keys:
 
 All other recognized top-level keys form the implicit `default` profile:
 
-| Session-level key | Meaning                                                               |
-| ----------------- | --------------------------------------------------------------------- |
-| `extends`         | One parent profile; defaults to `read_only` for the implicit profile. |
-| `description`     | Human-readable purpose, not executable instructions.                  |
-| `permissions`     | Filesystem, outbound network, listeners, and local IPC.               |
-| `target`          | Transport, compute environment, and workspace.                        |
-| `sandbox`         | Provider selection and provider-specific options.                     |
-| `services`        | Named listeners and explicitly requested publication routes.          |
-| `environments`    | R, Python, and SQL configuration.                                     |
-| `packages`        | Preparation, resolution, repositories, and source policy.             |
-| `resources`       | Per-session hard limits and scheduling preferences.                   |
-| `env`             | Deliberately forwarded or assigned worker environment variables.      |
+| Session-level key | Meaning                                                                                                                          |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `extends`         | Proposed parent profile. Currently only explicit native built-in selection is implemented; omission preserves existing defaults. |
+| `description`     | Human-readable purpose, not executable instructions.                                                                             |
+| `permissions`     | Filesystem, outbound network, listeners, and local IPC.                                                                          |
+| `target`          | Transport, compute environment, and workspace.                                                                                   |
+| `sandbox`         | Provider selection and provider-specific options.                                                                                |
+| `services`        | Named listeners and explicitly requested publication routes.                                                                     |
+| `environments`    | R, Python, and SQL configuration.                                                                                                |
+| `packages`        | Preparation, resolution, repositories, and source policy.                                                                        |
+| `resources`       | Per-session hard limits and scheduling preferences.                                                                              |
+| `env`             | Deliberately forwarded or assigned worker environment variables.                                                                 |
 
 Do not require a `session:` or `profiles.default:` wrapper for a one-profile configuration.
 Do not allow the same implicit profile to be defined again as `profiles.default`.
@@ -206,15 +201,15 @@ Do not add a config-path or storage-root override that scatters Console-managed 
 
 ```yaml
 version: 1
-extends: read_only
+extends: ":read-only"
 permissions:
   filesystem:
     allow_write: [.]
-    deny_write: [.git, .agents/console, .codex]
+    deny_write: [.git, .agents, .codex, .claude]
 
 profiles:
   review:
-    extends: read_only
+    extends: ":read-only"
 
   api_work:
     extends: default
@@ -245,13 +240,13 @@ Do not support multiple profile inheritance or implicit cross-products of profil
 
 Selecting a built-in directly produces its default local target, not the target from the implicit project profile.
 `config explain` shows the selected target.
-To remove sandboxing while retaining an already selected remote target, use the explicit policy-only override described under `full_access`, not an unrelated profile selection.
+To remove sandboxing while retaining an already selected remote target, use the explicit policy-only override described under `":danger-full-access"`, not an unrelated profile selection.
 
 ### Optional reusable definitions
 
 ```yaml
 version: 1
-extends: read_only
+extends: ":read-only"
 
 definitions:
   targets:
@@ -264,7 +259,7 @@ definitions:
     project_edits:
       filesystem:
         allow_write: [.]
-        deny_write: [.git, .agents/console, .codex]
+        deny_write: [.git, .agents, .codex, .claude]
 
   environments:
     analysis:
@@ -309,26 +304,22 @@ Pass the loaded configuration values through the launcher's existing setup inter
 
 ### Protected managed directory
 
-The whole `.agents/console/` directory is private to Console's trusted management processes for writing.
-Every sandboxed launch includes its write denial after the selected session settings are assembled, even when the config is absent or the profile otherwise permits workspace writes.
-A profile cannot remove this application-supplied denial.
-The sandbox owns its interpretation and enforcement; Console forwards a sandbox rejection without substituting a different policy or adding a local enforcement mechanism.
+The `":workspace"` profile's native `.agents` read entry protects `.agents/console/` from worker writes by default, including its configuration, state, and records.
+These are deliberate defaults: native write entries for `.agents` or a descendant can override them, while equal-path denials take precedence over grants.
+The controller writes from outside the worker sandbox.
+The no-profile default and `":read-only"` baseline grant no ordinary workspace writes; explicit writable paths still use native precedence.
+Unrestricted or externally enforced filesystem kinds retain their native meaning, and `serve --no-sandbox` bypasses sandbox project configuration.
 
-The controller and trusted preparation processes write config, state, records, and preparation artifacts there from outside the worker sandbox.
-Workers return outputs to the controller for recording rather than receiving a write exception for a subdirectory.
-For remote or container execution, pass the denial for the managed directory in the corresponding target namespace as well.
-
-Workers have full read access to `.agents/console/` by default, including configuration and every current and previous session's journal, projections, logs, outputs, and artifacts.
-Session and generation identities organize records; they do not imply filesystem read isolation.
-Only an explicit user read restriction changes that access, through the selected sandbox's policy.
-`full_access` and the explicit `--no-sandbox` override omit the managed-directory write denial.
-Other unsandboxed processes running as the same OS user are outside that boundary.
+Workers can read the managed directory by default, including current and previous session records.
+Session and generation identities do not imply filesystem read isolation.
+Explicit read restrictions use native semantics and their platform limitations.
+For proposed remote or container adapters, permissions must be interpreted in the target namespace by its sandbox provider.
 
 ### Referenced files
 
 For sandboxed sessions, referenced preparation inputs must have the same protection from worker writes as the config file.
 This includes Dockerfiles, complete build contexts, requirements manifests, lockfiles, and files they refer to that a trusted builder or installer will consume.
-Inputs under `.agents/console/` meet the managed-directory rule.
+Inputs under `.agents/console/` meet this proposed rule only while the effective policy protects them from worker writes; deliberate overrides must be considered.
 An external file, including one outside the project or in the user's home directory, is also eligible if the sandbox/provider confirms it is outside the worker's effective write access.
 An ordinary file or build context in a writable project directory is rejected; selecting its path does not make it a protected input.
 When replacing a running worker, protection must also cover that worker's current access.
@@ -342,11 +333,11 @@ File-loading and preparation errors propagate from the adapter.
 
 ### Built-ins
 
-| Profile           | Filesystem                                                                                     | Worker outbound network     | Sandbox             |
-| ----------------- | ---------------------------------------------------------------------------------------------- | --------------------------- | ------------------- |
-| `read_only`       | Read the visible target filesystem; write only private session temporary storage               | None                        | Required            |
-| `workspace_write` | `read_only` plus workspace writes; include denials for `.git`, `.agents/console`, and `.codex` | None                        | Required            |
-| `full_access`     | No MCP Console filesystem restrictions                                                         | Unrestricted by MCP Console | Disabled explicitly |
+| Profile                            | Filesystem                                                                                                                     | Worker outbound network     | Sandbox             |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | --------------------------- | ------------------- |
+| `":read-only"`                     | Read the visible target filesystem; write only private session temporary storage                                               | None                        | Required            |
+| `":workspace"`                     | `":read-only"` plus workspace writes; native read defaults for `.git`, `.agents`, `.codex`, and Console's `.claude` adjustment | None                        | Required            |
+| `":danger-full-access"` (proposed) | No MCP Console filesystem restrictions                                                                                         | Unrestricted by MCP Console | Disabled explicitly |
 
 Read-only is a mutation restriction, **not** a confidentiality guarantee.
 Use read denials, `read: minimal`, a container, or a combination when host files must not be visible.
@@ -355,14 +346,15 @@ OS permissions and an outer host/container boundary always remain in force.
 Private temporary storage is an explicit built-in exception.
 Do not make all of shared `/tmp` writable.
 Engine-owned logs and package preparation are separate from worker write permissions and must be reported separately.
-The managed-directory write denial applies to every sandboxed profile, including `read_only`, and has no writable runtime-cache or output exception.
+Metadata protection is a profile default and may be deliberately overridden; no separate mandatory managed-directory denial is supplied.
 
-The starter derives from `read_only` and explicitly adds workspace access to make its policy obvious.
-Deriving from `workspace_write` is equally supported; repeating its protected paths is harmless and keeps the example self-explanatory.
+The implemented starter selects `":workspace"` directly.
+Repeating its native metadata defaults is unnecessary.
 
-### Profile composition and sandbox policy
+### Proposed custom-profile composition and sandbox policy
 
-For ordinary configuration, omitted values inherit, scalar values replace, mappings merge by key, and sequences replace.
+For the proposed general configuration layering, omitted values would inherit, scalar values replace, mappings merge by key, and sequences replace.
+This is not the implemented built-in adapter: current restricted filesystem entries augment the native baseline, network values replace its network setting, and unrestricted/external filesystem kinds replace its filesystem.
 Changing a tagged object's `kind` replaces that whole object rather than retaining incompatible fields from its old kind.
 For example, changing a Python environment from `managed` to `existing` does not retain the managed requirements list.
 
@@ -373,23 +365,24 @@ Use a profile with the desired baseline and supply its requested rules:
 ```yaml
 profiles:
   write_results_only:
-    extends: read_only
+    extends: ":read-only"
     permissions:
       filesystem:
         allow_write: [results]
 ```
 
 The sandbox's schema owns the meaning of grants, denials, precedence, and supported combinations.
-Console supplies the selected rules plus its mandatory `.agents/console/` write denial to that schema and returns the sandbox's result.
+Console supplies the native baseline and explicit adjustments to that schema and returns the sandbox's result.
+Metadata defaults remain subject to native precedence.
 Do not implement a second rule matcher or promise access semantics beyond those provided by the selected sandbox.
 
-### Full access and no sandbox
+### Proposed full-access built-in and no sandbox
 
-The canonical configuration is:
+This built-in selector is a proposal:
 
 ```yaml
 version: 1
-extends: full_access
+extends: ":danger-full-access"
 ```
 
 It may add a target, environments, and resources; document-wide storage settings still apply.
@@ -401,7 +394,7 @@ Also support `mcp-console serve --no-sandbox` as a deliberate policy-only overri
 Managed requirements still use the configured resolver path.
 This is an explicit user action, never an error-recovery path.
 
-Internally `full_access` selects `sandbox.provider: none`.
+Internally `":danger-full-access"` selects `sandbox.provider: none`.
 Setting `provider:
 none` alongside a restricted policy is otherwise rejected; do not silently reinterpret an apparently restricted YAML file as unrestricted execution.
 
@@ -418,7 +411,7 @@ permissions:
     allow_read: []
     allow_write: [results, /scratch/analysis]
     deny_read: [~/.ssh, secrets, "**/.env", "**/.env.*"]
-    deny_write: [.git, .agents/console, .codex, data/raw]
+    deny_write: [.git, .agents, .codex, .claude, data/raw]
 ```
 
 `read` is `all` or `minimal`.
@@ -562,7 +555,7 @@ None should imply the others.
 
 ```yaml
 version: 1
-extends: workspace_write
+extends: ":workspace"
 permissions:
   network:
     mode: none
@@ -1358,14 +1351,13 @@ The configuration names existing environment variables or external tool identiti
 
 Configuration inputs such as a Dockerfile or requirements manifest also live under this directory when Console manages them.
 There is no separate default state directory or configurable log/cache root elsewhere.
-The root stays write-denied to the entire sandboxed workload, including its descendants, for the session's lifetime.
-Only completely unrestricted execution omits that protection.
-The sandbox implements it; Console supplies the denial and forwards any error.
+The `":workspace"` baseline protects this root through its `.agents` read entry for the workload and subprocesses.
+Deliberate native overrides can grant writes; Console does not impose a separate denial ceiling.
 
 The controller records transcripts, logs, projections, output files, and image artifacts from worker responses.
 Recording does not grant the worker direct write access to `sessions/` or any other part of the managed directory.
 Records for a remote worker are collected in the controller project's managed directory.
-If trusted preparation needs target-side artifacts, it uses the target workspace's `.agents/console/`, covered by the same sandbox write denial.
+Proposed target-side preparation artifacts use the target workspace's `.agents/console/`; their effective protection must account for native write exceptions.
 
 ### Logs and session records
 
@@ -1409,7 +1401,7 @@ Coordinate cleaners with locks.
 A user-invoked prune command may force an eligible sweep and show a dry run.
 
 Logs and transcripts are visible records of the session's code, input, output, and artifacts.
-The managed-directory denial protects controller records from worker mutation.
+The default `.agents` protection covers controller records, subject to deliberate native overrides.
 All current and previous records remain readable by default, as described in section 5; retention and generation boundaries do not add read denials.
 Do not execute an exported transcript as part of recording or cleanup.
 
@@ -1435,7 +1427,7 @@ That temporary storage is runner-owned scratch, not another persistent Console s
 Runtime settings such as cooperating R packages' user cache location are distinct from installer settings.[10] DuckDB's writable spill directory is likewise separate from its prepared extension artifacts.[9]
 
 The cache cleanup settings above are also document-wide.
-There is no worker-writable cache exception under `.agents/console/`.
+The proposal supplies no automatic worker-writable cache grant under `.agents/console/`; explicit native policy exceptions remain possible.
 The worker may read prepared artifacts as allowed by the sandbox policy, but trusted preparation never consumes the worker's scratch cache as its own package or executable cache.
 Publishing selected runtime output under `sessions/<timestamp>-<pid>/` is a controller recording operation, not promotion into a preparation cache.
 Tool-specific routing remains with the corresponding adapter, and filesystem validation remains with the sandbox.
@@ -1464,7 +1456,7 @@ The conceptual pipeline is:
 ```text
 load selected YAML as data
   -> select the profile, session settings, and document-wide storage settings
-  -> include the managed-directory write denial for a sandboxed launch
+  -> materialize the native baseline and compose explicit adjustments using native precedence
   -> pass the requested policy and path requirements to the sandbox/provider
   -> use its validation result or return its error
   -> preparation adapters prepare configured environments/images/storage as needed
@@ -1534,10 +1526,10 @@ Ordinary language, package, and connection adapters retain their existing input 
 | Slice | Deliverable                                                                                                             | Deliberate limit                                                                   |
 | ----- | ----------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
 | 1     | Ordinary YAML loading at `.agents/console/config.yaml`, profile selection, sandbox policy forwarding, `check`/`explain` | Reuse the sandbox parser and diagnostics                                           |
-| 2     | Centralized config, state, transcripts, logs, projections, and preparation storage under `.agents/console/`             | Include the whole-directory write denial in every sandboxed launch                 |
+| 2     | Centralized config, state, transcripts, logs, projections, and preparation storage under `.agents/console/`             | Use native metadata defaults and retain deliberate overrides                       |
 | 3     | Expose the sandbox's supported proxy and destination settings                                                           | No Console network validator or enforcement layer                                  |
 | 4     | Language selection, resolution controls, explicit manifests and repository policy                                       | Preserve current activation contracts; disclose existing host-build trust          |
-| 5     | Retention, protected preparation caches, runtime scratch routing, scheduling hints                                      | No worker write exception under the managed directory                              |
+| 5     | Retention, protected preparation caches, runtime scratch routing, scheduling hints                                      | No automatic runtime-cache write grant under the managed directory                 |
 | 6     | SSH target, configured setup, remote manager lifecycle, path mapping                                                    | Passwordless host setup and an existing remote workspace; no credential management |
 | 7     | Services/forwarding and exact local-IPC grants                                                                          | No blanket localhost/LAN allowance                                                 |
 | 8     | Docker, Docker Sandbox, and versioned command adapters                                                                  | No silent policy dilution by provider flags                                        |
@@ -1547,14 +1539,15 @@ These are coherent implementation areas, not a requirement to make exactly nine 
 Split further where needed.
 In particular, parser support does not constitute security-feature implementation.
 
-The first usable config can be as small as `version: 1` plus `extends: read_only`.
-Every sandboxed launch still supplies the `.agents/console/` write denial.
+The implemented project-editing config is `extends: ":workspace"`; `extends: ":read-only"` is also supported.
+No version field is required, and metadata defaults remain deliberately overridable.
 The starter uses settings accepted by the bundled sandbox; any unsupported policy is reported through its diagnostics.
 
 ### Acceptance tests that preserve the design
 
-Test the public configuration and launcher workflow: discover and initialize the single config path, select profiles, and forward the requested policy with the managed-directory denial.
-Cover that denial with omitted config, read-only and workspace-write profiles, explicit write grants, and the unrestricted exception.
+Test the public configuration and launcher workflow: discover the single config path, select native built-ins, and forward the baseline with explicit adjustments.
+An initializer and custom-profile tests belong to their proposed implementation work.
+Cover native defaults, quoted and unquoted built-in selectors, explicit write exceptions and read denials, and unrestricted/external policies; do not assert a mandatory managed-directory write-denial ceiling.
 Cover default reads of current and previous records and forwarding of explicit user read restrictions.
 Verify that loader and adapter failures reach the caller without an additional Console approval workflow.
 Check controller-relative manifests for local and remote targets and forward the sandbox/provider's result for protected preparation inputs.

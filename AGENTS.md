@@ -36,6 +36,10 @@ Do not treat `design-sketches/` as evidence of implemented behavior.
 ## Platform and development
 
 Project configuration is read only from `.agents/console/config.yaml` in the launch working directory.
+Top-level `extends` selects the native `":workspace"` or `":read-only"` built-in; omission preserves the default policy.
+Capture the workspace once at trusted launch and retain it across worker generations.
+Reuse native constructors and path handling, and keep explicit native adjustments subject to native precedence.
+Console adds `.claude` as a read entry and excludes shared temporary write grants by default for `":workspace"`; metadata defaults are deliberately overridable.
 Recorded sessions, transcripts, outputs, and artifacts are written beneath `.agents/console/sessions/`.
 
 The worker relay, built-in worker, and managed resolvers support macOS and Linux.
