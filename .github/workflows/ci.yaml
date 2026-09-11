@@ -151,11 +151,13 @@ jobs:
         id: ir-cache
         uses: actions/cache/restore@v6
         with:
-          # v3 covers the inline prewarm contract. Bump it when that contract changes.
+          # v4 covers the three prewarmed requirement sets below.
+          # Bump it when that contract changes.
           path: ${{ runner.temp }}/mcp-console-r-cache
           key: >-
-            ir-v3-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ steps.tools.outputs.ir_version }}-${{ hashFiles('src/worker_client.rs', 'src/resolver/managed_r.rs', 'tests/boundaries/client_server/requirements/test_r_automatic.py', 'tests/boundaries/client_server/requirements/test_r.py') }}
+            ir-v4-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ steps.tools.outputs.ir_version }}-${{ hashFiles('src/worker_client.rs', 'src/resolver/managed_r.rs', 'tests/boundaries/client_server/requirements/test_r_automatic.py', 'tests/boundaries/client_server/requirements/test_r.py') }}
           restore-keys: |
+            ir-v4-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ steps.tools.outputs.ir_version }}-
             ir-v3-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ steps.tools.outputs.ir_version }}-
 
       - name: Restore Cargo downloads
@@ -360,22 +362,28 @@ jobs:
             any::processx
             any::reticulate
 
-      - name: Prewarm default R environment
+      - name: Prewarm R test environments
         env:
           GITHUB_PAT: ${{ github.token }}
           IR_NO_LOCAL_SOURCES: "1"
           IR_LATEST_RESOLUTION_MAX_AGE_SECONDS: ${{ github.ref == 'refs/heads/main' && steps.ir-cache.outputs.cache-hit != 'true' && '0' || '604800' }}
         run: |
-          ir run \
-            --with tidyverse \
-            --with reticulate \
-            --with DBI \
-            --with duckdb \
-            --with arrow \
-            --with nanoarrow \
-            --isolated \
-            --vanilla \
-            -e 'sessionInfo(package = c("tidyverse", "reticulate", "DBI", "duckdb", "arrow", "nanoarrow"))'
+          prewarm_r() {
+            ir run \
+              --with tidyverse \
+              --with reticulate \
+              --with DBI \
+              --with duckdb \
+              --with arrow \
+              --with nanoarrow \
+              --isolated \
+              --vanilla \
+              "$@" \
+              -e 'sessionInfo(package = c("tidyverse", "reticulate", "DBI", "duckdb", "arrow", "nanoarrow"))'
+          }
+          prewarm_r
+          prewarm_r --with praise
+          prewarm_r --with praise --with zeallot
 
       - name: Run transcripts
         env:

@@ -32,6 +32,9 @@ Do not treat `design-sketches/` as evidence of implemented behavior.
 
 ## Platform and development
 
+Project configuration is read only from `.agents/console/config.yaml` in the launch working directory.
+Recorded sessions, transcripts, outputs, and artifacts are written beneath `.agents/console/sessions/`.
+
 The worker relay, built-in worker, and managed resolvers support macOS and Linux.
 The default sandbox and standalone sandbox command support both platforms.
 Linux requires procfs, permitted native namespace operations, and the selected policy enforcement capabilities; see `docs/LINUX_COMPATIBILITY.md` for tested baselines and constrained-host behavior.
@@ -126,6 +129,7 @@ Keep these invariants intact:
 ### Public interface and records
 
 - `src/main.rs`, `src/cli.rs` — binary entry point and command definitions.
+- `src/settings.rs`, `src/settings/yaml.rs` — trusted project YAML discovery, node loading, and application settings retained across worker launches; native policy construction and startup validation remain in the sandbox layer.
 - `src/server.rs`, `src/server_transport.rs` — MCP tools, stdio transport, and response-delivery ownership.
 - `src/transcript.rs`, `src/transcript/{event,markdown,output}.rs` — typed recording events, append-only tool journal, Markdown and source-only Quarto projections, cell output files, and image artifacts.
 - `python/mcp_console/` — synchronous and asynchronous MCP clients and composable framework adapters.
@@ -136,6 +140,7 @@ Keep these invariants intact:
 ### Protocols, relay, and worker orchestration
 
 - `src/worker_protocol.rs`, `src/sideband.rs` — relay-worker message and framing contract.
+- `src/readiness.rs` — shared blocking descriptor readiness and cancellation waits.
 - `src/relay_protocol.rs` — server-relay JSONL message and framing contract.
 - `src/worker_relay.rs`, `src/worker_relay/event_writer.rs` — worker launch, I/O forwarding, ordered event output, direct-worker signaling, termination, and reaping.
 - `src/worker_client.rs`, `src/worker_client/` — session coordination and send planning, server-owned environment, evaluation, lifecycle, ordinary launcher child ownership, ordered event dispatch, output tape, shared Unix relay transport, and platform-specific startup observation.

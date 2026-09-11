@@ -278,7 +278,7 @@ def test_custom_worker_prepares_r_and_duckdb_requirements(
 
         assert client.temporary_directory is not None
         workspace = Path(client.temporary_directory.name)
-        session = next((workspace / ".mcp-console" / "sessions").iterdir())
+        session = next((workspace / ".agents/console" / "sessions").iterdir())
         events = [
             json.loads(line)
             for line in (session / "internal" / "events.jsonl")

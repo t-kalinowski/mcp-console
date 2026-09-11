@@ -1,0 +1,314 @@
+---
+case: invalid tagged scalar
+command: serve
+stderr: >
+  .agents/console/config.yaml: line 1, column 26: invalid or unresolved
+  YAML value
+---
+case: invalid tagged scalar
+command: sandbox
+stderr: >
+  .agents/console/config.yaml: line 1, column 26: invalid or unresolved
+  YAML value
+---
+case: filesystem kind mapping
+command: serve
+stderr: >
+  .agents/console/config.yaml: sandbox.filesystem.kind: invalid type: map,
+  expected a string
+---
+case: filesystem kind mapping
+command: sandbox
+stderr: >
+  .agents/console/config.yaml: sandbox.filesystem.kind: invalid type: map,
+  expected a string
+---
+case: path type mapping
+command: serve
+stderr: >
+  .agents/console/config.yaml: sandbox.filesystem.entries[0].path.type:
+  invalid type: map, expected a string
+---
+case: path type mapping
+command: sandbox
+stderr: >
+  .agents/console/config.yaml: sandbox.filesystem.entries[0].path.type:
+  invalid type: map, expected a string
+---
+case: access mapping
+command: serve
+stderr: >
+  .agents/console/config.yaml: sandbox.filesystem.entries[0].access:
+  invalid type: map, expected a string
+---
+case: access mapping
+command: sandbox
+stderr: >
+  .agents/console/config.yaml: sandbox.filesystem.entries[0].access:
+  invalid type: map, expected a string
+---
+case: empty
+command: serve
+stderr: |
+  .agents/console/config.yaml: expected one mapping document
+---
+case: empty
+command: sandbox
+stderr: |
+  .agents/console/config.yaml: expected one mapping document
+---
+case: sequence
+command: serve
+stderr: |
+  .agents/console/config.yaml: expected one mapping document
+---
+case: sequence
+command: sandbox
+stderr: |
+  .agents/console/config.yaml: expected one mapping document
+---
+case: multiple documents
+command: serve
+stderr: |
+  .agents/console/config.yaml: expected one mapping document
+---
+case: multiple documents
+command: sandbox
+stderr: |
+  .agents/console/config.yaml: expected one mapping document
+---
+case: malformed
+command: serve
+stderr: >
+  .agents/console/config.yaml: while parsing a node, did not find expected
+  node content at byte 10 line 2 column 1
+---
+case: malformed
+command: sandbox
+stderr: >
+  .agents/console/config.yaml: while parsing a node, did not find expected
+  node content at byte 10 line 2 column 1
+---
+case: top-level field
+command: serve
+stderr: >
+  .agents/console/config.yaml: profile: unknown field `profile`, expected
+  `sandbox`
+---
+case: top-level field
+command: sandbox
+stderr: >
+  .agents/console/config.yaml: profile: unknown field `profile`, expected
+  `sandbox`
+---
+case: sandbox type
+command: serve
+stderr: >
+  .agents/console/config.yaml: sandbox: invalid type: boolean `false`,
+  expected a mapping
+---
+case: sandbox type
+command: sandbox
+stderr: >
+  .agents/console/config.yaml: sandbox: invalid type: boolean `false`,
+  expected a mapping
+---
+case: sandbox field
+command: serve
+stderr: >
+  .agents/console/config.yaml: sandbox.cwd: unknown field `cwd`, expected
+  one of `filesystem`, `network`, `proxy`
+---
+case: sandbox field
+command: sandbox
+stderr: >
+  .agents/console/config.yaml: sandbox.cwd: unknown field `cwd`, expected
+  one of `filesystem`, `network`, `proxy`
+---
+case: filesystem type
+command: serve
+stderr: >
+  .agents/console/config.yaml: sandbox.filesystem: invalid type: sequence,
+  expected a mapping
+---
+case: filesystem type
+command: sandbox
+stderr: >
+  .agents/console/config.yaml: sandbox.filesystem: invalid type: sequence,
+  expected a mapping
+---
+case: filesystem kind
+command: serve
+stderr: >
+  .agents/console/config.yaml: sandbox.filesystem.kind: unknown variant
+  `unrestricted`, expected `restricted`
+---
+case: filesystem kind
+command: sandbox
+stderr: >
+  .agents/console/config.yaml: sandbox.filesystem.kind: unknown variant
+  `unrestricted`, expected `restricted`
+---
+case: filesystem field
+command: serve
+stderr: >
+  .agents/console/config.yaml: sandbox.filesystem.roots: unknown field
+  `roots`, expected `kind` or `entries`
+---
+case: filesystem field
+command: sandbox
+stderr: >
+  .agents/console/config.yaml: sandbox.filesystem.roots: unknown field
+  `roots`, expected `kind` or `entries`
+---
+case: entries type
+command: serve
+stderr: >
+  .agents/console/config.yaml: sandbox.filesystem.entries: invalid type:
+  map, expected a sequence
+---
+case: entries type
+command: sandbox
+stderr: >
+  .agents/console/config.yaml: sandbox.filesystem.entries: invalid type:
+  map, expected a sequence
+---
+case: entry form
+command: serve
+stderr: >
+  .agents/console/config.yaml: sandbox.filesystem.entries[0].path: invalid
+  type: string "./out", expected a mapping
+---
+case: entry form
+command: sandbox
+stderr: >
+  .agents/console/config.yaml: sandbox.filesystem.entries[0].path: invalid
+  type: string "./out", expected a mapping
+---
+case: special path
+command: serve
+stderr: >
+  .agents/console/config.yaml: sandbox.filesystem.entries[0].path.type:
+  unknown variant `special`, expected `path`
+---
+case: special path
+command: sandbox
+stderr: >
+  .agents/console/config.yaml: sandbox.filesystem.entries[0].path.type:
+  unknown variant `special`, expected `path`
+---
+case: read grant
+command: serve
+stderr: >
+  .agents/console/config.yaml: sandbox.filesystem.entries[0].access:
+  unknown variant `read`, expected `write`
+---
+case: read grant
+command: sandbox
+stderr: >
+  .agents/console/config.yaml: sandbox.filesystem.entries[0].access:
+  unknown variant `read`, expected `write`
+---
+case: path type
+command: serve
+stderr: >
+  .agents/console/config.yaml: sandbox.filesystem.entries[0].path.path:
+  invalid type: integer `42`, expected path string
+---
+case: path type
+command: sandbox
+stderr: >
+  .agents/console/config.yaml: sandbox.filesystem.entries[0].path.path:
+  invalid type: integer `42`, expected path string
+---
+case: path field
+command: serve
+stderr: >
+  .agents/console/config.yaml: sandbox.filesystem.entries[0].path.extra:
+  unknown field `extra`, expected `type` or `path`
+---
+case: path field
+command: sandbox
+stderr: >
+  .agents/console/config.yaml: sandbox.filesystem.entries[0].path.extra:
+  unknown field `extra`, expected `type` or `path`
+---
+case: entry field
+command: serve
+stderr: >
+  .agents/console/config.yaml: sandbox.filesystem.entries[0].extra:
+  unknown field `extra`, expected `path` or `access`
+---
+case: entry field
+command: sandbox
+stderr: >
+  .agents/console/config.yaml: sandbox.filesystem.entries[0].extra:
+  unknown field `extra`, expected `path` or `access`
+---
+case: proxy type
+command: serve
+stderr: >
+  .agents/console/config.yaml: sandbox.proxy: invalid type: boolean
+  `true`, expected a mapping
+---
+case: proxy type
+command: sandbox
+stderr: >
+  .agents/console/config.yaml: sandbox.proxy: invalid type: boolean
+  `true`, expected a mapping
+---
+case: private proxy option
+command: serve
+stderr: >
+  .agents/console/config.yaml: sandbox.proxy.enableSocks5Udp: unknown
+  field `enableSocks5Udp`, expected one of `enabled`, `enableSocks5`,
+  `mode`, `domains`, `allowUpstreamProxy`, `allowLocalBinding`
+---
+case: private proxy option
+command: sandbox
+stderr: >
+  .agents/console/config.yaml: sandbox.proxy.enableSocks5Udp: unknown
+  field `enableSocks5Udp`, expected one of `enabled`, `enableSocks5`,
+  `mode`, `domains`, `allowUpstreamProxy`, `allowLocalBinding`
+---
+case: custom scalar tag
+command: serve
+stderr: |
+  .agents/console/config.yaml: line 1, column 28: custom tags are unsupported
+---
+case: custom scalar tag
+command: sandbox
+stderr: |
+  .agents/console/config.yaml: line 1, column 28: custom tags are unsupported
+---
+case: custom collection tag
+command: serve
+stderr: |
+  .agents/console/config.yaml: line 1, column 18: custom tags are unsupported
+---
+case: custom collection tag
+command: sandbox
+stderr: |
+  .agents/console/config.yaml: line 1, column 18: custom tags are unsupported
+---
+case: non-string key
+command: serve
+stderr: |
+  .agents/console/config.yaml: line 1, column 43: mapping keys must be strings
+---
+case: non-string key
+command: sandbox
+stderr: |
+  .agents/console/config.yaml: line 1, column 43: mapping keys must be strings
+---
+case: merge key
+command: serve
+stderr: >
+  .agents/console/config.yaml: sandbox.<<: unknown field `<<`, expected
+  one of `filesystem`, `network`, `proxy`
+---
+case: merge key
+command: sandbox
+stderr: >
+  .agents/console/config.yaml: sandbox.<<: unknown field `<<`, expected
+  one of `filesystem`, `network`, `proxy`

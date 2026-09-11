@@ -6,6 +6,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
+use crate::readiness::wait_for_io;
+
 const READ_FD_ENV: &str = "MCP_CONSOLE_SIDEBAND_READ_FD";
 const WRITE_FD_ENV: &str = "MCP_CONSOLE_SIDEBAND_WRITE_FD";
 const READ_CHUNK_SIZE: usize = 8 * 1024;
@@ -185,7 +187,12 @@ impl Writer {
         frame.push(b'\n');
         let mut remaining = frame.as_slice();
         while !remaining.is_empty() {
-            wait_for_io(endpoint.as_raw_fd(), libc::POLLOUT, cancelled)?;
+            if wait_for_io(endpoint.as_raw_fd(), libc::POLLOUT, cancelled)?.cancelled {
+                return Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "worker sideband writer cancelled",
+                ));
+            }
             match write_without_sigpipe(&endpoint, remaining) {
                 Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
                 Ok(length) => remaining = &remaining[length..],
@@ -238,37 +245,6 @@ fn set_nonblocking(fd: RawFd) -> io::Result<()> {
         return Err(io::Error::last_os_error());
     }
     Ok(())
-}
-
-fn wait_for_io(fd: RawFd, events: libc::c_short, cancelled: Option<&PipeReader>) -> io::Result<()> {
-    loop {
-        let mut descriptors = [
-            libc::pollfd {
-                fd,
-                events,
-                revents: 0,
-            },
-            libc::pollfd {
-                fd: cancelled.map_or(-1, AsRawFd::as_raw_fd),
-                events: libc::POLLIN,
-                revents: 0,
-            },
-        ];
-        // SAFETY: all nonnegative descriptors stay open through this wait.
-        if unsafe { libc::poll(descriptors.as_mut_ptr(), descriptors.len() as _, -1) } >= 0 {
-            if descriptors[1].revents != 0 {
-                return Err(io::Error::new(
-                    io::ErrorKind::BrokenPipe,
-                    "worker sideband writer cancelled",
-                ));
-            }
-            return Ok(());
-        }
-        let error = io::Error::last_os_error();
-        if error.kind() != io::ErrorKind::Interrupted {
-            return Err(error);
-        }
-    }
 }
 
 fn write_without_sigpipe(mut pipe: &PipeWriter, bytes: &[u8]) -> io::Result<usize> {

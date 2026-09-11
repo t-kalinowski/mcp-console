@@ -168,10 +168,10 @@ def test_cancelled_send_returns_owned_output_to_restart(
         omitted = len(cell_prefix) + 7
         assert client.client.temporary_directory is not None
         workspace = Path(client.client.temporary_directory.name)
-        session = next((workspace / ".mcp-console" / "sessions").iterdir())
+        session = next((workspace / ".agents/console" / "sessions").iterdir())
         relative_output = Path("outputs/call-000002.log")
         public_output = (
-            f".mcp-console/sessions/{session.name}/{relative_output.as_posix()}"
+            f".agents/console/sessions/{session.name}/{relative_output.as_posix()}"
         )
         truncation = (
             f"[output truncated: omitted {omitted} text bytes and "

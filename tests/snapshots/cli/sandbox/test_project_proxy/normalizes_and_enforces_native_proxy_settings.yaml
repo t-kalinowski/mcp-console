@@ -1,0 +1,194 @@
+---
+case: omitted domains
+proxy:
+  enabled: true
+  enableSocks5: true
+  enableSocks5Udp: false
+  allowUpstreamProxy: false
+  dangerouslyAllowAllUnixSockets: false
+  mode: full
+  domains: ~
+  unixSockets: ~
+  allowLocalBinding: false
+network: restricted
+stdout: |
+  direct network denied
+  native proxy returned 403
+---
+case: null domains
+proxy:
+  enabled: true
+  enableSocks5: true
+  enableSocks5Udp: false
+  allowUpstreamProxy: false
+  dangerouslyAllowAllUnixSockets: false
+  mode: full
+  domains: ~
+  unixSockets: ~
+  allowLocalBinding: false
+network: restricted
+stdout: |
+  direct network denied
+  native proxy returned 403
+---
+case: empty domains
+proxy:
+  enabled: true
+  enableSocks5: true
+  enableSocks5Udp: false
+  allowUpstreamProxy: false
+  dangerouslyAllowAllUnixSockets: false
+  mode: full
+  domains: {}
+  unixSockets: ~
+  allowLocalBinding: false
+network: restricted
+stdout: |
+  direct network denied
+  native proxy returned 403
+---
+case: omitted domains with local binding
+proxy:
+  enabled: true
+  enableSocks5: true
+  enableSocks5Udp: false
+  allowUpstreamProxy: false
+  dangerouslyAllowAllUnixSockets: false
+  mode: full
+  domains: ~
+  unixSockets: ~
+  allowLocalBinding: true
+network: restricted
+stdout: |
+  native proxy returned 403
+---
+case: empty domains with local binding
+proxy:
+  enabled: true
+  enableSocks5: true
+  enableSocks5Udp: false
+  allowUpstreamProxy: false
+  dangerouslyAllowAllUnixSockets: false
+  mode: full
+  domains: {}
+  unixSockets: ~
+  allowLocalBinding: true
+network: restricted
+stdout: |
+  native proxy returned 403
+---
+case: native wildcard
+proxy:
+  enabled: true
+  enableSocks5: true
+  enableSocks5Udp: false
+  allowUpstreamProxy: false
+  dangerouslyAllowAllUnixSockets: false
+  mode: full
+  domains:
+    "*": allow
+  unixSockets: ~
+  allowLocalBinding: true
+network: restricted
+stdout: |
+  native proxy returned 200
+---
+case: allow literal
+proxy:
+  enabled: true
+  enableSocks5: true
+  enableSocks5Udp: false
+  allowUpstreamProxy: false
+  dangerouslyAllowAllUnixSockets: false
+  mode: full
+  domains:
+    127.0.0.1: allow
+  unixSockets: ~
+  allowLocalBinding: false
+network: restricted
+stdout: |
+  direct network denied
+  native proxy returned 200
+---
+case: deny overrides wildcard
+proxy:
+  enabled: true
+  enableSocks5: true
+  enableSocks5Udp: false
+  allowUpstreamProxy: false
+  dangerouslyAllowAllUnixSockets: false
+  mode: full
+  domains:
+    "*": allow
+    127.0.0.1: deny
+  unixSockets: ~
+  allowLocalBinding: true
+network: restricted
+stdout: |
+  native proxy returned 403
+---
+case: none grants nothing
+proxy:
+  enabled: true
+  enableSocks5: true
+  enableSocks5Udp: false
+  allowUpstreamProxy: false
+  dangerouslyAllowAllUnixSockets: false
+  mode: full
+  domains:
+    127.0.0.1: none
+  unixSockets: ~
+  allowLocalBinding: true
+network: restricted
+stdout: |
+  native proxy returned 403
+---
+case: limited read
+proxy:
+  enabled: true
+  enableSocks5: true
+  enableSocks5Udp: false
+  allowUpstreamProxy: false
+  dangerouslyAllowAllUnixSockets: false
+  mode: limited
+  domains:
+    127.0.0.1: allow
+  unixSockets: ~
+  allowLocalBinding: false
+network: restricted
+stdout: |
+  direct network denied
+  native proxy returned 200
+---
+case: limited write
+proxy:
+  enabled: true
+  enableSocks5: true
+  enableSocks5Udp: false
+  allowUpstreamProxy: false
+  dangerouslyAllowAllUnixSockets: false
+  mode: limited
+  domains:
+    127.0.0.1: allow
+  unixSockets: ~
+  allowLocalBinding: false
+network: restricted
+stdout: |
+  direct network denied
+  native proxy returned 403
+---
+case: exposed switches
+proxy:
+  enabled: true
+  enableSocks5: false
+  enableSocks5Udp: false
+  allowUpstreamProxy: true
+  dangerouslyAllowAllUnixSockets: false
+  mode: full
+  domains:
+    127.0.0.1: allow
+  unixSockets: ~
+  allowLocalBinding: true
+network: restricted
+stdout: |
+  native proxy returned 200

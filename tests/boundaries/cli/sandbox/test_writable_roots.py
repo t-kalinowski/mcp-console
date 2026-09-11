@@ -18,6 +18,15 @@ from support.suites import run_this_suite
 
 @requires(SANDBOX)
 def test_writable_roots_augment_default_permissions(binary: Path) -> Transcript:
+    return _augment_default_permissions(binary)
+
+
+@requires(SANDBOX)
+def test_project_grants_combine_with_cli_roots(binary: Path) -> Transcript:
+    return _augment_default_permissions(binary, configured=True)
+
+
+def _augment_default_permissions(binary: Path, configured: bool = False) -> Transcript:
     script = code(r"""
         import errno
         import os
@@ -87,6 +96,23 @@ def test_writable_roots_augment_default_permissions(binary: Path) -> Transcript:
                 if allowed
                 else []
             )
+            if configured and allowed:
+                config = host / ".agents/console/config.yaml"
+                config.parent.mkdir(parents=True)
+                config.write_text(
+                    code("""
+                    sandbox:
+                      filesystem:
+                        kind: restricted
+                        entries:
+                          - path:
+                              type: path
+                              path: ./output café 雪
+                            access: write
+                    """),
+                    encoding="utf-8",
+                )
+                options = ["--writable-root", str(roots[1])]
             result = subprocess.run(
                 [
                     binary,

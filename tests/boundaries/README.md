@@ -84,6 +84,7 @@ Its `target` identifies the normalized value, and its remaining fields describe 
 The initialization, initialized notification, and tool-list exchange have full references in `client_server/server/test_tools::initializes_and_lists_tools`.
 Its primary snapshot records the sandboxed handshake; its `.direct.yaml` companion records the direct handshake.
 The `.bare.yaml` and `.bare.direct.yaml` companions preserve the corresponding interfaces when resolver commands are unavailable.
+The `.proxy.yaml` companion records the sandboxed interface with a project-configured network proxy.
 When selected, this reference case runs before the other cases, including during updates.
 At each position in a transcript, the runner compares the complete exchange against the appropriate reference before abbreviating it.
 This includes multiple client sessions in one case.

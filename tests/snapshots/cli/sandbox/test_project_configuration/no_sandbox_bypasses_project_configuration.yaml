@@ -1,0 +1,5 @@
+---
+arguments:
+  - serve
+  - --no-sandbox
+invalid_config_ignored: true

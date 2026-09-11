@@ -1,5 +1,100 @@
 # Sandbox configuration
 
+## Project configuration
+
+`serve` and ordinary `sandbox` launches read only `.agents/console/config.yaml` beneath the launch working directory.
+Only that directory is searched: no ancestors, home directory, or global configuration.
+An absent file preserves the defaults; an unreadable or invalid existing file prevents launch.
+
+Project configuration is trusted launcher input and can widen workload permissions.
+Review it before launching Console in a project.
+This first interface adds settings to Console's existing policy; it is not a complete runner policy or the final configuration API.
+
+For example, create `output` in your project and put this in `.agents/console/config.yaml`:
+
+```yaml
+sandbox:
+  filesystem:
+    kind: restricted
+    entries:
+      - path:
+          type: path
+          path: ./output
+        access: write
+  network: restricted
+  proxy:
+    enabled: true
+    mode: full
+    domains:
+      example.com: allow
+      blocked.example.com: deny
+```
+
+Then launch from the project directory:
+
+```sh
+mcp-console sandbox -- python3 -c 'from pathlib import Path; Path("output/result.txt").write_text("ready")'
+mcp-console serve
+```
+
+Console retains its default host read access, private temporary storage, platform compatibility rules, and lifecycle cleanup.
+Filesystem entries only add literal path write grants through the same path as `--writable-root`.
+Configured grants and repeated CLI writable roots are additive.
+Relative paths resolve against the launch working directory, not the metadata directory containing the YAML file.
+Console does not create paths, grant their parents, expand `~` or environment variables, or canonicalize away symlink components.
+The existing [native path behavior and platform limitations](#additional-writable-paths) apply.
+
+| Field under `sandbox`      | Supported values and defaults                                                                                                                                                                                                                    |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `filesystem`               | Mapping, default empty.                                                                                                                                                                                                                          |
+| `filesystem.kind`          | `restricted` only; may be omitted.                                                                                                                                                                                                               |
+| `filesystem.entries`       | List, default empty. Every entry requires `path: {type: path, path: STRING}` and `access: write`. Other path forms and access modes are rejected.                                                                                                |
+| `network`                  | `restricted` (default) or `enabled`. A proxy does not implicitly change this setting.                                                                                                                                                            |
+| `proxy`                    | Omitted or `null`: no proxy. Otherwise a mapping with `enabled: true`.                                                                                                                                                                           |
+| `proxy.enabled`            | Required Boolean `true` when a proxy object is supplied. To remove the proxy, omit the object or use `null`.                                                                                                                                     |
+| `proxy.mode`               | `full` (default) or `limited`, using the native proxy's modes. `full` permits all HTTP methods and HTTPS CONNECT tunnels to allowed destinations. `limited` permits HTTP GET/HEAD/OPTIONS and blocks HTTPS CONNECT in this runner configuration. |
+| `proxy.domains`            | Mapping from native domain patterns to `allow`, `deny`, or `none`. Omitted, `null`, and empty maps grant no destinations. `none` adds no permission; explicit denies take precedence over allows.                                                |
+| `proxy.enableSocks5`       | Boolean, default `true`.                                                                                                                                                                                                                         |
+| `proxy.allowUpstreamProxy` | Boolean, default `false`.                                                                                                                                                                                                                        |
+| `proxy.allowLocalBinding`  | Boolean, default `false`; opts into the native local/private network and binding exceptions.                                                                                                                                                     |
+
+Console passes domain patterns and permissions to the pinned runner without matching or rewriting them.
+The native proxy owns host normalization, pattern matching, local-network checks, and enforcement.
+For example, with local binding disabled, an explicitly allowlisted loopback IP literal can be reached through the proxy; a hostname resolving to a private address remains subject to the native local-network restriction.
+An empty allowlist does not mean unrestricted proxy access.
+When a proxy is supplied, the runner enforces managed proxy routing even with `network: enabled`; that value does not bypass the proxy.
+The native exceptions selected by `allowLocalBinding` still apply.
+
+Console supplies all required runner proxy fields explicitly.
+SOCKS5 UDP, upstream-proxy use, local binding, and Unix-socket exceptions default to disabled; only the exposed switches above can change their corresponding options.
+UDP and Unix-socket controls, listener/control internals, protocol versions, native backends, platform extensions, command, cwd, target environment, and lifecycle settings are not YAML fields.
+
+Configuration must contain exactly one UTF-8 YAML 1.2 mapping document.
+The `sandbox` mapping may be omitted; `{}` preserves defaults.
+Console checks the supported application fields and additive filesystem entry forms, then delegates native policy types, values, and validation to the runner.
+Unknown fields and malformed input are errors; custom tags are unsupported.
+For duplicate keys, the last value wins because of a known limitation of Saphyr's node loader; this behavior is subject to change.
+Booleans use YAML 1.2 values such as `true` and `false`; strings such as `yes` are not Boolean options.
+There are no includes, merge keys, interpolation, shell expansion, layering, or reloads.
+Parsing uses Saphyr's YAML node API in Rust and does not start Python or resolve a Python environment.
+Scalar and tag resolution follow the pinned Saphyr loader.
+
+The trusted outer process reads and normalizes configuration once, before workload startup.
+When a project configuration file exists, it probes the native sandbox with a no-op process using those captured settings.
+This checks native policy validation and sandbox/proxy startup before running the workload or announcing server readiness, without starting a worker.
+Probe failures include the configuration filename and the runner's diagnostic; native JSON error locations refer to the generated runner policy.
+`serve` retains that snapshot for the whole session, including when neither file existed at launch.
+Editing, removing, or creating either file later cannot change the initial worker, a restart that resets its state, recovery after worker failure, or a replacement using newly prepared requirements.
+Internal launches explicitly select the captured application settings through a child-specific environment payload and the public `sandbox` launch boundary; no child rereads a filename.
+The sandbox layer constructs native policy and strips the private settings transport before launching the runner and workload.
+Ambient `MCP_CONSOLE_SANDBOX_SETTINGS` or `MCP_CONSOLE_SANDBOX_CONFIG` values do not select policy, and the server's global environment is not modified.
+
+`serve --no-sandbox` bypasses sandbox configuration entirely.
+Explicit `sandbox --config-env NAME` also bypasses discovery and retains the complete-policy interface below.
+Both still conflict with explicit `--writable-root` arguments.
+
+## Explicit complete policy
+
 Select a policy explicitly in the trusted process that launches the sandbox:
 
 ```sh
@@ -11,7 +106,7 @@ SANDBOX_POLICY='{"version":2,"filesystem":{"kind":"restricted","entries":[{"path
 Console forwards the selected name to its verified private runner, which owns the configuration types, validation, and enforcement.
 An explicit configuration supplies the complete policy; Console does not merge its default policy or macOS extension into it.
 
-Without `--config-env`, `sandbox` uses the [Console defaults](SANDBOX.md#application-policy-and-launch), augmented by any explicit writable roots.
+Without `--config-env`, `sandbox` uses the [Console defaults](SANDBOX.md#application-policy-and-launch), augmented by discovered project settings and explicit writable roots.
 `serve` supplies the same policy and never selects a policy from ambient environment state.
 Setting `MCP_CONSOLE_SANDBOX_CONFIG` alone does not change either command's policy.
 
@@ -28,13 +123,13 @@ Paths may name directories, individual files, or locations that do not exist yet
 Console does not inspect, create, or remove them; it leaves filesystem handling to the runner.
 Paths must be valid UTF-8 to fit the runner's configuration transport.
 Relative paths resolve against the launch working directory before workload startup, and the server retains the absolute paths across worker restarts and replacements.
-Paths remain separate arguments, including spaces and Unicode; symlink components remain subject to the runner's native writable-root validation.
+Paths retain spaces and Unicode; symlink components remain subject to the runner's native writable-root validation.
 
 The paths augment the default filesystem policy for the workload and its subprocesses.
 Their parents, the working directory, and home receive no implicit write grant.
 The runner's native safeguards, network restrictions, macOS extensions, private temporary storage, and lifecycle cleanup still apply.
 These paths contain persistent user data; retirement removes only runner-owned private storage.
-Omitting the argument preserves the default permissions.
+Omitting both CLI and configured grants preserves the default filesystem permissions.
 
 On macOS, a missing path can be created by the workload under the native path rule.
 On Linux, the runner skips paths absent at sandbox startup; a directory created later becomes writable on a new sandbox launch, such as a worker restart.
@@ -43,8 +138,8 @@ Console does not substitute a parent-directory grant or change backends for thes
 
 `serve --no-sandbox` and `sandbox --config-env` each conflict with `--writable-root`.
 An explicit `--config-env` value supplies a complete policy; no merging or precedence is defined.
-There is no environment-variable interface for the path list or automatic configuration lookup.
-The launch code accepts a path list independently of argument parsing so a later configuration front end can supply the same list.
+There is no ambient environment-variable interface for the path list.
+Discovered filesystem entries supply the same additional-writable-root list.
 
 ## Command and environment
 
@@ -55,7 +150,7 @@ No shell is inserted; executable names and arguments are passed separately.
 Select the working directory through the caller's process-launch API.
 The configuration cannot contain `command` or `cwd`.
 
-The target inherits the launch environment by default, excluding configuration transport variables.
+With the explicit complete-policy interface, the target inherits the launch environment by default, excluding configuration transport variables.
 An optional `environment` map supplies target overrides without serializing the rest of the caller's environment:
 
 ```json
@@ -126,7 +221,7 @@ For default bubblewrap and macOS execution, descendant retirement and the [suppo
 Repeated `--config-env`, combining it with private `--exit-with-parent`, duplicate top-level JSON fields, and unknown top-level fields are rejected.
 Use `lifecycle.parent_pid` in an explicit configuration.
 The runner rejects simultaneous environment and descriptor input options.
-There is no configuration-file option, automatic file discovery, `@file` syntax, include, reload, or file fallback.
+The explicit interface has no configuration-file option, discovery, `@file` syntax, include, reload, or file fallback.
 
 ## Explicit Linux backend selection
 

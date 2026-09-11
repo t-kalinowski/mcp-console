@@ -10,16 +10,18 @@ The [integration validation record](SANDBOX_RUNNER_INTEGRATION.md) records the b
 The pin in `sandbox-runner.json` selects the runner source commit and protocol 2.
 The pinned checkout's `codex-rs/rust-toolchain.toml` selects its Rust toolchain.
 The executable contract and acceptance tests at that commit are the source of truth for runner behavior.
-Without a public configuration option, Console uses `--config-env MCP_CONSOLE_SANDBOX_CONFIG -- COMMAND [ARG]...`.
+For its application policy, Console uses `--config-env MCP_CONSOLE_SANDBOX_CONFIG -- COMMAND [ARG]...`.
 The selected variable contains one immutable JSON object, consumed by the runner and removed from the target environment.
 It is reserved for this private handoff.
 Arguments, cwd, and the rest of the environment remain ordinary executable inputs.
-There is no configuration file, mutable path reference, bootstrap writer process, or application control channel.
+The runner handoff carries no filename, mutable path reference, bootstrap writer process, or application control channel.
 Linux namespace init retains a private runner control endpoint that never reaches target code.
 
 The public `sandbox --config-env NAME -- COMMAND [ARG]...` option selects an explicit complete configuration using the runner's canonical schema.
 See [sandbox configuration](SANDBOX_CONFIGURATION.md) for fields, defaults, trust boundaries, size limits, and runnable shell, Python, and R examples.
-`serve` supplies the default configuration plus any explicit writable roots; ambient values never select its policy.
+`serve` and ordinary `sandbox` invocations discover project YAML beneath the launch working directory and add its supported settings and explicit writable roots to the default policy.
+`serve` retains one normalized snapshot for every worker launch, including when no configuration file existed.
+Ambient values never select its policy.
 
 By default, Console requests:
 
@@ -36,7 +38,7 @@ The frontend continues to remove `DYLD_INSERT_LIBRARIES` and `LD_PRELOAD` before
 The runner supplies full mutation of its private storage; Console does not construct or remove its path.
 The temporary layout is a runner-owned `sandbox-XXXXXX` container with a writable `data` child.
 The temporary [`--writable-root PATH`](SANDBOX_CONFIGURATION.md#additional-writable-paths) option augments the filesystem entries with explicit write access on `serve` and `sandbox`.
-The server retains the resolved path list across worker generations and only forwards it to the sandbox frontend; the relay and worker do not interpret it.
+The server retains the resolved path list, network setting, and proxy settings across worker generations and explicitly selects their child-specific environment payload at the sandbox frontend; the relay and worker do not interpret it.
 These paths are persistent user data and are never removed by sandbox retirement.
 
 The frontend preserves its PID and direct caller across exec.
@@ -109,8 +111,8 @@ Startup failures use the runner's native diagnostics; successful cancellation ca
 
 The pinned runner uses the base and preferences policies in `codex-rs/sandboxing/src/seatbelt*.sbpl` at `689f48c30deeb6aaa95a193e31e5971dd6820465`.
 MCP Console supplies read access to the filesystem root, restricted networking with no proxy, and its trusted `policy_extensions.sbpl`.
-The default application policy remains fixed.
-Standalone callers can select an explicit configuration through `--config-env`; managed proxy support follows the runner schema.
+Project configuration can add writable paths and select native network and proxy settings.
+Standalone callers can select a complete explicit configuration through `--config-env`; managed proxy support follows the runner schema.
 
 Compared with the previous `read_only_policy.sbpl`, the native base already provides the CPU and R startup sysctls (including `hw.logicalcpu` and `kern.usrstack64`), Python's `kern.sysv.semmns`, POSIX semaphores, OpenMP shared memory, process permissions, `/dev/null`, PTY allocation, user lookup, power-management lookup, and read-only preferences.
 Those local rules became redundant; their deletion does not mean the applications stopped needing them.

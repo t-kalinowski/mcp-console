@@ -1,0 +1,37 @@
+---
+case: absent
+initialized: true
+---
+case: .agents is a file
+initialized: true
+---
+case: .agents/console is a file
+initialized: true
+---
+case: ignored .mcp-console/config.yaml
+initialized: true
+---
+case: ignored .agents/mcp-console.yaml
+initialized: true
+---
+case: only console config used
+initialized: true
+---
+case: .agents/console/config.yaml
+command: serve
+stderr: >
+  .agents/console/config.yaml: sandbox.unknown: unknown field `unknown`,
+  expected one of `filesystem`, `network`, `proxy`
+---
+case: .agents/console/config.yaml
+command: sandbox
+stderr: >
+  .agents/console/config.yaml: sandbox.unknown: unknown field `unknown`,
+  expected one of `filesystem`, `network`, `proxy`
+---
+case: ancestors ignored
+initialized: true
+---
+case: unreadable existing path
+stderr: |
+  cannot read '.agents/console/config.yaml': Is a directory (os error 21)

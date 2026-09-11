@@ -47,7 +47,7 @@ def test_captures_worker_stdout(binary: Path, execution: Execution) -> Transcrip
     assert_large_output(output, "zod stdout 👩🏽‍💻\n")
     assert client.temporary_directory is not None
     workspace = Path(client.temporary_directory.name)
-    session = next((workspace / ".mcp-console" / "sessions").iterdir())
+    session = next((workspace / ".agents/console" / "sessions").iterdir())
     assert (session / "outputs" / "call-000001.log").read_text(
         encoding="utf-8"
     ) == output
@@ -395,7 +395,7 @@ def test_drains_pending_sideband_output_while_running(
         }, result
         assert client.temporary_directory is not None
         workspace = Path(client.temporary_directory.name)
-        session = next((workspace / ".mcp-console" / "sessions").iterdir())
+        session = next((workspace / ".agents/console" / "sessions").iterdir())
         assert (session / "outputs" / "call-000001.log").read_text(
             encoding="utf-8"
         ) == "before pending image\nafter pending image\n"

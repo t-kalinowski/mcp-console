@@ -139,7 +139,7 @@ impl WorkerRuntime {
             arguments,
             relay,
             no_sandbox,
-            writable_roots,
+            sandbox_settings,
             python,
             managed_r,
             dynamic_resolution,
@@ -151,7 +151,9 @@ impl WorkerRuntime {
         let target = relay_command_line(&current_executable, executable, arguments, relay);
         let mut command = if no_sandbox {
             let mut command = Command::new(&target[0]);
-            command.args(&target[1..]);
+            command
+                .args(&target[1..])
+                .env_remove(crate::settings::ENVIRONMENT);
             command
         } else {
             let mut command = Command::new(&current_executable);
@@ -159,9 +161,13 @@ impl WorkerRuntime {
                 .arg("sandbox")
                 .arg("--exit-with-parent")
                 .arg(std::process::id().to_string());
-            for root in writable_roots {
-                command.arg("--writable-root").arg(root);
-            }
+            command
+                .args(["--settings-env", crate::settings::ENVIRONMENT])
+                .env(
+                    crate::settings::ENVIRONMENT,
+                    serde_json::to_string(sandbox_settings)
+                        .map_err(|error| format!("cannot encode sandbox settings: {error}"))?,
+                );
             command.arg("--").args(target);
             command
         };

@@ -337,7 +337,7 @@ The [relay protocol](RELAY_PROTOCOL.md) owns that ordering guarantee, and the [b
 ## Recording, cell output, and image artifacts
 
 Recording is a server responsibility and does not add messages to either private protocol.
-On the first `send` call, the server creates a private run directory under `.mcp-console/sessions/` in its working directory.
+On the first `send` call, the server creates a private run directory under `.agents/console/sessions/` in its working directory.
 It appends tool calls and assembled results to `internal/events.jsonl`.
 The initial `session_started` event records whether dynamic environment resolution is available, and the Quarto projection derives its managed defaults from that capability.
 Each `tool_result` is appended before the MCP transport attempts the corresponding response write.

@@ -12,7 +12,7 @@ from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript, TranscriptWithCompanions
-from support.requirements import WORKER, requires
+from support.requirements import SANDBOX, WORKER, requires
 from support.resolvers import bare_runtime_environment
 from support.suites import run_this_suite
 
@@ -77,23 +77,34 @@ def test_invalid_send_has_no_external_effects(binary: Path) -> Transcript:
 def test_initializes_and_lists_tools(
     binary: Path, execution: Execution
 ) -> TranscriptWithCompanions:
+    companions = {
+        "bare.yaml": _initializes_and_lists_tools(binary, execution, bare=True)
+    }
+    if execution == SANDBOXED:
+        companions["proxy.yaml"] = _initializes_and_lists_tools(
+            binary, execution, proxy=True
+        )
     return TranscriptWithCompanions(
         _initializes_and_lists_tools(binary, execution),
-        {"bare.yaml": _initializes_and_lists_tools(binary, execution, bare=True)},
+        companions,
     )
 
 
 def _initializes_and_lists_tools(
-    binary: Path, execution: Execution, *, bare: bool = False
+    binary: Path, execution: Execution, *, bare: bool = False, proxy: bool = False
 ) -> Transcript:
     environment = os.environ.copy()
     environment.pop("MCP_CONSOLE_LANGUAGES", None)
     with tempfile.TemporaryDirectory() as library:
         if bare:
             environment = bare_runtime_environment(environment, Path(library))
-        with McpClient(binary, execution.serve(), environment) as client:
-            assert client.temporary_directory is not None
-            workspace = Path(client.temporary_directory.name)
+        workspace = Path(library) / "workspace"
+        workspace.mkdir()
+        if proxy:
+            config = workspace / ".agents/mcp-console.yaml"
+            config.parent.mkdir()
+            config.write_text("sandbox: {proxy: {enabled: true}}", encoding="utf-8")
+        with McpClient(binary, execution.serve(), environment, workspace) as client:
             client.initialize_and_list_tools()
             listed_tools = client.transcript[-1]["result"]["tools"]
             assert [tool["name"] for tool in listed_tools] == ["send"], listed_tools
@@ -105,7 +116,7 @@ def _initializes_and_lists_tools(
             assert '"$defs"' not in send_schema, send["inputSchema"]
             assert '"$ref"' not in send_schema, send["inputSchema"]
 
-            assert not (workspace / ".mcp-console").exists(), workspace
+            assert not (workspace / ".agents/console").exists(), workspace
             if bare:
                 assert "requirements" not in send["inputSchema"]["properties"]
                 return client.finish()
@@ -122,6 +133,77 @@ def _initializes_and_lists_tools(
                 assert requirement["items"]["minLength"] == 1, requirement
             assert requirement_properties["duckdb"]["items"]["maxLength"] == 64
             return client.finish()
+
+
+@requires(SANDBOX)
+def test_describes_project_network_access(binary: Path) -> Transcript:
+    cases = (
+        (
+            "restricted",
+            "sandbox: {network: restricted}",
+            False,
+            "cannot directly access the network",
+        ),
+        (
+            "enabled",
+            "sandbox: {network: enabled}",
+            False,
+            "can directly access the network",
+        ),
+        (
+            "proxy",
+            "sandbox: {proxy: {enabled: true}}",
+            False,
+            "network subject to the launcher's proxy settings",
+        ),
+        (
+            "proxy with local binding",
+            "sandbox: {proxy: {enabled: true, allowLocalBinding: true}}",
+            False,
+            "network subject to the launcher's proxy settings",
+        ),
+        (
+            "proxy with network enabled",
+            "sandbox: {network: enabled, proxy: {enabled: true}}",
+            False,
+            "network subject to the launcher's proxy settings",
+        ),
+        (
+            "native network representation",
+            "sandbox: {network: {enabled: null}}",
+            False,
+            "network access governed by the launcher's sandbox settings",
+        ),
+        (
+            "no sandbox",
+            "sandbox: {network: restricted}",
+            True,
+            "without a sandbox, with the server's permissions, including filesystem and network access",
+        ),
+    )
+    transcript: Transcript = []
+    for name, source, no_sandbox, expected in cases:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            config = workspace / ".agents/console/config.yaml"
+            config.parent.mkdir(parents=True)
+            config.write_text(source, encoding="utf-8")
+            arguments = ["serve", "--worker", "unused-worker"]
+            if no_sandbox:
+                arguments.append("--no-sandbox")
+            with McpClient(binary, arguments, current_directory=workspace) as client:
+                client.initialize_and_list_tools()
+                description = client.transcript[-1]["result"]["tools"][0]["description"]
+                assert expected in description, (name, description)
+                if not no_sandbox:
+                    assert "paths explicitly allowed by the launcher" in description
+                    assert "runs outside the sandbox" in description
+                config.write_text("invalid: [", encoding="utf-8")
+                listed = client.request("tools/list")
+                assert listed["result"]["tools"][0]["description"] == description
+                client.finish()
+                transcript.append({"configuration": name, "description": description})
+    return transcript
 
 
 def test_limits_send_languages_from_environment(binary: Path) -> Transcript:

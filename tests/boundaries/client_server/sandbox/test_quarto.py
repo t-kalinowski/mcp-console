@@ -62,7 +62,7 @@ def test_renders_generated_document(binary: Path) -> Transcript:
         assert "<div>not markdown</div>" in python_result, python_result
         transcript = client.finish()
 
-        session = next((workspace / ".mcp-console" / "sessions").iterdir())
+        session = next((workspace / ".agents/console" / "sessions").iterdir())
         document = session / "transcript.qmd"
         document_text = document.read_text(encoding="utf-8")
         assert f"```{{r}}\n\n{r_source}\n```" in document_text
