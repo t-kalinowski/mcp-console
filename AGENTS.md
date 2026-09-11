@@ -40,7 +40,7 @@ Recorded sessions, transcripts, outputs, and artifacts are written beneath `.age
 
 The worker relay, built-in worker, and managed resolvers support macOS and Linux.
 The default sandbox and standalone sandbox command support both platforms.
-Linux requires procfs, permitted native namespace operations, and the selected policy enforcement capabilities; see `docs/LINUX_COMPATIBILITY.md` for tested baselines and constrained-host behavior.
+Default Linux sandbox execution requires procfs, permitted native namespace operations, and the selected policy enforcement capabilities; see `docs/LINUX_COMPATIBILITY.md` for tested baselines, explicit enforcement modes, and constrained-host behavior.
 Do not infer support from a kernel version alone.
 Windows is not supported.
 Other Unix operating systems are not supported build or runtime targets; shared `cfg(unix)` modules do not imply support for them.

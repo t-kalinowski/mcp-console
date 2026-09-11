@@ -109,6 +109,11 @@ def _initializes_and_lists_tools(
             listed_tools = client.transcript[-1]["result"]["tools"]
             assert [tool["name"] for tool in listed_tools] == ["send"], listed_tools
             send = listed_tools[0]
+            if proxy:
+                assert (
+                    "network subject to the launcher's proxy settings"
+                    in send["description"]
+                )
             control = send["inputSchema"]["properties"]["control"]
             assert control["type"] == "string", control
             assert control["enum"] == ["interrupt", "restart"], control

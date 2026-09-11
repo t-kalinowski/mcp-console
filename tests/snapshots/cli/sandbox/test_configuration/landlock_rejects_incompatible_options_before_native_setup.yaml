@@ -3,6 +3,12 @@ scenario: direct full-write positive control
 stdout: |
   target started
 ---
+scenario: external enforcement
+stderr: >
+  mcp-console-sandbox: external-sandbox delegates enforcement; omit the
+  legacy landlock override
+exit_code: 1
+---
 scenario: private storage without exports
 stderr: >
   mcp-console-sandbox: landlock does not provide supervised lifetime; omit
