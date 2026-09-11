@@ -121,7 +121,10 @@ def _initializes_and_lists_tools(
             assert '"$defs"' not in send_schema, send["inputSchema"]
             assert '"$ref"' not in send_schema, send["inputSchema"]
 
-            assert not (workspace / ".agents/console/sessions").exists(), workspace
+            if proxy:
+                assert list(config.parent.iterdir()) == [config], workspace
+            else:
+                assert not (workspace / ".agents/console").exists(), workspace
             if bare:
                 assert "requirements" not in send["inputSchema"]["properties"]
                 return client.finish()

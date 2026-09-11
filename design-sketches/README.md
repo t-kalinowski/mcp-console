@@ -3,8 +3,9 @@
 MCP Console is a persistent, sandboxed R, Python, and DuckDB SQL console for AI agents.
 One console session hosts R, Python, and SQL in a single process, allowing an agent to load data once and use whichever language is best for each step.
 
-> **Status:** design-stage repository.
-> The interface and architecture are drafts intended to scaffold implementation.
+> **Status:** exploratory design sketch.
+> The files in this directory may describe different directions and need not be complete or mutually consistent.
+> Current implementation documentation is indexed in [`../docs/README.md`](../docs/README.md).
 
 ## Installation and registration
 
