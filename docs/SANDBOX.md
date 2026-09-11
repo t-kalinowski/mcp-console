@@ -60,6 +60,9 @@ See [release preparation](../RELEASE.md#private-sandbox-executable).
 
 ## Supported hosts and lifetime limits
 
+The native lifecycle below applies to Console's default policy and explicit managed policies.
+Explicit unrestricted and external policies have the additional [enforcement limits](SANDBOX_CONFIGURATION.md#filesystem-and-enforcement-modes) described in the configuration reference.
+
 macOS uses Seatbelt and a native stage that execs the requested target in the same PID.
 The target leads its dedicated process group; the runner remains outside that group.
 The runner transfers an exclusively owned foreground terminal to the target group and restores it at retirement.
@@ -76,7 +79,7 @@ The relay-worker sideband uses two anonymous pipes under the same sandbox policy
 It does not require Unix socket syscall exceptions or relaxed network restrictions.
 The selected helper's namespace operations, procfs, and requested seccomp/network capabilities must be available.
 See [Linux compatibility](LINUX_COMPATIBILITY.md) for differential security results and tested baselines.
-Full-disk-write policies remain rejected by supervised execution because writable procfs could expose supervisor resources.
+Explicit unrestricted filesystem policies retain native supervision and the selected network policy.
 Linux keeps the caller's foreground-terminal ownership and relays interrupts through namespace init.
 Standalone callers may explicitly select `linux_backend: "landlock"` for native filesystem/network enforcement with direct-exec semantics.
 This mode has no process isolation or descendant cleanup and rejects supervised-lifetime and proxy options.
@@ -109,7 +112,7 @@ Startup failures use the runner's native diagnostics; successful cancellation ca
 
 ## Policy extensions and compatibility
 
-The pinned runner uses the base and preferences policies in `codex-rs/sandboxing/src/seatbelt*.sbpl` at `689f48c30deeb6aaa95a193e31e5971dd6820465`.
+The pinned runner uses the base and preferences policies in `codex-rs/sandboxing/src/seatbelt*.sbpl` at `3f060c4210deba4d55cb6ec6d19899721182afae`.
 MCP Console supplies read access to the filesystem root, restricted networking with no proxy, and its trusted `policy_extensions.sbpl`.
 Project configuration can add writable paths and select native network and proxy settings.
 Standalone callers can select a complete explicit configuration through `--config-env`; managed proxy support follows the runner schema.

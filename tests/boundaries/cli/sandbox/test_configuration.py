@@ -135,6 +135,87 @@ def test_explicit_policy_controls_filesystem_and_network(binary: Path) -> Transc
 
 
 @requires(SANDBOX)
+def test_unrestricted_and_external_policies_preserve_network_and_cleanup(
+    binary: Path,
+) -> Transcript:
+    script = code("""
+        import json
+        import os
+        from pathlib import Path
+        import socket
+        import sys
+
+        assert "TEST_POLICY" not in os.environ
+        assert "MCP_CONSOLE_SANDBOX_CONFIG" not in os.environ
+        Path("created").write_text("allowed", encoding="utf-8")
+        temporary = Path(os.environ["TMPDIR"])
+        (temporary / "input").write_text(sys.stdin.read(), encoding="utf-8")
+        try:
+            with socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=2):
+                network = "allowed"
+        except OSError:
+            network = "denied"
+        print(json.dumps({
+            "network": network,
+            "temporary": str(temporary),
+            "input": (temporary / "input").read_text(encoding="utf-8"),
+        }))
+        sys.exit(23)
+        """)
+    transcript = []
+    with TemporaryDirectory() as directory, socket.socket() as listener:
+        host = Path(directory).resolve()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        for kind in ("unrestricted", "external-sandbox"):
+            for network in ("restricted", "enabled"):
+                config = {
+                    **configuration(),
+                    "filesystem": {"kind": kind},
+                    "network": network,
+                    "lifecycle": {
+                        "private_tmp": {"parent": str(host), "environment": ["TMPDIR"]}
+                    },
+                }
+                result = invoke(
+                    binary,
+                    config,
+                    sys.executable,
+                    "-c",
+                    script,
+                    str(listener.getsockname()[1]),
+                    cwd=host,
+                    input="literal stdin\x00雪\n",
+                )
+                assert result.returncode == 23 and result.stderr == "", result
+                output = json.loads(result.stdout)
+                permission = (
+                    "allowed"
+                    if network == "enabled" or kind == "external-sandbox"
+                    else "denied"
+                )
+                assert output["network"] == permission, (kind, network, output)
+                assert output["input"] == "literal stdin\x00雪\n", output
+                temporary = Path(output["temporary"])
+                assert temporary.parent.parent == host, output
+                assert not temporary.parent.exists(), output
+                assert (host / "created").read_text(encoding="utf-8") == "allowed"
+                (host / "created").unlink()
+                transcript.append(
+                    {
+                        "filesystem": kind,
+                        "network": network,
+                        "exit_code": result.returncode,
+                        "stdout": result.stdout.replace(
+                            str(temporary), "<private data>"
+                        ),
+                        "private_storage_removed": True,
+                    }
+                )
+    return transcript
+
+
+@requires(SANDBOX)
 def test_environment_overrides_and_arguments_are_literal(binary: Path) -> Transcript:
     value = "雪, café; 'quoted' \"double\" $() `literal` \\ newline\nend"
     script = code(r"""
@@ -524,8 +605,7 @@ def target_start_control(binary: Path, *, launch_prefix=()) -> Transcript:
 
 
 @requires(LINUX_SANDBOX)
-def test_supervised_linux_rejects_full_write_policies(binary: Path) -> Transcript:
-    # These checks precede native namespace setup; no working backend is needed.
+def test_supervised_linux_accepts_full_write_policies(binary: Path) -> Transcript:
     transcript = target_start_control(binary)
     root = {**configuration()["filesystem"]["entries"][0], "access": "write"}
     path = {"type": "path", "path": "/tmp"}
@@ -555,17 +635,17 @@ def test_supervised_linux_rejects_full_write_policies(binary: Path) -> Transcrip
                 if backend is not None:
                     config["linux_backend"] = backend
                 result = invoke(binary, config, "/bin/echo", "target started")
-                assert result.returncode == 1 and result.stdout == "", result
-                assert result.stderr == (
-                    "mcp-console-sandbox: supervised Linux execution requires "
-                    "a restricted filesystem policy\n"
+                assert (result.returncode, result.stdout, result.stderr) == (
+                    0,
+                    "target started\n",
+                    "",
                 ), result
                 transcript.append(
                     {
                         "backend": backend,
                         "network": network,
                         "filesystem": name,
-                        "stderr": result.stderr,
+                        "stdout": result.stdout,
                         "exit_code": result.returncode,
                     }
                 )
@@ -578,6 +658,11 @@ def test_landlock_rejects_incompatible_options_before_native_setup(
 ) -> Transcript:
     transcript = target_start_control(binary)
     for name, options, diagnostic in (
+        (
+            "external enforcement",
+            {"filesystem": {"kind": "external-sandbox"}},
+            "external-sandbox delegates enforcement; omit the legacy landlock override",
+        ),
         (
             "private storage without exports",
             {"lifecycle": {"private_tmp": {"environment": []}}},

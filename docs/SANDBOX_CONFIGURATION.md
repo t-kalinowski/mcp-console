@@ -177,10 +177,10 @@ An optional `environment` map supplies target overrides without serializing the 
 
 Set `inherit_environment` to `false` to start with an empty target environment and use `environment` as the complete ordinary target map.
 The runner's private-directory exports and managed proxy values take precedence over ordinary target variables.
-Linux supplies `PWD` from the working directory if the target map omits it.
+Native Linux execution supplies `PWD` from the working directory if the target map omits it.
 Native runtime additions, such as macOS locale metadata, follow the host runtime's behavior.
 
-Target overrides take effect only after helper setup and native enforcement.
+For native execution, target overrides take effect only after helper setup and enforcement.
 They cannot select host helpers through `PATH`, relocate host setup through `TMPDIR`, inject code into host loaders, or configure host proxy/control state.
 The trusted launch environment remains responsible for loading the frontend and runner and selecting host helpers.
 Put target loader settings in the JSON `environment` map.
@@ -192,20 +192,20 @@ Neither may also be a private-directory export.
 
 ## Configuration fields and defaults
 
-The pinned [runner protocol](https://github.com/t-kalinowski/codex/blob/689f48c30deeb6aaa95a193e31e5971dd6820465/codex-rs/mcp-console-sandbox/PROTOCOL.md) defines the canonical schema.
+The pinned [runner protocol](https://github.com/t-kalinowski/codex/blob/3f060c4210deba4d55cb6ec6d19899721182afae/codex-rs/mcp-console-sandbox/PROTOCOL.md#complete-json-reference) defines the complete canonical schema, including filesystem paths and precedence, proxy fields, and unknown-field handling.
 Its filesystem and proxy fields use the upstream types and validators directly.
 
-| Field                              | Environment-mode contract                                                                                                                                                                                                                                     |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `version`                          | Required integer, currently `2`.                                                                                                                                                                                                                              |
-| `filesystem`                       | Required runner filesystem policy. The example grants host reads and one writable directory. Supervised Linux rejects policies classified as full-filesystem write access; see [filesystem classification](LINUX_COMPATIBILITY.md#filesystem-classification). |
-| `network`                          | Required: `"restricted"` or `"enabled"`. Enabling networking does not grant filesystem writes.                                                                                                                                                                |
-| `proxy`                            | Optional managed proxy configuration; omitted or `null` means none. A supplied configuration must be enabled. Its allowlist is selected by the trusted launcher.                                                                                              |
-| `macos_seatbelt_profile_extension` | Optional trusted SBPL appended to the native profile. It can grant permissions as well as restrict them. Omitted or `null` adds no extension; a supplied value is rejected on Linux.                                                                          |
-| `inherit_environment`              | Optional Boolean, default `true`.                                                                                                                                                                                                                             |
-| `environment`                      | Optional target override map, default empty. Keys must be nonempty and contain neither `=` nor NUL; values must be NUL-free.                                                                                                                                  |
-| `linux_backend`                    | Optional on Linux: `"bubblewrap"` (default) or explicit `"landlock"`. Rejected on macOS.                                                                                                                                                                      |
-| `lifecycle`                        | Optional object with the defaults below.                                                                                                                                                                                                                      |
+| Field                              | Environment-mode contract                                                                                                                                                                                                           |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `version`                          | Required integer, currently `2`.                                                                                                                                                                                                    |
+| `filesystem`                       | Required object; `kind` is `"restricted"`, `"unrestricted"`, or `"external-sandbox"`. See [enforcement modes](#filesystem-and-enforcement-modes) and [filesystem classification](LINUX_COMPATIBILITY.md#filesystem-classification). |
+| `network`                          | Required: `"restricted"` or `"enabled"`. Enabling networking does not grant filesystem writes. External execution without a proxy delegates network enforcement to the outer sandbox.                                               |
+| `proxy`                            | Optional managed proxy configuration; omitted or `null` means none. A supplied configuration must be enabled. Its allowlist is selected by the trusted launcher.                                                                    |
+| `macos_seatbelt_profile_extension` | Optional trusted SBPL appended to the native profile. It can grant permissions as well as restrict them. Omitted or `null` adds no extension; a supplied value is rejected on Linux or for external execution without a proxy.      |
+| `inherit_environment`              | Optional Boolean, default `true`.                                                                                                                                                                                                   |
+| `environment`                      | Optional target override map, default empty. Keys must be nonempty and contain neither `=` nor NUL; values must be NUL-free.                                                                                                        |
+| `linux_backend`                    | Optional on Linux: `"bubblewrap"` (default when native execution is selected) or explicit `"landlock"`. Rejected on macOS.                                                                                                          |
+| `lifecycle`                        | Optional object with the defaults below.                                                                                                                                                                                            |
 
 | Lifecycle field      | Default and behavior                                                                                                                                                                                                                                                        |
 | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -216,19 +216,56 @@ Its filesystem and proxy fields use the upstream types and validators directly.
 
 These are the runner defaults for an explicit configuration.
 Console's no-config path additionally requests its macOS extension and private `TMPDIR`.
-For default bubblewrap and macOS execution, descendant retirement and the [supported lifetime boundaries](SANDBOX.md#supported-hosts-and-lifetime-limits) still apply.
+For native managed execution, descendant retirement and the [supported lifetime boundaries](SANDBOX.md#supported-hosts-and-lifetime-limits) still apply.
 
 Repeated `--config-env`, combining it with private `--exit-with-parent`, duplicate top-level JSON fields, and unknown top-level fields are rejected.
 Use `lifecycle.parent_pid` in an explicit configuration.
 The runner rejects simultaneous environment and descriptor input options.
 The explicit interface has no configuration-file option, discovery, `@file` syntax, include, reload, or file fallback.
 
+## Filesystem and enforcement modes
+
+The complete-policy interface accepts all three runner filesystem kinds on macOS and Linux.
+Project YAML continues to accept only additive write grants with `kind: restricted`; the other kinds require explicit `sandbox --config-env` selection.
+
+| Filesystem kind    | Filesystem access                                 | Networking without a proxy                                    | Execution                                                                  |
+| ------------------ | ------------------------------------------------- | ------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `restricted`       | Native rules from `entries`                       | Native enforcement of the selected `network` value            | Native supervision                                                         |
+| `unrestricted`     | Full filesystem access, subject to OS permissions | Native enforcement of the selected `network` value            | Native supervision, including Linux namespace init with enabled networking |
+| `external-sandbox` | Enforcement delegated to an outer sandbox         | Both network values delegate enforcement to the outer sandbox | Ordinary process supervision; no native sandbox                            |
+
+For example, this complete policy grants unrestricted filesystem access while requesting native network restrictions and private-directory cleanup:
+
+```json
+{
+  "version": 2,
+  "filesystem": { "kind": "unrestricted" },
+  "network": "restricted",
+  "lifecycle": { "private_tmp": { "environment": ["TMPDIR"] } }
+}
+```
+
+Entries accompanying `unrestricted` or `external-sandbox` do not narrow access.
+Unrestricted policies also discard the native writable-root metadata protections.
+Full filesystem access can let a workload alter shared files or interfere with an unsandboxed process and thereby undermine network or supervisor restrictions.
+The restricted-policy isolation guarantees do not extend to these modes; ordinary cleanup does not establish protection against a hostile unrestricted workload.
+
+For any filesystem kind, a supplied enabled proxy selects native managed-network enforcement and routing, with either network value.
+With `external-sandbox`, filesystem enforcement still belongs to the outer sandbox.
+
+Without a proxy, `external-sandbox` neither creates an outer sandbox nor verifies that one exists.
+In particular, `network: "restricted"` installs no network restriction in this mode.
+The runner supplies environment, stdio, signal restoration and forwarding, configured caller-death handling, and optional private-storage cleanup.
+Linux retires the original process group and waits for its direct child; the outer sandbox must retire descendants that leave that group.
+macOS retains its existing descendant observation and process-group retirement, with the [documented observation limits](SANDBOX.md#supported-hosts-and-lifetime-limits).
+
 ## Explicit Linux backend selection
 
-Omitting `linux_backend` or selecting `"bubblewrap"` retains the default namespace sandbox and supervised lifetime, even when `lifecycle` is omitted.
-Both reject unrestricted filesystem policies and special root write grants without effective narrower rules, with either network setting.
+For managed policies, omitting `linux_backend` or selecting `"bubblewrap"` retains the default namespace sandbox and supervised lifetime, even when `lifecycle` is omitted.
+Both support unrestricted filesystem policies and special root write grants without effective narrower rules, with either network setting.
 Root write with effective read-only or denied carveouts proceeds to native validation; it is not equivalent to unrestricted access.
-See the [exact classification and remaining supervision restriction](LINUX_COMPATIBILITY.md#filesystem-classification).
+See the [filesystem classification](LINUX_COMPATIBILITY.md#filesystem-classification).
+For `external-sandbox` without a proxy, explicit `"bubblewrap"` still delegates enforcement; it does not force a native sandbox.
 A namespace or policy failure does not switch backends or retry the target unsandboxed.
 Native procfs fallback changes the procfs view while preserving the backend and policy; see [Linux compatibility](LINUX_COMPATIBILITY.md).
 
@@ -244,6 +281,7 @@ Native device-ioctl restrictions depend on ABI 5 and are outside this backend's 
 Landlock provides no process isolation: same-user host signalling may remain possible.
 It provides no descendant retirement, caller-death cleanup, private storage, or terminal supervisor.
 Accordingly, `parent_pid`, `private_tmp`, an explicit cleanup timeout, retirement SIGTERM, and managed proxy routing are rejected.
+The runner also rejects combining `external-sandbox` with the Landlock override.
 The runner validates those incompatible requests before native setup:
 
 | Option               | Accepted with Landlock                            | Rejected with Landlock                                       |
