@@ -91,10 +91,13 @@ def test_retires_processx_descendants_across_sessions(binary: Path) -> Transcrip
 
     identities: list[_ProcessIdentity] = []
     try:
+        # The case supervisor bounds R and descendant startup. TIMEOUT bounds
+        # retirement after the complete process tree has reported readiness.
         root_pid, child_pid, grandchild_pid, temporary_directory = _read_lines(
             process.stdout,
             4,
             "the sandbox root, processx descendants, and temporary directory",
+            timeout=None,
         )
         pids = [int(root_pid), int(child_pid), int(grandchild_pid)]
         for pid in pids:
@@ -188,12 +191,15 @@ def test_relays_interrupt_then_retires_descendants(binary: Path) -> Transcript:
 
     identities: list[_ProcessIdentity] = []
     try:
+        # Bound startup with the case supervisor, then time signal delivery and
+        # retirement only after R and its descendant have reported readiness.
         pids = [
             int(line)
             for line in _read_lines(
                 process.stdout,
                 2,
                 "the sandbox root and processx descendant PIDs",
+                timeout=None,
             )
         ]
         identities = [_capture_identity(pid) for pid in pids]
