@@ -352,16 +352,38 @@ def test_allows_replacing_temporary_directories(binary: Path) -> Transcript:
 def test_allows_processx_pty_processes(binary: Path) -> Transcript:
     # fmt: r
     script = code(r"""
-        {
-          p <- processx::process$new("/bin/cat", pty = TRUE)
+        local({
+          p <- processx::process$new(
+            "/bin/sh",
+            c("-c", 'IFS= read -r line && printf "received: %s\\n" "$line"'),
+            pty = TRUE,
+            pty_options = list(echo = FALSE)
+          )
           on.exit(if (p$is_alive()) p$kill())
+          deadline <- proc.time()[["elapsed"]] + 5
+          remaining <- function() {
+            ms <- ceiling(1000 * (deadline - proc.time()[["elapsed"]]))
+            stopifnot(ms > 0)
+            ms
+          }
           p$write_input("sandboxed pty\n")
-          stopifnot(p$poll_io(5000)[["output"]] == "ready")
-          cat(p$read_output())
-          invisible(p$kill())
-        }
+          output <- ""
+          while (p$is_incomplete_output()) {
+            ready <- processx::poll(list(p$get_output_connection()), remaining())
+            stopifnot(ready[[1]] == "ready")
+            output <- paste0(output, p$read_output())
+          }
+          p$wait(remaining())
+          stopifnot(identical(p$get_exit_status(), 0L))
+          cat(output)
+        })
         """)
-    return [record(binary, "sandbox", "--", "Rscript", "-e", script)]
+    entry = record(binary, "sandbox", "--", "Rscript", "-e", script)
+    assert "exit_code" not in entry, entry
+    assert "stderr" not in entry, entry
+    # The PTY maps the child's LF to CRLF; echo is explicitly disabled above.
+    assert entry["stdout"] == "received: sandboxed pty\r\n", entry
+    return [entry]
 
 
 @requires(MACOS_SANDBOX)
