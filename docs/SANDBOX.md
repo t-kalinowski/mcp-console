@@ -23,7 +23,14 @@ See [sandbox configuration](SANDBOX_CONFIGURATION.md) for fields, defaults, trus
 `serve` retains one normalized snapshot for every worker launch, including when no configuration file existed.
 Ambient values never select its policy.
 
-By default, Console requests:
+For project edits, `extends: ":workspace"` selects the native workspace constructor and materializes its permissions against the captured launch directory.
+The constructor supplies `.git`, `.agents`, and `.codex` read-only defaults, including Git pointer handling; Console adds `.claude` as an ordinary native read entry and explicitly excludes inherited `TMPDIR` and shared `/tmp` grants.
+The runner retains its private writable storage.
+These protections follow native precedence and deliberate write exceptions; they are not mandatory denial ceilings.
+`extends: ":read-only"` selects the native read-only constructor.
+See [built-in composition and platform limits](SANDBOX_CONFIGURATION.md#project-configuration).
+
+Without a selected built-in, Console requests:
 
 - restricted filesystem access with host reads;
 - restricted networking, without a managed proxy;
@@ -111,8 +118,9 @@ Startup failures use the runner's native diagnostics; successful cancellation ca
 
 ## Policy extensions and compatibility
 
-The pinned runner uses the base and preferences policies in `codex-rs/sandboxing/src/seatbelt*.sbpl` at `3f060c4210deba4d55cb6ec6d19899721182afae`.
-MCP Console supplies read access to the filesystem root, restricted networking with no proxy, and its trusted `policy_extensions.sbpl`.
+The pinned runner uses the base and preferences policies in `codex-rs/sandboxing/src/seatbelt*.sbpl` at `2d0ad797210de821c07d1f18e4f1ffdcf06589cb`.
+Without a selected built-in, MCP Console supplies read access to the filesystem root and restricted networking with no proxy.
+Built-in selection supplies the native baseline described above; restricted application policies also receive Console's trusted `policy_extensions.sbpl` unless explicitly overridden.
 Project configuration forwards native filesystem, network, proxy, and other runner policy settings, including unrestricted and external enforcement.
 Standalone callers can select a complete explicit configuration through `--config-env`; managed proxy support follows the runner schema.
 

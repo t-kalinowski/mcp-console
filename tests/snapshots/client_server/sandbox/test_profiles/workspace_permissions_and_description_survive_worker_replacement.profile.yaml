@@ -1,0 +1,9 @@
+---
+native_profile: ':workspace'
+fixed_workspace: true
+identical_launches: 5
+network_inherited: true
+workspace_options:
+  exclude_tmpdir_env_var: true
+  exclude_slash_tmp: true
+console_read_adjustment: .claude

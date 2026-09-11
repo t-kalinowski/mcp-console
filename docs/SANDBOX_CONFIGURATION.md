@@ -11,7 +11,61 @@ Review it before launching Console in a project.
 Console forwards native sandbox fields and values to the runner, which owns their validation and defaults.
 Console supplies only its application policy and launch requirements.
 
-For example, create `output` in your project and put this in `.agents/console/config.yaml`:
+For project editing, put this complete configuration in `.agents/console/config.yaml`:
+
+```yaml
+extends: ":workspace"
+```
+
+`":workspace"` grants workspace write access with protected metadata paths: `.git`, `.agents`, `.codex`, and `.claude` beneath the fixed launch working directory are readable but protected from writes by default, including from subprocesses.
+Protecting `.agents` also covers `.agents/console/config.yaml` and Console's managed state.
+The colon is part of the string and reserves the name for a native built-in.
+Quote these identifiers in configuration examples; valid unquoted YAML such as `extends: :workspace` has the same meaning through the ordinary YAML parser.
+
+To select the native read-only baseline explicitly:
+
+```yaml
+extends: ":read-only"
+```
+
+Omitting `extends` preserves Console's existing defaults.
+No version field, named user profiles, inheritance chains, alternate discovery locations, initializer, or CLI profile selector are implemented.
+Unsupported identifiers reach the native runner and receive its diagnostic.
+
+Console reuses the native constructors and workspace materialization, including their Git pointer, symlink, and missing-path handling.
+It supplies `.claude` as an ordinary native `read` entry; the constructor already supplies the other metadata defaults.
+Networking remains restricted by default.
+For `":workspace"`, Console explicitly sets both `workspace_options.exclude_tmpdir_env_var` and `workspace_options.exclude_slash_tmp` to `true`, omitting inherited `TMPDIR` and shared `/tmp` write grants while retaining the runner's private writable temporary storage.
+These options may be supplied under `sandbox.workspace_options`; explicit values pass through, with omitted keys defaulting to `true` in Console.
+An explicit `null` options object selects the runner's native defaults, which include both temporary-directory grants.
+
+The built-in supplies the baseline; explicit restricted filesystem entries augment it, and explicit networking replaces its network setting.
+An empty restricted entry array does not erase the baseline.
+Explicit `unrestricted` or `external-sandbox` filesystem kinds replace the baseline filesystem and retain their native enforcement meaning.
+Console does not generate a replacement host-read or network policy for a selected built-in.
+
+Metadata protections are defaults, not mandatory write-denial ceilings.
+Native specificity applies: a more specific entry overrides an ancestor, and equal paths use `deny` over `write` over `read`, independently of array order.
+For example, this deliberate exception permits writes under `.claude`:
+
+```yaml
+extends: ":workspace"
+sandbox:
+  filesystem:
+    entries:
+      - path: {type: path, path: .claude}
+        access: write
+```
+
+A native `read` entry grants access as well as excluding writes from a broader write grant.
+It can reopen reads beneath a broader read denial; more specific denials still apply in the native model.
+The current Linux mount backend can instead hide that narrower read grant, and an additional nested denial can fail at mount setup.
+macOS honors the narrower read grant in these cases.
+Console preserves these native outcomes and diagnostics; it does not add a path matcher or switch backends.
+Native Linux setup may use temporary mount placeholders for absent protected paths; Console creates no directories to apply policy, and those paths remain absent after retirement.
+See [native path behavior](#additional-writable-paths) for other platform limits.
+
+For more selective writes and a managed network proxy, create `output` and use:
 
 ```yaml
 sandbox:
@@ -43,7 +97,7 @@ mcp-console sandbox -- python3 -c 'from pathlib import Path; Path("output/result
 mcp-console serve
 ```
 
-For an omitted filesystem kind, `kind: restricted`, or the equivalent native representation `kind: {restricted: null}`, Console retains its default host read grant and adds configured filesystem entries and repeated CLI writable roots.
+For an omitted filesystem kind, `kind: restricted`, or the equivalent native representation `kind: {restricted: null}`, Console adds configured filesystem entries and repeated CLI writable roots to the selected baseline, or to its default host read grant when no built-in is selected.
 Other filesystem kinds are forwarded without that grant or the default macOS extension.
 For example, `sandbox: {filesystem: {kind: unrestricted}}` requests unrestricted filesystem access, and `sandbox: {filesystem: {kind: external-sandbox}}` delegates enforcement to an outer sandbox.
 The `send` tool description reflects the selected filesystem and network access.
@@ -55,7 +109,8 @@ Other path forms, access modes, filesystem fields, network representations, prox
 The runner decides whether to accept them, including unknown values and fields.
 The existing [native path behavior and platform limitations](#additional-writable-paths) apply.
 
-Console supplies `network: restricted` when omitted because the runner requires this field.
+Without `extends`, Console supplies `network: restricted` when omitted because a complete runner policy requires this field.
+With a built-in, omission inherits the constructor's restricted network policy.
 An omitted or `null` proxy is omitted from the runner payload.
 A supplied proxy object is forwarded as written; Console does not fill in its fields.
 The pinned runner requires the seven scalar proxy fields shown in the example, including `enabled: true`.
@@ -68,8 +123,9 @@ The native proxy owns host normalization, pattern matching, local-network checks
 An empty domain allowlist grants no destinations.
 When a proxy is supplied, the runner enforces managed proxy routing even with `network: enabled`; the native exceptions selected by `allowLocalBinding` still apply.
 
-Console owns `version` and `lifecycle` in project configuration and rejects attempts to set them there.
-These fields select its private launch protocol, parent observation, signal handling, and worker temporary storage.
+Console owns `version`, `lifecycle`, `extends`, and `workspace` inside the `sandbox` mapping and rejects attempts to set them there.
+Select a built-in with top-level `extends`; Console captures `workspace` from the launch working directory.
+These fields select its private launch protocol, profile and workspace identity, parent observation, signal handling, and worker temporary storage.
 Use the [explicit complete-policy interface](#explicit-complete-policy) when selecting those fields for a standalone workload.
 The native cleanup timeout is left omitted so the runner supplies its default.
 Console also supplies its macOS extension for the restricted application policy unless `macos_seatbelt_profile_extension` is explicitly set, including to `null`.
@@ -88,11 +144,12 @@ Console checks its top-level configuration fields, the `sandbox` mapping, and JS
 Native policy validation and unknown-field handling belong to the runner; custom YAML tags are unsupported.
 For duplicate keys, the last value wins because of a known limitation of Saphyr's node loader; this behavior is subject to change.
 Booleans use YAML 1.2 values such as `true` and `false`; strings such as `yes` are not Boolean options.
-There are no includes, merge keys, interpolation, shell expansion, layering, or reloads.
+Apart from the native built-in baseline and explicit adjustments, there are no includes, merge keys, interpolation, shell expansion, configuration layering, or reloads.
 Parsing uses Saphyr's YAML node API in Rust and does not start Python or resolve a Python environment.
 Scalar and tag resolution follow the pinned Saphyr loader.
 
-The trusted outer process reads and normalizes configuration once, before workload startup.
+The trusted outer process captures the workspace and reads and normalizes configuration once, before workload startup.
+Worker directory changes do not move the workspace permission root.
 When a project configuration file exists, it probes the native sandbox with a no-op process using those captured settings.
 This checks native policy validation and sandbox/proxy startup before running the workload or announcing server readiness, without starting a worker.
 Probe failures include the configuration filename and the runner's diagnostic; native JSON error locations refer to the generated runner policy.
@@ -117,7 +174,7 @@ SANDBOX_POLICY='{"version":2,"filesystem":{"kind":"restricted","entries":[{"path
 
 `SANDBOX_POLICY` contains JSON, not a filename.
 Console forwards the selected name to its verified private runner, which owns the configuration types, validation, and enforcement.
-An explicit configuration supplies the complete policy; Console does not merge its default policy or macOS extension into it.
+An explicit configuration supplies the complete runner request, including its optional native built-in selection; Console does not merge application defaults, temporary-directory exclusions, `.claude` protection, or its macOS extension into it.
 
 Without `--config-env`, `sandbox` uses the [Console defaults](SANDBOX.md#application-policy-and-launch), augmented by discovered project settings and explicit writable roots.
 `serve` supplies the same policy and never selects a policy from ambient environment state.
@@ -139,7 +196,8 @@ Relative paths resolve against the launch working directory before workload star
 Paths retain spaces and Unicode; symlink components remain subject to the runner's native writable-root validation.
 
 The paths augment the default filesystem policy for the workload and its subprocesses.
-Their parents, the working directory, and home receive no implicit write grant.
+These extra entries grant no access to their parents or home.
+The selected built-in independently supplies its workspace baseline, including metadata defaults that a broader enclosing writable root does not erase.
 The runner's native safeguards, network restrictions, macOS extensions, private temporary storage, and lifecycle cleanup still apply.
 These paths contain persistent user data; retirement removes only runner-owned private storage.
 Omitting both CLI and configured grants preserves the default filesystem permissions.
@@ -205,20 +263,21 @@ Neither may also be a private-directory export.
 
 ## Configuration fields and defaults
 
-The pinned [runner protocol](https://github.com/t-kalinowski/codex/blob/3f060c4210deba4d55cb6ec6d19899721182afae/codex-rs/mcp-console-sandbox/PROTOCOL.md#complete-json-reference) defines the complete canonical schema, including filesystem paths and precedence, proxy fields, and unknown-field handling.
+The pinned [runner protocol](https://github.com/t-kalinowski/codex/blob/2d0ad797210de821c07d1f18e4f1ffdcf06589cb/codex-rs/mcp-console-sandbox/PROTOCOL.md#complete-json-reference) defines the complete canonical schema, including filesystem paths and precedence, proxy fields, and unknown-field handling.
 Its filesystem and proxy fields use the upstream types and validators directly.
 
-| Field                              | Environment-mode contract                                                                                                                                                                                                           |
-| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `version`                          | Required integer, currently `2`.                                                                                                                                                                                                    |
-| `filesystem`                       | Required object; `kind` is `"restricted"`, `"unrestricted"`, or `"external-sandbox"`. See [enforcement modes](#filesystem-and-enforcement-modes) and [filesystem classification](LINUX_COMPATIBILITY.md#filesystem-classification). |
-| `network`                          | Required: `"restricted"` or `"enabled"`. Enabling networking does not grant filesystem writes. External execution without a proxy delegates network enforcement to the outer sandbox.                                               |
-| `proxy`                            | Optional managed proxy configuration; omitted or `null` means none. A supplied configuration must be enabled. Its allowlist is selected by the trusted launcher.                                                                    |
-| `macos_seatbelt_profile_extension` | Optional trusted SBPL appended to the native profile. It can grant permissions as well as restrict them. Omitted or `null` adds no extension; a supplied value is rejected on Linux or for external execution without a proxy.      |
-| `inherit_environment`              | Optional Boolean, default `true`.                                                                                                                                                                                                   |
-| `environment`                      | Optional target override map, default empty. Keys must be nonempty and contain neither `=` nor NUL; values must be NUL-free.                                                                                                        |
-| `linux_backend`                    | Optional on Linux: `"bubblewrap"` (default when native execution is selected) or explicit `"landlock"`. Rejected on macOS.                                                                                                          |
-| `lifecycle`                        | Optional object with the defaults below.                                                                                                                                                                                            |
+| Field                                       | Environment-mode contract                                                                                                                                                                                                                                                                                                                                |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `version`                                   | Required integer, currently `2`.                                                                                                                                                                                                                                                                                                                         |
+| `filesystem`                                | Required without `extends`; omitted with a selector inherits its baseline. Supplied restricted entries augment that baseline. Object: `kind` is `"restricted"`, `"unrestricted"`, or `"external-sandbox"`. See [enforcement modes](#filesystem-and-enforcement-modes) and [filesystem classification](LINUX_COMPATIBILITY.md#filesystem-classification). |
+| `network`                                   | Required without `extends`; omitted with a selector inherits restricted networking. Explicit values: `"restricted"` or `"enabled"`. Enabling networking does not grant filesystem writes. External execution without a proxy delegates network enforcement to the outer sandbox.                                                                         |
+| `extends`, `workspace`, `workspace_options` | Optional native selection: `":workspace"` or `":read-only"`, a fixed absolute workspace (default command cwd), and the two temporary-directory switches for `":workspace"` (native defaults `false`). See the runner reference for composition and requiredness.                                                                                         |
+| `proxy`                                     | Optional managed proxy configuration; omitted or `null` means none. A supplied configuration must be enabled. Its allowlist is selected by the trusted launcher.                                                                                                                                                                                         |
+| `macos_seatbelt_profile_extension`          | Optional trusted SBPL appended to the native profile. It can grant permissions as well as restrict them. Omitted or `null` adds no extension; a supplied value is rejected on Linux or for external execution without a proxy.                                                                                                                           |
+| `inherit_environment`                       | Optional Boolean, default `true`.                                                                                                                                                                                                                                                                                                                        |
+| `environment`                               | Optional target override map, default empty. Keys must be nonempty and contain neither `=` nor NUL; values must be NUL-free.                                                                                                                                                                                                                             |
+| `linux_backend`                             | Optional on Linux: `"bubblewrap"` (default when native execution is selected) or explicit `"landlock"`. Rejected on macOS.                                                                                                                                                                                                                               |
+| `lifecycle`                                 | Optional object with the defaults below.                                                                                                                                                                                                                                                                                                                 |
 
 | Lifecycle field      | Default and behavior                                                                                                                                                                                                                                                        |
 | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

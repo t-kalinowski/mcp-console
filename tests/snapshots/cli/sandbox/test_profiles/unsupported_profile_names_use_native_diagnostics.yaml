@@ -1,0 +1,24 @@
+---
+selector: ':unknown'
+stderr: >
+  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
+  mcp-console-sandbox: unsupported built-in profile ":unknown"; expected
+  ":workspace" or ":read-only"
+---
+selector: workspace
+stderr: >
+  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
+  mcp-console-sandbox: unsupported built-in profile "workspace"; expected
+  ":workspace" or ":read-only"
+---
+selector: workspace_write
+stderr: >
+  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
+  mcp-console-sandbox: unsupported built-in profile "workspace_write";
+  expected ":workspace" or ":read-only"
+---
+selector: workspace-write
+stderr: >
+  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
+  mcp-console-sandbox: unsupported built-in profile "workspace-write";
+  expected ":workspace" or ":read-only"

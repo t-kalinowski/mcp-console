@@ -17,3 +17,7 @@ Keep them concise and action-oriented, and include facts that affect whether or 
 
 Leave tutorials and analysis-specific examples to the runtime guides.
 Omit implementation details that do not change agent behavior, such as interpreter backends, worker IPC, the internal journal, and exact output limits.
+
+The `send` description reflects the captured native built-in and explicit filesystem/network selection.
+For `":workspace"`, describe fixed workspace writes, private temporary storage, and readable metadata paths protected from writes by default; state that explicit native rules can change those defaults.
+Do not describe `.agents/console` as an unconditional write denial or imply that a `read` entry only denies writes.

@@ -253,13 +253,20 @@ impl ConsoleServer {
     ) -> Result<Self, String> {
         let languages = Languages::from_environment()?;
         let policy = &sandbox_settings;
+        let profile = policy.get("extends").and_then(serde_json::Value::as_str);
         let filesystem = policy
             .get("filesystem")
             .and_then(|filesystem| filesystem.get("kind"))
-            .and_then(crate::settings::native_variant_name);
+            .and_then(crate::settings::native_variant_name)
+            .or_else(|| {
+                (!policy.contains_key("filesystem") && profile.is_some()).then_some("restricted")
+            });
         let network = policy
             .get("network")
-            .and_then(crate::settings::native_variant_name);
+            .and_then(crate::settings::native_variant_name)
+            .or_else(|| {
+                (!policy.contains_key("network") && profile.is_some()).then_some("restricted")
+            });
         let network_access = match (filesystem, network, policy.get("proxy")) {
             // The pinned runner enforces managed proxy routing even with network enabled.
             (_, _, Some(proxy)) if !proxy.is_null() => {
@@ -274,6 +281,12 @@ impl ConsoleServer {
             _ => "has network access governed by the launcher's sandbox settings",
         };
         let sandbox_access = match filesystem {
+            Some("restricted") if profile == Some(":workspace") => format!(
+                "uses the native \":workspace\" profile: it can edit files beneath the fixed launch workspace, write in the worker's private temporary directory and to explicitly allowed paths, and {network_access}. The workspace's .git, .agents, .codex, and .claude paths are readable and protected from writes by default. Explicit native rules can override these defaults or restrict reads"
+            ),
+            Some("restricted") if profile == Some(":read-only") => format!(
+                "uses the native \":read-only\" profile: it can read host files subject to configured read restrictions, write in the worker's private temporary directory and to explicitly allowed paths, and {network_access}"
+            ),
             Some("restricted") => format!(
                 "can read host files, {network_access}, and can write in the worker's private temporary directory and to paths explicitly allowed by the launcher"
             ),

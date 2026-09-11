@@ -139,6 +139,21 @@ It also produces a Quarto source projection, `transcript.qmd`.
 Rejected or failed submissions may appear in that file, and rendering it does not reconstruct session control.
 See [Recording and artifacts](https://github.com/t-kalinowski/mcp-console/blob/main/docs/ARCHITECTURE.md#recording-and-image-artifacts) for the file formats and rendering behavior.
 
+## Project editing
+
+Put this complete configuration in `.agents/console/config.yaml` and launch `mcp-console serve` from the project directory:
+
+```yaml
+extends: ":workspace"
+```
+
+The native `":workspace"` profile permits project edits while keeping `.git`, `.agents`, `.codex`, and `.claude` readable and protected from writes by default.
+Explicit native rules can override those defaults.
+Networking stays restricted, and Console grants private temporary storage without the native shared `/tmp` or inherited `TMPDIR` write grants.
+Use `extends: ":read-only"` for the native read-only baseline; omitting `extends` preserves today's defaults.
+The colon identifies a native built-in.
+See [configuration and native precedence](docs/SANDBOX_CONFIGURATION.md#project-configuration), including Linux read-mask limitations.
+
 ## Security boundary
 
 Submitted R, Python, and SQL have shell-class capability.

@@ -15,14 +15,37 @@ const MARKER: &str = "MCP_CONSOLE_SANDBOX";
 
 pub fn capture_settings(roots: Vec<PathBuf>) -> Result<crate::settings::SandboxSettings, String> {
     let (source, mut settings) = crate::settings::discover()?;
+    let selected = settings.contains_key("extends");
+    let workspace_profile = settings.get("extends").and_then(Value::as_str) == Some(":workspace");
+    if selected {
+        settings.insert(
+            "workspace".into(),
+            resolve_writable_root(".".into())?.into(),
+        );
+    }
+    if workspace_profile {
+        // Preserve explicit native values, including null and malformed inputs.
+        if let Value::Object(options) = settings
+            .entry("workspace_options")
+            .or_insert_with(|| json!({}))
+        {
+            options
+                .entry("exclude_tmpdir_env_var")
+                .or_insert(true.into());
+            options.entry("exclude_slash_tmp").or_insert(true.into());
+        }
+    }
     let writable_roots = roots
         .into_iter()
         .map(resolve_writable_root)
         .collect::<Result<Vec<_>, _>>()?;
     // Augment the captured application policy once. Other shapes and kinds
     // remain untouched for native validation.
-    let mut restricted = false;
-    if let Value::Object(filesystem) = settings.entry("filesystem").or_insert_with(|| json!({})) {
+    if !selected || workspace_profile || !writable_roots.is_empty() {
+        settings.entry("filesystem").or_insert_with(|| json!({}));
+    }
+    let mut restricted = selected && !settings.contains_key("filesystem");
+    if let Some(Value::Object(filesystem)) = settings.get_mut("filesystem") {
         restricted = crate::settings::native_variant_name(
             filesystem
                 .entry("kind")
@@ -39,7 +62,7 @@ pub fn capture_settings(roots: Vec<PathBuf>) -> Result<crate::settings::SandboxS
                     *path = resolve_writable_root(PathBuf::from(&*path))?;
                 }
             }
-            if restricted {
+            if restricted && !selected {
                 entries.insert(
                     0,
                     json!({
@@ -47,6 +70,14 @@ pub fn capture_settings(roots: Vec<PathBuf>) -> Result<crate::settings::SandboxS
                         "access": "read",
                     }),
                 );
+            }
+            if restricted && workspace_profile {
+                // This is an ordinary read grant, subject to native precedence.
+                // The constructor supplies the other workspace metadata defaults.
+                entries.push(json!({
+                    "path": {"type": "special", "value": {"kind": "project_roots", "subpath": ".claude"}},
+                    "access": "read",
+                }));
             }
             entries.extend(writable_roots.into_iter().map(|root| {
                 json!({
@@ -56,9 +87,11 @@ pub fn capture_settings(roots: Vec<PathBuf>) -> Result<crate::settings::SandboxS
             }));
         }
     }
-    settings
-        .entry("network")
-        .or_insert_with(|| "restricted".into());
+    if !selected {
+        settings
+            .entry("network")
+            .or_insert_with(|| "restricted".into());
+    }
     if settings.get("proxy").is_some_and(Value::is_null) {
         settings.remove("proxy");
     }

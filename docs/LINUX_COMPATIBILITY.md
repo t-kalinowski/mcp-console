@@ -1,7 +1,7 @@
 # Linux host compatibility
 
-The current policy contract below follows runner pin `3f060c4210deba4d55cb6ec6d19899721182afae` from [`sandbox-runner.json`](../sandbox-runner.json).
-This advances `689f48c30deeb6aaa95a193e31e5971dd6820465` while retaining protocol 2 and the `rust-v0.154.0` release base.
+The current policy contract below follows runner pin `2d0ad797210de821c07d1f18e4f1ffdcf06589cb` from [`sandbox-runner.json`](../sandbox-runner.json).
+This advances `3f060c4210deba4d55cb6ec6d19899721182afae` while retaining protocol 2 and the `rust-v0.154.0` release base.
 The [historical validation record](#validation-record) identifies the earlier Console and runner revisions used for the host comparison.
 
 ## Policy and backend contract
@@ -52,7 +52,24 @@ Fresh procfs is not required for unrestricted execution; inherited procfs can ex
 Full filesystem access can also let the workload alter shared files or influence unsandboxed processes, undermining network or supervisor restrictions.
 The restricted-policy security results below do not establish those guarantees for unrestricted or externally enforced policies.
 See [enforcement modes](SANDBOX_CONFIGURATION.md#filesystem-and-enforcement-modes) for proxy selection and external lifecycle limits.
-The source boundaries are the pinned [runner execution selection](https://github.com/t-kalinowski/codex/blob/3f060c4210deba4d55cb6ec6d19899721182afae/codex-rs/mcp-console-sandbox/src/codex.rs), [policy classification and precedence](https://github.com/t-kalinowski/codex/blob/3f060c4210deba4d55cb6ec6d19899721182afae/codex-rs/protocol/src/permissions.rs), and [native mount builder](https://github.com/t-kalinowski/codex/blob/3f060c4210deba4d55cb6ec6d19899721182afae/codex-rs/linux-sandbox/src/bwrap.rs).
+The source boundaries are the pinned [runner execution selection](https://github.com/t-kalinowski/codex/blob/2d0ad797210de821c07d1f18e4f1ffdcf06589cb/codex-rs/mcp-console-sandbox/src/codex.rs), [policy classification and precedence](https://github.com/t-kalinowski/codex/blob/2d0ad797210de821c07d1f18e4f1ffdcf06589cb/codex-rs/protocol/src/permissions.rs), and [native mount builder](https://github.com/t-kalinowski/codex/blob/2d0ad797210de821c07d1f18e4f1ffdcf06589cb/codex-rs/linux-sandbox/src/bwrap.rs).
+
+### Native built-in profiles
+
+`extends: ":workspace"` and `extends: ":read-only"` use native constructors and a fixed, materialized workspace.
+Console's workspace baseline adds a `.claude` read entry and explicitly excludes the shared `/tmp` and inherited `TMPDIR` write grants; runner-owned private temporary storage remains writable.
+Native metadata exclusions survive broader enclosing writable roots, and explicit equal-path or descendant write grants retain native precedence.
+Git pointer and symlink handling remain in the native implementation.
+
+The current Linux mount backend does not fully implement read grants beneath broader read denials: an ancestor mask can hide the narrower readable directory, and adding a deeper denial can fail while creating its mount target.
+The runner's public tests reproduce both outcomes with a selector and with equivalent complete raw policies.
+macOS honors the narrower read grant in those cases.
+Console forwards the native result without rewriting policy, creating placeholder directories, or changing the backend.
+The native backend may create temporary mount placeholders for missing protected paths and removes them at retirement.
+
+At the current pin, all 96 runner acceptance tests passed in a namespace-capable x86-64 Ubuntu 24.04 container on kernel `6.8.0-139-generic`; all 87 macOS runner tests also passed.
+These counts include the profile and raw-policy comparisons.
+The host's ordinary namespace restrictions required the test container; this does not establish support for restricted container or AppArmor configurations.
 
 ## Earlier host compatibility comparison
 

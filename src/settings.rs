@@ -57,6 +57,7 @@ pub fn native_variant_name(value: &Value) -> Option<&str> {
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct Project {
+    extends: Option<String>,
     sandbox: Map<String, Value>,
 }
 
@@ -79,14 +80,17 @@ pub fn discover() -> Result<(Option<&'static str>, SandboxSettings), String> {
     let source =
         std::fs::read_to_string(name).map_err(|error| format!("cannot read '{name}': {error}"))?;
     let value = yaml::load(&source).map_err(|error| format!("{name}: {error}"))?;
-    let project: Project =
+    let mut project: Project =
         serde_path_to_error::deserialize(value).map_err(|error| format!("{name}: {error}"))?;
     // These fields belong to Console's launch protocol and worker lifetime.
     // All other sandbox fields and values are interpreted by the native runner.
-    for field in ["version", "lifecycle"] {
+    for field in ["version", "lifecycle", "extends", "workspace"] {
         if project.sandbox.contains_key(field) {
             return Err(format!("{name}: sandbox.{field} is managed by Console"));
         }
+    }
+    if let Some(profile) = project.extends {
+        project.sandbox.insert("extends".into(), profile.into());
     }
     Ok((Some(name), project.sandbox))
 }
