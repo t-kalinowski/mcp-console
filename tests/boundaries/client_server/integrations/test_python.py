@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT / "python"))
 import mcp_console
 from mcp_console import AsyncMCPConsole, MCPConsole
 from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.r import r_test_environment
 from support.records import Transcript
 from support.requirements import WORKER, requires
 from support.resolvers import bare_runtime_environment
@@ -175,12 +176,13 @@ def test_callable_preserves_line_breaks_around_images(
 def test_callable_preserves_mixed_language_state(
     binary: Path, execution: Execution
 ) -> Transcript:
+    environment, _ = r_test_environment()
+    # Retain the test caches while exercising Linux's C locale on every host.
+    environment["LC_ALL"] = "C"
     settings = {
         "command": binary,
         "args": execution.serve(),
-        # MCP omits locale variables by default. Exercise Linux's resulting
-        # C locale explicitly on every host, including macOS.
-        "server_parameters": {"env": {"LC_ALL": "C"}},
+        "server_parameters": {"env": environment},
     }
     cells = {
         "r": "answer <- 42; answer",

@@ -121,6 +121,7 @@ Runner image updates can change native tools or libraries that Cargo does not tr
 Runner source archives preserve the timestamps used by Cargo while excluding Git metadata and the separately cached build directory.
 PR and main runs save completed builds, including Clippy preparation, before tests.
 R package checks use a separate cached library, and packaging and runtime preparation share a uv cache that retains downloaded wheels within the current week.
+Before running transcripts, CI prewarms the default R environment, defaults plus `praise`, and defaults plus `praise` and `zeallot` so the initial-requirements cases can reuse those exact resolutions.
 Python SDK integration tests resolve current releases on a fresh weekly uv cache and reuse satisfying environments afterward; MCP stays within major version 2.
 Manual release builds also use a weekly uv cache; tag-driven release builds and publication do not restore uv caches.
 CI keeps one job per platform and runs all current tests; source installation checks run last because they replace and hide the shared target directory.
