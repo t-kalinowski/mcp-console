@@ -77,23 +77,34 @@ def test_invalid_send_has_no_external_effects(binary: Path) -> Transcript:
 def test_initializes_and_lists_tools(
     binary: Path, execution: Execution
 ) -> TranscriptWithCompanions:
+    companions = {
+        "bare.yaml": _initializes_and_lists_tools(binary, execution, bare=True)
+    }
+    if execution == SANDBOXED:
+        companions["proxy.yaml"] = _initializes_and_lists_tools(
+            binary, execution, proxy=True
+        )
     return TranscriptWithCompanions(
         _initializes_and_lists_tools(binary, execution),
-        {"bare.yaml": _initializes_and_lists_tools(binary, execution, bare=True)},
+        companions,
     )
 
 
 def _initializes_and_lists_tools(
-    binary: Path, execution: Execution, *, bare: bool = False
+    binary: Path, execution: Execution, *, bare: bool = False, proxy: bool = False
 ) -> Transcript:
     environment = os.environ.copy()
     environment.pop("MCP_CONSOLE_LANGUAGES", None)
     with tempfile.TemporaryDirectory() as library:
         if bare:
             environment = bare_runtime_environment(environment, Path(library))
-        with McpClient(binary, execution.serve(), environment) as client:
-            assert client.temporary_directory is not None
-            workspace = Path(client.temporary_directory.name)
+        workspace = Path(library) / "workspace"
+        workspace.mkdir()
+        if proxy:
+            config = workspace / ".agents/mcp-console.yaml"
+            config.parent.mkdir()
+            config.write_text("sandbox: {proxy: {enabled: true}}", encoding="utf-8")
+        with McpClient(binary, execution.serve(), environment, workspace) as client:
             client.initialize_and_list_tools()
             listed_tools = client.transcript[-1]["result"]["tools"]
             assert [tool["name"] for tool in listed_tools] == ["send"], listed_tools
