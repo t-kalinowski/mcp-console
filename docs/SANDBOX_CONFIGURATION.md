@@ -43,7 +43,7 @@ mcp-console sandbox -- python3 -c 'from pathlib import Path; Path("output/result
 mcp-console serve
 ```
 
-For an omitted filesystem kind or `kind: restricted`, Console retains its default host read grant and adds configured filesystem entries and repeated CLI writable roots.
+For an omitted filesystem kind, `kind: restricted`, or the equivalent native representation `kind: {restricted: null}`, Console retains its default host read grant and adds configured filesystem entries and repeated CLI writable roots.
 Other filesystem kinds are forwarded without that grant or the default macOS extension.
 For example, `sandbox: {filesystem: {kind: unrestricted}}` requests unrestricted filesystem access, and `sandbox: {filesystem: {kind: external-sandbox}}` delegates enforcement to an outer sandbox.
 See [enforcement modes](#filesystem-and-enforcement-modes).
@@ -72,6 +72,12 @@ These fields select its private launch protocol, parent observation, signal hand
 Use the [explicit complete-policy interface](#explicit-complete-policy) when selecting those fields for a standalone workload.
 The native cleanup timeout is left omitted so the runner supplies its default.
 Console also supplies its macOS extension for the restricted application policy unless `macos_seatbelt_profile_extension` is explicitly set, including to `null`.
+
+Project `environment` and `inherit_environment` control ordinary workload variables.
+For `serve`, Console preserves each worker generation's selected R/Python environment and dynamic-resolution setting after applying project controls, including when inheritance is disabled.
+Project overrides cannot replace or reintroduce variables assigned or removed by that selection.
+Host resolver configuration still comes from the server's launch environment.
+Standalone `sandbox` launches apply native environment controls without these worker-generation overrides.
 
 Configuration must contain exactly one UTF-8 YAML 1.2 mapping document.
 The `sandbox` mapping may be omitted; `{}` preserves defaults.

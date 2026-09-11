@@ -1,0 +1,22 @@
+---
+kind: restricted
+writable_root: false
+stdout: |
+  host read
+---
+kind: restricted
+writable_root: true
+stdout: |
+  host read
+---
+kind:
+  restricted: ~
+writable_root: false
+stdout: |
+  host read
+---
+kind:
+  restricted: ~
+writable_root: true
+stdout: |
+  host read

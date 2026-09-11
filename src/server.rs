@@ -263,21 +263,26 @@ impl ConsoleServer {
             .policy
             .get("filesystem")
             .and_then(|filesystem| filesystem.get("kind"))
-            .is_some_and(|kind| kind != "restricted")
+            .is_some_and(|kind| {
+                !matches!(
+                    crate::settings::native_variant_name(kind),
+                    Some("restricted" | "unrestricted")
+                )
+            })
         {
             "has network access governed by the launcher's sandbox settings"
         } else {
             match sandbox_settings
                 .policy
                 .get("network")
-                .and_then(serde_json::Value::as_str)
+                .and_then(crate::settings::native_variant_name)
             {
                 Some("enabled") => "can directly access the network",
                 Some("restricted") => "cannot directly access the network",
                 None if !sandbox_settings.policy.contains_key("network") => {
                     "cannot directly access the network"
                 }
-                // Other wire representations are interpreted by the native validator.
+                // Unknown policies remain the native runner's responsibility.
                 _ => "has network access governed by the launcher's sandbox settings",
             }
         };

@@ -250,7 +250,7 @@ def test_accepts_supported_project_settings(binary: Path) -> Transcript:
         "{}",
         "sandbox: {}",
         "sandbox: {proxy: null}",
-        "sandbox: {filesystem: {kind: {restricted: null}, entries: [{path: {type: special, value: {kind: root}}, access: read}]}}",
+        "sandbox: {filesystem: {kind: {restricted: null}}}",
         "sandbox: {filesystem: {entries: [{path: {type: path, path: ./out}, access: {write: null}}]}}",
         "sandbox: {filesystem: {entries: [{path: {type: path, path: './future café 雪'}, access: write}]}}",
         json.dumps(

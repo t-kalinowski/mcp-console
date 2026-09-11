@@ -15,9 +15,7 @@ initialized: true
 yaml: "sandbox: {proxy: null}"
 initialized: true
 ---
-yaml: >-
-  sandbox: {filesystem: {kind: {restricted: null}, entries: [{path: {type:
-  special, value: {kind: root}}, access: read}]}}
+yaml: "sandbox: {filesystem: {kind: {restricted: null}}}"
 initialized: true
 ---
 yaml: >-

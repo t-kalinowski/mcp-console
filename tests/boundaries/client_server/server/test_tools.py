@@ -185,7 +185,7 @@ def test_describes_project_network_access(binary: Path) -> Transcript:
             "native network representation",
             "sandbox: {network: {enabled: null}}",
             False,
-            "network access governed by the launcher's sandbox settings",
+            "can directly access the network",
         ),
         (
             "external enforcement",
@@ -199,6 +199,30 @@ def test_describes_project_network_access(binary: Path) -> Transcript:
             True,
             "without a sandbox, with the server's permissions, including filesystem and network access",
         ),
+    )
+    cases = (
+        tuple(
+            (
+                f"{kind} {network} ({'mapping' if mapping else 'string'})",
+                json.dumps(
+                    {
+                        "sandbox": {
+                            "filesystem": {"kind": {kind: None} if mapping else kind},
+                            "network": {network: None} if mapping else network,
+                        }
+                    }
+                ),
+                False,
+                "network access governed by the launcher's sandbox settings"
+                if kind == "external-sandbox"
+                else ("can" if network == "enabled" else "cannot")
+                + " directly access the network",
+            )
+            for kind in ("unrestricted", "restricted", "external-sandbox")
+            for network in ("restricted", "enabled")
+            for mapping in (False, True)
+        )
+        + cases
     )
     transcript: Transcript = []
     for name, source, no_sandbox, expected in cases:

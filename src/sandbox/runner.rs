@@ -31,10 +31,11 @@ pub(super) fn run(
     // the runner unchanged, including values that it may reject.
     let mut restricted = false;
     if let Some(filesystem) = filesystem.as_object_mut() {
-        restricted = filesystem
-            .entry("kind")
-            .or_insert_with(|| "restricted".into())
-            == "restricted";
+        restricted = crate::settings::native_variant_name(
+            filesystem
+                .entry("kind")
+                .or_insert_with(|| "restricted".into()),
+        ) == Some("restricted");
         if restricted || !settings.writable_roots.is_empty() {
             let entries = filesystem
                 .entry("entries")

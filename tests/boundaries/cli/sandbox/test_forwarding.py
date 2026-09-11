@@ -11,6 +11,7 @@ from tempfile import TemporaryDirectory
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.native import LOADER_VARIABLE, build_interposer
+from support.normalization import code
 from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, SANDBOX, requires
 from support.sandbox_configuration import NATIVE_PROXY
@@ -61,6 +62,75 @@ def test_omits_absent_proxy_and_native_lifecycle_defaults(binary: Path) -> Trans
             transcript.append(
                 {"case": name, "proxy_omitted": True, "native_cleanup_default": True}
             )
+    return transcript
+
+
+@requires(SANDBOX, NATIVE_FIXTURES)
+def test_augments_both_restricted_representations(binary: Path) -> Transcript:
+    transcript = []
+    with TemporaryDirectory() as directory:
+        host = Path(directory).resolve()
+        (host / "input").write_text("host read", encoding="utf-8")
+        output = host / "output"
+        output.mkdir()
+        config = host / CONFIG
+        config.parent.mkdir(parents=True)
+        capture = host / "payloads.jsonl"
+        environment = {
+            **os.environ,
+            LOADER_VARIABLE: str(build_interposer(host, "runner_configuration")),
+            "MCP_CONSOLE_TEST_RUNNER_CONFIGURATION": str(capture),
+        }
+        for kind in ("restricted", {"restricted": None}):
+            for writable in (False, True):
+                config.write_text(
+                    json.dumps({"sandbox": {"filesystem": {"kind": kind}}}),
+                    encoding="utf-8",
+                )
+                result = subprocess.run(
+                    [
+                        binary,
+                        "sandbox",
+                        *(["--writable-root", "output"] if writable else []),
+                        "--",
+                        sys.executable,
+                        "-c",
+                        code("""
+                            from pathlib import Path
+                            import sys
+
+                            print(Path("input").read_text())
+                            if sys.argv[1] == "1":
+                                Path("output/result").write_text("CLI grant")
+                            """),
+                        str(int(writable)),
+                    ],
+                    cwd=host,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                )
+                assert result.returncode == 0 and result.stderr == "", result
+                assert result.stdout == "host read\n", result
+                payloads = [
+                    json.loads(line) for line in capture.read_text().splitlines()
+                ]
+                assert len(payloads) == 2, payloads
+                for payload in payloads:
+                    assert payload["filesystem"]["kind"] == kind, payload
+                    assert payload["filesystem"]["entries"][0] == {
+                        "path": {"type": "special", "value": {"kind": "root"}},
+                        "access": "read",
+                    }, payload
+                    if sys.platform == "darwin":
+                        assert payload["macos_seatbelt_profile_extension"], payload
+                if writable:
+                    assert (output / "result").read_text() == "CLI grant"
+                    (output / "result").unlink()
+                capture.unlink()
+                transcript.append(
+                    {"kind": kind, "writable_root": writable, "stdout": result.stdout}
+                )
     return transcript
 
 
@@ -218,7 +288,13 @@ def test_forwards_native_fields_without_proxy_expansion(binary: Path) -> Transcr
     settings = {
         "filesystem": {"entries": entries, "glob_scan_max_depth": 1},
         "proxy": proxy,
-        "environment": {"FORWARDED_POLICY": "native"},
+        "inherit_environment": False,
+        "environment": {
+            "FORWARDED_POLICY": "native",
+            "RETICULATE_PYTHON": "project-python",
+            "MCP_CONSOLE_MANAGED_PYTHON": "project-manifest",
+            "MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION": "0",
+        },
         "macos_seatbelt_profile_extension": None,
     }
     with TemporaryDirectory() as directory:
@@ -235,7 +311,14 @@ def test_forwards_native_fields_without_proxy_expansion(binary: Path) -> Transcr
                 "--",
                 sys.executable,
                 "-c",
-                "import os; print(os.environ['FORWARDED_POLICY'])",
+                code("""
+                    import os
+
+                    assert os.environ["RETICULATE_PYTHON"] == "project-python"
+                    assert os.environ["MCP_CONSOLE_MANAGED_PYTHON"] == "project-manifest"
+                    assert os.environ["MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION"] == "0"
+                    print(os.environ["FORWARDED_POLICY"])
+                    """),
             ],
             cwd=host,
             env={
@@ -259,6 +342,7 @@ def test_forwards_native_fields_without_proxy_expansion(binary: Path) -> Transcr
                 "glob_scan_max_depth": 1,
             }, payload
             assert payload["environment"] == settings["environment"], payload
+            assert payload["inherit_environment"] is False, payload
             assert payload["macos_seatbelt_profile_extension"] is None, payload
     return [
         {

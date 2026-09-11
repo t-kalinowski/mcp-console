@@ -10,11 +10,24 @@ mod yaml;
 pub const ENVIRONMENT: &str = "MCP_CONSOLE_SANDBOX_SETTINGS";
 
 /// Captured native policy and Console's additional writable paths.
-#[derive(Default, Deserialize, Serialize)]
+#[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SandboxSettings {
     pub writable_roots: Vec<PathBuf>,
     pub policy: Map<String, Value>,
+}
+
+/// Recognize native unit variants for application additions and descriptions.
+/// This does not validate or transform policy values sent to the runner.
+pub fn native_variant_name(value: &Value) -> Option<&str> {
+    match value {
+        Value::String(name) => Some(name),
+        Value::Object(object) if object.len() == 1 => object
+            .iter()
+            .next()
+            .and_then(|(name, value)| value.is_null().then_some(name.as_str())),
+        _ => None,
+    }
 }
 
 #[derive(Default, Deserialize)]
