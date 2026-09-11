@@ -287,7 +287,10 @@ Do not introduce separate registries for every small object, or force ordinary f
 
 **A project file is a request, not a source of authority.** This matters even if MCP Console itself cannot write that file: another agent tool, a checkout, or a package script might change it.
 
-On first use of a project configuration, the controller should show a normalized summary and ask the user to authorize it through a trusted CLI or MCP-client approval channel.
+On first use of a project configuration, the controller should show a normalized summary and obtain authorization through a trusted CLI or MCP-client approval channel.
+When resolving target/provider identities requires network access or executable probes, first obtain limited authorization for those probe operations.
+That authorization identifies the permitted endpoints, credentials, and probe executable identities; it does not authorize image preparation, package installation, or worker launch.
+After resolving the target, executable, and image identities, obtain final authorization for the effective configuration bound to those identities before preparation or launch.
 The trust record belongs outside the project, in controller-owned state.
 It binds at least the project identity, selected profile's effective configuration, target identity, and relevant executable or image identities.
 
@@ -329,7 +332,7 @@ Managed enforcement may require a separate identity or service.
 
 ### Snapshot before launch
 
-Read configuration inputs into a bounded, validated snapshot, resolve the profile, and authorize that exact effective snapshot.
+Read configuration inputs into a bounded, validated snapshot, resolve the profile and target/provider identities under any required probe authorization, and obtain final authorization for that exact effective snapshot and its resolved identities.
 Pass the resulting normalized policy to the launcher.
 Do not approve a pathname and then have the sandbox reopen that mutable file later.
 
@@ -960,7 +963,9 @@ The public server-to-launcher architecture remains:
 controller <-> mcp-console sandbox <-> [transport/compute/manager] <-> relay <-> worker
 ```
 
-Only the launcher subsystem owns provider selection, proxy setup, supervision, and cleanup.
+The launcher subsystem owns provider selection and proxy setup through its adapters.
+Sandbox/provider process-tree supervision and cleanup belong to the selected runner or manager.
+The server retains logical relay lifetime orchestration and retirement; the relay retains direct-worker signal delivery, bounded termination, and reaping.
 The relay remains unaware of sandbox implementation.
 Keep the normalized policy and adapter contract independent of upstream Codex internals so a rolling upstream patch set can remain small and isolated.
 
@@ -1177,9 +1182,13 @@ Python index ordering is significant; `first_index` selects the first index cont
 This follows the safety motivation documented by uv.[8]
 
 Mirror preference is not complete package approval.
-Enforce `source_policy` on all direct and transitive requirements, GitHub/VCS references, URLs, local paths, R remotes, extension sources, and build dependencies.
+Enforce `source_policy` on all direct and transitive requirements and build dependencies, checking source kinds as well as approved repositories.
 Project package-manager configuration and ambient index/repository variables cannot silently add a source outside this policy.
 A corporate configuration may require different approved copies of built-in runtime dependencies; missing approved artifacts are errors, not permission to bypass the mirror.
+
+With `builds: trusted_host`, retain the current accepted inputs: documented trusted `ir` references with `IR_NO_LOCAL_SOURCES=1`, named Python PEP 508 registry requirements, and validated DuckDB extension names.
+`source_policy` may further restrict those inputs; it cannot authorize local sources, Python URL/VCS direct references, or arbitrary DuckDB source selectors on this path.
+Supporting additional source kinds requires a separately implemented isolated preparation boundary and explicit approval of that expanded authority; reject them until both exist.
 
 `network: sources` gives the trusted preparation path access only to the resolved approved repository/artifact destinations.
 Repository redirects and separate artifact/CDN hosts must be explicitly admitted or supplied by trusted repository metadata under a defined policy; an arbitrary redirect is not an automatic grant.
@@ -1509,15 +1518,18 @@ The conceptual pipeline is:
 parse selected inputs without executing them
   -> resolve configuration layers, definitions, and one profile
   -> normalize paths and requested capabilities
-  -> apply trusted requirements and obtain authorization
-  -> resolve approved target identities and probe provider capabilities
+  -> apply trusted requirements and obtain limited probe authorization if needed
+  -> resolve target/provider identities and probe capabilities within that authorization
+  -> obtain final authorization bound to the resolved identities and effective configuration
   -> prepare approved environments/images/storage
-  -> freeze the effective launch plan and recheck mutable identities
+  -> freeze the effective launch plan and recheck identities against final authorization
   -> launch through mcp-console sandbox
   -> enforce, supervise, and record the worker generation
 ```
 
 A side-effect-free structural check is distinct from an authorized target probe.
+Probing may resolve a Docker tag to a digest, verify an SSH host identity, or inspect an approved command-provider executable; it does not authorize preparation or launch.
+If an identity changes after final authorization, stop and obtain authorization for the newly resolved identity before continuing.
 Do not contact every SSH host or build every image just to list profiles.
 Source provenance survives all steps: a diagnostic should name the file, profile/definition, field, requested behavior, and missing capability.
 
