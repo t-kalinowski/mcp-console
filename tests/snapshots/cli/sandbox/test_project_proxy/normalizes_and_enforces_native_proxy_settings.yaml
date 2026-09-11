@@ -7,8 +7,6 @@ proxy:
   allowUpstreamProxy: false
   dangerouslyAllowAllUnixSockets: false
   mode: full
-  domains: ~
-  unixSockets: ~
   allowLocalBinding: false
 network: restricted
 stdout: |
@@ -23,9 +21,8 @@ proxy:
   allowUpstreamProxy: false
   dangerouslyAllowAllUnixSockets: false
   mode: full
-  domains: ~
-  unixSockets: ~
   allowLocalBinding: false
+  domains: ~
 network: restricted
 stdout: |
   direct network denied
@@ -39,9 +36,8 @@ proxy:
   allowUpstreamProxy: false
   dangerouslyAllowAllUnixSockets: false
   mode: full
-  domains: {}
-  unixSockets: ~
   allowLocalBinding: false
+  domains: {}
 network: restricted
 stdout: |
   direct network denied
@@ -55,8 +51,6 @@ proxy:
   allowUpstreamProxy: false
   dangerouslyAllowAllUnixSockets: false
   mode: full
-  domains: ~
-  unixSockets: ~
   allowLocalBinding: true
 network: restricted
 stdout: |
@@ -70,9 +64,8 @@ proxy:
   allowUpstreamProxy: false
   dangerouslyAllowAllUnixSockets: false
   mode: full
-  domains: {}
-  unixSockets: ~
   allowLocalBinding: true
+  domains: {}
 network: restricted
 stdout: |
   native proxy returned 403
@@ -85,10 +78,9 @@ proxy:
   allowUpstreamProxy: false
   dangerouslyAllowAllUnixSockets: false
   mode: full
+  allowLocalBinding: true
   domains:
     "*": allow
-  unixSockets: ~
-  allowLocalBinding: true
 network: restricted
 stdout: |
   native proxy returned 200
@@ -101,10 +93,9 @@ proxy:
   allowUpstreamProxy: false
   dangerouslyAllowAllUnixSockets: false
   mode: full
+  allowLocalBinding: false
   domains:
     127.0.0.1: allow
-  unixSockets: ~
-  allowLocalBinding: false
 network: restricted
 stdout: |
   direct network denied
@@ -118,11 +109,10 @@ proxy:
   allowUpstreamProxy: false
   dangerouslyAllowAllUnixSockets: false
   mode: full
+  allowLocalBinding: true
   domains:
     "*": allow
     127.0.0.1: deny
-  unixSockets: ~
-  allowLocalBinding: true
 network: restricted
 stdout: |
   native proxy returned 403
@@ -135,10 +125,9 @@ proxy:
   allowUpstreamProxy: false
   dangerouslyAllowAllUnixSockets: false
   mode: full
+  allowLocalBinding: true
   domains:
     127.0.0.1: none
-  unixSockets: ~
-  allowLocalBinding: true
 network: restricted
 stdout: |
   native proxy returned 403
@@ -151,10 +140,9 @@ proxy:
   allowUpstreamProxy: false
   dangerouslyAllowAllUnixSockets: false
   mode: limited
+  allowLocalBinding: false
   domains:
     127.0.0.1: allow
-  unixSockets: ~
-  allowLocalBinding: false
 network: restricted
 stdout: |
   direct network denied
@@ -168,10 +156,9 @@ proxy:
   allowUpstreamProxy: false
   dangerouslyAllowAllUnixSockets: false
   mode: limited
+  allowLocalBinding: false
   domains:
     127.0.0.1: allow
-  unixSockets: ~
-  allowLocalBinding: false
 network: restricted
 stdout: |
   direct network denied
@@ -185,10 +172,9 @@ proxy:
   allowUpstreamProxy: true
   dangerouslyAllowAllUnixSockets: false
   mode: full
+  allowLocalBinding: true
   domains:
     127.0.0.1: allow
-  unixSockets: ~
-  allowLocalBinding: true
 network: restricted
 stdout: |
   native proxy returned 200

@@ -16,6 +16,7 @@ from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
 from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, SANDBOX, requires
+from support.sandbox_configuration import NATIVE_PROXY
 from support.suites import run_this_suite
 
 
@@ -65,17 +66,6 @@ def _enforces_native_proxy_settings(binary: Path, network: str) -> Transcript:
                 raise AssertionError("direct network unexpectedly allowed")
         print(f"native proxy returned {response.status}")
         """)
-    defaults = {
-        "enabled": True,
-        "enableSocks5": True,
-        "enableSocks5Udp": False,
-        "allowUpstreamProxy": False,
-        "dangerouslyAllowAllUnixSockets": False,
-        "mode": "full",
-        "domains": None,
-        "unixSockets": None,
-        "allowLocalBinding": False,
-    }
     cases = (
         ("omitted domains", {}, "GET", 403),
         ("null domains", {"domains": None}, "GET", 403),
@@ -162,7 +152,7 @@ def _enforces_native_proxy_settings(binary: Path, network: str) -> Transcript:
                         {
                             "sandbox": {
                                 "network": network,
-                                "proxy": {"enabled": True, **options},
+                                "proxy": {**NATIVE_PROXY, **options},
                             }
                         }
                     ),
@@ -189,7 +179,7 @@ def _enforces_native_proxy_settings(binary: Path, network: str) -> Transcript:
                 assert result.returncode == 0 and result.stderr == "", (name, result)
                 payload = json.loads(capture.read_text().splitlines()[-1])
                 assert payload["network"] == network, payload
-                assert payload["proxy"] == {**defaults, **options}, payload
+                assert payload["proxy"] == {**NATIVE_PROXY, **options}, payload
                 transcript.append(
                     {
                         "case": name,

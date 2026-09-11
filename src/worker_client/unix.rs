@@ -161,13 +161,7 @@ impl WorkerRuntime {
                 .arg("sandbox")
                 .arg("--exit-with-parent")
                 .arg(std::process::id().to_string());
-            command
-                .args(["--settings-env", crate::settings::ENVIRONMENT])
-                .env(
-                    crate::settings::ENVIRONMENT,
-                    serde_json::to_string(sandbox_settings)
-                        .map_err(|error| format!("cannot encode sandbox settings: {error}"))?,
-                );
+            command.args(["--settings-env", crate::settings::ENVIRONMENT]);
             command.arg("--").args(target);
             command
         };
@@ -181,6 +175,40 @@ impl WorkerRuntime {
             "MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION",
             if dynamic_resolution { "1" } else { "0" },
         );
+        if !no_sandbox {
+            let mut settings = sandbox_settings.clone();
+            let inherit_environment =
+                settings.policy.get("inherit_environment") != Some(&serde_json::Value::Bool(false));
+            // Project target controls must not replace this generation's owned
+            // environment. Only serialize assignments when inheritance is off;
+            // otherwise removing project overrides preserves the launch values.
+            if (!inherit_environment || settings.policy.contains_key("environment"))
+                && let Some(environment) = settings
+                    .policy
+                    .entry("environment")
+                    .or_insert_with(|| serde_json::json!({}))
+                    .as_object_mut()
+            {
+                for (name, value) in command.get_envs() {
+                    let name = name
+                        .to_str()
+                        .ok_or_else(|| "worker environment name must be UTF-8".to_string())?;
+                    if !inherit_environment && let Some(value) = value {
+                        let value = value.to_str().ok_or_else(|| {
+                            format!("worker environment value for '{name}' must be UTF-8")
+                        })?;
+                        environment.insert(name.into(), value.into());
+                    } else {
+                        environment.remove(name);
+                    }
+                }
+            }
+            command.env(
+                crate::settings::ENVIRONMENT,
+                serde_json::to_string(&settings)
+                    .map_err(|error| format!("cannot encode sandbox settings: {error}"))?,
+            );
+        }
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

@@ -1,5 +1,9 @@
 ---
-yaml: "sandbox: {proxy: {enabled: !!bool true}}"
+yaml: >-
+  sandbox: {proxy: {"enabled": true, "enableSocks5": true,
+  "enableSocks5Udp": false, "allowUpstreamProxy": false,
+  "dangerouslyAllowAllUnixSockets": false, "mode": "full",
+  "allowLocalBinding": false, enabled: !!bool true}}
 initialized: true
 ---
 yaml: "{}"
@@ -11,14 +15,23 @@ initialized: true
 yaml: "sandbox: {proxy: null}"
 initialized: true
 ---
+yaml: "sandbox: {filesystem: {kind: {restricted: null}}}"
+initialized: true
+---
+yaml: >-
+  sandbox: {filesystem: {entries: [{path: {type: path, path: ./out},
+  access: {write: null}}]}}
+initialized: true
+---
 yaml: >-
   sandbox: {filesystem: {entries: [{path: {type: path, path: './future
   café 雪'}, access: write}]}}
 initialized: true
 ---
 yaml: >-
-  sandbox: {network: enabled, proxy: {enabled: true, mode: limited,
-  enableSocks5: false, allowUpstreamProxy: true, allowLocalBinding: true,
-  domains: {'*.example.com': allow, blocked.example.com: deny,
-  ignored.example.com: none}}}
+  {"sandbox": {"network": "enabled", "proxy": {"enabled": true,
+  "enableSocks5": false, "enableSocks5Udp": false, "allowUpstreamProxy":
+  true, "dangerouslyAllowAllUnixSockets": false, "mode": "limited",
+  "allowLocalBinding": true, "domains": {"*.example.com": "allow",
+  "blocked.example.com": "deny", "ignored.example.com": "none"}}}}
 initialized: true

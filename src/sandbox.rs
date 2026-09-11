@@ -11,8 +11,29 @@ mod unsupported;
 
 pub fn capture_settings(roots: Vec<PathBuf>) -> Result<crate::settings::SandboxSettings, String> {
     let (source, mut settings) = crate::settings::discover()?;
-    settings.writable_roots.extend(roots);
-    settings.writable_roots = resolve_writable_roots(settings.writable_roots)?;
+    settings.writable_roots = roots
+        .into_iter()
+        .map(resolve_writable_root)
+        .collect::<Result<_, _>>()?;
+    if let Some(entries) = settings
+        .policy
+        .get_mut("filesystem")
+        .and_then(|filesystem| filesystem.get_mut("entries"))
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for entry in entries {
+            if entry
+                .pointer("/path/type")
+                .and_then(serde_json::Value::as_str)
+                == Some("path")
+                && let Some(serde_json::Value::String(path)) = entry.pointer_mut("/path/path")
+            {
+                *path = resolve_writable_root(PathBuf::from(&*path))?
+                    .to_string_lossy()
+                    .into_owned();
+            }
+        }
+    }
     if let Some(source) = source {
         preflight(&settings).map_err(|error| format!("{source}: {error}"))?;
     }
@@ -50,23 +71,17 @@ fn preflight(settings: &crate::settings::SandboxSettings) -> Result<(), String> 
 }
 
 /// Capture launch-relative paths without hiding symlinks from runner validation.
-pub fn resolve_writable_roots(roots: Vec<PathBuf>) -> Result<Vec<PathBuf>, String> {
-    roots
-        .into_iter()
-        .map(|path| {
-            let root = std::path::absolute(&path).map_err(|error| {
-                format!("cannot resolve writable root '{}': {error}", path.display())
-            })?;
-            // The runner configuration carries paths as JSON strings.
-            if root.to_str().is_none() {
-                return Err(format!(
-                    "writable root '{}' is not valid UTF-8",
-                    path.display()
-                ));
-            }
-            Ok(root)
-        })
-        .collect()
+fn resolve_writable_root(path: PathBuf) -> Result<PathBuf, String> {
+    let root = std::path::absolute(&path)
+        .map_err(|error| format!("cannot resolve writable root '{}': {error}", path.display()))?;
+    // The runner configuration carries paths as JSON strings.
+    if root.to_str().is_none() {
+        return Err(format!(
+            "writable root '{}' is not valid UTF-8",
+            path.display()
+        ));
+    }
+    Ok(root)
 }
 
 pub fn run(

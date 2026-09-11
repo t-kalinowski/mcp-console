@@ -1,7 +1,6 @@
 ---
 scenario: sandbox defaults
 runner_configuration:
-  version: 2
   filesystem:
     kind: restricted
     entries:
@@ -11,14 +10,11 @@ runner_configuration:
             kind: root
         access: read
   network: restricted
-  proxy: ~
+  version: 2
   lifecycle:
-    parent_pid: ~
-    sigterm: forward
     private_tmp:
       environment:
         - TMPDIR
-    cleanup_timeout_ms: 1000
   macos_seatbelt_profile_extension: |
     ; MCP Console additions to the pinned native macOS sandbox policy.
     ; SPDX-License-Identifier: MIT
@@ -93,7 +89,6 @@ transcript_normalization:
 ---
 scenario: sandbox with roots
 runner_configuration:
-  version: 2
   filesystem:
     kind: restricted
     entries:
@@ -115,14 +110,11 @@ runner_configuration:
           path: <host directory>/future output
         access: write
   network: restricted
-  proxy: ~
+  version: 2
   lifecycle:
-    parent_pid: ~
-    sigterm: forward
     private_tmp:
       environment:
         - TMPDIR
-    cleanup_timeout_ms: 1000
   macos_seatbelt_profile_extension: |
     ; MCP Console additions to the pinned native macOS sandbox policy.
     ; SPDX-License-Identifier: MIT
@@ -197,7 +189,6 @@ transcript_normalization:
 ---
 scenario: serve initial worker
 runner_configuration:
-  version: 2
   filesystem:
     kind: restricted
     entries:
@@ -219,14 +210,13 @@ runner_configuration:
           path: <host directory>/future output
         access: write
   network: restricted
-  proxy: ~
+  version: 2
   lifecycle:
-    parent_pid: <server pid>
-    sigterm: retire
     private_tmp:
       environment:
         - TMPDIR
-    cleanup_timeout_ms: 1000
+    parent_pid: <server pid>
+    sigterm: retire
   macos_seatbelt_profile_extension: |
     ; MCP Console additions to the pinned native macOS sandbox policy.
     ; SPDX-License-Identifier: MIT
@@ -301,7 +291,6 @@ transcript_normalization:
 ---
 scenario: serve restart
 runner_configuration:
-  version: 2
   filesystem:
     kind: restricted
     entries:
@@ -323,14 +312,13 @@ runner_configuration:
           path: <host directory>/future output
         access: write
   network: restricted
-  proxy: ~
+  version: 2
   lifecycle:
-    parent_pid: <server pid>
-    sigterm: retire
     private_tmp:
       environment:
         - TMPDIR
-    cleanup_timeout_ms: 1000
+    parent_pid: <server pid>
+    sigterm: retire
   macos_seatbelt_profile_extension: |
     ; MCP Console additions to the pinned native macOS sandbox policy.
     ; SPDX-License-Identifier: MIT
@@ -405,7 +393,6 @@ transcript_normalization:
 ---
 scenario: serve failure replacement
 runner_configuration:
-  version: 2
   filesystem:
     kind: restricted
     entries:
@@ -427,14 +414,13 @@ runner_configuration:
           path: <host directory>/future output
         access: write
   network: restricted
-  proxy: ~
+  version: 2
   lifecycle:
-    parent_pid: <server pid>
-    sigterm: retire
     private_tmp:
       environment:
         - TMPDIR
-    cleanup_timeout_ms: 1000
+    parent_pid: <server pid>
+    sigterm: retire
   macos_seatbelt_profile_extension: |
     ; MCP Console additions to the pinned native macOS sandbox policy.
     ; SPDX-License-Identifier: MIT

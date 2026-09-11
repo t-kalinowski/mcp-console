@@ -27,6 +27,118 @@ stderr: >
   mcp-console-sandbox: invalid configuration JSON (Syntax at line 1,
   column <column>)
 ---
+case: YAML 1.2 boolean
+command: serve
+stderr: >
+  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
+  <column>)
+---
+case: YAML 1.2 boolean
+command: sandbox
+stderr: >
+  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
+  <column>)
+---
+case: path type mapping
+command: serve
+stderr: >
+  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
+  <column>)
+---
+case: path type mapping
+command: sandbox
+stderr: >
+  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
+  <column>)
+---
+case: filesystem type
+command: serve
+stderr: >
+  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
+  <column>)
+---
+case: filesystem type
+command: sandbox
+stderr: >
+  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
+  <column>)
+---
+case: entries type
+command: serve
+stderr: >
+  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
+  <column>)
+---
+case: entries type
+command: sandbox
+stderr: >
+  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
+  <column>)
+---
+case: entry form
+command: serve
+stderr: >
+  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
+  <column>)
+---
+case: entry form
+command: sandbox
+stderr: >
+  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
+  <column>)
+---
+case: path type
+command: serve
+stderr: >
+  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
+  <column>)
+---
+case: path type
+command: sandbox
+stderr: >
+  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
+  <column>)
+---
+case: sandbox field
+command: serve
+stderr: >
+  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
+  <column>)
+---
+case: sandbox field
+command: sandbox
+stderr: >
+  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
+  <column>)
+---
+case: merge key
+command: serve
+stderr: >
+  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
+  <column>)
+---
+case: merge key
+command: sandbox
+stderr: >
+  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
+  <column>)
+---
 case: proxy disabled
 command: serve
 stderr: >
@@ -49,20 +161,6 @@ stderr: >
   <column>)
 ---
 case: proxy missing enabled
-command: sandbox
-stderr: >
-  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
-  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
-  <column>)
----
-case: YAML 1.2 boolean
-command: serve
-stderr: >
-  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
-  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
-  <column>)
----
-case: YAML 1.2 boolean
 command: sandbox
 stderr: >
   .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
@@ -138,3 +236,17 @@ stderr: >
   .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
   mcp-console-sandbox: invalid glob pattern: [: error parsing glob '[':
   unclosed character class; missing ']'
+---
+case: proxy type
+command: serve
+stderr: >
+  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
+  <column>)
+---
+case: proxy type
+command: sandbox
+stderr: >
+  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
+  <column>)

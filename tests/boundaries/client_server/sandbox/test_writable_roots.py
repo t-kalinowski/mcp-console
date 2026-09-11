@@ -170,7 +170,7 @@ def _writable_roots_reach_every_runner_launch(
                 else []
             )
             assert ("macos_seatbelt_profile_extension" in payload) == macos
-            parent = payload["lifecycle"]["parent_pid"]
+            parent = payload["lifecycle"].get("parent_pid")
             assert parent == (
                 client.process.pid if scenario.startswith("serve") else None
             )
