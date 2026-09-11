@@ -23,41 +23,61 @@ pub(super) fn run(
     }
     // The runner captures and monitors this same caller after exec. No waiting
     // adapter changes its direct-parent identity or retains a standard stream.
-    let mut entries = vec![serde_json::json!({
-        "path": {"type": "special", "value": {"kind": "root"}},
-        "access": "read",
-    })];
-    entries.extend(settings.writable_roots.iter().map(|root| {
-        serde_json::json!({
-            "path": {"type": "path", "path": root},
-            "access": "write",
-        })
-    }));
-    let mut configuration = serde_json::json!({
-        "version": installation::PROTOCOL_VERSION,
-        "filesystem": {"kind": "restricted", "entries": entries},
-        "network": settings.network,
-        "proxy": settings.proxy.as_ref().map(|proxy| serde_json::json!({
-            "enabled": proxy.enabled,
-            "enableSocks5": proxy.enable_socks5,
-            "enableSocks5Udp": false,
-            "allowUpstreamProxy": proxy.allow_upstream_proxy,
-            "dangerouslyAllowAllUnixSockets": false,
-            "mode": proxy.mode,
-            "domains": proxy.domains,
-            "unixSockets": null,
-            "allowLocalBinding": proxy.allow_local_binding,
-        })),
-        "lifecycle": {
-            "parent_pid": parent,
-            "sigterm": if parent.is_some() { "retire" } else { "forward" },
-            "private_tmp": {"environment": ["TMPDIR"]},
-            "cleanup_timeout_ms": 1000,
-        },
-    });
-    if cfg!(target_os = "macos") {
-        configuration["macos_seatbelt_profile_extension"] =
-            include_str!("policy_extensions.sbpl").into();
+    let mut configuration = settings.policy.clone();
+    let filesystem = configuration
+        .entry("filesystem")
+        .or_insert_with(|| serde_json::json!({}));
+    // Only augment the known application policy. Other shapes and kinds reach
+    // the runner unchanged, including values that it may reject.
+    let mut restricted = false;
+    if let Some(filesystem) = filesystem.as_object_mut() {
+        restricted = filesystem
+            .entry("kind")
+            .or_insert_with(|| "restricted".into())
+            == "restricted";
+        if restricted || !settings.writable_roots.is_empty() {
+            let entries = filesystem
+                .entry("entries")
+                .or_insert_with(|| serde_json::json!([]));
+            if let Some(entries) = entries.as_array_mut() {
+                if restricted {
+                    entries.insert(
+                        0,
+                        serde_json::json!({
+                            "path": {"type": "special", "value": {"kind": "root"}},
+                            "access": "read",
+                        }),
+                    );
+                }
+                entries.extend(settings.writable_roots.iter().map(|root| {
+                    serde_json::json!({
+                        "path": {"type": "path", "path": root},
+                        "access": "write",
+                    })
+                }));
+            }
+        }
+    }
+    configuration
+        .entry("network")
+        .or_insert_with(|| "restricted".into());
+    if configuration
+        .get("proxy")
+        .is_some_and(serde_json::Value::is_null)
+    {
+        configuration.remove("proxy");
+    }
+    configuration.insert("version".into(), installation::PROTOCOL_VERSION.into());
+    let mut lifecycle = serde_json::json!({"private_tmp": {"environment": ["TMPDIR"]}});
+    if let Some(parent) = parent {
+        lifecycle["parent_pid"] = parent.into();
+        lifecycle["sigterm"] = "retire".into();
+    }
+    configuration.insert("lifecycle".into(), lifecycle);
+    if cfg!(target_os = "macos") && restricted {
+        configuration
+            .entry("macos_seatbelt_profile_extension")
+            .or_insert_with(|| include_str!("policy_extensions.sbpl").into());
     }
     let mut runner = Command::new(installation::private_runner()?);
     if let Some(name) = settings_env {
@@ -68,7 +88,10 @@ pub(super) fn run(
     }
     if config_env.is_none() {
         // This is also the serve path: an ambient value never selects policy.
-        runner.env(CONFIGURATION, configuration.to_string());
+        runner.env(
+            CONFIGURATION,
+            serde_json::Value::Object(configuration).to_string(),
+        );
     } else if config_env != Some(CONFIGURATION) {
         runner.env_remove(CONFIGURATION);
     }

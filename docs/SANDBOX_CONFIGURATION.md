@@ -8,7 +8,8 @@ An absent file preserves the defaults; an unreadable or invalid existing file pr
 
 Project configuration is trusted launcher input and can widen workload permissions.
 Review it before launching Console in a project.
-This first interface adds settings to Console's existing policy; it is not a complete runner policy or the final configuration API.
+Console forwards native sandbox fields and values to the runner, which owns their validation and defaults.
+Console supplies only its application policy and launch requirements.
 
 For example, create `output` in your project and put this in `.agents/console/config.yaml`:
 
@@ -24,6 +25,11 @@ sandbox:
   network: restricted
   proxy:
     enabled: true
+    enableSocks5: true
+    enableSocks5Udp: false
+    allowUpstreamProxy: false
+    dangerouslyAllowAllUnixSockets: false
+    allowLocalBinding: false
     mode: full
     domains:
       example.com: allow
@@ -37,42 +43,40 @@ mcp-console sandbox -- python3 -c 'from pathlib import Path; Path("output/result
 mcp-console serve
 ```
 
-Console retains its default host read access, private temporary storage, platform compatibility rules, and lifecycle cleanup.
-Filesystem entries only add literal path write grants through the same path as `--writable-root`.
-Configured grants and repeated CLI writable roots are additive.
-Relative paths resolve against the launch working directory, not the metadata directory containing the YAML file.
-Console does not create paths, grant their parents, expand `~` or environment variables, or canonicalize away symlink components.
+For an omitted filesystem kind or `kind: restricted`, Console retains its default host read grant and adds configured filesystem entries and repeated CLI writable roots.
+Other filesystem kinds are forwarded without that grant or the default macOS extension.
+For example, `sandbox: {filesystem: {kind: unrestricted}}` requests unrestricted filesystem access, and `sandbox: {filesystem: {kind: external-sandbox}}` delegates enforcement to an outer sandbox.
+See [enforcement modes](#filesystem-and-enforcement-modes).
+
+Console resolves literal filesystem paths (`path: {type: path, path: STRING}`) against the launch working directory, not the metadata directory containing the YAML file.
+It does not create paths, grant their parents, expand `~` or environment variables, or canonicalize away symlink components.
+Other path forms, access modes, filesystem fields, network representations, proxy fields, and native options pass through without a Console allowlist.
+The runner decides whether to accept them, including unknown values and fields.
 The existing [native path behavior and platform limitations](#additional-writable-paths) apply.
 
-| Field under `sandbox`      | Supported values and defaults                                                                                                                                                                                                                    |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `filesystem`               | Mapping, default empty.                                                                                                                                                                                                                          |
-| `filesystem.kind`          | `restricted` only; may be omitted.                                                                                                                                                                                                               |
-| `filesystem.entries`       | List, default empty. Every entry requires `path: {type: path, path: STRING}` and `access: write`. Other path forms and access modes are rejected.                                                                                                |
-| `network`                  | `restricted` (default) or `enabled`. A proxy does not implicitly change this setting.                                                                                                                                                            |
-| `proxy`                    | Omitted or `null`: no proxy. Otherwise a mapping with `enabled: true`.                                                                                                                                                                           |
-| `proxy.enabled`            | Required Boolean `true` when a proxy object is supplied. To remove the proxy, omit the object or use `null`.                                                                                                                                     |
-| `proxy.mode`               | `full` (default) or `limited`, using the native proxy's modes. `full` permits all HTTP methods and HTTPS CONNECT tunnels to allowed destinations. `limited` permits HTTP GET/HEAD/OPTIONS and blocks HTTPS CONNECT in this runner configuration. |
-| `proxy.domains`            | Mapping from native domain patterns to `allow`, `deny`, or `none`. Omitted, `null`, and empty maps grant no destinations. `none` adds no permission; explicit denies take precedence over allows.                                                |
-| `proxy.enableSocks5`       | Boolean, default `true`.                                                                                                                                                                                                                         |
-| `proxy.allowUpstreamProxy` | Boolean, default `false`.                                                                                                                                                                                                                        |
-| `proxy.allowLocalBinding`  | Boolean, default `false`; opts into the native local/private network and binding exceptions.                                                                                                                                                     |
+Console supplies `network: restricted` when omitted because the runner requires this field.
+An omitted or `null` proxy is omitted from the runner payload.
+A supplied proxy object is forwarded as written; Console does not fill in its fields.
+The pinned runner requires the seven scalar proxy fields shown in the example, including `enabled: true`.
+Previously, Console filled in the other six scalar fields; configurations that relied on that behavior must now supply them explicitly.
+`domains` and `unixSockets` may be omitted or `null`.
+Incomplete proxy objects receive the native runner's validation error.
+The [runner protocol](#configuration-fields-and-defaults) defines supported values and required fields.
 
-Console passes domain patterns and permissions to the pinned runner without matching or rewriting them.
 The native proxy owns host normalization, pattern matching, local-network checks, and enforcement.
-For example, with local binding disabled, an explicitly allowlisted loopback IP literal can be reached through the proxy; a hostname resolving to a private address remains subject to the native local-network restriction.
-An empty allowlist does not mean unrestricted proxy access.
-When a proxy is supplied, the runner enforces managed proxy routing even with `network: enabled`; that value does not bypass the proxy.
-The native exceptions selected by `allowLocalBinding` still apply.
+An empty domain allowlist grants no destinations.
+When a proxy is supplied, the runner enforces managed proxy routing even with `network: enabled`; the native exceptions selected by `allowLocalBinding` still apply.
 
-Console supplies all required runner proxy fields explicitly.
-SOCKS5 UDP, upstream-proxy use, local binding, and Unix-socket exceptions default to disabled; only the exposed switches above can change their corresponding options.
-UDP and Unix-socket controls, listener/control internals, protocol versions, native backends, platform extensions, command, cwd, target environment, and lifecycle settings are not YAML fields.
+Console owns `version` and `lifecycle` in project configuration and rejects attempts to set them there.
+These fields select its private launch protocol, parent observation, signal handling, and worker temporary storage.
+Use the [explicit complete-policy interface](#explicit-complete-policy) when selecting those fields for a standalone workload.
+The native cleanup timeout is left omitted so the runner supplies its default.
+Console also supplies its macOS extension for the restricted application policy unless `macos_seatbelt_profile_extension` is explicitly set, including to `null`.
 
 Configuration must contain exactly one UTF-8 YAML 1.2 mapping document.
 The `sandbox` mapping may be omitted; `{}` preserves defaults.
-Console checks the supported application fields and additive filesystem entry forms, then delegates native policy types, values, and validation to the runner.
-Unknown fields and malformed input are errors; custom tags are unsupported.
+Console checks its top-level configuration fields, the `sandbox` mapping, and JSON-compatible YAML syntax.
+Native policy validation and unknown-field handling belong to the runner; custom YAML tags are unsupported.
 For duplicate keys, the last value wins because of a known limitation of Saphyr's node loader; this behavior is subject to change.
 Booleans use YAML 1.2 values such as `true` and `false`; strings such as `yes` are not Boolean options.
 There are no includes, merge keys, interpolation, shell expansion, layering, or reloads.
@@ -83,10 +87,10 @@ The trusted outer process reads and normalizes configuration once, before worklo
 When a project configuration file exists, it probes the native sandbox with a no-op process using those captured settings.
 This checks native policy validation and sandbox/proxy startup before running the workload or announcing server readiness, without starting a worker.
 Probe failures include the configuration filename and the runner's diagnostic; native JSON error locations refer to the generated runner policy.
-`serve` retains that snapshot for the whole session, including when neither file existed at launch.
-Editing, removing, or creating either file later cannot change the initial worker, a restart that resets its state, recovery after worker failure, or a replacement using newly prepared requirements.
+`serve` retains that snapshot for the whole session, including when the configuration file did not exist at launch.
+Editing, removing, or creating the file later cannot change the initial worker, a restart that resets its state, recovery after worker failure, or a replacement using newly prepared requirements.
 Internal launches explicitly select the captured application settings through a child-specific environment payload and the public `sandbox` launch boundary; no child rereads a filename.
-The sandbox layer constructs native policy and strips the private settings transport before launching the runner and workload.
+The sandbox layer adds application launch requirements and strips the private settings transport before launching the runner and workload.
 Ambient `MCP_CONSOLE_SANDBOX_SETTINGS` or `MCP_CONSOLE_SANDBOX_CONFIG` values do not select policy, and the server's global environment is not modified.
 
 `serve --no-sandbox` bypasses sandbox configuration entirely.
@@ -139,7 +143,7 @@ Console does not substitute a parent-directory grant or change backends for thes
 `serve --no-sandbox` and `sandbox --config-env` each conflict with `--writable-root`.
 An explicit `--config-env` value supplies a complete policy; no merging or precedence is defined.
 There is no ambient environment-variable interface for the path list.
-Discovered filesystem entries supply the same additional-writable-root list.
+Configured filesystem entries and CLI writable roots are additive; native validation applies to both.
 
 ## Command and environment
 
@@ -225,8 +229,8 @@ The explicit interface has no configuration-file option, discovery, `@file` synt
 
 ## Filesystem and enforcement modes
 
-The complete-policy interface accepts all three runner filesystem kinds on macOS and Linux.
-Project YAML continues to accept only additive write grants with `kind: restricted`; the other kinds require explicit `sandbox --config-env` selection.
+Project YAML and the complete-policy interface forward all filesystem kinds to the runner on macOS and Linux.
+The pinned runner accepts the three kinds below.
 
 | Filesystem kind    | Filesystem access                                 | Networking without a proxy                                    | Execution                                                                  |
 | ------------------ | ------------------------------------------------- | ------------------------------------------------------------- | -------------------------------------------------------------------------- |

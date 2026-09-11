@@ -14,6 +14,7 @@ from support.normalization import code
 from support.records import Transcript, TranscriptWithCompanions
 from support.requirements import SANDBOX, WORKER, requires
 from support.resolvers import bare_runtime_environment
+from support.sandbox_configuration import NATIVE_PROXY
 from support.suites import run_this_suite
 
 
@@ -103,7 +104,9 @@ def _initializes_and_lists_tools(
         if proxy:
             config = workspace / ".agents/console/config.yaml"
             config.parent.mkdir(parents=True)
-            config.write_text("sandbox: {proxy: {enabled: true}}", encoding="utf-8")
+            config.write_text(
+                json.dumps({"sandbox": {"proxy": NATIVE_PROXY}}), encoding="utf-8"
+            )
         with McpClient(binary, execution.serve(), environment, workspace) as client:
             client.initialize_and_list_tools()
             listed_tools = client.transcript[-1]["result"]["tools"]
@@ -160,25 +163,33 @@ def test_describes_project_network_access(binary: Path) -> Transcript:
         ),
         (
             "proxy",
-            "sandbox: {proxy: {enabled: true}}",
+            json.dumps({"sandbox": {"proxy": NATIVE_PROXY}}),
             False,
             "network subject to the launcher's proxy settings",
         ),
         (
             "proxy with local binding",
-            "sandbox: {proxy: {enabled: true, allowLocalBinding: true}}",
+            json.dumps(
+                {"sandbox": {"proxy": {**NATIVE_PROXY, "allowLocalBinding": True}}}
+            ),
             False,
             "network subject to the launcher's proxy settings",
         ),
         (
             "proxy with network enabled",
-            "sandbox: {network: enabled, proxy: {enabled: true}}",
+            json.dumps({"sandbox": {"network": "enabled", "proxy": NATIVE_PROXY}}),
             False,
             "network subject to the launcher's proxy settings",
         ),
         (
             "native network representation",
             "sandbox: {network: {enabled: null}}",
+            False,
+            "network access governed by the launcher's sandbox settings",
+        ),
+        (
+            "external enforcement",
+            "sandbox: {filesystem: {kind: external-sandbox}}",
             False,
             "network access governed by the launcher's sandbox settings",
         ),

@@ -20,14 +20,14 @@ initialized: true
 case: .agents/console/config.yaml
 command: serve
 stderr: >
-  .agents/console/config.yaml: sandbox.unknown: unknown field `unknown`,
-  expected one of `filesystem`, `network`, `proxy`
+  .agents/console/config.yaml: unknown: unknown field `unknown`, expected
+  `sandbox`
 ---
 case: .agents/console/config.yaml
 command: sandbox
 stderr: >
-  .agents/console/config.yaml: sandbox.unknown: unknown field `unknown`,
-  expected one of `filesystem`, `network`, `proxy`
+  .agents/console/config.yaml: unknown: unknown field `unknown`, expected
+  `sandbox`
 ---
 case: ancestors ignored
 initialized: true

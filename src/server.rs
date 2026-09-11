@@ -252,13 +252,31 @@ impl ConsoleServer {
         sandbox_settings: crate::settings::SandboxSettings,
     ) -> Result<Self, String> {
         let languages = Languages::from_environment()?;
-        let network_access = if sandbox_settings.proxy.is_some() {
+        let network_access = if sandbox_settings
+            .policy
+            .get("proxy")
+            .is_some_and(|proxy| !proxy.is_null())
+        {
             // The pinned runner enforces managed proxy routing even with network enabled.
             "can access the network subject to the launcher's proxy settings"
+        } else if sandbox_settings
+            .policy
+            .get("filesystem")
+            .and_then(|filesystem| filesystem.get("kind"))
+            .is_some_and(|kind| kind != "restricted")
+        {
+            "has network access governed by the launcher's sandbox settings"
         } else {
-            match sandbox_settings.network.as_str() {
+            match sandbox_settings
+                .policy
+                .get("network")
+                .and_then(serde_json::Value::as_str)
+            {
                 Some("enabled") => "can directly access the network",
                 Some("restricted") => "cannot directly access the network",
+                None if !sandbox_settings.policy.contains_key("network") => {
+                    "cannot directly access the network"
+                }
                 // Other wire representations are interpreted by the native validator.
                 _ => "has network access governed by the launcher's sandbox settings",
             }

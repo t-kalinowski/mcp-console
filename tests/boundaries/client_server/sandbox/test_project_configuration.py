@@ -15,6 +15,7 @@ from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
 from support.records import TranscriptWithCompanions
 from support.requirements import NATIVE_FIXTURES, SANDBOX, requires
+from support.sandbox_configuration import NATIVE_PROXY
 from support.suites import run_this_suite
 
 
@@ -64,10 +65,11 @@ def _snapshot_survives_replacement(
                     entries:
                       - path: {type: path, path: ./output café 雪}
                         access: write
-                  proxy:
-                    enabled: true
-                    domains: {127.0.0.1: allow}
-                """),
+                  proxy: PROXY_CONFIGURATION
+                """).replace(
+                    "PROXY_CONFIGURATION",
+                    json.dumps({**NATIVE_PROXY, "domains": {"127.0.0.1": "allow"}}),
+                ),
                 encoding="utf-8",
             )
         capture = host / "payloads.jsonl"
@@ -125,7 +127,7 @@ def _snapshot_survives_replacement(
         assert all(payload == payloads[0] for payload in payloads), payloads
         payload = payloads[0]
         assert payload["network"] == "restricted"
-        assert (payload["proxy"] is not None) == configured
+        assert (payload.get("proxy") is not None) == configured
         expected_roots = (
             ["output café 雪", "CLI cache"] if configured else ["CLI cache"]
         )
@@ -137,7 +139,6 @@ def _snapshot_survives_replacement(
             "parent_pid": client.process.pid,
             "sigterm": "retire",
             "private_tmp": {"environment": ["TMPDIR"]},
-            "cleanup_timeout_ms": 1000,
         }, payload
         assert not (host / "neighbor/created").exists()
         return TranscriptWithCompanions(
@@ -150,7 +151,7 @@ def _snapshot_survives_replacement(
                         "identical_worker_launches": len(payloads) - len(preflights),
                         "writable_roots": expected_roots,
                         "network": payload["network"],
-                        "proxy": payload["proxy"],
+                        "proxy": payload.get("proxy"),
                     }
                 ]
             },

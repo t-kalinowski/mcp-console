@@ -19,7 +19,7 @@ Linux namespace init retains a private runner control endpoint that never reache
 
 The public `sandbox --config-env NAME -- COMMAND [ARG]...` option selects an explicit complete configuration using the runner's canonical schema.
 See [sandbox configuration](SANDBOX_CONFIGURATION.md) for fields, defaults, trust boundaries, size limits, and runnable shell, Python, and R examples.
-`serve` and ordinary `sandbox` invocations discover project YAML beneath the launch working directory and add its supported settings and explicit writable roots to the default policy.
+`serve` and ordinary `sandbox` invocations discover project YAML beneath the launch working directory and forward its native policy settings, adding Console's application defaults and explicit writable roots.
 `serve` retains one normalized snapshot for every worker launch, including when no configuration file existed.
 Ambient values never select its policy.
 
@@ -29,16 +29,15 @@ By default, Console requests:
 - restricted networking, without a managed proxy;
 - the existing trusted macOS policy extension;
 - runner-owned private storage exported as `TMPDIR`;
-- a 1000 ms descendant-retirement timeout;
 - optional exact caller observation from `--exit-with-parent PID`; and
 - SIGTERM retirement in that owned mode, or ordinary signal forwarding otherwise.
 
 `MCP_CONSOLE_SANDBOX=1` remains part of the target environment.
 The frontend continues to remove `DYLD_INSERT_LIBRARIES` and `LD_PRELOAD` before runner exec.
-The runner supplies full mutation of its private storage; Console does not construct or remove its path.
+The runner supplies its default descendant-retirement timeout (1000 ms at the pin) and full mutation of its private storage; Console does not construct or remove its path.
 The temporary layout is a runner-owned `sandbox-XXXXXX` container with a writable `data` child.
 The temporary [`--writable-root PATH`](SANDBOX_CONFIGURATION.md#additional-writable-paths) option augments the filesystem entries with explicit write access on `serve` and `sandbox`.
-The server retains the resolved path list, network setting, and proxy settings across worker generations and explicitly selects their child-specific environment payload at the sandbox frontend; the relay and worker do not interpret it.
+The server retains the native policy values and resolved literal paths across worker generations and explicitly selects their child-specific environment payload at the sandbox frontend; the relay and worker do not interpret it.
 These paths are persistent user data and are never removed by sandbox retirement.
 
 The frontend preserves its PID and direct caller across exec.
@@ -114,7 +113,7 @@ Startup failures use the runner's native diagnostics; successful cancellation ca
 
 The pinned runner uses the base and preferences policies in `codex-rs/sandboxing/src/seatbelt*.sbpl` at `3f060c4210deba4d55cb6ec6d19899721182afae`.
 MCP Console supplies read access to the filesystem root, restricted networking with no proxy, and its trusted `policy_extensions.sbpl`.
-Project configuration can add writable paths and select native network and proxy settings.
+Project configuration forwards native filesystem, network, proxy, and other runner policy settings, including unrestricted and external enforcement.
 Standalone callers can select a complete explicit configuration through `--config-env`; managed proxy support follows the runner schema.
 
 Compared with the previous `read_only_policy.sbpl`, the native base already provides the CPU and R startup sysctls (including `hw.logicalcpu` and `kern.usrstack64`), Python's `kern.sysv.semmns`, POSIX semaphores, OpenMP shared memory, process permissions, `/dev/null`, PTY allocation, user lookup, power-management lookup, and read-only preferences.

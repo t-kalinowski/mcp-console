@@ -14,6 +14,7 @@ from support.client import McpClient
 from support.normalization import code
 from support.records import Transcript
 from support.requirements import SANDBOX, requires
+from support.sandbox_configuration import NATIVE_PROXY
 from support.suites import run_this_suite
 
 
@@ -44,10 +45,13 @@ def invoke(binary: Path, host: Path, *arguments: str):
 
 @requires(SANDBOX)
 def test_duplicate_keys_use_last_value(binary: Path) -> Transcript:
+    proxy_fields = json.dumps(NATIVE_PROXY)[1:-1]
     cases = (
         "sandbox: invalid\nsandbox: {}",
         "sandbox: {network: invalid, network: restricted}",
-        "sandbox: {proxy: {enabled: true, domains: {example.com: invalid, 'example.com': deny}}}",
+        "sandbox: {proxy: {"
+        + proxy_fields
+        + ", domains: {example.com: invalid, 'example.com': deny}}}",
     )
     with TemporaryDirectory() as directory:
         host = Path(directory)
@@ -61,22 +65,45 @@ def test_duplicate_keys_use_last_value(binary: Path) -> Transcript:
 
 @requires(SANDBOX)
 def test_native_validation_precedes_server_readiness(binary: Path) -> Transcript:
+    proxy_cases = (
+        ("proxy disabled", {**NATIVE_PROXY, "enabled": False}),
+        (
+            "proxy missing enabled",
+            {key: value for key, value in NATIVE_PROXY.items() if key != "enabled"},
+        ),
+        ("proxy mode", {**NATIVE_PROXY, "mode": "enabled"}),
+        ("proxy domains", {**NATIVE_PROXY, "domains": []}),
+        ("domain permission", {**NATIVE_PROXY, "domains": {"example.com": "ask"}}),
+        ("proxy option type", {**NATIVE_PROXY, "enableSocks5": None}),
+        ("native domain pattern", {**NATIVE_PROXY, "domains": {"[": "allow"}}),
+        ("proxy type", True),
+    )
     cases = (
         ("network value", "sandbox: {network: full}"),
         ("network type", "sandbox: {network: true}"),
-        ("proxy disabled", "sandbox: {proxy: {enabled: false}}"),
-        ("proxy missing enabled", "sandbox: {proxy: {}}"),
-        ("YAML 1.2 boolean", "sandbox: {proxy: {enabled: yes}}"),
-        ("proxy mode", "sandbox: {proxy: {enabled: true, mode: enabled}}"),
-        ("proxy domains", "sandbox: {proxy: {enabled: true, domains: []}}"),
         (
-            "domain permission",
-            "sandbox: {proxy: {enabled: true, domains: {example.com: ask}}}",
+            "YAML 1.2 boolean",
+            "sandbox: {proxy: {" + json.dumps(NATIVE_PROXY)[1:-1] + ", enabled: yes}}",
         ),
-        ("proxy option type", "sandbox: {proxy: {enabled: true, enableSocks5: null}}"),
         (
-            "native domain pattern",
-            "sandbox: {proxy: {enabled: true, domains: {'[': allow}}}",
+            "path type mapping",
+            "sandbox: {filesystem: {entries: [{path: {type: {path: null}, path: ./out}, access: write}]}}",
+        ),
+        ("filesystem type", "sandbox: {filesystem: []}"),
+        ("entries type", "sandbox: {filesystem: {entries: {}}}"),
+        (
+            "entry form",
+            "sandbox: {filesystem: {entries: [{path: ./out, access: write}]}}",
+        ),
+        (
+            "path type",
+            "sandbox: {filesystem: {entries: [{path: {type: path, path: 42}, access: write}]}}",
+        ),
+        ("sandbox field", "sandbox: {cwd: /tmp}"),
+        ("merge key", "sandbox: {<<: {network: enabled}}"),
+        *(
+            (name, json.dumps({"sandbox": {"proxy": proxy}}))
+            for name, proxy in proxy_cases
         ),
     )
     transcript = []
@@ -110,67 +137,18 @@ def test_native_validation_precedes_server_readiness(binary: Path) -> Transcript
 def test_rejects_invalid_project_configuration(binary: Path) -> Transcript:
     cases = (
         ("invalid tagged scalar", "sandbox: {network: !!int enabled}", "YAML"),
-        (
-            "filesystem kind mapping",
-            "sandbox: {filesystem: {kind: {restricted: null}}}",
-            "kind",
-        ),
-        (
-            "path type mapping",
-            "sandbox: {filesystem: {entries: [{path: {type: {path: null}, path: ./out}, access: write}]}}",
-            "type",
-        ),
-        (
-            "access mapping",
-            "sandbox: {filesystem: {entries: [{path: {type: path, path: ./out}, access: {write: null}}]}}",
-            "access",
-        ),
         ("empty", "", "one mapping document"),
         ("sequence", "[]", "mapping"),
         ("multiple documents", "---\n{}\n---\n{}", "one mapping document"),
         ("malformed", "sandbox: [", "line"),
         ("top-level field", "profile: default", "profile"),
         ("sandbox type", "sandbox: false", "sandbox"),
-        ("sandbox field", "sandbox: {cwd: /tmp}", "cwd"),
-        ("filesystem type", "sandbox: {filesystem: []}", "filesystem"),
-        ("filesystem kind", "sandbox: {filesystem: {kind: unrestricted}}", "kind"),
-        ("filesystem field", "sandbox: {filesystem: {roots: []}}", "roots"),
-        ("entries type", "sandbox: {filesystem: {entries: {}}}", "entries"),
+        ("sandbox sequence", "sandbox: []", "sandbox"),
+        ("owned protocol", "sandbox: {version: 2}", "version is managed by Console"),
         (
-            "entry form",
-            "sandbox: {filesystem: {entries: [{path: ./out, access: write}]}}",
-            "path",
-        ),
-        (
-            "special path",
-            "sandbox: {filesystem: {entries: [{path: {type: special, value: {kind: root}}, access: write}]}}",
-            "type",
-        ),
-        (
-            "read grant",
-            "sandbox: {filesystem: {entries: [{path: {type: path, path: ./out}, access: read}]}}",
-            "access",
-        ),
-        (
-            "path type",
-            "sandbox: {filesystem: {entries: [{path: {type: path, path: 42}, access: write}]}}",
-            "path",
-        ),
-        (
-            "path field",
-            "sandbox: {filesystem: {entries: [{path: {type: path, path: ./out, extra: true}, access: write}]}}",
-            "extra",
-        ),
-        (
-            "entry field",
-            "sandbox: {filesystem: {entries: [{path: {type: path, path: ./out}, access: write, extra: true}]}}",
-            "extra",
-        ),
-        ("proxy type", "sandbox: {proxy: true}", "proxy"),
-        (
-            "private proxy option",
-            "sandbox: {proxy: {enabled: true, enableSocks5Udp: true}}",
-            "enableSocks5Udp",
+            "owned lifetime",
+            "sandbox: {lifecycle: {parent_pid: null}}",
+            "lifecycle is managed by Console",
         ),
         ("custom scalar tag", "sandbox: {network: !custom restricted}", "tag"),
         ("custom collection tag", "sandbox: !custom {}", "tag"),
@@ -179,7 +157,7 @@ def test_rejects_invalid_project_configuration(binary: Path) -> Transcript:
             "sandbox: {proxy: {enabled: true, domains: {1: allow}}}",
             "key",
         ),
-        ("merge key", "sandbox: {<<: {network: enabled}}", "<<"),
+        ("non-finite number", "sandbox: {future: .inf}", "non-finite"),
     )
     transcript = []
     with TemporaryDirectory() as directory:
@@ -232,7 +210,7 @@ def test_discovers_only_launch_directory_configuration(binary: Path) -> Transcri
         accepted(binary, host)
         transcript.append({"case": "only console config used", "initialized": True})
 
-        config.write_text("sandbox: {unknown: true}", encoding="utf-8")
+        config.write_text("unknown: true", encoding="utf-8")
         for arguments in ((), ("sandbox", "--", "/bin/echo", "workload started")):
             result = invoke(binary, host, *arguments)
             assert result.returncode == 1 and result.stdout == "", result
@@ -266,12 +244,34 @@ def test_discovers_only_launch_directory_configuration(binary: Path) -> Transcri
 @requires(SANDBOX)
 def test_accepts_supported_project_settings(binary: Path) -> Transcript:
     cases = (
-        "sandbox: {proxy: {enabled: !!bool true}}",
+        "sandbox: {proxy: {"
+        + json.dumps(NATIVE_PROXY)[1:-1]
+        + ", enabled: !!bool true}}",
         "{}",
         "sandbox: {}",
         "sandbox: {proxy: null}",
+        "sandbox: {filesystem: {kind: {restricted: null}, entries: [{path: {type: special, value: {kind: root}}, access: read}]}}",
+        "sandbox: {filesystem: {entries: [{path: {type: path, path: ./out}, access: {write: null}}]}}",
         "sandbox: {filesystem: {entries: [{path: {type: path, path: './future café 雪'}, access: write}]}}",
-        "sandbox: {network: enabled, proxy: {enabled: true, mode: limited, enableSocks5: false, allowUpstreamProxy: true, allowLocalBinding: true, domains: {'*.example.com': allow, blocked.example.com: deny, ignored.example.com: none}}}",
+        json.dumps(
+            {
+                "sandbox": {
+                    "network": "enabled",
+                    "proxy": {
+                        **NATIVE_PROXY,
+                        "mode": "limited",
+                        "enableSocks5": False,
+                        "allowUpstreamProxy": True,
+                        "allowLocalBinding": True,
+                        "domains": {
+                            "*.example.com": "allow",
+                            "blocked.example.com": "deny",
+                            "ignored.example.com": "none",
+                        },
+                    },
+                }
+            }
+        ),
     )
     transcript = []
     with TemporaryDirectory() as directory:

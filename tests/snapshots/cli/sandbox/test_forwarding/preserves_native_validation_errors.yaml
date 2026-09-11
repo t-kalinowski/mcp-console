@@ -1,0 +1,168 @@
+---
+settings:
+  filesystem:
+    kind: future-filesystem
+command: serve
+stderr: >
+  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
+  <column>)
+---
+settings:
+  filesystem:
+    kind: future-filesystem
+command: sandbox
+stderr: >
+  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
+  <column>)
+---
+settings:
+  filesystem:
+    entries:
+      - path:
+          type: future-path
+        access: read
+command: serve
+stderr: >
+  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
+  <column>)
+---
+settings:
+  filesystem:
+    entries:
+      - path:
+          type: future-path
+        access: read
+command: sandbox
+stderr: >
+  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
+  <column>)
+---
+settings:
+  filesystem:
+    entries:
+      - path:
+          type: special
+          value:
+            kind: root
+        access: future-access
+command: serve
+stderr: >
+  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
+  <column>)
+---
+settings:
+  filesystem:
+    entries:
+      - path:
+          type: special
+          value:
+            kind: root
+        access: future-access
+command: sandbox
+stderr: >
+  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
+  <column>)
+---
+settings:
+  proxy:
+    enabled: true
+command: serve
+stderr: >
+  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
+  <column>)
+---
+settings:
+  proxy:
+    enabled: true
+command: sandbox
+stderr: >
+  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
+  <column>)
+---
+settings:
+  proxy:
+    enabled: false
+    enableSocks5: true
+    enableSocks5Udp: false
+    allowUpstreamProxy: false
+    dangerouslyAllowAllUnixSockets: false
+    mode: full
+    allowLocalBinding: false
+command: serve
+stderr: >
+  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
+  mcp-console-sandbox: executor-local network proxy launch requires an
+  enabled proxy
+---
+settings:
+  proxy:
+    enabled: false
+    enableSocks5: true
+    enableSocks5Udp: false
+    allowUpstreamProxy: false
+    dangerouslyAllowAllUnixSockets: false
+    mode: full
+    allowLocalBinding: false
+command: sandbox
+stderr: >
+  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
+  mcp-console-sandbox: executor-local network proxy launch requires an
+  enabled proxy
+---
+settings:
+  environment:
+    INVALID_VALUE: "\0"
+command: serve
+stderr: >
+  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
+  mcp-console-sandbox: target environment value contains NUL
+---
+settings:
+  environment:
+    INVALID_VALUE: "\0"
+command: sandbox
+stderr: >
+  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
+  mcp-console-sandbox: target environment value contains NUL
+---
+settings:
+  future_policy:
+    enabled: true
+command: serve
+stderr: >
+  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
+  <column>)
+---
+settings:
+  future_policy:
+    enabled: true
+command: sandbox
+stderr: >
+  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
+  <column>)
+---
+settings:
+  linux_backend: future-backend
+command: serve
+stderr: >
+  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
+  <column>)
+---
+settings:
+  linux_backend: future-backend
+command: sandbox
+stderr: >
+  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
+  <column>)
