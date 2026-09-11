@@ -91,6 +91,7 @@ jobs:
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: 0.12.4
+          cache-local-path: ${{ runner.temp }}/mcp-console-cache
           cache-suffix: release-v1-${{ steps.cache-epoch.outputs.value }}
 
       - name: Install Linux build and sandbox dependencies
@@ -183,7 +184,6 @@ jobs:
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: 0.12.4
-          enable-cache: false
 
       - name: Publish wheels to PyPI
         run: |
