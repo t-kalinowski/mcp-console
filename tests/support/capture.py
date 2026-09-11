@@ -22,17 +22,20 @@ def read_lines(
     count: int,
     description: str,
     *,
-    timeout: float = 10,
+    timeout: float | None = 10,
 ) -> list[str]:
+    # Startup can use the enclosing case deadline instead of an I/O deadline.
     descriptor = stream.fileno()  # type: ignore[attr-defined]
     output = bytearray()
     newline_count = 0
-    deadline = time.monotonic() + timeout
+    deadline = None if timeout is None else time.monotonic() + timeout
     with selectors.DefaultSelector() as selector:
         selector.register(descriptor, selectors.EVENT_READ)
         while newline_count < count:
-            remaining = deadline - time.monotonic()
-            assert remaining > 0, f"timed out waiting for {description}"
+            remaining = None if deadline is None else deadline - time.monotonic()
+            assert remaining is None or remaining > 0, (
+                f"timed out waiting for {description}"
+            )
             ready = selector.select(remaining)
             assert ready, f"timed out waiting for {description}"
             chunk = os.read(descriptor, 4096)
