@@ -1,0 +1,216 @@
+---
+configuration: restricted
+description: >-
+  Persistent R, Python, and SQL workbench for exact computation, file and data
+  inspection, transformation, visualization, statistics, simulation, and
+  modeling. State persists across calls. Choose the language best suited to each
+  cell and reuse live state when switching: Python reads R globals through
+  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
+  query R data frames by name. R accesses its SQL connection through
+  `sql_connection()`; R or Python can select a user-owned connection with
+  `console_sql_connection(connection)`.
+
+
+  Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
+  must be sequential; a control-only interrupt may overlap a pending `send`.
+  Inspect intermediate results before submitting dependent cells. Cells are not
+  transactional; changes made before an error may remain.
+
+
+  Omit code to poll, supply stdin, control the session, or prepare requirements
+  when available. If a response ends in `[running; poll with an empty send]`,
+  call `send` again without code or stdin; do not resubmit the cell. Send
+  `stdin` alone to answer an active prompt or debugger. Field descriptions
+  specify preparation, control, and timeout ordering.
+
+
+  Evaluated code can read host files, cannot directly access the network, and
+  can write in the worker's private temporary directory and to paths explicitly
+  allowed by the launcher. Dependency resolution, when available, runs outside
+  the sandbox and may execute installation or build code; use only trusted
+  dependencies.
+---
+configuration: enabled
+description: >-
+  Persistent R, Python, and SQL workbench for exact computation, file and data
+  inspection, transformation, visualization, statistics, simulation, and
+  modeling. State persists across calls. Choose the language best suited to each
+  cell and reuse live state when switching: Python reads R globals through
+  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
+  query R data frames by name. R accesses its SQL connection through
+  `sql_connection()`; R or Python can select a user-owned connection with
+  `console_sql_connection(connection)`.
+
+
+  Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
+  must be sequential; a control-only interrupt may overlap a pending `send`.
+  Inspect intermediate results before submitting dependent cells. Cells are not
+  transactional; changes made before an error may remain.
+
+
+  Omit code to poll, supply stdin, control the session, or prepare requirements
+  when available. If a response ends in `[running; poll with an empty send]`,
+  call `send` again without code or stdin; do not resubmit the cell. Send
+  `stdin` alone to answer an active prompt or debugger. Field descriptions
+  specify preparation, control, and timeout ordering.
+
+
+  Evaluated code can read host files, can directly access the network, and can
+  write in the worker's private temporary directory and to paths explicitly
+  allowed by the launcher. Dependency resolution, when available, runs outside
+  the sandbox and may execute installation or build code; use only trusted
+  dependencies.
+---
+configuration: proxy
+description: >-
+  Persistent R, Python, and SQL workbench for exact computation, file and data
+  inspection, transformation, visualization, statistics, simulation, and
+  modeling. State persists across calls. Choose the language best suited to each
+  cell and reuse live state when switching: Python reads R globals through
+  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
+  query R data frames by name. R accesses its SQL connection through
+  `sql_connection()`; R or Python can select a user-owned connection with
+  `console_sql_connection(connection)`.
+
+
+  Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
+  must be sequential; a control-only interrupt may overlap a pending `send`.
+  Inspect intermediate results before submitting dependent cells. Cells are not
+  transactional; changes made before an error may remain.
+
+
+  Omit code to poll, supply stdin, control the session, or prepare requirements
+  when available. If a response ends in `[running; poll with an empty send]`,
+  call `send` again without code or stdin; do not resubmit the cell. Send
+  `stdin` alone to answer an active prompt or debugger. Field descriptions
+  specify preparation, control, and timeout ordering.
+
+
+  Evaluated code can read host files, can access the network subject to the
+  launcher's proxy settings, and can write in the worker's private temporary
+  directory and to paths explicitly allowed by the launcher. Dependency
+  resolution, when available, runs outside the sandbox and may execute
+  installation or build code; use only trusted dependencies.
+---
+configuration: proxy with local binding
+description: >-
+  Persistent R, Python, and SQL workbench for exact computation, file and data
+  inspection, transformation, visualization, statistics, simulation, and
+  modeling. State persists across calls. Choose the language best suited to each
+  cell and reuse live state when switching: Python reads R globals through
+  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
+  query R data frames by name. R accesses its SQL connection through
+  `sql_connection()`; R or Python can select a user-owned connection with
+  `console_sql_connection(connection)`.
+
+
+  Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
+  must be sequential; a control-only interrupt may overlap a pending `send`.
+  Inspect intermediate results before submitting dependent cells. Cells are not
+  transactional; changes made before an error may remain.
+
+
+  Omit code to poll, supply stdin, control the session, or prepare requirements
+  when available. If a response ends in `[running; poll with an empty send]`,
+  call `send` again without code or stdin; do not resubmit the cell. Send
+  `stdin` alone to answer an active prompt or debugger. Field descriptions
+  specify preparation, control, and timeout ordering.
+
+
+  Evaluated code can read host files, can access the network subject to the
+  launcher's proxy settings, and can write in the worker's private temporary
+  directory and to paths explicitly allowed by the launcher. Dependency
+  resolution, when available, runs outside the sandbox and may execute
+  installation or build code; use only trusted dependencies.
+---
+configuration: proxy with network enabled
+description: >-
+  Persistent R, Python, and SQL workbench for exact computation, file and data
+  inspection, transformation, visualization, statistics, simulation, and
+  modeling. State persists across calls. Choose the language best suited to each
+  cell and reuse live state when switching: Python reads R globals through
+  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
+  query R data frames by name. R accesses its SQL connection through
+  `sql_connection()`; R or Python can select a user-owned connection with
+  `console_sql_connection(connection)`.
+
+
+  Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
+  must be sequential; a control-only interrupt may overlap a pending `send`.
+  Inspect intermediate results before submitting dependent cells. Cells are not
+  transactional; changes made before an error may remain.
+
+
+  Omit code to poll, supply stdin, control the session, or prepare requirements
+  when available. If a response ends in `[running; poll with an empty send]`,
+  call `send` again without code or stdin; do not resubmit the cell. Send
+  `stdin` alone to answer an active prompt or debugger. Field descriptions
+  specify preparation, control, and timeout ordering.
+
+
+  Evaluated code can read host files, can access the network subject to the
+  launcher's proxy settings, and can write in the worker's private temporary
+  directory and to paths explicitly allowed by the launcher. Dependency
+  resolution, when available, runs outside the sandbox and may execute
+  installation or build code; use only trusted dependencies.
+---
+configuration: native network representation
+description: >-
+  Persistent R, Python, and SQL workbench for exact computation, file and data
+  inspection, transformation, visualization, statistics, simulation, and
+  modeling. State persists across calls. Choose the language best suited to each
+  cell and reuse live state when switching: Python reads R globals through
+  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
+  query R data frames by name. R accesses its SQL connection through
+  `sql_connection()`; R or Python can select a user-owned connection with
+  `console_sql_connection(connection)`.
+
+
+  Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
+  must be sequential; a control-only interrupt may overlap a pending `send`.
+  Inspect intermediate results before submitting dependent cells. Cells are not
+  transactional; changes made before an error may remain.
+
+
+  Omit code to poll, supply stdin, control the session, or prepare requirements
+  when available. If a response ends in `[running; poll with an empty send]`,
+  call `send` again without code or stdin; do not resubmit the cell. Send
+  `stdin` alone to answer an active prompt or debugger. Field descriptions
+  specify preparation, control, and timeout ordering.
+
+
+  Evaluated code can read host files, has network access governed by the
+  launcher's sandbox settings, and can write in the worker's private temporary
+  directory and to paths explicitly allowed by the launcher. Dependency
+  resolution, when available, runs outside the sandbox and may execute
+  installation or build code; use only trusted dependencies.
+---
+configuration: no sandbox
+description: >-
+  Persistent R, Python, and SQL workbench for exact computation, file and data
+  inspection, transformation, visualization, statistics, simulation, and
+  modeling. State persists across calls. Choose the language best suited to each
+  cell and reuse live state when switching: Python reads R globals through
+  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
+  query R data frames by name. R accesses its SQL connection through
+  `sql_connection()`; R or Python can select a user-owned connection with
+  `console_sql_connection(connection)`.
+
+
+  Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
+  must be sequential; a control-only interrupt may overlap a pending `send`.
+  Inspect intermediate results before submitting dependent cells. Cells are not
+  transactional; changes made before an error may remain.
+
+
+  Omit code to poll, supply stdin, control the session, or prepare requirements
+  when available. If a response ends in `[running; poll with an empty send]`,
+  call `send` again without code or stdin; do not resubmit the cell. Send
+  `stdin` alone to answer an active prompt or debugger. Field descriptions
+  specify preparation, control, and timeout ordering.
+
+
+  Evaluated code runs without a sandbox, with the server's permissions,
+  including filesystem and network access. Dependency resolution, when
+  available, may execute installation or build code; use only trusted
+  dependencies.
