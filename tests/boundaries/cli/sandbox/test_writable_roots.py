@@ -23,17 +23,10 @@ def test_writable_roots_augment_default_permissions(binary: Path) -> Transcript:
 
 @requires(SANDBOX)
 def test_project_grants_combine_with_cli_roots(binary: Path) -> Transcript:
-    return _augment_default_permissions(binary, ".mcp-console/config.yaml")
+    return _augment_default_permissions(binary, configured=True)
 
 
-@requires(SANDBOX)
-def test_agents_project_grants_combine_with_cli_roots(binary: Path) -> Transcript:
-    return _augment_default_permissions(binary, ".agents/mcp-console.yaml")
-
-
-def _augment_default_permissions(
-    binary: Path, location: str | None = None
-) -> Transcript:
+def _augment_default_permissions(binary: Path, configured: bool = False) -> Transcript:
     script = code(r"""
         import errno
         import os
@@ -103,9 +96,9 @@ def _augment_default_permissions(
                 if allowed
                 else []
             )
-            if location and allowed:
-                config = host / location
-                config.parent.mkdir()
+            if configured and allowed:
+                config = host / ".agents/console/config.yaml"
+                config.parent.mkdir(parents=True)
                 config.write_text(
                     code("""
                     sandbox:

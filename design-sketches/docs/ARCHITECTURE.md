@@ -940,7 +940,7 @@ The transcript links to the same files.
 
 ### 16.1 Directory layout
 
-The implemented slice creates one run-specific directory at `.mcp-console/sessions/<UTC-first-use>-<pid>/` when the first ordinary `send` call arrives, with `transcript.md`, `transcript.qmd`, `artifacts/`, and `internal/events.jsonl` beneath it.
+The implemented slice creates one run-specific directory at `.agents/console/sessions/<UTC-first-use>-<pid>/` when the first ordinary `send` call arrives, with `transcript.md`, `transcript.qmd`, `artifacts/`, and `internal/events.jsonl` beneath it.
 Initialization, tool listing, unknown tool calls, and an unused server process create no record.
 On Unix, it creates the record directories with mode `0700` and journal, document, and artifact files with mode `0600`.
 Its journal records MCP tool calls and results plus image artifacts when worker frames arrive; it does not yet implement the complete evaluation-event vocabulary below.
@@ -950,7 +950,7 @@ An existing journal may therefore end with the last successfully flushed event.
 The named-session design will replace that temporary run identity with the planned layout below:
 
 ```text
-.mcp-console/sessions/default/
+.agents/console/sessions/default/
 ├── transcript.md
 ├── transcript.qmd
 ├── environment.json

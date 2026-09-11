@@ -17,7 +17,7 @@ from support.requirements import SANDBOX, requires
 from support.suites import run_this_suite
 
 
-LOCATIONS = (".mcp-console/config.yaml", ".agents/mcp-console.yaml")
+CONFIG = ".agents/console/config.yaml"
 
 
 def accepted(binary: Path, host: Path, *arguments: str) -> None:
@@ -51,8 +51,8 @@ def test_duplicate_keys_use_last_value(binary: Path) -> Transcript:
     )
     with TemporaryDirectory() as directory:
         host = Path(directory)
-        config = host / LOCATIONS[0]
-        config.parent.mkdir()
+        config = host / CONFIG
+        config.parent.mkdir(parents=True)
         for yaml in cases:
             config.write_text(yaml, encoding="utf-8")
             accepted(binary, host)
@@ -82,14 +82,14 @@ def test_native_validation_precedes_server_readiness(binary: Path) -> Transcript
     transcript = []
     with TemporaryDirectory() as directory:
         host = Path(directory)
-        config = host / LOCATIONS[0]
-        config.parent.mkdir()
+        config = host / CONFIG
+        config.parent.mkdir(parents=True)
         for name, yaml in cases:
             config.write_text(yaml, encoding="utf-8")
             for arguments in ((), ("sandbox", "--", "/bin/echo", "workload started")):
                 result = invoke(binary, host, *arguments)
                 assert result.returncode == 1 and result.stdout == "", (name, result)
-                assert f"{LOCATIONS[0]}: sandbox preflight failed" in result.stderr, (
+                assert f"{CONFIG}: sandbox preflight failed" in result.stderr, (
                     name,
                     result,
                 )
@@ -184,15 +184,15 @@ def test_rejects_invalid_project_configuration(binary: Path) -> Transcript:
     transcript = []
     with TemporaryDirectory() as directory:
         host = Path(directory).resolve()
-        config = host / LOCATIONS[0]
-        config.parent.mkdir()
+        config = host / CONFIG
+        config.parent.mkdir(parents=True)
         for name, yaml, diagnostic in cases:
             config.write_text(yaml, encoding="utf-8")
             for arguments in ((), ("sandbox", "--", "/bin/echo", "workload started")):
                 result = invoke(binary, host, *arguments)
                 assert result.returncode == 1, (name, result)
                 assert result.stdout == "", (name, result)
-                assert LOCATIONS[0] in result.stderr, (name, result)
+                assert CONFIG in result.stderr, (name, result)
                 assert diagnostic in result.stderr, (name, result)
                 transcript.append(
                     {
@@ -208,51 +208,49 @@ def test_discovers_only_launch_directory_configuration(binary: Path) -> Transcri
     transcript = []
     with TemporaryDirectory() as directory:
         host = Path(directory).resolve()
-        for location in LOCATIONS:
-            config = host / location
-            config.parent.mkdir()
         accepted(binary, host)
+        assert not (host / ".agents").exists()
         transcript.append({"case": "absent", "initialized": True})
-        for location in LOCATIONS:
-            metadata = (host / location).parent
-            metadata.rmdir()
+        for location in (".agents", ".agents/console"):
+            metadata = host / location
+            metadata.parent.mkdir(parents=True, exist_ok=True)
             metadata.write_text("not a metadata directory", encoding="utf-8")
             accepted(binary, host)
-            transcript.append(
-                {"case": f"{metadata.name} is a file", "initialized": True}
-            )
+            transcript.append({"case": f"{location} is a file", "initialized": True})
             metadata.unlink()
-            metadata.mkdir()
-        for location in LOCATIONS:
-            config = host / location
-            config.write_text("sandbox: {unknown: true}", encoding="utf-8")
-            result = invoke(binary, host)
-            assert result.returncode == 1 and location in result.stderr, result
+
+        for location in (".mcp-console/config.yaml", ".agents/mcp-console.yaml"):
+            old = host / location
+            old.parent.mkdir(parents=True, exist_ok=True)
+            old.write_text("invalid: [", encoding="utf-8")
+            accepted(binary, host)
+            transcript.append({"case": f"ignored {location}", "initialized": True})
+
+        config = host / CONFIG
+        config.parent.mkdir()
+        config.write_text("{}", encoding="utf-8")
+        accepted(binary, host)
+        transcript.append({"case": "only console config used", "initialized": True})
+
+        config.write_text("sandbox: {unknown: true}", encoding="utf-8")
+        for arguments in ((), ("sandbox", "--", "/bin/echo", "workload started")):
+            result = invoke(binary, host, *arguments)
+            assert result.returncode == 1 and result.stdout == "", result
+            assert CONFIG in result.stderr and "unknown" in result.stderr, result
             transcript.append(
                 {
-                    "case": location,
+                    "case": CONFIG,
+                    "command": arguments[0] if arguments else "serve",
                     "stderr": result.stderr.replace(str(host), "<project>"),
                 }
             )
-            config.unlink()
-        for location in LOCATIONS:
-            (host / location).write_text("invalid", encoding="utf-8")
-        result = invoke(binary, host)
-        assert result.returncode == 1 and "ambiguous" in result.stderr, result
-        assert all(location in result.stderr for location in LOCATIONS), result
-        transcript.append(
-            {
-                "case": "ambiguous",
-                "stderr": result.stderr.replace(str(host), "<project>"),
-            }
-        )
+
         child = host / "child"
         child.mkdir()
         accepted(binary, child)
         transcript.append({"case": "ancestors ignored", "initialized": True})
-        for location in LOCATIONS:
-            (host / location).unlink()
-        config = host / LOCATIONS[0]
+
+        config.unlink()
         config.mkdir()
         result = invoke(binary, host)
         assert result.returncode == 1 and "cannot read" in result.stderr, result
@@ -278,8 +276,8 @@ def test_accepts_supported_project_settings(binary: Path) -> Transcript:
     transcript = []
     with TemporaryDirectory() as directory:
         host = Path(directory).resolve()
-        config = host / LOCATIONS[1]
-        config.parent.mkdir()
+        config = host / CONFIG
+        config.parent.mkdir(parents=True)
         for yaml in cases:
             config.write_text(yaml, encoding="utf-8")
             accepted(
@@ -300,15 +298,14 @@ def test_accepts_supported_project_settings(binary: Path) -> Transcript:
 def test_no_sandbox_bypasses_project_configuration(binary: Path) -> Transcript:
     with TemporaryDirectory() as directory:
         host = Path(directory)
-        for location in LOCATIONS:
-            config = host / location
-            config.parent.mkdir()
-            config.write_text("invalid: [", encoding="utf-8")
+        config = host / CONFIG
+        config.parent.mkdir(parents=True)
+        config.write_text("invalid: [", encoding="utf-8")
         accepted(binary, host, "serve", "--no-sandbox", "--worker", "unused-worker")
     return [
         {
             "arguments": ["serve", "--no-sandbox"],
-            "ambiguous_invalid_files_ignored": True,
+            "invalid_config_ignored": True,
         }
     ]
 
@@ -339,10 +336,9 @@ def test_explicit_policy_bypasses_project_configuration(binary: Path) -> Transcr
     transcript = []
     with TemporaryDirectory() as directory:
         host = Path(directory)
-        for location in LOCATIONS:
-            config = host / location
-            config.parent.mkdir()
-            config.write_text("invalid: [", encoding="utf-8")
+        config = host / CONFIG
+        config.parent.mkdir(parents=True)
+        config.write_text("invalid: [", encoding="utf-8")
         # Also exercise a selected complete policy whose name is reserved for
         # internal application settings. Only the explicit selector owns it.
         for name in ("TEST_POLICY", "MCP_CONSOLE_SANDBOX_SETTINGS"):

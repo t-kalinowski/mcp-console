@@ -225,7 +225,7 @@ impl ActiveTranscript {
             started_at.format("%Y%m%dT%H%M%S%.9fZ"),
             std::process::id()
         );
-        let sessions = working_directory.join(".mcp-console/sessions");
+        let sessions = working_directory.join(".agents/console/sessions");
         let directory = sessions.join(&run_id);
         create_private_directory(&sessions, true)
             .map_err(|error| format!("failed to create {}: {error}", sessions.display()))?;

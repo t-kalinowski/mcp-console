@@ -32,6 +32,9 @@ Do not treat `design-sketches/` as evidence of implemented behavior.
 
 ## Platform and development
 
+Project configuration is read only from `.agents/console/config.yaml` in the launch working directory.
+Recorded sessions, transcripts, outputs, and artifacts are written beneath `.agents/console/sessions/`.
+
 The worker relay, built-in worker, and managed resolvers support macOS and Linux.
 The default sandbox and standalone sandbox command support both platforms.
 Linux requires procfs, permitted native namespace operations, and the selected policy enforcement capabilities; see `docs/LINUX_COMPATIBILITY.md` for tested baselines and constrained-host behavior.

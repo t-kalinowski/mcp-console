@@ -40,10 +40,10 @@ def test_bounds_pending_output_and_resets_after_completion(
         client.send(r="overflow console output")
         overflow = client.transcript[-1]
         output = last_tool_text(client)
-        session = next((workspace / ".mcp-console" / "sessions").iterdir())
+        session = next((workspace / ".agents/console" / "sessions").iterdir())
         relative_output = Path("outputs/call-000001.log")
         public_output = (
-            f".mcp-console/sessions/{session.name}/{relative_output.as_posix()}"
+            f".agents/console/sessions/{session.name}/{relative_output.as_posix()}"
         )
         retained = "x" * PENDING_TEXT_BUDGET
         notice = (

@@ -111,9 +111,11 @@ def test_keeps_mapped_resolution_notice_atomic_at_output_limit(
     assert "resolved PyPI distribution" not in remainder, repr(remainder[:200])
     assert client.temporary_directory is not None
     workspace = Path(client.temporary_directory.name)
-    session = next((workspace / ".mcp-console" / "sessions").iterdir())
+    session = next((workspace / ".agents/console" / "sessions").iterdir())
     relative_output = Path("outputs/call-000001.log")
-    public_output = f".mcp-console/sessions/{session.name}/{relative_output.as_posix()}"
+    public_output = (
+        f".agents/console/sessions/{session.name}/{relative_output.as_posix()}"
+    )
     assert (
         f"; retained text: {public_output} (9 of 78 omitted text bytes)]" in remainder
     ), remainder[-300:]

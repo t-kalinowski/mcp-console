@@ -26,7 +26,7 @@ def test_keeps_the_public_interface_without_starting_workers(
 
     tools = client.transcript[-1]["result"]["tools"]
     assert [tool["name"] for tool in tools] == ["send"], tools
-    assert not (workspace / ".mcp-console").exists()
+    assert not (workspace / ".agents/console").exists()
 
     removed = client.request(
         "tools/call",
@@ -34,7 +34,7 @@ def test_keeps_the_public_interface_without_starting_workers(
         arguments={"action": "restart"},
     )
     assert removed["error"] == {"code": -32602, "message": "tool not found"}
-    assert not (workspace / ".mcp-console").exists()
+    assert not (workspace / ".agents/console").exists()
 
     evaluation = client.send(r="1 + 1")
     assert evaluation == {

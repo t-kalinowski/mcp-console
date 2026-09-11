@@ -139,8 +139,8 @@ def _enforces_native_proxy_settings(binary: Path, network: str) -> Transcript:
         thread.start()
         try:
             host = Path(directory).resolve()
-            config = host / ".mcp-console/config.yaml"
-            config.parent.mkdir()
+            config = host / ".agents/console/config.yaml"
+            config.parent.mkdir(parents=True)
             capture = host / "payloads.jsonl"
             environment = {
                 key: value
@@ -225,8 +225,8 @@ def test_project_network_enabled_allows_direct_connection(binary: Path) -> Trans
         """)
     with TemporaryDirectory() as directory, socket.socket() as listener:
         host = Path(directory)
-        config = host / ".agents/mcp-console.yaml"
-        config.parent.mkdir()
+        config = host / ".agents/console/config.yaml"
+        config.parent.mkdir(parents=True)
         config.write_text("sandbox:\n  network: enabled\n", encoding="utf-8")
         listener.bind(("127.0.0.1", 0))
         listener.listen()

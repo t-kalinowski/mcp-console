@@ -2,16 +2,15 @@
 
 ## Project configuration
 
-`serve` and ordinary `sandbox` launches read either `.mcp-console/config.yaml` or `.agents/mcp-console.yaml` beneath the launch working directory.
+`serve` and ordinary `sandbox` launches read only `.agents/console/config.yaml` beneath the launch working directory.
 Only that directory is searched: no ancestors, home directory, or global configuration.
-If both files exist, the launch fails with an ambiguity error.
 An absent file preserves the defaults; an unreadable or invalid existing file prevents launch.
 
 Project configuration is trusted launcher input and can widen workload permissions.
 Review it before launching Console in a project.
 This first interface adds settings to Console's existing policy; it is not a complete runner policy or the final configuration API.
 
-For example, create `output` in your project and put this in `.mcp-console/config.yaml`:
+For example, create `output` in your project and put this in `.agents/console/config.yaml`:
 
 ```yaml
 sandbox:
