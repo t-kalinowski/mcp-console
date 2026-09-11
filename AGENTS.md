@@ -40,10 +40,11 @@ Windows is not supported.
 Other Unix operating systems are not supported build or runtime targets; shared `cfg(unix)` modules do not imply support for them.
 Retain platform conditionals for modules that use OS-specific APIs and for selecting different implementations or unsupported-platform stubs; avoid redundant gates on shared code.
 CI runs core checks and all capability-applicable transcript modes on macOS and Linux.
-Keep Python SDK integration test dependencies unpinned and refresh their resolution on each local or CI transcript run to detect upstream breaking releases.
+Keep Python SDK integration test dependencies free of exact version pins, with MCP constrained to the supported major using `mcp==2.*`.
 Keep one CI job per platform.
 CI restores Cargo build data across source and dependency changes within the same native build environment and UTC week, with incremental compilation enabled.
-Keep the intentional weekly build-cache reset.
+Keep every GitHub Actions cache key and restore prefix within the current UTC ISO week, including uv, IR/renv, R package libraries, downloads, source archives, and finished build outputs.
+The first CI run with a fresh weekly uv cache resolves current SDK releases; later runs may reuse that environment.
 Skip runner staging only when both its finished artifacts and build data are exact cache hits.
 Ordinary source edits reuse one cached baseline per dependency set rather than saving another target-directory snapshot.
 Keep `main` caches reusable by PRs and remove caches for closed PRs.

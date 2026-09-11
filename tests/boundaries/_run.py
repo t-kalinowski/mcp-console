@@ -2,7 +2,7 @@
 # requires-python = ">=3.11"
 # dependencies = [
 #     "py-yaml12>=0.2.0",
-#     "mcp",
+#     "mcp==2.*",
 #     "anthropic[mcp]",
 #     "chatlas[mcp]",
 #     "openai",

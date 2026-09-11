@@ -93,7 +93,8 @@ Console keeps one cached build baseline per dependency set during that week.
 Ordinary source edits reuse the baseline without uploading another large target-directory snapshot; Cargo updates the restored files for the current checkout.
 This lets new PRs, later commits to a PR, and merge commits reuse the same baseline from `main`.
 PR-specific caches remain available to that PR; the cache cleanup workflow deletes them when the PR closes so they do not crowd out shared caches.
-The build caches intentionally reset each Monday.
+All GitHub Actions caches intentionally reset each Monday in UTC, including uv, IR/renv, R package libraries, Cargo downloads, source archives, build data, and finished runners and wheels.
+Every restore prefix includes the UTC ISO week, so a cache miss cannot restore data from an earlier week.
 All CI builds enable incremental compilation, including release builds and source installation checks; Cargo decides which tracked inputs require rebuilding.
 An exact match of source, packaging inputs, toolchain, R and Python versions, and runner image additionally permits skipping the release build and using the finished wheel and native bundle directly.
 Otherwise, Maturin invokes Cargo with the restored build data and packages the updated output.
@@ -101,7 +102,9 @@ Unrelated workflow edits do not change cache keys.
 Bump `CI_BUILD_CACHE_VERSION` in `.github/workflows/ci.yaml` when changing build inputs outside the hashed files, such as workflow build flags or native dependency setup; the version invalidates build data and finished outputs together.
 Runner source archives preserve the timestamps used by Cargo while excluding Git metadata and the separately cached build directory.
 PR and main runs save completed builds, including Clippy preparation, before tests.
-R package checks use a separate cached library, and packaging and runtime preparation share a uv cache that retains downloaded wheels.
+R package checks use a separate cached library, and packaging and runtime preparation share a uv cache that retains downloaded wheels within the current week.
+Python SDK integration tests resolve current releases on a fresh weekly uv cache and reuse satisfying environments afterward; MCP stays within major version 2.
+Manual release builds also use a weekly uv cache; tag-driven release builds and publication do not restore uv caches.
 CI keeps one job per platform and runs all current tests; source installation checks run last because they replace and hide the shared target directory.
 Those installation checks still invoke Cargo and can reuse the prepared runner workspace.
 Installation checks cover unstaged sources, compiler-flag changes between reinstalls, relocated bundles, bounded verification allocations, and rejection of missing or modified companions.
