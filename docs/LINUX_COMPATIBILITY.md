@@ -2,7 +2,7 @@
 
 The current policy contract below follows runner pin `3f060c4210deba4d55cb6ec6d19899721182afae` from [`sandbox-runner.json`](../sandbox-runner.json).
 This advances `689f48c30deeb6aaa95a193e31e5971dd6820465` while retaining protocol 2 and the `rust-v0.154.0` release base.
-The earlier host comparison and its validation record remain historical evidence for their recorded revisions.
+The [historical validation record](#validation-record) identifies the earlier Console and runner revisions used for the host comparison.
 
 ## Policy and backend contract
 
@@ -142,7 +142,9 @@ Host restrictions that deny native namespaces remain explicit launch failures.
 
 ## Validation record
 
-Validation used the pinned sources above on macOS 26.6.2 arm64 and Ubuntu x86_64 with kernel `6.8.0-139-generic` and Landlock ABI 4.
+This historical validation used Console commit `61cd8fdfe4c32d16a8439a10419b10d02cd1e037` with runner pin `7aacbcf1bca0f173f036617a5ee8ae71e18fb8cc` on the `rust-v0.150.1` release base.
+The native comparison baseline was runner `d488fc969da435f93ea5937c7f284fa91a8c2575` from Console main `f35a304d`.
+Validation ran on macOS 26.6.2 arm64 and Ubuntu x86_64 with kernel `6.8.0-139-generic` and Landlock ABI 4.
 
 | Check                                       | Result                                                                                                              |
 | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
