@@ -252,48 +252,37 @@ impl ConsoleServer {
         sandbox_settings: crate::settings::SandboxSettings,
     ) -> Result<Self, String> {
         let languages = Languages::from_environment()?;
-        let filesystem_kind = sandbox_settings
-            .policy
+        let policy = &sandbox_settings;
+        let filesystem = policy
             .get("filesystem")
-            .and_then(|filesystem| filesystem.get("kind"));
-        let restricted_filesystem = filesystem_kind
-            .is_none_or(|kind| crate::settings::native_variant_name(kind) == Some("restricted"));
-        let unrestricted_filesystem = filesystem_kind
-            .is_some_and(|kind| crate::settings::native_variant_name(kind) == Some("unrestricted"));
-        let network_access = if sandbox_settings
-            .policy
-            .get("proxy")
-            .is_some_and(|proxy| !proxy.is_null())
-        {
+            .and_then(|filesystem| filesystem.get("kind"))
+            .and_then(crate::settings::native_variant_name);
+        let network = policy
+            .get("network")
+            .and_then(crate::settings::native_variant_name);
+        let network_access = match (filesystem, network, policy.get("proxy")) {
             // The pinned runner enforces managed proxy routing even with network enabled.
-            "can access the network subject to the launcher's proxy settings"
-        } else if !(restricted_filesystem || unrestricted_filesystem) {
-            "has network access governed by the launcher's sandbox settings"
-        } else {
-            match sandbox_settings
-                .policy
-                .get("network")
-                .and_then(crate::settings::native_variant_name)
-            {
-                Some("enabled") => "can directly access the network",
-                Some("restricted") => "cannot directly access the network",
-                None if !sandbox_settings.policy.contains_key("network") => {
-                    "cannot directly access the network"
-                }
-                // Unknown policies remain the native runner's responsibility.
-                _ => "has network access governed by the launcher's sandbox settings",
+            (_, _, Some(proxy)) if !proxy.is_null() => {
+                "can access the network subject to the launcher's proxy settings"
             }
+            (Some("restricted" | "unrestricted"), Some("enabled"), _) => {
+                "can directly access the network"
+            }
+            (Some("restricted" | "unrestricted"), Some("restricted"), _) => {
+                "cannot directly access the network"
+            }
+            _ => "has network access governed by the launcher's sandbox settings",
         };
-        let sandbox_access = if restricted_filesystem {
-            format!(
+        let sandbox_access = match filesystem {
+            Some("restricted") => format!(
                 "can read host files, {network_access}, and can write in the worker's private temporary directory and to paths explicitly allowed by the launcher"
-            )
-        } else if unrestricted_filesystem {
-            format!("has unrestricted filesystem access and {network_access}")
-        } else {
-            format!(
+            ),
+            Some("unrestricted") => {
+                format!("has unrestricted filesystem access and {network_access}")
+            }
+            _ => format!(
                 "has filesystem access governed by the launcher's sandbox settings and {network_access}"
-            )
+            ),
         };
         let worker = match (worker, relay) {
             (Some(program), relay) => {

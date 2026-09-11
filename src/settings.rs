@@ -1,20 +1,44 @@
 //! Trusted application settings, captured before starting a session or workload.
 
-use std::path::PathBuf;
+use std::ffi::OsStr;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{Map, Value};
 
 mod yaml;
 
 pub const ENVIRONMENT: &str = "MCP_CONSOLE_SANDBOX_SETTINGS";
 
-/// Captured native policy and Console's additional writable paths.
-#[derive(Clone, Default, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct SandboxSettings {
-    pub writable_roots: Vec<PathBuf>,
-    pub policy: Map<String, Value>,
+/// Native policy captured with Console's application additions.
+pub type SandboxSettings = Map<String, Value>;
+
+/// Preserve Console's assignments and removals after project environment controls.
+pub fn preserve_environment<'a>(
+    policy: &mut SandboxSettings,
+    values: impl IntoIterator<Item = (&'a OsStr, Option<&'a OsStr>)>,
+) -> Result<(), String> {
+    let inherit = policy.get("inherit_environment") != Some(&Value::Bool(false));
+    if !inherit {
+        policy
+            .entry("environment")
+            .or_insert_with(|| Value::Object(Map::new()));
+    }
+    if let Some(Value::Object(environment)) = policy.get_mut("environment") {
+        for (name, value) in values {
+            let name = name
+                .to_str()
+                .ok_or_else(|| "worker environment name must be UTF-8".to_string())?;
+            if !inherit && let Some(value) = value {
+                let value = value.to_str().ok_or_else(|| {
+                    format!("worker environment value for '{name}' must be UTF-8")
+                })?;
+                environment.insert(name.into(), value.into());
+            } else {
+                environment.remove(name);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Recognize native unit variants for application additions and descriptions.
@@ -64,13 +88,7 @@ pub fn discover() -> Result<(Option<&'static str>, SandboxSettings), String> {
             return Err(format!("{name}: sandbox.{field} is managed by Console"));
         }
     }
-    Ok((
-        Some(name),
-        SandboxSettings {
-            policy: project.sandbox,
-            ..Default::default()
-        },
-    ))
+    Ok((Some(name), project.sandbox))
 }
 
 pub fn from_environment(name: &str) -> Result<SandboxSettings, String> {
