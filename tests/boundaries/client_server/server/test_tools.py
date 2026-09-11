@@ -101,8 +101,8 @@ def _initializes_and_lists_tools(
         workspace = Path(library) / "workspace"
         workspace.mkdir()
         if proxy:
-            config = workspace / ".agents/mcp-console.yaml"
-            config.parent.mkdir()
+            config = workspace / ".agents/console/config.yaml"
+            config.parent.mkdir(parents=True)
             config.write_text("sandbox: {proxy: {enabled: true}}", encoding="utf-8")
         with McpClient(binary, execution.serve(), environment, workspace) as client:
             client.initialize_and_list_tools()
@@ -116,7 +116,10 @@ def _initializes_and_lists_tools(
             assert '"$defs"' not in send_schema, send["inputSchema"]
             assert '"$ref"' not in send_schema, send["inputSchema"]
 
-            assert not (workspace / ".agents/console").exists(), workspace
+            if proxy:
+                assert list(config.parent.iterdir()) == [config], workspace
+            else:
+                assert not (workspace / ".agents/console").exists(), workspace
             if bare:
                 assert "requirements" not in send["inputSchema"]["properties"]
                 return client.finish()
