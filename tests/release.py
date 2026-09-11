@@ -30,6 +30,56 @@ def write_executable(path: Path, source: str) -> None:
     path.chmod(0o755)
 
 
+def bubblewrap_notice(
+    pin: dict[str, object], toolchain: str = "fixture-sandbox"
+) -> str:
+    return (
+        "Bubblewrap companion\n\n"
+        f"Source archive: https://github.com/{pin['repository']}/archive/{pin['commit']}.tar.gz\n"
+        "C source: codex-rs/vendor/bubblewrap\n"
+        "Build integration: codex-rs/bwrap\n"
+        "License text: bubblewrap-COPYING\n"
+        f"Rust toolchain: {toolchain} (codex-rs/rust-toolchain.toml)\n\n"
+        "/* Copyright fixture author; SPDX-License-Identifier: LGPL-2.0-or-later */\n"
+    )
+
+
+def helper_metadata(pin: dict[str, object], helper: bytes) -> dict[str, object]:
+    return {
+        "source_repository": pin["repository"],
+        "source_revision": pin["commit"],
+        "source_directory": "codex-rs/vendor/bubblewrap",
+        "build_script": "codex-rs/bwrap/build.rs",
+        "wrapper_directory": "codex-rs/bwrap",
+        "sha256": hashlib.sha256(helper).hexdigest(),
+        "elf_needed": ["libc.so.6", "libcap.so.2"],
+        "libcap_linkage": "dynamic",
+    }
+
+
+def write_readelf_fixture(commands: Path) -> None:
+    write_executable(
+        commands / "readelf",
+        """
+        #!/usr/bin/env python3
+        import os
+        import sys
+        from pathlib import Path
+
+        if sys.argv[1:3] == ["-s", "-W"]:
+            assert Path(sys.argv[3]).read_bytes() == b"bwrap bytes with debug symbols"
+            if not os.environ.get("FAKE_NO_LIBCAP"):
+                print("12: 0000000000100 42 FUNC GLOBAL DEFAULT 15 cap_get_proc")
+            raise SystemExit(0)
+        assert sys.argv[1:3] == ["-d", "-W"]
+        assert Path(sys.argv[3]).read_bytes() in (b"fixture\\n", b"bwrap bytes")
+        print(" 0x0000000000000001 (NEEDED) Shared library: [libc.so.6]")
+        if not os.environ.get("FAKE_STATIC_LIBCAP"):
+            print(" 0x0000000000000001 (NEEDED) Shared library: [libcap.so.2]")
+    """,
+    )
+
+
 class ReleaseScriptTests(unittest.TestCase):
     def run_script(
         self,
@@ -295,6 +345,8 @@ class ReleaseScriptTests(unittest.TestCase):
             """,
         )
 
+        write_readelf_fixture(commands)
+        shutil.copyfile(ROOT / "sandbox-runner.json", directory / "sandbox-runner.json")
         wheel = directory / "mcp_console-0.0.2-py3-none-macosx_11_0_arm64.whl"
         self.write_wheel(wheel)
         environment = os.environ.copy()
@@ -315,7 +367,12 @@ class ReleaseScriptTests(unittest.TestCase):
             archive.writestr("mcp_console-0.0.2.data/scripts/mcp-console", "fixture\n")
             names = ("mcp-console-sandbox", "LICENSE", "NOTICE")
             if "linux" in wheel.name:
-                names += ("bwrap", "bubblewrap-COPYING")
+                names += (
+                    "bwrap",
+                    "bubblewrap-COPYING",
+                    "bubblewrap-NOTICE",
+                    "bubblewrap-SOURCE.json",
+                )
             for name in names:
                 if name == omit:
                     continue
@@ -329,7 +386,15 @@ class ReleaseScriptTests(unittest.TestCase):
                 )
                 mode = 0o755 if directory == "libexec" and executable else 0o644
                 info.external_attr = (stat.S_IFREG | mode) << 16
-                archive.writestr(info, "fixture\n")
+                contents = "fixture\n"
+                if name == "bubblewrap-NOTICE":
+                    contents = bubblewrap_notice(
+                        json.loads((ROOT / "sandbox-runner.json").read_text())
+                    )
+                if name == "bubblewrap-SOURCE.json":
+                    pin = json.loads((ROOT / "sandbox-runner.json").read_text())
+                    contents = json.dumps(helper_metadata(pin, b"fixture\n"))
+                archive.writestr(info, contents)
 
     def test_smoke_wheel_requires_a_private_companion_bundle(self) -> None:
         for defect in (
@@ -502,12 +567,98 @@ class ReleaseScriptTests(unittest.TestCase):
             self.assertIn(["serve"], invocations)
             self.assertTrue(any(call[:1] == ["sandbox"] for call in invocations))
 
-            for missing in ("mcp-console-sandbox", "bwrap", "bubblewrap-COPYING"):
+            for missing in (
+                "mcp-console-sandbox",
+                "bwrap",
+                "bubblewrap-COPYING",
+                "bubblewrap-NOTICE",
+                "bubblewrap-SOURCE.json",
+            ):
                 with self.subTest(missing=missing):
                     self.write_wheel(linux_wheel, omit=missing)
                     result = self.run_script(*command, cwd=directory, env=environment)
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn("private sandbox runner", result.stderr)
+
+            for field, value in (
+                ("source_revision", "b" * 40),
+                ("source_repository", "wrong/source"),
+                ("source_directory", "old/bubblewrap"),
+                ("build_script", "old/build.rs"),
+                ("wrapper_directory", "old/wrapper"),
+                ("sha256", "0" * 64),
+                ("elf_needed", ["libc.so.6"]),
+                ("libcap_linkage", "static"),
+            ):
+                with self.subTest(field=field):
+                    self.write_wheel(linux_wheel)
+                    with zipfile.ZipFile(linux_wheel) as archive:
+                        entries = [
+                            (info, archive.read(info)) for info in archive.infolist()
+                        ]
+                    with zipfile.ZipFile(linux_wheel, "w") as archive:
+                        for info, contents in entries:
+                            if info.filename.endswith("bubblewrap-SOURCE.json"):
+                                metadata = json.loads(contents)
+                                metadata[field] = value
+                                contents = json.dumps(metadata).encode()
+                            archive.writestr(info, contents)
+                    result = self.run_script(*command, cwd=directory, env=environment)
+                    self.assertNotEqual(result.returncode, 0, result.stderr)
+                    self.assertIn("provenance", result.stderr)
+
+            for notice_name, replacement in (
+                ("bubblewrap-NOTICE", b"notice for obsolete source"),
+                ("bubblewrap-NOTICE", b""),
+                ("bubblewrap-COPYING", b""),
+            ):
+                self.write_wheel(linux_wheel)
+                with zipfile.ZipFile(linux_wheel) as archive:
+                    entries = [
+                        (info, archive.read(info)) for info in archive.infolist()
+                    ]
+                with zipfile.ZipFile(linux_wheel, "w") as archive:
+                    for info, contents in entries:
+                        if info.filename.endswith("/" + notice_name):
+                            contents = replacement
+                        archive.writestr(info, contents)
+                result = self.run_script(*command, cwd=directory, env=environment)
+                self.assertNotEqual(result.returncode, 0, result.stderr)
+                self.assertIn(notice_name, result.stderr)
+
+            for missing_notice in (True, False):
+                self.write_wheel(linux_wheel)
+                with zipfile.ZipFile(linux_wheel) as archive:
+                    entries = [
+                        (info, archive.read(info)) for info in archive.infolist()
+                    ]
+                with zipfile.ZipFile(linux_wheel, "w") as archive:
+                    for info, contents in entries:
+                        if info.filename.endswith("bubblewrap-SOURCE.json"):
+                            metadata = json.loads(contents)
+                            metadata.update(
+                                libcap_linkage="static", elf_needed=["libc.so.6"]
+                            )
+                            contents = json.dumps(metadata).encode()
+                        archive.writestr(info, contents)
+                    if not missing_notice:
+                        archive.writestr(
+                            "mcp_console-0.0.2.data/data/share/licenses/mcp-console/libcap-NOTICE",
+                            "fixture libcap notice",
+                        )
+                result = self.run_script(
+                    *command,
+                    cwd=directory,
+                    env=environment | {"FAKE_STATIC_LIBCAP": "1"},
+                )
+                if missing_notice:
+                    self.assertNotEqual(result.returncode, 0, result.stderr)
+                    self.assertIn("libcap-NOTICE", result.stderr)
+                else:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                # The same notice must not describe a dynamic dependency as bundled.
+                result = self.run_script(*command, cwd=directory, env=environment)
+                self.assertNotEqual(result.returncode, 0, result.stderr)
 
     def test_verify_wheel_set_requires_macos_and_linux_architectures(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -592,6 +743,9 @@ class ReleaseScriptTests(unittest.TestCase):
             vendor = checkout / "codex-rs/vendor/bubblewrap"
             vendor.mkdir(parents=True)
             (vendor / "COPYING").write_text("bwrap license\n")
+            (vendor / "bubblewrap.c").write_text(
+                "/* Copyright fixture author; SPDX-License-Identifier: LGPL-2.0-or-later */\n"
+            )
             commands = directory / "commands"
             commands.mkdir()
             write_executable(
@@ -648,6 +802,7 @@ class ReleaseScriptTests(unittest.TestCase):
                 os.execvp(sys.argv[4], [sys.argv[4], "+fixture-sandbox", *sys.argv[5:]])
                 """,
             )
+            write_readelf_fixture(commands)
             for name in ("xcrun", "strip"):
                 write_executable(
                     commands / name,
@@ -670,6 +825,7 @@ class ReleaseScriptTests(unittest.TestCase):
                     "FAKE_CARGO_ARGUMENTS": str(directory / "cargo.json"),
                     "CARGO_BUILD_TARGET": "x86_64-apple-darwin",
                     "RUSTUP_TOOLCHAIN": "fixture-console",
+                    "LIBCAP_STATIC": "1",  # Requested linkage is not ELF evidence.
                 }
             )
             command = [
@@ -678,9 +834,39 @@ class ReleaseScriptTests(unittest.TestCase):
                 str(scripts / STAGE_SCRIPT.name),
                 str(checkout),
             ]
+
+            def reject_build_overrides() -> None:
+                for name, value in (
+                    ("CODEX_BWRAP_SOURCE_DIR", ""),
+                    ("CODEX_BWRAP_SOURCE_DIR", str(vendor)),
+                    ("CODEX_BWRAP_SOURCE_DIR", str(directory / "alternative")),
+                    ("CODEX_SKIP_BWRAP_BUILD", "1"),
+                    ("CODEX_SKIP_BWRAP_BUILD", ""),
+                ):
+                    with self.subTest(override=name, value=value):
+                        log = directory / "cargo.json"
+                        log.unlink(missing_ok=True)
+                        result = subprocess.run(
+                            command + ["--target", "x86_64-unknown-linux-gnu"],
+                            env=environment | {name: value},
+                            capture_output=True,
+                            text=True,
+                        )
+                        self.assertNotEqual(result.returncode, 0, result.stderr)
+                        self.assertIn(name, result.stderr)
+                        self.assertFalse(
+                            log.exists(), "must reject before Cargo can reuse a helper"
+                        )
+
+            (directory / "alternative").mkdir()
+            reject_build_overrides()  # Clean staging, no helper exists yet.
             for arguments, target in (
                 ([], "aarch64-apple-darwin"),
                 (["--target", "x86_64-unknown-linux-gnu"], "x86_64-unknown-linux-gnu"),
+                (
+                    ["--target", "aarch64-unknown-linux-gnu"],
+                    "aarch64-unknown-linux-gnu",
+                ),
                 (["--target", "x86_64-apple-darwin"], "x86_64-apple-darwin"),
             ):
                 with self.subTest(target=target):
@@ -741,6 +927,20 @@ class ReleaseScriptTests(unittest.TestCase):
                                 ).hexdigest(),
                                 **(
                                     {
+                                        "bubblewrap-SOURCE.json": hashlib.sha256(
+                                            (
+                                                json.dumps(
+                                                    helper_metadata(
+                                                        pin, b"bwrap bytes"
+                                                    ),
+                                                    indent=2,
+                                                )
+                                                + "\n"
+                                            ).encode()
+                                        ).hexdigest(),
+                                        "bubblewrap-NOTICE": hashlib.sha256(
+                                            bubblewrap_notice(pin).encode()
+                                        ).hexdigest(),
                                         "bubblewrap-COPYING": hashlib.sha256(
                                             b"bwrap license\n"
                                         ).hexdigest(),
@@ -755,6 +955,8 @@ class ReleaseScriptTests(unittest.TestCase):
                         },
                     )
                     data = root / "wheel-data/data"
+                    if "linux" in target:
+                        reject_build_overrides()  # Incremental staging with a finished helper.
                     unchanged = [
                         root / "target/sandbox-runner-build.json",
                         *(path for path in data.rglob("*") if path.is_file()),
@@ -763,6 +965,12 @@ class ReleaseScriptTests(unittest.TestCase):
                         os.utime(path, ns=(1_000_000_000, 1_000_000_000))
                     obsolete = data / "libexec/obsolete-runner"
                     obsolete.write_bytes(b"obsolete")
+                    if "linux" in target:
+                        notice = (
+                            data / "share/licenses/mcp-console/bubblewrap-SOURCE.json"
+                        )
+                        notice.write_text('{"source_revision": "stale"}')
+                        unchanged.remove(notice)
                     result = subprocess.run(
                         command + arguments,
                         env=environment,
@@ -771,6 +979,11 @@ class ReleaseScriptTests(unittest.TestCase):
                     )
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertFalse(obsolete.exists())
+                    if "linux" in target:
+                        self.assertEqual(
+                            json.loads(notice.read_text()),
+                            helper_metadata(pin, b"bwrap bytes"),
+                        )
                     self.assertEqual(
                         {
                             path.relative_to(root): path.stat().st_mtime_ns
@@ -803,6 +1016,55 @@ class ReleaseScriptTests(unittest.TestCase):
                 )
                 self.assertNotEqual(result.returncode, 0)
                 self.assertFalse((directory / "cargo.json").exists())
+            static_notice = directory / "libcap notice"
+            static_notice.write_text("fixture libcap redistribution notice\n")
+            for changes, expected in (
+                ({}, "MCP_CONSOLE_LIBCAP_NOTICE"),
+                (
+                    {
+                        "MCP_CONSOLE_LIBCAP_NOTICE": str(static_notice),
+                        "FAKE_NO_LIBCAP": "1",
+                    },
+                    "cannot establish libcap linkage",
+                ),
+                ({"MCP_CONSOLE_LIBCAP_NOTICE": str(static_notice)}, None),
+            ):
+                with self.subTest(static=changes):
+                    result = subprocess.run(
+                        command + ["--target", "x86_64-unknown-linux-gnu"],
+                        env=environment | {"FAKE_STATIC_LIBCAP": "1"} | changes,
+                        capture_output=True,
+                        text=True,
+                    )
+                    if expected:
+                        self.assertNotEqual(result.returncode, 0, result.stderr)
+                        self.assertIn(expected, result.stderr)
+                    else:
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        notice = data / "share/licenses/mcp-console/libcap-NOTICE"
+                        self.assertEqual(
+                            notice.read_bytes(), static_notice.read_bytes()
+                        )
+                        metadata = json.loads(
+                            (
+                                data
+                                / "share/licenses/mcp-console/bubblewrap-SOURCE.json"
+                            ).read_text()
+                        )
+                        self.assertEqual(metadata["libcap_linkage"], "static")
+                        self.assertEqual(metadata["elf_needed"], ["libc.so.6"])
+            # A later dynamic build must remove the static library notice.
+            result = subprocess.run(
+                command + ["--target", "x86_64-unknown-linux-gnu"],
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(
+                (data / "share/licenses/mcp-console/libcap-NOTICE").exists()
+            )
+            (directory / "cargo.json").unlink()
             toolchain_file.unlink()
             result = subprocess.run(
                 command, env=environment, capture_output=True, text=True
@@ -845,6 +1107,10 @@ class ReleaseScriptTests(unittest.TestCase):
             if sys.platform == "linux":
                 artifacts["bwrap"] = b"bwrap bytes"
                 artifacts["bubblewrap-COPYING"] = b"bwrap license"
+                artifacts["bubblewrap-NOTICE"] = bubblewrap_notice(pin).encode()
+                artifacts["bubblewrap-SOURCE.json"] = json.dumps(
+                    helper_metadata(pin, b"bwrap bytes")
+                ).encode()
             staged = root / "wheel-data/data"
             staged_files = {}
             for name, contents in artifacts.items():
