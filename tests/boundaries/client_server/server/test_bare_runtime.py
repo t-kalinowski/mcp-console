@@ -69,7 +69,7 @@ def test_runs_without_a_resolver_bootstrap(
             "isError": True,
         }, result
         transcript = client.finish()
-        session = next((workspace / ".mcp-console" / "sessions").iterdir())
+        session = next((workspace / ".agents/console" / "sessions").iterdir())
         events = [
             json.loads(line)
             for line in (session / "internal" / "events.jsonl")

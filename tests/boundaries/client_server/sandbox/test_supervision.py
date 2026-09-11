@@ -6,6 +6,8 @@ import shutil
 import signal
 import sys
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -24,10 +26,7 @@ from support.macos import (
 )
 from support.normalization import code
 from support.records import Transcript
-from support.sandbox_observation import (
-    RunnerObservations,
-    build_runner_observation_interposer,
-)
+from support.sandbox_observation import observed_sandbox_descendants
 from support.requirements import (
     MACOS_SANDBOX,
     NATIVE_FIXTURES,
@@ -121,46 +120,44 @@ def _spawn_processx_generation(client: McpClient) -> _Generation:
     return _normalize_generation(client)
 
 
-@requires(MACOS_SANDBOX, PROCESS_EVENTS)
+@contextmanager
+def _observed_processx_generation(
+    binary: Path,
+) -> Iterator[tuple[McpClient, _Generation]]:
+    with tempfile.TemporaryDirectory() as directory:
+        environment = os.environ.copy()
+        with observed_sandbox_descendants(Path(directory), environment) as observe:
+            client = McpClient(binary, SANDBOXED.serve(), environment)
+            generation: _Generation | None = None
+            try:
+                client.initialize_and_list_tools()
+                generation = _spawn_processx_generation(client)
+                # Retirement covers detached children already registered by the
+                # runner; a ready worker does not establish that observation.
+                observe(generation[2][0], client.process)
+                yield client, generation
+            finally:
+                stop_client(client)
+                if generation is not None:
+                    _kill_generation(generation)
+                    shutil.rmtree(generation[3].parent, ignore_errors=True)
+
+
+@requires(MACOS_SANDBOX, NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_restart_retires_descendants_outside_the_worker_group(
     binary: Path,
 ) -> Transcript:
-    client = McpClient(binary, SANDBOXED.serve())
-    generation: _Generation | None = None
-    try:
-        client.initialize_and_list_tools()
-        generation = _spawn_processx_generation(client)
+    with _observed_processx_generation(binary) as (client, generation):
         client.send(control="restart")
         _assert_generation_retired(generation, "restart")
         return client.finish()
-    finally:
-        stop_client(client)
-        if generation is not None:
-            _kill_generation(generation)
-            shutil.rmtree(generation[3].parent, ignore_errors=True)
 
 
 @requires(MACOS_SANDBOX, NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_failure_replacement_retires_descendants_outside_the_worker_group(
     binary: Path,
 ) -> Transcript:
-    temporary_owner = tempfile.TemporaryDirectory()
-    temporary = Path(temporary_owner.name)
-    observations = RunnerObservations(temporary / "manager-observations")
-    environment = os.environ.copy()
-    environment["MCP_CONSOLE_TEST_MANAGER_OBSERVATIONS"] = str(observations.path)
-    environment["DYLD_INSERT_LIBRARIES"] = str(
-        build_runner_observation_interposer(temporary)
-    )
-    client = McpClient(binary, SANDBOXED.serve(), environment)
-    generation: _Generation | None = None
-    try:
-        client.initialize_and_list_tools()
-        generation = _spawn_processx_generation(client)
-        # The runner lists a process's children only after registering its
-        # identity in the descendant tracker. Wait for the exact processx PID
-        # so killing its parent cannot race that observation.
-        observations.wait_for(generation[2][0], client.process)
+    with _observed_processx_generation(binary) as (client, generation):
         client.send(r="tools::pskill(Sys.getpid(), signal = 9L)")
         result = client.transcript[-1]["result"]
         assert result == {
@@ -182,32 +179,16 @@ def test_failure_replacement_retires_descendants_outside_the_worker_group(
         client.send(r='writeLines("replacement ready")')
         assert _last_text(client) == "replacement ready\n"
         return client.finish()
-    finally:
-        stop_client(client)
-        if generation is not None:
-            _kill_generation(generation)
-            shutil.rmtree(generation[3].parent, ignore_errors=True)
-        observations.close()
-        temporary_owner.cleanup()
 
 
-@requires(MACOS_SANDBOX, PROCESS_EVENTS)
+@requires(MACOS_SANDBOX, NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_server_shutdown_retires_descendants_outside_the_worker_group(
     binary: Path,
 ) -> Transcript:
-    client = McpClient(binary, SANDBOXED.serve())
-    generation: _Generation | None = None
-    try:
-        client.initialize_and_list_tools()
-        generation = _spawn_processx_generation(client)
+    with _observed_processx_generation(binary) as (client, generation):
         transcript = client.finish()
         _assert_generation_retired(generation, "shutdown")
         return transcript
-    finally:
-        stop_client(client)
-        if generation is not None:
-            _kill_generation(generation)
-            shutil.rmtree(generation[3].parent, ignore_errors=True)
 
 
 if __name__ == "__main__":

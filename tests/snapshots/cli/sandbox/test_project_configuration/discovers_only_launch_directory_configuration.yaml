@@ -2,30 +2,36 @@
 case: absent
 initialized: true
 ---
-case: .mcp-console is a file
-initialized: true
----
 case: .agents is a file
 initialized: true
 ---
-case: .mcp-console/config.yaml
+case: .agents/console is a file
+initialized: true
+---
+case: ignored .mcp-console/config.yaml
+initialized: true
+---
+case: ignored .agents/mcp-console.yaml
+initialized: true
+---
+case: only console config used
+initialized: true
+---
+case: .agents/console/config.yaml
+command: serve
 stderr: >
-  .mcp-console/config.yaml: sandbox.unknown: unknown field `unknown`,
+  .agents/console/config.yaml: sandbox.unknown: unknown field `unknown`,
   expected one of `filesystem`, `network`, `proxy`
 ---
-case: .agents/mcp-console.yaml
+case: .agents/console/config.yaml
+command: sandbox
 stderr: >
-  .agents/mcp-console.yaml: sandbox.unknown: unknown field `unknown`,
+  .agents/console/config.yaml: sandbox.unknown: unknown field `unknown`,
   expected one of `filesystem`, `network`, `proxy`
----
-case: ambiguous
-stderr: >
-  ambiguous project configuration: '.mcp-console/config.yaml' and
-  '.agents/mcp-console.yaml'
 ---
 case: ancestors ignored
 initialized: true
 ---
 case: unreadable existing path
 stderr: |
-  cannot read '.mcp-console/config.yaml': Is a directory (os error 21)
+  cannot read '.agents/console/config.yaml': Is a directory (os error 21)

@@ -54,8 +54,8 @@ def _snapshot_survives_replacement(
         host = Path(directory).resolve()
         for name in ("output café 雪", "CLI cache", "neighbor"):
             (host / name).mkdir()
-        config = host / ".mcp-console/config.yaml"
-        config.parent.mkdir()
+        config = host / ".agents/console/config.yaml"
+        config.parent.mkdir(parents=True)
         if configured:
             config.write_text(
                 code("""
@@ -101,9 +101,7 @@ def _snapshot_survives_replacement(
             client.send(python=exercise)
             assert last_tool_text(client).endswith(expected), last_tool_text(client)
 
-            other = host / ".agents/mcp-console.yaml"
-            other.parent.mkdir()
-            other.write_text("sandbox: {network: enabled}\n", encoding="utf-8")
+            config.unlink()
             client.send(python="os._exit(23)")
             client.send(python=exercise)
             assert last_tool_text(client).endswith(expected), last_tool_text(client)

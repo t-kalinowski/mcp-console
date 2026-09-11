@@ -80,7 +80,7 @@ def test_records_real_mixed_language_session(
         assert '"b"' in sql_output and "50" in sql_output, sql_output
         transcript = client.finish()
 
-        session = next((workspace / ".mcp-console" / "sessions").iterdir())
+        session = next((workspace / ".agents/console" / "sessions").iterdir())
         events = [
             json.loads(line)
             for line in (session / "internal" / "events.jsonl")
@@ -170,7 +170,7 @@ def test_emits_yamark_formatted_documents(
         )
         transcript = client.finish()
 
-        session = next((workspace / ".mcp-console" / "sessions").iterdir())
+        session = next((workspace / ".agents/console" / "sessions").iterdir())
         markdown = (session / "transcript.md").read_text(encoding="utf-8")
         quarto = (session / "transcript.qmd").read_text(encoding="utf-8")
         assert f"`````python\n{source}\n`````" in markdown

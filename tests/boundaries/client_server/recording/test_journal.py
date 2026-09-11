@@ -45,7 +45,7 @@ def test_materializes_records_only_for_console_use(
             current_directory=unused_workspace,
         )
         client.initialize_and_list_tools()
-        assert not (unused_workspace / ".mcp-console").exists(), unused_workspace
+        assert not (unused_workspace / ".agents").exists(), unused_workspace
         removed = client.request(
             "tools/call",
             name="session",
@@ -55,10 +55,10 @@ def test_materializes_records_only_for_console_use(
             "code": -32602,
             "message": "tool not found",
         }, removed
-        assert not (unused_workspace / ".mcp-console").exists(), unused_workspace
+        assert not (unused_workspace / ".agents").exists(), unused_workspace
         assert not list(unused_workspace.glob("sandbox-*")), unused_workspace
         transcript = client.finish()
-        assert not (unused_workspace / ".mcp-console").exists(), unused_workspace
+        assert not (unused_workspace / ".agents").exists(), unused_workspace
 
         workspace = temporary / "send"
         workspace.mkdir()
@@ -68,11 +68,16 @@ def test_materializes_records_only_for_console_use(
             current_directory=workspace,
         )
         client.initialize_and_list_tools()
-        assert not (workspace / ".mcp-console").exists(), workspace
+        assert not (workspace / ".agents").exists(), workspace
         client.send(r="echo echo")
 
-        sessions = list((workspace / ".mcp-console" / "sessions").iterdir())
+        sessions = list((workspace / ".agents/console/sessions").iterdir())
         assert len(sessions) == 1, sessions
+        assert not (workspace / ".mcp-console").exists(), workspace
+        assert (sessions[0] / "transcript.md").is_file(), sessions
+        assert (sessions[0] / "transcript.qmd").is_file(), sessions
+        assert (sessions[0] / "artifacts").is_dir(), sessions
+        assert (sessions[0] / "outputs/call-000001.log").read_text() == "zod: echo\n"
         events = [
             json.loads(line)
             for line in (sessions[0] / "internal" / "events.jsonl")
@@ -107,7 +112,8 @@ def test_continues_without_record_when_record_cannot_be_created(
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         workspace = Path(temporary_directory)
-        (workspace / ".mcp-console").write_text("occupied", encoding="utf-8")
+        (workspace / ".agents").mkdir()
+        (workspace / ".agents/console").write_text("occupied", encoding="utf-8")
         client = McpClient(
             binary,
             execution.serve("--worker", str(zod)),
@@ -123,13 +129,13 @@ def test_continues_without_record_when_record_cannot_be_created(
             "code": -32602,
             "message": "tool not found",
         }, client.transcript[-1]
-        assert (workspace / ".mcp-console").read_text(encoding="utf-8") == "occupied"
+        assert (workspace / ".agents/console").read_text(encoding="utf-8") == "occupied"
         transcript, standard_error = client.finish_with_standard_error()
         assert standard_error.count("\n") == 1, standard_error
         assert standard_error.startswith(
             "mcp-console: transcript recording disabled: failed to create "
         ), standard_error
-        assert ".mcp-console/sessions" in standard_error, standard_error
+        assert ".agents/console/sessions" in standard_error, standard_error
         transcript.append(
             {
                 "server stderr": (
@@ -159,7 +165,7 @@ def test_updates_quarto_without_rereading_journal(
             client.initialize_and_list_tools()
             client.send(r="echo first")
 
-            session = next((workspace / ".mcp-console" / "sessions").iterdir())
+            session = next((workspace / ".agents/console" / "sessions").iterdir())
             journal = session / "internal" / "events.jsonl"
             journal.chmod(0o200)
             journal_read_disabled = True
@@ -213,7 +219,7 @@ def test_records_tool_calls_and_images(
             stdin="recorded stdin\n",
             requirements={"r": ["praise"]},
         )
-        session = next((workspace / ".mcp-console" / "sessions").iterdir())
+        session = next((workspace / ".agents/console" / "sessions").iterdir())
         quarto_path = session / "transcript.qmd"
         quarto_before_python_requirement = quarto_path.read_text(encoding="utf-8")
         quarto_before_inode = quarto_path.stat().st_ino
@@ -231,7 +237,7 @@ def test_records_tool_calls_and_images(
         preparation_result = client.transcript[-1]["result"]
         client.request("tools/call", name="missing", arguments={})
 
-        sessions = list((workspace / ".mcp-console" / "sessions").iterdir())
+        sessions = list((workspace / ".agents/console" / "sessions").iterdir())
         assert len(sessions) == 1, sessions
         session = sessions[0]
         journal_text = (session / "internal" / "events.jsonl").read_text(
@@ -355,8 +361,9 @@ def test_records_tool_calls_and_images(
         directory_modes = {
             path.relative_to(workspace).as_posix(): path.stat().st_mode & 0o777
             for path in (
-                workspace / ".mcp-console",
-                workspace / ".mcp-console" / "sessions",
+                workspace / ".agents",
+                workspace / ".agents/console",
+                workspace / ".agents/console" / "sessions",
                 session,
                 session / "artifacts",
                 session / "internal",
@@ -410,7 +417,7 @@ def test_records_tool_calls_and_images(
                     events,
                     {
                         "produced session": {
-                            "root": ".mcp-console/sessions/<run ID>",
+                            "root": ".agents/console/sessions/<run ID>",
                             "files": [
                                 "internal/events.jsonl",
                                 "transcript.md",
@@ -439,7 +446,7 @@ def test_disables_recording_after_transcript_failure(
         )
         client.initialize_and_list_tools()
         client.send(r="echo echo")
-        session = next((workspace / ".mcp-console" / "sessions").iterdir())
+        session = next((workspace / ".agents/console" / "sessions").iterdir())
         artifacts = session / "artifacts"
         artifacts.rmdir()
         artifacts.write_text("not a directory", encoding="utf-8")
@@ -505,7 +512,7 @@ def test_keeps_recording_after_cell_output_failure(
         client.initialize_and_list_tools()
         client.send(r="echo first")
 
-        session = next((workspace / ".mcp-console" / "sessions").iterdir())
+        session = next((workspace / ".agents/console" / "sessions").iterdir())
         outputs = session / "outputs"
         retained_outputs = session / "retained-outputs"
         outputs.rename(retained_outputs)
@@ -513,7 +520,9 @@ def test_keeps_recording_after_cell_output_failure(
 
         client.send(r="echo second")
         failure = last_tool_text(client)
-        public_output = f".mcp-console/sessions/{session.name}/outputs/call-000002.log"
+        public_output = (
+            f".agents/console/sessions/{session.name}/outputs/call-000002.log"
+        )
         assert "cell output file was not created" in failure, failure
         assert public_output in failure, failure
         assert str(workspace) not in failure, failure
@@ -588,7 +597,7 @@ def test_flushes_calls_and_keeps_unpolled_images(
             "zod-evaluation-started",
             client,
         )
-        session = next((workspace / ".mcp-console" / "sessions").iterdir())
+        session = next((workspace / ".agents/console" / "sessions").iterdir())
         journal = session / "internal" / "events.jsonl"
         markdown = session / "transcript.md"
         quarto = session / "transcript.qmd"

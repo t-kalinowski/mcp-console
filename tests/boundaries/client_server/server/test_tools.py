@@ -116,7 +116,7 @@ def _initializes_and_lists_tools(
             assert '"$defs"' not in send_schema, send["inputSchema"]
             assert '"$ref"' not in send_schema, send["inputSchema"]
 
-            assert not (workspace / ".mcp-console").exists(), workspace
+            assert not (workspace / ".agents/console").exists(), workspace
             if bare:
                 assert "requirements" not in send["inputSchema"]["properties"]
                 return client.finish()
@@ -185,8 +185,8 @@ def test_describes_project_network_access(binary: Path) -> Transcript:
     for name, source, no_sandbox, expected in cases:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
-            config = workspace / ".mcp-console/config.yaml"
-            config.parent.mkdir()
+            config = workspace / ".agents/console/config.yaml"
+            config.parent.mkdir(parents=True)
             config.write_text(source, encoding="utf-8")
             arguments = ["serve", "--worker", "unused-worker"]
             if no_sandbox:

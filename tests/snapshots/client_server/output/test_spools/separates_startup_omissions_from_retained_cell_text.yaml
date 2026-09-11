@@ -9,5 +9,5 @@ result:
       text: |-
         <retained 8388608 startup text bytes>
         [output truncated: omitted 7 text bytes and 0 encoded image bytes across 1 event]
-        [output truncated: omitted 12 text bytes and 0 encoded image bytes across 1 event; retained text: .mcp-console/sessions/<run ID>/outputs/call-000001.log (12 of 12 omitted text bytes)]
+        [output truncated: omitted 12 text bytes and 0 encoded image bytes across 1 event; retained text: .agents/console/sessions/<run ID>/outputs/call-000001.log (12 of 12 omitted text bytes)]
   isError: false

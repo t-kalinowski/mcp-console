@@ -161,32 +161,21 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for Mapping<T> {
 }
 
 pub fn discover() -> Result<(Option<&'static str>, SandboxSettings), String> {
-    let mut selected = None;
-    for name in [".mcp-console/config.yaml", ".agents/mcp-console.yaml"] {
-        // A dangling symlink or an unreadable existing file must reach read_to_string.
-        match std::fs::symlink_metadata(name) {
-            // No configuration file can exist below a non-directory component.
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
-                ) =>
-            {
-                continue;
-            }
-            Err(error) => return Err(format!("cannot inspect '{name}': {error}")),
-            Ok(_) => {}
+    let name = ".agents/console/config.yaml";
+    // A dangling symlink or an unreadable existing file must reach read_to_string.
+    match std::fs::symlink_metadata(name) {
+        // No configuration file can exist below a non-directory component.
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            return Ok((None, SandboxSettings::default()));
         }
-        if let Some(previous) = selected {
-            return Err(format!(
-                "ambiguous project configuration: '{previous}' and '{name}'"
-            ));
-        }
-        selected = Some(name);
+        Err(error) => return Err(format!("cannot inspect '{name}': {error}")),
+        Ok(_) => {}
     }
-    let Some(name) = selected else {
-        return Ok((None, SandboxSettings::default()));
-    };
     let source =
         std::fs::read_to_string(name).map_err(|error| format!("cannot read '{name}': {error}"))?;
     let value = yaml::load(&source).map_err(|error| format!("{name}: {error}"))?;

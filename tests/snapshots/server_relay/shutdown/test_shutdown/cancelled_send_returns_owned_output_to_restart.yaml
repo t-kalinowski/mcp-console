@@ -36,7 +36,7 @@ result:
     - type: text
       text: |-
         <retained 8388590 text bytes>
-        [output truncated: omitted 25 text bytes and 0 encoded image bytes across 1 event; retained text: .mcp-console/sessions/<run ID>/outputs/call-000002.log (25 of 25 omitted text bytes)]
+        [output truncated: omitted 25 text bytes and 0 encoded image bytes across 1 event; retained text: .agents/console/sessions/<run ID>/outputs/call-000002.log (25 of 25 omitted text bytes)]
         [stopped by session restart request before evaluation finished]
         [worker stopped: in-memory state lost]
         [active evaluation stopped by session restart request]

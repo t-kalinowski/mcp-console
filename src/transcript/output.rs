@@ -48,7 +48,10 @@ impl Transcript {
         let filename = format!("call-{call_id:06}.log");
         let relative_path = format!("outputs/{filename}");
         let file_path = active.directory.join(&relative_path);
-        let public_path = format!(".mcp-console/sessions/{}/outputs/{filename}", active.run_id);
+        let public_path = format!(
+            ".agents/console/sessions/{}/outputs/{filename}",
+            active.run_id
+        );
         let writer = create_private_file(&file_path)
             .map_err(|error| format!("failed to create {public_path}: {error}"))?;
         Ok(Some(CellOutput {

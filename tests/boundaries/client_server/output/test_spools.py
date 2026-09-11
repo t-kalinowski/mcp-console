@@ -51,8 +51,8 @@ def test_separates_startup_omissions_from_retained_cell_text(
         output = last_tool_text(client)
         assert client.temporary_directory is not None
         workspace = Path(client.temporary_directory.name)
-        session = next((workspace / ".mcp-console" / "sessions").iterdir())
-        path = f".mcp-console/sessions/{session.name}/outputs/call-000001.log"
+        session = next((workspace / ".agents/console" / "sessions").iterdir())
+        path = f".agents/console/sessions/{session.name}/outputs/call-000001.log"
         assert (workspace / path).read_bytes() == b"cell output\n"
         notices = (
             "\n[output truncated: omitted 7 text bytes and 0 encoded image bytes across 1 event]"
@@ -124,8 +124,8 @@ def test_reports_partial_retention_and_later_unretained_output(
                 second_text = last_tool_text(client)
             assert "retained text:" not in second_text, second_text[-1000:]
 
-            session = next((workspace / ".mcp-console" / "sessions").iterdir())
-            path = f".mcp-console/sessions/{session.name}/outputs/call-000001.log"
+            session = next((workspace / ".agents/console" / "sessions").iterdir())
+            path = f".agents/console/sessions/{session.name}/outputs/call-000001.log"
             assert (workspace / path).read_bytes() == b"x" * file_limit
             omitted = 2 * PENDING_TEXT_BUDGET + 7
             persisted = file_limit - PENDING_TEXT_BUDGET
@@ -211,8 +211,8 @@ def test_reports_omitted_bytes_retained_at_the_file_limit(
         output = last_tool_text(client)
         assert client.temporary_directory is not None
         workspace = Path(client.temporary_directory.name)
-        session = next((workspace / ".mcp-console" / "sessions").iterdir())
-        path = f".mcp-console/sessions/{session.name}/outputs/call-000002.log"
+        session = next((workspace / ".agents/console" / "sessions").iterdir())
+        path = f".agents/console/sessions/{session.name}/outputs/call-000002.log"
         limit = 1024 * 1024 * 1024
         assert (workspace / path).stat().st_size == limit, (
             (workspace / path).stat().st_size,
