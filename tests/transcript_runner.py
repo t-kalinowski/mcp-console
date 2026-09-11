@@ -538,6 +538,36 @@ def test_unselected(binary):
         self.assertIn("result: sandbox", differing.stderr)
         self.assertIn("::selected[direct] differs", differing.stderr)
 
+    def test_project_proxy_sessions_use_a_canonical_reference(self) -> None:
+        references = ROOT / "tests/snapshots/client_server/server/test_tools"
+        for reference in references.glob("initializes_and_lists_tools*.yaml"):
+            shutil.copy2(reference, self.snapshots / reference.name)
+        self.suite.write_text(
+            PUBLIC_SUITE
+            + """
+from yaml12 import read_yaml
+
+def test_selected(binary):
+    reference = binary.parents[2] / "tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml"
+    handshake = read_yaml(reference, multi=True)
+    send = handshake[-1]["result"]["tools"][0]
+    send["description"] = send["description"].replace(
+        "cannot directly access the network",
+        "can access the network subject to the launcher's proxy settings",
+    )
+    return [{"runner": "before"}] + handshake + [{"runner": "between"}] + handshake
+""",
+            encoding="utf-8",
+        )
+        result = self.run_runner(
+            "--update", "client_server/server/test_tools::selected"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        snapshot = (self.snapshots / "selected.yaml").read_text()
+        self.assertEqual(snapshot.count("!same-as"), 2, snapshot)
+        self.assertEqual(snapshot.count("initializes_and_lists_tools.proxy.yaml"), 2)
+        self.assertNotIn("method: initialize", snapshot)
+
     def test_initialization_updates_only_available_execution_references(self) -> None:
         source = (
             PUBLIC_SUITE
