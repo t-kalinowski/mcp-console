@@ -44,7 +44,9 @@ The runner sees the original caller as its direct parent and inherits the origin
 The [sandbox integration](SANDBOX.md) defines Console policy defaults, installation verification, supported hosts, and lifetime limits.
 The [migration record](SANDBOX_RUNNER_INTEGRATION.md) records the baseline, validation, and changed lifetime guarantees.
 
-With `serve --no-sandbox`, the server launches the relay directly with host permissions and the host temporary-directory environment.
+With `serve --no-sandbox`, the relay skips the native runner at its selected execution target.
+Local and SSH host execution use that account's permissions and temporary-directory environment.
+Docker retains its outer container boundary and retirement.
 Available R, Python, and DuckDB dependency resolution runs in separate host processes; [requirements and environments](REQUIREMENTS.md) defines its trust boundary.
 
 For a configured SSH target, the process chain is:
@@ -64,6 +66,22 @@ That owner captures trusted resolver settings once and runs the existing resolve
 It reports operation completion only after its resolver groups retire.
 The local server retains requirements, candidates, and activation decisions; remote execution never enters controller runtime discovery or resolver processes.
 See [SSH execution](SSH.md) for configuration and prerequisites.
+
+For a Docker target, the controller resolves an immutable image once and probes a disposable container before MCP readiness.
+Every generation then follows:
+
+```text
+controller MCP server → local Docker owner → Docker attachment
+    → container target launcher → native sandbox (unless disabled) → relay → worker
+```
+
+The Docker owner creates the container before attaching, captures its ID, observes controller input closure and attachment exit independently of output backpressure, and confirms removal through the captured daemon endpoint.
+Container retirement covers descendants outside the relay's process group.
+Only confirmed retirement permits replacement.
+The shared target launcher consumes captured policy without YAML discovery and uses its own container-local owner identity.
+Docker uses the image's preinstalled runtime, disables dynamic preparation, and never discovers controller interpreters or calls host resolvers.
+Image setup is separate from generation lifetime and does not reread a build context on replacement.
+See [Docker execution](DOCKER.md).
 
 ## Communication boundaries
 
@@ -140,7 +158,8 @@ At generation retirement, it first requests graceful shutdown through the relay 
 In sandboxed mode, it then sends `SIGTERM` to the launcher to request managed retirement and uses a hard launcher kill only as the final fail-safe.
 On normal and owned-retirement paths, the server treats successful managed launcher exit as the synchronous cleanup barrier before reaping.
 Cancellation before worker readiness follows the same runner-retirement request and grace period, including when the startup I/O join reaches the child first.
-With `--no-sandbox`, the server owns and reaps the relay directly; no runner supplies descendant cleanup.
+For local host execution with `--no-sandbox`, the server owns and reaps the relay directly; no runner supplies descendant cleanup.
+SSH and Docker keep their target adapters; Docker requires confirmed container retirement.
 After the relay deadline, the server accepts termination from its own successful `SIGTERM` request as completed direct retirement.
 
 ### Sandbox frontend and runner
@@ -174,7 +193,8 @@ Blocked downstream pipe or socket output can therefore fail retirement without d
 
 The internal `worker-relay` command uses the same stream protocol when launched directly without a sandbox or below another process wrapper.
 Such a direct invocation owns only its direct worker; it supplies no sandbox policy or descendant-cleanup guarantee.
-`serve --no-sandbox` selects this direct launch while retaining the relay protocol and direct-worker shutdown behavior.
+`serve --no-sandbox` selects this direct relay launch at the configured target while retaining the relay protocol and direct-worker shutdown behavior.
+An outer Docker container still supplies descendant retirement.
 A replacement sandbox launcher must provide the process-lifetime contract described in [sandbox integration](SANDBOX.md), including cleanup before successful owned retirement.
 Any future sandbox-specific control plane ends at that launcher, without reaching the relay or changing its protocol.
 
@@ -233,7 +253,8 @@ An explicit restart starts its replacement eagerly, including when the session h
 
 For each worker start, the server first constructs the relay target independently of sandboxing.
 The built-in target is the current executable's `worker-relay` command followed by the worker command line; a configured relay is followed directly by the same worker command line.
-By default, the server then constructs an ordinary current-executable command for `sandbox --exit-with-parent <server-pid> -- <relay-target>`; with `--no-sandbox`, it uses the relay target directly.
+For local host execution, the server then constructs an ordinary current-executable command for `sandbox --exit-with-parent <server-pid> -- <relay-target>`; with `--no-sandbox`, it uses the relay target directly.
+SSH and Docker construct that command inside the target with a target-local owner PID.
 It applies the retained environment and configures piped input and output plus inherited error in either mode.
 In sandboxed mode, the frontend execs the runner with that environment and those streams; the runner establishes native enforcement and descendant observation before releasing the relay.
 The relay creates the worker sideband and standard streams, launches the worker, and forwards its startup events.
@@ -362,6 +383,8 @@ On the first `send` call, the server creates a private run directory under `.age
 It appends tool calls and assembled results to `internal/events.jsonl`.
 The initial `session_started` event records whether dynamic environment resolution is available, and the Quarto projection derives its managed defaults from that capability.
 For SSH sessions, it also records `target.transport` and the initial remote `target.workspace` separately from the local `working_directory` that owns the recording.
+Docker session metadata additionally records compute kind, requested/resolved image identity, and container workspace; generation events identify created containers.
+Declared binds can expose controller records to the workload.
 Each `tool_result` is appended before the MCP transport attempts the corresponding response write.
 It records server assembly, not whether the transport write succeeded or the client received the response.
 
@@ -384,7 +407,7 @@ For local sessions, rendering executes the captured client-authored cells in ord
 Rendering does not reconstruct session control, stdin, recorded results, or artifacts.
 SQL chunks require a DBI connection supplied by the document user.
 
-SSH projections identify the remote target, omit the local execution root, and set `execute.eval: false`.
+SSH and Docker projections identify the execution target, omit the local execution root, and set `execute.eval: false`.
 By default, rendering them locally displays the captured source without executing it.
 Replaying remote cells requires the user to select and provision an appropriate execution environment; the document does not reproduce remote files.
 

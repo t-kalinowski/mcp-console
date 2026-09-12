@@ -25,6 +25,9 @@ pub(super) enum Event<'a> {
         #[serde(skip_serializing_if = "Option::is_none")]
         target: Option<&'a Value>,
     },
+    TargetGeneration {
+        container_id: &'a str,
+    },
     ToolCall {
         call_id: u64,
         request_id: &'a RequestId,

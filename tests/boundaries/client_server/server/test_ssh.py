@@ -172,9 +172,11 @@ def _preinstalled_remote_runtime(binary: Path, execution: Execution) -> Transcri
                 assert "[waiting for stdin]" in last_result_text(client), (
                     last_result_text(client)
                 )
-                client.send(stdin="interactive value\n")
-                assert "interactive value" in last_result_text(client), (
-                    last_result_text(client)
+                wait_for_evaluation_output(
+                    client,
+                    "interactive value\n",
+                    "remote interactive input",
+                    stdin="interactive value\n",
                 )
                 plotted = client.send(r="plot(1:3)")
                 images = [

@@ -59,6 +59,13 @@ struct RelayConnection {
     commands: RelayCommandSender,
     tasks: Option<Box<RelayTasks>>,
     ssh: Option<Box<(crate::ssh::Session, crate::ssh::Retirement)>>,
+    docker: Option<
+        Box<(
+            crate::docker::Session,
+            crate::target_launch::Retirement,
+            String,
+        )>,
+    >,
 }
 
 struct RelayProcess {
@@ -138,6 +145,7 @@ impl WorkerRuntime {
     ) -> Result<Worker, SendFailure> {
         let super::WorkerSpec {
             ssh,
+            docker,
             executable,
             arguments,
             relay,
@@ -149,7 +157,7 @@ impl WorkerRuntime {
             callbacks,
         } = spec;
 
-        let bootstrap = ssh
+        let mut bootstrap = ssh
             .map(|ssh| {
                 ssh.bootstrap(
                     sandbox_settings,
@@ -162,7 +170,14 @@ impl WorkerRuntime {
         let current_executable = std::env::current_exe()
             .map_err(|error| format!("failed to locate the current executable: {error}"))?;
         let target = relay_command_line(&current_executable, executable, arguments, relay);
-        let mut command = if let Some(ssh) = ssh {
+        let mut docker_launch = docker
+            .map(|session| session.launch(sandbox_settings, no_sandbox, false))
+            .transpose()?;
+        let docker_name = docker_launch.as_ref().map(|(_, _, name)| name.clone());
+        let mut command = if let Some((command, bytes, _)) = docker_launch.take() {
+            bootstrap = Some(bytes);
+            command
+        } else if let Some(ssh) = ssh {
             ssh.command()?
         } else if no_sandbox {
             let mut command = Command::new(&target[0]);
@@ -180,7 +195,7 @@ impl WorkerRuntime {
             command.arg("--").args(target);
             command
         };
-        if ssh.is_none() {
+        if ssh.is_none() && docker.is_none() {
             if let Some(python) = python {
                 python.configure_worker(&mut command);
             }
@@ -235,11 +250,30 @@ impl WorkerRuntime {
         let ready_commit = ReadyCommit(Arc::new(Mutex::new(Some(ready_commit_sender))));
         let shutdown_started = ShutdownAcceptance::default();
 
+        let container = docker.map(|session| {
+            (
+                session.clone(),
+                crate::target_launch::Retirement::default(),
+                docker_name.expect("Docker launch name"),
+            )
+        });
         let remote = ssh.map(|session| (session.clone(), crate::ssh::Retirement::default()));
         let (commands, command_writer) =
             start_relay_command_writer(relay_stdin, worker_events.clone(), bootstrap);
-        let event_reader =
-            start_relay_event_reader(relay_stdout, output_exit, worker_events, remote.clone());
+        let event_reader = start_relay_event_reader(
+            relay_stdout,
+            output_exit,
+            worker_events,
+            remote.clone(),
+            container.clone(),
+            callbacks
+                .client
+                .0
+                .recording
+                .lock()
+                .expect("recording lock")
+                .clone(),
+        );
         let dispatcher = WorkerEventDispatcher::start(
             worker_event_receiver,
             operation.clone(),
@@ -254,6 +288,7 @@ impl WorkerRuntime {
 
         let relay = RelayConnection {
             ssh: remote.map(Box::new),
+            docker: container.map(Box::new),
             child,
             commands: commands.clone(),
             tasks: Some(Box::new(RelayTasks {
@@ -276,12 +311,12 @@ impl WorkerRuntime {
             let error = worker.startup_failure(error);
             return Err(error);
         }
-        let started = if ssh.is_some() {
+        let started = if ssh.is_some() || docker.is_some() {
             startup_receiver
-                .recv_timeout(crate::ssh::SETUP_TIMEOUT)
+                .recv_timeout(crate::target_launch::SETUP_TIMEOUT)
                 .map_err(|error| match error {
                     mpsc::RecvTimeoutError::Timeout => {
-                        "SSH connection/bootstrap deadline exceeded".to_string()
+                        "target connection/bootstrap deadline exceeded".to_string()
                     }
                     mpsc::RecvTimeoutError::Disconnected => {
                         "worker event dispatcher stopped before readiness".to_string()
@@ -889,16 +924,33 @@ fn start_relay_event_reader(
     output_exit: std::io::PipeReader,
     events: mpsc::Sender<WorkerEvent>,
     ssh: Option<(crate::ssh::Session, crate::ssh::Retirement)>,
+    docker: Option<(
+        crate::docker::Session,
+        crate::target_launch::Retirement,
+        String,
+    )>,
+    recording: Option<crate::transcript::Transcript>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let output = crate::process_output::RelayOutput::new(relay_stdout, output_exit);
-        let output: Box<dyn Read> = match ssh.as_ref() {
-            Some((session, retirement)) => Box::new(crate::ssh::Output::new(
-                output,
-                session.clone(),
-                retirement.clone(),
-            )),
-            None => Box::new(output),
+        let output: Box<dyn Read> = if let Some((_, retirement, _)) = &docker {
+            Box::new(
+                crate::target_launch::Output::new(
+                    output,
+                    crate::target_launch::Protocol("Docker"),
+                    retirement.clone(),
+                )
+                .with_recording(recording),
+            )
+        } else {
+            match ssh.as_ref() {
+                Some((_session, retirement)) => Box::new(crate::target_launch::Output::new(
+                    output,
+                    crate::target_launch::Protocol("SSH"),
+                    retirement.clone(),
+                )),
+                None => Box::new(output),
+            }
         };
         let mut reader = JsonlReader::new(BufReader::new(output));
         let result = (|| -> Result<(), String> {
@@ -916,7 +968,12 @@ fn start_relay_event_reader(
             let _ = events.send(WorkerEvent::TransportFailure(error));
         }
         if let Some((session, retirement)) = ssh
-            && let Err(error) = retirement.check(&session)
+            && let Err(error) = session.check_retirement(&retirement)
+        {
+            let _ = events.send(WorkerEvent::TransportFailure(error));
+        }
+        if let Some((session, retirement, name)) = docker
+            && let Err(error) = session.check_retirement(&retirement, &name)
         {
             let _ = events.send(WorkerEvent::TransportFailure(error));
         }
@@ -1344,9 +1401,17 @@ impl RelayConnection {
         };
         let cleanup = combine_shutdown_results(
             cleanup,
-            self.ssh
+            self.ssh.as_deref().map_or(Ok(()), |(session, retirement)| {
+                session.check_retirement(retirement)
+            }),
+        );
+        let cleanup = combine_shutdown_results(
+            cleanup,
+            self.docker
                 .as_deref()
-                .map_or(Ok(()), |(session, retirement)| retirement.check(session)),
+                .map_or(Ok(()), |(session, retirement, name)| {
+                    session.check_retirement(retirement, name)
+                }),
         );
         match (tasks, cleanup) {
             (Ok(outcome), Ok(())) => Ok(outcome),

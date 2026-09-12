@@ -14,6 +14,7 @@ Source and public acceptance tests remain the final authority when prose disagre
 - [Built-in runtime](BUILTIN_RUNTIME.md) is the source of truth for user-visible R, Python, DuckDB SQL, input, output, graphics, and interoperability behavior.
 - [Requirements and environments](REQUIREMENTS.md) is the source of truth for dependency preparation, retained environments, accepted requirement syntax, and the host-resolution trust boundary.
 - [SSH execution](SSH.md) defines the single remote target, runtime and resolver bootstrap prerequisites, managed preparation and bare-runtime fallback, remote policy paths, transport limits, and local recordings.
+- [Docker execution](DOCKER.md) defines image setup, container paths and mounts, preinstalled runtime requirements, sandbox choices, owned container lifetime, and controller recordings.
 
 ## Implementers and protocol reviewers
 

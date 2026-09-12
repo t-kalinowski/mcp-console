@@ -1,10 +1,10 @@
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::net::UnixStream;
 
-pub(super) struct InputWatch(OwnedFd);
+pub(crate) struct InputWatch(OwnedFd);
 
 impl InputWatch {
-    pub(super) fn new(completion: RawFd) -> Result<Self, String> {
+    pub(crate) fn new(completion: RawFd) -> Result<Self, String> {
         // SAFETY: kqueue returns a new owned descriptor on success.
         let descriptor = unsafe { libc::kqueue() };
         if descriptor < 0 {
@@ -34,7 +34,7 @@ impl InputWatch {
         Ok(Self(queue))
     }
 
-    pub(super) fn wait(self, completion: UnixStream) -> Result<(), String> {
+    pub(crate) fn wait(self, completion: UnixStream) -> Result<(), String> {
         watch(&self.0, completion)
     }
 }

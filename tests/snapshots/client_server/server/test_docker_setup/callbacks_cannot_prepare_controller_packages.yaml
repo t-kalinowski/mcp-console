@@ -1,0 +1,11 @@
+---
+send:
+  r: "42"
+result:
+  content:
+    - type: text
+      text: |
+        dynamic environment resolution is unavailable for Docker targets; install packages in the image and start a new server session
+        dynamic environment resolution is unavailable
+        dynamic environment resolution is unavailable
+  isError: false
