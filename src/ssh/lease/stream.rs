@@ -77,6 +77,11 @@ pub(super) fn pump(
     let mut ended_sent = false;
     let mut finished = false;
     loop {
+        // A completed exchange has no remaining lease or application work.
+        // Do not queue a heartbeat after the peer's terminal acknowledgment.
+        if encoded.is_empty() && if remote { finished } else { ended_sent } {
+            return Ok(());
+        }
         let now = Instant::now();
         if (remote && peer_closed) || (!remote && source_closed) {
             retirement.get_or_insert(now + Duration::from_secs(8));
@@ -106,12 +111,6 @@ pub(super) fn pump(
                 encoded.extend(frame(END, &sent.to_be_bytes()));
                 end_sent = true;
             }
-        }
-        if !remote && ended_sent && encoded.is_empty() {
-            return Ok(());
-        }
-        if remote && finished && encoded.is_empty() {
-            return Ok(());
         }
         let wake = if remote && pending_ping.is_none() {
             deadline.min(next_ping)
