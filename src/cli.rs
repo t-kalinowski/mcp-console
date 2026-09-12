@@ -53,6 +53,8 @@ pub enum Command {
     /// Launch the built-in runtime for an authenticated SSH controller
     #[command(hide = true)]
     SshLaunch,
+    #[command(hide = true)]
+    SshOwner,
 
     /// Prepare dependencies for an authenticated SSH controller
     #[command(hide = true)]

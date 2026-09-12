@@ -541,6 +541,9 @@ impl Client {
             {
                 ssh.available()?;
             }
+            if request.cell.is_some() {
+                ssh.status.check()?;
+            }
         }
         if let Some(control) = request.control {
             return self.send_controlled(control, request).await;

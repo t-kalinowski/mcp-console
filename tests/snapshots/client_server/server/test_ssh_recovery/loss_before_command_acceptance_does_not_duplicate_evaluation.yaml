@@ -1,0 +1,4 @@
+---
+loss: before
+side_effect_count: 1
+same_worker: true

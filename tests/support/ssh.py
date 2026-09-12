@@ -220,3 +220,24 @@ def poison_controller(root: Path, environment: dict[str, str]) -> Path:
         }
     )
     return trap
+
+
+def ownership_ancestor(identity, operation="ssh-owner"):
+    """Find the live owner through a checkpointed workload's actual ancestry."""
+    from support.processes import capture_process_identity
+
+    while identity[0] > 1:
+        observed = (
+            subprocess.check_output(
+                ["/bin/ps", "-p", str(identity[0]), "-o", "ppid=", "-o", "args="],
+                text=True,
+            )
+            .strip()
+            .split(maxsplit=1)
+        )
+        assert capture_process_identity(identity[0]) == identity
+        assert len(observed) == 2, observed
+        if observed[1].endswith(" " + operation):
+            return identity
+        identity = capture_process_identity(int(observed[0]))
+    raise AssertionError("checkpointed process has no SSH ownership ancestor")

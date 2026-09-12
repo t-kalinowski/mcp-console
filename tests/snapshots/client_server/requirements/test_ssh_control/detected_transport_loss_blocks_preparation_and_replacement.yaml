@@ -32,6 +32,4 @@ result:
   isError: true
 ---
 stderr: |
-  truncated SSH frame length: failed to fill whole buffer
-  SSH connection closed before stream retirement
   SSH preparation owner stopped

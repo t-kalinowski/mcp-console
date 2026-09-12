@@ -1,0 +1,4 @@
+---
+stderr: |
+  SSH frame exceeds 32768 bytes
+  SSH preparation retirement is unconfirmed: truncated SSH frame length: failed to fill whole buffer

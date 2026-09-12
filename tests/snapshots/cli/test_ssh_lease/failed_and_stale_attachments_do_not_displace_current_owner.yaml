@@ -1,0 +1,4 @@
+---
+bad_credentials_rejected: true
+stale_epoch_rejected: true
+higher_epoch_fenced_old_stream: true

@@ -1,5 +1,3 @@
 ---
 repeated_response_rejected: true
-stderr: |
-  truncated SSH frame length: failed to fill whole buffer
-  unexpected SSH lease frame
+remote_owner_retired: true

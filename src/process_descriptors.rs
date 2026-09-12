@@ -8,15 +8,43 @@ use std::process::Command;
 pub(crate) fn close_unlisted_from_multithreaded_parent(
     command: &mut Command,
 ) -> Result<(), String> {
-    // A server thread can open a descriptor after any parent-side snapshot.
-    // Scan every possible child slot after fork instead. Descriptors created by
-    // Rust for spawn failure reporting already carry close-on-exec and remain
-    // usable until a successful exec closes them.
+    // Enumerate after fork: other parent threads can open descriptors before
+    // spawn. Allocate the table beforehand so the child uses only syscalls;
+    // scanning every possible slot is expensive with macOS's large fd limit.
     let descriptor_limit = descriptor_limit()?;
+    let mut descriptors = vec![
+        libc::proc_fdinfo {
+            proc_fd: 0,
+            proc_fdtype: 0
+        };
+        descriptor_limit as usize
+    ];
     unsafe {
         command.pre_exec(move || {
-            for descriptor in (libc::STDERR_FILENO + 1)..descriptor_limit {
-                set_close_on_exec(descriptor)?;
+            let bytes = loop {
+                let bytes = libc::proc_pidinfo(
+                    libc::getpid(),
+                    libc::PROC_PIDLISTFDS,
+                    0,
+                    descriptors.as_mut_ptr().cast(),
+                    std::mem::size_of_val(descriptors.as_slice()) as libc::c_int,
+                );
+                if bytes > 0 {
+                    break bytes as usize;
+                }
+                let error = std::io::Error::last_os_error();
+                if error.kind() != std::io::ErrorKind::Interrupted {
+                    return Err(error);
+                }
+            };
+            if !bytes.is_multiple_of(std::mem::size_of::<libc::proc_fdinfo>()) {
+                return Err(std::io::ErrorKind::InvalidData.into());
+            }
+            for descriptor in &descriptors[..bytes / std::mem::size_of::<libc::proc_fdinfo>()] {
+                if descriptor.proc_fd > libc::STDERR_FILENO {
+                    // Preserve Rust's close-on-exec spawn-error pipe until exec.
+                    set_close_on_exec(descriptor.proc_fd)?;
+                }
             }
             Ok(())
         });

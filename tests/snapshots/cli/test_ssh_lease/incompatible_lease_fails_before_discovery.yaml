@@ -2,12 +2,12 @@
 input:
   version: 999
 stderr: |
-  incompatible SSH lease protocol, channel, or Console build
+  incompatible SSH recovery protocol, channel, or Console build
 ---
 input:
   build: other-build
 stderr: |
-  incompatible SSH lease protocol, channel, or Console build
+  incompatible SSH recovery protocol, channel, or Console build
 ---
 input:
   lease_ms: 0

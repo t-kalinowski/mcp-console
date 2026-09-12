@@ -28,7 +28,10 @@ The remote helper materializes application policy and performs native preflight 
 Remote YAML is never read.
 Native enforcement, proxy addresses, private storage, and descendant cleanup belong to the execution host.
 The local server requires the helper's cleanup acknowledgment before replacement; SSH process exit cannot supply that guarantee.
-Observed connection closure and the independent remote controller lease request runner retirement even while output is backpressured.
+A finite-lived remote owner survives replacement of its SSH attachment; the launch helper remains the runner's caller throughout recovery.
+Explicit shutdown and expiry of the independent remote controller lease request runner retirement even while output is backpressured.
+Private attachment credentials remain outside workload arguments, environment, and files; the native sandbox's process/descriptor isolation protects trusted owner memory.
+Same-UID Unix socket permissions alone do not establish that boundary, and deliberately unrestricted execution cannot provide it.
 Lease expiry bounds the request, not native cleanup completion; the original helper's receipt remains required.
 
 For project edits, `extends: ":workspace"` selects the native workspace constructor and materializes its permissions against the captured launch directory.

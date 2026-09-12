@@ -1,0 +1,5 @@
+---
+during_discovery: true
+fault: close
+same_preparation_owner: true
+resolver_repeated: false

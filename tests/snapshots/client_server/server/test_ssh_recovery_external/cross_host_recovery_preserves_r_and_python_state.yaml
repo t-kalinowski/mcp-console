@@ -1,0 +1,7 @@
+---
+input_blackhole_recovered: true
+output_blackhole_recovered: true
+same_remote_worker: true
+r_state: 42
+python_state: 42
+confirmed_sandbox_retirement: true

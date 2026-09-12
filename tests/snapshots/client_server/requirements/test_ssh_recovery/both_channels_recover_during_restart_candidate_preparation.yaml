@@ -1,0 +1,4 @@
+---
+both_channels_recovered: true
+candidate_committed_before_replacement: true
+same_preparation_owner: true

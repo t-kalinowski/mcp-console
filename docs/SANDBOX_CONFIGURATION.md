@@ -189,6 +189,9 @@ Explicit remote `R_HOME` and `RETICULATE_PYTHON` values are conveyed separately 
 Standalone `sandbox` still uses local paths and local policy materialization.
 See [SSH execution](SSH.md) for every target field, defaults, error behavior, remote runtime and preparation prerequisites, and lifecycle limits.
 
+SSH `target.lease_ms` freezes an independent per-channel controller lease (30,000 milliseconds by default).
+[SSH execution](SSH.md) defines its allowed range, heartbeat and recovery budgets, same-process recovery, and explicit cleanup receipts.
+
 ## Explicit complete policy
 
 Select a policy explicitly in the trusted process that launches the sandbox:

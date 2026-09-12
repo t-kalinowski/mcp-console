@@ -1,0 +1,11 @@
+---
+send: {}
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false
+---
+same_preparation_owner: true
+callback_replayed: false
