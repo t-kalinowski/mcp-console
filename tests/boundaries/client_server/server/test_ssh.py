@@ -6,12 +6,18 @@ import os
 import shlex
 import subprocess
 import sys
+from contextlib import closing
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.assertions import assert_result_content, last_result_text
+from support.assertions import (
+    assert_result_content,
+    last_result_text,
+    wait_for_evaluation_output,
+)
+from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution
 from support.normalization import code
@@ -167,9 +173,27 @@ def _preinstalled_remote_runtime(binary: Path, execution: Execution) -> Transcri
                     [artifact.read_bytes()],
                     image_reference="local recording artifact",
                 )
-                client.send(r="repeat Sys.sleep(60)", timeout_ms=1)
-                assert "[running;" in last_result_text(client), last_result_text(client)
-                client.send(control="interrupt")
+                with closing(FifoCheckpoint.create(remote / "loop-started")) as started:
+                    client.send(
+                        r=code(r"""
+                            local({
+                              checkpoint <- fifo("loop-started", open = "wb", blocking = TRUE)
+                              writeBin(charToRaw("1"), checkpoint)
+                              close(checkpoint)
+                              repeat Sys.sleep(60)
+                            })
+                            """),
+                        timeout_ms=1,
+                    )
+                    assert "[running;" in last_result_text(client), last_result_text(
+                        client
+                    )
+                    # Running acknowledges admission; the FIFO proves execution
+                    # has reached the remote worker before the interrupt.
+                    started.wait("remote R loop started")
+                    wait_for_evaluation_output(
+                        client, "\n", "remote R interrupt", control="interrupt"
+                    )
                 client.send(r="x")
                 assert last_result_text(client).endswith("[1] 41\n"), last_result_text(
                     client

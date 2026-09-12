@@ -302,7 +302,13 @@ result:
   isError: false
 ---
 send:
-  r: repeat Sys.sleep(60)
+  r: |
+    local({
+      checkpoint <- fifo("loop-started", open = "wb", blocking = TRUE)
+      writeBin(charToRaw("1"), checkpoint)
+      close(checkpoint)
+      repeat Sys.sleep(60)
+    })
   timeout_ms: 1
 result:
   content:

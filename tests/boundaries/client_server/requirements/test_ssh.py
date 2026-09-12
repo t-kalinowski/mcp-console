@@ -364,10 +364,14 @@ def test_failed_remote_activation_preserves_worker_until_restart(binary, executi
             })
             """),
         )
-        assert "remote activation failed" in last_result_text(client), last_result_text(
-            client
+        assert last_tool_text(client) == "Error: remote activation failed\n", (
+            last_tool_text(client)
         )
-        assert len(ir_run_records(ir_record)) == baseline + 1
+        runs = ir_run_records(ir_record)
+        assert len(runs) == baseline + 1, {
+            "baseline": baseline,
+            "requirements": [ir_requirements(run) for run in runs],
+        }
         client.send(r="stopifnot(Sys.getpid() == worker); sentinel")
         assert last_tool_text(client) == "[1] 42\n"
         client.send(requirements={"r": ["praise"]})
