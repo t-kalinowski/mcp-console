@@ -378,7 +378,11 @@ def test_preparation_loss_preserves_ordinary_worker_evaluations(binary):
             assert "unconfirmed" in last_result_text(client), last_result_text(client)
         client.stdin.close()
         client.process.wait(timeout=10)
-        return client.transcript[3:] + [{"stderr": client.stderr.read()}]
+        errors = client.stderr.read()
+        assert "SSH preparation owner stopped" in errors, errors
+        # SSH and adapter diagnostics can both report the lost owner. Their
+        # arrival races adapter exit; the MCP operation errors are recorded.
+        return client.transcript[3:]
 
 
 @requires(SSH, WORKER, PROCESS_EVENTS, command("ir"), command("uv"))
