@@ -167,9 +167,19 @@ Malformed YAML and invalid target configuration are errors in this mode.
 Explicit `sandbox --config-env NAME` also bypasses discovery and retains the complete-policy interface below.
 Both still conflict with explicit `--writable-root` arguments.
 
+### Docker target placement
+
+`target.transport` and `target.compute` are independent.
+Docker accepts local transport and requires an absolute container workspace and an existing image or separate Dockerfile build.
+It runs relay and worker together while retaining the MCP server and recordings on the controller.
+Omitted target and explicit local transport with host compute retain the existing local behavior.
+Native policy and CLI writable roots are materialized inside the container.
+Explicit external mode delegates enforcement to Docker, including networking; a read-write project bind can expose controller recordings to worker writes.
+See [Docker execution](DOCKER.md) for the complete schema, image example, environment and lifecycle contracts, and limits.
+
 ### SSH target placement
 
-Top-level `target` selects SSH execution for `serve` only; it does not select a permission policy.
+An SSH transport under top-level `target` selects SSH execution for `serve` only; it does not select a permission policy.
 For example:
 
 ```yaml

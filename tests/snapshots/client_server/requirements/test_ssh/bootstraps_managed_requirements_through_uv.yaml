@@ -18,7 +18,10 @@ send:
     stopifnot(
       Sys.which("ir") == "",
       requireNamespace("praise", quietly = TRUE),
-      startsWith(Sys.getenv("R_LIBS"), file.path(getwd(), "ir-cache"))
+      startsWith(
+        Sys.getenv("R_LIBS"),
+        paste0(normalizePath("ir-cache", mustWork = TRUE), "/")
+      )
     )
     x <- 42L
     cat("R ready:", x, "\n")

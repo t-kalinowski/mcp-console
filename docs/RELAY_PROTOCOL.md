@@ -20,14 +20,15 @@ server <--> sandbox runner <--> relay <--> worker
 The sandbox frontend execs the runner in the same PID.
 The runner passes the server's piped input and output and inherited error stream through to the target without a data proxy.
 
-With `serve --no-sandbox`, the server starts the configured relay directly:
+For local host execution with `serve --no-sandbox`, the server starts the configured relay directly:
 
 ```text
 server <--> relay <--> worker
             direct-worker owner
 ```
 
-This mode supplies no sandbox policy, sandbox-owned private temporary directory, or runner-owned descendant cleanup.
+This direct relay supplies no sandbox policy, sandbox-owned private temporary directory, or runner-owned descendant cleanup.
+SSH and Docker wrap the same relay protocol at their target; Docker retains its owned container cleanup even when the inner sandbox is disabled.
 The relay receives only standard input, standard output, and standard error from its parent in either mode.
 It need not be the sandbox root or a process-group leader; an ordinary wrapper can launch it as a child with the same streams.
 The internal `worker-relay` command also accepts this protocol when launched directly without a sandbox, with the caller responsible for any descendant cleanup.
@@ -56,9 +57,10 @@ In sandboxed mode, successful managed launcher exit is the server's sandbox-clea
 In direct mode, the server waits for and reaps the relay; its exit supplies no descendant-cleanup guarantee.
 The server owns generation state and available host-side dependency resolution; see [Requirements and environments](REQUIREMENTS.md) for that trust boundary.
 
-## SSH launch envelope
+## Target launch envelope
 
-An [SSH target](SSH.md) uses the same relay messages inside a private launch envelope implemented in `src/ssh.rs` and `src/ssh/launch.rs`:
+SSH and Docker targets use the same relay messages inside the private launch envelope in `src/target_launch.rs` and `src/target_launch/`.
+For an [SSH target](SSH.md), the chain is:
 
 ```text
 local server <--> OpenSSH <--> remote ssh-launch <--> sandbox runner <--> relay <--> worker
@@ -70,17 +72,25 @@ The helper materializes the captured policy on the remote host and never discove
 
 Controller input starts with a four-byte unsigned big-endian length followed by a UTF-8 JSON bootstrap object, limited to 1 MiB.
 Its fields are `version` (currently `2`), `build` (the Console package version), `workspace`, `policy` (the captured native settings object), `writable_roots` (an array), `no_sandbox` (a boolean), and optional `environment` (the discovered capability, runtime selections, and prepared R/Python environments).
+Docker sends no managed environment; the image supplies its bare runtime.
 The helper consumes exactly this frame and passes every following byte to relay stdin, including bytes received in the same write.
 It checks the protocol and Console versions before starting the worker; the relay's `ready` event is not this compatibility check.
-Incompatible changes to the launch envelope or relay wire contract must increment the SSH protocol version, including between development builds with the same package version.
+Incompatible changes to the launch envelope or relay wire contract must increment the target bootstrap protocol version, including between development builds with the same package version.
 
 Helper stdout uses a one-byte tag, a four-byte unsigned big-endian payload length, and the payload.
 Payloads are limited to 64 KiB.
-Tag `1` contains a JSON compatibility response with `version` and `build`; tag `2` contains raw relay stdout bytes, without imposing JSONL boundaries on the chunks; tag `3` contains a terminal JSON object with `confirmed` and nullable `error`.
+Tag `1` contains a JSON compatibility response with `version` and `build`, plus an optional `container_id` supplied by the Docker owner; tag `2` contains raw relay stdout bytes, without imposing JSONL boundaries on the chunks; tag `3` contains a terminal JSON object with `confirmed` and nullable `error`.
 A setup rejection may emit tag `3` without tag `1`.
 The terminal frame must be followed by EOF.
 Unexpected stdout, incompatible versions, oversized or truncated frames, and missing retirement acknowledgment are transport errors.
-Setup and SSH diagnostics use stderr.
+Setup, Docker, and SSH diagnostics use stderr.
+
+For [Docker execution](DOCKER.md), a local ownership helper creates and attaches one container and runs `docker-probe` or `docker-launch` inside it.
+The controller sends that helper a separate bounded length-prefixed JSON request containing the captured session, unique ownership name, probe flag, and bootstrap.
+The helper sends only the bootstrap to the container, consumes the container launcher's envelope, and emits its own envelope with the authoritative container ID.
+Its terminal confirmation describes container removal, including when an inner launcher could not confirm native cleanup.
+The adapter validates that receipt before replacement; CLI exit and an inner launcher receipt cannot substitute for it.
+The initial probe verifies compatibility, policy, workspace, and runtime without starting an analysis worker.
 
 Only the transport adapter removes this envelope; the existing JSONL parser receives unmodified relay bytes.
 Copy tasks use fixed buffers and preserve stream backpressure.
@@ -278,7 +288,8 @@ Signal-derived status 137 is redundant only when relay EOF itself established th
 The server uses a hard runner kill only as the final fail-safe.
 After runner loss there is no independent supervisor to guarantee descendant cleanup or directory removal.
 
-With `--no-sandbox`, the server retains the relay itself as its waitable child and applies the same worker and relay deadlines.
+For local host execution with `--no-sandbox`, the server retains the relay itself as its waitable child and applies the same worker and relay deadlines.
+SSH and Docker adapters retain their ordinary transport child and require their own retirement receipts.
 If the relay has not exited by the applicable deadline, the server sends `SIGTERM` directly to it, allows six seconds before `SIGKILL`, and then allows one second to observe exit.
 The server reaps the relay before admitting a replacement.
 When relay EOF itself established the generation failure, the direct relay's exit status is redundant; otherwise, a nonzero exit after readiness fails retirement.

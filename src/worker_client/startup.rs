@@ -5,15 +5,6 @@ use std::sync::Mutex;
 
 use crate::resolver::ResolverStopHandle;
 
-// The supported targets are macOS and Linux. `cfg(unix)` on shared runtime
-// modules describes their API requirements, not support for other Unix targets.
-#[cfg(target_os = "macos")]
-#[path = "startup/macos.rs"]
-mod platform;
-#[cfg(target_os = "linux")]
-#[path = "startup/linux.rs"]
-mod platform;
-
 #[derive(Default)]
 struct Startup {
     cancelled: Option<String>,
@@ -44,7 +35,7 @@ pub(super) fn with_input_owner<T>(
         // when initialization unwinds. The watcher never consumes MCP input.
         let (completed, completion) = UnixStream::pair()
             .map_err(|error| format!("failed to create MCP startup completion pipe: {error}"))?;
-        let queue = platform::InputWatch::new(completion.as_raw_fd())?;
+        let queue = crate::input_watch::InputWatch::new(completion.as_raw_fd())?;
         let watcher = scope.spawn(|| {
             if let Err(error) = queue.wait(completion) {
                 let mut startup = startup.lock().expect("startup state is not poisoned");

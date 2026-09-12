@@ -1,0 +1,17 @@
+---
+send:
+  python: |
+    import os, sys, subprocess
+    from pathlib import Path
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"], start_new_session=True)
+    print(Path("/etc/hostname").read_text().strip())
+result:
+  content:
+    - type: text
+      text: |
+        <container>
+  isError: false
+---
+lost: process_group_interrupt
+escaped_output_writer: true
+container_absent: true

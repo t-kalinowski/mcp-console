@@ -14,8 +14,6 @@ use crate::cell::{Cell, Language};
 use crate::worker_protocol::{ConsoleChannel, ServerMessage, WorkerMessage};
 
 static R_MAIN_ARGS: OnceLock<Vec<CString>> = OnceLock::new();
-static R_REPL_INIT: OnceLock<ReplInit> = OnceLock::new();
-static R_REPL_DO_ONE: OnceLock<ReplDoOne> = OnceLock::new();
 static R_EVENTS: OnceLock<REvents> = OnceLock::new();
 static R_CHECK_USER_INTERRUPT: OnceLock<CheckUserInterrupt> = OnceLock::new();
 static CELL_SOURCE: Mutex<Option<CellSource>> = Mutex::new(None);
@@ -40,6 +38,26 @@ type ReadConsole = unsafe extern "C-unwind" fn(
     add_history: c_int,
 ) -> c_int;
 type CheckUserInterrupt = unsafe extern "C-unwind" fn();
+type ExecWithCleanup = unsafe extern "C-unwind" fn(
+    unsafe extern "C-unwind" fn(*mut c_void) -> *mut c_void,
+    *mut c_void,
+    unsafe extern "C-unwind" fn(*mut c_void),
+    *mut c_void,
+) -> *mut c_void;
+type ObjectFn = unsafe extern "C-unwind" fn(*mut c_void);
+
+#[repr(C)]
+struct ReplApi {
+    init: ReplInit,
+    do_one: ReplDoOne,
+    top_level_exec: TopLevelExec,
+    exec_with_cleanup: ExecWithCleanup,
+    preserve: ObjectFn,
+    release: ObjectFn,
+    stack_top: *mut c_int,
+    stack: *mut *mut *mut c_void,
+    nil: libr::SEXP,
+}
 type AddInputHandler = unsafe extern "C-unwind" fn(
     *mut c_void,
     c_int,
@@ -153,13 +171,8 @@ unsafe extern "C" {
         sideband_fd: c_int,
         wait_usec: c_int,
     ) -> c_int;
-    fn mcp_r_repl_run_cell(
-        init: ReplInit,
-        do_one: ReplDoOne,
-        before_do_one: extern "C" fn(),
-        check_interrupt: CheckUserInterrupt,
-        interrupts_pending: *const c_int,
-    ) -> c_int;
+    fn mcp_r_repl_configure(api: *const ReplApi);
+    fn mcp_r_repl_run_cell(before_do_one: extern "C" fn()) -> c_int;
 }
 
 unsafe extern "C-unwind" {
@@ -563,12 +576,19 @@ fn initialize_r_repl() -> Result<(), Box<dyn Error>> {
     let remove_input_handler =
         unsafe { *library.get::<RemoveInputHandler>(b"removeInputHandler\0")? };
     let rg_wait_usec = unsafe { *library.get::<*mut c_int>(b"Rg_wait_usec\0")? as usize };
-    R_REPL_INIT
-        .set(init)
-        .map_err(|_| io::Error::other("R REPL was already initialized"))?;
-    R_REPL_DO_ONE
-        .set(do_one)
-        .map_err(|_| io::Error::other("R REPL was already initialized"))?;
+    unsafe {
+        mcp_r_repl_configure(&ReplApi {
+            init,
+            do_one,
+            top_level_exec,
+            exec_with_cleanup: *library.get::<ExecWithCleanup>(b"R_ExecWithCleanup\0")?,
+            preserve: *library.get::<ObjectFn>(b"R_PreserveObject\0")?,
+            release: *library.get::<ObjectFn>(b"R_ReleaseObject\0")?,
+            stack_top: *library.get::<*mut c_int>(b"R_PPStackTop\0")?,
+            stack: *library.get::<*mut *mut *mut c_void>(b"R_PPStack\0")?,
+            nil: libr::R_NilValue,
+        });
+    }
     R_EVENTS
         .set(REvents {
             top_level_exec,
@@ -638,27 +658,10 @@ fn r_input_handlers() -> *mut c_void {
 }
 
 fn run_repl_cell() -> c_int {
-    let init = *R_REPL_INIT
-        .get()
-        .expect("R REPL should be initialized before evaluation");
-    let do_one = *R_REPL_DO_ONE
-        .get()
-        .expect("R REPL should be initialized before evaluation");
-    let check_interrupt = *R_CHECK_USER_INTERRUPT
-        .get()
-        .expect("R interrupt checker should be initialized before evaluation");
-    // SAFETY: Both function pointers are process-lifetime libR symbols with
-    // the declared ABI. This main thread owns R, and the C shim contains R's
-    // top-level jump so it cannot bypass a live Rust frame.
-    unsafe {
-        mcp_r_repl_run_cell(
-            init,
-            do_one,
-            before_repl_iteration,
-            check_interrupt,
-            libr::R_interrupts_pending,
-        )
-    }
+    // SAFETY: The configured API consists of process-lifetime libR symbols.
+    // This main thread owns R; the C shim keeps a live top-level context so
+    // errors and interrupts cannot bypass a Rust frame.
+    unsafe { mcp_r_repl_run_cell(before_repl_iteration) }
 }
 
 extern "C" fn before_repl_iteration() {

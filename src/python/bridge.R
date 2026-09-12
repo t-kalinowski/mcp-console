@@ -20,7 +20,15 @@ base::local(
     pending_requirements <- NULL
     source <- NULL
     `%||%` <- function(x, y) if (is.null(x)) y else x
-    managed_python_disabled_message <- if (!dynamic_resolution) {
+    managed_python_disabled_message <- if (
+      !dynamic_resolution &&
+        Sys.getenv("MCP_CONSOLE_EXECUTION_COMPUTE") == "docker"
+    ) {
+      paste0(
+        "MCP Console dynamic environment resolution is unavailable for Docker targets. ",
+        "Install the distribution in the image and start a new server session."
+      )
+    } else if (!dynamic_resolution) {
       paste0(
         "MCP Console dynamic environment resolution is unavailable. ",
         "Install the distribution into the ambient Python environment, or ",

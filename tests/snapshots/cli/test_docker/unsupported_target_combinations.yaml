@@ -1,0 +1,69 @@
+---
+target:
+  compute:
+    kind: docker
+    image: example
+stderr: >
+  .agents/console/config.yaml: target.workspace must be an absolute remote
+  directory path
+---
+target:
+  workspace: /workspace
+  transport:
+    kind: ssh
+    host: example
+  compute:
+    kind: docker
+    image: example
+stderr: >
+  .agents/console/config.yaml: SSH plus Docker is not supported; Docker
+  requires local transport
+---
+target:
+  workspace: /workspace
+  compute:
+    kind: docker
+    image: example
+    mounts:
+      - target: /workspace
+stderr: |
+  .agents/console/config.yaml: target.compute: missing field `source`
+---
+target:
+  workspace: /workspace
+  compute:
+    kind: docker
+    image: example
+    mounts:
+      - source: .
+        target: /workspace
+        access: write
+stderr: >
+  .agents/console/config.yaml: target.compute: unknown variant `write`,
+  expected `read_only` or `read_write`
+---
+target:
+  workspace: /workspace
+  command: []
+  compute:
+    kind: docker
+    image: example
+stderr: >
+  .agents/console/config.yaml: target.command must be a nonempty argv with
+  a nonempty executable and no NUL bytes
+---
+target:
+  transport:
+    kind: local
+    host: example
+stderr: >
+  .agents/console/config.yaml: target.transport: unknown field `host`,
+  there are no fields
+---
+target:
+  compute:
+    kind: host
+    image: example
+stderr: >
+  .agents/console/config.yaml: target.compute: unknown field `image`,
+  there are no fields

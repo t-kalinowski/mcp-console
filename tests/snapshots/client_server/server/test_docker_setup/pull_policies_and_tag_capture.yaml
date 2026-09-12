@@ -1,0 +1,145 @@
+---
+pull: never
+initially_present: false
+pull_count: 0
+stderr: |+
+  Docker command failed with exit status: 1: Error response from daemon: No such image: <requested image>
+
+---
+pull: never
+initially_present: true
+pull_count: 0
+stderr: ""
+---
+send:
+  r: "42"
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false
+---
+send:
+  control: restart
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: false
+---
+send:
+  r: "42"
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false
+---
+pull: if_missing
+initially_present: false
+pull_count: 1
+stderr: |
+  registry peer: pulled image
+---
+send:
+  r: "42"
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false
+---
+send:
+  control: restart
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: false
+---
+send:
+  r: "42"
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false
+---
+pull: if_missing
+initially_present: true
+pull_count: 0
+stderr: ""
+---
+send:
+  r: "42"
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false
+---
+send:
+  control: restart
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: false
+---
+send:
+  r: "42"
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false
+---
+pull: always
+initially_present: true
+pull_count: 1
+stderr: |
+  registry peer: pulled image
+---
+send:
+  r: "42"
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false
+---
+send:
+  control: restart
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: false
+---
+send:
+  r: "42"
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false
