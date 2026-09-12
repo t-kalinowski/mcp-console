@@ -81,7 +81,10 @@ def main() -> None:
 
     fail = os.environ.get("MCP_CONSOLE_TEST_IR_FAIL_REQUIREMENT")
     if fail is not None and fail in arguments:
-        print(f"synthetic `ir` failure for {fail}", file=sys.stderr)
+        if failure := os.environ.get("MCP_CONSOLE_TEST_IR_FAILURE_OUTPUT"):
+            sys.stderr.buffer.write(Path(failure).read_bytes())
+        else:
+            print(f"synthetic `ir` failure for {fail}", file=sys.stderr)
         raise SystemExit(1)
 
     block = os.environ.get("MCP_CONSOLE_TEST_IR_BLOCK_REQUIREMENT")

@@ -17,7 +17,7 @@ Reconcile the relevant contracts, tests, and current documentation when implemen
 - `docs/ARCHITECTURE.md` describes the implemented process structure, ownership, and lifecycle.
 - `docs/SANDBOX.md` describes application policy, runner integration, supported hosts, and lifetime guarantees.
 - `docs/SANDBOX_CONFIGURATION.md` defines the public configuration interface, environment ownership, caller examples, and transport integrity.
-- `docs/SSH.md` defines remote target configuration, preinstalled runtime requirements, launch framing, retirement confirmation, and local recording semantics.
+- `docs/SSH.md` defines remote target configuration, runtime prerequisites, managed preparation, launch framing, retirement confirmation, and local recording semantics.
 - `docs/LINUX_COMPATIBILITY.md` records capability requirements, security comparisons, native backend differences, and tested Linux baselines.
 - `docs/SANDBOX_RUNNER_INTEGRATION.md` records the migration baseline, fixture changes, supported-host validation, and changed guarantees.
 - `docs/PYTHON.md` describes the synchronous and asynchronous Python clients and framework integrations.

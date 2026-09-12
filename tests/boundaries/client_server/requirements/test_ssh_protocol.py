@@ -17,7 +17,16 @@ from support.suites import run_this_suite
 @requires(SSH)
 def test_invalid_preparation_results_never_commit_or_launch(binary):
     transcript = []
-    for mode in ("unconfirmed", "truncated", "missing", "mismatched", "malformed"):
+    for mode in (
+        "unconfirmed",
+        "truncated",
+        "missing",
+        "mismatched",
+        "malformed",
+        "truncated-error",
+        "mismatched-error",
+        "error-success",
+    ):
         with TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             record = root / "requests"

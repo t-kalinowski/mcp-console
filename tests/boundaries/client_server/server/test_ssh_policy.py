@@ -17,6 +17,7 @@ from support.normalization import code
 from support.r import r_test_environment
 from support.records import Transcript
 from support.requirements import SANDBOX, WORKER, requires
+from support.resolvers import send_and_collect_runtime_python_resolution
 from support.ssh import (
     CONFIG,
     SSH,
@@ -81,7 +82,7 @@ def test_policy_uses_remote_paths_and_native_validation(binary: Path) -> Transcr
                 binary, ("serve", "--writable-root", "cli"), environment, local
             ) as client:
                 client.initialize_and_list_tools()
-                client.send(r=EXERCISE)
+                send_and_collect_runtime_python_resolution(client, r=EXERCISE)
                 assert (
                     last_result_text(client)
                     == "remote relative and CLI grants verified\n"
@@ -93,7 +94,9 @@ def test_policy_uses_remote_paths_and_native_validation(binary: Path) -> Transcr
             configure(local, remote, [str(binary)], sandbox=selected)
             with McpClient(binary, ("serve",), environment, local) as client:
                 client.initialize_and_list_tools()
-                client.send(r="must_not_run <- TRUE")
+                send_and_collect_runtime_python_resolution(
+                    client, r="must_not_run <- TRUE"
+                )
                 assert "remote launcher exited" in last_result_text(client), (
                     last_result_text(client)
                 )
@@ -181,6 +184,35 @@ def test_invalid_environment_reaches_remote_native_validation(
         return transcript
 
 
+@requires(SSH)
+def test_nul_runtime_selectors_fail_on_remote_host_without_panicking(
+    binary: Path,
+) -> Transcript:
+    transcript = []
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        with localhost(root / "sshd") as environment:
+            trap = poison_controller(root / "sshd", environment)
+            for name in ("R_HOME", "RETICULATE_PYTHON"):
+                configure(
+                    root,
+                    root,
+                    [str(binary)],
+                    sandbox={"environment": {name: "invalid\0selection"}},
+                )
+                with McpClient(binary, ("serve",), environment, root) as client:
+                    assert client.process.wait(timeout=12) != 0
+                    assert not client.stdout.read()
+                    errors = client.stderr.read()
+                    assert f"remote {name} selection must not contain NUL" in errors, (
+                        errors
+                    )
+                    assert "panicked" not in errors, errors
+                    transcript.append({"selection": name, "standard_error": errors})
+            assert not trap.exists(), "controller discovered an execution runtime"
+    return transcript
+
+
 @requires(EXTERNAL_SSH)
 def test_external_execution_host_policy(binary: Path) -> Transcript:
     # Test infrastructure provisions the host and existing workspace. No uploads,
@@ -215,11 +247,12 @@ def test_external_execution_host_policy(binary: Path) -> Transcript:
             binary, ("serve", "--writable-root", "cli"), environment, local
         ) as client:
             client.initialize_and_list_tools()
-            client.send(
+            send_and_collect_runtime_python_resolution(
+                client,
                 r="stopifnot(Sys.info()[['sysname']] == "
                 + json.dumps(external["platform"])
                 + "); "
-                + EXERCISE
+                + EXERCISE,
             )
             assert (
                 last_result_text(client) == "remote relative and CLI grants verified\n"

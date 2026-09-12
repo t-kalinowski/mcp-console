@@ -94,14 +94,18 @@ def test_discovers_remote_capability_without_preparing(binary: Path) -> Transcri
 
 
 @contextmanager
-def managed_session(binary, execution, *, selected_python=False, inherit=True):
+def managed_session(
+    binary, execution, *, selected_python=False, inherit=True, failure_output=None
+):
     with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
         local, remote = root / "controller", root / "remote"
         local.mkdir()
         remote.mkdir()
         r_environment, ir_record = recording_ir_environment(
-            remote, fail_requirement="console.test.failure"
+            remote,
+            fail_requirement="console.test.failure",
+            failure_output=failure_output,
         )
         uv_environment, uv_record = recording_uv_environment(remote)
         # These are trusted execution-host settings supplied by the SSH account's
@@ -340,6 +344,38 @@ def test_failed_restart_and_invalid_requirements_preserve_worker(binary, executi
         return json.loads(
             json.dumps(client.finish()[3:]).replace(str(remote.parent), "<ssh-test>")
         )
+
+
+@requires(SSH, WORKER, command("ir"), command("uv"))
+@executions(DIRECT, SANDBOXED)
+def test_large_remote_install_failure_preserves_diagnostics_and_worker(
+    binary, execution
+):
+    diagnostic = ('compile: α\t"error"\\source ' * 128).rstrip()
+    diagnostics = ((diagnostic + "\n") * 352) + "final diagnostic"
+    with managed_session(binary, execution, failure_output=diagnostics) as (
+        client,
+        remote,
+        ir_record,
+        uv_record,
+    ):
+        send_and_collect_runtime_python_resolution(
+            client, r="sentinel <- 42L; worker <- Sys.getpid()"
+        )
+        client.send(
+            control="restart",
+            r="sentinel <- 0L",
+            requirements={"r": ["console.test.failure"]},
+        )
+        assert client.transcript[-1]["result"]["isError"]
+        output = last_result_text(client)
+        expected = f"[R package resolution failed with exit status: 1: {diagnostics}]"
+        assert output == expected, {"length": len(output), "prefix": output[:500]}
+        client.send(r="stopifnot(Sys.getpid() == worker); sentinel")
+        assert last_tool_text(client) == "[1] 42\n"
+        client.send(requirements={"r": ["praise"]}, r="sentinel")
+        assert last_tool_text(client) == "[1] 42\n"
+        return client.finish()[3:]
 
 
 @requires(SSH, WORKER, command("ir"), command("uv"))

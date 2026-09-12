@@ -107,6 +107,7 @@ struct Pending {
     id: u64,
     state: Arc<State>,
     reply: Reply,
+    error: Option<String>,
 }
 
 impl Preparation {
@@ -182,6 +183,7 @@ impl Preparation {
             id: 0,
             state: state.clone(),
             reply,
+            error: None,
         };
         let blocked = session.blocked.clone();
         let open = Input::Open {
@@ -319,7 +321,12 @@ fn run(
                     state,
                     reply,
                 } if active.is_none() && !close_requested => {
-                    active = Some(Pending { id, state, reply });
+                    active = Some(Pending {
+                        id,
+                        state,
+                        reply,
+                        error: None,
+                    });
                     outgoing
                         .send(Input::Run { id, operation })
                         .map_err(|_| "SSH preparation writer stopped")?;
@@ -364,6 +371,13 @@ fn run(
                         let _ = reply.send(result);
                     }
                 }
+                Event::Received(Ok(Output::ErrorChunk { id, text })) if hello => {
+                    let pending = active
+                        .as_mut()
+                        .filter(|pending| pending.id == id)
+                        .ok_or("mismatched SSH preparation diagnostic")?;
+                    pending.error.get_or_insert_default().push_str(&text);
+                }
                 Event::Received(Ok(Output::Completed {
                     id,
                     result,
@@ -371,9 +385,19 @@ fn run(
                     confirmed,
                 })) if hello => {
                     let pending = active
-                        .as_ref()
+                        .as_mut()
                         .filter(|pending| pending.id == id)
                         .ok_or("mismatched SSH preparation result")?;
+                    if pending.error.is_some() && result.is_ok() {
+                        return Err("SSH preparation diagnostics followed by success".into());
+                    }
+                    let result = result.map_err(|error| match pending.error.take() {
+                        Some(mut prefix) => {
+                            prefix.push_str(&error);
+                            prefix
+                        }
+                        None => error,
+                    });
                     if !confirmed {
                         return Err("remote preparation process cleanup failed".into());
                     }

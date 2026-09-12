@@ -185,16 +185,19 @@ pub(super) fn run() -> Result<(), String> {
     crate::ssh::enter_workspace(&workspace)?;
     // Only these runtime selections cross the workload boundary. This is the
     // single-threaded entry point; later worker environment changes cannot reach it.
-    unsafe {
-        if let Some(home) = selections.r_home {
-            std::env::set_var("R_HOME", home);
-        }
-        if let Some(python) = selections.python {
-            std::env::set_var("RETICULATE_PYTHON", python);
+    for (name, value) in [
+        ("R_HOME", selections.r_home),
+        ("RETICULATE_PYTHON", selections.python),
+    ] {
+        if let Some(value) = value {
+            if value.contains('\0') {
+                return Err(format!("remote {name} selection must not contain NUL"));
+            }
+            unsafe { std::env::set_var(name, value) };
         }
     }
     let (events, received) = mpsc::channel();
-    let (outgoing, output) = mpsc::channel();
+    let (outgoing, output) = mpsc::channel::<Output>();
     let (input_cancelled, input_cancel) = io::pipe().map_err(|e| e.to_string())?;
     let (output_cancelled, output_cancel) = io::pipe().map_err(|e| e.to_string())?;
     let input_events = events.clone();
@@ -218,7 +221,7 @@ pub(super) fn run() -> Result<(), String> {
         let result = (|| {
             let mut writer = Io::new(duplicate(1)?, Some(output_cancelled), None)?;
             for message in output {
-                super::write(&mut writer, &message)?;
+                message.write(&mut writer)?;
             }
             Ok::<(), String>(())
         })();

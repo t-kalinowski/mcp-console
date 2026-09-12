@@ -18,7 +18,7 @@ pub(crate) use client::Preparation;
 #[cfg(not(unix))]
 pub(crate) use unsupported::Preparation;
 
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 const LIMIT: usize = 1024 * 1024;
 
 #[derive(Default, Clone, Deserialize, Serialize)]
@@ -101,6 +101,10 @@ enum Output {
         version: u32,
         build: String,
     },
+    ErrorChunk {
+        id: u64,
+        text: String,
+    },
     Completed {
         id: u64,
         result: Result<serde_json::Value, String>,
@@ -112,6 +116,43 @@ enum Output {
         result: Result<bool, String>,
     },
     Closed,
+}
+
+impl Output {
+    fn write(&self, writer: &mut impl Write) -> Result<(), String> {
+        let Self::Completed {
+            id,
+            result: Err(error),
+            control,
+            confirmed,
+        } = self
+        else {
+            return write(writer, self);
+        };
+        // JSON can expand each text byte to six bytes. Leave room for the
+        // envelope and keep the final result and retirement receipt together.
+        let mut tail = error.as_str();
+        while tail.len() > LIMIT / 8 {
+            let end = tail.floor_char_boundary(LIMIT / 8);
+            write(
+                writer,
+                &Self::ErrorChunk {
+                    id: *id,
+                    text: tail[..end].to_owned(),
+                },
+            )?;
+            tail = &tail[end..];
+        }
+        write(
+            writer,
+            &Self::Completed {
+                id: *id,
+                result: Err(tail.to_owned()),
+                control: *control,
+                confirmed: *confirmed,
+            },
+        )
+    }
 }
 
 fn write(writer: &mut impl Write, message: &impl Serialize) -> Result<(), String> {

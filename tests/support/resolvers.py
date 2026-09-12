@@ -21,6 +21,7 @@ def recording_ir_environment(
     directory: Path,
     *,
     fail_requirement: str | None = None,
+    failure_output: str | None = None,
 ) -> tuple[dict[str, str], Path]:
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
@@ -37,6 +38,10 @@ def recording_ir_environment(
     environment["MCP_CONSOLE_TEST_IR_RECORD"] = str(record)
     if fail_requirement is not None:
         environment["MCP_CONSOLE_TEST_IR_FAIL_REQUIREMENT"] = fail_requirement
+    if failure_output is not None:
+        failure = directory / "ir-failure-output"
+        failure.write_text(failure_output, encoding="utf-8")
+        environment["MCP_CONSOLE_TEST_IR_FAILURE_OUTPUT"] = str(failure)
     return environment, record
 
 

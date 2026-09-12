@@ -204,3 +204,127 @@ result:
   isError: true
 ---
 stderr: ""
+---
+peer: truncated-error
+---
+send:
+  requirements:
+    r:
+      - praise
+result:
+  content:
+    - type: text
+      text: >-
+        SSH preparation retirement is unconfirmed: truncated SSH frame length:
+        failed to fill whole buffer
+  isError: true
+---
+send:
+  requirements:
+    r:
+      - praise
+result:
+  content:
+    - type: text
+      text: >-
+        SSH preparation retirement is unconfirmed; this session cannot prepare
+        or start a replacement: truncated SSH frame length: failed to fill whole
+        buffer
+  isError: true
+---
+send:
+  control: restart
+  r: must_not_run <- TRUE
+result:
+  content:
+    - type: text
+      text: |-
+        [starting new worker]
+        [SSH preparation retirement is unconfirmed; this session cannot prepare or start a replacement: truncated SSH frame length: failed to fill whole buffer]
+        session restart did not complete; cell was not run
+  isError: true
+---
+stderr: |
+  SSH preparation owner stopped
+---
+peer: mismatched-error
+---
+send:
+  requirements:
+    r:
+      - praise
+result:
+  content:
+    - type: text
+      text: >-
+        SSH preparation retirement is unconfirmed: mismatched SSH preparation
+        diagnostic
+  isError: true
+---
+send:
+  requirements:
+    r:
+      - praise
+result:
+  content:
+    - type: text
+      text: >-
+        SSH preparation retirement is unconfirmed; this session cannot prepare
+        or start a replacement: mismatched SSH preparation diagnostic
+  isError: true
+---
+send:
+  control: restart
+  r: must_not_run <- TRUE
+result:
+  content:
+    - type: text
+      text: |-
+        [starting new worker]
+        [SSH preparation retirement is unconfirmed; this session cannot prepare or start a replacement: mismatched SSH preparation diagnostic]
+        session restart did not complete; cell was not run
+  isError: true
+---
+stderr: |
+  SSH preparation owner stopped
+---
+peer: error-success
+---
+send:
+  requirements:
+    r:
+      - praise
+result:
+  content:
+    - type: text
+      text: >-
+        SSH preparation retirement is unconfirmed: SSH preparation diagnostics
+        followed by success
+  isError: true
+---
+send:
+  requirements:
+    r:
+      - praise
+result:
+  content:
+    - type: text
+      text: >-
+        SSH preparation retirement is unconfirmed; this session cannot prepare
+        or start a replacement: SSH preparation diagnostics followed by success
+  isError: true
+---
+send:
+  control: restart
+  r: must_not_run <- TRUE
+result:
+  content:
+    - type: text
+      text: |-
+        [starting new worker]
+        [SSH preparation retirement is unconfirmed; this session cannot prepare or start a replacement: SSH preparation diagnostics followed by success]
+        session restart did not complete; cell was not run
+  isError: true
+---
+stderr: |
+  SSH preparation owner stopped

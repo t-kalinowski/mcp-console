@@ -105,7 +105,8 @@ Its operations are limited to bootstrap preparation, R libraries, Python manifes
 They call the same embedded resolver implementation used locally.
 The private requests carry no shell programs, source code, executable choices, or arbitrary environment overrides.
 Preparation uses a separate versioned, length-prefixed JSON protocol with a 1 MiB message limit; installer output is captured separately from protocol frames.
-Launch protocol version 2 carries the selected environment, and preparation protocol version 1 requires a matching Console package version.
+Large installer errors use bounded diagnostic chunks followed by the final result and cleanup receipt, preserving the complete error without changing its failure classification.
+Launch protocol version 2 carries the selected environment, and preparation protocol version 2 requires a matching Console package version.
 Older preinstalled-only peers fail compatibility checks before MCP readiness.
 Resolver programs, temporary files, interpreter checks, Matplotlib preparation, and caches belong to the execution host.
 Python resolution retains the existing treatment of `UV_OFFLINE`, `UV_NO_CACHE`, and `RETICULATE_UV`.
