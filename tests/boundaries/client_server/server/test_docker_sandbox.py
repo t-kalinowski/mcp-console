@@ -203,6 +203,63 @@ def test_delegated_environment_and_no_sandbox(binary: Path) -> Transcript:
 
 
 @requires(DOCKER)
+def test_runtime_discovery_uses_workload_environment(binary: Path) -> Transcript:
+    reference = image()
+    records = []
+    for arguments in (("serve",), ("serve", "--no-sandbox")):
+        for inherit in (True, False):
+            with workspace() as root:
+                runtime = root / "runtime"
+                runtime.mkdir()
+                selector = runtime / "R"
+                selector.write_text(
+                    code("""
+                    #!/bin/sh
+                    test "$DISCOVERY_VALUE" = selected || exit 91
+                    exec /usr/bin/R "$@"
+                """)
+                )
+                selector.chmod(0o755)
+                config = configure(
+                    root,
+                    reference,
+                    command=[
+                        "/usr/bin/env",
+                        "-u",
+                        "R_HOME",
+                        "PATH=/opt/analysis/bin",
+                        "/opt/analysis/bin/mcp-console",
+                    ],
+                    mounts=[{"source": str(runtime), "target": "/runtime"}],
+                    environment={
+                        "PATH": "/runtime:/usr/bin:/bin",
+                        "DISCOVERY_VALUE": "selected",
+                    },
+                )
+                policy = json.loads(config.read_text())
+                policy["sandbox"]["inherit_environment"] = inherit
+                config.write_text(json.dumps(policy))
+                with McpClient(binary, arguments, current_directory=root) as client:
+                    client.initialize_and_list_tools()
+                    client.send(
+                        r=code("""
+                            stopifnot(
+                              R.home() == "/usr/lib/R",
+                              Sys.getenv("DISCOVERY_VALUE") == "selected"
+                            )
+                            cat("workload R discovered\\n")
+                        """),
+                    )
+                    assert last_result_text(client) == "workload R discovered\n"
+                    transcript = client.finish()[3:]
+                records.append(
+                    {"arguments": list(arguments), "inherit_environment": inherit}
+                )
+                records.extend(transcript)
+    return records
+
+
+@requires(DOCKER)
 def test_explicit_proxy_uses_native_setup(binary: Path) -> Transcript:
     reference = image()
     with workspace() as root:

@@ -122,6 +122,7 @@ Select an appropriate image user or `compute.user` when this matters; Console do
 ## Environment and sandbox selection
 
 Setup checks Console package/protocol compatibility, the container workspace, R discovery and shared `libR` loadability, Python execution, and native preflight before announcing readiness.
+When `R_HOME` is not selected, both the readiness probe and worker discover R using the effective workload environment, including its configured `PATH`.
 Python 3.10 or later is required.
 Supply `RETICULATE_PYTHON` in the image or workload environment to select an interpreter; without it, the readiness probe requires `python3` on the workload's `PATH`.
 It does not start the analysis worker during this probe.

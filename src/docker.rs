@@ -336,21 +336,9 @@ pub(crate) fn configure_runtime(
             {
                 command.env(name, value);
             }
-            None if name == "R_HOME" => {
-                let output = Command::new("R")
-                    .arg("RHOME")
-                    .output()
-                    .map_err(|error| format!("cannot discover container R: {error}"))?;
-                if !output.status.success() {
-                    return Err(format!(
-                        "container R RHOME failed: {}",
-                        String::from_utf8_lossy(&output.stderr)
-                    ));
-                }
-                let home = String::from_utf8(output.stdout).map_err(|error| error.to_string())?;
-                command.env(name, home.trim());
-            }
             _ => {
+                // Without an explicit R_HOME, the runtime probe and worker
+                // discover R after the workload environment is applied.
                 command.env_remove(name);
             }
         }
