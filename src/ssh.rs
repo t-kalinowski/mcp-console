@@ -128,7 +128,7 @@ impl Session {
         policy: &crate::settings::SandboxSettings,
         on_started: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
     ) -> Result<preparation::Discovery, String> {
-        let selections = preparation::Selections::from_policy(policy)?;
+        let selections = preparation::Selections::from_policy(policy);
         let (preparation, discovery) =
             preparation::Preparation::open(self, selections, on_started)?;
         self.preparation = Some(preparation);

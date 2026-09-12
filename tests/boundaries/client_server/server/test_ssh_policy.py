@@ -17,7 +17,15 @@ from support.normalization import code
 from support.r import r_test_environment
 from support.records import Transcript
 from support.requirements import SANDBOX, WORKER, requires
-from support.ssh import CONFIG, SSH, EXTERNAL_SSH, configure, localhost
+from support.ssh import (
+    CONFIG,
+    SSH,
+    EXTERNAL_SSH,
+    configure,
+    localhost,
+    poison_controller,
+    remote_command,
+)
 from support.suites import run_this_suite
 
 
@@ -112,6 +120,65 @@ def test_policy_uses_remote_paths_and_native_validation(binary: Path) -> Transcr
         )
         assert result.returncode == 0 and result.stdout.strip() == str(local), result
         return transcript + [{"standalone_sandbox_remained_local": True}]
+
+
+@requires(SSH, WORKER, SANDBOX)
+def test_invalid_environment_reaches_remote_native_validation(
+    binary: Path,
+) -> Transcript:
+    r_environment, _ = r_test_environment()
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        local, remote = root / "local", root / "remote"
+        local.mkdir()
+        remote.mkdir()
+        prefix = remote_command(
+            remote,
+            binary,
+            {
+                "PATH": "/usr/bin:/bin",
+                "R_HOME": r_environment["R_HOME"],
+                "R_LIBS_USER": "/unavailable",
+                "R_LIBS_SITE": "/unavailable",
+            },
+        )
+        transcript = []
+        with localhost(root / "sshd") as environment:
+            trap = poison_controller(root / "sshd", environment)
+            for inherit in (True, False):
+                for invalid in ([], {"R_HOME": 42}, {"RETICULATE_PYTHON": 42}):
+                    configure(
+                        local,
+                        remote,
+                        prefix,
+                        sandbox={
+                            "inherit_environment": inherit,
+                            "environment": invalid,
+                        },
+                    )
+                    with McpClient(binary, ("serve",), environment, local) as client:
+                        client.initialize_and_list_tools()
+                        client.send(r="must_not_run <- TRUE")
+                        assert "remote launcher exited" in last_result_text(client), (
+                            last_result_text(client)
+                        )
+                        client.stdin.close()
+                        client.stdout.read(timeout=12)
+                        stderr = client.stderr.read(timeout=12)
+                        client.process.wait(timeout=12)
+                        assert (
+                            "mcp-console-sandbox: invalid configuration JSON" in stderr
+                        ), stderr
+                        stderr = re.sub(
+                            r"(at line [0-9]+, column )[0-9]+", r"\1<column>", stderr
+                        )
+                        transcript.append(
+                            {"inherit_environment": inherit, "environment": invalid}
+                        )
+                        transcript.extend(client.transcript[3:])
+                        transcript.append({"standard_error": stderr})
+            assert not trap.exists(), "controller discovered an execution runtime"
+        return transcript
 
 
 @requires(EXTERNAL_SSH)

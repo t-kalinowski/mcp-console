@@ -29,27 +29,20 @@ pub(crate) struct Selections {
 }
 
 impl Selections {
-    pub fn from_policy(policy: &crate::settings::SandboxSettings) -> Result<Self, String> {
-        let mut selections = Self::default();
-        if let Some(environment) = policy.get("environment") {
-            let environment = environment
-                .as_object()
-                .ok_or("sandbox.environment must be a mapping")?;
-            for (name, selection) in [
-                ("R_HOME", &mut selections.r_home),
-                ("RETICULATE_PYTHON", &mut selections.python),
-            ] {
-                if let Some(value) = environment.get(name) {
-                    *selection = Some(
-                        value
-                            .as_str()
-                            .ok_or_else(|| format!("{name} must be a string"))?
-                            .into(),
-                    );
-                }
-            }
+    pub fn from_policy(policy: &crate::settings::SandboxSettings) -> Self {
+        // Extract usable selectors without validating native policy on the
+        // controller. Other shapes remain in the captured policy for the host.
+        let selection = |name| {
+            policy
+                .get("environment")?
+                .get(name)?
+                .as_str()
+                .map(str::to_owned)
+        };
+        Self {
+            r_home: selection("R_HOME"),
+            python: selection("RETICULATE_PYTHON"),
         }
-        Ok(selections)
     }
 }
 

@@ -63,6 +63,7 @@ Native modes, proxy fields, omitted values, and explicit nulls retain the [sandb
 The worker inherits the remote environment, then applies `sandbox.environment` and `sandbox.inherit_environment`.
 These settings configure the workload, not SSH, `uvx`, or trusted preparation.
 Two runtime selections also inform preparation: an explicit `sandbox.environment.R_HOME` selects the remote R installation, and `sandbox.environment.RETICULATE_PYTHON` selects the remote Python mode.
+The controller extracts only string selections; malformed environment fields remain in the captured policy for validation on the execution host.
 No other workload environment settings are applied to the preparation owner.
 The controller does not send its ambient R/Python paths, `HOME`, `TMPDIR`, or loader variables.
 For an installation outside the remote SSH `PATH`, configure the execution-host paths explicitly:
