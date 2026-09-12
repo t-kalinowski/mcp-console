@@ -60,9 +60,11 @@ result:
 
         Execution target:
         {"transport":{"kind":"ssh","host":"console-test"},"workspace":"<ssh-test>/remote
-        space ' ; $()"}. R, Python, and SQL adapters and packages must already
-        be installed there; managed preparation is unsupported for SSH targets.
-        Records and returned images are saved locally beneath
+        space ' ; $()"}. Dependency capability is discovered there. When
+        available, managed defaults and requested R, Python, and DuckDB
+        dependencies are prepared outside the worker sandbox with the remote
+        account's trusted setup permissions; bare runtimes require preinstalled
+        packages. Records and returned images are saved locally beneath
         .agents/console/sessions/. Files created by code remain remote. The
         source-only Quarto export does not reproduce the remote filesystem.
       inputSchema:
@@ -210,8 +212,8 @@ result:
   content:
     - type: text
       text: >-
-        managed preparation is unsupported for SSH targets; provision the remote
-        runtime before starting MCP Console
+        dynamic environment resolution is unavailable; install `ir` or `uv` and
+        restart MCP Console
   isError: true
 ---
 send:
@@ -257,8 +259,9 @@ result:
         No module named 'mcpConsoleDefinitelyMissingPackage'.
 
 
-        managed preparation is unsupported for SSH targets; provision the remote
-        runtime before starting MCP Console
+        MCP Console dynamic environment resolution is unavailable. Install the
+        distribution into the ambient Python environment, or install `ir` or
+        `uv` and restart MCP Console.
   isError: false
 ---
 send:

@@ -1,0 +1,51 @@
+---
+send:
+  requirements:
+    r:
+      - praise
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+send:
+  r: x <- 42L; stopifnot(requireNamespace("praise", quietly = TRUE)); x
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false
+---
+send:
+  requirements:
+    python:
+      - humanize
+  control: restart
+  r: x <- 0L
+result:
+  content:
+    - type: text
+      text: >-
+        [managed Python requirements are disabled because the session uses a
+        user-selected Python environment]
+  isError: true
+---
+send:
+  r: x
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false
+---
+send:
+  python: import sys; print(sys.executable)
+result:
+  content:
+    - type: text
+      text: |
+        <selected-remote-python>
+  isError: false

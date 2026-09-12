@@ -40,7 +40,7 @@ def bootstrap(
     version = subprocess.check_output([binary, "--version"], text=True).split()[1]
     body = json.dumps(
         {
-            "version": 1,
+            "version": 2,
             "build": version,
             "workspace": str(workspace),
             "policy": policy or {},
@@ -163,3 +163,45 @@ LogLevel VERBOSE
         process.terminate()
         process.wait(timeout=10)
         reader.close()
+
+
+def remote_command(root: Path, binary: Path, environment: dict[str, str]) -> list[str]:
+    prefix = root / "remote-console"
+    prefix.write_text(
+        "#!/bin/sh\nexec "
+        + shlex.join(
+            [
+                "/usr/bin/env",
+                "-i",
+                *(f"{name}={value}" for name, value in environment.items()),
+                str(binary),
+            ]
+        )
+        + ' "$@"\n'
+    )
+    prefix.chmod(0o755)
+    return [str(prefix)]
+
+
+def poison_controller(root: Path, environment: dict[str, str]) -> Path:
+    trap = root / "controller-discovery"
+    for name in ("R", "Rscript", "uv", "uvx", "ir", "python", "python3"):
+        executable = root / name
+        executable.write_text(
+            code("""
+                #!/bin/sh
+                printf called >> TRAP
+                exit 93
+                """).replace("TRAP", shlex.quote(str(trap)))
+        )
+        executable.chmod(0o755)
+    environment.update(
+        {
+            "PATH": str(root),
+            "R_HOME": "/controller-must-not-discover-R",
+            "RETICULATE_PYTHON": "/controller-must-not-select-python",
+            "IR_CACHE_DIR": str(root / "controller-ir"),
+            "UV_CACHE_DIR": str(root / "controller-uv"),
+        }
+    )
+    return trap

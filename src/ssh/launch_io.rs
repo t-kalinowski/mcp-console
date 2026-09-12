@@ -118,8 +118,9 @@ impl<T: AsRawFd + Write> Write for Io<T> {
                         io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
                     ) =>
                 {
-                    // A full SSH stdout must not hide input closure during
-                    // bootstrap or terminal acknowledgment delivery.
+                    // Bootstrap has no input owner yet. After one supplies a
+                    // cancellation pipe, let that owner arbitrate input closure
+                    // independently of this backpressured output stream.
                     let ready = poll(
                         &[
                             (self.inner.as_raw_fd(), libc::POLLOUT),
@@ -127,7 +128,7 @@ impl<T: AsRawFd + Write> Write for Io<T> {
                                 self.cancelled.as_ref().map_or(-1, AsRawFd::as_raw_fd),
                                 libc::POLLIN,
                             ),
-                            (0, 0),
+                            (if self.cancelled.is_none() { 0 } else { -1 }, 0),
                         ],
                         self.deadline,
                     )

@@ -11,11 +11,14 @@ Prepared requirements configure the built-in worker; they do not attach an R pac
 Runtime use is covered by the [built-in runtime guide](BUILTIN_RUNTIME.md).
 Exact live-worker messages and custom-worker receipts belong to the [worker protocol](WORKER_PROTOCOL.md).
 
-[SSH targets](SSH.md) always use preinstalled environments and the bare-runtime capability model.
-The controller does not discover local R/Python, prepare managed defaults, or run resolvers for remote callbacks.
-`requirements` is absent from the tool schema; explicit preparation fails before code, stdin, or control side effects with an SSH-specific unsupported-preparation error.
-Remote R, Python selection, packages, SQL providers, and extensions must already be available through the remote environment and supported worker-environment configuration.
-Remote dependency setup is not implemented.
+[SSH targets](SSH.md) use the same capability discovery and managed preparation on the execution host.
+The controller never discovers local R/Python or executes resolvers for remote sessions.
+A separate trusted remote preparation owner captures resolver settings before MCP readiness without preparing defaults or starting a worker.
+When a bootstrap is available, `requirements`, first-use defaults, automatic R/Python requests, and restart preparation use the remote R installation, caches, filesystem, and temporary files.
+Bare fallback remains available when no bootstrap is found; a selected bootstrap failure does not fall back.
+An explicit remote Python interpreter disables managed Python additions while retaining managed R and DuckDB.
+The local server keeps requirement merging, transaction and activation decisions, generation ownership, and recording.
+Remote results require confirmed resolver cleanup before commit; uncertain completion blocks further preparation and replacement.
 
 On Linux, preparing a managed environment can compile R packages, including the resolver's own `pak` tooling.
 On Debian and Ubuntu, install `build-essential`, `pkg-config`, and `libcurl4-openssl-dev` for that bootstrap.

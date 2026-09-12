@@ -4,6 +4,7 @@ import base64
 import json
 import os
 import shlex
+import subprocess
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -29,17 +30,28 @@ def _preinstalled_remote_runtime(binary: Path, execution: Execution) -> Transcri
         local.mkdir()
         remote.mkdir()
         value = "literal space ' \" ; $(echo unexpected) $HOME"
-        remote_environment, _ = r_test_environment()
+        remote_environment, rscript = r_test_environment()
+        preinstalled_libraries = subprocess.check_output(
+            [
+                rscript,
+                "--vanilla",
+                "-e",
+                "cat(paste(.libPaths(), collapse = .Platform$path.sep))",
+            ],
+            env=remote_environment,
+            text=True,
+        )
         prefix = root / "command space ' ; $()"
         prefix.write_text(
             code(r"""
                 #!/bin/sh
                 [ "$1" = VALUE ] || exit 23
                 shift
-                exec EXECUTABLE "$@"
+                exec /usr/bin/env -i PATH=/usr/bin:/bin R_HOME=RHOME R_LIBS_USER=/unavailable R_LIBS_SITE=/unavailable EXECUTABLE "$@"
                 """)
             .replace("VALUE", shlex.quote(value))
             .replace("EXECUTABLE", shlex.quote(str(binary)))
+            .replace("RHOME", shlex.quote(remote_environment["R_HOME"]))
         )
         prefix.chmod(0o755)
         config = configure(
@@ -53,7 +65,7 @@ def _preinstalled_remote_runtime(binary: Path, execution: Execution) -> Transcri
                     "R_HOME": remote_environment["R_HOME"],
                     "R_LIBS": os.environ.get(
                         "MCP_CONSOLE_TEST_SSH_R_LIBS",
-                        remote_environment.get("R_LIBS", ""),
+                        preinstalled_libraries,
                     ),
                     "R_PROFILE_USER": os.devnull,
                     "RETICULATE_PYTHON": sys.executable,
@@ -105,7 +117,7 @@ def _preinstalled_remote_runtime(binary: Path, execution: Execution) -> Transcri
                     stdin="unwanted\n",
                 )
                 assert (
-                    "managed preparation is unsupported for SSH targets"
+                    "dynamic environment resolution is unavailable"
                     in last_result_text(client)
                 )
                 client.send(r="x")
@@ -129,7 +141,7 @@ def _preinstalled_remote_runtime(binary: Path, execution: Execution) -> Transcri
                         """).rstrip()
                 )
                 assert (
-                    "managed preparation is unsupported for SSH targets"
+                    "dynamic environment resolution is unavailable"
                     in last_result_text(client)
                 ), last_result_text(client)
                 client.send(sql="SELECT 6 * 7 AS answer")
@@ -235,7 +247,7 @@ def _peer(binary: Path, mode: str) -> Transcript:
                 "stdout": "unexpected stdout",
                 "incompatible": "incompatible SSH bootstrap",
                 "lost": "unconfirmed",
-                "resolver": "unexpected remote resolution request",
+                "resolver": "dynamic environment resolution is unavailable",
             }[mode]
             assert expected in result, result
             if mode != "resolver":

@@ -24,6 +24,7 @@ static atomic_bool completed = false;
 static struct stat output_identity;
 static int completion_record;
 static const char *completed_frame;
+static int advance_seconds = 2;
 
 __attribute__((constructor)) static void initialize_clock(void) {
     unsetenv("DYLD_INSERT_LIBRARIES");
@@ -35,6 +36,8 @@ __attribute__((constructor)) static void initialize_clock(void) {
     if (native_clock_gettime == NULL) _exit(90);
 #endif
     completed_frame = getenv("MCP_CONSOLE_TEST_CLOCK_AFTER_FRAME");
+    const char *seconds = getenv("MCP_CONSOLE_TEST_CLOCK_SECONDS");
+    if (seconds != NULL) advance_seconds = atoi(seconds);
     completion_record = open(getenv("MCP_CONSOLE_TEST_OUTPUT_COMPLETE"),
                              O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
     if (completed_frame == NULL || *completed_frame == '\0' ||
@@ -74,7 +77,7 @@ static ssize_t observe_completed_write(int descriptor, const void *buffer, size_
 static int advance_after_output(clockid_t clock, struct timespec *time) {
     int result = clock_gettime(clock, time);
     if (result == 0 && clock != CLOCK_REALTIME && atomic_load(&completed)) {
-        time->tv_sec += 2;
+        time->tv_sec += advance_seconds;
     }
     return result;
 }

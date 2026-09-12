@@ -1,0 +1,41 @@
+---
+send:
+  python: |
+    import socket
+    try:
+        with socket.socket() as connection:
+            assert connection.connect_ex(("127.0.0.1", <listening-port>)) != 0
+    except PermissionError:
+        pass
+    print("worker network denied")
+result:
+  content:
+    - type: text
+      text: |
+        worker network denied
+  isError: false
+---
+send:
+  python: import pyfiglet; print("addition available")
+result:
+  content:
+    - type: text
+      text: |
+        addition available
+  isError: false
+---
+send:
+  python: |
+    import socket
+    try:
+        with socket.socket() as connection:
+            assert connection.connect_ex(("127.0.0.1", <listening-port>)) != 0
+    except PermissionError:
+        pass
+    print("worker network denied")
+result:
+  content:
+    - type: text
+      text: |
+        worker network denied
+  isError: false

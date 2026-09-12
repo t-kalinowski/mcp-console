@@ -12,21 +12,23 @@ use serde::{Deserialize, Serialize};
 mod launch;
 #[cfg(unix)]
 mod launch_io;
+pub(crate) mod preparation;
 
 pub(crate) const SETUP_TIMEOUT: Duration = Duration::from_secs(30);
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 const MAX_BOOTSTRAP: usize = 1024 * 1024;
 const MAX_FRAME: usize = 64 * 1024;
 const HELLO: u8 = 1;
 const DATA: u8 = 2;
 const RETIRED: u8 = 3;
-pub(crate) const PREINSTALLED: &str = "managed preparation is unsupported for SSH targets; provision the remote runtime before starting MCP Console";
 
 #[derive(Clone)]
 pub(crate) struct Session {
     pub target: crate::settings::SshTarget,
     roots: Vec<PathBuf>,
     blocked: Arc<Mutex<Option<String>>>,
+    pub preparation: Option<preparation::Preparation>,
+    discovery: Option<preparation::Discovery>,
 }
 
 impl Session {
@@ -35,6 +37,8 @@ impl Session {
             target,
             roots,
             blocked: Arc::default(),
+            preparation: None,
+            discovery: None,
         }
     }
 
@@ -43,6 +47,10 @@ impl Session {
     }
 
     pub fn command(&self) -> Result<Command, String> {
+        self.command_for("ssh-launch")
+    }
+
+    fn command_for(&self, operation: &str) -> Result<Command, String> {
         if let Some(error) = &*self
             .blocked
             .lock()
@@ -57,7 +65,7 @@ impl Session {
             .command
             .iter()
             .map(|argument| format!("'{}'", argument.replace('\'', "'\\''")))
-            .chain(std::iter::once("'ssh-launch'".into()))
+            .chain(std::iter::once(format!("'{operation}'")))
             .collect::<Vec<_>>()
             .join(" ");
         let mut command = Command::new("ssh");
@@ -87,6 +95,8 @@ impl Session {
         &self,
         policy: &crate::settings::SandboxSettings,
         no_sandbox: bool,
+        managed_r: Option<&crate::resolver::ManagedR>,
+        python: Option<&crate::resolver::ManagedPython>,
     ) -> Result<Vec<u8>, String> {
         let value = serde_json::to_vec(&Bootstrap {
             version: VERSION,
@@ -95,6 +105,14 @@ impl Session {
             policy: policy.clone(),
             writable_roots: self.roots.clone(),
             no_sandbox,
+            environment: self
+                .discovery
+                .clone()
+                .map(|discovery| preparation::WorkerEnvironment {
+                    discovery,
+                    r: managed_r.cloned(),
+                    python: python.cloned(),
+                }),
         })
         .map_err(|error| format!("cannot encode SSH bootstrap: {error}"))?;
         if value.len() > MAX_BOOTSTRAP {
@@ -103,6 +121,19 @@ impl Session {
         let mut bytes = (value.len() as u32).to_be_bytes().to_vec();
         bytes.extend(value);
         Ok(bytes)
+    }
+
+    pub fn discover(
+        &mut self,
+        policy: &crate::settings::SandboxSettings,
+        on_started: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
+    ) -> Result<preparation::Discovery, String> {
+        let selections = preparation::Selections::from_policy(policy)?;
+        let (preparation, discovery) =
+            preparation::Preparation::open(self, selections, on_started)?;
+        self.preparation = Some(preparation);
+        self.discovery = Some(discovery.clone());
+        Ok(discovery)
     }
 
     fn block(&self) {
@@ -126,6 +157,23 @@ struct Bootstrap {
     policy: crate::settings::SandboxSettings,
     writable_roots: Vec<PathBuf>,
     no_sandbox: bool,
+    #[serde(default)]
+    environment: Option<preparation::WorkerEnvironment>,
+}
+
+fn enter_workspace(workspace: &str) -> Result<(), String> {
+    if !workspace.starts_with('/') {
+        return Err("target.workspace must be an absolute remote directory path".into());
+    }
+    let metadata = std::fs::metadata(workspace)
+        .map_err(|error| format!("cannot access remote target.workspace '{workspace}': {error}"))?;
+    if !metadata.is_dir() {
+        return Err(format!(
+            "remote target.workspace '{workspace}' is not a directory"
+        ));
+    }
+    std::env::set_current_dir(workspace)
+        .map_err(|error| format!("cannot enter remote target.workspace: {error}"))
 }
 
 #[derive(Deserialize, Serialize)]

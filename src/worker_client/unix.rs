@@ -150,7 +150,14 @@ impl WorkerRuntime {
         } = spec;
 
         let bootstrap = ssh
-            .map(|ssh| ssh.bootstrap(sandbox_settings, no_sandbox))
+            .map(|ssh| {
+                ssh.bootstrap(
+                    sandbox_settings,
+                    no_sandbox,
+                    managed_r,
+                    python.and_then(super::PythonEnvironment::managed),
+                )
+            })
             .transpose()?;
         let current_executable = std::env::current_exe()
             .map_err(|error| format!("failed to locate the current executable: {error}"))?;

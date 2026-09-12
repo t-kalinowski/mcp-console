@@ -6,7 +6,7 @@ result:
     - type: text
       text: >-
         [worker relay stdout read failed: incompatible SSH bootstrap: expected
-        protocol 1, Console 0.0.3; received protocol 999, Console 0.0.3;
+        protocol 2, Console 0.0.3; received protocol 999, Console 0.0.3;
         additionally failed to stop the worker: remote retirement is unconfirmed
         (SSH exit is not a cleanup barrier)]
   isError: true

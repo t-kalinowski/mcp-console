@@ -13,8 +13,8 @@ An empty `stdin` string contributes no bytes; the table refers to nonempty input
 Request decoding and structural checks precede interruption, preparation, stdin enqueue, and evaluation.
 These checks reject unknown fields, wrong field types, multiple code fields, disabled languages, unavailable requirements, standalone preparation with nonempty stdin, and interrupt plus requirements without a cell.
 
-[SSH targets](SSH.md) always use preinstalled environments.
-They omit `requirements` from the schema and reject any supplied preparation before control, stdin, or evaluation side effects.
+[SSH targets](SSH.md) discover capability on the execution host before advertising the schema.
+Managed targets use the same preparation ordering below; bare targets omit `requirements` and reject supplied preparation before control, stdin, or evaluation side effects.
 
 Requirement-content errors normally also reject the call before those actions.
 For interrupt plus a cell, reporting those errors is deferred until after interrupt delivery, stdin enqueue, the 100-millisecond grace, and settlement of the previous evaluation.
@@ -27,7 +27,8 @@ Requirement compatibility and resolver errors can arise later during preparation
 It starts when evaluation observation begins after admission, or when a poll attaches to an evaluation.
 Explicit preparation and control finish before this wait, as shown below.
 It does not cancel evaluation, worker startup, or resolution.
-SSH connection and bootstrap waits have a separate 30-second startup deadline and remain cancellable by session shutdown.
+SSH discovery and worker bootstrap have separate 30-second setup deadlines and remain cancellable by session shutdown.
+Remote dependency preparation has no setup deadline; an interrupt or cancellation targets that operation's remote resolver processes.
 An automatic replacement attempt after worker failure shares the same evaluation wait.
 The table assumes the session admits the operation; a conflicting operation or generation change can reject it before the remaining steps.
 

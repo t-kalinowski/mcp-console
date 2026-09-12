@@ -1,0 +1,4 @@
+---
+remote_managed_schema: true
+preparation_is_lazy: true
+controller_runtime_unused: true

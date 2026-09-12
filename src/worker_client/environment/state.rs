@@ -22,7 +22,7 @@ const USER_SELECTED_PYTHON_ERROR: &str = "managed Python requirements are disabl
 pub(in crate::worker_client) enum PythonEnvironment {
     Managed {
         selected: crate::resolver::ManagedPython,
-        resolver: crate::resolver::ManagedPythonResolverConfiguration,
+        resolver: crate::resolver::execution::PythonConfiguration,
     },
     UserSelected(OsString),
     Ambient,
@@ -47,7 +47,10 @@ impl PythonEnvironment {
             return Ok(Self::UserSelected(configured));
         }
         let selected = crate::resolver::resolve_python(&[], &resolver, managed_r, on_started)?;
-        Ok(Self::Managed { selected, resolver })
+        Ok(Self::Managed {
+            selected,
+            resolver: crate::resolver::execution::PythonConfiguration::Local(resolver),
+        })
     }
 
     pub(in crate::worker_client) fn bare(configured: Option<OsString>) -> Self {
@@ -61,7 +64,7 @@ impl PythonEnvironment {
         }
     }
 
-    pub(super) fn managed(&self) -> Option<&crate::resolver::ManagedPython> {
+    pub(in crate::worker_client) fn managed(&self) -> Option<&crate::resolver::ManagedPython> {
         match self {
             Self::Managed { selected, .. } => Some(selected),
             Self::UserSelected(_) | Self::Ambient => None,
@@ -73,7 +76,7 @@ impl PythonEnvironment {
     ) -> Result<
         (
             &crate::resolver::ManagedPython,
-            &crate::resolver::ManagedPythonResolverConfiguration,
+            &crate::resolver::execution::PythonConfiguration,
         ),
         String,
     > {

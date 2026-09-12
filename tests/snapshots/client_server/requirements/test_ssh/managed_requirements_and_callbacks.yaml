@@ -1,0 +1,144 @@
+---
+send:
+  requirements:
+    r:
+      - praise
+    python:
+      - humanize
+    duckdb:
+      - inet
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+send:
+  requirements:
+    r:
+      - praise
+    python:
+      - humanize
+    duckdb:
+      - inet
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+send:
+  r: |
+    x <- 42L
+    stopifnot(requireNamespace("praise", quietly = TRUE), requireNamespace("tidyverse", quietly = TRUE))
+    Sys.setenv(RETICULATE_UV = "/worker-must-not-select-uv", IR_CACHE_DIR = "/worker-must-not-select-cache")
+    library(zeallot)
+    cat("R ready:", x, "\n")
+result:
+  content:
+    - type: text
+      text: |
+        R ready: 42 
+  isError: false
+---
+send:
+  python: |
+    import humanize, pyfiglet
+    print(humanize.intcomma(12345))
+    print(r.x)
+result:
+  content:
+    - type: text
+      text: |
+        12,345
+        42
+  isError: false
+---
+send:
+  r: >-
+    reticulate::py_require("more-itertools");
+    reticulate::py_run_string("import more_itertools;
+    print(list(more_itertools.take(3, range(10))))")
+result:
+  content:
+    - type: text
+      text: |
+        [0, 1, 2]
+  isError: false
+---
+send:
+  r: |
+    reticulate::py_require(
+      python_version = c(">=3.11"),
+      action = "set"
+    )
+    result <- tryCatch(
+      reticulate::py_write_requirements(
+        NULL,
+        NULL,
+        freeze = FALSE,
+        python = NULL
+      )$python_version,
+      error = conditionMessage
+    )
+    cat(result, "\n", sep = "")
+result:
+  content:
+    - type: text
+      text: |
+        3.12
+  isError: false
+---
+send:
+  sql: LOAD inet
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  sql: SELECT host('127.0.0.1'::INET) AS address
+result:
+  content:
+    - type: text
+      text: |
+        # A tibble: 1 × 1
+          address    
+          <string>   
+        1 "127.0.0.1"
+  isError: false
+---
+send:
+  control: restart
+  requirements:
+    r:
+      - praise
+    python:
+      - humanize
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: false
+---
+send:
+  r: stopifnot(!exists("x")); library(zeallot); cat("reused\n")
+result:
+  content:
+    - type: text
+      text: |
+        reused
+  isError: false
+---
+send:
+  python: import pyfiglet, humanize, more_itertools; print("reused")
+result:
+  content:
+    - type: text
+      text: |
+        reused
+  isError: false

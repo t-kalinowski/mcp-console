@@ -2,11 +2,13 @@ use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::sync::Arc;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub(crate) enum ResolverControlOutcome {
     Interrupted,
     Cancelled,
 }
+
+pub(crate) mod execution;
 
 #[cfg(unix)]
 mod managed_duckdb;
@@ -173,19 +175,17 @@ fn is_uv_environment_variable(name: &OsStr) -> bool {
 #[cfg(unix)]
 pub(crate) use managed_duckdb::resolve_duckdb_extensions;
 #[cfg(unix)]
-pub(crate) use managed_python::{
-    ManagedPython, resolve_python_host, resolve_python_manifest, resolve_python_version,
-};
+pub(crate) use managed_python::{ManagedPython, resolve_python_manifest, resolve_python_version};
 #[cfg(unix)]
 pub(crate) use managed_r::{
-    ManagedR, ManagedRBootstrap, ManagedRResolverConfiguration, detect_r_bootstrap, resolve_r,
-    resolve_r_with,
+    ManagedR, ManagedRBootstrap, ManagedRResolverConfiguration, detect_r_bootstrap, discover,
+    resolve_r, resolve_r_with,
 };
 #[cfg(unix)]
-pub(crate) use process::ResolverStopHandle;
+pub(crate) use process::{ResolverControl, ResolverStopHandle};
 #[cfg(not(unix))]
 pub(crate) use unsupported::{
     ManagedPython, ManagedR, ManagedRBootstrap, ManagedRResolverConfiguration, ResolverStopHandle,
-    resolve_duckdb_extensions, resolve_python, resolve_python_host, resolve_python_manifest,
-    resolve_python_version, resolve_r, resolve_r_with,
+    resolve_duckdb_extensions, resolve_python, resolve_python_manifest, resolve_python_version,
+    resolve_r, resolve_r_with,
 };

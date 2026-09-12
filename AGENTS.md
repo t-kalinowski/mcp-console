@@ -45,7 +45,11 @@ Recorded sessions, transcripts, outputs, and artifacts are written beneath `.age
 
 An optional `target` selects one SSH destination for `serve`, including `--no-sandbox`.
 Capture its required absolute remote workspace, executable prefix, and raw user policy locally once; materialize paths, platform additions, and native preflight on that execution host without rediscovering YAML.
-SSH uses preinstalled bare runtimes and must not discover controller interpreters or invoke controller resolvers.
+SSH discovers capability and executes managed preparation on the remote host, independently of the relay and worker.
+The preparation owner captures trusted resolver settings once; the local server owns requirements, candidates, and activation decisions.
+Only explicit remote R_HOME and RETICULATE_PYTHON workload selections also inform preparation.
+Never discover controller interpreters, invoke controller resolvers, or validate remote paths on the controller.
+Require explicit result and resolver cleanup confirmation before committing an environment; uncertain preparation retirement blocks further preparation and replacement.
 Standalone `sandbox` remains local.
 SSH exit alone cannot confirm remote retirement; require the remote launcher's terminal acknowledgment before replacement, and block replacement after unconfirmed cleanup.
 
@@ -145,6 +149,8 @@ Keep these invariants intact:
 - `src/main.rs`, `src/cli.rs` — binary entry point and command definitions.
 - `src/settings.rs`, `src/settings/yaml.rs` — trusted project YAML discovery, node loading, and application settings retained across worker launches; native policy values remain JSON; the sandbox layer adds application launch requirements and delegates validation and defaults to the runner.
 - `src/ssh.rs`, `src/ssh/launch.rs`, `src/ssh/launch_io.rs` — configured OpenSSH transport, bounded bootstrap and relay envelope, compatibility checks, remote ordinary launcher ownership, cancellable transfer, and retirement confirmation.
+- `src/ssh/preparation.rs`, `src/ssh/preparation/{client,host}.rs` — typed trusted preparation connection, remote startup configuration, operation-scoped resolver control, and confirmed results.
+- `src/resolver/execution.rs` — host selection for existing resolver operations, preserving local session transactions.
 - `src/server.rs`, `src/server_transport.rs` — MCP tools, stdio transport, and response-delivery ownership.
 - `src/transcript.rs`, `src/transcript/{event,markdown,output}.rs` — typed recording events, append-only tool journal, Markdown and source-only Quarto projections, cell output files, and image artifacts.
 - `python/mcp_console/` — synchronous and asynchronous MCP clients and composable framework adapters.

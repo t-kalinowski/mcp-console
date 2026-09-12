@@ -127,14 +127,14 @@ struct ClientInner {
 enum RResolver {
     Discover,
     Pending(BuiltinSetup),
-    Configured(crate::resolver::ManagedRResolverConfiguration),
+    Configured(crate::resolver::execution::RConfiguration),
     Disabled,
 }
 
 #[derive(Clone)]
 struct BuiltinSetup {
-    bootstrap: crate::resolver::ManagedRBootstrap,
-    python_resolver: crate::resolver::ManagedPythonResolverConfiguration,
+    bootstrap: crate::resolver::execution::Bootstrap,
+    python_resolver: crate::resolver::execution::PythonConfiguration,
     configured_python: Option<OsString>,
 }
 
@@ -393,8 +393,10 @@ impl Client {
                     Default::default(),
                     None,
                     RResolver::Pending(BuiltinSetup {
-                        bootstrap,
-                        python_resolver,
+                        bootstrap: crate::resolver::execution::Bootstrap::Local(bootstrap),
+                        python_resolver: crate::resolver::execution::PythonConfiguration::Local(
+                            python_resolver,
+                        ),
                         configured_python,
                     }),
                 ),
@@ -466,18 +468,51 @@ impl Client {
     }
 
     pub(crate) fn ssh(
-        session: crate::ssh::Session,
+        mut session: crate::ssh::Session,
         no_sandbox: bool,
         policy: crate::settings::SandboxSettings,
     ) -> Result<Self, String> {
-        // No controller R/Python/uv discovery and no managed environment state.
+        #[cfg(unix)]
+        let discovery = startup::with_input_owner(|started| session.discover(&policy, started))?;
+        #[cfg(not(unix))]
+        let discovery = session.discover(&policy, &|_| Ok(()))?;
+        let preparation = session
+            .preparation
+            .as_ref()
+            .expect("remote discovery opened preparation")
+            .clone();
+        let configured_python = discovery.selections.python.map(OsString::from);
+        let (r_resolver, python) = if discovery.managed {
+            (
+                RResolver::Pending(BuiltinSetup {
+                    bootstrap: crate::resolver::execution::Bootstrap::Ssh(preparation.clone()),
+                    python_resolver: crate::resolver::execution::PythonConfiguration::Ssh(
+                        preparation,
+                    ),
+                    configured_python,
+                }),
+                None,
+            )
+        } else {
+            (
+                RResolver::Disabled,
+                Some(PythonEnvironment::bare(configured_python)),
+            )
+        };
         let mut client = Self::with_arguments(
             std::env::current_exe().map_err(|error| error.to_string())?,
             Vec::new(),
             None,
             no_sandbox,
             policy,
-            None,
+            Some(Environment {
+                custom_worker: false,
+                duckdb_extensions: Default::default(),
+                duckdb_r_targets: Vec::new(),
+                python,
+                r: None,
+                r_resolver,
+            }),
         );
         Arc::get_mut(&mut client.0)
             .expect("new client has one owner")
@@ -491,9 +526,6 @@ impl Client {
 
     /// Interprets preparation, control, evaluation, stdin, and polling for the session.
     pub(crate) async fn send(&self, request: SendRequest) -> Result<Response, String> {
-        if self.0.ssh.is_some() && request.requirements.is_some() {
-            return Err(crate::ssh::PREINSTALLED.into());
-        }
         request.validate(self.dynamic_resolution())?;
         if let Some(control) = request.control {
             return self.send_controlled(control, request).await;
@@ -1576,12 +1608,6 @@ impl WorkerCallbacks {
         &self,
         packages: Vec<String>,
     ) -> Result<crate::resolver::ManagedR, RuntimeRResolutionFailure> {
-        if self.client.0.ssh.is_some() {
-            return Err(RuntimeRResolutionFailure::Ordinary(format!(
-                "unexpected remote resolution request: {}",
-                crate::ssh::PREINSTALLED
-            )));
-        }
         self.client
             .resolve_runtime_r(self.generation.clone(), packages)
     }
@@ -1608,12 +1634,6 @@ impl WorkerCallbacks {
         &self,
         request: crate::worker_protocol::PythonResolveRequest,
     ) -> Result<crate::resolver::ManagedPython, String> {
-        if self.client.0.ssh.is_some() {
-            return Err(format!(
-                "unexpected remote resolution request: {}",
-                crate::ssh::PREINSTALLED
-            ));
-        }
         self.client
             .resolve_runtime_python(self.generation.clone(), request)
     }
@@ -1622,12 +1642,6 @@ impl WorkerCallbacks {
         &self,
         request: crate::worker_protocol::PythonVersionResolveRequest,
     ) -> Result<String, String> {
-        if self.client.0.ssh.is_some() {
-            return Err(format!(
-                "unexpected remote resolution request: {}",
-                crate::ssh::PREINSTALLED
-            ));
-        }
         self.client
             .resolve_runtime_python_version(self.generation.clone(), request)
     }

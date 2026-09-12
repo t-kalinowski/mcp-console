@@ -338,7 +338,7 @@ impl ConsoleServer {
                 "with the remote account's permissions",
             );
             description.push_str(&format!(
-                "\n\nExecution target: {}. R, Python, and SQL adapters and packages must already be installed there; managed preparation is unsupported for SSH targets. Records and returned images are saved locally beneath .agents/console/sessions/. Files created by code remain remote. The source-only Quarto export does not reproduce the remote filesystem.", target,
+                "\n\nExecution target: {}. Dependency capability is discovered there. When available, managed defaults and requested R, Python, and DuckDB dependencies are prepared outside the worker sandbox with the remote account's trusted setup permissions; bare runtimes require preinstalled packages. Records and returned images are saved locally beneath .agents/console/sessions/. Files created by code remain remote. The source-only Quarto export does not reproduce the remote filesystem.", target,
             ));
         }
         Ok(Self {

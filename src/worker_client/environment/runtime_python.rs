@@ -63,7 +63,7 @@ impl Client {
             }
         }
 
-        let managed = match crate::resolver::resolve_python_manifest(
+        let managed = match crate::resolver::execution::resolve_python_manifest(
             requirements,
             resolver,
             environment.r.as_ref(),
@@ -103,7 +103,7 @@ impl Client {
         let managed_r = environment.r.as_ref().ok_or_else(|| {
             "managed Python version resolution requires a managed R environment".to_string()
         })?;
-        let result = crate::resolver::resolve_python_version(
+        let result = crate::resolver::execution::resolve_python_version(
             request.constraints,
             resolver,
             managed_r,

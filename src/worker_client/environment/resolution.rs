@@ -25,17 +25,21 @@ fn classify_resolver_result<T>(
     result: Result<T, String>,
     handle: Option<&crate::resolver::ResolverStopHandle>,
 ) -> Result<T, EnvironmentResolutionFailure> {
-    result.map_err(
-        |message| match handle.and_then(|handle| handle.control_outcome()) {
-            Some(crate::resolver::ResolverControlOutcome::Interrupted) => {
-                EnvironmentResolutionFailure::Interrupted(message)
+    result.map_err(|message| {
+        if handle.is_some_and(|handle| !handle.cleanup_confirmed()) {
+            EnvironmentResolutionFailure::Operation(message)
+        } else {
+            match handle.and_then(|handle| handle.control_outcome()) {
+                Some(crate::resolver::ResolverControlOutcome::Interrupted) => {
+                    EnvironmentResolutionFailure::Interrupted(message)
+                }
+                Some(crate::resolver::ResolverControlOutcome::Cancelled) => {
+                    EnvironmentResolutionFailure::Cancelled(message)
+                }
+                None => EnvironmentResolutionFailure::Host(message),
             }
-            Some(crate::resolver::ResolverControlOutcome::Cancelled) => {
-                EnvironmentResolutionFailure::Cancelled(message)
-            }
-            None => EnvironmentResolutionFailure::Host(message),
-        },
-    )
+        }
+    })
 }
 
 impl Client {
@@ -167,7 +171,7 @@ impl Client {
                 crate::resolver::resolve_r(requirements, on_started)
             }
             super::super::RResolver::Configured(configuration) => {
-                crate::resolver::resolve_r_with(configuration, requirements, on_started)
+                configuration.resolve_r(requirements, on_started)
             }
             super::super::RResolver::Disabled => {
                 return Err(EnvironmentResolutionFailure::Host(
@@ -188,17 +192,21 @@ impl Client {
         &self,
         generation: &WorkerGeneration,
         requirements: crate::worker_protocol::PythonRequirementManifest,
-        resolver: &crate::resolver::ManagedPythonResolverConfiguration,
+        resolver: &crate::resolver::execution::PythonConfiguration,
         managed_r: Option<&crate::resolver::ManagedR>,
     ) -> Result<crate::resolver::ManagedPython, EnvironmentResolutionFailure> {
         self.ensure_startup(generation)
             .map_err(EnvironmentResolutionFailure::Operation)?;
         let mut stop_handle = None;
-        let result =
-            crate::resolver::resolve_python_host(requirements, resolver, managed_r, |handle| {
+        let result = crate::resolver::execution::resolve_python_manifest(
+            requirements,
+            resolver,
+            managed_r,
+            |handle| {
                 stop_handle = Some(handle.clone());
                 self.register_resolver_stop_handle(generation, handle)
-            });
+            },
+        );
         self.clear_resolver_stop_handle(generation)
             .map_err(EnvironmentResolutionFailure::Operation)?;
         classify_resolver_result(result, stop_handle.as_ref())
@@ -219,11 +227,15 @@ impl Client {
             self.ensure_startup(generation)
                 .map_err(EnvironmentResolutionFailure::Operation)?;
             let mut stop_handle = None;
-            let result =
-                crate::resolver::resolve_duckdb_extensions(managed_r, extensions, |handle| {
+            let result = crate::resolver::execution::resolve_duckdb_extensions(
+                self.0.ssh.as_ref().and_then(|ssh| ssh.preparation.as_ref()),
+                managed_r,
+                extensions,
+                |handle| {
                     stop_handle = Some(handle.clone());
                     self.register_resolver_stop_handle(generation, handle)
-                });
+                },
+            );
             self.clear_resolver_stop_handle(generation)
                 .map_err(EnvironmentResolutionFailure::Operation)?;
             classify_resolver_result(result, stop_handle.as_ref())?;

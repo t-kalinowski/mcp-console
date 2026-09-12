@@ -1,9 +1,9 @@
-#[derive(Clone)]
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
 pub(crate) struct ManagedPython {
     requirements: crate::worker_protocol::PythonRequirementManifest,
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
 pub(crate) struct ManagedR;
 
 #[derive(Clone)]
@@ -37,6 +37,9 @@ impl ManagedRResolverConfiguration {
 pub(crate) struct ResolverStopHandle;
 
 impl ResolverStopHandle {
+    pub(crate) fn cleanup_confirmed(&self) -> bool {
+        true
+    }
     pub(crate) fn stop(&self) -> Result<(), String> {
         Ok(())
     }
@@ -121,15 +124,6 @@ pub(crate) fn resolve_python_manifest(
     crate::python_requirement::validate_all(&requirements.packages)?;
     crate::python_requirement::validate_version_constraints(&requirements.python_version)?;
     Err("managed Python environments are supported only on macOS".to_string())
-}
-
-pub(crate) fn resolve_python_host(
-    requirements: crate::worker_protocol::PythonRequirementManifest,
-    configuration: &super::ManagedPythonResolverConfiguration,
-    managed_r: Option<&ManagedR>,
-    on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
-) -> Result<ManagedPython, String> {
-    resolve_python_manifest(requirements, configuration, managed_r, on_started)
 }
 
 pub(crate) fn resolve_python_version(

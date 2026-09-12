@@ -1,0 +1,35 @@
+---
+send:
+  r: must_not_run <- TRUE
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running; poll with an empty send]
+  isError: false
+---
+send: {}
+result:
+  content:
+    - type: text
+      text: >-
+        [SSH preparation retirement is unconfirmed: truncated SSH frame length:
+        failed to fill whole buffer]
+  isError: true
+---
+send:
+  control: restart
+  r: must_not_replace <- TRUE
+result:
+  content:
+    - type: text
+      text: |-
+        [starting new worker]
+        [SSH preparation retirement is unconfirmed; this session cannot prepare or start a replacement: truncated SSH frame length: failed to fill whole buffer]
+        session restart did not complete; cell was not run
+  isError: true
+---
+stderr: |
+  SSH preparation owner stopped

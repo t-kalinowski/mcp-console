@@ -69,7 +69,7 @@ See [release preparation](RELEASE.md#private-sandbox-executable) for build depen
 It waits for MCP protocol input rather than presenting an interactive terminal prompt.
 
 To run cells on an existing SSH host while keeping the server and recordings local, configure an [SSH target](docs/SSH.md).
-The remote workspace and R/Python/SQL environments must already exist; remote dependency preparation is not supported.
+The remote workspace, R installation, and resolver bootstrap must already exist; Console prepares managed R, Python, and DuckDB dependencies on that host.
 
 ## Python integrations
 
