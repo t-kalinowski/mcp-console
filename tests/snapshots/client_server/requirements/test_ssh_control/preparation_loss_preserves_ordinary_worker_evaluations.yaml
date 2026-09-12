@@ -61,8 +61,3 @@ result:
         or start a replacement: truncated SSH frame length: failed to fill whole
         buffer
   isError: true
----
-stderr: |
-  SSH owner is missing or unavailable; prior effects and retirement are unconfirmed: Connection refused (os error <ECONNREFUSED>)
-  SSH owner is missing or unavailable; prior effects and retirement are unconfirmed: Connection refused (os error <ECONNREFUSED>)
-  SSH preparation owner stopped

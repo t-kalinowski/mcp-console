@@ -1,6 +1,5 @@
 #!/usr/bin/env -S uv run --script
 
-import errno
 import json
 import os
 import shlex
@@ -394,10 +393,11 @@ def test_preparation_loss_preserves_ordinary_worker_evaluations(binary):
             assert "unconfirmed" in last_result_text(client), last_result_text(client)
         client.stdin.close()
         client.process.wait(timeout=10)
-        errors = client.stderr.read().replace(
-            f"(os error {errno.ECONNREFUSED})", "(os error <ECONNREFUSED>)"
-        )
-        return client.transcript[3:] + [{"stderr": errors}]
+        errors = client.stderr.read()
+        assert "SSH preparation owner stopped" in errors, errors
+        # SSH and adapter diagnostics can both report the lost owner. Their
+        # arrival races adapter exit; the MCP operation errors are recorded.
+        return client.transcript[3:]
 
 
 @requires(SSH, WORKER, PROCESS_EVENTS, command("ir"), command("uv"))
