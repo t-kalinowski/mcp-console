@@ -10,7 +10,9 @@ from pathlib import Path
 arguments = sys.argv[1:]
 root = Path(os.environ["CONSOLE_DOCKER_PEER"])
 with (root / "calls").open("a") as stream:
-    stream.write(json.dumps({"pid": os.getpid(), "args": arguments}) + "\n")
+    stream.write(
+        json.dumps({"pid": os.getpid(), "ppid": os.getppid(), "args": arguments}) + "\n"
+    )
 mode = (root / "mode").read_text() if (root / "mode").exists() else ""
 
 if mode == "registry-peer" and "pull" in arguments:

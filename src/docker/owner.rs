@@ -351,7 +351,10 @@ fn attach(container: &Container<'_>, bootstrap: &Bootstrap, cancel: &Cancel) -> 
     if events[0] != 0 || events[1] != 0 {
         // A malformed/closed stream is never an instruction to replay work.
         let _ = child.kill();
-    } else {
+    } else if child.wait().map_err(|e| e.to_string())?.success() {
+        // Preserve queued output after an ordinary exit. A failed attachment
+        // must instead cancel blocked forwarding so container retirement can
+        // proceed even when the controller is not draining this pipe.
         poll(
             &[
                 (cancel.reader.as_raw_fd(), libc::POLLIN),

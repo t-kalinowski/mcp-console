@@ -171,7 +171,11 @@ pub(super) fn run(
         return Err("Docker setup cancelled".into());
     }
     if !status.success() {
-        return Err(format!("Docker command failed with {status}: {errors}"));
+        return Err(if errors.is_empty() {
+            format!("Docker command failed with {status}")
+        } else {
+            format!("Docker command failed with {status}: {errors}")
+        });
     }
     Ok(output.unwrap_or_default())
 }

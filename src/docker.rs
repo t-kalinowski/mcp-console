@@ -367,13 +367,32 @@ pub(crate) fn configure_runtime(
 pub(crate) fn runtime_probe() -> Result<(), String> {
     let home =
         harp::command::r_home_setup().map_err(|e| format!("container R discovery failed: {e}"))?;
-    if !home.join("lib/libR.so").is_file() {
+    let library = home.join("lib/libR.so");
+    if !library.is_file() {
         return Err("container R requires a shared libR.so; install R with shared-library support in the image".into());
     }
-    if let Some(python) = std::env::var_os("RETICULATE_PYTHON")
-        && !PathBuf::from(python).is_file()
+    // Loadability is checked in this disposable target probe, without starting
+    // R or the analysis worker. The image supplies this trusted native code.
+    unsafe { libloading::Library::new(library) }
+        .map_err(|error| format!("container R library cannot be loaded: {error}"))?;
+    let selected = std::env::var_os("RETICULATE_PYTHON");
+    if selected
+        .as_ref()
+        .is_some_and(|python| !PathBuf::from(python).is_file())
     {
         return Err("container RETICULATE_PYTHON must select an existing interpreter".into());
+    }
+    let python = selected.unwrap_or_else(|| "python3".into());
+    let output = Command::new(python)
+        .args(["-c", "import sys; assert sys.version_info.major == 3"])
+        .output()
+        .map_err(|error| format!("container Python probe failed: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "container Python probe failed with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        ));
     }
     Ok(())
 }

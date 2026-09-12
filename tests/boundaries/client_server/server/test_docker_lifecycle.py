@@ -5,6 +5,7 @@ import signal
 import sys
 from contextlib import closing
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
@@ -24,8 +25,10 @@ from support.docker import (
     workspace,
 )
 from support.normalization import code
+from support.native import LOADER_VARIABLE, build_interposer
+from support.events import Events
 from support.records import Transcript
-from support.requirements import POSIX, requires
+from support.requirements import NATIVE_FIXTURES, POSIX, PROCESS_EVENTS, requires
 from support.suites import run_this_suite
 
 
@@ -73,7 +76,10 @@ def test_cancelled_creation_uses_ownership_token(binary: Path) -> Transcript:
                 error = client.stderr.read(timeout=15)
                 assert "cancel" in error, error
                 assert client.process.wait(timeout=5) != 0
-        absent(identity)
+        try:
+            absent(identity)
+        except AssertionError as failure:
+            raise AssertionError(error) from failure
         return [
             {
                 "cancelled_after_create_before_id_delivery": True,
@@ -271,6 +277,96 @@ def test_attachment_loss_retires_container_before_replacement(
     binary: Path,
 ) -> Transcript:
     return _loss(binary, "attachment")
+
+
+@requires(DOCKER, NATIVE_FIXTURES, PROCESS_EVENTS)
+def test_attachment_loss_retires_with_backpressured_output(binary: Path) -> Transcript:
+    reference = image()
+    # LD_PRELOAD separates library names at spaces. Keep this native fixture
+    # outside the deliberately space-containing bind-mount test directory.
+    with workspace() as root, TemporaryDirectory(dir="/tmp") as native:
+        environment = cli_peer(root / "peer")
+        environment[LOADER_VARIABLE] = str(
+            build_interposer(Path(native), "docker_owner_backpressure")
+        )
+        with closing(FifoCheckpoint.create(root / "blocked")) as blocked:
+            environment["MCP_CONSOLE_TEST_STDOUT_BLOCKED"] = str(blocked.path)
+            configure(root, reference)
+            identity = None
+            stopped = False
+            try:
+                with McpClient(
+                    binary, ("serve", "--no-sandbox"), environment, root
+                ) as client:
+                    client.initialize_and_list_tools()
+                    client.send(
+                        python=code('''
+                        import os, sys, subprocess
+                        from pathlib import Path
+                        os.mkfifo("/tmp/output-gate")
+                        producer = """
+                        import os, time
+                        with open("/tmp/output-gate") as gate:
+                            gate.read(1)
+                        os.write(1, b"x" * (64 * 1024 * 1024))
+                        time.sleep(600)
+                        """
+                        child = subprocess.Popen([sys.executable, "-c", producer], start_new_session=True)
+                        print(Path("/etc/hostname").read_text().strip())
+                    ''')
+                    )
+                    identity = last_result_text(client).strip()
+                    calls = [
+                        json.loads(line)
+                        for line in (root / "peer/calls").read_text().splitlines()
+                    ]
+                    attachments = [call for call in calls if "start" in call["args"]]
+                    assert len(attachments) == 2
+                    os.kill(client.process.pid, signal.SIGSTOP)
+                    stopped = True
+                    released = docker(
+                        "exec",
+                        identity,
+                        "/opt/analysis/bin/python",
+                        "-c",
+                        'with open("/tmp/output-gate", "w") as gate: gate.write("x")',
+                    )
+                    assert released.returncode == 0, released.stderr
+                    blocked.wait("Docker owner stdout reached EAGAIN", timeout=15)
+                    with removal_event(identity) as removed, Events() as events:
+                        owner = attachments[-1]["ppid"]
+                        events.watch_process(owner)
+                        os.kill(attachments[-1]["pid"], signal.SIGKILL)
+                        removed()
+                        assert owner in events.wait(5), (
+                            "owner did not finish bounded retirement"
+                        )
+                    absent(identity)
+                    os.kill(client.process.pid, signal.SIGCONT)
+                    stopped = False
+                    client.stdin.close()
+                    client.stdout.read(timeout=15)
+                    stderr = client.stderr.read(timeout=15)
+                    assert client.process.wait(timeout=5) != 0
+                    assert "retirement is unconfirmed" in stderr, stderr
+                    assert "cannot start a replacement" in stderr, stderr
+            finally:
+                if stopped and client.process.poll() is None:
+                    os.kill(client.process.pid, signal.SIGCONT)
+                if identity is not None:
+                    docker("rm", "--force", identity)
+                    absent(identity)
+        return normalize_recording(
+            [
+                {
+                    "owner_stdout_backpressure_observed": True,
+                    "attachment_killed": True,
+                    "container_absent_before_controller_resumes": True,
+                    "stderr": stderr,
+                }
+            ],
+            root,
+        )
 
 
 @requires(DOCKER)

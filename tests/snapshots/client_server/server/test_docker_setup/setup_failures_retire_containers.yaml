@@ -10,12 +10,19 @@ container_absent: true
 stderr: |
   Docker command failed with exit status: 1: Error response from daemon: invalid mount config for type "bind": bind source path does not exist: <controller>/missing-bind
   ; Docker container '<owned container>' (creation ID unavailable) retirement is unconfirmed: container creation returned no identity; an empty listing cannot confirm retirement of an unacknowledged creation
-  Docker command failed with exit status: 1: 
+  Docker command failed with exit status: 1
 ---
 rejected_before_readiness: runtime
 container_absent: true
 stderr: |
   container RETICULATE_PYTHON must select an existing interpreter
+  remote launcher exited with exit status: 1
+  remote launcher exited with exit status: 1
+---
+rejected_before_readiness: python_executable
+container_absent: true
+stderr: |
+  container Python probe failed: Permission denied (os error 13)
   remote launcher exited with exit status: 1
   remote launcher exited with exit status: 1
 ---

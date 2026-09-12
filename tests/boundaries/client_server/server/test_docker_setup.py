@@ -198,6 +198,7 @@ def test_setup_failures_retire_containers(binary: Path) -> Transcript:
         ("workspace", "workspace"),
         ("mount", "bind source path does not exist"),
         ("runtime", "RETICULATE_PYTHON"),
+        ("python_executable", "container Python probe failed"),
         ("compatibility", "incompatible Docker bootstrap"),
         ("native_environment", "mcp-console-sandbox: invalid configuration JSON"),
         ("native_policy", "mcp-console-sandbox: invalid configuration JSON"),
@@ -216,6 +217,8 @@ def test_setup_failures_retire_containers(binary: Path) -> Transcript:
                 value["sandbox"]["environment"] = {
                     "RETICULATE_PYTHON": "/missing-python"
                 }
+            elif case == "python_executable":
+                value["sandbox"]["environment"] = {"RETICULATE_PYTHON": "/etc/hostname"}
             elif case == "compatibility":
                 program = root / "incompatible.py"
                 program.write_text("""import json, struct, sys
@@ -237,6 +240,10 @@ sys.stdout.buffer.flush()
                 error = client.stderr.read(timeout=30)
                 assert expected in error, error
                 assert client.process.wait(timeout=5) != 0
+            assert not any(
+                line.startswith("Docker command failed") and line.endswith(": ")
+                for line in error.splitlines()
+            ), error
             for args in calls(root):
                 if "create" in args:
                     name = args[args.index("--name") + 1]

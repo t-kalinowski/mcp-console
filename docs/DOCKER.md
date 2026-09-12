@@ -121,7 +121,8 @@ Select an appropriate image user or `compute.user` when this matters; Console do
 
 ## Environment and sandbox selection
 
-Setup checks Console package/protocol compatibility, the container workspace, R discovery and shared `libR`, explicit Python selection, and native preflight before announcing readiness.
+Setup checks Console package/protocol compatibility, the container workspace, R discovery and shared `libR` loadability, Python execution, and native preflight before announcing readiness.
+Supply `RETICULATE_PYTHON` in the image or workload environment to select an interpreter; without it, the readiness probe requires `python3` on the workload's `PATH`.
 It does not start the analysis worker during this probe.
 Missing analysis packages retain ordinary package or adapter errors.
 Install them in the Dockerfile and start a new server session.
