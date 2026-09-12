@@ -86,6 +86,7 @@ pub(super) struct Engine {
     heartbeat: Duration,
     next_ping: Instant,
     pending_ping: Option<Secret>,
+    prove_renewal: bool,
     last_response: Instant,
     last_challenge: Instant,
     advertised: Cursor,
@@ -124,6 +125,7 @@ impl Engine {
             heartbeat: lease / 6,
             next_ping: now,
             pending_ping: None,
+            prove_renewal: false,
             last_response: now,
             last_challenge: now,
             advertised: Cursor::default(),
@@ -162,6 +164,7 @@ impl Engine {
         link.wire.queue(READY, &json(&self.flow.delivered))?;
         self.link = Some(link); // Dropping the old stream fences its epoch.
         self.pending_ping = None;
+        self.prove_renewal = true;
         self.next_ping = Instant::now();
         self.last_challenge = Instant::now();
         self.advertised = self.flow.delivered;
@@ -442,8 +445,17 @@ impl Engine {
                 && self.pending_ping.as_ref().map(|token| token.as_slice()) == Some(bytes) =>
             {
                 self.pending_ping = None;
-                self.deadline = Instant::now() + self.lease;
-                self.next_ping = Instant::now() + self.heartbeat;
+                let now = Instant::now();
+                self.deadline = now + self.lease;
+                // Prove the first renewal on this attachment immediately.
+                // Waiting a heartbeat could exceed the controller's previous
+                // deadline after a late reconnection. Further pings keep the
+                // ordinary cadence; authentication alone never renews a lease.
+                self.next_ping = if std::mem::take(&mut self.prove_renewal) {
+                    now
+                } else {
+                    now + self.heartbeat
+                };
                 if self.retirement.is_none() {
                     self.activated = true;
                 }

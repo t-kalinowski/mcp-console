@@ -160,7 +160,8 @@ Without that acknowledgment, Console reports unconfirmed retirement and prevents
 Recovery retransmits missing transport data to the same surviving owner; it does not resubmit an evaluation to a new worker.
 
 Each remote channel issues an unpredictable challenge and requires its response before starting discovery, preflight, or other work.
-It issues the next challenge only after accepting the previous response and waiting the heartbeat interval.
+It issues the next challenge only after accepting the previous response.
+The first renewal on each attachment is followed by an immediate challenge, proving renewal to a controller that may be near its previous deadline; subsequent challenges wait the heartbeat interval.
 Only a matching, outstanding response renews its monotonic deadline; writes, socket connectivity, and unsolicited or repeated heartbeats do not.
 If either communication direction stalls, the channel expires even when SSH never reports EOF.
 Expiry is terminal and closes the existing owner's input to request retirement.

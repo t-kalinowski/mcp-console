@@ -17,14 +17,21 @@ from support.assertions import last_result_text, wait_for_evaluation_output
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
 from support.normalization import code
+from support.native import LOADER_VARIABLE, build_interposer
 from support.r import r_test_environment
-from support.requirements import SANDBOX, WORKER, PROCESS_EVENTS, requires
+from support.requirements import (
+    NATIVE_FIXTURES,
+    SANDBOX,
+    WORKER,
+    PROCESS_EVENTS,
+    requires,
+)
 from support.ssh import SSH, configure, localhost, remote_command
 from support.suites import run_this_suite
 
 
 @contextmanager
-def recovery_session(binary, *, initial_loss=False, direct=False):
+def recovery_session(binary, *, initial_loss=False, direct=False, late_renewal=False):
     with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
         remote = root / "remote"
@@ -58,6 +65,12 @@ def recovery_session(binary, *, initial_loss=False, direct=False):
             (gates / "ssh-prepare.action").write_text(
                 json.dumps({"direction": "down", "stage": "before", "tag": 1})
             )
+        if late_renewal:
+            # Lose the first response before discovery, then reattach to the
+            # same owner with only four seconds on the controller's lease.
+            (gates / "ssh-prepare.action").write_text(
+                json.dumps({"direction": "up", "stage": "before", "tag": 5})
+            )
         config = configure(
             root,
             remote,
@@ -71,9 +84,22 @@ def recovery_session(binary, *, initial_loss=False, direct=False):
             },
         )
         target = json.loads(config.read_text())
-        target["target"]["lease_ms"] = 6000
+        target["target"]["lease_ms"] = 30000 if late_renewal else 6000
         config.write_text(json.dumps(target))
         with localhost(root / "sshd", faults=True) as environment:
+            if late_renewal:
+                environment.update(
+                    {
+                        LOADER_VARIABLE: str(build_interposer(root, "ssh_lease_clock")),
+                        "MCP_CONSOLE_TEST_SSH_CLOCK_ROLE": "ssh-connect",
+                        "MCP_CONSOLE_TEST_SSH_CLOCK_TAG": "9",
+                        "MCP_CONSOLE_TEST_SSH_CLOCK_ORDINAL": "2",
+                        "MCP_CONSOLE_TEST_SSH_CLOCK_MS": "26000",
+                        "MCP_CONSOLE_TEST_SSH_CLOCK_RECORD": str(
+                            root / "clock-advanced"
+                        ),
+                    }
+                )
             with McpClient(
                 binary,
                 ("serve", "--no-sandbox") if direct else ("serve",),
@@ -146,6 +172,35 @@ def gate(root, role, direction, stage, marker="", tag=2, **options):
             }
         )
     )
+
+
+@requires(SSH, WORKER, NATIVE_FIXTURES)
+def test_late_attachment_proves_renewal_before_the_old_deadline(binary):
+    with recovery_session(binary, direct=True, late_renewal=True) as (
+        client,
+        root,
+        remote,
+    ):
+        assert (root / "clock-advanced").read_text() == "1"
+        owner = (root / "gates/ssh-prepare.owner").read_text()
+        with closing(FifoCheckpoint.create(root / "renewed")) as renewed:
+            gate(
+                root,
+                "ssh-prepare",
+                "down",
+                "count",
+                tag=4,
+                remaining=1,
+                checkpoint=str(renewed.path),
+            )
+            # The ordinary five-second challenge arrives after the previous
+            # deadline. Recovery must already have proved the new renewal.
+            renewed.wait("preparation lease continues after late recovery")
+        client.send(r="42L")
+        assert last_result_text(client) == "[1] 42\n", last_result_text(client)
+        assert (root / "gates/ssh-prepare.owner").read_text() == owner
+        client.finish()
+        return [{"late_attachment_renewed_before_previous_deadline": True}]
 
 
 @requires(SSH, WORKER, SANDBOX)
