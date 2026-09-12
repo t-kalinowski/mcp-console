@@ -26,7 +26,7 @@ if "Open" in bootstrap:
         sys.stdout.buffer.write(struct.pack(">I", len(body)) + body)
         sys.stdout.buffer.flush()
 
-    preparation_frame({"Hello": {"version": 2, "build": bootstrap["Open"]["build"]}})
+    preparation_frame({"Hello": {"version": 3, "build": bootstrap["Open"]["build"]}})
     preparation_frame(
         {
             "Completed": {

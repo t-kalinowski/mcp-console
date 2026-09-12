@@ -50,7 +50,7 @@ from support.suites import run_this_suite
 
 
 @contextmanager
-def gated_session(binary: Path, *, probe=False, advance_clock=False):
+def gated_session(binary: Path, *, probe=False, advance_clock=False, handoff=False):
     with TemporaryDirectory() as temporary, Events() as exits:
         root = Path(temporary).resolve()
         local, remote = root / "local", root / "remote"
@@ -100,6 +100,21 @@ def gated_session(binary: Path, *, probe=False, advance_clock=False):
                 "MCP_CONSOLE_TEST_STARTUP_RELEASE": str(release.path),
             }
         )
+        if handoff:
+            environment.update(
+                {
+                    LOADER_VARIABLE: str(
+                        build_interposer(remote, "resolver_spawn_interposer")
+                    ),
+                    "RETICULATE_UV": "managed",
+                    "MCP_CONSOLE_TEST_STARTUP_PHASE": "none",
+                    "MCP_CONSOLE_TEST_SPAWN_ARMED": str(remote / "armed"),
+                    # Version check, R library, DuckDB, uv bootstrap, then Python.
+                    "MCP_CONSOLE_TEST_SPAWN_ORDINAL": "5",
+                    "MCP_CONSOLE_TEST_SPAWN_STARTED": str(started.path),
+                    "MCP_CONSOLE_TEST_SPAWN_RELEASE": str(release.path),
+                }
+            )
         prefix = remote_command(remote, binary, environment)
         launcher = Path(prefix[0])
         launcher.write_text(
@@ -115,6 +130,13 @@ def gated_session(binary: Path, *, probe=False, advance_clock=False):
                 ),
             )
         )
+        if handoff:
+            launcher.write_text(
+                launcher.read_text().replace(
+                    "/usr/bin/env -i ",
+                    "/usr/bin/env -i MCP_CONSOLE_TEST_SPAWN_SERVER=$$ ",
+                )
+            )
         configure(local, remote, prefix)
         with localhost(root / "sshd") as controller:
             poison_controller(root / "sshd", controller)
@@ -138,8 +160,12 @@ def gated_session(binary: Path, *, probe=False, advance_clock=False):
             try:
                 if not probe:
                     client.initialize_and_list_tools()
+                if handoff:
+                    (remote / "armed").touch()
                 yield client, remote, started, release, exits, identities
             finally:
+                if handoff:
+                    release.release()
                 client.close()
                 kill_processes(identities)
                 started.close()
@@ -245,6 +271,32 @@ def test_explicit_preparation_waits_and_accepts_concurrent_control(binary):
         client.receive_many([preparation, interrupt])
         retired(exits, identities)
         assert "exit status: 130" in json.dumps(preparation), preparation
+        return client.finish()[3:]
+
+
+@requires(SSH, WORKER, PROCESS_EVENTS, NATIVE_FIXTURES, command("ir"), command("uv"))
+def test_interrupt_is_accepted_between_remote_resolver_stages(binary):
+    with gated_session(binary, handoff=True) as (
+        client,
+        remote,
+        started,
+        release,
+        exits,
+        identities,
+    ):
+        preparation = client.start_send(requirements={"r": ["praise"]})
+        started.wait("uv bootstrap finished before Python resolver spawn", timeout=180)
+        client.request("ping")
+        client.send(control="interrupt", timeout_ms=0)
+        assert last_tool_text(client) == "\n[running; poll with an empty send]", (
+            last_result_text(client)
+        )
+        release.release()
+        client.receive(preparation)
+        assert preparation["result"]["isError"], preparation
+        client.response_timeout = 180
+        output = send_and_collect_runtime_python_resolution(client, r="42L")
+        assert output == "[1] 42\n", output
         return client.finish()[3:]
 
 
@@ -354,7 +406,7 @@ def test_connection_closure_reaps_preparation_with_backpressured_output(binary):
                 frame(
                     {
                         "Open": {
-                            "version": 2,
+                            "version": 3,
                             "build": version,
                             "workspace": str(remote),
                             "selections": {"r_home": None, "python": None},

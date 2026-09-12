@@ -95,7 +95,13 @@ def test_discovers_remote_capability_without_preparing(binary: Path) -> Transcri
 
 @contextmanager
 def managed_session(
-    binary, execution, *, selected_python=False, inherit=True, failure_output=None
+    binary,
+    execution,
+    *,
+    selected_python=False,
+    inherit=True,
+    failure_output=None,
+    inherited_library_bytes=0,
 ):
     with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
@@ -147,7 +153,9 @@ def managed_session(
         environment["UV_OFFLINE"] = "1"
         environment["UV_NO_CACHE"] = "1"
         environment["TMPDIR"] = str(remote)
-        environment["R_LIBS"] = ""
+        environment["R_LIBS"] = os.pathsep.join(
+            [str(remote)] * (inherited_library_bytes // (len(str(remote)) + 1))
+        )
         environment["R_LIBS_USER"] = str(remote / "ambient-library")
         environment["R_LIBS_SITE"] = str(remote / "ambient-library")
         override = {
@@ -409,6 +417,58 @@ def test_oversized_preparation_request_preserves_worker_and_connection(
         )
         assert last_tool_text(client) == "[1] 42\n"
         return client.finish()[3:]
+
+
+@requires(SSH, WORKER, command("ir"), command("uv"))
+def test_large_successful_resolver_result_preserves_completion(binary):
+    with managed_session(
+        binary, DIRECT, selected_python=True, inherited_library_bytes=120_000
+    ) as (client, remote, ir_record, uv_record):
+        output = send_and_collect_runtime_python_resolution(
+            client,
+            r="sentinel <- 42L; worker <- Sys.getpid(); cat(.libPaths()[1L])",
+        )
+        library = Path(output)
+        assert library.is_dir(), output
+        # Use the existing library fixture for large accepted requirement strings.
+        # The real remote resolver still validates and returns its host metadata.
+        ir = remote / "bin/ir"
+        ir.unlink()
+        fixture = Path(__file__).resolve().parents[3] / "fixtures/ordered_retirement_ir"
+        counter = remote / "ir-counter"
+        ir.write_text(
+            code(f"""
+                #!/usr/bin/env python3
+                import os
+                import sys
+
+                os.environ["MCP_CONSOLE_TEST_IR_LIBRARIES"] = {str(library)!r}
+                os.environ["MCP_CONSOLE_TEST_IR_COUNTER"] = {str(counter)!r}
+                os.execv(sys.executable, [sys.executable, {str(fixture)!r}, *sys.argv[1:]])
+                """)
+        )
+        ir.chmod(0o755)
+        client.send(
+            requirements={"r": [f"package{i}" + "x" * 125_000 for i in range(5)]}
+        )
+        assert counter.read_text() == "1"
+        # R resolution succeeds with a result larger than one frame. Sending that
+        # metadata to the next DuckDB operation exceeds the request limit, which
+        # must remain an ordinary admission failure with confirmed R completion.
+        assert last_result_text(client) == "SSH preparation message exceeds 1 MiB", (
+            last_result_text(client)
+        )
+        client.send(r="stopifnot(Sys.getpid() == worker); sentinel")
+        assert last_tool_text(client) == "[1] 42\n"
+        ir.unlink()
+        ir.symlink_to(fixture.parent / "record_ir")
+        client.send(requirements={"r": ["praise"]}, r="sentinel")
+        assert last_tool_text(client) == "[1] 42\n"
+        return json.loads(
+            json.dumps(client.finish()[3:])
+            .replace(str(remote.parent), "<ssh-test>")
+            .replace(str(library), "<remote-managed-library>")
+        )
 
 
 @requires(SSH, WORKER, command("ir"), command("uv"))

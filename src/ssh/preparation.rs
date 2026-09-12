@@ -18,7 +18,7 @@ pub(crate) use client::Preparation;
 #[cfg(not(unix))]
 pub(crate) use unsupported::Preparation;
 
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
 const LIMIT: usize = 1024 * 1024;
 
 #[derive(Default, Clone, Deserialize, Serialize)]
@@ -101,13 +101,13 @@ enum Output {
         version: u32,
         build: String,
     },
-    ErrorChunk {
+    ResultChunk {
         id: u64,
         text: String,
     },
     Completed {
         id: u64,
-        result: Result<serde_json::Value, String>,
+        result: Option<Result<serde_json::Value, String>>,
         control: Option<ResolverControlOutcome>,
         confirmed: bool,
     },
@@ -122,21 +122,25 @@ impl Output {
     fn write(&self, writer: &mut impl Write) -> Result<(), String> {
         let Self::Completed {
             id,
-            result: Err(error),
+            result: Some(result),
             control,
             confirmed,
         } = self
         else {
             return write(writer, self);
         };
+        let result = serde_json::to_string(result).map_err(|error| error.to_string())?;
+        if result.len() <= LIMIT / 8 {
+            return write(writer, self);
+        }
         // JSON can expand each text byte to six bytes. Leave room for the
-        // envelope and keep the final result and retirement receipt together.
-        let mut tail = error.as_str();
-        while tail.len() > LIMIT / 8 {
-            let end = tail.floor_char_boundary(LIMIT / 8);
+        // envelope; only the terminal receipt completes the assembled result.
+        let mut tail = result.as_str();
+        while !tail.is_empty() {
+            let end = tail.floor_char_boundary((LIMIT / 8).min(tail.len()));
             write(
                 writer,
-                &Self::ErrorChunk {
+                &Self::ResultChunk {
                     id: *id,
                     text: tail[..end].to_owned(),
                 },
@@ -147,7 +151,7 @@ impl Output {
             writer,
             &Self::Completed {
                 id: *id,
-                result: Err(tail.to_owned()),
+                result: None,
                 control: *control,
                 confirmed: *confirmed,
             },

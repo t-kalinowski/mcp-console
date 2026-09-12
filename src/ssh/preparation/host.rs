@@ -156,7 +156,7 @@ fn perform<T>(
     events
         .send(Event::Completed(Output::Completed {
             id,
-            result: result.as_ref().map(value).map_err(Clone::clone),
+            result: Some(result.as_ref().map(value).map_err(Clone::clone)),
             control,
             confirmed,
         }))
@@ -280,7 +280,9 @@ pub(super) fn run() -> Result<(), String> {
             Event::Input(Ok(Input::Control { id, control })) if active == Some(id) => {
                 pending.get_or_insert(control);
                 let result = if let Some(handle) = &handle {
-                    apply(handle, control)
+                    // The operation still owns this control between resolver
+                    // stages, even after the previous handle has completed.
+                    apply(handle, control).map(|_| true)
                 } else {
                     Ok(true)
                 };

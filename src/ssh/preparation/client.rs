@@ -107,7 +107,7 @@ struct Pending {
     id: u64,
     state: Arc<State>,
     reply: Reply,
-    error: Option<String>,
+    chunks: Option<String>,
 }
 
 impl Preparation {
@@ -183,7 +183,7 @@ impl Preparation {
             id: 0,
             state: state.clone(),
             reply,
-            error: None,
+            chunks: None,
         };
         let blocked = session.blocked.clone();
         let open = Input::Open {
@@ -329,7 +329,7 @@ fn run(
                         id,
                         state,
                         reply,
-                        error: None,
+                        chunks: None,
                     });
                     outgoing
                         .send(request)
@@ -375,12 +375,12 @@ fn run(
                         let _ = reply.send(result);
                     }
                 }
-                Event::Received(Ok(Output::ErrorChunk { id, text })) if hello => {
+                Event::Received(Ok(Output::ResultChunk { id, text })) if hello => {
                     let pending = active
                         .as_mut()
                         .filter(|pending| pending.id == id)
-                        .ok_or("mismatched SSH preparation diagnostic")?;
-                    pending.error.get_or_insert_default().push_str(&text);
+                        .ok_or("mismatched SSH preparation result chunk")?;
+                    pending.chunks.get_or_insert_default().push_str(&text);
                 }
                 Event::Received(Ok(Output::Completed {
                     id,
@@ -392,16 +392,13 @@ fn run(
                         .as_mut()
                         .filter(|pending| pending.id == id)
                         .ok_or("mismatched SSH preparation result")?;
-                    if pending.error.is_some() && result.is_ok() {
-                        return Err("SSH preparation diagnostics followed by success".into());
-                    }
-                    let result = result.map_err(|error| match pending.error.take() {
-                        Some(mut prefix) => {
-                            prefix.push_str(&error);
-                            prefix
-                        }
-                        None => error,
-                    });
+                    let result = match (pending.chunks.take(), result) {
+                        (None, Some(result)) => result,
+                        (Some(chunks), None) => serde_json::from_str(&chunks).map_err(|error| {
+                            format!("invalid chunked SSH preparation result: {error}")
+                        })?,
+                        _ => return Err("SSH preparation requires one complete result".into()),
+                    };
                     if !confirmed {
                         return Err("remote preparation process cleanup failed".into());
                     }

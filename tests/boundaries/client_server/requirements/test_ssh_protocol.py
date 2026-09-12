@@ -23,9 +23,9 @@ def test_invalid_preparation_results_never_commit_or_launch(binary):
         "missing",
         "mismatched",
         "malformed",
-        "truncated-error",
-        "mismatched-error",
-        "error-success",
+        "truncated-result",
+        "mismatched-chunk",
+        "chunked-and-inline",
     ):
         with TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()

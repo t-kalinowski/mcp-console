@@ -40,7 +40,7 @@ opened = read()["Open"]
 write(
     {
         "Hello": {
-            "version": 1 if mode == "incompatible" else 2,
+            "version": 2 if mode == "incompatible" else 3,
             "build": opened["build"],
         }
     }
@@ -58,16 +58,16 @@ while (message := read()) is not None:
     with Path(record).open("a") as stream:
         stream.write(json.dumps(request) + "\n")
     id = request["id"]
-    if mode in ("truncated-error", "mismatched-error", "error-success"):
+    if mode in ("truncated-result", "mismatched-chunk", "chunked-and-inline"):
         write(
             {
-                "ErrorChunk": {
-                    "id": id + (mode == "mismatched-error"),
-                    "text": "installer failed",
+                "ResultChunk": {
+                    "id": id + (mode == "mismatched-chunk"),
+                    "text": json.dumps({"Err": "installer failed"}),
                 }
             }
         )
-        if mode == "error-success":
+        if mode == "chunked-and-inline":
             complete(id, None)
         break
     if mode == "unconfirmed":

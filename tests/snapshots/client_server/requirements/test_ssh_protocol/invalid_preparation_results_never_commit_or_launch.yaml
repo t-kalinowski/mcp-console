@@ -205,7 +205,7 @@ result:
 ---
 stderr: ""
 ---
-peer: truncated-error
+peer: truncated-result
 ---
 send:
   requirements:
@@ -247,7 +247,7 @@ result:
 stderr: |
   SSH preparation owner stopped
 ---
-peer: mismatched-error
+peer: mismatched-chunk
 ---
 send:
   requirements:
@@ -258,7 +258,7 @@ result:
     - type: text
       text: >-
         SSH preparation retirement is unconfirmed: mismatched SSH preparation
-        diagnostic
+        result chunk
   isError: true
 ---
 send:
@@ -270,7 +270,7 @@ result:
     - type: text
       text: >-
         SSH preparation retirement is unconfirmed; this session cannot prepare
-        or start a replacement: mismatched SSH preparation diagnostic
+        or start a replacement: mismatched SSH preparation result chunk
   isError: true
 ---
 send:
@@ -281,14 +281,14 @@ result:
     - type: text
       text: |-
         [starting new worker]
-        [SSH preparation retirement is unconfirmed; this session cannot prepare or start a replacement: mismatched SSH preparation diagnostic]
+        [SSH preparation retirement is unconfirmed; this session cannot prepare or start a replacement: mismatched SSH preparation result chunk]
         session restart did not complete; cell was not run
   isError: true
 ---
 stderr: |
   SSH preparation owner stopped
 ---
-peer: error-success
+peer: chunked-and-inline
 ---
 send:
   requirements:
@@ -298,8 +298,8 @@ result:
   content:
     - type: text
       text: >-
-        SSH preparation retirement is unconfirmed: SSH preparation diagnostics
-        followed by success
+        SSH preparation retirement is unconfirmed: SSH preparation requires one
+        complete result
   isError: true
 ---
 send:
@@ -311,7 +311,7 @@ result:
     - type: text
       text: >-
         SSH preparation retirement is unconfirmed; this session cannot prepare
-        or start a replacement: SSH preparation diagnostics followed by success
+        or start a replacement: SSH preparation requires one complete result
   isError: true
 ---
 send:
@@ -322,7 +322,7 @@ result:
     - type: text
       text: |-
         [starting new worker]
-        [SSH preparation retirement is unconfirmed; this session cannot prepare or start a replacement: SSH preparation diagnostics followed by success]
+        [SSH preparation retirement is unconfirmed; this session cannot prepare or start a replacement: SSH preparation requires one complete result]
         session restart did not complete; cell was not run
   isError: true
 ---

@@ -106,8 +106,8 @@ They call the same embedded resolver implementation used locally.
 The private requests carry no shell programs, source code, executable choices, or arbitrary environment overrides.
 Preparation uses a separate versioned, length-prefixed JSON protocol with a 1 MiB message limit; installer output is captured separately from protocol frames.
 Oversized preparation requests are rejected before remote admission and leave the session available for subsequent requests.
-Large installer errors use bounded diagnostic chunks followed by the final result and cleanup receipt, preserving the complete error without changing its failure classification.
-Launch protocol version 2 carries the selected environment, and preparation protocol version 2 requires a matching Console package version.
+Large results and installer errors use bounded result chunks followed by the cleanup receipt, preserving the complete result without changing its failure classification.
+Launch protocol version 2 carries the selected environment, and preparation protocol version 3 requires a matching Console package version.
 Older preinstalled-only peers fail compatibility checks before MCP readiness.
 Resolver programs, temporary files, interpreter checks, Matplotlib preparation, and caches belong to the execution host.
 Python resolution retains the existing treatment of `UV_OFFLINE`, `UV_NO_CACHE`, and `RETICULATE_UV`.
@@ -115,6 +115,7 @@ Python resolution retains the existing treatment of `UV_OFFLINE`, `UV_NO_CACHE`,
 The local server owns admitted operations, requirement merging, candidate and retained environments, activation receipts, and worker generations.
 The preparation owner retains trusted resolver configuration, not session manifests or activation decisions.
 Each operation runs its own resolver process groups and reports an explicit result and cleanup status before the server can commit a candidate.
+An interrupt accepted between resolver stages remains owned by that preparation operation and applies to its next resolver.
 An ordinary installation failure with confirmed cleanup retains the existing transaction behavior, including preservation of a healthy old worker during failed restart preparation.
 Missing, malformed, or truncated results, failed cleanup, and detected transport loss prevent further preparation and worker replacement in that session.
 Preparation is never automatically replayed after uncertain completion.
