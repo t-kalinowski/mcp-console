@@ -372,6 +372,13 @@ def test_preserves_selected_python_duckdb_connection_state(
     client.send(sql="SELECT value FROM later_state")
     preview = last_tool_text(client)
     assert "value" in preview and "'retained'" in preview
+    client.send(control="restart")
+    assert (
+        last_tool_text(client)
+        == "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+    ), last_tool_text(client)
+    client.send(python='print("new interpreter")')
+    assert last_tool_text(client) == "new interpreter\n"
     return client.finish()
 
 

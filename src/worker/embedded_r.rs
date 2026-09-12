@@ -206,14 +206,16 @@ pub(crate) fn run() -> Result<(), Box<dyn Error>> {
     let sql = crate::sql::Bridge::initialize()?;
     writer.send(&WorkerMessage::Ready)?;
 
-    Runtime {
+    let mut runtime = Runtime {
         writer,
         graphics,
         r_environment,
         python,
         sql,
-    }
-    .run()
+    };
+    let result = runtime.run();
+    crate::python::prepare_process_exit()?;
+    result
 }
 
 #[cfg(target_os = "linux")]

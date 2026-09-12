@@ -58,6 +58,10 @@ pub(crate) fn use_r_sql() -> Result<(), String> {
     library::use_r_sql()
 }
 
+pub(crate) fn prepare_process_exit() -> Result<(), String> {
+    library::prepare_process_exit()
+}
+
 #[cfg(test)]
 mod tests {
     use super::PreparationOutcome;
