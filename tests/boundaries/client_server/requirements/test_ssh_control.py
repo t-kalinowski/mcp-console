@@ -50,7 +50,15 @@ from support.suites import run_this_suite
 
 
 @contextmanager
-def gated_session(binary: Path, *, probe=False, advance_clock=False, handoff=False):
+def gated_session(
+    binary: Path,
+    *,
+    probe=False,
+    advance_clock=False,
+    handoff=False,
+    lease_ms=None,
+    faults=False,
+):
     with TemporaryDirectory() as temporary, Events() as exits:
         root = Path(temporary).resolve()
         local, remote = root / "local", root / "remote"
@@ -122,7 +130,7 @@ def gated_session(binary: Path, *, probe=False, advance_clock=False, handoff=Fal
                 "#!/bin/sh\n",
                 code(r"""
                     #!/bin/sh
-                    if [ "$1" = ssh-prepare ]; then
+                    if [ "$1" = ssh-prepare ] || [ "$2" = ssh-prepare ]; then
                       printf '%s\n' "$$" > OWNER
                     fi
                     """).replace(
@@ -134,11 +142,15 @@ def gated_session(binary: Path, *, probe=False, advance_clock=False, handoff=Fal
             launcher.write_text(
                 launcher.read_text().replace(
                     "/usr/bin/env -i ",
-                    "/usr/bin/env -i MCP_CONSOLE_TEST_SPAWN_SERVER=$$ ",
+                    "/usr/bin/env -i MCP_CONSOLE_TEST_SPAWN_SERVER=ssh-prepare ",
                 )
             )
-        configure(local, remote, prefix)
-        with localhost(root / "sshd") as controller:
+        config = configure(local, remote, prefix)
+        if lease_ms is not None:
+            value = json.loads(config.read_text())
+            value["target"]["lease_ms"] = lease_ms
+            config.write_text(json.dumps(value))
+        with localhost(root / "sshd", faults=faults) as controller:
             poison_controller(root / "sshd", controller)
             if advance_clock:
                 controller.update(

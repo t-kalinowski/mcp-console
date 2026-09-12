@@ -37,6 +37,10 @@ Selecting SSH alone grants no workspace writes.
 
 For example, `target.command: [uvx, mcp-console==0.0.3]` selects a package version, and `target.command: [/opt/console/bin/mcp-console]` selects a preinstalled build.
 The selected package must implement this SSH protocol; a version pin is not a compatibility guarantee.
+`target.lease_ms` sets each channel's controller lease in integer milliseconds, from 1,000 through 300,000 (default 30,000).
+Heartbeat challenges are spaced at one sixth of that lease (5 seconds by default).
+The server freezes this setting with the target.
+Select a lease that allows for host scheduling and SSH latency; it does not extend connection or setup deadlines.
 The command is a trusted executable prefix, not a shell program or a `send` argument.
 It must leave stdout exclusively for Console's launch protocol; setup diagnostics belong on stderr.
 Unexpected stdout is an error.
@@ -141,6 +145,8 @@ An ordinary cell may return running while defaults or automatic dependencies res
 Interrupt and cancellation messages identify the preparation operation and reach its remote resolver process group, independently of the worker connection.
 Closing MCP input cancels discovery before readiness and active preparation during shutdown.
 The remote preparation owner observes input closure independently of blocked protocol output and cancels and reaps its resolver groups.
+Both SSH channels have independent leases, including during discovery before a worker exists.
+A healthy preparation channel cannot renew the worker channel, or the reverse.
 
 Evaluation, polling, stdin, output, images, interrupts, shutdown, and replacement use the existing relay protocol and generation rules.
 The remote helper observes connection closure independently of output backpressure and requests ordinary runner retirement, including before worker readiness.
@@ -150,11 +156,39 @@ On a healthy connection, the helper acknowledges retirement after the runner exi
 Without that acknowledgment, Console reports unconfirmed retirement and prevents further replacement in the session.
 Cells are never replayed after transport failure.
 
-There is no reconnect, resume, heartbeat, or lease protocol.
-During an undetected network partition, remote cleanup may be delayed until SSH detects the connection loss.
-Client-side SSH keepalives do not establish bounded remote retirement.
+Each remote channel issues an unpredictable challenge and requires its response before starting discovery, preflight, or other work.
+It issues the next challenge only after accepting the previous response and waiting the heartbeat interval.
+Only a matching, outstanding response renews its monotonic deadline; writes, socket connectivity, and unsolicited or repeated heartbeats do not.
+If either communication direction stalls, the channel expires even when SSH never reports EOF.
+Expiry is terminal and closes the existing owner's input to request retirement.
+The launch owner retires the ordinary sandbox launcher; the preparation owner stops and reaps its existing resolver groups.
+Idle sessions, busy cells, prompts, long installations, partial frames, and output backpressure remain subject to that deadline.
+The deadline bounds the retirement request, not completion of native cleanup.
+
+Transport loss, retirement requested, and retirement confirmed are separate outcomes.
+Without the original launch or preparation cleanup receipt, retirement remains unconfirmed and conflicting preparation or replacement stays blocked.
+The local adapter also bounds its SSH child's exit wait; it cannot manufacture a remote cleanup receipt by killing that child.
+Explicit shutdown retains the existing protocol request and does not wait for lease expiry while communication is available.
+Controller input closure cancels queued transport input and starts a separate eight-second retirement deadline; continuing heartbeats cannot extend shutdown.
+Connection closure still requests immediate retirement in this change; reconnect and resume are not yet supported.
 The runner retains its own limits, including no independent recovery after runner death.
 Direct execution retains its lack of runner-owned descendant cleanup.
+
+### Private lease envelope
+
+Each local `ssh-connect` adapter runs OpenSSH, whose remote `ssh-tunnel` owns the existing `ssh-launch` or `ssh-prepare` helper through ordinary pipes.
+Lease protocol 1 checks the Console package version, channel name, and frozen lease before starting that helper.
+It wraps both directions; lease controls never enter relay JSONL or the typed preparation protocol.
+Each frame has a one-byte tag, a four-byte big-endian payload length, and at most 32 KiB of payload.
+Compatibility messages are structured JSON; challenge tokens have 32 random bytes.
+Data frames contain an eight-byte byte offset followed by at most 16 KiB of stream data.
+Acknowledgments identify the cumulative bytes written to the receiving application pipe, independently of MCP response delivery.
+Each direction allows at most 256 KiB of unacknowledged application data and applies backpressure at that bound.
+An end frame carries the final offset.
+Remote output is acknowledged after the receiving pipe drains and closes; controller input closure requests prompt cancellation even when application input is backpressured.
+Malformed framing, invalid offsets, and exhausted control capacity fail the channel explicitly.
+The readiness loop services control and monotonic deadlines independently of application reads and writes.
+Diagnostics remain on stderr, outside these frames.
 
 Journals, output spools, transcripts, and returned image bytes stay in the local project's `.agents/console/sessions/`.
 Session metadata records the SSH destination and initial remote execution directory separately from the local recording workspace.

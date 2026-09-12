@@ -27,10 +27,10 @@ pub(super) fn poll(
         .collect::<Vec<_>>();
     loop {
         let timeout = deadline.map_or(-1, |deadline| {
-            deadline
-                .saturating_duration_since(Instant::now())
-                .as_millis()
-                .min(i32::MAX as u128) as i32
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            (remaining.as_millis()
+                + u128::from(!remaining.subsec_nanos().is_multiple_of(1_000_000)))
+            .min(i32::MAX as u128) as i32
         });
         let result =
             unsafe { libc::poll(descriptors.as_mut_ptr(), descriptors.len() as _, timeout) };
@@ -54,6 +54,9 @@ pub(super) struct Io<T> {
 }
 
 impl<T: AsRawFd> Io<T> {
+    pub(super) fn into_inner(self) -> T {
+        self.inner
+    }
     pub(super) fn new(
         inner: T,
         cancelled: Option<io::PipeReader>,

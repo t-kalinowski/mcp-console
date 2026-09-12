@@ -52,6 +52,9 @@ Never discover controller interpreters, invoke controller resolvers, or validate
 Require explicit result and resolver cleanup confirmation before committing an environment; uncertain preparation retirement blocks further preparation and replacement.
 Standalone `sandbox` remains local.
 SSH exit alone cannot confirm remote retirement; require the remote launcher's terminal acknowledgment before replacement, and block replacement after unconfirmed cleanup.
+Each SSH channel has an independent bidirectional controller lease, frozen as `target.lease_ms` (default 30000; range 1000–300000 milliseconds).
+Challenge/response renewal runs outside application framing and backpressure; expiry initiates ordinary owner retirement and never proves cleanup.
+Connection closure currently retires immediately; no reconnect is implemented yet.
 
 The worker relay, built-in worker, and managed resolvers support macOS and Linux.
 The default sandbox and standalone sandbox command support both platforms.
@@ -149,6 +152,7 @@ Keep these invariants intact:
 - `src/main.rs`, `src/cli.rs` — binary entry point and command definitions.
 - `src/settings.rs`, `src/settings/yaml.rs` — trusted project YAML discovery, node loading, and application settings retained across worker launches; native policy values remain JSON; the sandbox layer adds application launch requirements and delegates validation and defaults to the runner.
 - `src/ssh.rs`, `src/ssh/launch.rs`, `src/ssh/launch_io.rs` — configured OpenSSH transport, bounded bootstrap and relay envelope, compatibility checks, remote ordinary launcher ownership, cancellable transfer, and retirement confirmation.
+- `src/ssh/lease.rs`, `src/ssh/lease/stream.rs` — per-channel SSH adapters, versioned outer framing, challenge/response leases, bounded stream windows, and deadline-driven retirement requests.
 - `src/ssh/preparation.rs`, `src/ssh/preparation/{client,host}.rs` — typed trusted preparation connection, remote startup configuration, operation-scoped resolver control, and confirmed results.
 - `src/resolver/execution.rs` — host selection for existing resolver operations, preserving local session transactions.
 - `src/server.rs`, `src/server_transport.rs` — MCP tools, stdio transport, and response-delivery ownership.

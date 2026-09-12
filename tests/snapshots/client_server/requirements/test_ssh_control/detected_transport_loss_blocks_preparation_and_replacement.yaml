@@ -25,11 +25,13 @@ send:
 result:
   content:
     - type: text
-      text: |-
-        [starting new worker]
-        [SSH preparation retirement is unconfirmed; this session cannot prepare or start a replacement: truncated SSH frame length: failed to fill whole buffer]
-        session restart did not complete; cell was not run
+      text: >-
+        SSH preparation retirement is unconfirmed; this session cannot prepare
+        or start a replacement: truncated SSH frame length: failed to fill whole
+        buffer
   isError: true
 ---
 stderr: |
+  truncated SSH frame length: failed to fill whole buffer
+  SSH connection closed before stream retirement
   SSH preparation owner stopped

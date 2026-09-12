@@ -5,8 +5,12 @@ import struct
 import sys
 from pathlib import Path
 
-mode, record, operation = sys.argv[1:]
+from ssh_tunnel_peer import wrap
+
+mode, record, tunnel, operation = sys.argv[1:]
+assert tunnel == "ssh-tunnel"
 assert operation == "ssh-prepare", operation
+wrap()
 
 
 def read():

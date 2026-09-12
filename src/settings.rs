@@ -78,6 +78,21 @@ pub(crate) struct SshTarget {
     pub workspace: String,
     #[serde(default = "remote_command")]
     pub command: Vec<String>,
+    #[serde(default = "ssh_lease_ms")]
+    pub lease_ms: u64,
+}
+
+fn ssh_lease_ms() -> u64 {
+    30_000
+}
+
+pub(crate) fn validate_ssh_lease(lease_ms: u64) -> Result<(), String> {
+    if !(1_000..=300_000).contains(&lease_ms) {
+        return Err(
+            "target.lease_ms must be an integer from 1000 through 300000 milliseconds".into(),
+        );
+    }
+    Ok(())
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -97,6 +112,7 @@ impl SshTarget {
     }
 
     fn validate(&self) -> Result<(), String> {
+        validate_ssh_lease(self.lease_ms)?;
         if !self.workspace.starts_with('/') || self.workspace.contains('\0') {
             return Err("target.workspace must be an absolute remote directory path".into());
         }

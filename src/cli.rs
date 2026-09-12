@@ -58,6 +58,14 @@ pub enum Command {
     #[command(hide = true)]
     SshPrepare,
 
+    /// Own the controller end of the private SSH stream
+    #[command(hide = true)]
+    SshConnect { operation: String },
+
+    /// Own the remote end of the private SSH stream
+    #[command(hide = true)]
+    SshTunnel { operation: String },
+
     /// Run the internal worker relay
     #[command(hide = true)]
     WorkerRelay {

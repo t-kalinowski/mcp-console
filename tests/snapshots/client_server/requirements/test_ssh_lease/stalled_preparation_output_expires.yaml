@@ -1,0 +1,5 @@
+---
+stalled_direction: down
+during_discovery: false
+resolver_and_descendant_retired: true
+completion_unconfirmed: true

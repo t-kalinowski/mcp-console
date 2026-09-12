@@ -1,0 +1,5 @@
+---
+partial_frame_still_open: true
+stderr: |
+  truncated SSH frame length: failed to fill whole buffer
+  SSH controller lease expired; remote retirement is unconfirmed
