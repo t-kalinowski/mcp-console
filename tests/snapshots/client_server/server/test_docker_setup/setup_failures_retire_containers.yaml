@@ -26,6 +26,14 @@ stderr: |
   remote launcher exited with exit status: 1
   remote launcher exited with exit status: 1
 ---
+rejected_before_readiness: python_version
+container_absent: true
+stderr: |
+  container Python probe failed with exit status: 1: MCP Console requires Python 3.10 or later
+
+  remote launcher exited with exit status: 1
+  remote launcher exited with exit status: 1
+---
 rejected_before_readiness: compatibility
 container_absent: true
 stderr: >

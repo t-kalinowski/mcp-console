@@ -199,6 +199,7 @@ def test_setup_failures_retire_containers(binary: Path) -> Transcript:
         ("mount", "bind source path does not exist"),
         ("runtime", "RETICULATE_PYTHON"),
         ("python_executable", "container Python probe failed"),
+        ("python_version", "MCP Console requires Python 3.10 or later"),
         ("compatibility", "incompatible Docker bootstrap"),
         ("native_environment", "mcp-console-sandbox: invalid configuration JSON"),
         ("native_policy", "mcp-console-sandbox: invalid configuration JSON"),
@@ -219,6 +220,24 @@ def test_setup_failures_retire_containers(binary: Path) -> Transcript:
                 }
             elif case == "python_executable":
                 value["sandbox"]["environment"] = {"RETICULATE_PYTHON": "/etc/hostname"}
+            elif case == "python_version":
+                # Execute the probe with an older interpreter's version report.
+                program = root / "python-version"
+                program.write_text("""#!/opt/analysis/bin/python
+from collections import namedtuple
+import sys
+VersionInfo = namedtuple("VersionInfo", "major minor micro releaselevel serial")
+sys.version_info = VersionInfo(3, 9, 0, "final", 0)
+exec(sys.argv[2])
+""")
+                program.chmod(0o755)
+                value["sandbox"]["environment"] = {
+                    "RETICULATE_PYTHON": "/python-version",
+                    "PYTHONOPTIMIZE": "1",
+                }
+                value["target"]["compute"]["mounts"] = [
+                    {"source": str(program), "target": "/python-version"}
+                ]
             elif case == "compatibility":
                 program = root / "incompatible.py"
                 program.write_text("""import json, struct, sys
@@ -236,7 +255,14 @@ sys.stdout.buffer.flush()
                 value["sandbox"]["filesystem"] = {"kind": "native-runner-must-validate"}
             config.write_text(json.dumps(value))
             with McpClient(binary, ("serve",), environment, root) as client:
-                assert client.stdout.read(timeout=30) == ""
+                client.start_request(
+                    "initialize",
+                    protocolVersion="2025-11-25",
+                    capabilities={},
+                    clientInfo={"name": "docker-setup-test", "version": "1"},
+                )
+                response = client.stdout.readline(timeout=30)
+                assert response == "", (case, response)
                 error = client.stderr.read(timeout=30)
                 assert expected in error, error
                 assert client.process.wait(timeout=5) != 0
