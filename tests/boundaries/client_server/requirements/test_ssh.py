@@ -448,8 +448,10 @@ def test_large_successful_resolver_result_preserves_completion(binary):
                 """)
         )
         ir.chmod(0o755)
+        # Even three JSON bytes per inherited path byte put the result over the
+        # limit; its size must not depend on the temporary directory spelling.
         client.send(
-            requirements={"r": [f"package{i}" + "x" * 125_000 for i in range(5)]}
+            requirements={"r": [f"package{i}" + "x" * 120_000 for i in range(6)]}
         )
         assert counter.read_text() == "1"
         # R resolution succeeds with a result larger than one frame. Sending that
