@@ -1,18 +1,10 @@
 //! One ordinary Docker container, owned independently of its attachment.
 use crate::target_launch::process::{self, Cancel};
 use crate::target_launch::transfer::{Io, duplicate};
-use crate::target_launch::{self, Bootstrap, Hello};
-use serde::{Deserialize, Serialize};
+use crate::target_launch::{self, Hello};
 use std::time::{Duration, Instant};
 
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct Request {
-    pub session: super::Session,
-    pub name: String,
-    pub probe: bool,
-    pub bootstrap: Bootstrap,
-}
+type Request = target_launch::owner::Request<super::Captured>;
 
 pub(super) fn run() -> Result<(), String> {
     let mut input = Io::new(
@@ -20,8 +12,9 @@ pub(super) fn run() -> Result<(), String> {
         None,
         Some(Instant::now() + super::COMMAND_TIMEOUT),
     )?;
-    let bytes = target_launch::read_payload(&mut input, super::LIMIT, super::PROTOCOL)
-        .map_err(|e| e.to_string())?;
+    let bytes =
+        target_launch::read_payload(&mut input, target_launch::MAX_BOOTSTRAP, super::PROTOCOL)
+            .map_err(|e| e.to_string())?;
     let request: Request =
         serde_json::from_slice(&bytes).map_err(|e| format!("invalid Docker owner request: {e}"))?;
     target_launch::owner::run(super::PROTOCOL, |cancel| {
@@ -61,7 +54,7 @@ pub(super) fn run() -> Result<(), String> {
 }
 
 struct Container<'a> {
-    session: &'a super::Session,
+    session: &'a super::Captured,
     name: &'a str,
     id: Option<String>,
     retired: bool,

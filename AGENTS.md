@@ -65,7 +65,7 @@ Capture a prepared digest-qualified template once, use one newly owned microVM p
 An unacknowledged create remains uncertain after an empty listing; never adopt or prefix-match user resources.
 Docker owns inherited policy and host integrations; Console must not mutate global policy, credentials, or daemon settings.
 VM-local changes disappear on restart; declared host shares and any records beneath them remain exposed according to provider access.
-Standalone `sandbox` remains local and rejects resolved compute enforcement.
+Standalone `sandbox` remains local for supported native selections and rejects resolved compute enforcement.
 SSH exit alone cannot confirm remote retirement; require the remote launcher's terminal acknowledgment before replacement, and block replacement after unconfirmed cleanup.
 
 The worker relay, built-in worker, and managed resolvers support macOS and Linux.
@@ -165,8 +165,8 @@ Keep these invariants intact:
 - `src/main.rs`, `src/cli.rs` — binary entry point and command definitions.
 - `src/settings.rs`, `src/settings/{yaml,target}.rs` — trusted project YAML discovery, node loading, and application settings retained across worker launches; native policy values remain JSON; the sandbox layer adds application launch requirements and delegates validation and defaults to the runner.
 - `src/ssh.rs` — configured OpenSSH transport and remote retirement confirmation.
-- `src/target_launch.rs`, `src/target_launch/` — shared versioned bootstrap, relay envelope, direct/native launcher mechanics, image runtime selection, cancellable CLI transfer, and local owner observation.
-- `src/compute_session.rs` — dispatch for the two implemented local compute targets.
+- `src/target_launch.rs`, `src/target_launch/` — shared versioned bootstrap, relay envelope, direct/native launcher mechanics, image runtime selection, workload environment decoding, cancellable CLI transfer, and the shared local owner request and observation.
+- `src/target_session.rs` — selected SSH/Docker/SBX sessions, shared compute probes and controller replacement blocking, and generation-owned retirement receipts and resource names.
 - `src/docker.rs`, `src/docker/` — captured Docker endpoint and immutable image setup, local ownership helper, and confirmed container retirement.
 - `src/docker_sandbox.rs`, `src/docker_sandbox/owner.rs` — compute policy validation, typed SBX CLI adapter, prepared template identity, owned microVM creation, and confirmed retirement.
 - `src/ssh/preparation.rs`, `src/ssh/preparation/{client,host}.rs` — typed trusted preparation connection, remote startup configuration, operation-scoped resolver control, and confirmed results.

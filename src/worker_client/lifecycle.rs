@@ -1205,9 +1205,9 @@ impl Client {
         tokio::task::spawn_blocking(move || {
             let preparation = client
                 .0
-                .ssh
+                .target
                 .as_ref()
-                .and_then(|ssh| ssh.preparation.as_ref())
+                .and_then(crate::target_session::Session::ssh_preparation)
                 .map(|preparation| {
                     let preparation = preparation.clone();
                     // The two SSH retirement bounds run together. A lost

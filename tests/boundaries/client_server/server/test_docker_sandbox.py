@@ -11,6 +11,7 @@ from support.client import McpClient
 from support.docker import (
     DOCKER,
     absent,
+    calls as peer_calls,
     cli_peer,
     configure,
     docker,
@@ -91,8 +92,8 @@ def test_native_selection_is_enforced_or_rejected(binary: Path) -> Transcript:
                 assert "bwrap:" in error or "mcp-console-sandbox:" in error, error
                 assert client.process.wait(timeout=5) != 0
                 print(error, file=sys.stderr, end="")
-        for line in (root / "peer/calls").read_text().splitlines():
-            args = json.loads(line)["args"]
+        for call in peer_calls(root):
+            args = call["args"]
             if "create" in args:
                 assert not any(
                     arg in args

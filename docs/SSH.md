@@ -30,12 +30,12 @@ Selecting SSH alone grants no workspace writes.
 | Field                   | Default and meaning                                                                                                                                                                                                                                            |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `target`                | Omitted: local host execution. With SSH transport, selects one host for the implicit session. Applies only to `serve`.                                                                                                                                         |
-| `target.transport.kind` | Select `ssh` for this host target; Docker separately accepts local transport.                                                                                                                                                                                  |
+| `target.transport.kind` | Select `ssh` for this host target; Docker and Docker Sandbox separately accept local transport.                                                                                                                                                                |
 | `target.transport.host` | Required, nonempty OpenSSH destination, including a host alias. Uses the controller's SSH configuration for identity, user, port, jump hosts, and host keys.                                                                                                   |
 | `target.workspace`      | Required absolute path on the execution host. The helper verifies that it exists and is a directory; it never creates it or substitutes another cwd. Relative or missing values fail locally; inaccessible, nonexistent, or non-directory paths fail remotely. |
 | `target.command`        | Optional nonempty string argv; defaults to `[uvx, mcp-console]`. Its first element must name an executable. NUL bytes are rejected. Console quotes each argument for the remote shell and appends a fixed internal launch or preparation operation.            |
 
-`target.compute` is optional for SSH and accepts `{kind: host}`; SSH plus Docker is deferred.
+`target.compute` is optional for SSH and accepts `{kind: host}`; SSH plus Docker or Docker Sandbox is unsupported.
 
 For example, `target.command: [uvx, mcp-console==0.0.3]` selects a package version, and `target.command: [/opt/console/bin/mcp-console]` selects a preinstalled build.
 The selected package must implement this SSH protocol; a version pin is not a compatibility guarantee.
@@ -47,9 +47,9 @@ Unexpected stdout is an error.
 It launches the remote relay directly, with the remote account's permissions and the existing direct-worker cleanup limitations.
 It still reads configuration to select the target, so malformed YAML is an error.
 Sandbox permission fields are not enforced in this mode; target environment controls still apply remotely.
-Custom development `--worker` and `--relay` replacements cannot be combined with SSH or Docker.
+Custom development `--worker` and `--relay` replacements cannot be combined with SSH, Docker, or Docker Sandbox.
 
-Standalone `mcp-console sandbox -- COMMAND` remains local.
+Standalone `mcp-console sandbox -- COMMAND` remains local for supported native selections and rejects resolved compute enforcement.
 It uses the local cwd for built-ins, relative policy paths, and `--writable-root`, regardless of `target`.
 
 ## Runtime selection and policy
@@ -148,6 +148,7 @@ The remote preparation owner observes input closure independently of blocked pro
 Evaluation, polling, stdin, output, images, interrupts, shutdown, and replacement use the existing relay protocol and generation rules.
 The remote helper observes connection closure independently of output backpressure and requests ordinary runner retirement, including before worker readiness.
 Local shutdown retains the existing staged bound of approximately 10 seconds, including forced local SSH termination if needed.
+The [architecture timing reference](ARCHITECTURE.md#selected-target-sessions-and-timing) records the separately owned setup and retirement allowances.
 The local SSH process exiting is not proof that remote cleanup completed.
 On a healthy connection, the helper acknowledges retirement after the runner exits successfully and queued output is forwarded.
 Without that acknowledgment, Console reports unconfirmed retirement and prevents further replacement in the session.

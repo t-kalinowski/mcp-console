@@ -5,6 +5,11 @@ Build the fixture before running tests and set `MCP_CONSOLE_TEST_DOCKER_IMAGE` t
 Missing Docker access or an unselected fixture skips integration cases; it is not Docker validation.
 Cases run on macOS and Linux controllers and keep process observations in the container namespace.
 
+Docker Sandbox cases separately require standalone `sbx`, usable virtualization/login/policy, and `MCP_CONSOLE_TEST_SBX_TEMPLATE`; see `docs/DOCKER_SANDBOX.md` for template preparation and optional network/inner-Docker capabilities.
+`tests/support/docker_sandbox.py` owns capability discovery and serializes real microVM fixtures.
+Its controller-isolation fixture relocates Console without its companion and installs sentinels for forbidden native/runtime/resolver calls; fake-provider and real-runtime cases retain separate coverage.
+Fake peers establish orchestration contracts, not real container or VM cleanup.
+
 SSH cases use a private localhost OpenSSH server, pinned temporary host and client keys, and a test alias.
 The shared `SSH` capability requires `sshd` and `ssh-keygen`; CI installs the Linux server and prepares `/run/sshd`.
 `MCP_CONSOLE_TEST_SSH_R_LIBS` can supply preinstalled R libraries to this fixture without adding dependency setup to SSH execution.
@@ -147,7 +152,8 @@ Shared helpers under `tests/support/` are grouped by responsibility:
 - `cases.py` runs individual cases and their snapshot checks with deadlines and captures their diagnostic output.
 - `snapshots.py` formats and compares primary and companion snapshots.
 - `normalization.py` contains source-text and diagnostic normalization.
-- `checkpoints.py`, `capture.py`, and `processes.py` contain reusable synchronization, stream-reading, and cleanup mechanics.
+- `checkpoints.py`, `capture.py`, and `processes.py` contain reusable synchronization, stream-reading (including the JSONL reader used by provider call logs), and cleanup mechanics.
+- `ssh.py`, `docker.py`, and `docker_sandbox.py` contain provider capabilities and concrete fixtures; standalone peer scripts remain self-contained.
 - `macos.py` contains shared Darwin process inspection and native fixture compilation.
 - `assertions.py` contains transcript result assertions and public-output collection.
 - `r.py` and `resolvers.py` contain runtime-specific fixture setup.

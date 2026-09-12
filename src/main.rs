@@ -4,7 +4,6 @@ use clap::Parser;
 
 mod cell;
 mod cli;
-mod compute_session;
 mod docker;
 mod docker_sandbox;
 #[cfg(unix)]
@@ -39,6 +38,7 @@ mod sideband;
 mod sql;
 mod ssh;
 mod target_launch;
+mod target_session;
 mod transcript;
 mod worker;
 mod worker_client;
@@ -64,34 +64,30 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
-        cli::Command::DockerSandboxLaunch => match target_launch::run(
-            target_launch::Protocol("Docker Sandbox"),
-            false,
-            Some("docker_sandbox"),
-        ) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(error) => exit_with_error(error),
-        },
-        cli::Command::DockerSandboxProbe => match target_launch::run(
-            target_launch::Protocol("Docker Sandbox"),
-            true,
-            Some("docker_sandbox"),
-        ) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(error) => exit_with_error(error),
-        },
+        cli::Command::DockerSandboxLaunch => {
+            match target_launch::run(docker_sandbox::PROTOCOL, false, Some("docker_sandbox")) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => exit_with_error(error),
+            }
+        }
+        cli::Command::DockerSandboxProbe => {
+            match target_launch::run(docker_sandbox::PROTOCOL, true, Some("docker_sandbox")) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => exit_with_error(error),
+            }
+        }
         cli::Command::DockerOwner => match docker::run_owner() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
         cli::Command::DockerLaunch => {
-            match target_launch::run(target_launch::Protocol("Docker"), false, Some("docker")) {
+            match target_launch::run(docker::PROTOCOL, false, Some("docker")) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => exit_with_error(error),
             }
         }
         cli::Command::DockerProbe => {
-            match target_launch::run(target_launch::Protocol("Docker"), true, Some("docker")) {
+            match target_launch::run(docker::PROTOCOL, true, Some("docker")) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => exit_with_error(error),
             }

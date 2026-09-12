@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use super::{Discovery, Input, Operation, Output, Selections};
 use crate::resolver::{ResolverControl, ResolverControlOutcome, ResolverStopHandle};
-use crate::ssh::launch_io::Io;
+use crate::target_launch::transfer::Io;
 
 #[derive(Clone)]
 pub(crate) struct Preparation(Arc<Connection>);
@@ -304,7 +304,7 @@ fn run(
     let mut closing = Vec::new();
     let mut close_requested = false;
     let mut hello = false;
-    let mut deadline = Some(Instant::now() + crate::ssh::SETUP_TIMEOUT);
+    let mut deadline = Some(Instant::now() + super::SETUP_TIMEOUT);
     let result = (|| {
         outgoing
             .send(open)

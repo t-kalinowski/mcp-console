@@ -11,6 +11,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from support.client import McpClient
+from support.capture import read_jsonl_path
 from support.requirements import WORKER, Requirement
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -151,8 +152,33 @@ def cli_peer(root: Path, *, real: bool = False) -> dict[str, str]:
     }
 
 
+def isolated_controller(
+    binary: Path, root: Path, *, real: bool = False
+) -> tuple[Path, dict[str, str]]:
+    """Relocate Console without its companion and expose forbidden host calls."""
+    prefix = root / "installation"
+    (prefix / "bin").mkdir(parents=True)
+    (prefix / "libexec").mkdir()
+    relocated = prefix / "bin/mcp-console"
+    shutil.copyfile(binary, relocated)
+    relocated.chmod(0o755)
+    environment = cli_peer(root / "peer", real=real)
+    paths = [prefix / "libexec/mcp-console-sandbox"]
+    paths.extend(
+        root / "peer" / name
+        for name in ("mcp-console-sandbox", "R", "Rscript", "uv", "ir")
+    )
+    for path in paths:
+        path.write_text(f"""#!/bin/sh
+echo invoked >> '{root / "sentinel"}'
+exit 99
+""")
+        path.chmod(0o755)
+    return relocated, environment
+
+
 def calls(root: Path) -> list[dict]:
-    return [json.loads(line) for line in (root / "peer/calls").read_text().splitlines()]
+    return read_jsonl_path(root / "peer/calls")
 
 
 def absent(name: str, id: str) -> None:

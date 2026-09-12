@@ -28,7 +28,8 @@ server <--> relay <--> worker
 ```
 
 This direct relay supplies no sandbox policy, sandbox-owned private temporary directory, or runner-owned descendant cleanup.
-SSH and Docker wrap the same relay protocol at their target; Docker retains its owned container cleanup even when the inner sandbox is disabled.
+SSH, Docker, and SBX wrap the same relay protocol at their target.
+Docker retains owned container cleanup when the inner sandbox is disabled; SBX always retains its outer microVM cleanup.
 The relay receives only standard input, standard output, and standard error from its parent in either mode.
 It need not be the sandbox root or a process-group leader; an ordinary wrapper can launch it as a child with the same streams.
 The internal `worker-relay` command also accepts this protocol when launched directly without a sandbox, with the caller responsible for any descendant cleanup.
@@ -59,7 +60,7 @@ The server owns generation state and available host-side dependency resolution; 
 
 ## Target launch envelope
 
-SSH and Docker targets use the same relay messages inside the private launch envelope in `src/target_launch.rs` and `src/target_launch/`.
+SSH, Docker, and SBX targets use the same relay messages inside the private launch envelope in `src/target_launch.rs` and `src/target_launch/`.
 For an [SSH target](SSH.md), the chain is:
 
 ```text
@@ -71,33 +72,35 @@ It launches the public sandbox command with its own remote PID as `--exit-with-p
 The helper materializes the captured policy on the remote host and never discovers project YAML there.
 
 Controller input starts with a four-byte unsigned big-endian length followed by a UTF-8 JSON bootstrap object, limited to 1 MiB.
-Its fields are `version` (currently `2`), `build` (the Console package version), `workspace`, `policy` (the captured native settings object), `writable_roots` (an array), `no_sandbox` (a boolean), and optional `environment` (the discovered capability, runtime selections, and prepared R/Python environments).
-Docker sends no managed environment; the image supplies its bare runtime.
+Its fields are `version` (currently `3`), `build` (the Console package version), `workspace`, `policy` (the captured policy object), `writable_roots` (an array), `no_sandbox` (a boolean), `provider` (`native` by default, or `compute` for SBX), and optional `environment` (the discovered capability, runtime selections, and prepared R/Python environments).
+Docker and SBX send no managed environment; the image or template supplies its bare runtime.
 The helper consumes exactly this frame and passes every following byte to relay stdin, including bytes received in the same write.
 It checks the protocol and Console versions before starting the worker; the relay's `ready` event is not this compatibility check.
 Incompatible changes to the launch envelope or relay wire contract must increment the target bootstrap protocol version, including between development builds with the same package version.
 
 Helper stdout uses a one-byte tag, a four-byte unsigned big-endian payload length, and the payload.
 Payloads are limited to 64 KiB.
-Tag `1` contains a JSON compatibility response with `version` and `build`, plus an optional `container_id` supplied by the Docker owner; tag `2` contains raw relay stdout bytes, without imposing JSONL boundaries on the chunks; tag `3` contains a terminal JSON object with `confirmed` and nullable `error`.
+Tag `1` contains a JSON compatibility response with `version` and `build`, plus an optional `container_id` supplied by the Docker owner or `sandbox` object with `name` and `id` supplied by the SBX owner; tag `2` contains raw relay stdout bytes, without imposing JSONL boundaries on the chunks; tag `3` contains a terminal JSON object with `confirmed` and nullable `error`.
 A setup rejection may emit tag `3` without tag `1`.
 The terminal frame must be followed by EOF.
 Unexpected stdout, incompatible versions, oversized or truncated frames, and missing retirement acknowledgment are transport errors.
-Setup, Docker, and SSH diagnostics use stderr.
+Setup and provider diagnostics use stderr.
 
-For [Docker execution](DOCKER.md), a local ownership helper creates and attaches one container and runs `docker-probe` or `docker-launch` inside it.
-The controller sends that helper a separate bounded length-prefixed JSON request containing the captured session, unique ownership name, probe flag, and bootstrap.
-The helper sends only the bootstrap to the container, consumes the container launcher's envelope, and emits its own envelope with the authoritative container ID.
-Its terminal confirmation describes container removal, including when an inner launcher could not confirm native cleanup.
+For [Docker execution](DOCKER.md) and [Docker Sandbox execution](DOCKER_SANDBOX.md), a local ownership helper creates and attaches one container or microVM and runs the provider's probe or launch operation inside it.
+The controller sends that helper the shared bounded length-prefixed owner request containing captured provider data, a unique ownership name, a probe flag, and the bootstrap.
+Controller-only session state is not serialized.
+The helper sends only the bootstrap into the resource, consumes the inner launcher's envelope, and emits its own envelope with the authoritative container ID or VM name/UUID.
+Its terminal confirmation describes outer-resource removal, including when an inner launcher could not confirm cleanup.
 The adapter validates that receipt before replacement; CLI exit and an inner launcher receipt cannot substitute for it.
-The initial probe verifies compatibility, policy, workspace, and runtime without starting an analysis worker.
+The initial probe verifies compatibility, applicable policy, workspace, and runtime without starting an analysis worker.
 
 Only the transport adapter removes this envelope; the existing JSONL parser receives unmodified relay bytes.
 Copy tasks use fixed buffers and preserve stream backpressure.
 The helper independently observes input closure while startup or output forwarding is blocked and requests ordinary launcher retirement.
-The terminal acknowledgment confirms retirement only after the remote launcher completes its cleanup barrier.
+For SSH, the terminal acknowledgment confirms retirement only after the remote launcher completes its cleanup barrier.
 An SSH child exit alone never confirms it, and unconfirmed retirement prevents this session from starting another generation.
-Connection/setup waits have a 30-second deadline independent of `send.timeout_ms`; cancellation and shutdown retain bounded local waits.
+Worker connection/setup waits have a 30-second deadline independent of `send.timeout_ms`; cancellation and shutdown retain bounded local waits.
+The [architecture timing reference](ARCHITECTURE.md#selected-target-sessions-and-timing) also records compute-probe and provider-retirement allowances.
 Cleanup after an undetected partition may be delayed until SSH observes connection loss.
 See [SSH execution](SSH.md) for the supported lifecycle and direct-mode limitations.
 
@@ -289,7 +292,7 @@ The server uses a hard runner kill only as the final fail-safe.
 After runner loss there is no independent supervisor to guarantee descendant cleanup or directory removal.
 
 For local host execution with `--no-sandbox`, the server retains the relay itself as its waitable child and applies the same worker and relay deadlines.
-SSH and Docker adapters retain their ordinary transport child and require their own retirement receipts.
+SSH, Docker, and SBX adapters retain their ordinary transport child and require their own retirement receipts.
 If the relay has not exited by the applicable deadline, the server sends `SIGTERM` directly to it, allows six seconds before `SIGKILL`, and then allows one second to observe exit.
 The server reaps the relay before admitting a replacement.
 When relay EOF itself established the generation failure, the direct relay's exit status is redundant; otherwise, a nonzero exit after readiness fails retirement.

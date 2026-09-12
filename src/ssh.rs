@@ -5,13 +5,11 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-pub(crate) use crate::target_launch::Retirement;
-#[cfg(unix)]
-use crate::target_launch::transfer as launch_io;
-use crate::target_launch::{Bootstrap, MAX_BOOTSTRAP, VERSION};
+use crate::target_launch::{self, Bootstrap, Protocol, Retirement, VERSION};
 pub(crate) mod preparation;
 
-pub(crate) const SETUP_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const PROTOCOL: Protocol = Protocol("SSH");
+pub(crate) const RETIREMENT_GRACE: Duration = Duration::from_secs(6);
 #[derive(Clone)]
 pub(crate) struct Session {
     pub target: crate::settings::Target,
@@ -88,7 +86,7 @@ impl Session {
         managed_r: Option<&crate::resolver::ManagedR>,
         python: Option<&crate::resolver::ManagedPython>,
     ) -> Result<Vec<u8>, String> {
-        let value = serde_json::to_vec(&Bootstrap {
+        target_launch::encode(&Bootstrap {
             version: VERSION,
             build: env!("CARGO_PKG_VERSION").into(),
             workspace: self.target.workspace.clone(),
@@ -105,13 +103,7 @@ impl Session {
                     python: python.cloned(),
                 }),
         })
-        .map_err(|error| format!("cannot encode SSH bootstrap: {error}"))?;
-        if value.len() > MAX_BOOTSTRAP {
-            return Err("SSH bootstrap exceeds 1 MiB".into());
-        }
-        let mut bytes = (value.len() as u32).to_be_bytes().to_vec();
-        bytes.extend(value);
-        Ok(bytes)
+        .map_err(|error| format!("cannot encode SSH bootstrap: {error}"))
     }
 
     pub fn discover(
@@ -147,9 +139,5 @@ impl Session {
 }
 
 pub(crate) fn run() -> Result<(), String> {
-    crate::target_launch::run(crate::target_launch::Protocol("SSH"), false, None)
-}
-
-fn read_payload(reader: &mut impl std::io::Read, maximum: usize) -> std::io::Result<Vec<u8>> {
-    crate::target_launch::read_payload(reader, maximum, crate::target_launch::Protocol("SSH"))
+    target_launch::run(PROTOCOL, false, None)
 }

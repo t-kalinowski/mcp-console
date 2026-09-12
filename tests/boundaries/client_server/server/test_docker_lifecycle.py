@@ -16,6 +16,7 @@ from support.docker import (
     DOCKER,
     ROOT,
     absent,
+    calls as peer_calls,
     cli_peer,
     configure,
     docker,
@@ -50,10 +51,7 @@ def test_cancelled_image_setup_before_readiness(binary: Path) -> Transcript:
                 error = client.stderr.read(timeout=15)
                 assert "cancel" in error, error
                 assert client.process.wait(timeout=5) != 0
-        calls = [
-            json.loads(line)["args"]
-            for line in (root / "peer/calls").read_text().splitlines()
-        ]
+        calls = [call["args"] for call in peer_calls(root)]
         assert not any("create" in args for args in calls), calls
         return [
             {"cancelled_before_readiness": True, "container_creation_started": False}
@@ -177,8 +175,8 @@ def test_cancelled_probe_and_pre_ready_launch(binary: Path) -> Transcript:
                 client.stdout.read(timeout=15)
                 client.stderr.read(timeout=15)
                 client.process.wait(timeout=5)
-            for line in (root / "peer/calls").read_text().splitlines():
-                args = json.loads(line)["args"]
+            for call in peer_calls(root):
+                args = call["args"]
                 if "create" in args:
                     absent(args[args.index("--name") + 1])
             records.append({"cancelled": mode, "owned_containers_absent": True})
@@ -238,10 +236,7 @@ def _loss(binary: Path, victim: str) -> Transcript:
             )
             identity = last_result_text(client).strip()
             assert docker("inspect", identity).returncode == 0, identity
-            calls = [
-                json.loads(line)
-                for line in (root / "peer/calls").read_text().splitlines()
-            ]
+            calls = peer_calls(root)
             attachments = [call["pid"] for call in calls if "start" in call["args"]]
             assert len(attachments) == 2, calls
             with removal_event(identity) as removed:
@@ -316,10 +311,7 @@ def test_attachment_loss_retires_with_backpressured_output(binary: Path) -> Tran
                     ''')
                     )
                     identity = last_result_text(client).strip()
-                    calls = [
-                        json.loads(line)
-                        for line in (root / "peer/calls").read_text().splitlines()
-                    ]
+                    calls = peer_calls(root)
                     attachments = [call for call in calls if "start" in call["args"]]
                     assert len(attachments) == 2
                     os.kill(client.process.pid, signal.SIGSTOP)
@@ -403,10 +395,7 @@ def _daemon_failure(binary: Path, mode: str) -> Transcript:
                     client
                 )
                 client.send(control="restart", r="must_not_run <- TRUE")
-                calls = [
-                    json.loads(line)
-                    for line in (root / "peer/calls").read_text().splitlines()
-                ]
+                calls = peer_calls(root)
                 assert sum("create" in call["args"] for call in calls) == 2, calls
                 client.stdin.close()
                 client.stdout.read(timeout=15)

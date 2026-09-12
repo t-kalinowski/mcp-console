@@ -1,30 +1,34 @@
 //! Owned Linux containers. Image setup is separate from generation lifetime.
 use crate::settings::{Compute, Pull, Target};
-use crate::target_launch::{self, Bootstrap, Protocol};
+use crate::target_launch::{self, Protocol};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::io::Read;
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 mod owner;
 use crate::target_launch::process;
-const LIMIT: usize = 1024 * 1024;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
-const PROTOCOL: Protocol = Protocol("Docker");
+pub(crate) const PROTOCOL: Protocol = Protocol("Docker");
+pub(crate) const PROFILE: crate::target_session::ComputeProfile =
+    crate::target_session::ComputeProfile {
+        protocol: PROTOCOL,
+        resource: "container",
+        owner_command: "docker-owner",
+        probe_output: process::OutputMode::Capture,
+        probe_retirement_grace: Duration::from_secs(8),
+        retirement_grace: Duration::from_secs(6),
+    };
+
 const LABEL: &str = "org.mcp-console.owner";
 
 #[derive(Clone, Deserialize, Serialize)]
-pub(crate) struct Session {
-    target: Target,
-    roots: Vec<PathBuf>,
+pub(crate) struct Captured {
+    pub target: Target,
     endpoint: Endpoint,
     image: String,
     digest: Option<String>,
-    #[serde(skip)]
-    blocked: Arc<Mutex<Option<String>>>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -124,17 +128,9 @@ fn tls_arguments(path: PathBuf) -> Vec<String> {
     .collect()
 }
 
-impl Session {
-    pub fn setup(
-        target: Target,
-        roots: Vec<PathBuf>,
-        policy: &crate::settings::SandboxSettings,
-        no_sandbox: bool,
-        started: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
-    ) -> Result<Self, String> {
-        let cancel = process::Cancel::new(PROTOCOL)?;
-        started(crate::resolver::ResolverStopHandle::new(cancel.clone()))?;
-        let endpoint = Endpoint::capture(&cancel)?;
+impl Captured {
+    pub fn capture(target: Target, cancel: &process::Cancel) -> Result<Self, String> {
+        let endpoint = Endpoint::capture(cancel)?;
         let Compute::Docker(docker) = &target.compute else {
             unreachable!("Docker compute selected")
         };
@@ -143,7 +139,7 @@ impl Session {
             command.args(["image", "inspect", "--", reference]);
             let bytes = process::run(
                 command,
-                &cancel,
+                cancel,
                 Some(Instant::now() + COMMAND_TIMEOUT),
                 process::OutputMode::Capture,
                 None,
@@ -161,7 +157,7 @@ impl Session {
                 command.args(["image", "pull", "--", reference]);
                 process::run(
                     command,
-                    &cancel,
+                    cancel,
                     None,
                     process::OutputMode::Diagnostics,
                     None,
@@ -206,7 +202,7 @@ impl Session {
                     .arg(&build.context);
                 process::run(
                     command,
-                    &cancel,
+                    cancel,
                     None,
                     process::OutputMode::Diagnostics,
                     None,
@@ -232,37 +228,12 @@ impl Session {
             .and_then(|values| values.first())
             .and_then(Value::as_str)
             .map(str::to_string);
-        let session = Self {
+        Ok(Self {
             target,
-            roots,
             endpoint,
             image: id,
             digest,
-            blocked: Arc::default(),
-        };
-        let (command, request, _) = session.launch(policy, no_sandbox, true)?;
-        let output = process::run(
-            command,
-            &cancel,
-            Some(Instant::now() + Duration::from_secs(40)),
-            process::OutputMode::Capture,
-            Some(process::OwnerInput {
-                bytes: request,
-                retirement_grace: Duration::from_secs(8),
-            }),
-        )?;
-        let retirement = target_launch::Retirement::default();
-        let mut output =
-            target_launch::Output::new(std::io::Cursor::new(output), PROTOCOL, retirement.clone());
-        let mut unexpected = Vec::new();
-        output
-            .read_to_end(&mut unexpected)
-            .map_err(|e| e.to_string())?;
-        retirement.check()?;
-        if !unexpected.is_empty() {
-            return Err("unexpected Docker runtime probe output".into());
-        }
-        Ok(session)
+        })
     }
 
     pub fn metadata(&self) -> Value {
@@ -272,57 +243,6 @@ impl Session {
         json!({"transport": self.target.transport, "workspace": self.target.workspace,
             "compute": {"kind": "docker", "image": docker.image, "build": docker.build,
                 "image_id": self.image, "repository_digest": self.digest}})
-    }
-
-    pub fn launch(
-        &self,
-        policy: &crate::settings::SandboxSettings,
-        no_sandbox: bool,
-        probe: bool,
-    ) -> Result<(Command, Vec<u8>, String), String> {
-        if let Some(error) = &*self
-            .blocked
-            .lock()
-            .map_err(|_| "Docker session lock poisoned")?
-        {
-            return Err(error.clone());
-        }
-        let name = format!("mcp-console-{}", target_launch::owner::token()?);
-        let request = owner::Request {
-            session: self.clone(),
-            name: name.clone(),
-            probe,
-            bootstrap: Bootstrap {
-                version: target_launch::VERSION,
-                build: env!("CARGO_PKG_VERSION").into(),
-                workspace: self.target.workspace.clone(),
-                policy: policy.clone(),
-                writable_roots: self.roots.clone(),
-                no_sandbox,
-                provider: crate::settings::Provider::Native,
-                environment: None,
-            },
-        };
-        let mut command = Command::new(std::env::current_exe().map_err(|e| e.to_string())?);
-        command.arg("docker-owner");
-        Ok((command, target_launch::encode(&request)?, name))
-    }
-
-    pub fn check_retirement(
-        &self,
-        retirement: &target_launch::Retirement,
-        name: &str,
-    ) -> Result<(), String> {
-        retirement.check().map_err(|error| {
-            let error = format!(
-                "Docker container '{name}': {error}; this session cannot start a replacement"
-            );
-            self.blocked
-                .lock()
-                .expect("Docker session lock")
-                .get_or_insert(error.clone());
-            error
-        })
     }
 }
 

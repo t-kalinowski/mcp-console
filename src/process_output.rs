@@ -20,29 +20,12 @@ impl<T: Read + AsRawFd> RelayOutput<T> {
     }
 
     fn wait(&mut self) -> io::Result<()> {
-        let mut descriptors = [
-            libc::pollfd {
-                fd: self.stdout.as_raw_fd(),
-                events: libc::POLLIN,
-                revents: 0,
-            },
-            libc::pollfd {
-                fd: self.exited.as_raw_fd(),
-                events: libc::POLLIN,
-                revents: 0,
-            },
-        ];
-        loop {
-            // SAFETY: both descriptors and the writable array remain live.
-            if unsafe { libc::poll(descriptors.as_mut_ptr(), descriptors.len() as _, -1) } >= 0 {
-                break;
-            }
-            let error = io::Error::last_os_error();
-            if error.kind() != io::ErrorKind::Interrupted {
-                return Err(error);
-            }
-        }
-        if descriptors[1].revents != 0 {
+        let ready = crate::readiness::wait_for_io(
+            self.stdout.as_raw_fd(),
+            libc::POLLIN,
+            Some(&self.exited),
+        )?;
+        if ready.cancelled {
             // The child is gone, but an unsupervised descendant may still own
             // stdout. Preserve everything already queued without waiting for
             // that descendant to close the stream or accepting more output.

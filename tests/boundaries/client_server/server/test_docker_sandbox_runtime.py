@@ -3,7 +3,6 @@
 
 import json
 import os
-import shutil
 import sys
 from pathlib import Path
 
@@ -21,6 +20,7 @@ from support.docker_sandbox import (
     calls,
     cli_peer,
     configure,
+    isolated_controller,
     finish,
     generations,
     sbx,
@@ -41,28 +41,11 @@ def test_mixed_runtime_shares_recordings_and_restart_without_native(
         readonly = root / 'read only, "quoted"; $(never-execute)'
         readonly.mkdir()
         (readonly / "value").write_text("read-only data")
-        prefix = root / "installation"
-        (prefix / "bin").mkdir(parents=True)
-        (prefix / "libexec").mkdir()
-        relocated = prefix / "bin/mcp-console"
-        shutil.copyfile(binary, relocated)
-        relocated.chmod(0o755)
-        native = prefix / "libexec/mcp-console-sandbox"
-        native.write_text(
-            f"#!/bin/sh\necho invoked >> '{root / 'sentinel'}'\nexit 99\n"
-        )
-        native.chmod(0o755)
-        environment = cli_peer(root / "peer", real=True)
+        relocated, environment = isolated_controller(binary, root, real=True)
         environment.update(
             R_HOME="/controller-r-must-not-be-used",
             RETICULATE_PYTHON="/controller-python-must-not-be-used",
         )
-        for name in ("mcp-console-sandbox", "R", "Rscript", "uv", "ir"):
-            path = root / "peer" / name
-            path.write_text(
-                f"#!/bin/sh\necho invoked >> '{root / 'sentinel'}'\nexit 99\n"
-            )
-            path.chmod(0o755)
         config = configure(
             project,
             workspace=str(project),

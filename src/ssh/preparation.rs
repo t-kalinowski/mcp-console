@@ -20,6 +20,7 @@ pub(crate) use unsupported::Preparation;
 
 const VERSION: u32 = 3;
 const LIMIT: usize = 1024 * 1024;
+const SETUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 #[derive(Default, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -177,7 +178,8 @@ fn write(writer: &mut impl Write, message: &impl Serialize) -> Result<(), String
 }
 
 fn read<T: serde::de::DeserializeOwned>(reader: &mut impl Read) -> Result<T, String> {
-    let bytes = super::read_payload(reader, LIMIT).map_err(|error| error.to_string())?;
+    let bytes = crate::target_launch::read_payload(reader, LIMIT, super::PROTOCOL)
+        .map_err(|error| error.to_string())?;
     serde_json::from_slice(&bytes)
         .map_err(|error| format!("invalid SSH preparation message: {error}"))
 }
