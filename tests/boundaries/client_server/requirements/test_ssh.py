@@ -188,17 +188,17 @@ def managed_session(
             )
         # Distinct host pathnames can share already downloaded artifacts in this
         # localhost harness. The controller process is forbidden to use either.
+        # Always use a symlink, including without inherited cache configuration,
+        # to exercise the resolver's canonical library paths on every host.
         for tool, variable in (("ir", "IR_CACHE_DIR"), ("uv", "UV_CACHE_DIR")):
-            cache = (
-                environment.get(variable) or str(remote / "ir-store")
+            cache = Path(
+                (environment.get(variable) or root / "ir-cache")
                 if bootstrap_uv and tool == "ir"
                 else subprocess.check_output([tool, "cache", "dir"], text=True).strip()
             )
             remote_cache = remote / f"{tool}-cache"
-            if cache:
-                cache = Path(cache)
-                cache.mkdir(parents=True, exist_ok=True)
-                remote_cache.symlink_to(cache, target_is_directory=True)
+            cache.mkdir(parents=True, exist_ok=True)
+            remote_cache.symlink_to(cache, target_is_directory=True)
             environment[variable] = str(remote_cache)
         if not bootstrap_uv:
             environment["UV_OFFLINE"] = "1"

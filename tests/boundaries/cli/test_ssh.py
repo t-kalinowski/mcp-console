@@ -57,6 +57,37 @@ def test_invalid_target_configuration(binary: Path) -> Transcript:
     return records
 
 
+def test_lease_requires_ssh_transport(binary: Path) -> Transcript:
+    records = []
+    with TemporaryDirectory() as temporary:
+        workspace = Path(temporary)
+        config = workspace / CONFIG
+        config.parent.mkdir(parents=True)
+        for target in (
+            {"lease_ms": 30000},
+            {
+                "workspace": "/workspace",
+                "compute": {"kind": "docker", "image": "example"},
+                "lease_ms": 30000,
+            },
+        ):
+            config.write_text(json.dumps({"target": target}))
+            result = subprocess.run(
+                [binary, "serve"],
+                cwd=workspace,
+                input="",
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            assert result.returncode != 0 and not result.stdout, result
+            assert "target.lease_ms requires SSH transport" in result.stderr, (
+                result.stderr
+            )
+            records.append({"target": target, "error": result.stderr})
+    return records
+
+
 def test_bootstrap_framing_errors(binary: Path) -> Transcript:
     cases = (
         (b"\x00\x10\x00\x01", "exceeds"),

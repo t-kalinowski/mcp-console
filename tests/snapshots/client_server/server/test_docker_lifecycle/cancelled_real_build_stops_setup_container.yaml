@@ -1,0 +1,5 @@
+---
+build_started: true
+startup_cancelled: true
+build_container_absent: true
+analysis_worker_started: false

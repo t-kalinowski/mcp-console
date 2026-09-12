@@ -87,13 +87,13 @@ fn controller(operation: &str) -> Result<(), String> {
     // This entry point is single-threaded. Do not pass controller configuration
     // into OpenSSH's environment or any workload.
     unsafe { std::env::remove_var("MCP_CONSOLE_SSH_TARGET") };
-    let target: crate::settings::SshTarget =
+    let target: crate::settings::Target =
         serde_json::from_str(&target).map_err(|e| e.to_string())?;
     let hello = Hello {
         version: VERSION,
         build: env!("CARGO_PKG_VERSION").into(),
         operation: operation.into(),
-        lease_ms: target.lease_ms,
+        lease_ms: target.ssh_lease_ms(),
     };
     hello.check(operation)?;
     let session = super::Session::new(target, Vec::new());

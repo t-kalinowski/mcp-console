@@ -1,0 +1,42 @@
+---
+send:
+  python: >-
+    from pathlib import Path;
+    print(Path("/etc/hostname").read_text().strip())
+result:
+  content:
+    - type: text
+      text: |
+        <container>
+  isError: false
+---
+send:
+  python: |
+    import os
+    with open("submissions", "a") as stream:
+        stream.write("once\n")
+    os._exit(23)
+result:
+  content:
+    - type: text
+      text: |-
+        [worker sideband read failed: worker sideband closed]
+        [worker exited with status 23]
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: true
+---
+send:
+  r: "42"
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false
+---
+worker_failed: true
+old_container_absent: true
+submitted_cell_executions: 1
+replacement_ready: true

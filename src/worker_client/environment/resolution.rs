@@ -175,8 +175,11 @@ impl Client {
             }
             super::super::RResolver::Disabled => {
                 return Err(EnvironmentResolutionFailure::Host(
-                    "dynamic environment resolution is unavailable; install `ir` or `uv` and restart MCP Console"
-                        .to_string(),
+                    if self.0.docker.is_some() {
+                        "dynamic environment resolution is unavailable for Docker targets; install packages in the image and start a new server session"
+                    } else {
+                        "dynamic environment resolution is unavailable; install `ir` or `uv` and restart MCP Console"
+                    }.to_string(),
                 ));
             }
             super::super::RResolver::Pending(_) => {

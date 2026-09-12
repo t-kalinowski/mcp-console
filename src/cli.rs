@@ -29,7 +29,7 @@ pub struct Cli {
 pub enum Command {
     /// Run the MCP server over standard input and output
     Serve {
-        /// Run evaluated code with server permissions, without sandbox isolation or descendant cleanup
+        /// Skip the inner native sandbox at the selected execution target
         #[arg(long)]
         no_sandbox: bool,
 
@@ -49,6 +49,15 @@ pub enum Command {
     /// Run the internal R worker
     #[command(hide = true)]
     Worker,
+
+    #[command(hide = true)]
+    DockerOwner,
+    #[command(hide = true)]
+    DockerLaunch,
+    #[command(hide = true)]
+    DockerProbe,
+    #[command(hide = true)]
+    DockerRuntimeProbe,
 
     /// Launch the built-in runtime for an authenticated SSH controller
     #[command(hide = true)]

@@ -1,0 +1,31 @@
+---
+send:
+  r: cat(readLines("/etc/hostname"))
+result:
+  content:
+    - type: text
+      text: <container>
+  isError: false
+---
+send:
+  control: restart
+  r: must_not_run <- TRUE
+result:
+  content:
+    - type: text
+      text: |-
+        [worker launcher exited with status 1; additionally failed to retire worker I/O: Docker container '<owned container>': target retirement is unconfirmed (transport exit is not a cleanup barrier); this session cannot start a replacement]
+        session restart did not complete; cell was not run
+  isError: true
+---
+send:
+  control: restart
+  r: must_not_run <- TRUE
+result:
+  content:
+    - type: text
+      text: "[worker is shutting down]"
+  isError: true
+---
+daemon_cleanup_receipt_lost: true
+replacement_blocked: true

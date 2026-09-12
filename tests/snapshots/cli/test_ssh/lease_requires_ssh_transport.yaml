@@ -1,0 +1,14 @@
+---
+target:
+  lease_ms: 30000
+error: |
+  .agents/console/config.yaml: target.lease_ms requires SSH transport
+---
+target:
+  workspace: /workspace
+  compute:
+    kind: docker
+    image: example
+  lease_ms: 30000
+error: |
+  .agents/console/config.yaml: target.lease_ms requires SSH transport

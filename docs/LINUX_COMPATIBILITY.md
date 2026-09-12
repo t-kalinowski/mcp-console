@@ -71,6 +71,14 @@ At the current pin, all 96 runner acceptance tests passed in a namespace-capable
 These counts include the profile and raw-policy comparisons.
 The host's ordinary namespace restrictions required the test container; this does not establish support for restricted container or AppArmor configurations.
 
+## Docker targets
+
+An ordinary Docker container can deny the namespace operations needed by the default native backend.
+Docker placement adds no privileged flags or implicit backend change.
+Explicit `external-sandbox` without a proxy delegates filesystem and network enforcement to the owned container and works without nested namespace creation; `network: restricted` does not add a block in that delegated mode.
+The adapter still runs native validation and reports an explicit proxy or native setup failure.
+See [Docker execution](DOCKER.md) for configuration and current acceptance coverage.
+
 ## Earlier host compatibility comparison
 
 The following comparison and validation record started at Console main `f35a304d` and runner `d488fc969da435f93ea5937c7f284fa91a8c2575`.

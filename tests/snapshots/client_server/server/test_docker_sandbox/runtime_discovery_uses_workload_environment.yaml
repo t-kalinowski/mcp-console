@@ -1,0 +1,74 @@
+---
+arguments:
+  - serve
+inherit_environment: true
+---
+send:
+  r: |
+    stopifnot(
+      R.home() == "/usr/lib/R",
+      Sys.getenv("DISCOVERY_VALUE") == "selected"
+    )
+    cat("workload R discovered\n")
+result:
+  content:
+    - type: text
+      text: |
+        workload R discovered
+  isError: false
+---
+arguments:
+  - serve
+inherit_environment: false
+---
+send:
+  r: |
+    stopifnot(
+      R.home() == "/usr/lib/R",
+      Sys.getenv("DISCOVERY_VALUE") == "selected"
+    )
+    cat("workload R discovered\n")
+result:
+  content:
+    - type: text
+      text: |
+        workload R discovered
+  isError: false
+---
+arguments:
+  - serve
+  - --no-sandbox
+inherit_environment: true
+---
+send:
+  r: |
+    stopifnot(
+      R.home() == "/usr/lib/R",
+      Sys.getenv("DISCOVERY_VALUE") == "selected"
+    )
+    cat("workload R discovered\n")
+result:
+  content:
+    - type: text
+      text: |
+        workload R discovered
+  isError: false
+---
+arguments:
+  - serve
+  - --no-sandbox
+inherit_environment: false
+---
+send:
+  r: |
+    stopifnot(
+      R.home() == "/usr/lib/R",
+      Sys.getenv("DISCOVERY_VALUE") == "selected"
+    )
+    cat("workload R discovered\n")
+result:
+  content:
+    - type: text
+      text: |
+        workload R discovered
+  isError: false

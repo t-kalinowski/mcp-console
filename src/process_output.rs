@@ -4,14 +4,14 @@ use std::io::{self, PipeReader, Read};
 use std::os::fd::AsRawFd;
 use std::process::ChildStdout;
 
-pub(crate) struct RelayOutput {
-    stdout: ChildStdout,
+pub(crate) struct RelayOutput<T = ChildStdout> {
+    stdout: T,
     exited: PipeReader,
     remaining: Option<usize>,
 }
 
-impl RelayOutput {
-    pub(crate) fn new(stdout: ChildStdout, exited: PipeReader) -> Self {
+impl<T: Read + AsRawFd> RelayOutput<T> {
+    pub(crate) fn new(stdout: T, exited: PipeReader) -> Self {
         Self {
             stdout,
             exited,
@@ -57,7 +57,7 @@ impl RelayOutput {
     }
 }
 
-impl Read for RelayOutput {
+impl<T: Read + AsRawFd> Read for RelayOutput<T> {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
         if buffer.is_empty() {
             return Ok(0);

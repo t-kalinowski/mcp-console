@@ -27,7 +27,7 @@ On older Linux kernels or when seccomp denies `close_range` with `EPERM`, inheri
 
 A working R installation is required on the execution host.
 Set `R_HOME` or make `R` discoverable on that host's `PATH`.
-An SSH controller does not need a local R or Python analysis environment.
+An SSH or Docker controller does not need a local R or Python analysis environment.
 For local execution, dynamic environment resolution normally starts from either `ir` 0.4.0 or later or `uv` on `PATH`.
 The first managed server start may download and install the default R and Python requirements.
 If no resolver bootstrap is available, the server starts a bare runtime using installed packages.
@@ -54,7 +54,8 @@ Fresh procfs mounts and pidfds are optional; see the [tested host capabilities](
 Host AppArmor policy or container restrictions can prevent namespace setup.
 The wheel includes a private bubblewrap helper; a suitable `bwrap` on `PATH` takes precedence.
 There is no automatic unsandboxed fallback.
-Use `mcp-console serve --no-sandbox` to explicitly run with host permissions and without descendant cleanup.
+Use `mcp-console serve --no-sandbox` to skip the inner native sandbox at the selected target.
+Local and SSH host execution then use the target account's permissions without native descendant cleanup; Docker retains its outer container boundary and retirement.
 
 Install the current source checkout with its private sandbox companions:
 
@@ -70,6 +71,9 @@ It waits for MCP protocol input rather than presenting an interactive terminal p
 
 To run cells on an existing SSH host while keeping the server and recordings local, configure an [SSH target](docs/SSH.md).
 The remote workspace, R installation, and resolver bootstrap must already exist; Console prepares managed R, Python, and DuckDB dependencies on that host.
+
+To run the relay and worker in a fresh owned Linux container, configure a [Docker target](docs/DOCKER.md).
+The image supplies Console, R, Python, and analysis packages; the controller keeps the MCP connection and recordings.
 
 ## Python integrations
 
@@ -167,16 +171,19 @@ With the default policy, the worker can read host files, but direct network acce
 The temporary `--writable-root PATH` launch argument adds a writable path; see [path semantics and an example](docs/SANDBOX_CONFIGURATION.md#additional-writable-paths).
 This is a process boundary, not a safe evaluator for untrusted code with access to sensitive readable files.
 
-`mcp-console serve --no-sandbox` launches the relay directly with host permissions.
-The worker inherits the host temporary-directory environment, and no sandbox runner tracks or cleans up descendants.
+`mcp-console serve --no-sandbox` launches the relay directly at the selected target.
+Local and SSH host workers use the target account's permissions and temporary-directory environment without native descendant cleanup.
+Docker workers remain in owned containers that are retired with their descendants.
 The relay still shuts down and reaps its direct worker normally.
 
-The server installs automatically inferred or explicitly declared R and Python packages and DuckDB extensions outside the worker sandbox with server permissions.
+When managed preparation is available, the server installs automatically inferred or explicitly declared R and Python packages and DuckDB extensions outside the worker sandbox on the selected execution host.
+Docker targets use preinstalled image packages and disable this preparation.
 Those operations may access the network and execute installation or build code, so only trusted requirements should be supplied.
 See [Requirements and environments](https://github.com/t-kalinowski/mcp-console/blob/main/docs/REQUIREMENTS.md) for the accepted inputs and trust model.
 
 Session records contain submitted source, standard input, requirements, results, and artifacts without redaction.
-Rendering the Quarto source projection executes submitted code outside the worker sandbox with the permissions of the `ir` and Quarto processes.
+Executing the Quarto source projection runs submitted code outside the worker sandbox with the permissions of the `ir` and Quarto processes.
+SSH and Docker projections default to non-executing and require a deliberately recreated target environment.
 Render only code you trust.
 
 ## Development
