@@ -1,0 +1,40 @@
+---
+rejected_before_readiness: workspace
+container_absent: true
+stderr: |
+  cannot access remote target.workspace '/missing-workspace-must-not-be-created': No such file or directory (os error 2)
+  cannot access remote target.workspace '/missing-workspace-must-not-be-created': No such file or directory (os error 2)
+---
+rejected_before_readiness: mount
+container_absent: true
+stderr: |
+  Docker command failed with exit status: 1: Error response from daemon: invalid mount config for type "bind": bind source path does not exist: <controller>/missing-bind
+  ; Docker container '<owned container>' (creation ID unavailable) retirement is unconfirmed: container creation returned no identity; an empty listing cannot confirm retirement of an unacknowledged creation
+  Docker command failed with exit status: 1: 
+---
+rejected_before_readiness: runtime
+container_absent: true
+stderr: |
+  container RETICULATE_PYTHON must select an existing interpreter
+  remote launcher exited with exit status: 1
+  remote launcher exited with exit status: 1
+---
+rejected_before_readiness: compatibility
+container_absent: true
+stderr: >
+  incompatible Docker bootstrap: expected protocol 2, Console 0.0.3;
+  received protocol 999, Console incompatible
+---
+rejected_before_readiness: native_environment
+container_absent: true
+stderr: |
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column 89)
+  remote launcher exited with exit status: 1
+  remote launcher exited with exit status: 1
+---
+rejected_before_readiness: native_policy
+container_absent: true
+stderr: |
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column 51)
+  remote launcher exited with exit status: 1
+  remote launcher exited with exit status: 1

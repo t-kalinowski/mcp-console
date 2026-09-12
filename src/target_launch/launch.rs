@@ -6,14 +6,14 @@ use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use super::launch_io::{Io, duplicate, poll};
+use super::transfer::{Io, duplicate, poll};
 use super::{Bootstrap, Hello, Retired};
 
 const RETIRE_TIMEOUT: Duration = Duration::from_secs(6);
 
-pub(super) fn run() -> Result<(), String> {
+pub(super) fn run(protocol: super::Protocol, probe: bool, container: bool) -> Result<(), String> {
     let mut confirmed = true;
-    let result = launch(&mut confirmed);
+    let result = launch(&mut confirmed, protocol, probe, container);
     // Setup diagnostics stay on stderr. This terminal frame also distinguishes
     // a rejected launch from a broken connection with an unknown remote lifetime.
     let retired = serde_json::to_vec(&Retired {
@@ -34,16 +34,21 @@ pub(super) fn run() -> Result<(), String> {
     }
 }
 
-fn launch(confirmed: &mut bool) -> Result<(), String> {
+fn launch(
+    confirmed: &mut bool,
+    protocol: super::Protocol,
+    probe_only: bool,
+    container: bool,
+) -> Result<(), String> {
     let deadline = Instant::now() + super::SETUP_TIMEOUT;
     let mut input = Io::new(duplicate(0)?, None, Some(deadline))?;
     // No BufReader: consume exactly this frame, even if relay traffic arrives
     // in the same write. The copy task inherits every following byte.
-    let bytes =
-        super::read_payload(&mut input, super::MAX_BOOTSTRAP).map_err(|error| error.to_string())?;
+    let bytes = super::read_payload(&mut input, super::MAX_BOOTSTRAP, protocol)
+        .map_err(|error| error.to_string())?;
     let bootstrap: Bootstrap = serde_json::from_slice(&bytes)
-        .map_err(|error| format!("invalid SSH bootstrap: {error}"))?;
-    super::compatible(bootstrap.version, &bootstrap.build)?;
+        .map_err(|error| format!("invalid {} bootstrap: {error}", protocol.0))?;
+    protocol.compatible(bootstrap.version, &bootstrap.build)?;
     super::enter_workspace(&bootstrap.workspace)?;
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     let mut policy = if bootstrap.no_sandbox {
@@ -64,7 +69,9 @@ fn launch(confirmed: &mut bool) -> Result<(), String> {
             .arg(std::process::id().to_string())
             .args(["--settings-env", crate::settings::ENVIRONMENT, "--"]);
     }
-    if let Some(environment) = &bootstrap.environment {
+    if container {
+        crate::docker::configure_runtime(&mut command, &policy)?;
+    } else if let Some(environment) = &bootstrap.environment {
         environment.configure(&mut command)?;
     } else {
         // Private launch-only callers select a bare runtime explicitly.
@@ -96,12 +103,26 @@ fn launch(confirmed: &mut bool) -> Result<(), String> {
         supervise(probe, false, true, Some(deadline), confirmed)?;
     }
     let hello = serde_json::to_vec(&Hello {
+        container_id: None,
         version: super::VERSION,
         build: env!("CARGO_PKG_VERSION").into(),
     })
     .map_err(|error| error.to_string())?;
     let mut output = Io::new(duplicate(1)?, None, Some(deadline))?;
     super::write_frame(&mut output, super::HELLO, &hello).map_err(|error| error.to_string())?;
+    if probe_only {
+        if !bootstrap.no_sandbox {
+            command.arg(&executable);
+        }
+        command.arg("docker-runtime-probe");
+        return supervise(
+            command,
+            false,
+            !bootstrap.no_sandbox,
+            Some(deadline),
+            confirmed,
+        );
+    }
     if !bootstrap.no_sandbox {
         command.arg(&executable);
     }

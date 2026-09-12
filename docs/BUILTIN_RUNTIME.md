@@ -17,6 +17,10 @@ Without a resolver bootstrap, the remote session uses available preinstalled pac
 Runtime state and arbitrary files then live remotely; the MCP server, output spools, journals, transcripts, and returned image artifacts stay local.
 The tool context and session metadata identify the target and initial remote directory separately from the recording workspace.
 Remote source-only Quarto projections default to evaluation disabled and omit the controller execution root.
+
+A [Docker target](DOCKER.md) instead runs the relay and worker in a fresh owned Linux container for each generation, using a captured image and its preinstalled packages.
+The controller retains the server and records; binds persist across restart, while the container's writable layer is discarded.
+Dynamic package preparation is disabled, and Docker Quarto projections follow the same non-executing convention.
 They do not reproduce the remote filesystem when rendered locally.
 Each worker generation contains:
 
@@ -285,7 +289,7 @@ Python and R globals, Python objects, the DuckDB catalog, worker PID, and stdin 
 New subprocesses use the activated environment and can import its retained packages.
 In a sandboxed macOS worker, the built-in Python runtime makes psutil enumerate the dedicated process group instead of requesting the host-wide process table.
 On Linux, the PID namespace limits native process enumeration to the sandbox.
-With `serve --no-sandbox`, psutil retains its native host process enumeration.
+With `serve --no-sandbox`, psutil retains native process enumeration in the selected host or container namespace.
 The server retains a successfully activated environment for later cells and restart, even if the inferred distribution does not provide the requested module or later code in the cell fails.
 An ordinary resolution failure before activation restores the earlier reticulate manifest and leaves the worker usable.
 Errors include the inferred distribution, the host resolver diagnostic when available, and an explicit `requirements.python` recovery example.
@@ -517,7 +521,8 @@ The [implemented architecture](ARCHITECTURE.md) describes the session record and
   On macOS, the guarantee covers the owned process group and detached descendants observed by the runner; a later descendant that becomes orphaned before its fork event is resolved remains outside this guarantee.
   The configured relay starts only after the runner establishes native enforcement and cleanup ownership.
   Caller death triggers cleanup while the runner lives; runner death has no independent recovery guarantee.
-- With `serve --no-sandbox`, the worker runs with host permissions and no runner tracks or retires its descendants; normal relay shutdown still reaps the direct worker.
+- With `serve --no-sandbox`, local and SSH host workers use the target account's permissions without native descendant cleanup; normal relay shutdown still reaps the direct worker.
+  Docker retains its outer container boundary and retirement.
 - Linux sandboxing requires procfs, permitted namespace setup, and the requested policy capabilities; see [tested Linux host compatibility](LINUX_COMPATIBILITY.md).
 - Windows is not supported.
 

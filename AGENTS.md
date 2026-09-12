@@ -17,6 +17,7 @@ Reconcile the relevant contracts, tests, and current documentation when implemen
 - `docs/ARCHITECTURE.md` describes the implemented process structure, ownership, and lifecycle.
 - `docs/SANDBOX.md` describes application policy, runner integration, supported hosts, and lifetime guarantees.
 - `docs/SANDBOX_CONFIGURATION.md` defines the public configuration interface, environment ownership, caller examples, and transport integrity.
+- `docs/DOCKER.md` defines container targets, image setup, preinstalled environments, owned retirement, and controller records.
 - `docs/SSH.md` defines remote target configuration, runtime prerequisites, managed preparation, launch framing, retirement confirmation, and local recording semantics.
 - `docs/LINUX_COMPATIBILITY.md` records capability requirements, security comparisons, native backend differences, and tested Linux baselines.
 - `docs/SANDBOX_RUNNER_INTEGRATION.md` records the migration baseline, fixture changes, supported-host validation, and changed guarantees.
@@ -43,13 +44,17 @@ Reuse native constructors and path handling, and keep explicit native adjustment
 Console adds `.claude` as a read entry and excludes shared temporary write grants by default for `":workspace"`; metadata defaults are deliberately overridable.
 Recorded sessions, transcripts, outputs, and artifacts are written beneath `.agents/console/sessions/`.
 
-An optional `target` selects one SSH destination for `serve`, including `--no-sandbox`.
+An optional `target` independently selects transport and compute for `serve`, including `--no-sandbox`: SSH host or local Docker container.
+Omitted target and explicit local host selection share the existing local launch path.
 Capture its required absolute remote workspace, executable prefix, and raw user policy locally once; materialize paths, platform additions, and native preflight on that execution host without rediscovering YAML.
 SSH discovers capability and executes managed preparation on the remote host, independently of the relay and worker.
 The preparation owner captures trusted resolver settings once; the local server owns requirements, candidates, and activation decisions.
 Only explicit remote R_HOME and RETICULATE_PYTHON workload selections also inform preparation.
 Never discover controller interpreters, invoke controller resolvers, or validate remote paths on the controller.
 Require explicit result and resolver cleanup confirmation before committing an environment; uncertain preparation retirement blocks further preparation and replacement.
+Docker resolves its image once before workload startup and uses that immutable ID for every probe and generation.
+Each generation owns a fresh Linux container containing relay and worker; a local owner observes server and attachment loss and requires confirmed container removal before replacement.
+Docker uses image packages with dynamic preparation disabled, even if resolvers are installed.
 Standalone `sandbox` remains local.
 SSH exit alone cannot confirm remote retirement; require the remote launcher's terminal acknowledgment before replacement, and block replacement after unconfirmed cleanup.
 
@@ -121,7 +126,8 @@ Keep these invariants intact:
 
 - The server owns logical relay lifetime orchestration and retirement, worker-generation state, operation admission, output cuts, pending-output budgets, response assembly, delivery ownership, retained requirements, and host resolvers.
   By default, it starts the relay through an ordinary sandbox launcher child and uses successful managed launcher exit as its synchronous cleanup barrier.
-  `serve --no-sandbox` starts the relay directly without sandbox policy or runner-owned descendant cleanup.
+  `serve --no-sandbox` skips the native runner at the selected target.
+  Docker still owns outer container retirement; host execution retains direct-worker cleanup limits.
   Its sandbox access is limited to the launcher's standard streams and ordinary child lifecycle.
   Do not move these responsibilities into the relay.
 - The relay owns local worker transports, sideband translation, direct-worker signal delivery, bounded termination, and direct-worker reaping.
@@ -147,8 +153,10 @@ Keep these invariants intact:
 ### Public interface and records
 
 - `src/main.rs`, `src/cli.rs` — binary entry point and command definitions.
-- `src/settings.rs`, `src/settings/yaml.rs` — trusted project YAML discovery, node loading, and application settings retained across worker launches; native policy values remain JSON; the sandbox layer adds application launch requirements and delegates validation and defaults to the runner.
-- `src/ssh.rs`, `src/ssh/launch.rs`, `src/ssh/launch_io.rs` — configured OpenSSH transport, bounded bootstrap and relay envelope, compatibility checks, remote ordinary launcher ownership, cancellable transfer, and retirement confirmation.
+- `src/settings.rs`, `src/settings/{yaml,target}.rs` — trusted project YAML discovery, node loading, and application settings retained across worker launches; native policy values remain JSON; the sandbox layer adds application launch requirements and delegates validation and defaults to the runner.
+- `src/ssh.rs` — configured OpenSSH transport and remote retirement confirmation.
+- `src/target_launch.rs`, `src/target_launch/` — shared versioned bootstrap, relay envelope, target-side ordinary launcher ownership, native preflight, and cancellable transfer.
+- `src/docker.rs`, `src/docker/` — captured Docker endpoint and immutable image setup, image runtime selection, local ownership helper, and confirmed container retirement.
 - `src/ssh/preparation.rs`, `src/ssh/preparation/{client,host}.rs` — typed trusted preparation connection, remote startup configuration, operation-scoped resolver control, and confirmed results.
 - `src/resolver/execution.rs` — host selection for existing resolver operations, preserving local session transactions.
 - `src/server.rs`, `src/server_transport.rs` — MCP tools, stdio transport, and response-delivery ownership.
@@ -162,6 +170,7 @@ Keep these invariants intact:
 
 - `src/worker_protocol.rs`, `src/sideband.rs` — relay-worker message and framing contract.
 - `src/readiness.rs` — shared blocking descriptor readiness and cancellation waits.
+- `src/input_watch.rs`, `src/input_watch/` — platform input-closure observation shared by startup and the Docker ownership helper.
 - `src/relay_protocol.rs` — server-relay JSONL message and framing contract.
 - `src/worker_relay.rs`, `src/worker_relay/event_writer.rs` — worker launch, I/O forwarding, ordered event output, direct-worker signaling, termination, and reaping.
 - `src/worker_client.rs`, `src/worker_client/` — session coordination and send planning, server-owned environment, evaluation, lifecycle, ordinary launcher child ownership, ordered event dispatch, output tape, shared Unix relay transport, and platform-specific startup observation.

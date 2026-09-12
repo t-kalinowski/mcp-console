@@ -1,0 +1,107 @@
+---
+arguments:
+  - serve
+target_environment: true
+delegated_filesystem: true
+preinstalled_packages_required: true
+---
+send:
+  python: |
+    import os
+    from pathlib import Path
+    assert os.getuid() == 4321
+    assert os.environ["WORKLOAD_VALUE"] == "selected"
+    assert os.environ["DOCKER_HOST"] == "must-not-configure-the-launcher"
+    assert os.environ.get("HOME") != "/controller-home"
+    assert os.environ.get("TMPDIR") != "/controller-temp"
+    Path("/tmp/delegated-write").write_text("yes")
+    print("container environment")
+result:
+  content:
+    - type: text
+      text: |
+        container environment
+  isError: false
+---
+send:
+  r: >-
+    tryCatch(library(mcpConsoleDefinitelyMissingPackage),
+    error=function(error) cat(conditionMessage(error), "\n", sep=""))
+result:
+  content:
+    - type: text
+      text: |
+        there is no package called 'mcpConsoleDefinitelyMissingPackage'
+  isError: false
+---
+send:
+  python: |
+    try:
+        import mcpConsoleDefinitelyMissingPackage
+    except ModuleNotFoundError as error:
+        print(error)
+result:
+  content:
+    - type: text
+      text: >
+        No module named 'mcpConsoleDefinitelyMissingPackage'.
+
+
+        MCP Console dynamic environment resolution is unavailable for Docker
+        targets. Install the distribution in the image and start a new server
+        session.
+  isError: false
+---
+arguments:
+  - serve
+  - --no-sandbox
+target_environment: true
+delegated_filesystem: true
+preinstalled_packages_required: true
+---
+send:
+  python: |
+    import os
+    from pathlib import Path
+    assert os.getuid() == 4321
+    assert os.environ["WORKLOAD_VALUE"] == "selected"
+    assert os.environ["DOCKER_HOST"] == "must-not-configure-the-launcher"
+    assert os.environ.get("HOME") != "/controller-home"
+    assert os.environ.get("TMPDIR") != "/controller-temp"
+    Path("/tmp/delegated-write").write_text("yes")
+    print("container environment")
+result:
+  content:
+    - type: text
+      text: |
+        container environment
+  isError: false
+---
+send:
+  r: >-
+    tryCatch(library(mcpConsoleDefinitelyMissingPackage),
+    error=function(error) cat(conditionMessage(error), "\n", sep=""))
+result:
+  content:
+    - type: text
+      text: |
+        there is no package called 'mcpConsoleDefinitelyMissingPackage'
+  isError: false
+---
+send:
+  python: |
+    try:
+        import mcpConsoleDefinitelyMissingPackage
+    except ModuleNotFoundError as error:
+        print(error)
+result:
+  content:
+    - type: text
+      text: >
+        No module named 'mcpConsoleDefinitelyMissingPackage'.
+
+
+        MCP Console dynamic environment resolution is unavailable for Docker
+        targets. Install the distribution in the image and start a new server
+        session.
+  isError: false

@@ -1,0 +1,50 @@
+---
+send:
+  python: |
+    import os
+    from pathlib import Path
+    assert os.getuid() == 1234
+    assert os.environ["IMAGE_VALUE"] == "initial"
+    assert Path("/build-input/included").read_text() == "from context"
+    assert not Path("/build-input/ignored").exists()
+    print(Path("/etc/hostname").read_text().strip())
+result:
+  content:
+    - type: text
+      text: |
+        <container>
+  isError: false
+---
+send:
+  control: restart
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: false
+---
+send:
+  python: |
+    import os
+    from pathlib import Path
+    print(os.environ["IMAGE_VALUE"])
+    print(Path("/build-input/included").read_text())
+    print(Path("/etc/hostname").read_text().strip())
+result:
+  content:
+    - type: text
+      text: |
+        initial
+        from context
+        <container>
+  isError: false
+---
+builds: 1
+separate_dockerfile: true
+dockerignore: true
+image_user: 1234
+entrypoint_healthcheck_and_stop_signal_overridden: true
+replacement_uses_captured_image: true

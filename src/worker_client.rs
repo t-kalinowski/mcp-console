@@ -121,6 +121,8 @@ struct ClientInner {
     environment: Option<Mutex<Environment>>,
     dynamic_resolution: bool,
     ssh: Option<crate::ssh::Session>,
+    docker: Option<crate::docker::Session>,
+    recording: Mutex<Option<crate::transcript::Transcript>>,
 }
 
 #[derive(Clone)]
@@ -150,6 +152,7 @@ struct WorkerSpec<'a> {
     dynamic_resolution: bool,
     callbacks: WorkerCallbacks,
     ssh: Option<&'a crate::ssh::Session>,
+    docker: Option<&'a crate::docker::Session>,
 }
 
 struct IdleResponseSnapshot {
@@ -464,7 +467,52 @@ impl Client {
             environment: environment.map(Mutex::new),
             dynamic_resolution,
             ssh: None,
+            docker: None,
+            recording: Mutex::new(None),
         }))
+    }
+
+    pub(crate) fn target(
+        target: crate::settings::Target,
+        roots: Vec<PathBuf>,
+        no_sandbox: bool,
+        policy: crate::settings::SandboxSettings,
+    ) -> Result<Self, String> {
+        if matches!(target.compute, crate::settings::Compute::Host {}) {
+            return Self::ssh(crate::ssh::Session::new(target, roots), no_sandbox, policy);
+        }
+        let session = startup::with_input_owner(|started| {
+            crate::docker::Session::setup(target, roots, &policy, no_sandbox, started)
+        })?;
+        let mut client = Self::with_arguments(
+            std::env::current_exe().map_err(|error| error.to_string())?,
+            Vec::new(),
+            None,
+            no_sandbox,
+            policy,
+            Some(Environment {
+                custom_worker: false,
+                duckdb_extensions: Default::default(),
+                duckdb_r_targets: Vec::new(),
+                python: Some(PythonEnvironment::bare(None)),
+                r: None,
+                r_resolver: RResolver::Disabled,
+            }),
+        );
+        Arc::get_mut(&mut client.0).expect("new client").docker = Some(session);
+        Ok(client)
+    }
+
+    pub(crate) fn record_with(&self, transcript: crate::transcript::Transcript) {
+        *self.0.recording.lock().expect("recording lock") = Some(transcript);
+    }
+
+    pub(crate) fn target_metadata(&self) -> Option<serde_json::Value> {
+        self.0
+            .ssh
+            .as_ref()
+            .map(crate::ssh::Session::metadata)
+            .or_else(|| self.0.docker.as_ref().map(crate::docker::Session::metadata))
     }
 
     pub(crate) fn ssh(
@@ -526,6 +574,9 @@ impl Client {
 
     /// Interprets preparation, control, evaluation, stdin, and polling for the session.
     pub(crate) async fn send(&self, request: SendRequest) -> Result<Response, String> {
+        if self.0.docker.is_some() && request.requirements.is_some() {
+            return Err("dynamic environment resolution is disabled for Docker targets; install packages in the image and start a new server session".into());
+        }
         request.validate(self.dynamic_resolution())?;
         if let Some(control) = request.control {
             return self.send_controlled(control, request).await;
@@ -1570,6 +1621,7 @@ impl Client {
                 .and_then(|environment| environment.r.as_ref());
             let spec = WorkerSpec {
                 ssh: self.0.ssh.as_ref(),
+                docker: self.0.docker.as_ref(),
                 executable: &self.0.program,
                 arguments: &self.0.arguments,
                 relay: self.0.relay.as_deref(),

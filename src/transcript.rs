@@ -63,18 +63,30 @@ pub(crate) struct Artifact {
 impl Transcript {
     #[cfg(test)]
     pub(crate) fn new(dynamic_resolution: bool) -> Self {
-        Self::with_target(dynamic_resolution, None)
+        Self::with_target(std::env::current_dir(), dynamic_resolution, None)
     }
 
-    pub(crate) fn with_target(dynamic_resolution: bool, target: Option<serde_json::Value>) -> Self {
+    pub(crate) fn with_target(
+        working_directory: std::io::Result<PathBuf>,
+        dynamic_resolution: bool,
+        target: Option<serde_json::Value>,
+    ) -> Self {
         Self(Arc::new(Mutex::new(TranscriptState {
-            working_directory: std::env::current_dir()
+            working_directory: working_directory
                 .map_err(|error| format!("failed to find the current working directory: {error}")),
             dynamic_resolution,
             target,
             active: None,
             failure: None,
         })))
+    }
+
+    pub(crate) fn target_generation(&self, container_id: &str) {
+        self.update(|state| {
+            state
+                .materialize()?
+                .append(Event::TargetGeneration { container_id }, Utc::now())
+        });
     }
 
     pub(crate) fn begin(
