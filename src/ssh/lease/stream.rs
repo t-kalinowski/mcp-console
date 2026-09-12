@@ -197,6 +197,17 @@ impl Engine {
         self.status("retiring");
     }
     pub fn tick(&mut self) -> io::Result<bool> {
+        // A completed exchange has no remaining lease or application work.
+        // Do not queue a heartbeat after the peer's terminal acknowledgment.
+        if self.link.as_ref().is_some_and(|link| link.wire.empty())
+            && if self.remote {
+                self.finished
+            } else {
+                self.ended_sent || (self.output_abandoned && self.end_sent)
+            }
+        {
+            return Ok(true);
+        }
         if self.activated
             && self.source.is_none()
             && self.diagnostics.is_none()
@@ -249,12 +260,7 @@ impl Engine {
                 self.end_sent = true;
             }
         }
-        Ok(link.wire.empty()
-            && if self.remote {
-                self.finished
-            } else {
-                self.ended_sent || (self.output_abandoned && self.end_sent)
-            })
+        Ok(false)
     }
     pub fn wake(&self) -> Instant {
         let mut deadline = self

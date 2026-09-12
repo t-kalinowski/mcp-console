@@ -208,6 +208,7 @@ Continuing heartbeats cannot extend shutdown.
 When communication is unavailable, local shutdown remains bounded and remote lease expiry is the fallback.
 Expiry closes the helper input to initiate cleanup; elapsed time never proves that cleanup succeeded.
 Without an explicit valid launch or preparation receipt, retirement stays unconfirmed and conflicting preparation or replacement remains blocked.
+Preparation failure does not prevent ordinary cells in an existing healthy worker; cells that need dependency preparation still fail at that preparation boundary.
 The runner retains its limits, including no independent recovery after runner death.
 Direct execution retains its lack of runner-owned descendant cleanup.
 
