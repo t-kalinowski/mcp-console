@@ -26,7 +26,10 @@ pub(super) enum Event<'a> {
         target: Option<&'a Value>,
     },
     TargetGeneration {
-        container_id: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        container_id: Option<&'a str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        sandbox: Option<&'a crate::target_launch::SandboxIdentity>,
     },
     ToolCall {
         call_id: u64,

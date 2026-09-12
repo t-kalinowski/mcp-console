@@ -1,4 +1,4 @@
-//! Cancellable Docker CLI operations; diagnostics never enter protocol stdout.
+//! Cancellable target CLI operations; diagnostics never enter protocol stdout.
 use std::io::{self, Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::process::CommandExt;
@@ -9,15 +9,17 @@ use std::time::{Duration, Instant};
 use crate::target_launch::transfer::{Io, duplicate, poll};
 
 #[derive(Clone)]
-pub(super) struct Cancel {
+pub(crate) struct Cancel {
+    pub protocol: crate::target_launch::Protocol,
     pub reader: Arc<io::PipeReader>,
     writer: Arc<Mutex<Option<io::PipeWriter>>>,
 }
 
 impl Cancel {
-    pub fn new() -> Result<Self, String> {
+    pub fn new(protocol: crate::target_launch::Protocol) -> Result<Self, String> {
         let (reader, writer) = io::pipe().map_err(|e| e.to_string())?;
         Ok(Self {
+            protocol,
             reader: Arc::new(reader),
             writer: Arc::new(Mutex::new(Some(writer))),
         })
@@ -35,7 +37,7 @@ impl Cancel {
             return Err(io::Error::last_os_error().to_string());
         }
         if event.revents != 0 {
-            Err("Docker setup cancelled".into())
+            Err(format!("{} setup cancelled", self.protocol.0))
         } else {
             Ok(())
         }
@@ -61,26 +63,44 @@ impl crate::resolver::ResolverControl for Cancel {
     }
 }
 
-pub(super) fn run(
+pub(crate) struct OwnerInput {
+    pub bytes: Vec<u8>,
+    pub retirement_grace: Duration,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum OutputMode {
+    /// Capture provider data and retain stderr for a failed command's error.
+    Capture,
+    /// Stream setup output and errors to controller stderr.
+    Diagnostics,
+    /// Capture stdout data while streaming provider diagnostics on stderr.
+    Data,
+}
+
+pub(crate) fn run(
     mut command: Command,
     cancel: &Cancel,
     deadline: Option<Instant>,
-    diagnostics: bool,
-    input: Option<Vec<u8>>,
+    mode: OutputMode,
+    input: Option<OwnerInput>,
 ) -> Result<Vec<u8>, String> {
     cancel.check()?;
+    let label = cancel.protocol.0;
+    let owner = input.is_some();
+    let retirement_grace = input.as_ref().map(|input| input.retirement_grace);
     command
         .stdin(if input.is_some() {
             Stdio::piped()
         } else {
             Stdio::null()
         })
-        .stdout(if diagnostics {
+        .stdout(if matches!(mode, OutputMode::Diagnostics) {
             Stdio::from(duplicate(2)?)
         } else {
             Stdio::piped()
         })
-        .stderr(if diagnostics || input.is_some() {
+        .stderr(if !matches!(mode, OutputMode::Capture) || input.is_some() {
             Stdio::inherit()
         } else {
             Stdio::piped()
@@ -89,7 +109,7 @@ pub(super) fn run(
     crate::process_descriptors::close_unlisted_from_multithreaded_parent(&mut command)?;
     let mut child = command
         .spawn()
-        .map_err(|e| format!("cannot execute Docker command: {e}"))?;
+        .map_err(|e| format!("cannot execute {label} command: {e}"))?;
     let (exited, notify) = io::pipe().map_err(|e| e.to_string())?;
     let mut exit =
         crate::process_exit::ChildExitWaiter::start_notifying(child.id(), move || drop(notify))?;
@@ -98,11 +118,11 @@ pub(super) fn run(
         std::thread::spawn(move || {
             let mut output = Vec::new();
             crate::process_output::RelayOutput::new(stdout, exited)
-                .take((super::LIMIT + 1) as u64)
+                .take((crate::target_launch::MAX_BOOTSTRAP + 1) as u64)
                 .read_to_end(&mut output)
                 .map_err(|e| e.to_string())?;
-            if output.len() > super::LIMIT {
-                return Err("Docker response exceeds 1 MiB".to_string());
+            if output.len() > crate::target_launch::MAX_BOOTSTRAP {
+                return Err(format!("{label} response exceeds 1 MiB"));
             }
             Ok(output)
         })
@@ -112,24 +132,24 @@ pub(super) fn run(
         std::thread::spawn(move || {
             let mut errors = Vec::new();
             crate::process_output::RelayOutput::new(stderr, exited)
-                .take((super::LIMIT + 1) as u64)
+                .take((crate::target_launch::MAX_BOOTSTRAP + 1) as u64)
                 .read_to_end(&mut errors)
                 .map_err(|e| e.to_string())?;
             Ok::<_, String>(String::from_utf8_lossy(&errors).into_owned())
         })
     });
-    let writer = input.map(|bytes| {
+    let writer = input.map(|input| {
         let stdin = child.stdin.take().expect("piped setup input");
         let cancelled = cancel.reader.try_clone().expect("cancellation pipe clone");
         std::thread::spawn(move || -> Result<_, String> {
             let mut stdin = Io::new(stdin, Some(cancelled), deadline)?;
-            stdin.write_all(&bytes).map_err(|e| e.to_string())?;
+            stdin.write_all(&input.bytes).map_err(|e| e.to_string())?;
             // Keep the owner connected until it exits or setup is cancelled.
             Ok(stdin)
         })
     });
     let owner_input = writer
-        .map(|task| task.join().map_err(|_| "Docker setup writer panicked")?)
+        .map(|task| task.join().map_err(|_| "target setup writer panicked")?)
         .transpose();
     let waited = poll(
         &[
@@ -146,8 +166,8 @@ pub(super) fn run(
     if interrupted {
         // Ownership helpers retire their container on input closure. Ordinary
         // image operations own no workload and can be killed immediately.
-        if writer_is_owner(&command) {
-            let _ = exit.wait(Duration::from_secs(8));
+        if let Some(grace) = retirement_grace {
+            let _ = exit.wait(grace);
         }
         if !exit.wait(Duration::ZERO)? {
             unsafe {
@@ -156,30 +176,29 @@ pub(super) fn run(
         }
     }
     if !exit.wait(Duration::from_secs(1))? {
-        return Err("Docker CLI did not exit after cancellation".into());
+        return Err(format!("{label} CLI did not exit after cancellation"));
     }
     let status = child.wait().map_err(|e| e.to_string())?;
     let output = output
-        .map(|task| task.join().map_err(|_| "Docker output task panicked")?)
+        .map(|task| task.join().map_err(|_| "target output task panicked")?)
         .transpose()?;
-    let errors = errors
-        .map(|task| task.join().map_err(|_| "Docker diagnostic task panicked")?)
+    let mut errors = errors
+        .map(|task| task.join().map_err(|_| "target diagnostic task panicked")?)
         .transpose()?
         .unwrap_or_default();
     waited?;
     if interrupted {
-        return Err("Docker setup cancelled".into());
+        return Err(format!("{label} setup cancelled"));
     }
     if !status.success() {
+        if !owner && let Some(output) = &output {
+            errors.push_str(&String::from_utf8_lossy(output));
+        }
         return Err(if errors.is_empty() {
-            format!("Docker command failed with {status}")
+            format!("{label} command failed with {status}")
         } else {
-            format!("Docker command failed with {status}: {errors}")
+            format!("{label} command failed with {status}: {errors}")
         });
     }
     Ok(output.unwrap_or_default())
-}
-
-fn writer_is_owner(command: &Command) -> bool {
-    command.get_args().any(|arg| arg == "docker-owner")
 }

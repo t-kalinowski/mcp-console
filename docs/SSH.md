@@ -109,7 +109,8 @@ The private requests carry no shell programs, source code, executable choices, o
 Preparation uses a separate versioned, length-prefixed JSON protocol with a 1 MiB message limit; installer output is captured separately from protocol frames.
 Oversized preparation requests are rejected before remote admission and leave the session available for subsequent requests.
 Large results and installer errors use bounded result chunks followed by the cleanup receipt, preserving the complete result without changing its failure classification.
-Launch protocol version 2 carries the selected environment, and preparation protocol version 3 requires a matching Console package version.
+Launch protocol version 3 carries the selected environment and explicit isolation provider; preparation protocol version 3 is unchanged.
+Both require a matching Console package version.
 Older preinstalled-only peers fail compatibility checks before MCP readiness.
 Resolver programs, temporary files, interpreter checks, Matplotlib preparation, and caches belong to the execution host.
 Python resolution retains the existing treatment of `UV_OFFLINE`, `UV_NO_CACHE`, and `RETICULATE_UV`.

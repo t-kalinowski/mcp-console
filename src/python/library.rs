@@ -14,6 +14,7 @@ type PyInitializeEx = unsafe extern "C" fn(libc::c_int);
 type PySysSetArgv = unsafe extern "C" fn(libc::c_int, *mut *mut libc::wchar_t);
 type PyOsSetSignal = unsafe extern "C" fn(libc::c_int, libc::sighandler_t) -> libc::sighandler_t;
 type PyEvalSaveThread = unsafe extern "C" fn() -> *mut libc::c_void;
+type PyEvalRestoreThread = unsafe extern "C" fn(*mut libc::c_void);
 type PyObject = libc::c_void;
 type PyGilState = libc::c_int;
 type PyGilStateEnsure = unsafe extern "C" fn() -> PyGilState;
@@ -65,6 +66,7 @@ struct PythonApi {
     set_argv: PySysSetArgv,
     set_signal: PyOsSetSignal,
     save_thread: PyEvalSaveThread,
+    restore_thread: PyEvalRestoreThread,
     gil_state_ensure: PyGilStateEnsure,
     gil_state_release: PyGilStateRelease,
     import_add_module: PyImportAddModule,
@@ -88,7 +90,8 @@ struct PythonApi {
 enum Interpreter {
     Uninitialized,
     External,
-    RustOwned { gil_released: bool },
+    // PyEval_SaveThread's main-thread state, retained until process exit.
+    RustOwned { saved_thread: Option<usize> },
 }
 
 struct Configuration {
@@ -96,6 +99,35 @@ struct Configuration {
     python_home: String,
     program_name_wide: Vec<libc::wchar_t>,
     python_home_wide: Vec<libc::wchar_t>,
+}
+
+pub(super) fn prepare_process_exit() -> Result<(), String> {
+    let restore = {
+        let mut slot = PYTHON_LIBRARY
+            .lock()
+            .map_err(|_| "Python shared library state is unavailable")?;
+        let Some(library) = slot.as_mut() else {
+            return Ok(());
+        };
+        let Interpreter::RustOwned {
+            saved_thread: Some(state),
+        } = library.interpreter
+        else {
+            return Ok(());
+        };
+        // The worker returns on the same thread that initialized CPython. Do
+        // not run extension-library exit destructors with a detached state.
+        // User-initiated finalization can already have invalidated that state.
+        if unsafe { (library.api.is_initialized)() } == 0 {
+            return Ok(());
+        }
+        library.interpreter = Interpreter::RustOwned { saved_thread: None };
+        (library.api.restore_thread, state)
+    };
+    // SAFETY: this pairs the one main-thread SaveThread call below. Python
+    // stays attached until process exit; this is not interpreter finalization.
+    unsafe { (restore.0)(restore.1 as *mut libc::c_void) };
+    Ok(())
 }
 
 pub(super) fn load(path: &Path) -> Result<bool, String> {
@@ -290,9 +322,7 @@ impl LoadedLibrary {
         }
 
         self.configuration = Some(configuration);
-        self.interpreter = Interpreter::RustOwned {
-            gil_released: false,
-        };
+        self.interpreter = Interpreter::RustOwned { saved_thread: None };
         Ok(true)
     }
 
@@ -332,12 +362,13 @@ impl LoadedLibrary {
             Interpreter::Uninitialized => {
                 return Err("Python interpreter is not initialized".to_string());
             }
-            Interpreter::External | Interpreter::RustOwned { gil_released: true } => {
+            Interpreter::External
+            | Interpreter::RustOwned {
+                saved_thread: Some(_),
+            } => {
                 return Ok(());
             }
-            Interpreter::RustOwned {
-                gil_released: false,
-            } => {}
+            Interpreter::RustOwned { saved_thread: None } => {}
         }
         // SAFETY: The resolved function has no preconditions.
         if unsafe { (self.api.is_initialized)() } == 0 {
@@ -350,7 +381,9 @@ impl LoadedLibrary {
         if thread_state.is_null() {
             return Err("CPython did not return its initial thread state".to_string());
         }
-        self.interpreter = Interpreter::RustOwned { gil_released: true };
+        self.interpreter = Interpreter::RustOwned {
+            saved_thread: Some(thread_state as usize),
+        };
         Ok(())
     }
 }
@@ -570,6 +603,7 @@ impl PythonApi {
             set_argv: unsafe { load_symbol(library, path, b"PySys_SetArgv\0")? },
             set_signal: unsafe { load_symbol(library, path, b"PyOS_setsig\0")? },
             save_thread: unsafe { load_symbol(library, path, b"PyEval_SaveThread\0")? },
+            restore_thread: unsafe { load_symbol(library, path, b"PyEval_RestoreThread\0")? },
             gil_state_ensure: unsafe { load_symbol(library, path, b"PyGILState_Ensure\0")? },
             gil_state_release: unsafe { load_symbol(library, path, b"PyGILState_Release\0")? },
             import_add_module: unsafe { load_symbol(library, path, b"PyImport_AddModule\0")? },

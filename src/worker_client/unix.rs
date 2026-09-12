@@ -59,9 +59,9 @@ struct RelayConnection {
     commands: RelayCommandSender,
     tasks: Option<Box<RelayTasks>>,
     ssh: Option<Box<(crate::ssh::Session, crate::ssh::Retirement)>>,
-    docker: Option<
+    compute: Option<
         Box<(
-            crate::docker::Session,
+            crate::compute_session::Session,
             crate::target_launch::Retirement,
             String,
         )>,
@@ -70,6 +70,7 @@ struct RelayConnection {
 
 struct RelayProcess {
     child: Child,
+    retirement_grace: Duration,
     no_sandbox: bool,
     exit: super::child_exit::ChildExitWaiter,
     exited: bool,
@@ -145,7 +146,7 @@ impl WorkerRuntime {
     ) -> Result<Worker, SendFailure> {
         let super::WorkerSpec {
             ssh,
-            docker,
+            compute,
             executable,
             arguments,
             relay,
@@ -170,11 +171,11 @@ impl WorkerRuntime {
         let current_executable = std::env::current_exe()
             .map_err(|error| format!("failed to locate the current executable: {error}"))?;
         let target = relay_command_line(&current_executable, executable, arguments, relay);
-        let mut docker_launch = docker
+        let mut compute_launch = compute
             .map(|session| session.launch(sandbox_settings, no_sandbox, false))
             .transpose()?;
-        let docker_name = docker_launch.as_ref().map(|(_, _, name)| name.clone());
-        let mut command = if let Some((command, bytes, _)) = docker_launch.take() {
+        let compute_name = compute_launch.as_ref().map(|(_, _, name)| name.clone());
+        let mut command = if let Some((command, bytes, _)) = compute_launch.take() {
             bootstrap = Some(bytes);
             command
         } else if let Some(ssh) = ssh {
@@ -195,7 +196,7 @@ impl WorkerRuntime {
             command.arg("--").args(target);
             command
         };
-        if ssh.is_none() && docker.is_none() {
+        if ssh.is_none() && compute.is_none() {
             if let Some(python) = python {
                 python.configure_worker(&mut command);
             }
@@ -229,8 +230,17 @@ impl WorkerRuntime {
         let child = command
             .spawn()
             .map_err(|error| format!("failed to launch worker relay: {error}"))?;
-        let mut child = RelayProcess::new(child, no_sandbox, ssh.is_some(), notify_output_exit)
-            .map_err(|error| format!("failed to monitor worker relay: {error}"))?;
+        let mut child = RelayProcess::new(
+            child,
+            no_sandbox,
+            ssh.is_some(),
+            compute.map_or(
+                LAUNCHER_RETIREMENT_GRACE,
+                crate::compute_session::Session::retirement_grace,
+            ),
+            notify_output_exit,
+        )
+        .map_err(|error| format!("failed to monitor worker relay: {error}"))?;
         let relay_stdin = child
             .take_stdin()
             .expect("piped worker relay stdin should be available");
@@ -250,11 +260,11 @@ impl WorkerRuntime {
         let ready_commit = ReadyCommit(Arc::new(Mutex::new(Some(ready_commit_sender))));
         let shutdown_started = ShutdownAcceptance::default();
 
-        let container = docker.map(|session| {
+        let owned = compute.map(|session| {
             (
                 session.clone(),
                 crate::target_launch::Retirement::default(),
-                docker_name.expect("Docker launch name"),
+                compute_name.expect("compute launch name"),
             )
         });
         let remote = ssh.map(|session| (session.clone(), crate::ssh::Retirement::default()));
@@ -265,7 +275,7 @@ impl WorkerRuntime {
             output_exit,
             worker_events,
             remote.clone(),
-            container.clone(),
+            owned.clone(),
             callbacks
                 .client
                 .0
@@ -288,7 +298,7 @@ impl WorkerRuntime {
 
         let relay = RelayConnection {
             ssh: remote.map(Box::new),
-            docker: container.map(Box::new),
+            compute: owned.map(Box::new),
             child,
             commands: commands.clone(),
             tasks: Some(Box::new(RelayTasks {
@@ -311,7 +321,7 @@ impl WorkerRuntime {
             let error = worker.startup_failure(error);
             return Err(error);
         }
-        let started = if ssh.is_some() || docker.is_some() {
+        let started = if ssh.is_some() || compute.is_some() {
             startup_receiver
                 .recv_timeout(crate::target_launch::SETUP_TIMEOUT)
                 .map_err(|error| match error {
@@ -375,6 +385,7 @@ impl RelayProcess {
         child: Child,
         no_sandbox: bool,
         ssh: bool,
+        retirement_grace: Duration,
         notify_output_exit: std::io::PipeWriter,
     ) -> Result<Self, String> {
         let exit =
@@ -388,6 +399,7 @@ impl RelayProcess {
             };
         Ok(Self {
             child,
+            retirement_grace,
             no_sandbox,
             ssh,
             exit,
@@ -450,13 +462,13 @@ impl RelayProcess {
         } else {
             self.request_retirement()
         };
-        let cleanup = match self.wait_timeout_without_reaping(LAUNCHER_RETIREMENT_GRACE) {
+        let cleanup = match self.wait_timeout_without_reaping(self.retirement_grace) {
             Ok(true) => self.reap(),
             outcome => {
                 let error = match outcome {
                     Ok(false) => format!(
                         "worker launcher did not retire within {} ms",
-                        LAUNCHER_RETIREMENT_GRACE.as_millis()
+                        self.retirement_grace.as_millis()
                     ),
                     Err(error) => error,
                     Ok(true) => unreachable!(),
@@ -605,7 +617,7 @@ impl Drop for RelayProcess {
         }
         let _ = self.request_retirement();
         if !self
-            .wait_timeout_without_reaping(LAUNCHER_RETIREMENT_GRACE)
+            .wait_timeout_without_reaping(self.retirement_grace)
             .unwrap_or(false)
         {
             let _ = self.force_stop_inner();
@@ -924,8 +936,8 @@ fn start_relay_event_reader(
     output_exit: std::io::PipeReader,
     events: mpsc::Sender<WorkerEvent>,
     ssh: Option<(crate::ssh::Session, crate::ssh::Retirement)>,
-    docker: Option<(
-        crate::docker::Session,
+    compute: Option<(
+        crate::compute_session::Session,
         crate::target_launch::Retirement,
         String,
     )>,
@@ -933,14 +945,10 @@ fn start_relay_event_reader(
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let output = crate::process_output::RelayOutput::new(relay_stdout, output_exit);
-        let output: Box<dyn Read> = if let Some((_, retirement, _)) = &docker {
+        let output: Box<dyn Read> = if let Some((session, retirement, _)) = &compute {
             Box::new(
-                crate::target_launch::Output::new(
-                    output,
-                    crate::target_launch::Protocol("Docker"),
-                    retirement.clone(),
-                )
-                .with_recording(recording),
+                crate::target_launch::Output::new(output, session.protocol(), retirement.clone())
+                    .with_recording(recording),
             )
         } else {
             match ssh.as_ref() {
@@ -972,7 +980,7 @@ fn start_relay_event_reader(
         {
             let _ = events.send(WorkerEvent::TransportFailure(error));
         }
-        if let Some((session, retirement, name)) = docker
+        if let Some((session, retirement, name)) = compute
             && let Err(error) = session.check_retirement(&retirement, &name)
         {
             let _ = events.send(WorkerEvent::TransportFailure(error));
@@ -1264,7 +1272,8 @@ impl WorkerShutdownHandle {
             if let Err(error) = child.request_retirement() {
                 errors.push(error);
             }
-            match child.wait_timeout_without_reaping(LAUNCHER_RETIREMENT_GRACE) {
+            let grace = child.retirement_grace;
+            match child.wait_timeout_without_reaping(grace) {
                 Ok(observed) => exited = observed,
                 Err(error) => errors.push(error),
             }
@@ -1280,7 +1289,7 @@ impl WorkerShutdownHandle {
         } else {
             errors.push(format!(
                 "worker launcher did not retire within {} ms",
-                LAUNCHER_RETIREMENT_GRACE.as_millis()
+                child.retirement_grace.as_millis()
             ));
             if let Err(error) = child.force_stop_inner() {
                 errors.push(error);
@@ -1407,7 +1416,7 @@ impl RelayConnection {
         );
         let cleanup = combine_shutdown_results(
             cleanup,
-            self.docker
+            self.compute
                 .as_deref()
                 .map_or(Ok(()), |(session, retirement, name)| {
                     session.check_retirement(retirement, name)

@@ -1,0 +1,48 @@
+---
+send:
+  python: |
+    import urllib.request, urllib.error
+    def fetch(host):
+        try:
+            with urllib.request.urlopen("https://" + host, timeout=15) as response:
+                print(host, response.status)
+        except urllib.error.URLError as error:
+            print(host, type(error).__name__, str(error))
+    fetch("pypi.org")
+result:
+  content:
+    - type: text
+      text: |
+        pypi.org 200
+  isError: false
+---
+send:
+  python: fetch("example.com"); fetch("registry.npmjs.org")
+result:
+  content:
+    - type: text
+      text: |
+        example.com 200
+        registry.npmjs.org 200
+  isError: false
+---
+send:
+  python: fetch("pypi.org"); fetch("registry.npmjs.org")
+result:
+  content:
+    - type: text
+      text: |
+        pypi.org HTTPError HTTP Error 403: Forbidden
+        registry.npmjs.org 200
+  isError: false
+---
+standard_error: |
+  Deleting sandbox <owned-microvm>...
+  Sandbox '<owned-microvm>' removed
+  Deleting sandbox <owned-microvm>...
+  Sandbox '<owned-microvm>' removed
+---
+global_rules_unchanged: true
+unrelated_resources_unchanged: true
+owned_allow_is_additive: true
+owned_deny_overrides_inherited_allow: true

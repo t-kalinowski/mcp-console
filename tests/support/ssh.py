@@ -40,7 +40,8 @@ def bootstrap(
     version = subprocess.check_output([binary, "--version"], text=True).split()[1]
     body = json.dumps(
         {
-            "version": 2,
+            "version": 3,
+            "provider": "native",
             "build": version,
             "workspace": str(workspace),
             "policy": policy or {},

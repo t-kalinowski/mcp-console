@@ -1,0 +1,11 @@
+---
+send:
+  r: "42"
+result:
+  content:
+    - type: text
+      text: |
+        provider peer
+  isError: false
+---
+provider_diagnostics_preserved_on_controller_stderr: true

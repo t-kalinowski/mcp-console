@@ -29,7 +29,7 @@ pub struct Cli {
 pub enum Command {
     /// Run the MCP server over standard input and output
     Serve {
-        /// Skip the inner native sandbox at the selected execution target
+        /// Skip inner native enforcement; retain any selected Docker container or Sandbox microVM and its provider policy
         #[arg(long)]
         no_sandbox: bool,
 
@@ -57,7 +57,13 @@ pub enum Command {
     #[command(hide = true)]
     DockerProbe,
     #[command(hide = true)]
-    DockerRuntimeProbe,
+    ImageRuntimeProbe,
+    #[command(hide = true)]
+    DockerSandboxOwner,
+    #[command(hide = true)]
+    DockerSandboxLaunch,
+    #[command(hide = true)]
+    DockerSandboxProbe,
 
     /// Launch the built-in runtime for an authenticated SSH controller
     #[command(hide = true)]

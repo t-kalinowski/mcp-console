@@ -95,6 +95,7 @@ impl Session {
             policy: policy.clone(),
             writable_roots: self.roots.clone(),
             no_sandbox,
+            provider: crate::settings::Provider::Native,
             environment: self
                 .discovery
                 .clone()
@@ -146,7 +147,7 @@ impl Session {
 }
 
 pub(crate) fn run() -> Result<(), String> {
-    crate::target_launch::run(crate::target_launch::Protocol("SSH"), false, false)
+    crate::target_launch::run(crate::target_launch::Protocol("SSH"), false, None)
 }
 
 fn read_payload(reader: &mut impl std::io::Read, maximum: usize) -> std::io::Result<Vec<u8>> {

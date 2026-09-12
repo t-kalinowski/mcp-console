@@ -22,10 +22,17 @@ base::local(
     `%||%` <- function(x, y) if (is.null(x)) y else x
     managed_python_disabled_message <- if (
       !dynamic_resolution &&
-        Sys.getenv("MCP_CONSOLE_EXECUTION_COMPUTE") == "docker"
+        Sys.getenv("MCP_CONSOLE_EXECUTION_COMPUTE") %in%
+          c("docker", "docker_sandbox")
     ) {
       paste0(
-        "MCP Console dynamic environment resolution is unavailable for Docker targets. ",
+        "MCP Console dynamic environment resolution is unavailable for ",
+        if (Sys.getenv("MCP_CONSOLE_EXECUTION_COMPUTE") == "docker") {
+          "Docker"
+        } else {
+          "Docker Sandbox"
+        },
+        " targets. ",
         "Install the distribution in the image and start a new server session."
       )
     } else if (!dynamic_resolution) {

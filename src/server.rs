@@ -1,3 +1,4 @@
+mod execution;
 use std::error::Error;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -254,51 +255,7 @@ impl ConsoleServer {
     ) -> Result<Self, String> {
         let recording_directory = std::env::current_dir();
         let languages = Languages::from_environment()?;
-        let policy = &sandbox_settings;
-        let profile = policy.get("extends").and_then(serde_json::Value::as_str);
-        let filesystem = policy
-            .get("filesystem")
-            .and_then(|filesystem| filesystem.get("kind"))
-            .and_then(crate::settings::native_variant_name)
-            .or_else(|| {
-                (!policy.contains_key("filesystem") && profile.is_some()).then_some("restricted")
-            });
-        let network = policy
-            .get("network")
-            .and_then(crate::settings::native_variant_name)
-            .or_else(|| {
-                (!policy.contains_key("network") && profile.is_some()).then_some("restricted")
-            });
-        let network_access = match (filesystem, network, policy.get("proxy")) {
-            // The pinned runner enforces managed proxy routing even with network enabled.
-            (_, _, Some(proxy)) if !proxy.is_null() => {
-                "can access the network subject to the launcher's proxy settings"
-            }
-            (Some("restricted" | "unrestricted"), Some("enabled"), _) => {
-                "can directly access the network"
-            }
-            (Some("restricted" | "unrestricted"), Some("restricted"), _) => {
-                "cannot directly access the network"
-            }
-            _ => "has network access governed by the launcher's sandbox settings",
-        };
-        let sandbox_access = match filesystem {
-            Some("restricted") if profile == Some(":workspace") => format!(
-                "uses the native \":workspace\" profile: it can edit files beneath the fixed launch workspace, write in the worker's private temporary directory and to explicitly allowed paths, and {network_access}. The workspace's .git, .agents, .codex, and .claude paths are readable and protected from writes by default. Explicit native rules can override these defaults or restrict reads"
-            ),
-            Some("restricted") if profile == Some(":read-only") => format!(
-                "uses the native \":read-only\" profile: it can read host files subject to configured read restrictions, write in the worker's private temporary directory and to explicitly allowed paths, and {network_access}"
-            ),
-            Some("restricted") => format!(
-                "can read host files, {network_access}, and can write in the worker's private temporary directory and to paths explicitly allowed by the launcher"
-            ),
-            Some("unrestricted") => {
-                format!("has unrestricted filesystem access and {network_access}")
-            }
-            _ => format!(
-                "has filesystem access governed by the launcher's sandbox settings and {network_access}"
-            ),
-        };
+        let policy = sandbox_settings.clone();
         let worker = if let Some((target, roots)) = target {
             crate::worker_client::Client::target(target, roots, no_sandbox, sandbox_settings)?
         } else {
@@ -322,45 +279,8 @@ impl ConsoleServer {
             target.clone(),
         );
         worker.record_with(transcript.clone());
-        let mut tool_router = Self::configured_tool_router(
-            languages,
-            dynamic_resolution,
-            no_sandbox,
-            &sandbox_access,
-        );
-        if let Some(target) = target {
-            let description = tool_router
-                .map
-                .get_mut("send")
-                .expect("send is registered")
-                .attr
-                .description
-                .as_mut()
-                .expect("send has a description")
-                .to_mut();
-            if target
-                .pointer("/compute/kind")
-                .and_then(serde_json::Value::as_str)
-                == Some("docker")
-            {
-                *description = description.replace("host files", "container files");
-                *description = description.replace(
-                    "Evaluated code runs without a sandbox, with the server's permissions, including filesystem and network access. Dependency resolution, when available, may execute installation or build code; use only trusted dependencies.",
-                    "Evaluated code runs inside an owned Docker container without an inner native sandbox. Docker bind access, namespaces, bridge networking, and container retirement still apply.",
-                );
-                description.push_str(&format!(
-                    "\n\nExecution target: {target}. The relay and built-in worker run in a fresh container for each generation, using the captured immutable image ID. Docker uses ordinary bridge networking. Without a proxy, external-sandbox delegates filesystem and network enforcement to Docker: native filesystem entries and network: restricted add no restrictions in that mode. Use the image's preinstalled R, Python, and SQL packages; dynamic package preparation is disabled even if ir or uv is installed. Records and returned images are written by the controller beneath .agents/console/sessions/; declared mounts can expose them to the worker. Files remain in the container or its binds. Restart discards the container layer. Quarto exports default to non-executing and require a deliberately recreated target environment.",
-                ));
-            } else {
-                *description = description.replace(
-                    "with the server's permissions",
-                    "with the remote account's permissions",
-                );
-                description.push_str(&format!(
-                    "\n\nExecution target: {}. Dependency capability is discovered there. When available, managed defaults and requested R, Python, and DuckDB dependencies are prepared outside the worker sandbox with the remote account's trusted setup permissions; bare runtimes require preinstalled packages. Records and returned images are saved locally beneath .agents/console/sessions/. Files created by code remain remote. The source-only Quarto export does not reproduce the remote filesystem.", target,
-                ));
-            }
-        }
+        let security = execution::description(&policy, no_sandbox, target.as_ref());
+        let tool_router = Self::configured_tool_router(languages, dynamic_resolution, &security);
         Ok(Self {
             worker,
             transcript,
@@ -373,8 +293,7 @@ impl ConsoleServer {
     fn configured_tool_router(
         languages: Languages,
         dynamic_resolution: bool,
-        no_sandbox: bool,
-        sandbox_access: &str,
+        security: &str,
     ) -> ToolRouter<Self> {
         let mut router = Self::tool_router();
         let send = router
@@ -388,15 +307,7 @@ impl ConsoleServer {
             .expect("send tool must have a description")
             .to_mut();
         description.push_str("\n\n");
-        let security = if no_sandbox {
-            "Evaluated code runs without a sandbox, with the server's permissions, including filesystem and network access. Dependency resolution, when available, may execute installation or build code; use only trusted dependencies."
-                .to_string()
-        } else {
-            format!(
-                "Evaluated code {sandbox_access}. Dependency resolution, when available, runs outside the sandbox and may execute installation or build code; use only trusted dependencies."
-            )
-        };
-        description.push_str(&security);
+        description.push_str(security);
         let schema = Arc::make_mut(&mut send.attr.input_schema);
         let properties = schema
             .get_mut("properties")

@@ -32,6 +32,7 @@ impl Default for Transport {
 pub(crate) enum Compute {
     Host {},
     Docker(Docker),
+    DockerSandbox(DockerSandbox),
 }
 
 impl Default for Compute {
@@ -49,6 +50,14 @@ pub(crate) struct Docker {
     #[serde(default)]
     pub mounts: Vec<Mount>,
     pub user: Option<String>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DockerSandbox {
+    pub template: String,
+    #[serde(default)]
+    pub mounts: Vec<Mount>,
 }
 
 #[derive(Clone, Copy, Default, Deserialize, Serialize)]
@@ -131,6 +140,9 @@ impl Target {
                 return Err("target.transport.host must be a nonempty SSH destination".into());
             }
             if !matches!(self.compute, Compute::Host {}) {
+                if matches!(self.compute, Compute::DockerSandbox(_)) {
+                    return Err("docker_sandbox requires local transport; SSH Sandbox targets are not supported".into());
+                }
                 return Err(
                     "SSH plus Docker is not supported; Docker requires local transport".into(),
                 );
@@ -139,7 +151,7 @@ impl Target {
         if self.command.is_none() {
             self.command = Some(match self.compute {
                 Compute::Host {} => vec!["uvx".into(), "mcp-console".into()],
-                Compute::Docker(_) => vec!["mcp-console".into()],
+                Compute::Docker(_) | Compute::DockerSandbox(_) => vec!["mcp-console".into()],
             });
         }
         if self.command().is_empty()
@@ -192,6 +204,9 @@ impl Target {
                 capture_path(&mut build.context)?;
                 capture_path(&mut build.dockerfile)?;
             }
+        }
+        if let Compute::DockerSandbox(sandbox) = &mut self.compute {
+            crate::docker_sandbox::capture(sandbox)?;
         }
         Ok(())
     }

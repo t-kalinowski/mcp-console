@@ -1,8 +1,11 @@
 # Sandbox integration
 
+This document describes native enforcement (`sandbox.provider: native`), the default for local, SSH, and ordinary Docker execution.
+[Docker Sandbox compute enforcement](DOCKER_SANDBOX.md) uses a separate SBX microVM boundary and does not discover or invoke this native executable.
+
 MCP Console selects its application policy, verifies the installed private executable, and replaces `mcp-console sandbox` with that executable on macOS and Linux.
 The runner owns native enforcement, signal and terminal handling, descendant observation and retirement, and private storage.
-Console contains no sandbox manager, recovery monitor, descendant tracker, target signal wrapper, or directory owner.
+Console contains no native sandbox manager, recovery monitor, descendant tracker, target signal wrapper, or directory owner.
 The [integration validation record](SANDBOX_RUNNER_INTEGRATION.md) records the baseline, supported-host results, fixture changes, and changed guarantees.
 
 ## Application policy and launch

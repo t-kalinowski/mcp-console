@@ -1,0 +1,77 @@
+---
+config:
+  sandbox:
+    provider: compute
+error: >
+  .agents/console/config.yaml: sandbox.provider: compute requires
+  target.compute.kind: docker_sandbox
+---
+config:
+  sandbox:
+    provider: none
+error: >
+  .agents/console/config.yaml: sandbox.provider: unknown variant `none`,
+  expected `native` or `compute`
+---
+config:
+  target:
+    transport:
+      kind: ssh
+      host: unused
+    workspace: /workspace
+    compute:
+      kind: docker_sandbox
+      template: docker.io/example/console@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+error: >
+  .agents/console/config.yaml: docker_sandbox requires local transport;
+  SSH Sandbox targets are not supported
+---
+config:
+  target:
+    workspace: /workspace
+    compute:
+      kind: docker
+      image: example
+  sandbox:
+    provider: compute
+error: >
+  .agents/console/config.yaml: sandbox.provider: compute requires
+  target.compute.kind: docker_sandbox
+---
+config:
+  target:
+    workspace: /workspace
+    compute:
+      kind: docker_sandbox
+      template: docker.io/example/console@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  sandbox:
+    provider: native
+error: >
+  .agents/console/config.yaml: docker_sandbox only supports
+  sandbox.provider: compute; inner native enforcement is not supported
+---
+config:
+  target:
+    workspace: /workspace
+    compute:
+      kind: docker_sandbox
+      template: example:mutable
+error: >
+  .agents/console/config.yaml: Docker Sandbox target.compute.template
+  requires a digest-qualified registry reference
+  (registry/repository@sha256:<64 hex digits>); sbx local template
+  listings do not supply an immutable full identity
+---
+config:
+  target:
+    workspace: /workspace
+    compute:
+      kind: docker_sandbox
+      template: docker.io/example/console@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      mounts:
+        - source: .
+          target: /remapped
+error: >
+  .agents/console/config.yaml: Docker Sandbox shares use the same absolute
+  path on host and guest; mounts[].target must equal the resolved source
+  (remapping is unsupported)

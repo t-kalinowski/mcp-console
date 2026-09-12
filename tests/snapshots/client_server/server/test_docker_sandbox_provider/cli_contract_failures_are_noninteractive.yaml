@@ -1,0 +1,15 @@
+---
+fake_provider: unsupported-version
+stderr: >
+  Docker Sandbox requires supported sbx v0.42.1; received sbx version:
+  v0.41.0 fixture
+---
+fake_provider: malformed-listing
+stderr: |
+  invalid Docker Sandbox listing: missing field `id` at line 1 column 37
+---
+fake_provider: create-failed
+stderr: |
+  fixture: create rejected
+  Docker Sandbox command failed with exit status: 1; Docker Sandbox create used shared sources []; shared paths must already exist. Setup requires login, initialized provider policy, an available template, and virtualization; see docs/DOCKER_SANDBOX.md; Docker Sandbox microVM '<owned-microvm>' (creation ID unavailable) retirement is unconfirmed: creation returned no identity; an empty listing cannot confirm retirement of an unacknowledged creation
+  Docker Sandbox command failed with exit status: 1

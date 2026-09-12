@@ -20,7 +20,7 @@ An explicit remote Python interpreter disables managed Python additions while re
 The local server keeps requirement merging, transaction and activation decisions, generation ownership, and recording.
 Remote results require confirmed resolver cleanup before commit; uncertain completion blocks further preparation and replacement.
 
-[Docker targets](DOCKER.md) deliberately use a preinstalled image environment.
+[Docker targets](DOCKER.md) and [Docker Sandbox targets](DOCKER_SANDBOX.md) deliberately use a preinstalled image environment.
 Capability probes never select `uv` or `ir`; `requirements`, automatic resolution, and worker preparation callbacks are disabled.
 Reticulate cannot silently create a managed environment.
 Rebuild the image and start a new server session to add packages.

@@ -2,6 +2,14 @@
 
 ## Project configuration
 
+`sandbox.provider` selects Console's enforcement implementation separately from native policy values.
+`native` is the default for local, SSH, and ordinary Docker targets.
+`compute` is supported only with `target.compute.kind: docker_sandbox`, which selects it by default.
+See [Docker Sandbox execution](DOCKER_SANDBOX.md) for its complete schema and setup.
+That provider accepts only `provider`, `environment`, and `inherit_environment` under `sandbox`; native restrictions, top-level `extends`, and CLI writable roots are rejected.
+It uses Docker's existing policy without applying native defaults or requiring a native companion.
+The native policy configuration below applies to native selection.
+
 `serve` and ordinary `sandbox` launches read only `.agents/console/config.yaml` beneath the launch working directory.
 Only that directory is searched: no ancestors, home directory, or global configuration.
 An absent file preserves the defaults; an unreadable or invalid existing file prevents launch.
@@ -153,7 +161,7 @@ Scalar and tag resolution follow the pinned Saphyr loader.
 
 The trusted outer process captures the workspace and reads and normalizes configuration once, before workload startup.
 Worker directory changes do not move the workspace permission root.
-When a project configuration file exists, it probes the native sandbox with a no-op process using those captured settings.
+For native selection, when a project configuration file exists, it probes the native sandbox with a no-op process using those captured settings.
 This checks native policy validation and sandbox/proxy startup before running the workload or announcing server readiness, without starting a worker.
 Probe failures include the configuration filename and the runner's diagnostic; native JSON error locations refer to the generated runner policy.
 `serve` retains that snapshot for the whole session, including when the configuration file did not exist at launch.
@@ -162,7 +170,8 @@ Internal launches explicitly select the captured application settings through a 
 The sandbox layer adds application launch requirements and strips the private settings transport before launching the runner and workload.
 Ambient `MCP_CONSOLE_SANDBOX_SETTINGS` or `MCP_CONSOLE_SANDBOX_CONFIG` values do not select policy, and the server's global environment is not modified.
 
-`serve --no-sandbox` reads project configuration to retain target selection but does not enforce sandbox permission settings.
+`serve --no-sandbox` reads project configuration to retain target selection and skips inner native enforcement.
+Ordinary Docker retains its container boundary; Docker Sandbox compute enforcement retains its microVM, shared paths, and provider policy, including validation of unsupported native fields.
 Malformed YAML and invalid target configuration are errors in this mode.
 Explicit `sandbox --config-env NAME` also bypasses discovery and retains the complete-policy interface below.
 Both still conflict with explicit `--writable-root` arguments.
@@ -176,6 +185,16 @@ Omitted target and explicit local transport with host compute retain the existin
 Native policy and CLI writable roots are materialized inside the container.
 Explicit external mode delegates enforcement to Docker, including networking; a read-write project bind can expose controller recordings to worker writes.
 See [Docker execution](DOCKER.md) for the complete schema, image example, environment and lifecycle contracts, and limits.
+
+### Docker Sandbox target placement
+
+`target.compute.kind: docker_sandbox` selects Docker Sandboxes through standalone `sbx` with local transport.
+It defaults to `sandbox.provider: compute` and requires a prepared digest-qualified template, existing absolute VM workspace, and explicitly declared shared paths.
+Shares use the same absolute path on host and guest; omitted mounts expose no project implicitly.
+The VM supplies preinstalled R, Python, and SQL packages, with no dynamic resolution or native companion calls.
+Each generation gets a new owned microVM; only confirmed removal permits replacement.
+See [Docker Sandbox execution](DOCKER_SANDBOX.md) for setup, exact accepted fields, inherited policy and integrations, sharing limits, and recording visibility.
+Standalone `sandbox -- COMMAND` rejects this resolved provider instead of silently selecting local native enforcement.
 
 ### SSH target placement
 
