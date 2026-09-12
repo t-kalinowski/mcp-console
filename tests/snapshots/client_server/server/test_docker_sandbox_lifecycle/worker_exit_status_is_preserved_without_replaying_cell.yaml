@@ -1,0 +1,49 @@
+---
+send:
+  python: |
+    import os
+    with open("attempt", "a") as attempts:
+        attempts.write("once\n")
+        attempts.flush()
+    os._exit(23)
+result:
+  content:
+    - type: text
+      text: |-
+        [worker sideband read failed: worker sideband closed]
+        [worker exited with status 23]
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: true
+---
+send:
+  control: restart
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: false
+---
+send:
+  python: from pathlib import Path; print(Path("attempt").read_text())
+result:
+  content:
+    - type: text
+      text: |+
+        once
+
+  isError: false
+---
+standard_error: |
+  Deleting sandbox <owned-microvm>...
+  Sandbox '<owned-microvm>' removed
+  Deleting sandbox <owned-microvm>...
+  Sandbox '<owned-microvm>' removed
+  Deleting sandbox <owned-microvm>...
+  Sandbox '<owned-microvm>' removed
+  Deleting sandbox <owned-microvm>...
+  Sandbox '<owned-microvm>' removed

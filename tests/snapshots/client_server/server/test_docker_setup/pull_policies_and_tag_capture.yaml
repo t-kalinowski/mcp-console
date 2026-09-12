@@ -4,6 +4,7 @@ initially_present: false
 pull_count: 0
 stderr: |+
   Docker command failed with exit status: 1: Error response from daemon: No such image: <requested image>
+  []
 
 ---
 pull: never

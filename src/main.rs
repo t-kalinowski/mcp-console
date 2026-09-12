@@ -4,7 +4,9 @@ use clap::Parser;
 
 mod cell;
 mod cli;
+mod compute_session;
 mod docker;
+mod docker_sandbox;
 #[cfg(unix)]
 mod input_watch;
 #[cfg(unix)]
@@ -58,23 +60,43 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
+        cli::Command::DockerSandboxOwner => match docker_sandbox::run_owner() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => exit_with_error(error),
+        },
+        cli::Command::DockerSandboxLaunch => match target_launch::run(
+            target_launch::Protocol("Docker Sandbox"),
+            false,
+            Some("docker_sandbox"),
+        ) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => exit_with_error(error),
+        },
+        cli::Command::DockerSandboxProbe => match target_launch::run(
+            target_launch::Protocol("Docker Sandbox"),
+            true,
+            Some("docker_sandbox"),
+        ) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => exit_with_error(error),
+        },
         cli::Command::DockerOwner => match docker::run_owner() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
         cli::Command::DockerLaunch => {
-            match target_launch::run(target_launch::Protocol("Docker"), false, true) {
+            match target_launch::run(target_launch::Protocol("Docker"), false, Some("docker")) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => exit_with_error(error),
             }
         }
         cli::Command::DockerProbe => {
-            match target_launch::run(target_launch::Protocol("Docker"), true, true) {
+            match target_launch::run(target_launch::Protocol("Docker"), true, Some("docker")) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => exit_with_error(error),
             }
         }
-        cli::Command::DockerRuntimeProbe => match docker::runtime_probe() {
+        cli::Command::ImageRuntimeProbe => match target_launch::runtime::runtime_probe() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
@@ -115,7 +137,15 @@ fn run_server(
     no_sandbox: bool,
     writable_roots: Vec<std::path::PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (source, policy, target) = settings::discover()?;
+    let settings::Captured {
+        source,
+        policy,
+        target,
+        provider,
+    } = settings::discover()?;
+    if provider == settings::Provider::Compute {
+        docker_sandbox::validate_policy(&policy, false, &writable_roots)?;
+    }
     let target = target.map(|target| (target, writable_roots.clone()));
     if target.is_some() && (worker.is_some() || relay.is_some()) {
         return Err("Execution targets require the built-in worker and relay".into());

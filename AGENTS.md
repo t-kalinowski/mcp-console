@@ -18,6 +18,7 @@ Reconcile the relevant contracts, tests, and current documentation when implemen
 - `docs/SANDBOX.md` describes application policy, runner integration, supported hosts, and lifetime guarantees.
 - `docs/SANDBOX_CONFIGURATION.md` defines the public configuration interface, environment ownership, caller examples, and transport integrity.
 - `docs/DOCKER.md` defines container targets, image setup, preinstalled environments, owned retirement, and controller records.
+- `docs/DOCKER_SANDBOX.md` defines the standalone SBX provider, prepared templates, shared paths, inherited policy, owned microVM retirement, and controller records.
 - `docs/SSH.md` defines remote target configuration, runtime prerequisites, managed preparation, launch framing, retirement confirmation, and local recording semantics.
 - `docs/LINUX_COMPATIBILITY.md` records capability requirements, security comparisons, native backend differences, and tested Linux baselines.
 - `docs/SANDBOX_RUNNER_INTEGRATION.md` records the migration baseline, fixture changes, supported-host validation, and changed guarantees.
@@ -44,7 +45,7 @@ Reuse native constructors and path handling, and keep explicit native adjustment
 Console adds `.claude` as a read entry and excludes shared temporary write grants by default for `":workspace"`; metadata defaults are deliberately overridable.
 Recorded sessions, transcripts, outputs, and artifacts are written beneath `.agents/console/sessions/`.
 
-An optional `target` independently selects transport and compute for `serve`, including `--no-sandbox`: SSH host or local Docker container.
+An optional `target` independently selects transport and compute for `serve`, including `--no-sandbox`: SSH host, local Docker container, or local Docker Sandbox microVM.
 Omitted target and explicit local host selection share the existing local launch path.
 Capture its required absolute remote workspace, executable prefix, and raw user policy locally once; materialize paths, platform additions, and native preflight on that execution host without rediscovering YAML.
 SSH discovers capability and executes managed preparation on the remote host, independently of the relay and worker.
@@ -55,7 +56,16 @@ Require explicit result and resolver cleanup confirmation before committing an e
 Docker resolves its image once before workload startup and uses that immutable ID for every probe and generation.
 Each generation owns a fresh Linux container containing relay and worker; a local owner observes server and attachment loss and requires confirmed container removal before replacement.
 Docker uses image packages with dynamic preparation disabled, even if resolvers are installed.
-Standalone `sandbox` remains local.
+Docker Sandbox selects compute enforcement by default; explicit `sandbox.provider: compute` documents that selection.
+All other targets default to native enforcement.
+Keep this selector separate from native policy JSON and from whether direct launch needs an inner native runner.
+The SBX adapter accepts only workload environment controls, rejects native restrictions/extends/writable roots, and never discovers or executes the native companion.
+Use fixed standalone sbx CLI argument arrays and structured output, never a private daemon API or host Docker substitute.
+Capture a prepared digest-qualified template once, use one newly owned microVM per probe or generation, and require forced removal plus authoritative absence before replacement.
+An unacknowledged create remains uncertain after an empty listing; never adopt or prefix-match user resources.
+Docker owns inherited policy and host integrations; Console must not mutate global policy, credentials, or daemon settings.
+VM-local changes disappear on restart; declared host shares and any records beneath them remain exposed according to provider access.
+Standalone `sandbox` remains local and rejects resolved compute enforcement.
 SSH exit alone cannot confirm remote retirement; require the remote launcher's terminal acknowledgment before replacement, and block replacement after unconfirmed cleanup.
 
 The worker relay, built-in worker, and managed resolvers support macOS and Linux.
@@ -127,7 +137,7 @@ Keep these invariants intact:
 - The server owns logical relay lifetime orchestration and retirement, worker-generation state, operation admission, output cuts, pending-output budgets, response assembly, delivery ownership, retained requirements, and host resolvers.
   By default, it starts the relay through an ordinary sandbox launcher child and uses successful managed launcher exit as its synchronous cleanup barrier.
   `serve --no-sandbox` skips the native runner at the selected target.
-  Docker still owns outer container retirement; host execution retains direct-worker cleanup limits.
+  Docker containers and Docker Sandbox microVMs retain their outer enforcement and retirement; host execution retains direct-worker cleanup limits.
   Its sandbox access is limited to the launcher's standard streams and ordinary child lifecycle.
   Do not move these responsibilities into the relay.
 - The relay owns local worker transports, sideband translation, direct-worker signal delivery, bounded termination, and direct-worker reaping.
@@ -155,11 +165,13 @@ Keep these invariants intact:
 - `src/main.rs`, `src/cli.rs` — binary entry point and command definitions.
 - `src/settings.rs`, `src/settings/{yaml,target}.rs` — trusted project YAML discovery, node loading, and application settings retained across worker launches; native policy values remain JSON; the sandbox layer adds application launch requirements and delegates validation and defaults to the runner.
 - `src/ssh.rs` — configured OpenSSH transport and remote retirement confirmation.
-- `src/target_launch.rs`, `src/target_launch/` — shared versioned bootstrap, relay envelope, target-side ordinary launcher ownership, native preflight, and cancellable transfer.
-- `src/docker.rs`, `src/docker/` — captured Docker endpoint and immutable image setup, image runtime selection, local ownership helper, and confirmed container retirement.
+- `src/target_launch.rs`, `src/target_launch/` — shared versioned bootstrap, relay envelope, direct/native launcher mechanics, image runtime selection, cancellable CLI transfer, and local owner observation.
+- `src/compute_session.rs` — dispatch for the two implemented local compute targets.
+- `src/docker.rs`, `src/docker/` — captured Docker endpoint and immutable image setup, local ownership helper, and confirmed container retirement.
+- `src/docker_sandbox.rs`, `src/docker_sandbox/owner.rs` — compute policy validation, typed SBX CLI adapter, prepared template identity, owned microVM creation, and confirmed retirement.
 - `src/ssh/preparation.rs`, `src/ssh/preparation/{client,host}.rs` — typed trusted preparation connection, remote startup configuration, operation-scoped resolver control, and confirmed results.
 - `src/resolver/execution.rs` — host selection for existing resolver operations, preserving local session transactions.
-- `src/server.rs`, `src/server_transport.rs` — MCP tools, stdio transport, and response-delivery ownership.
+- `src/server.rs`, `src/server/execution.rs`, `src/server_transport.rs` — MCP tools, descriptions derived from effective target/provider metadata, stdio transport, and response-delivery ownership.
 - `src/transcript.rs`, `src/transcript/{event,markdown,output}.rs` — typed recording events, append-only tool journal, Markdown and source-only Quarto projections, cell output files, and image artifacts.
 - `python/mcp_console/` — synchronous and asynchronous MCP clients and composable framework adapters.
   The public `openai.py`, `anthropic.py`, `chatlas.py`, and `codex.py` modules group adapters by product or SDK.
@@ -170,7 +182,7 @@ Keep these invariants intact:
 
 - `src/worker_protocol.rs`, `src/sideband.rs` — relay-worker message and framing contract.
 - `src/readiness.rs` — shared blocking descriptor readiness and cancellation waits.
-- `src/input_watch.rs`, `src/input_watch/` — platform input-closure observation shared by startup and the Docker ownership helper.
+- `src/input_watch.rs`, `src/input_watch/` — platform input-closure observation shared by startup and the compute ownership helpers.
 - `src/relay_protocol.rs` — server-relay JSONL message and framing contract.
 - `src/worker_relay.rs`, `src/worker_relay/event_writer.rs` — worker launch, I/O forwarding, ordered event output, direct-worker signaling, termination, and reaping.
 - `src/worker_client.rs`, `src/worker_client/` — session coordination and send planning, server-owned environment, evaluation, lifecycle, ordinary launcher child ownership, ordered event dispatch, output tape, shared Unix relay transport, and platform-specific startup observation.

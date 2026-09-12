@@ -1,0 +1,44 @@
+---
+send:
+  python: |
+    import os, sys
+    assert sys.platform == "linux"
+    assert os.environ["HOME"] == "/tmp/vm-workload-home"
+    assert ("R_PROFILE_USER" in os.environ) == True
+    assert os.environ["MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION"] == "0"
+    assert os.environ["RETICULATE_USE_MANAGED_VENV"] == "no"
+    print("VM workload environment")
+result:
+  content:
+    - type: text
+      text: |
+        VM workload environment
+  isError: false
+---
+standard_error: |
+  Deleting sandbox <owned-microvm>...
+  Sandbox '<owned-microvm>' removed
+  Deleting sandbox <owned-microvm>...
+  Sandbox '<owned-microvm>' removed
+---
+send:
+  python: |
+    import os, sys
+    assert sys.platform == "linux"
+    assert os.environ["HOME"] == "/tmp/vm-workload-home"
+    assert ("R_PROFILE_USER" in os.environ) == False
+    assert os.environ["MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION"] == "0"
+    assert os.environ["RETICULATE_USE_MANAGED_VENV"] == "no"
+    print("VM workload environment")
+result:
+  content:
+    - type: text
+      text: |
+        VM workload environment
+  isError: false
+---
+standard_error: |
+  Deleting sandbox <owned-microvm>...
+  Sandbox '<owned-microvm>' removed
+  Deleting sandbox <owned-microvm>...
+  Sandbox '<owned-microvm>' removed

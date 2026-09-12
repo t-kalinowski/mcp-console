@@ -81,11 +81,19 @@ impl Transcript {
         })))
     }
 
-    pub(crate) fn target_generation(&self, container_id: &str) {
+    pub(crate) fn target_generation(
+        &self,
+        container_id: Option<&str>,
+        sandbox: Option<&crate::target_launch::SandboxIdentity>,
+    ) {
         self.update(|state| {
-            state
-                .materialize()?
-                .append(Event::TargetGeneration { container_id }, Utc::now())
+            state.materialize()?.append(
+                Event::TargetGeneration {
+                    container_id,
+                    sandbox,
+                },
+                Utc::now(),
+            )
         });
     }
 

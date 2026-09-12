@@ -2,6 +2,10 @@
 
 **Status:** Implemented for macOS and Linux controllers and Linux images.
 
+This document covers ordinary Docker Engine containers.
+[Docker Sandboxes](DOCKER_SANDBOX.md) is a separate microVM product controlled by the standalone `sbx` CLI and selected with `compute.kind: docker_sandbox` and `sandbox.provider: compute`.
+Ordinary Docker retains native provider selection by default; its `external-sandbox` mode still launches the native executable.
+
 The MCP server and recordings stay on the controller.
 Each worker generation gets a fresh Console-owned container containing both the relay and built-in worker.
 Docker image setup happens once before MCP readiness.
@@ -228,5 +232,5 @@ scripts/test cli/test_docker client_server/server/test_docker client_server/serv
 scripts/check
 ```
 
-Deferred capabilities include SSH plus Docker, Docker Sandbox microVMs, Podman guarantees, Windows containers or controllers, inline Dockerfiles, GPU/device/resource controls, arbitrary Docker flags, managed package preparation, synchronization, reconnect/resume, and reusable user containers.
+Deferred capabilities include SSH plus Docker, ordinary Docker compute enforcement, Podman guarantees, Windows containers or controllers, inline Dockerfiles, GPU/device/resource controls, arbitrary Docker flags, managed package preparation, synchronization, reconnect/resume, and reusable user containers.
 Transport and compute remain separate fields for future composition.

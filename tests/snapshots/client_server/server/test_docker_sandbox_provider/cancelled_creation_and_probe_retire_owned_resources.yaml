@@ -1,0 +1,20 @@
+---
+fake_provider: true
+cancelled: create-unacknowledged
+owned_resources_absent: true
+unacknowledged_creation_remains_unconfirmed: true
+---
+fake_provider: true
+cancelled: create-gate
+owned_resources_absent: true
+unacknowledged_creation_remains_unconfirmed: true
+---
+fake_provider: true
+cancelled: probe-gate
+owned_resources_absent: true
+unacknowledged_creation_remains_unconfirmed: false
+---
+fake_provider: true
+cancelled: launch-gate
+owned_resources_absent: true
+unacknowledged_creation_remains_unconfirmed: false

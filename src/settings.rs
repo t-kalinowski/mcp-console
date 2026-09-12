@@ -2,12 +2,27 @@
 
 use std::ffi::OsStr;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 mod target;
 mod yaml;
-pub(crate) use target::{Compute, Pull, Target};
+pub(crate) use target::{Access, Compute, DockerSandbox, Pull, Target};
+
+/// Selected enforcement, independently of direct versus inner-runner launch.
+#[derive(Clone, Copy, Default, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Provider {
+    #[default]
+    Native,
+    Compute,
+}
+
+impl Provider {
+    pub fn needs_native_runner(self, no_sandbox: bool) -> bool {
+        self == Self::Native && !no_sandbox
+    }
+}
 
 pub const ENVIRONMENT: &str = "MCP_CONSOLE_SANDBOX_SETTINGS";
 
@@ -72,7 +87,15 @@ struct Project {
     target: Option<Target>,
 }
 
-pub fn discover() -> Result<(Option<&'static str>, SandboxSettings, Option<Target>), String> {
+#[derive(Default)]
+pub(crate) struct Captured {
+    pub source: Option<&'static str>,
+    pub policy: SandboxSettings,
+    pub target: Option<Target>,
+    pub provider: Provider,
+}
+
+pub fn discover() -> Result<Captured, String> {
     let name = ".agents/console/config.yaml";
     // A dangling symlink or an unreadable existing file must reach read_to_string.
     match std::fs::symlink_metadata(name) {
@@ -83,7 +106,7 @@ pub fn discover() -> Result<(Option<&'static str>, SandboxSettings, Option<Targe
                 std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
             ) =>
         {
-            return Ok((None, SandboxSettings::default(), None));
+            return Ok(Captured::default());
         }
         Err(error) => return Err(format!("cannot inspect '{name}': {error}")),
         Ok(_) => {}
@@ -91,8 +114,32 @@ pub fn discover() -> Result<(Option<&'static str>, SandboxSettings, Option<Targe
     let source =
         std::fs::read_to_string(name).map_err(|error| format!("cannot read '{name}': {error}"))?;
     let value = yaml::load(&source).map_err(|error| format!("{name}: {error}"))?;
+    let has_extends = value.get("extends").is_some();
     let mut project: Project =
         serde_path_to_error::deserialize(value).map_err(|error| format!("{name}: {error}"))?;
+    let compute = project
+        .target
+        .as_ref()
+        .is_some_and(|target| matches!(target.compute, Compute::DockerSandbox(_)));
+    let provider = match project.sandbox.remove("provider") {
+        Some(value) => serde_json::from_value(value)
+            .map_err(|error| format!("{name}: sandbox.provider: {error}"))?,
+        None if compute => Provider::Compute,
+        None => Provider::Native,
+    };
+    if provider == Provider::Compute {
+        if !compute {
+            return Err(format!(
+                "{name}: sandbox.provider: compute requires target.compute.kind: docker_sandbox"
+            ));
+        }
+        crate::docker_sandbox::validate_policy(&project.sandbox, has_extends, &[])
+            .map_err(|error| format!("{name}: {error}"))?;
+    } else if compute {
+        return Err(format!(
+            "{name}: docker_sandbox only supports sandbox.provider: compute; inner native enforcement is not supported"
+        ));
+    }
     // These fields belong to Console's launch protocol and worker lifetime.
     // All other sandbox fields and values are interpreted by the native runner.
     for field in ["version", "lifecycle", "extends", "workspace"] {
@@ -109,7 +156,12 @@ pub fn discover() -> Result<(Option<&'static str>, SandboxSettings, Option<Targe
             .map_err(|error| format!("{name}: {error}"))?;
     }
     let target = project.target.filter(|target| !target.is_local_host());
-    Ok((Some(name), project.sandbox, target))
+    Ok(Captured {
+        source: Some(name),
+        policy: project.sandbox,
+        target,
+        provider,
+    })
 }
 
 pub fn from_environment(name: &str) -> Result<SandboxSettings, String> {

@@ -1,0 +1,18 @@
+---
+send:
+  python: >-
+    import os; print(os.getcwd());
+    print(os.path.exists(".agents/console/sessions"))
+result:
+  content:
+    - type: text
+      text: |
+        /workspace
+        False
+  isError: false
+---
+standard_error: |
+  Deleting sandbox <owned-microvm>...
+  Sandbox '<owned-microvm>' removed
+  Deleting sandbox <owned-microvm>...
+  Sandbox '<owned-microvm>' removed

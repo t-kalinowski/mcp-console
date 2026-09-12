@@ -1,0 +1,19 @@
+---
+failure: missing-workspace
+stderr: "Deleting sandbox <owned-microvm>...\nSandbox '<owned-microvm>' removed\nunexpected stdout in Docker Sandbox launch protocol: OCI runtime exec failed: chdir to `/console-workspace-does-not-exist`: No such file or directory\r\n\n"
+---
+failure: missing-share
+stderr: |
+
+  The selected workspace does not exist. Would you like to create it? (y/N): ERROR: user cancelled operation
+  Docker Sandbox command failed with exit status: 1; Docker Sandbox create used shared sources ["<sandbox-test>/missing"]; shared paths must already exist. Setup requires login, initialized provider policy, an available template, and virtualization; see docs/DOCKER_SANDBOX.md; Docker Sandbox microVM '<owned-microvm>' (creation ID unavailable) retirement is unconfirmed: creation returned no identity; an empty listing cannot confirm retirement of an unacknowledged creation
+  Docker Sandbox command failed with exit status: 1
+---
+failure: readonly-primary
+stderr: |
+  ERROR: primary workspace must be read/write (remove ':ro' or ':readonly')
+  Docker Sandbox command failed with exit status: 1; Docker Sandbox create used shared sources ["<sandbox-test>"]; shared paths must already exist. Setup requires login, initialized provider policy, an available template, and virtualization; see docs/DOCKER_SANDBOX.md; Docker Sandbox microVM '<owned-microvm>' (creation ID unavailable) retirement is unconfirmed: creation returned no identity; an empty listing cannot confirm retirement of an unacknowledged creation
+  Docker Sandbox command failed with exit status: 1
+---
+failure: missing-console
+stderr: "Deleting sandbox <owned-microvm>...\nSandbox '<owned-microvm>' removed\nunexpected stdout in Docker Sandbox launch protocol: OCI runtime exec failed: executable file `/console-executable-does-not-exist` not found: No such file or directory\r\n\n"

@@ -131,8 +131,9 @@ Its `allowWrite`, `denyWrite`, `denyRead`, domain rules, local binding, and Unix
 MCP Console uses snake_case equivalents and makes listener publishing a separate concern.
 SRT also distinguishes filesystem and proxy-mediated network enforcement.[2]
 
-The native runner is the implementation boundary for the proposed configuration.
-An alternative provider remains exploratory and must own its policy interpretation and enforcement.
+The native runner owns native policy interpretation and enforcement.
+The implemented [Docker Sandbox compute provider](../docs/DOCKER_SANDBOX.md) uses Docker's existing policy and rejects unsupported native restrictions.
+The broader provider selection below remains exploratory; each provider must own its policy interpretation and enforcement.
 Adapters may map configuration fields to a provider's API, but Console does not supply a shared security validator or evaluator for them.
 
 ### Current MCP Console
@@ -762,6 +763,9 @@ Filesystem permissions refer to `/workspace` inside the container.
 Cache backing and service forwarding are likewise resolved across both boundaries.
 
 ### Docker Sandbox
+
+The [implemented first slice](../docs/DOCKER_SANDBOX.md) requires a prepared digest-qualified template, explicit same-path shares, and one owned VM per worker generation.
+The session lifetime and policy translation described below remain proposals.
 
 ```yaml
 target:

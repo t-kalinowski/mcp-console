@@ -8,9 +8,15 @@ use std::sync::{Arc, Mutex};
 #[cfg(unix)]
 mod launch;
 #[cfg(unix)]
+pub(crate) mod owner;
+#[cfg(unix)]
+pub(crate) mod process;
+#[cfg(unix)]
+pub(crate) mod runtime;
+#[cfg(unix)]
 pub(crate) mod transfer;
 
-pub(crate) const VERSION: u32 = 2;
+pub(crate) const VERSION: u32 = 3;
 pub(crate) const MAX_BOOTSTRAP: usize = 1024 * 1024;
 pub(crate) const MAX_FRAME: usize = 64 * 1024;
 pub(crate) const HELLO: u8 = 1;
@@ -30,9 +36,13 @@ pub(crate) fn encode(bootstrap: &impl Serialize) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-pub(crate) fn run(protocol: Protocol, probe: bool, container: bool) -> Result<(), String> {
+pub(crate) fn run(
+    protocol: Protocol,
+    probe: bool,
+    compute: Option<&'static str>,
+) -> Result<(), String> {
     #[cfg(unix)]
-    return launch::run(protocol, probe, container);
+    return launch::run(protocol, probe, compute);
     #[cfg(not(unix))]
     Err("target execution requires macOS or Linux".into())
 }
@@ -46,6 +56,8 @@ pub(crate) struct Bootstrap {
     pub policy: crate::settings::SandboxSettings,
     pub writable_roots: Vec<PathBuf>,
     pub no_sandbox: bool,
+    #[serde(default)]
+    pub provider: crate::settings::Provider,
     #[serde(default)]
     pub environment: Option<preparation::WorkerEnvironment>,
 }
@@ -72,6 +84,14 @@ pub(crate) struct Hello {
     pub build: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub container_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox: Option<SandboxIdentity>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+pub(crate) struct SandboxIdentity {
+    pub name: String,
+    pub id: String,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -148,7 +168,10 @@ impl<R: Read> Output<R> {
                     .compatible(hello.version, &hello.build)
                     .map_err(io::Error::other)?;
                 if let (Some(recording), Some(id)) = (&self.recording, &hello.container_id) {
-                    recording.target_generation(id);
+                    recording.target_generation(Some(id), None);
+                }
+                if let (Some(recording), Some(identity)) = (&self.recording, &hello.sandbox) {
+                    recording.target_generation(None, Some(identity));
                 }
                 self.hello = true;
             }

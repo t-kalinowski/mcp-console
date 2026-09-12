@@ -21,6 +21,27 @@ from support.suites import run_this_suite
 CONFIG = ".agents/console/config.yaml"
 
 
+@requires(SANDBOX)
+def test_explicit_native_provider_preserves_native_configuration(
+    binary: Path,
+) -> Transcript:
+    with TemporaryDirectory() as directory:
+        host = Path(directory)
+        config = host / CONFIG
+        config.parent.mkdir(parents=True)
+        tools = []
+        for sandbox in ({}, {"provider": "native"}):
+            config.write_text(json.dumps({"sandbox": sandbox}))
+            with McpClient(
+                binary, ("serve", "--worker", "unused-worker"), current_directory=host
+            ) as client:
+                client.initialize_and_list_tools()
+                tools.append(client.transcript[-1]["result"])
+                client.finish()
+        assert tools[0] == tools[1]
+    return [{"explicit_native_provider_preserves_native_schema_and_policy": True}]
+
+
 def accepted(binary: Path, host: Path, *arguments: str) -> None:
     with McpClient(
         binary,

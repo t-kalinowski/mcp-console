@@ -174,13 +174,15 @@ impl Client {
                 configuration.resolve_r(requirements, on_started)
             }
             super::super::RResolver::Disabled => {
-                return Err(EnvironmentResolutionFailure::Host(
-                    if self.0.docker.is_some() {
-                        "dynamic environment resolution is unavailable for Docker targets; install packages in the image and start a new server session"
-                    } else {
-                        "dynamic environment resolution is unavailable; install `ir` or `uv` and restart MCP Console"
-                    }.to_string(),
-                ));
+                let message = if let Some(session) = &self.0.compute {
+                    format!(
+                        "dynamic environment resolution is unavailable for {} targets; install packages in the image and start a new server session",
+                        session.protocol().0
+                    )
+                } else {
+                    "dynamic environment resolution is unavailable; install `ir` or `uv` and restart MCP Console".into()
+                };
+                return Err(EnvironmentResolutionFailure::Host(message));
             }
             super::super::RResolver::Pending(_) => {
                 unreachable!("built-in bootstrap must be prepared before R resolution")

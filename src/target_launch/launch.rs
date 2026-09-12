@@ -11,9 +11,13 @@ use super::{Bootstrap, Hello, Retired};
 
 const RETIRE_TIMEOUT: Duration = Duration::from_secs(6);
 
-pub(super) fn run(protocol: super::Protocol, probe: bool, container: bool) -> Result<(), String> {
+pub(super) fn run(
+    protocol: super::Protocol,
+    probe: bool,
+    compute: Option<&'static str>,
+) -> Result<(), String> {
     let mut confirmed = true;
-    let result = launch(&mut confirmed, protocol, probe, container);
+    let result = launch(&mut confirmed, protocol, probe, compute);
     // Setup diagnostics stay on stderr. This terminal frame also distinguishes
     // a rejected launch from a broken connection with an unknown remote lifetime.
     let retired = serde_json::to_vec(&Retired {
@@ -38,7 +42,7 @@ fn launch(
     confirmed: &mut bool,
     protocol: super::Protocol,
     probe_only: bool,
-    container: bool,
+    compute: Option<&'static str>,
 ) -> Result<(), String> {
     let deadline = Instant::now() + super::SETUP_TIMEOUT;
     let mut input = Io::new(duplicate(0)?, None, Some(deadline))?;
@@ -49,9 +53,20 @@ fn launch(
     let bootstrap: Bootstrap = serde_json::from_slice(&bytes)
         .map_err(|error| format!("invalid {} bootstrap: {error}", protocol.0))?;
     protocol.compatible(bootstrap.version, &bootstrap.build)?;
+    if bootstrap.provider == crate::settings::Provider::Compute {
+        if compute != Some("docker_sandbox") {
+            return Err("compute enforcement requires Docker Sandbox execution".into());
+        }
+        crate::docker_sandbox::validate_policy(
+            &bootstrap.policy,
+            false,
+            &bootstrap.writable_roots,
+        )?;
+    }
+    let native = bootstrap.provider.needs_native_runner(bootstrap.no_sandbox);
     super::enter_workspace(&bootstrap.workspace)?;
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
-    let mut policy = if bootstrap.no_sandbox {
+    let mut policy = if !native {
         bootstrap.policy
     } else {
         crate::sandbox::materialize_settings(
@@ -61,7 +76,7 @@ fn launch(
         )?
     };
     let mut command = Command::new(&executable);
-    if bootstrap.no_sandbox {
+    if !native {
         configure_direct_environment(&mut command, &policy)?;
     } else {
         command
@@ -69,8 +84,8 @@ fn launch(
             .arg(std::process::id().to_string())
             .args(["--settings-env", crate::settings::ENVIRONMENT, "--"]);
     }
-    if container {
-        crate::docker::configure_runtime(&mut command, &policy)?;
+    if let Some(compute) = compute {
+        super::runtime::configure_runtime(&mut command, &policy, compute)?;
     } else if let Some(environment) = &bootstrap.environment {
         environment.configure(&mut command)?;
     } else {
@@ -83,7 +98,7 @@ fn launch(
     }
     command.env_remove(crate::settings::ENVIRONMENT);
     crate::settings::preserve_environment(&mut policy, command.get_envs())?;
-    if !bootstrap.no_sandbox {
+    if native {
         command.env(
             crate::settings::ENVIRONMENT,
             serde_json::to_string(&policy).map_err(|error| error.to_string())?,
@@ -104,6 +119,7 @@ fn launch(
     }
     let hello = serde_json::to_vec(&Hello {
         container_id: None,
+        sandbox: None,
         version: super::VERSION,
         build: env!("CARGO_PKG_VERSION").into(),
     })
@@ -111,23 +127,17 @@ fn launch(
     let mut output = Io::new(duplicate(1)?, None, Some(deadline))?;
     super::write_frame(&mut output, super::HELLO, &hello).map_err(|error| error.to_string())?;
     if probe_only {
-        if !bootstrap.no_sandbox {
+        if native {
             command.arg(&executable);
         }
-        command.arg("docker-runtime-probe");
-        return supervise(
-            command,
-            false,
-            !bootstrap.no_sandbox,
-            Some(deadline),
-            confirmed,
-        );
+        command.arg("image-runtime-probe");
+        return supervise(command, false, native, Some(deadline), confirmed);
     }
-    if !bootstrap.no_sandbox {
+    if native {
         command.arg(&executable);
     }
     command.arg("worker-relay").arg(&executable).arg("worker");
-    supervise(command, true, !bootstrap.no_sandbox, None, confirmed)
+    supervise(command, true, native, None, confirmed)
 }
 
 fn configure_direct_environment(

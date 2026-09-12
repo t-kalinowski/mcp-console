@@ -14,7 +14,15 @@ mod unsupported;
 const MARKER: &str = "MCP_CONSOLE_SANDBOX";
 
 pub fn capture_settings(roots: Vec<PathBuf>) -> Result<crate::settings::SandboxSettings, String> {
-    let (source, settings, _) = crate::settings::discover()?;
+    let crate::settings::Captured {
+        source,
+        policy: settings,
+        provider,
+        ..
+    } = crate::settings::discover()?;
+    if provider == crate::settings::Provider::Compute {
+        return Err("standalone sandbox is local and cannot use the resolved compute provider; use mcp-console serve for Docker Sandbox execution".into());
+    }
     capture_policy(source, settings, roots)
 }
 

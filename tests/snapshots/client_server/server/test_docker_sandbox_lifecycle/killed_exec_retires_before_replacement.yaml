@@ -1,0 +1,44 @@
+---
+send:
+  python: |
+    import subprocess, sys
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"], start_new_session=True)
+    print("detached output writer started")
+result:
+  content:
+    - type: text
+      text: |
+        detached output writer started
+  isError: false
+---
+send:
+  control: restart
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: false
+---
+send:
+  r: "42"
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false
+---
+standard_error: |
+  Deleting sandbox <owned-microvm>...
+  Sandbox '<owned-microvm>' removed
+  Deleting sandbox <owned-microvm>...
+  Sandbox '<owned-microvm>' removed
+  Deleting sandbox <owned-microvm>...
+  Sandbox '<owned-microvm>' removed
+---
+lost: exec
+detached_writer_retired_with_microvm: true
+replacement_after_exec_loss: true

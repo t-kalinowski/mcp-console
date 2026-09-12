@@ -46,7 +46,7 @@ stdout: |
   Usage: mcp-console serve [OPTIONS]
 
   Options:
-        --no-sandbox            Skip the inner native sandbox at the selected execution target
+        --no-sandbox            Skip inner native enforcement; retain any selected Docker container or Sandbox microVM and its provider policy
         --writable-root <PATH>  Allow writes to an additional path (temporary launch option)
     -h, --help                  Print help
 ---

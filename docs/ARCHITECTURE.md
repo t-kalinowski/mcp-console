@@ -47,6 +47,7 @@ The [migration record](SANDBOX_RUNNER_INTEGRATION.md) records the baseline, vali
 With `serve --no-sandbox`, the relay skips the native runner at its selected execution target.
 Local and SSH host execution use that account's permissions and temporary-directory environment.
 Docker retains its outer container boundary and retirement.
+Docker Sandbox compute enforcement retains its outer microVM and provider policy, including with `--no-sandbox`; it does not use an inner native runner.
 Available R, Python, and DuckDB dependency resolution runs in separate host processes; [requirements and environments](REQUIREMENTS.md) defines its trust boundary.
 
 For a configured SSH target, the process chain is:
@@ -82,6 +83,26 @@ The shared target launcher consumes captured policy without YAML discovery and u
 Docker uses the image's preinstalled runtime, disables dynamic preparation, and never discovers controller interpreters or calls host resolvers.
 Image setup is separate from generation lifetime and does not reread a build context on replacement.
 See [Docker execution](DOCKER.md).
+
+For `compute.kind: docker_sandbox`, `sandbox.provider` resolves to `compute` independently of the user's `no_sandbox` flag.
+The controller captures a prepared digest-qualified template and probes it in a disposable owned VM before MCP readiness:
+
+```text
+controller MCP server → local ownership helper → sbx create / exec -i
+    → in-VM target launcher → relay → built-in worker
+```
+
+SBX owns its microVM runtime, sharing, policy inheritance, and host integrations.
+Console owns only its newly created VM through fixed CLI invocations and structured listings; it does not call a private service API or the host Docker Engine control plane.
+The common target owner observes input loss, transport failure, and signals independently of output backpressure.
+The Sandbox adapter verifies the owned name/UUID, requests forced removal, and requires confirmed absence before replacement.
+Unacknowledged creation remains uncertain even after an empty listing.
+Each generation uses the captured template reference and discards VM-local changes on retirement; host shares remain.
+There is no native policy materialization, native preflight, companion discovery, or controller interpreter/resolver discovery in this path.
+Workload environment controls are applied inside the VM; provider policy remains externally managed and can change during the session.
+Tool and transcript metadata distinguish the provider, template, VM identity, target directory, shared paths, and controller recording location.
+Shared paths can expose controller-owned records and metadata to the worker.
+See [Docker Sandbox execution](DOCKER_SANDBOX.md).
 
 ## Communication boundaries
 
@@ -159,7 +180,7 @@ In sandboxed mode, it then sends `SIGTERM` to the launcher to request managed re
 On normal and owned-retirement paths, the server treats successful managed launcher exit as the synchronous cleanup barrier before reaping.
 Cancellation before worker readiness follows the same runner-retirement request and grace period, including when the startup I/O join reaches the child first.
 For local host execution with `--no-sandbox`, the server owns and reaps the relay directly; no runner supplies descendant cleanup.
-SSH and Docker keep their target adapters; Docker requires confirmed container retirement.
+SSH, Docker, and Docker Sandbox keep their target adapters; compute targets require confirmed container or microVM retirement.
 After the relay deadline, the server accepts termination from its own successful `SIGTERM` request as completed direct retirement.
 
 ### Sandbox frontend and runner
@@ -194,7 +215,7 @@ Blocked downstream pipe or socket output can therefore fail retirement without d
 The internal `worker-relay` command uses the same stream protocol when launched directly without a sandbox or below another process wrapper.
 Such a direct invocation owns only its direct worker; it supplies no sandbox policy or descendant-cleanup guarantee.
 `serve --no-sandbox` selects this direct relay launch at the configured target while retaining the relay protocol and direct-worker shutdown behavior.
-An outer Docker container still supplies descendant retirement.
+An outer Docker container or Docker Sandbox microVM still supplies descendant retirement.
 A replacement sandbox launcher must provide the process-lifetime contract described in [sandbox integration](SANDBOX.md), including cleanup before successful owned retirement.
 Any future sandbox-specific control plane ends at that launcher, without reaching the relay or changing its protocol.
 
@@ -215,6 +236,7 @@ The R provider owns a managed DuckDB connection by default and can retain a user
 Its private R environment bridge conditionally wraps `base::library` and runs R's unchanged `base::loadNamespace` body in a private lexical environment that intercepts its retry restart; it applies accepted managed libraries and reports activation outcomes.
 The Rust Python facade loads, retains, and initializes the selected file-backed `libpython`, or attaches its own handle if CPython was already initialized.
 It embeds and installs the private evaluator and DB-API adapter through that CPython API; reticulate attaches to the interpreter and continues to own object conversion, Python-cell evaluation dispatch, its manifest, event handling, and interrupts.
+Before normal worker exit, it restores the main Python thread's saved attachment so extension-library exit destructors, including DuckDB's, can use Python safely.
 Its private Python runtime conditionally appends a last-chance import finder, while the R Python bridge owns the reticulate manifest and the callback into the existing managed-Python resolver.
 Bare sessions leave both resolution adapters disabled.
 Their user-visible behavior belongs in the [built-in runtime guide](BUILTIN_RUNTIME.md), while the sideband contract remains independent of the interpreter implementation.
@@ -241,7 +263,7 @@ The server reports the failed operation and does not replay its cell or stdin ag
 
 ### Server and worker startup
 
-The built-in server first captures a stable host resolver configuration and detects its capability without installing an environment.
+For a local host target, the built-in server first captures a stable host resolver configuration and detects its capability without installing an environment.
 It prefers `ir` on `PATH`, otherwise selects `uv` on `PATH` or an explicit `uv` path, and can obtain `uv` from reticulate when only `ir` or an ambient R installation is available.
 It retains the selected bootstrap as pending setup and accepts MCP input before invoking it or resolving the default R, DuckDB, and managed Python environments.
 An operation that first needs an environment resolves the defaults through the normal generation-owned resolver lifecycle and commits the complete candidate only after all preparation succeeds.
@@ -255,6 +277,7 @@ For each worker start, the server first constructs the relay target independentl
 The built-in target is the current executable's `worker-relay` command followed by the worker command line; a configured relay is followed directly by the same worker command line.
 For local host execution, the server then constructs an ordinary current-executable command for `sandbox --exit-with-parent <server-pid> -- <relay-target>`; with `--no-sandbox`, it uses the relay target directly.
 SSH and Docker construct that command inside the target with a target-local owner PID.
+Docker Sandbox compute enforcement uses the direct relay command inside the VM and never constructs a native launcher or native preflight.
 It applies the retained environment and configures piped input and output plus inherited error in either mode.
 In sandboxed mode, the frontend execs the runner with that environment and those streams; the runner establishes native enforcement and descendant observation before releasing the relay.
 The relay creates the worker sideband and standard streams, launches the worker, and forwards its startup events.
@@ -384,7 +407,8 @@ It appends tool calls and assembled results to `internal/events.jsonl`.
 The initial `session_started` event records whether dynamic environment resolution is available, and the Quarto projection derives its managed defaults from that capability.
 For SSH sessions, it also records `target.transport` and the initial remote `target.workspace` separately from the local `working_directory` that owns the recording.
 Docker session metadata additionally records compute kind, requested/resolved image identity, and container workspace; generation events identify created containers.
-Declared binds can expose controller records to the workload.
+Docker Sandbox metadata records its compute provider, template digest, CLI version, target workspace, and shares; generation events identify VM names and UUIDs separately from container IDs.
+Declared binds and shared paths can expose controller records to the workload.
 Each `tool_result` is appended before the MCP transport attempts the corresponding response write.
 It records server assembly, not whether the transport write succeeded or the client received the response.
 
@@ -407,7 +431,7 @@ For local sessions, rendering executes the captured client-authored cells in ord
 Rendering does not reconstruct session control, stdin, recorded results, or artifacts.
 SQL chunks require a DBI connection supplied by the document user.
 
-SSH and Docker projections identify the execution target, omit the local execution root, and set `execute.eval: false`.
+SSH, Docker, and Docker Sandbox projections identify the execution target, omit the local execution root, and set `execute.eval: false`.
 By default, rendering them locally displays the captured source without executing it.
 Replaying remote cells requires the user to select and provision an appropriate execution environment; the document does not reproduce remote files.
 

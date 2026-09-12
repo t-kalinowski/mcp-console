@@ -27,7 +27,7 @@ On older Linux kernels or when seccomp denies `close_range` with `EPERM`, inheri
 
 A working R installation is required on the execution host.
 Set `R_HOME` or make `R` discoverable on that host's `PATH`.
-An SSH or Docker controller does not need a local R or Python analysis environment.
+An SSH, Docker, or Docker Sandbox controller does not need a local R or Python analysis environment.
 For local execution, dynamic environment resolution normally starts from either `ir` 0.4.0 or later or `uv` on `PATH`.
 The first managed server start may download and install the default R and Python requirements.
 If no resolver bootstrap is available, the server starts a bare runtime using installed packages.
@@ -55,7 +55,7 @@ Host AppArmor policy or container restrictions can prevent namespace setup.
 The wheel includes a private bubblewrap helper; a suitable `bwrap` on `PATH` takes precedence.
 There is no automatic unsandboxed fallback.
 Use `mcp-console serve --no-sandbox` to skip the inner native sandbox at the selected target.
-Local and SSH host execution then use the target account's permissions without native descendant cleanup; Docker retains its outer container boundary and retirement.
+Local and SSH host execution then use the target account's permissions without native descendant cleanup; Docker retains its outer container boundary and Docker Sandboxes retains its microVM and provider policy.
 
 Install the current source checkout with its private sandbox companions:
 
@@ -74,6 +74,10 @@ The remote workspace, R installation, and resolver bootstrap must already exist;
 
 To run the relay and worker in a fresh owned Linux container, configure a [Docker target](docs/DOCKER.md).
 The image supplies Console, R, Python, and analysis packages; the controller keeps the MCP connection and recordings.
+
+To use Docker's microVM isolation through standalone `sbx`, configure a [Docker Sandbox target](docs/DOCKER_SANDBOX.md).
+Both relay and worker run inside a Console-owned microVM from a prepared template.
+This provider uses Docker's existing policy and shared paths and does not require or invoke Console's native sandbox companion.
 
 ## Python integrations
 
@@ -166,24 +170,25 @@ See [configuration and native precedence](docs/SANDBOX_CONFIGURATION.md#project-
 
 Submitted R, Python, and SQL have shell-class capability.
 On macOS and Linux, the worker sandbox is enabled by default.
-With the default policy, the worker can read host files, but direct network access and regular-file writes outside its private temporary directory are denied.
+With the default local native policy, the worker can read host files, but direct network access and regular-file writes outside its private temporary directory are denied.
 [Project configuration](docs/SANDBOX_CONFIGURATION.md#project-configuration) is trusted launcher input and can select native sandbox policy, including unrestricted filesystem access or enforcement by an outer sandbox.
 The temporary `--writable-root PATH` launch argument adds a writable path; see [path semantics and an example](docs/SANDBOX_CONFIGURATION.md#additional-writable-paths).
 This is a process boundary, not a safe evaluator for untrusted code with access to sensitive readable files.
 
 `mcp-console serve --no-sandbox` launches the relay directly at the selected target.
 Local and SSH host workers use the target account's permissions and temporary-directory environment without native descendant cleanup.
-Docker workers remain in owned containers that are retired with their descendants.
+Docker workers remain in owned containers; Docker Sandbox workers remain in owned microVMs governed by Docker policy.
+Both outer compute resources are retired with their descendants.
 The relay still shuts down and reaps its direct worker normally.
 
 When managed preparation is available, the server installs automatically inferred or explicitly declared R and Python packages and DuckDB extensions outside the worker sandbox on the selected execution host.
-Docker targets use preinstalled image packages and disable this preparation.
+Docker and Docker Sandbox targets use preinstalled image packages and disable this preparation.
 Those operations may access the network and execute installation or build code, so only trusted requirements should be supplied.
 See [Requirements and environments](https://github.com/t-kalinowski/mcp-console/blob/main/docs/REQUIREMENTS.md) for the accepted inputs and trust model.
 
 Session records contain submitted source, standard input, requirements, results, and artifacts without redaction.
 Executing the Quarto source projection runs submitted code outside the worker sandbox with the permissions of the `ir` and Quarto processes.
-SSH and Docker projections default to non-executing and require a deliberately recreated target environment.
+SSH, Docker, and Docker Sandbox projections default to non-executing and require a deliberately recreated target environment.
 Render only code you trust.
 
 ## Development
