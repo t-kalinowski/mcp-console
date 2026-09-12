@@ -57,6 +57,7 @@ If the response ends in `[running; poll with an empty send]`, call `send()` agai
 Each poll returns new output.
 
 Use one connection for the lifetime of a conversation.
+Python clients use the MCP `initialize` handshake while waiting for local or remote startup to finish.
 Explicit `console.connect()` and `console.close()` are also available; await these methods on `AsyncMCPConsole`.
 Enter and close an async connection in the same async task.
 The synchronous client manages that task on an AnyIO portal thread.

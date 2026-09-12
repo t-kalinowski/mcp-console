@@ -16,6 +16,7 @@ import mcp_console
 from mcp_console import AsyncMCPConsole, MCPConsole
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.r import r_test_environment
+from support.normalization import code
 from support.records import Transcript
 from support.requirements import WORKER, requires
 from support.resolvers import bare_runtime_environment
@@ -30,6 +31,45 @@ def options(binary: Path, execution: Execution) -> dict:
             "env": {**os.environ, "MCP_CONSOLE_TEST_PYTHON": sys.executable}
         },
     }
+
+
+@executions(DIRECT, SANDBOXED)
+def test_initialization_keeps_one_lifecycle_while_startup_is_pending(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        gate = Path(directory) / "startup.py"
+        gate.write_text(
+            code("""
+            import json
+            import subprocess
+            import sys
+
+            pending = [sys.stdin.buffer.readline()]
+            if json.loads(pending[0])["method"] == "server/discover":
+                # Release on the SDK's initialize fallback, without a timing sleep.
+                # The real server sees every request, including the pending discovery.
+                pending.append(sys.stdin.buffer.readline())
+            child = subprocess.Popen(sys.argv[1:], stdin=subprocess.PIPE)
+            try:
+                for message in pending:
+                    child.stdin.write(message)
+                child.stdin.flush()
+                for message in sys.stdin.buffer:
+                    child.stdin.write(message)
+                    child.stdin.flush()
+            finally:
+                child.stdin.close()
+                child.wait(timeout=10)
+            """)
+        )
+        settings = options(binary, execution)
+        settings["command"] = sys.executable
+        settings["args"] = ["-u", str(gate), str(binary), *settings["args"]]
+        with MCPConsole(**settings) as console:
+            result = console.send(r="echo initialized")
+            assert result == "zod: initialized\n", result
+        return [{"startup_kept_one_lifecycle": True, "output": result}]
 
 
 @executions(DIRECT, SANDBOXED)

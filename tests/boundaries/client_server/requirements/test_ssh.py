@@ -262,11 +262,12 @@ def test_bootstraps_managed_requirements_through_uv(
             client,
             requirements={"r": ["praise"], "python": ["humanize"]},
             r=code(r"""
+                r_library <- strsplit(Sys.getenv("R_LIBS"), .Platform$path.sep, fixed = TRUE)[[1L]][[1L]]
                 stopifnot(
                   Sys.which("ir") == "",
                   requireNamespace("praise", quietly = TRUE),
                   startsWith(
-                    Sys.getenv("R_LIBS"),
+                    normalizePath(r_library, mustWork = TRUE),
                     paste0(normalizePath("ir-cache", mustWork = TRUE), "/")
                   )
                 )
