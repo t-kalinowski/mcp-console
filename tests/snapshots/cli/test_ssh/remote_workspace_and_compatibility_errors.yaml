@@ -10,9 +10,9 @@ error: |
   target.workspace must be an absolute remote directory path
 ---
 error: >
-  incompatible SSH bootstrap: expected protocol 1, Console 0.0.3; received
+  incompatible SSH bootstrap: expected protocol 2, Console 0.0.3; received
   protocol 999, Console 0.0.3
 ---
 error: >
-  incompatible SSH bootstrap: expected protocol 1, Console 0.0.3; received
-  protocol 1, Console incompatible-build
+  incompatible SSH bootstrap: expected protocol 2, Console 0.0.3; received
+  protocol 2, Console incompatible-build

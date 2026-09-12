@@ -17,10 +17,37 @@ def frame(tag: int, value: object) -> None:
 
 mode = os.environ["CONSOLE_SSH_PEER"]
 log = Path(os.environ["CONSOLE_SSH_PEER_LOG"])
-with log.open("a") as output:
-    output.write("launched\n")
 length = struct.unpack(">I", sys.stdin.buffer.read(4))[0]
 bootstrap = json.loads(sys.stdin.buffer.read(length))
+if "Open" in bootstrap:
+
+    def preparation_frame(value):
+        body = json.dumps(value).encode()
+        sys.stdout.buffer.write(struct.pack(">I", len(body)) + body)
+        sys.stdout.buffer.flush()
+
+    preparation_frame({"Hello": {"version": 3, "build": bootstrap["Open"]["build"]}})
+    preparation_frame(
+        {
+            "Completed": {
+                "id": 0,
+                "result": {
+                    "Ok": {
+                        "managed": False,
+                        "selections": {"r_home": None, "python": None},
+                    }
+                },
+                "control": None,
+                "confirmed": True,
+            }
+        }
+    )
+    length = struct.unpack(">I", sys.stdin.buffer.read(4))[0]
+    assert json.loads(sys.stdin.buffer.read(length)) == "Close"
+    preparation_frame("Closed")
+    sys.exit(0)
+with log.open("a") as output:
+    output.write("launched\n")
 assert "-T" in sys.argv and "-a" in sys.argv and "BatchMode=yes" in sys.argv
 assert sys.argv[-2] == "console-test", sys.argv
 if mode == "auth":
@@ -29,7 +56,7 @@ if mode == "auth":
 if mode == "stdout":
     print("unexpected login banner", flush=True)
     sys.exit(0)
-frame(1, {"version": 999 if mode == "incompatible" else 1, "build": bootstrap["build"]})
+frame(1, {"version": 999 if mode == "incompatible" else 2, "build": bootstrap["build"]})
 if mode == "incompatible":
     sys.exit(0)
 frame(2, {"kind": "ready"})
@@ -59,9 +86,10 @@ for line in sys.stdin.buffer:
                 frame(2, callback)
                 response = json.loads(sys.stdin.buffer.readline())
                 assert response["kind"].endswith("resolution_failed"), response
-                assert "unexpected remote resolution request" in response["message"], (
-                    response
-                )
+                assert (
+                    "dynamic environment resolution is unavailable"
+                    in response["message"]
+                ), response
                 frame(2, {"kind": "console_output", "data": response["message"] + "\n"})
         frame(2, {"kind": "completed"})
     elif command["kind"] == "shutdown":

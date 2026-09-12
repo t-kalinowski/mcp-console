@@ -133,6 +133,7 @@ Console also supplies its macOS extension for the restricted application policy 
 Project `environment` and `inherit_environment` control ordinary workload variables.
 For `serve`, Console preserves each worker generation's selected R/Python environment and dynamic-resolution setting after applying project controls, including when inheritance is disabled.
 Project overrides cannot replace or reintroduce variables assigned or removed by that selection.
+Values with invalid native types remain subject to runner validation, including entries that conflict with Console's assignments or removals.
 Host resolver configuration still comes from the server's launch environment.
 Standalone `sandbox` launches apply native environment controls without these worker-generation overrides.
 Both application launch paths retain `MCP_CONSOLE_SANDBOX=1` for runtime integration, including when inheritance is disabled or project environment entries try to replace it.
@@ -181,9 +182,10 @@ The server reads YAML locally and captures the target and user policy once.
 It sends these settings as bounded structured data; the remote helper verifies the existing absolute workspace and materializes policy there without discovering remote YAML.
 Platform defaults, relative filesystem entries, workspace special paths, and `serve --writable-root` use the remote host and workspace.
 The native sandbox and any proxy run remotely.
-`sandbox.environment` and `inherit_environment` retain their target-only meaning, including with direct SSH execution; they never configure trusted SSH or bootstrap setup.
+`sandbox.environment` and `inherit_environment` retain their workload meaning, including with direct SSH execution; they do not forward the workload environment to SSH or trusted preparation.
+Explicit remote `R_HOME` and `RETICULATE_PYTHON` values are conveyed separately as runtime selections so preparation targets the worker's runtime; the rest of the environment map remains workload-only.
 Standalone `sandbox` still uses local paths and local policy materialization.
-See [SSH execution](SSH.md) for every target field, defaults, error behavior, preinstalled-runtime prerequisites, and lifecycle limits.
+See [SSH execution](SSH.md) for every target field, defaults, error behavior, remote runtime and preparation prerequisites, and lifecycle limits.
 
 ## Explicit complete policy
 

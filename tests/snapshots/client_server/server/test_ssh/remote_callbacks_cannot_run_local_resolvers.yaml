@@ -5,9 +5,9 @@ result:
   content:
     - type: text
       text: |
-        unexpected remote resolution request: managed preparation is unsupported for SSH targets; provision the remote runtime before starting MCP Console
-        unexpected remote resolution request: managed preparation is unsupported for SSH targets; provision the remote runtime before starting MCP Console
-        unexpected remote resolution request: managed preparation is unsupported for SSH targets; provision the remote runtime before starting MCP Console
+        dynamic environment resolution is unavailable; install `ir` or `uv` and restart MCP Console
+        dynamic environment resolution is unavailable
+        dynamic environment resolution is unavailable
   isError: false
 ---
 standard_error: ""

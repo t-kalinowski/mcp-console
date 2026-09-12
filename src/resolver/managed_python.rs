@@ -19,7 +19,8 @@ with open(sys.argv[-1], "w", encoding="utf-8") as stream:
 "#;
 static PYTHON_PATH_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-#[derive(Clone)]
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct ManagedPython {
     python: PathBuf,
     requirements: crate::worker_protocol::PythonRequirementManifest,
@@ -187,15 +188,6 @@ pub(crate) fn resolve_python_version(
     versions
         .resolve(&constraints)
         .map_err(|error| format!("managed Python version resolution failed: {}", error.trim()))
-}
-
-pub(crate) fn resolve_python_host(
-    requirements: crate::worker_protocol::PythonRequirementManifest,
-    configuration: &super::ManagedPythonResolverConfiguration,
-    managed_r: Option<&super::ManagedR>,
-    on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
-) -> Result<ManagedPython, String> {
-    resolve_python_manifest(requirements, configuration, managed_r, on_started)
 }
 
 fn resolve_python_versions<F>(

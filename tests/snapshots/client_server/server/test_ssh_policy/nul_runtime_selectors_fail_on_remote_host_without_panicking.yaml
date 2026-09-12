@@ -1,0 +1,10 @@
+---
+selection: R_HOME
+standard_error: |
+  remote R_HOME selection must not contain NUL
+  SSH preparation retirement is unconfirmed: truncated SSH frame length: failed to fill whole buffer
+---
+selection: RETICULATE_PYTHON
+standard_error: |
+  remote RETICULATE_PYTHON selection must not contain NUL
+  SSH preparation retirement is unconfirmed: truncated SSH frame length: failed to fill whole buffer

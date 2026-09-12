@@ -44,23 +44,7 @@ fn launch(confirmed: &mut bool) -> Result<(), String> {
     let bootstrap: Bootstrap = serde_json::from_slice(&bytes)
         .map_err(|error| format!("invalid SSH bootstrap: {error}"))?;
     super::compatible(bootstrap.version, &bootstrap.build)?;
-    if !bootstrap.workspace.starts_with('/') {
-        return Err("target.workspace must be an absolute remote directory path".into());
-    }
-    let metadata = std::fs::metadata(&bootstrap.workspace).map_err(|error| {
-        format!(
-            "cannot access remote target.workspace '{}': {error}",
-            bootstrap.workspace
-        )
-    })?;
-    if !metadata.is_dir() {
-        return Err(format!(
-            "remote target.workspace '{}' is not a directory",
-            bootstrap.workspace
-        ));
-    }
-    std::env::set_current_dir(&bootstrap.workspace)
-        .map_err(|error| format!("cannot enter remote target.workspace: {error}"))?;
+    super::enter_workspace(&bootstrap.workspace)?;
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     let mut policy = if bootstrap.no_sandbox {
         bootstrap.policy
@@ -80,13 +64,17 @@ fn launch(confirmed: &mut bool) -> Result<(), String> {
             .arg(std::process::id().to_string())
             .args(["--settings-env", crate::settings::ENVIRONMENT, "--"]);
     }
-    // These are capability controls, never controller interpreter selections.
-    command
-        .env("MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION", "0")
-        .env("MCP_CONSOLE_PREINSTALLED", "1")
-        .env("RETICULATE_USE_MANAGED_VENV", "no")
-        .env_remove("MCP_CONSOLE_MANAGED_PYTHON")
-        .env_remove(crate::settings::ENVIRONMENT);
+    if let Some(environment) = &bootstrap.environment {
+        environment.configure(&mut command)?;
+    } else {
+        // Private launch-only callers select a bare runtime explicitly.
+        command
+            .env("MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION", "0")
+            .env("RETICULATE_USE_MANAGED_VENV", "no")
+            .env_remove("MCP_CONSOLE_MANAGED_PYTHON")
+            .env_remove("MCP_CONSOLE_PREINSTALLED");
+    }
+    command.env_remove(crate::settings::ENVIRONMENT);
     crate::settings::preserve_environment(&mut policy, command.get_envs())?;
     if !bootstrap.no_sandbox {
         command.env(

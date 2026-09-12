@@ -1,0 +1,24 @@
+---
+send:
+  r: 42L
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running; poll with an empty send]
+  isError: false
+---
+input:
+  method: ping
+result: {}
+---
+send:
+  control: interrupt
+result:
+  content:
+    - type: text
+      text: >-
+        [failed to check R package resolver version with exit status: 130: ]
+  isError: true

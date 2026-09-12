@@ -58,6 +58,10 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
+        cli::Command::SshPrepare => match ssh::preparation::run() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => exit_with_error(error),
+        },
         cli::Command::WorkerRelay { command } => match worker_relay::run(&command) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),

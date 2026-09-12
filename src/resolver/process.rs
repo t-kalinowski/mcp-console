@@ -4,14 +4,42 @@ use std::os::unix::process::CommandExt as _;
 use std::path::Path;
 use std::process::{Child, ChildStdin, Command, ExitStatus};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
 #[derive(Clone)]
-pub(crate) struct ResolverStopHandle {
+pub(crate) struct ResolverStopHandle(Arc<dyn ResolverControl>);
+
+pub(crate) trait ResolverControl: Send + Sync {
+    fn stop(&self) -> Result<(), String>;
+    fn interrupt(&self) -> Result<bool, String>;
+    fn control_outcome(&self) -> Option<super::ResolverControlOutcome>;
+    fn cleanup_confirmed(&self) -> bool;
+}
+
+impl ResolverStopHandle {
+    pub(crate) fn new(control: impl ResolverControl + 'static) -> Self {
+        Self(Arc::new(control))
+    }
+    pub(crate) fn stop(&self) -> Result<(), String> {
+        self.0.stop()
+    }
+    pub(crate) fn interrupt(&self) -> Result<bool, String> {
+        self.0.interrupt()
+    }
+    pub(crate) fn control_outcome(&self) -> Option<super::ResolverControlOutcome> {
+        self.0.control_outcome()
+    }
+    pub(crate) fn cleanup_confirmed(&self) -> bool {
+        self.0.cleanup_confirmed()
+    }
+}
+
+struct LocalControl {
     events: Sender<ResolverEvent>,
     control: Arc<AtomicU8>,
+    cleanup: Arc<AtomicBool>,
 }
 
 const CONTROL_NONE: u8 = 0;
@@ -43,6 +71,7 @@ pub(super) struct ResolverProcess {
     events: Sender<ResolverEvent>,
     event_receiver: Receiver<ResolverEvent>,
     control: Arc<AtomicU8>,
+    cleanup: Arc<AtomicBool>,
 }
 
 impl ResolverProcess {
@@ -52,17 +81,20 @@ impl ResolverProcess {
             events,
             event_receiver,
             control: Arc::new(AtomicU8::new(CONTROL_NONE)),
+            cleanup: Arc::new(AtomicBool::new(false)),
         }
     }
 
     pub(super) fn stop_handle(&self) -> ResolverStopHandle {
-        ResolverStopHandle {
+        ResolverStopHandle::new(LocalControl {
             events: self.events.clone(),
             control: self.control.clone(),
-        }
+            cleanup: self.cleanup.clone(),
+        })
     }
 
     pub(super) fn watch_exit(&self, pid: u32) {
+        self.cleanup.store(false, Ordering::SeqCst);
         watch_resolver_exit(pid, self.events.clone());
     }
 
@@ -75,20 +107,12 @@ impl ResolverProcess {
         program: &Path,
         kind: &str,
     ) -> Result<ResolverOutput, String> {
-        wait_for_resolver(
-            child,
-            &self.event_receiver,
-            input,
-            stdout,
-            stderr,
-            program,
-            kind,
-        )
+        wait_for_resolver(self, child, input, stdout, stderr, program, kind)
     }
 }
 
-impl ResolverStopHandle {
-    pub(crate) fn stop(&self) -> Result<(), String> {
+impl ResolverControl for LocalControl {
+    fn stop(&self) -> Result<(), String> {
         let marked = self.mark_control(CONTROL_CANCELLED);
         if self.events.send(ResolverEvent::Cancel).is_err() {
             self.clear_control(CONTROL_CANCELLED, marked);
@@ -96,7 +120,7 @@ impl ResolverStopHandle {
         Ok(())
     }
 
-    pub(crate) fn interrupt(&self) -> Result<bool, String> {
+    fn interrupt(&self) -> Result<bool, String> {
         let (reply, response) = mpsc::channel();
         let marked = self.mark_control(CONTROL_INTERRUPTED);
         let clear_marker = marked.then(|| self.control.clone());
@@ -120,7 +144,7 @@ impl ResolverStopHandle {
         }
     }
 
-    pub(crate) fn control_outcome(&self) -> Option<super::ResolverControlOutcome> {
+    fn control_outcome(&self) -> Option<super::ResolverControlOutcome> {
         match self.control.load(Ordering::SeqCst) {
             CONTROL_INTERRUPTED => Some(super::ResolverControlOutcome::Interrupted),
             CONTROL_CANCELLED => Some(super::ResolverControlOutcome::Cancelled),
@@ -129,6 +153,12 @@ impl ResolverStopHandle {
         }
     }
 
+    fn cleanup_confirmed(&self) -> bool {
+        self.cleanup.load(Ordering::SeqCst)
+    }
+}
+
+impl LocalControl {
     fn mark_control(&self, control: u8) -> bool {
         self.control
             .compare_exchange(CONTROL_NONE, control, Ordering::SeqCst, Ordering::SeqCst)
@@ -239,11 +269,17 @@ fn wait_for_resolver_exit(
     events: &Receiver<ResolverEvent>,
     program: &Path,
     kind: &str,
+    cleanup: &AtomicBool,
 ) -> Result<ExitStatus, String> {
+    let stop = |child: &mut Child| {
+        let result = stop_resolver(child, program, kind);
+        cleanup.store(result.is_ok(), Ordering::SeqCst);
+        result
+    };
     loop {
         match events.recv() {
             Ok(ResolverEvent::Cancel) => {
-                stop_resolver(child, program, kind)?;
+                stop(child)?;
                 return Err(format!("{kind} resolution cancelled"));
             }
             Ok(ResolverEvent::Interrupt {
@@ -265,22 +301,22 @@ fn wait_for_resolver_exit(
                         program.display()
                     );
                     let _ = reply.send(Err(message.clone()));
-                    let _ = stop_resolver(child, program, kind);
+                    let _ = stop(child);
                     return Err(message);
                 }
             },
             Ok(ResolverEvent::Exited(Ok(()))) => {
-                return stop_resolver(child, program, kind);
+                return stop(child);
             }
             Ok(ResolverEvent::Exited(Err(error))) => {
-                let _ = stop_resolver(child, program, kind);
+                let _ = stop(child);
                 return Err(format!(
                     "failed to wait for {kind} resolver `{}`: {error}",
                     program.display()
                 ));
             }
             Err(_) => {
-                let _ = stop_resolver(child, program, kind);
+                let _ = stop(child);
                 return Err(format!("{kind} resolver exit task stopped"));
             }
         }
@@ -288,15 +324,21 @@ fn wait_for_resolver_exit(
 }
 
 fn wait_for_resolver(
+    resolver: &ResolverProcess,
     child: &mut Child,
-    events: &Receiver<ResolverEvent>,
     input: Receiver<io::Result<()>>,
     stdout: Receiver<io::Result<Vec<u8>>>,
     stderr: Receiver<io::Result<Vec<u8>>>,
     program: &Path,
     kind: &str,
 ) -> Result<ResolverOutput, String> {
-    let status = wait_for_resolver_exit(child, events, program, kind)?;
+    let status = wait_for_resolver_exit(
+        child,
+        &resolver.event_receiver,
+        program,
+        kind,
+        &resolver.cleanup,
+    )?;
     let write_result = receive_result(input, "stdin writer", kind)?;
     let stdout = receive_result(stdout, "stdout reader", kind)?
         .map_err(|error| format!("failed to read resolver stdout: {error}"))?;

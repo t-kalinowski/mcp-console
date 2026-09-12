@@ -1200,18 +1200,38 @@ impl Client {
 
     /// Stops and reaps active worker and resolver process groups.
     pub(crate) async fn shutdown(&self, deadline: Instant) -> Result<(), String> {
-        let Some(stop_handles) = self.close_lifecycle(deadline)? else {
-            return Ok(());
-        };
+        let stop_handles = self.close_lifecycle(deadline)?.unwrap_or_default();
         let client = self.clone();
         tokio::task::spawn_blocking(move || {
+            let preparation = client
+                .0
+                .ssh
+                .as_ref()
+                .and_then(|ssh| ssh.preparation.as_ref())
+                .map(|preparation| {
+                    let preparation = preparation.clone();
+                    // The two SSH retirement bounds run together. A lost
+                    // preparation connection must not extend worker shutdown.
+                    std::thread::spawn(move || preparation.close())
+                });
             let stopped = stop_handles.shutdown(deadline);
             let retired = client.finish_worker_retirement().map(|_| ());
-            match (stopped, retired) {
+            let preparation = preparation.map_or(Ok(()), |task| {
+                task.join()
+                    .map_err(|_| "SSH preparation shutdown task panicked")?
+            });
+            let worker = match (stopped, retired) {
                 (Ok(()), Ok(())) => Ok(()),
                 (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
                 (Err(error), Err(retirement_error)) => Err(format!(
                     "{error}; additionally failed to retire worker I/O: {retirement_error}"
+                )),
+            };
+            match (worker, preparation) {
+                (Ok(()), Ok(())) => Ok(()),
+                (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+                (Err(error), Err(preparation_error)) => Err(format!(
+                    "{error}; additionally failed to retire SSH preparation: {preparation_error}"
                 )),
             }
         })

@@ -28,6 +28,14 @@ pub fn preserve_environment<'a>(
             let name = name
                 .to_str()
                 .ok_or_else(|| "worker environment name must be UTF-8".to_string())?;
+            // Keep invalid native values for execution-host validation, even
+            // when Console owns the assignment or removal of a valid value.
+            if environment
+                .get(name)
+                .is_some_and(|value| !value.is_string())
+            {
+                continue;
+            }
             if !inherit && let Some(value) = value {
                 let value = value.to_str().ok_or_else(|| {
                     format!("worker environment value for '{name}' must be UTF-8")

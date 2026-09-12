@@ -112,10 +112,13 @@ pub(crate) struct ManagedRResolverConfiguration {
     rscript: PathBuf,
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct ManagedR {
     library: PathBuf,
     r_libs: OsString,
+    // Executable selection never travels in a preparation request.
+    #[serde(skip)]
     rscript: PathBuf,
     requirements: Vec<String>,
 }
@@ -157,6 +160,10 @@ impl ManagedRResolverConfiguration {
 }
 
 impl ManagedR {
+    pub(crate) fn on_host(mut self, rscript: &Path) -> Self {
+        self.rscript = rscript.to_path_buf();
+        self
+    }
     pub(crate) fn configure_worker(&self, command: &mut Command) -> Result<(), String> {
         if !self.library.is_dir() {
             return Err(format!(
@@ -185,14 +192,27 @@ pub(crate) fn detect_r_bootstrap(
     python: &mut super::ManagedPythonResolverConfiguration,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<Option<ManagedRBootstrap>, String> {
+    discover(python, on_started).map(|(bootstrap, _)| bootstrap)
+}
+
+pub(crate) fn discover(
+    python: &mut super::ManagedPythonResolverConfiguration,
+    on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
+) -> Result<(Option<ManagedRBootstrap>, PathBuf), String> {
     let resolver = ResolverProcess::new();
     let mut on_started = Some(on_started);
     let rscript = discover_rscript(&resolver, &mut on_started)?;
     let ir = select_ir_command(python);
     if ir.is_none() && !probe_ambient_uv(&resolver, &mut on_started, &rscript, python)? {
-        return Ok(None);
+        return Ok((None, rscript));
     }
-    Ok(Some(ManagedRBootstrap { ir, rscript }))
+    Ok((
+        Some(ManagedRBootstrap {
+            ir,
+            rscript: rscript.clone(),
+        }),
+        rscript,
+    ))
 }
 
 pub(crate) fn resolve_r(

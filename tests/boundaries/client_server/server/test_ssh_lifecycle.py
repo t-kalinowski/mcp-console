@@ -16,7 +16,7 @@ from support.normalization import code
 from support.processes import capture_process_identity, host_process_id, live_processes
 from support.records import Transcript
 from support.requirements import SANDBOX, WORKER, requires
-from support.ssh import SSH, configure, localhost
+from support.ssh import SSH, configure, localhost, remote_command
 from support.suites import run_this_suite
 
 
@@ -35,7 +35,7 @@ def test_startup_cancellation_preserves_shared_connection(binary: Path) -> Trans
         r.write_text(
             code(r"""
             #!/bin/sh
-            printf '%s\n' "$PPID" "$TMPDIR" > STATE
+            printf '%s\n' "$$" > STATE
             printf 1 > CHECKPOINT
             exec /bin/cat GATE
             """)
@@ -47,12 +47,7 @@ def test_startup_cancellation_preserves_shared_connection(binary: Path) -> Trans
         configure(
             local,
             remote,
-            [str(binary)],
-            extends=":workspace",
-            sandbox={
-                "inherit_environment": False,
-                "environment": {"PATH": str(remote)},
-            },
+            remote_command(remote, binary, {"PATH": str(remote)}),
         )
         with localhost(root / "sshd") as environment:
             ssh = root / "sshd/ssh"
@@ -64,10 +59,8 @@ def test_startup_cancellation_preserves_shared_connection(binary: Path) -> Trans
             )
             try:
                 with McpClient(binary, ("serve",), environment, local) as client:
-                    client.initialize_and_list_tools()
-                    client.start_send(r="must_not_run <- TRUE")
-                    checkpoint.wait("remote worker is gated before readiness")
-                    pid, private = state.read_text().splitlines()
+                    checkpoint.wait("remote R probe is gated before MCP readiness")
+                    pid = state.read_text().strip()
                     # The test owns sshd; its remote worker is not a descendant
                     # of the local MCP client or the shared SSH connection.
                     worker = capture_process_identity(
@@ -77,11 +70,10 @@ def test_startup_cancellation_preserves_shared_connection(binary: Path) -> Trans
                     output = client.stdout.read(timeout=12)
                     errors = client.stderr.read(timeout=12)
                     client.process.wait(timeout=12)
-                    assert client.process.returncode == 0, (output, errors)
-                    assert not errors, errors
-                    assert not Path(private).exists(), private
+                    assert client.process.returncode != 0, (output, errors)
+                    assert "closed" in errors, errors
                     assert not live_processes([worker]), (
-                        "remote worker survived startup cancellation"
+                        "remote R probe survived startup cancellation"
                     )
                 subprocess.run(
                     [ssh, "-O", "check", "console-test"],
@@ -113,10 +105,7 @@ def test_unavailable_remote_command(binary: Path) -> Transcript:
             with McpClient(
                 binary, ("serve", "--no-sandbox"), environment, root
             ) as client:
-                client.initialize_and_list_tools()
-                client.send(r="must_not_run <- TRUE")
-                result = last_result_text(client)
-                assert "unconfirmed" in result, result
+                client.process.wait(timeout=12)
                 client.stdin.close()
                 client.stdout.read(timeout=12)
                 errors = client.stderr.read(timeout=12)
@@ -124,9 +113,8 @@ def test_unavailable_remote_command(binary: Path) -> Transcript:
                 assert "/console-test-unavailable" in errors, errors
                 # Shell diagnostic spelling varies with the remote account's
                 # configured shell. The original diagnostic must reach stderr.
-                return client.transcript[3:] + [
-                    {"remote_shell_diagnostic_retained": True}
-                ]
+                assert "SSH preparation retirement is unconfirmed" in errors, errors
+                return [{"mcp_ready": False, "remote_shell_diagnostic_retained": True}]
 
 
 if __name__ == "__main__":

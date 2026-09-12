@@ -59,7 +59,10 @@ The remote helper owns only its ordinary launcher child and connection lifetime.
 It consumes captured user policy, applies remote application defaults and preflight, and passes its own remote PID as the sandbox owner.
 The runner retains enforcement, private storage, and descendant cleanup.
 Direct SSH execution skips the sandbox at the same target.
-Remote execution uses preinstalled environments and never enters controller runtime discovery or resolver processes.
+A separate local OpenSSH child connects to the remote `ssh-prepare` owner for capability discovery and dependency operations.
+That owner captures trusted resolver settings once and runs the existing resolver functions outside the worker sandbox.
+It reports operation completion only after its resolver groups retire.
+The local server retains requirements, candidates, and activation decisions; remote execution never enters controller runtime discovery or resolver processes.
 See [SSH execution](SSH.md) for configuration and prerequisites.
 
 ## Communication boundaries

@@ -54,6 +54,10 @@ pub enum Command {
     #[command(hide = true)]
     SshLaunch,
 
+    /// Prepare dependencies for an authenticated SSH controller
+    #[command(hide = true)]
+    SshPrepare,
+
     /// Run the internal worker relay
     #[command(hide = true)]
     WorkerRelay {
