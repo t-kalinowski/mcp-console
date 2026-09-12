@@ -4,6 +4,9 @@ use clap::Parser;
 
 mod cell;
 mod cli;
+mod docker;
+#[cfg(unix)]
+mod input_watch;
 #[cfg(unix)]
 mod process_descriptors;
 #[cfg(unix)]
@@ -33,6 +36,7 @@ mod sideband;
 #[cfg(unix)]
 mod sql;
 mod ssh;
+mod target_launch;
 mod transcript;
 mod worker;
 mod worker_client;
@@ -51,6 +55,26 @@ fn main() -> ExitCode {
             Err(error) => exit_with_error(error),
         },
         cli::Command::Worker => match worker::run() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => exit_with_error(error),
+        },
+        cli::Command::DockerOwner => match docker::run_owner() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => exit_with_error(error),
+        },
+        cli::Command::DockerLaunch => {
+            match target_launch::run(target_launch::Protocol("Docker"), false, true) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => exit_with_error(error),
+            }
+        }
+        cli::Command::DockerProbe => {
+            match target_launch::run(target_launch::Protocol("Docker"), true, true) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => exit_with_error(error),
+            }
+        }
+        cli::Command::DockerRuntimeProbe => match docker::runtime_probe() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
@@ -92,11 +116,11 @@ fn run_server(
     writable_roots: Vec<std::path::PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (source, policy, target) = settings::discover()?;
-    let ssh = target.map(|target| ssh::Session::new(target, writable_roots.clone()));
-    if ssh.is_some() && (worker.is_some() || relay.is_some()) {
-        return Err("SSH targets require the built-in worker and relay".into());
+    let target = target.map(|target| (target, writable_roots.clone()));
+    if target.is_some() && (worker.is_some() || relay.is_some()) {
+        return Err("Execution targets require the built-in worker and relay".into());
     }
-    let settings = if ssh.is_some() {
+    let settings = if target.is_some() {
         policy
     } else if no_sandbox {
         settings::SandboxSettings::default()
@@ -106,7 +130,7 @@ fn run_server(
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    let result = runtime.block_on(server::run(worker, relay, no_sandbox, settings, ssh));
+    let result = runtime.block_on(server::run(worker, relay, no_sandbox, settings, target));
     // `server::run` has already joined service and worker shutdown. Tokio's
     // stdout uses a blocking task that cannot be cancelled while the client
     // leaves its output pipe full, so runtime teardown must not wait for it.

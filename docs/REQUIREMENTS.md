@@ -20,6 +20,11 @@ An explicit remote Python interpreter disables managed Python additions while re
 The local server keeps requirement merging, transaction and activation decisions, generation ownership, and recording.
 Remote results require confirmed resolver cleanup before commit; uncertain completion blocks further preparation and replacement.
 
+[Docker targets](DOCKER.md) deliberately use a preinstalled image environment.
+Capability probes never select `uv` or `ir`; `requirements`, automatic resolution, and worker preparation callbacks are disabled.
+Reticulate cannot silently create a managed environment.
+Rebuild the image and start a new server session to add packages.
+
 On Linux, preparing a managed environment can compile R packages, including the resolver's own `pak` tooling.
 On Debian and Ubuntu, install `build-essential`, `pkg-config`, and `libcurl4-openssl-dev` for that bootstrap.
 Additional R packages can require their own system libraries and development headers.
@@ -288,7 +293,7 @@ It then retains the extension names without changing the worker's R, Python, SQL
 
 Preparation does not load extension code.
 A later `LOAD` or DuckDB automatic load occurs inside the worker, which is sandboxed by default.
-With `serve --no-sandbox`, extension code runs with the server's filesystem, process, and network permissions.
+With `serve --no-sandbox`, extension code uses the selected host account's or container's filesystem, process, and network access.
 DuckDB chooses its compiled default extension repository and version-and-platform native cache; MCP Console does not accept a repository, URL, path, or version selector.
 
 When a DuckDB request also needs a new R library, the worker still uses live R preparation for that library.
@@ -438,7 +443,7 @@ For [SSH execution](SSH.md#trusted-preparation), they belong to the trusted prep
 
 On macOS and Linux, the default worker sandbox denies direct network access and regular writes outside its private temporary directory and any [explicit writable roots](SANDBOX_CONFIGURATION.md#additional-writable-paths).
 Dependency resolution is a deliberate exception to that boundary: the server launches R, Python, and DuckDB resolvers on the host, outside the sandbox.
-With `serve --no-sandbox`, the worker and the package or extension code it loads also run with the server's filesystem, process, and network permissions.
+With `serve --no-sandbox`, the worker and loaded package or extension code use the selected host account's or container's filesystem, process, and network access.
 The requirement validation and trusted-resolver rules apply in both modes.
 
 Host resolvers may access the network and their normal caches.

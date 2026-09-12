@@ -2,10 +2,12 @@
 
 use std::ffi::OsStr;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{Map, Value};
 
+mod target;
 mod yaml;
+pub(crate) use target::{Compute, Pull, Target};
 
 pub const ENVIRONMENT: &str = "MCP_CONSOLE_SANDBOX_SETTINGS";
 
@@ -67,53 +69,10 @@ pub fn native_variant_name(value: &Value) -> Option<&str> {
 struct Project {
     extends: Option<String>,
     sandbox: Map<String, Value>,
-    target: Option<SshTarget>,
+    target: Option<Target>,
 }
 
-#[derive(Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct SshTarget {
-    pub transport: Transport,
-    #[serde(default)]
-    pub workspace: String,
-    #[serde(default = "remote_command")]
-    pub command: Vec<String>,
-}
-
-#[derive(Clone, Deserialize, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum Transport {
-    Ssh { host: String },
-}
-
-fn remote_command() -> Vec<String> {
-    vec!["uvx".into(), "mcp-console".into()]
-}
-
-impl SshTarget {
-    pub fn host(&self) -> &str {
-        let Transport::Ssh { host } = &self.transport;
-        host
-    }
-
-    fn validate(&self) -> Result<(), String> {
-        if !self.workspace.starts_with('/') || self.workspace.contains('\0') {
-            return Err("target.workspace must be an absolute remote directory path".into());
-        }
-        if self.host().is_empty() || self.host().contains('\0') {
-            return Err("target.transport.host must be a nonempty SSH destination".into());
-        }
-        if self.command.is_empty()
-            || self.command[0].is_empty()
-            || self.command.iter().any(|argument| argument.contains('\0'))
-        {
-            return Err("target.command must be a nonempty argv with a nonempty executable and no NUL bytes".into());
-        }
-        Ok(())
-    }
-}
-
-pub fn discover() -> Result<(Option<&'static str>, SandboxSettings, Option<SshTarget>), String> {
+pub fn discover() -> Result<(Option<&'static str>, SandboxSettings, Option<Target>), String> {
     let name = ".agents/console/config.yaml";
     // A dangling symlink or an unreadable existing file must reach read_to_string.
     match std::fs::symlink_metadata(name) {
@@ -144,12 +103,13 @@ pub fn discover() -> Result<(Option<&'static str>, SandboxSettings, Option<SshTa
     if let Some(profile) = project.extends {
         project.sandbox.insert("extends".into(), profile.into());
     }
-    if let Some(target) = &project.target {
+    if let Some(target) = &mut project.target {
         target
-            .validate()
+            .capture()
             .map_err(|error| format!("{name}: {error}"))?;
     }
-    Ok((Some(name), project.sandbox, project.target))
+    let target = project.target.filter(|target| !target.is_local_host());
+    Ok((Some(name), project.sandbox, target))
 }
 
 pub fn from_environment(name: &str) -> Result<SandboxSettings, String> {

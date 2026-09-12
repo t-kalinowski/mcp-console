@@ -1,5 +1,10 @@
 # Boundary tests
 
+Docker cases use the shared Linux daemon capability in `tests/support/docker.py` and the reproducible `examples/docker/Dockerfile`.
+Build the fixture before running tests and set `MCP_CONSOLE_TEST_DOCKER_IMAGE` to its tag or ID; see `docs/DOCKER.md` for commands.
+Missing Docker access or an unselected fixture skips integration cases; it is not Docker validation.
+Cases run on macOS and Linux controllers and keep process observations in the container namespace.
+
 SSH cases use a private localhost OpenSSH server, pinned temporary host and client keys, and a test alias.
 The shared `SSH` capability requires `sshd` and `ssh-keygen`; CI installs the Linux server and prepares `/run/sshd`.
 `MCP_CONSOLE_TEST_SSH_R_LIBS` can supply preinstalled R libraries to this fixture without adding dependency setup to SSH execution.

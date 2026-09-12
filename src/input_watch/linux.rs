@@ -1,10 +1,10 @@
 use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::net::UnixStream;
 
-pub(super) struct InputWatch([libc::pollfd; 2]);
+pub(crate) struct InputWatch([libc::pollfd; 2]);
 
 impl InputWatch {
-    pub(super) fn new(completion: RawFd) -> Result<Self, String> {
+    pub(crate) fn new(completion: RawFd) -> Result<Self, String> {
         Ok(Self([
             libc::pollfd {
                 fd: libc::STDIN_FILENO,
@@ -19,7 +19,7 @@ impl InputWatch {
         ]))
     }
 
-    pub(super) fn wait(mut self, completion: UnixStream) -> Result<(), String> {
+    pub(crate) fn wait(mut self, completion: UnixStream) -> Result<(), String> {
         debug_assert_eq!(self.0[1].fd, completion.as_raw_fd());
         loop {
             // Request only peer closure: queued MCP input must neither wake

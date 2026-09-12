@@ -250,8 +250,9 @@ impl ConsoleServer {
         relay: Option<PathBuf>,
         no_sandbox: bool,
         sandbox_settings: crate::settings::SandboxSettings,
-        ssh: Option<crate::ssh::Session>,
+        target: Option<(crate::settings::Target, Vec<PathBuf>)>,
     ) -> Result<Self, String> {
+        let recording_directory = std::env::current_dir();
         let languages = Languages::from_environment()?;
         let policy = &sandbox_settings;
         let profile = policy.get("extends").and_then(serde_json::Value::as_str);
@@ -298,9 +299,8 @@ impl ConsoleServer {
                 "has filesystem access governed by the launcher's sandbox settings and {network_access}"
             ),
         };
-        let target = ssh.as_ref().map(crate::ssh::Session::metadata);
-        let worker = if let Some(ssh) = ssh {
-            crate::worker_client::Client::ssh(ssh, no_sandbox, sandbox_settings)?
+        let worker = if let Some((target, roots)) = target {
+            crate::worker_client::Client::target(target, roots, no_sandbox, sandbox_settings)?
         } else {
             match (worker, relay) {
                 (Some(program), relay) => {
@@ -314,9 +314,14 @@ impl ConsoleServer {
                 }
             }
         };
+        let target = worker.target_metadata();
         let dynamic_resolution = worker.dynamic_resolution();
-        let transcript =
-            crate::transcript::Transcript::with_target(dynamic_resolution, target.clone());
+        let transcript = crate::transcript::Transcript::with_target(
+            recording_directory,
+            dynamic_resolution,
+            target.clone(),
+        );
+        worker.record_with(transcript.clone());
         let mut tool_router = Self::configured_tool_router(
             languages,
             dynamic_resolution,
@@ -333,13 +338,28 @@ impl ConsoleServer {
                 .as_mut()
                 .expect("send has a description")
                 .to_mut();
-            *description = description.replace(
-                "with the server's permissions",
-                "with the remote account's permissions",
-            );
-            description.push_str(&format!(
-                "\n\nExecution target: {}. Dependency capability is discovered there. When available, managed defaults and requested R, Python, and DuckDB dependencies are prepared outside the worker sandbox with the remote account's trusted setup permissions; bare runtimes require preinstalled packages. Records and returned images are saved locally beneath .agents/console/sessions/. Files created by code remain remote. The source-only Quarto export does not reproduce the remote filesystem.", target,
-            ));
+            if target
+                .pointer("/compute/kind")
+                .and_then(serde_json::Value::as_str)
+                == Some("docker")
+            {
+                *description = description.replace("host files", "container files");
+                *description = description.replace(
+                    "Evaluated code runs without a sandbox, with the server's permissions, including filesystem and network access. Dependency resolution, when available, may execute installation or build code; use only trusted dependencies.",
+                    "Evaluated code runs inside an owned Docker container without an inner native sandbox. Docker bind access, namespaces, bridge networking, and container retirement still apply.",
+                );
+                description.push_str(&format!(
+                    "\n\nExecution target: {target}. The relay and built-in worker run in a fresh container for each generation, using the captured immutable image ID. Docker uses ordinary bridge networking. Without a proxy, external-sandbox delegates filesystem and network enforcement to Docker: native filesystem entries and network: restricted add no restrictions in that mode. Use the image's preinstalled R, Python, and SQL packages; dynamic package preparation is disabled even if ir or uv is installed. Records and returned images are written by the controller beneath .agents/console/sessions/; declared mounts can expose them to the worker. Files remain in the container or its binds. Restart discards the container layer. Quarto exports default to non-executing and require a deliberately recreated target environment.",
+                ));
+            } else {
+                *description = description.replace(
+                    "with the server's permissions",
+                    "with the remote account's permissions",
+                );
+                description.push_str(&format!(
+                    "\n\nExecution target: {}. Dependency capability is discovered there. When available, managed defaults and requested R, Python, and DuckDB dependencies are prepared outside the worker sandbox with the remote account's trusted setup permissions; bare runtimes require preinstalled packages. Records and returned images are saved locally beneath .agents/console/sessions/. Files created by code remain remote. The source-only Quarto export does not reproduce the remote filesystem.", target,
+                ));
+            }
         }
         Ok(Self {
             worker,
@@ -625,9 +645,9 @@ pub async fn run(
     relay: Option<PathBuf>,
     no_sandbox: bool,
     sandbox_settings: crate::settings::SandboxSettings,
-    ssh: Option<crate::ssh::Session>,
+    target: Option<(crate::settings::Target, Vec<PathBuf>)>,
 ) -> Result<(), Box<dyn Error>> {
-    let server = ConsoleServer::new(worker, relay, no_sandbox, sandbox_settings, ssh)
+    let server = ConsoleServer::new(worker, relay, no_sandbox, sandbox_settings, target)
         .map_err(std::io::Error::other)?;
     let worker = server.worker.clone();
     let (input_closed, wait_for_input_close) = oneshot::channel();

@@ -5,7 +5,7 @@ use std::io::{self, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::time::Instant;
 
-pub(super) fn duplicate(descriptor: RawFd) -> Result<File, String> {
+pub(crate) fn duplicate(descriptor: RawFd) -> Result<File, String> {
     let fd = unsafe { libc::fcntl(descriptor, libc::F_DUPFD_CLOEXEC, 3) };
     if fd < 0 {
         return Err(io::Error::last_os_error().to_string());
@@ -13,7 +13,7 @@ pub(super) fn duplicate(descriptor: RawFd) -> Result<File, String> {
     Ok(unsafe { File::from_raw_fd(fd) })
 }
 
-pub(super) fn poll(
+pub(crate) fn poll(
     descriptors: &[(RawFd, libc::c_short)],
     deadline: Option<Instant>,
 ) -> Result<Vec<libc::c_short>, String> {
@@ -38,7 +38,7 @@ pub(super) fn poll(
             return Ok(descriptors.iter().map(|event| event.revents).collect());
         }
         if result == 0 {
-            return Err("SSH connection/bootstrap deadline exceeded".into());
+            return Err("target operation deadline exceeded".into());
         }
         let error = io::Error::last_os_error();
         if error.kind() != io::ErrorKind::Interrupted {
@@ -47,14 +47,14 @@ pub(super) fn poll(
     }
 }
 
-pub(super) struct Io<T> {
+pub(crate) struct Io<T> {
     inner: T,
     cancelled: Option<io::PipeReader>,
     deadline: Option<Instant>,
 }
 
 impl<T: AsRawFd> Io<T> {
-    pub(super) fn new(
+    pub(crate) fn new(
         inner: T,
         cancelled: Option<io::PipeReader>,
         deadline: Option<Instant>,
@@ -86,7 +86,7 @@ impl<T: AsRawFd> Io<T> {
         )
         .map_err(io::Error::other)?;
         if ready[1] != 0 {
-            return Err(io::Error::other("SSH transfer cancelled"));
+            return Err(io::Error::other("target transfer cancelled"));
         }
         Ok(())
     }
@@ -135,7 +135,7 @@ impl<T: AsRawFd + Write> Write for Io<T> {
                     .map_err(io::Error::other)?;
                     if ready[1] != 0 || ready[2] != 0 {
                         return Err(io::Error::other(
-                            "SSH connection closed or transfer cancelled",
+                            "target connection closed or transfer cancelled",
                         ));
                     }
                 }

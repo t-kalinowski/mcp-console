@@ -182,7 +182,7 @@ pub(super) fn run() -> Result<(), String> {
     if version != super::VERSION || build != env!("CARGO_PKG_VERSION") {
         return Err("incompatible SSH preparation protocol or Console build".into());
     }
-    crate::ssh::enter_workspace(&workspace)?;
+    crate::target_launch::enter_workspace(&workspace)?;
     // Only these runtime selections cross the workload boundary. This is the
     // single-threaded entry point; later worker environment changes cannot reach it.
     for (name, value) in [

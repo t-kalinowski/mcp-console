@@ -42,7 +42,8 @@ Both platforms support the default sandbox launcher and explicit `serve --no-san
 
 For every worker generation, the relay launches the configured worker with piped standard input, standard output, and standard error.
 By default, the relay is already inside the worker sandbox, and the worker inherits that sandbox and its process group.
-With `serve --no-sandbox`, the server launches the relay directly, and both relay and worker run with server permissions without a sandbox runner or descendant-cleanup guarantee.
+With `serve --no-sandbox`, the relay skips the native runner at its selected target.
+Local and SSH host workers use the target account's permissions without native descendant cleanup; Docker retains the outer container boundary and retirement.
 The built-in command is `mcp-console worker`.
 The hidden `serve --worker PATH` option uses `PATH` as one executable name or path, without arguments or shell parsing.
 
@@ -410,7 +411,8 @@ If it does not exit within the relay's supplied grace period, the relay forcibly
 After direct-worker exit or force-stop, the relay reaps the direct child and retires its local transports.
 In sandboxed mode, the sandbox launcher owns cleanup of remaining descendants, including those retaining worker descriptors or entering another process group or session.
 The server requires successful managed launcher exit as the sandbox-lifetime retirement barrier before replacement in that mode.
-With `--no-sandbox`, the server waits for and reaps the relay directly; no runner cleans up remaining descendants.
+For local host execution with `--no-sandbox`, the server waits for and reaps the relay directly; no runner cleans up remaining descendants.
+Docker instead requires confirmed retirement of the owned container, including its descendants.
 The exact server-relay acceptance and retirement sequence is specified in [`RELAY_PROTOCOL.md`](RELAY_PROTOCOL.md).
 
 During retirement, additional nonblocking reads of worker-sideband, fd 1, and fd 2 share a 100-millisecond allowance.

@@ -8,85 +8,66 @@ use std::process::Command;
 pub(crate) fn close_unlisted_from_multithreaded_parent(
     command: &mut Command,
 ) -> Result<(), String> {
-    // A server thread can open a descriptor after any parent-side snapshot.
-    // Scan every possible child slot after fork instead. Descriptors created by
-    // Rust for spawn failure reporting already carry close-on-exec and remain
-    // usable until a successful exec closes them.
-    let descriptor_limit = descriptor_limit()?;
     unsafe {
-        command.pre_exec(move || {
-            for descriptor in (libc::STDERR_FILENO + 1)..descriptor_limit {
-                set_close_on_exec(descriptor)?;
-            }
-            Ok(())
-        });
+        command.pre_exec(cloexec_macos_descriptors);
     }
     Ok(())
 }
 
 #[cfg(target_os = "macos")]
-fn descriptor_limit() -> Result<RawFd, String> {
-    let table_size = unsafe { libc::getdtablesize() };
-    if table_size <= 0 {
-        return Err(format!(
-            "failed to read the launcher file-descriptor limit: {}",
-            std::io::Error::last_os_error()
-        ));
+fn cloexec_macos_descriptors() -> std::io::Result<()> {
+    // Enumerate after fork, when the descriptor table is stable. Scanning the
+    // soft limit can require a million fcntl calls for a nearly empty table.
+    // libproc's proc_pidinfo is a direct __proc_info syscall wrapper. mmap
+    // supplies scratch space without using the allocator after a threaded fork.
+    fn list(buffer: *mut libc::c_void, size: libc::c_int) -> std::io::Result<usize> {
+        loop {
+            let count = unsafe {
+                libc::proc_pidinfo(libc::getpid(), libc::PROC_PIDLISTFDS, 0, buffer, size)
+            };
+            if count > 0 {
+                return Ok(count as usize);
+            }
+            let error = std::io::Error::last_os_error();
+            if error.kind() != std::io::ErrorKind::Interrupted {
+                return Err(error);
+            }
+        }
     }
-    Ok(open_descriptors()?
-        .into_iter()
-        .max()
-        .map_or(table_size, |descriptor| {
-            table_size.max(descriptor.saturating_add(1))
-        }))
-}
-
-#[cfg(target_os = "macos")]
-fn open_descriptors() -> Result<Vec<RawFd>, String> {
-    let mut capacity = 16;
-    loop {
-        let mut descriptors: Vec<libc::proc_fdinfo> = Vec::with_capacity(capacity);
-        descriptors.resize_with(capacity, || unsafe { std::mem::zeroed() });
-
-        unsafe { *libc::__error() = 0 };
-        let size = unsafe {
-            libc::proc_pidinfo(
-                libc::getpid(),
-                libc::PROC_PIDLISTFDS,
-                0,
-                descriptors.as_mut_ptr().cast(),
-                std::mem::size_of_val(descriptors.as_slice()) as libc::c_int,
-            )
+    let size = list(std::ptr::null_mut(), 0)?;
+    let memory = unsafe {
+        libc::mmap(
+            std::ptr::null_mut(),
+            size,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANON,
+            -1,
+            0,
+        )
+    };
+    if memory == libc::MAP_FAILED {
+        return Err(std::io::Error::last_os_error());
+    }
+    let result = (|| {
+        let written = list(memory, size as libc::c_int)?;
+        let entry_size = std::mem::size_of::<libc::proc_fdinfo>();
+        if written > size || !written.is_multiple_of(entry_size) {
+            return Err(std::io::Error::from_raw_os_error(libc::EIO));
+        }
+        // The successful syscall initialized exactly these records. No code
+        // in this child opens a descriptor between the sizing and listing calls.
+        let descriptors = unsafe {
+            std::slice::from_raw_parts(memory.cast::<libc::proc_fdinfo>(), written / entry_size)
         };
-        if size == 0 {
-            let error_code = unsafe { *libc::__error() };
-            if error_code == 0 {
-                return Ok(Vec::new());
+        for descriptor in descriptors {
+            if descriptor.proc_fd > libc::STDERR_FILENO {
+                set_close_on_exec(descriptor.proc_fd)?;
             }
-            if error_code == libc::EINTR {
-                continue;
-            }
-            return Err(format!(
-                "failed to list launcher file descriptors: {}",
-                std::io::Error::from_raw_os_error(error_code)
-            ));
         }
-        if size < 0 || !(size as usize).is_multiple_of(std::mem::size_of::<libc::proc_fdinfo>()) {
-            return Err(format!(
-                "failed to list launcher file descriptors: proc_pidinfo returned {size} bytes"
-            ));
-        }
-
-        let count = size as usize / std::mem::size_of::<libc::proc_fdinfo>();
-        if count < capacity {
-            descriptors.truncate(count);
-            return Ok(descriptors
-                .into_iter()
-                .map(|descriptor| descriptor.proc_fd)
-                .collect());
-        }
-        capacity = capacity.saturating_mul(2).max(count + 16);
-    }
+        Ok(())
+    })();
+    unsafe { libc::munmap(memory, size) };
+    result
 }
 
 fn set_close_on_exec(descriptor: RawFd) -> std::io::Result<()> {
