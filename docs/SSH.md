@@ -167,6 +167,7 @@ The deadline bounds the retirement request, not completion of native cleanup.
 
 Transport loss, retirement requested, and retirement confirmed are separate outcomes.
 Without the original launch or preparation cleanup receipt, retirement remains unconfirmed and conflicting preparation or replacement stays blocked.
+Preparation failure does not prevent ordinary cells in an existing healthy worker; cells that need dependency preparation still fail at that preparation boundary.
 The local adapter also bounds its SSH child's exit wait; it cannot manufacture a remote cleanup receipt by killing that child.
 Explicit shutdown retains the existing protocol request and does not wait for lease expiry while communication is available.
 Controller input closure cancels queued transport input and starts a separate eight-second retirement deadline; continuing heartbeats cannot extend shutdown.
