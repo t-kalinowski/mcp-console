@@ -19,7 +19,7 @@ from support.normalization import code
 from support.r import r_test_environment
 from support.records import Transcript
 from support.requirements import WORKER, SANDBOX, command, requires
-from support.execution import DIRECT, SANDBOXED, executions
+from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.resolvers import (
     recording_ir_environment,
     recording_uv_environment,
@@ -102,18 +102,39 @@ def managed_session(
     inherit=True,
     failure_output=None,
     inherited_library_bytes=0,
+    bootstrap_uv: bool = False,
 ):
     with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
         local, remote = root / "controller", root / "remote"
         local.mkdir()
         remote.mkdir()
-        r_environment, ir_record = recording_ir_environment(
-            remote,
-            fail_requirement="console.test.failure",
-            failure_output=failure_output,
-        )
+        if bootstrap_uv:
+            r_environment, _ = r_test_environment()
+            ir_record = remote / "ir.jsonl"
+            r_environment = {
+                name: value
+                for name, value in r_environment.items()
+                if not name.startswith("MCP_CONSOLE_TEST_")
+            }
+        else:
+            r_environment, ir_record = recording_ir_environment(
+                remote,
+                fail_requirement="console.test.failure",
+                failure_output=failure_output,
+            )
         uv_environment, uv_record = recording_uv_environment(remote)
+        if bootstrap_uv:
+            # Retain only recording settings: every invocation delegates to uv.
+            uv_environment = {
+                name: uv_environment[name]
+                for name in (
+                    "RETICULATE_UV",
+                    "MCP_CONSOLE_TEST_REAL_UV",
+                    "MCP_CONSOLE_TEST_UV_RECORD",
+                    "MCP_CONSOLE_TEST_UV_ARGUMENTS_RECORD",
+                )
+            }
         # These are trusted execution-host settings supplied by the SSH account's
         # command prefix, never by the controller environment or worker policy.
         environment = {
@@ -140,18 +161,48 @@ def managed_session(
                 if name == "RETICULATE_UV" or name.startswith("MCP_CONSOLE_TEST_")
             }
         )
+        if bootstrap_uv:
+            remote_bin = remote / "bin"
+            remote_bin.mkdir()
+            (remote_bin / "uv").symlink_to(environment.pop("RETICULATE_UV"))
+            (remote_bin / "python3").symlink_to(sys.executable)
+            path = [str(remote_bin)]
+            for index, entry in enumerate(environment["PATH"].split(os.pathsep)):
+                directory = Path(entry)
+                if not directory.is_absolute():
+                    continue
+                if os.path.lexists(directory / "ir"):
+                    # Preserve system/build tools even when they share ir's bin.
+                    filtered = remote / f"path-{index}"
+                    filtered.mkdir()
+                    for executable in directory.iterdir():
+                        if executable.name != "ir":
+                            (filtered / executable.name).symlink_to(executable)
+                    directory = filtered
+                path.append(str(directory))
+            environment["PATH"] = os.pathsep.join(path)
+            environment["UV_TOOL_DIR"] = str(remote / "uv-tools")
+            assert shutil.which("ir", path=environment["PATH"]) is None
+            assert shutil.which("uv", path=environment["PATH"]) == str(
+                remote_bin / "uv"
+            )
         # Distinct host pathnames can share already downloaded artifacts in this
         # localhost harness. The controller process is forbidden to use either.
         for tool, variable in (("ir", "IR_CACHE_DIR"), ("uv", "UV_CACHE_DIR")):
-            cache = Path(
-                subprocess.check_output([tool, "cache", "dir"], text=True).strip()
+            cache = (
+                environment.get(variable)
+                if bootstrap_uv and tool == "ir"
+                else subprocess.check_output([tool, "cache", "dir"], text=True).strip()
             )
-            cache.mkdir(parents=True, exist_ok=True)
             remote_cache = remote / f"{tool}-cache"
-            remote_cache.symlink_to(cache, target_is_directory=True)
+            if cache:
+                cache = Path(cache)
+                cache.mkdir(parents=True, exist_ok=True)
+                remote_cache.symlink_to(cache, target_is_directory=True)
             environment[variable] = str(remote_cache)
-        environment["UV_OFFLINE"] = "1"
-        environment["UV_NO_CACHE"] = "1"
+        if not bootstrap_uv:
+            environment["UV_OFFLINE"] = "1"
+            environment["UV_NO_CACHE"] = "1"
         environment["TMPDIR"] = str(remote)
         environment["R_LIBS"] = os.pathsep.join(
             [str(remote)] * (inherited_library_bytes // (len(str(remote)) + 1))
@@ -187,6 +238,71 @@ def managed_session(
             assert not trap.exists()
             assert not (root / "sshd/controller-ir").exists()
             assert not (root / "sshd/controller-uv").exists()
+
+
+@requires(SSH, WORKER, command("R"), command("uv"))
+@executions(DIRECT, SANDBOXED)
+def test_bootstraps_managed_requirements_through_uv(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with managed_session(binary, execution, bootstrap_uv=True) as (
+        client,
+        remote,
+        ir_record,
+        uv_record,
+    ):
+        schema = client.transcript[-1]["result"]["tools"][0]["inputSchema"]
+        assert "requirements" in schema["properties"], schema
+        client.send()
+        assert last_result_text(client) == "\n[idle]"
+        assert not uv_record.exists(), "discovery or polling invoked uv"
+        assert not (remote / "uv-tools").exists()
+
+        output = send_and_collect_runtime_python_resolution(
+            client,
+            requirements={"r": ["praise"], "python": ["humanize"]},
+            r=code(r"""
+                stopifnot(
+                  Sys.which("ir") == "",
+                  requireNamespace("praise", quietly = TRUE),
+                  startsWith(Sys.getenv("R_LIBS"), file.path(getwd(), "ir-cache"))
+                )
+                x <- 42L
+                cat("R ready:", x, "\n")
+                """),
+        )
+        assert output == "R ready: 42 \n", output
+        arguments = [json.loads(line) for line in uv_record.read_text().splitlines()]
+        bootstrap = ["tool", "run", "--from", "r-lib-ir", "ir"]
+        assert [*bootstrap, "--version"] in arguments, arguments
+        resolutions = [args for args in arguments if args[:6] == [*bootstrap, "run"]]
+        assert any(
+            "praise" in ir_requirements({"arguments": args}) for args in resolutions
+        ), arguments
+        assert not ir_record.exists()
+
+        output = send_and_collect_runtime_python_resolution(
+            client,
+            python=code("""
+                import humanize, sys
+                from pathlib import Path
+                assert Path(sys.prefix).resolve().is_relative_to((Path.cwd() / "uv-cache").resolve()), sys.prefix
+                print(humanize.intcomma(12345))
+                print(r.x)
+                """),
+        )
+        assert output == "12,345\n42\n", output
+        records = [
+            json.loads(line)
+            for line in (remote / "uv-environment.jsonl").read_text().splitlines()
+        ]
+        assert all(
+            entry["UV_CACHE_DIR"] == str(remote / "uv-cache") for entry in records
+        )
+        transcript = client.finish()
+        return json.loads(
+            json.dumps(transcript[3:]).replace(str(remote.parent), "<ssh-test>")
+        )
 
 
 @requires(SSH, WORKER, command("ir"), command("uv"))

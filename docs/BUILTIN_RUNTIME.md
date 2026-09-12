@@ -11,7 +11,9 @@ The [canonical handshake snapshot](../tests/snapshots/client_server/server/test_
 ## Session model
 
 MCP Console provides one implicit session.
-That session can use a configured [SSH target](SSH.md) with preinstalled R, Python, and SQL environments.
+That session can use a configured [SSH target](SSH.md) with an existing R installation and a resolver bootstrap such as `uv`.
+Console prepares managed R, Python, and DuckDB dependencies on that host as needed.
+Without a resolver bootstrap, the remote session uses available preinstalled packages and adapters with managed preparation disabled.
 Runtime state and arbitrary files then live remotely; the MCP server, output spools, journals, transcripts, and returned image artifacts stay local.
 The tool context and session metadata identify the target and initial remote directory separately from the recording workspace.
 Remote source-only Quarto projections default to evaluation disabled and omit the controller execution root.

@@ -1,0 +1,45 @@
+---
+send: {}
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false
+---
+send:
+  requirements:
+    r:
+      - praise
+    python:
+      - humanize
+  r: |
+    stopifnot(
+      Sys.which("ir") == "",
+      requireNamespace("praise", quietly = TRUE),
+      startsWith(Sys.getenv("R_LIBS"), file.path(getwd(), "ir-cache"))
+    )
+    x <- 42L
+    cat("R ready:", x, "\n")
+result:
+  content:
+    - type: text
+      text: |
+        R ready: 42 
+  isError: false
+---
+send:
+  python: |
+    import humanize, sys
+    from pathlib import Path
+    assert Path(sys.prefix).resolve().is_relative_to((Path.cwd() / "uv-cache").resolve()), sys.prefix
+    print(humanize.intcomma(12345))
+    print(r.x)
+result:
+  content:
+    - type: text
+      text: |
+        12,345
+        42
+  isError: false

@@ -69,7 +69,7 @@ It launches the public sandbox command with its own remote PID as `--exit-with-p
 The helper materializes the captured policy on the remote host and never discovers project YAML there.
 
 Controller input starts with a four-byte unsigned big-endian length followed by a UTF-8 JSON bootstrap object, limited to 1 MiB.
-Its fields are `version` (currently `1`), `build` (the Console package version), `workspace`, `policy` (the captured native settings object), `writable_roots` (an array), and `no_sandbox` (a boolean).
+Its fields are `version` (currently `2`), `build` (the Console package version), `workspace`, `policy` (the captured native settings object), `writable_roots` (an array), `no_sandbox` (a boolean), and optional `environment` (the discovered capability, runtime selections, and prepared R/Python environments).
 The helper consumes exactly this frame and passes every following byte to relay stdin, including bytes received in the same write.
 It checks the protocol and Console versions before starting the worker; the relay's `ready` event is not this compatibility check.
 Incompatible changes to the launch envelope or relay wire contract must increment the SSH protocol version, including between development builds with the same package version.
@@ -91,8 +91,9 @@ Connection/setup waits have a 30-second deadline independent of `send.timeout_ms
 Cleanup after an undetected partition may be delayed until SSH observes connection loss.
 See [SSH execution](SSH.md) for the supported lifecycle and direct-mode limitations.
 
-SSH workers use preinstalled environments.
-They do not request managed preparation, and unexpected resolver callbacks receive an explicit unsupported error without invoking controller resolvers.
+SSH workers retain the existing resolver callback semantics.
+The local server dispatches preparation through the separate trusted remote preparation connection; controller resolvers must not execute remote requests.
+See [SSH execution](SSH.md#trusted-preparation) for capability discovery, preparation, and environment ownership.
 
 ## Framing and raw bytes
 
