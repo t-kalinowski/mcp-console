@@ -190,7 +190,7 @@ def managed_session(
         # localhost harness. The controller process is forbidden to use either.
         for tool, variable in (("ir", "IR_CACHE_DIR"), ("uv", "UV_CACHE_DIR")):
             cache = (
-                environment.get(variable)
+                environment.get(variable) or str(remote / "ir-store")
                 if bootstrap_uv and tool == "ir"
                 else subprocess.check_output([tool, "cache", "dir"], text=True).strip()
             )
@@ -262,10 +262,14 @@ def test_bootstraps_managed_requirements_through_uv(
             client,
             requirements={"r": ["praise"], "python": ["humanize"]},
             r=code(r"""
+                r_library <- strsplit(Sys.getenv("R_LIBS"), .Platform$path.sep, fixed = TRUE)[[1L]][[1L]]
                 stopifnot(
                   Sys.which("ir") == "",
                   requireNamespace("praise", quietly = TRUE),
-                  startsWith(Sys.getenv("R_LIBS"), file.path(getwd(), "ir-cache"))
+                  startsWith(
+                    normalizePath(r_library, mustWork = TRUE),
+                    paste0(normalizePath("ir-cache", mustWork = TRUE), "/")
+                  )
                 )
                 x <- 42L
                 cat("R ready:", x, "\n")
