@@ -34,5 +34,7 @@ result:
 standard_error: |
   mcp-console-sandbox: invalid configuration JSON (Data at line 1, column <column>)
   remote launcher exited with exit status: 1
+  remote ownership helper exited with exit status: 1
+  SSH exited with exit status: 1
 ---
 standalone_sandbox_remained_local: true

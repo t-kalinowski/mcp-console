@@ -22,6 +22,9 @@ def test_invalid_target_configuration(binary: Path) -> Transcript:
         ({"workspace": "relative"}, "absolute"),
         ({"workspace": "/", "command": []}, "nonempty"),
         ({"workspace": "/", "command": [""]}, "nonempty"),
+        ({"workspace": "/", "lease_ms": 0}, "target.lease_ms"),
+        ({"workspace": "/", "lease_ms": 300001}, "target.lease_ms"),
+        ({"workspace": "/", "lease_ms": "30s"}, "lease_ms"),
     )
     records = []
     with TemporaryDirectory() as temporary:

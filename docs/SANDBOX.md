@@ -28,7 +28,8 @@ The remote helper materializes application policy and performs native preflight 
 Remote YAML is never read.
 Native enforcement, proxy addresses, private storage, and descendant cleanup belong to the execution host.
 The local server requires the helper's cleanup acknowledgment before replacement; SSH process exit cannot supply that guarantee.
-Observed connection closure requests runner retirement even while output is backpressured, but an undetected network partition has no lease deadline.
+Observed connection closure and the independent remote controller lease request runner retirement even while output is backpressured.
+Lease expiry bounds the request, not native cleanup completion; the original helper's receipt remains required.
 
 For project edits, `extends: ":workspace"` selects the native workspace constructor and materializes its permissions against the captured launch directory.
 The constructor supplies `.git`, `.agents`, and `.codex` read-only defaults, including Git pointer handling; Console adds `.claude` as an ordinary native read entry and explicitly excludes inherited `TMPDIR` and shared `/tmp` grants.

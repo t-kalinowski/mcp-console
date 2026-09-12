@@ -62,6 +62,14 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
+        cli::Command::SshConnect { operation } => match ssh_transport(false, &operation) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => exit_with_error(error),
+        },
+        cli::Command::SshTunnel { operation } => match ssh_transport(true, &operation) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => exit_with_error(error),
+        },
         cli::Command::WorkerRelay { command } => match worker_relay::run(&command) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
@@ -83,6 +91,13 @@ fn main() -> ExitCode {
             Err(error) => exit_with_error(error),
         },
     }
+}
+
+fn ssh_transport(remote: bool, operation: &str) -> Result<(), String> {
+    #[cfg(unix)]
+    return ssh::lease::run(remote, operation);
+    #[cfg(not(unix))]
+    Err("SSH execution requires macOS or Linux".into())
 }
 
 fn run_server(

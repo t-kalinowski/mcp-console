@@ -24,3 +24,24 @@ target:
 error: >
   .agents/console/config.yaml: target.command must be a nonempty argv with
   a nonempty executable and no NUL bytes
+---
+target:
+  workspace: /
+  lease_ms: 0
+error: >
+  .agents/console/config.yaml: target.lease_ms must be an integer from
+  1000 through 300000 milliseconds
+---
+target:
+  workspace: /
+  lease_ms: 300001
+error: >
+  .agents/console/config.yaml: target.lease_ms must be an integer from
+  1000 through 300000 milliseconds
+---
+target:
+  workspace: /
+  lease_ms: 30s
+error: >
+  .agents/console/config.yaml: target.lease_ms: invalid type: string
+  "30s", expected u64
