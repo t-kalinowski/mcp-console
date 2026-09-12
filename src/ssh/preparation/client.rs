@@ -88,7 +88,7 @@ type ControlReply = mpsc::Sender<Result<bool, String>>;
 enum Event {
     Run {
         id: u64,
-        operation: Operation,
+        request: Input,
         state: Arc<State>,
         reply: Reply,
     },
@@ -241,6 +241,10 @@ impl Preparation {
             return Err(error.clone());
         }
         let id = self.0.sequence.fetch_add(1, Ordering::SeqCst);
+        let request = Input::Run { id, operation };
+        // Reject unsendable requests before registering a resolver or admitting
+        // remote work. No retirement confirmation is needed for a rejected input.
+        super::encode(&request)?;
         let state = Arc::new(State::default());
         let handle = ResolverStopHandle::new(Control {
             id,
@@ -252,7 +256,7 @@ impl Preparation {
             .events
             .send(Event::Run {
                 id,
-                operation,
+                request,
                 state,
                 reply,
             })
@@ -317,7 +321,7 @@ fn run(
             match event {
                 Event::Run {
                     id,
-                    operation,
+                    request,
                     state,
                     reply,
                 } if active.is_none() && !close_requested => {
@@ -328,7 +332,7 @@ fn run(
                         error: None,
                     });
                     outgoing
-                        .send(Input::Run { id, operation })
+                        .send(request)
                         .map_err(|_| "SSH preparation writer stopped")?;
                 }
                 Event::Control { id, control, reply } => {

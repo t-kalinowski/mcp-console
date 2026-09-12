@@ -105,6 +105,7 @@ Its operations are limited to bootstrap preparation, R libraries, Python manifes
 They call the same embedded resolver implementation used locally.
 The private requests carry no shell programs, source code, executable choices, or arbitrary environment overrides.
 Preparation uses a separate versioned, length-prefixed JSON protocol with a 1 MiB message limit; installer output is captured separately from protocol frames.
+Oversized preparation requests are rejected before remote admission and leave the session available for subsequent requests.
 Large installer errors use bounded diagnostic chunks followed by the final result and cleanup receipt, preserving the complete error without changing its failure classification.
 Launch protocol version 2 carries the selected environment, and preparation protocol version 2 requires a matching Console package version.
 Older preinstalled-only peers fail compatibility checks before MCP readiness.

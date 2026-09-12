@@ -380,6 +380,39 @@ def test_large_remote_install_failure_preserves_diagnostics_and_worker(
 
 @requires(SSH, WORKER, command("ir"), command("uv"))
 @executions(DIRECT, SANDBOXED)
+def test_oversized_preparation_request_preserves_worker_and_connection(
+    binary, execution
+):
+    with managed_session(binary, execution) as (client, remote, ir_record, uv_record):
+        send_and_collect_runtime_python_resolution(
+            client, r="sentinel <- 42L; worker <- Sys.getpid()"
+        )
+        assert last_tool_text(client) == "[done]"
+        baseline = ir_run_records(ir_record)
+        client.send(
+            control="restart",
+            r="sentinel <- 0L",
+            requirements={"r": ["x" * (1024 * 1024)]},
+        )
+        assert client.transcript[-1]["result"]["isError"]
+        assert last_result_text(client) == "[SSH preparation message exceeds 1 MiB]", (
+            last_result_text(client)
+        )
+        assert ir_run_records(ir_record) == baseline
+        client.send(r="stopifnot(Sys.getpid() == worker); sentinel")
+        assert last_tool_text(client) == "[1] 42\n"
+        client.send(requirements={"r": ["praise"]}, r="sentinel")
+        assert last_tool_text(client) == "[1] 42\n"
+        client.send(control="restart")
+        client.send(
+            r='stopifnot(!exists("sentinel"), requireNamespace("praise", quietly = TRUE)); 42L'
+        )
+        assert last_tool_text(client) == "[1] 42\n"
+        return client.finish()[3:]
+
+
+@requires(SSH, WORKER, command("ir"), command("uv"))
+@executions(DIRECT, SANDBOXED)
 def test_failed_remote_activation_preserves_worker_until_restart(binary, execution):
     with managed_session(binary, execution) as (client, remote, ir_record, uv_record):
         send_and_collect_runtime_python_resolution(

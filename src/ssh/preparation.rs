@@ -155,11 +155,16 @@ impl Output {
     }
 }
 
-fn write(writer: &mut impl Write, message: &impl Serialize) -> Result<(), String> {
+fn encode(message: &impl Serialize) -> Result<Vec<u8>, String> {
     let bytes = serde_json::to_vec(message).map_err(|error| error.to_string())?;
     if bytes.len() > LIMIT {
         return Err("SSH preparation message exceeds 1 MiB".into());
     }
+    Ok(bytes)
+}
+
+fn write(writer: &mut impl Write, message: &impl Serialize) -> Result<(), String> {
+    let bytes = encode(message)?;
     writer
         .write_all(&(bytes.len() as u32).to_be_bytes())
         .and_then(|()| writer.write_all(&bytes))
