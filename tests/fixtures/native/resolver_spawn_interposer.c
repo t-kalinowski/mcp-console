@@ -5,16 +5,21 @@
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 
 static atomic_uint fork_count = 0;
+static int command_selected = 0;
 
 static int is_server(void) {
     const char *server = getenv("MCP_CONSOLE_TEST_SPAWN_SERVER");
-    return server != NULL && strtol(server, NULL, 10) == getpid();
+    return command_selected || (server != NULL && strtol(server, NULL, 10) == getpid());
 }
 
-__attribute__((constructor)) static void prevent_child_injection(void) {
+__attribute__((constructor)) static void prevent_child_injection(int argc, char **argv) {
+    const char *server = getenv("MCP_CONSOLE_TEST_SPAWN_SERVER");
+    command_selected = server != NULL && argc > 1 &&
+        strcmp(server, "ssh-prepare") == 0 && strcmp(argv[1], server) == 0;
     if (is_server()) {
         unsetenv("DYLD_INSERT_LIBRARIES");
         unsetenv("LD_PRELOAD");

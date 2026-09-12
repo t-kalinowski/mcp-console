@@ -578,6 +578,21 @@ impl Client {
             return Err("dynamic environment resolution is disabled for Docker targets; install packages in the image and start a new server session".into());
         }
         request.validate(self.dynamic_resolution())?;
+        if let Some(ssh) = &self.0.ssh {
+            let starts_worker = request.cell.is_some()
+                && !self
+                    .0
+                    .lifecycle
+                    .lock()
+                    .map_err(|_| "worker lifecycle lock poisoned")?
+                    .has_ready_worker();
+            if starts_worker
+                || request.requirements.is_some()
+                || matches!(request.control, Some(SendControl::Restart))
+            {
+                ssh.available()?;
+            }
+        }
         if let Some(control) = request.control {
             return self.send_controlled(control, request).await;
         }

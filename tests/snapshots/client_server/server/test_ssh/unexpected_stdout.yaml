@@ -16,8 +16,8 @@ result:
   content:
     - type: text
       text: >-
-        [SSH target 'console-test' retirement is unconfirmed; this session
-        cannot start a replacement]
+        SSH target 'console-test' retirement is unconfirmed; this session cannot
+        start a replacement
   isError: true
 ---
 send:
@@ -26,10 +26,9 @@ send:
 result:
   content:
     - type: text
-      text: |-
-        [starting new worker]
-        [SSH target 'console-test' retirement is unconfirmed; this session cannot start a replacement]
-        session restart did not complete; cell was not run
+      text: >-
+        SSH target 'console-test' retirement is unconfirmed; this session cannot
+        start a replacement
   isError: true
 ---
 standard_error: ""

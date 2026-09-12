@@ -7,9 +7,9 @@ result:
       text: >-
         [worker relay stdout read failed: SSH launch stream ended before
         confirmed retirement: failed to fill whole buffer; additionally failed
-        to stop the worker: SSH process exited with exit status: 255;
-        additionally failed to retire worker I/O: remote retirement is
-        unconfirmed (SSH exit is not a cleanup barrier)]
+        to stop the worker: SSH process exited with exit status: 1; additionally
+        failed to retire worker I/O: remote retirement is unconfirmed (SSH exit
+        is not a cleanup barrier)]
   isError: true
 ---
 send:
@@ -17,7 +17,9 @@ send:
 result:
   content:
     - type: text
-      text: "[worker is shutting down]"
+      text: >-
+        SSH target 'console-test' retirement is unconfirmed; this session cannot
+        start a replacement
   isError: true
 ---
 send:
@@ -26,9 +28,11 @@ send:
 result:
   content:
     - type: text
-      text: "[worker is shutting down]"
+      text: >-
+        SSH target 'console-test' retirement is unconfirmed; this session cannot
+        start a replacement
   isError: true
 ---
-standard_error: >
-  worker relay shutdown was requested twice; additionally SSH process
-  exited with exit status: 255
+standard_error: |
+  SSH exited with exit status: 255
+  worker relay shutdown was requested twice; additionally SSH process exited with exit status: 1

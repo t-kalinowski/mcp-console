@@ -50,7 +50,15 @@ from support.suites import run_this_suite
 
 
 @contextmanager
-def gated_session(binary: Path, *, probe=False, advance_clock=False, handoff=False):
+def gated_session(
+    binary: Path,
+    *,
+    probe=False,
+    advance_clock=False,
+    handoff=False,
+    lease_ms=None,
+    faults=False,
+):
     with TemporaryDirectory() as temporary, Events() as exits:
         root = Path(temporary).resolve()
         local, remote = root / "local", root / "remote"
@@ -122,7 +130,7 @@ def gated_session(binary: Path, *, probe=False, advance_clock=False, handoff=Fal
                 "#!/bin/sh\n",
                 code(r"""
                     #!/bin/sh
-                    if [ "$1" = ssh-prepare ]; then
+                    if [ "$1" = ssh-prepare ] || [ "$2" = ssh-prepare ]; then
                       printf '%s\n' "$$" > OWNER
                     fi
                     """).replace(
@@ -134,11 +142,15 @@ def gated_session(binary: Path, *, probe=False, advance_clock=False, handoff=Fal
             launcher.write_text(
                 launcher.read_text().replace(
                     "/usr/bin/env -i ",
-                    "/usr/bin/env -i MCP_CONSOLE_TEST_SPAWN_SERVER=$$ ",
+                    "/usr/bin/env -i MCP_CONSOLE_TEST_SPAWN_SERVER=ssh-prepare ",
                 )
             )
-        configure(local, remote, prefix)
-        with localhost(root / "sshd") as controller:
+        config = configure(local, remote, prefix)
+        if lease_ms is not None:
+            value = json.loads(config.read_text())
+            value["target"]["lease_ms"] = lease_ms
+            config.write_text(json.dumps(value))
+        with localhost(root / "sshd", faults=faults) as controller:
             poison_controller(root / "sshd", controller)
             if advance_clock:
                 controller.update(
@@ -341,6 +353,36 @@ def test_input_closure_cancels_discovery_before_mcp_ready(binary):
                 "remote_probe_and_descendant_retired": True,
             }
         ]
+
+
+@requires(SSH, WORKER, PROCESS_EVENTS, command("ir"), command("uv"))
+def test_preparation_loss_preserves_ordinary_worker_evaluations(binary):
+    with gated_session(binary) as (client, remote, started, release, exits, identities):
+        client.send(r="value <- 41L; worker <- Sys.getpid()", timeout_ms=0)
+        observe(remote, started, exits, identities)
+        release.release()
+        client.response_timeout = 180
+        send_and_collect_runtime_python_resolution(client)
+        (remote / "claimed").unlink()
+        preparation = client.start_send(requirements={"r": ["praise"]})
+        owner = observe(remote, started, exits, identities)
+        # Lose the trusted context after admission, keeping the established
+        # worker connection and its language state alive.
+        os.kill(owner[0], signal.SIGKILL)
+        client.receive(preparation)
+        assert "unconfirmed" in json.dumps(preparation), preparation
+        client.send(r="stopifnot(Sys.getpid() == worker); value + 1L")
+        assert last_tool_text(client) == "[1] 42\n", last_tool_text(client)
+        for request in ({"requirements": {"r": ["praise"]}}, {"control": "restart"}):
+            client.send(**request)
+            assert "unconfirmed" in last_result_text(client), last_result_text(client)
+        client.stdin.close()
+        client.process.wait(timeout=10)
+        errors = client.stderr.read()
+        assert "SSH preparation owner stopped" in errors, errors
+        # SSH and adapter diagnostics can both report the lost owner. Their
+        # arrival races adapter exit; the MCP operation errors are recorded.
+        return client.transcript[3:]
 
 
 @requires(SSH, WORKER, PROCESS_EVENTS, command("ir"), command("uv"))

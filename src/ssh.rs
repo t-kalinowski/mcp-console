@@ -9,6 +9,8 @@ pub(crate) use crate::target_launch::Retirement;
 #[cfg(unix)]
 use crate::target_launch::transfer as launch_io;
 use crate::target_launch::{Bootstrap, MAX_BOOTSTRAP, VERSION};
+#[cfg(unix)]
+pub(crate) mod lease;
 pub(crate) mod preparation;
 
 pub(crate) const SETUP_TIMEOUT: Duration = Duration::from_secs(30);
@@ -40,6 +42,17 @@ impl Session {
         self.command_for("ssh-launch")
     }
 
+    pub(crate) fn available(&self) -> Result<(), String> {
+        match &*self
+            .blocked
+            .lock()
+            .map_err(|_| "SSH session lock poisoned")?
+        {
+            Some(error) => Err(error.clone()),
+            None => Ok(()),
+        }
+    }
+
     fn command_for(&self, operation: &str) -> Result<Command, String> {
         if let Some(error) = &*self
             .blocked
@@ -48,6 +61,15 @@ impl Session {
         {
             return Err(error.clone());
         }
+        let mut command = Command::new(std::env::current_exe().map_err(|e| e.to_string())?);
+        command.args(["ssh-connect", operation]).env(
+            "MCP_CONSOLE_SSH_TARGET",
+            serde_json::to_string(&self.target).map_err(|e| e.to_string())?,
+        );
+        Ok(command)
+    }
+
+    fn ssh_command(&self, operation: &str) -> Result<Command, String> {
         // OpenSSH joins remote argv with spaces and passes it through a shell.
         // Only the trusted executable prefix goes there; all launch data uses stdin.
         let remote = self
@@ -55,7 +77,7 @@ impl Session {
             .command()
             .iter()
             .map(|argument| format!("'{}'", argument.replace('\'', "'\\''")))
-            .chain(std::iter::once(format!("'{operation}'")))
+            .chain(["'ssh-tunnel'".into(), format!("'{operation}'")])
             .collect::<Vec<_>>()
             .join(" ");
         let mut command = Command::new("ssh");

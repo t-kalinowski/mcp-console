@@ -54,6 +54,10 @@ pub(super) enum OldGenerationCommitDisposition {
 }
 
 impl LifecycleControl {
+    pub(super) fn has_ready_worker(&self) -> bool {
+        matches!(self.state, LifecycleState::Ready) && self.processes.worker.is_some()
+    }
+
     pub(super) fn new() -> Self {
         Self {
             state: LifecycleState::Ready,

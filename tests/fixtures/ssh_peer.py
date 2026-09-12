@@ -6,6 +6,10 @@ import struct
 import sys
 from pathlib import Path
 
+from ssh_tunnel_peer import wrap
+
+wrap()
+
 
 def frame(tag: int, value: object) -> None:
     body = json.dumps(value).encode()

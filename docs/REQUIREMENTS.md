@@ -12,6 +12,8 @@ Runtime use is covered by the [built-in runtime guide](BUILTIN_RUNTIME.md).
 Exact live-worker messages and custom-worker receipts belong to the [worker protocol](WORKER_PROTOCOL.md).
 
 [SSH targets](SSH.md) use the same capability discovery and managed preparation on the execution host.
+The preparation channel's remote controller lease applies throughout discovery and installation, independently of worker traffic and evaluation wait timeouts.
+Expiry requests cancellation through the existing resolver process-group owner; a missing completion/cleanup receipt still blocks further preparation and replacement.
 The controller never discovers local R/Python or executes resolvers for remote sessions.
 A separate trusted remote preparation owner captures resolver settings before MCP readiness without preparing defaults or starting a worker.
 When a bootstrap is available, `requirements`, first-use defaults, automatic R/Python requests, and restart preparation use the remote R installation, caches, filesystem, and temporary files.

@@ -12,6 +12,17 @@ pub(crate) struct Target {
     pub workspace: String,
     #[serde(default)]
     pub command: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lease_ms: Option<u64>,
+}
+
+pub(crate) fn validate_ssh_lease(lease_ms: u64) -> Result<(), String> {
+    if !(1_000..=300_000).contains(&lease_ms) {
+        return Err(
+            "target.lease_ms must be an integer from 1000 through 300000 milliseconds".into(),
+        );
+    }
+    Ok(())
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -98,6 +109,10 @@ impl Mount {
 }
 
 impl Target {
+    pub fn ssh_lease_ms(&self) -> u64 {
+        self.lease_ms.unwrap_or(30_000)
+    }
+
     pub fn is_local_host(&self) -> bool {
         matches!(
             (&self.transport, &self.compute),
@@ -117,6 +132,9 @@ impl Target {
     }
 
     pub(super) fn capture(&mut self) -> Result<(), String> {
+        if self.lease_ms.is_some() && !matches!(self.transport, Transport::Ssh { .. }) {
+            return Err("target.lease_ms requires SSH transport".into());
+        }
         if self.is_local_host() {
             if !self.workspace.is_empty() || self.command.is_some() {
                 return Err("local host targets use the launch directory and built-in command; target.workspace and target.command require SSH or Docker".into());
@@ -127,6 +145,7 @@ impl Target {
             return Err("target.workspace must be an absolute remote directory path".into());
         }
         if let Transport::Ssh { host } = &self.transport {
+            validate_ssh_lease(self.ssh_lease_ms())?;
             if host.is_empty() || host.contains('\0') {
                 return Err("target.transport.host must be a nonempty SSH destination".into());
             }

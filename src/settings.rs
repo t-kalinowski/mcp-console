@@ -7,7 +7,7 @@ use serde_json::{Map, Value};
 
 mod target;
 mod yaml;
-pub(crate) use target::{Compute, Pull, Target};
+pub(crate) use target::{Compute, Pull, Target, validate_ssh_lease};
 
 pub const ENVIRONMENT: &str = "MCP_CONSOLE_SANDBOX_SETTINGS";
 

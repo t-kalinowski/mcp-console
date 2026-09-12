@@ -22,6 +22,9 @@ def test_invalid_target_configuration(binary: Path) -> Transcript:
         ({"workspace": "relative"}, "absolute"),
         ({"workspace": "/", "command": []}, "nonempty"),
         ({"workspace": "/", "command": [""]}, "nonempty"),
+        ({"workspace": "/", "lease_ms": 0}, "target.lease_ms"),
+        ({"workspace": "/", "lease_ms": 300001}, "target.lease_ms"),
+        ({"workspace": "/", "lease_ms": "30s"}, "lease_ms"),
     )
     records = []
     with TemporaryDirectory() as temporary:
@@ -51,6 +54,37 @@ def test_invalid_target_configuration(binary: Path) -> Transcript:
             assert expected in result.stderr, result.stderr
             assert not result.stdout, result.stdout
             records.append({"target": values, "error": result.stderr})
+    return records
+
+
+def test_lease_requires_ssh_transport(binary: Path) -> Transcript:
+    records = []
+    with TemporaryDirectory() as temporary:
+        workspace = Path(temporary)
+        config = workspace / CONFIG
+        config.parent.mkdir(parents=True)
+        for target in (
+            {"lease_ms": 30000},
+            {
+                "workspace": "/workspace",
+                "compute": {"kind": "docker", "image": "example"},
+                "lease_ms": 30000,
+            },
+        ):
+            config.write_text(json.dumps({"target": target}))
+            result = subprocess.run(
+                [binary, "serve"],
+                cwd=workspace,
+                input="",
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            assert result.returncode != 0 and not result.stdout, result
+            assert "target.lease_ms requires SSH transport" in result.stderr, (
+                result.stderr
+            )
+            records.append({"target": target, "error": result.stderr})
     return records
 
 

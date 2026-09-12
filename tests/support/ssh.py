@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from pathlib import Path
 import select
 import time
+import sys
 
 from support.client import TextReader
 from support.normalization import code
@@ -93,7 +94,7 @@ def configure(
 
 
 @contextmanager
-def localhost(root: Path):
+def localhost(root: Path, *, faults: bool = False):
     assert SSHD is not None
     root.mkdir()
     for name in ("host", "client"):
@@ -148,6 +149,20 @@ LogLevel VERBOSE
             """).replace("COMMAND", shlex.join([executable, "-F", str(client_config)]))
     )
     launcher.chmod(0o755)
+    if faults:
+        proxy = Path(__file__).resolve().parents[1] / "fixtures/ssh_tcp_proxy.py"
+        wrapper = root / "ssh-wrapper.py"
+        wrapper.write_text(
+            "import os, shlex, sys\n"
+            + f"base = {str(executable)!r}\nconfig = {str(client_config)!r}\n"
+            + f"proxy = {str(proxy)!r}\nroot = {str(root)!r}\n"
+            + "role = shlex.split(sys.argv[-1])[-1]\n"
+            + "command = shlex.join([sys.executable, proxy, root, role]) + ' %h %p'\n"
+            + "os.execv(base, [base, '-F', config, '-o', 'ProxyCommand=' + command, *sys.argv[1:]])\n"
+        )
+        launcher.write_text(
+            "#!/bin/sh\nexec " + shlex.join([sys.executable, str(wrapper)]) + ' "$@"\n'
+        )
     process = subprocess.Popen(
         [SSHD, "-D", "-e", "-f", str(server_config)],
         stderr=subprocess.PIPE,

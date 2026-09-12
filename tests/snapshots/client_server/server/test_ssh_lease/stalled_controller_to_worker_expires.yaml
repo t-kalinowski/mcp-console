@@ -1,0 +1,5 @@
+---
+stalled_direction: up
+remote_worker_retired: true
+private_storage_removed: true
+replacement_blocked: true

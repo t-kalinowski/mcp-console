@@ -29,6 +29,8 @@ Explicit preparation and control finish before this wait, as shown below.
 It does not cancel evaluation, worker startup, or resolution.
 SSH discovery and worker bootstrap have separate 30-second setup deadlines and remain cancellable by session shutdown.
 Remote dependency preparation has no setup deadline; an interrupt or cancellation targets that operation's remote resolver processes.
+The independent SSH controller lease can expire during preparation or evaluation when bidirectional control communication is lost.
+`timeout_ms` neither renews that lease nor changes its duration.
 An automatic replacement attempt after worker failure shares the same evaluation wait.
 The table assumes the session admits the operation; a conflicting operation or generation change can reject it before the remaining steps.
 
