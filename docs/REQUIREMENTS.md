@@ -433,6 +433,9 @@ It must also apply its first managed R library before loading DuckDB; a DuckDB n
 
 ## Host resolution and trust
 
+For local execution, the resolver permissions and startup environment described below belong to the server.
+For [SSH execution](SSH.md#trusted-preparation), they belong to the trusted preparation owner on the execution host.
+
 On macOS and Linux, the default worker sandbox denies direct network access and regular writes outside its private temporary directory and any [explicit writable roots](SANDBOX_CONFIGURATION.md#additional-writable-paths).
 Dependency resolution is a deliberate exception to that boundary: the server launches R, Python, and DuckDB resolvers on the host, outside the sandbox.
 With `serve --no-sandbox`, the worker and the package or extension code it loads also run with the server's filesystem, process, and network permissions.

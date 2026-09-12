@@ -134,7 +134,9 @@ Project `environment` and `inherit_environment` control ordinary workload variab
 For `serve`, Console preserves each worker generation's selected R/Python environment and dynamic-resolution setting after applying project controls, including when inheritance is disabled.
 Project overrides cannot replace or reintroduce variables assigned or removed by that selection.
 Values with invalid native types remain subject to runner validation, including entries that conflict with Console's assignments or removals.
-Host resolver configuration still comes from the server's launch environment.
+For local execution, trusted resolver configuration comes from the server's launch environment.
+For [SSH execution](SSH.md#runtime-selection-and-policy), the remote preparation owner captures trusted configuration on the execution host.
+Workload environment controls do not configure that process, except for the supported explicit remote `R_HOME` and `RETICULATE_PYTHON` runtime selections.
 Standalone `sandbox` launches apply native environment controls without these worker-generation overrides.
 Both application launch paths retain `MCP_CONSOLE_SANDBOX=1` for runtime integration, including when inheritance is disabled or project environment entries try to replace it.
 The explicit complete-policy interface leaves this marker under caller control.
