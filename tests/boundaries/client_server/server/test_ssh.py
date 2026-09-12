@@ -134,10 +134,26 @@ def _preinstalled_remote_runtime(binary: Path, execution: Execution) -> Transcri
                 assert "42\nTrue\n" in last_result_text(client), last_result_text(
                     client
                 )
-                client.send(python="_ = os.write(1, b'raw output\\n')")
-                assert last_result_text(client) == "raw output\n", last_result_text(
-                    client
-                )
+                with closing(
+                    FifoCheckpoint.create(remote / "raw-output-release")
+                ) as release:
+                    # Raw stdout and completion use independent transports. Keep
+                    # the cell running until the MCP response proves receipt.
+                    wait_for_evaluation_output(
+                        client,
+                        "raw output\n\n[running; poll with an empty send]",
+                        "remote raw stdout",
+                        python=code(r"""
+                            _ = os.write(1, b'raw output\n')
+                            with open("raw-output-release", "rb", buffering=0) as gate:
+                                assert gate.read(1) == b"1"
+                            """),
+                        timeout_ms=1,
+                    )
+                    release.release()
+                    wait_for_evaluation_output(
+                        client, "[done]", "remote raw output completion"
+                    )
                 client.send(
                     python=code("""
                         try:

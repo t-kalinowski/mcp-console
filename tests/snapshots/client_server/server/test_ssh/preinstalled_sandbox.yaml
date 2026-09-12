@@ -238,12 +238,25 @@ result:
   isError: false
 ---
 send:
-  python: _ = os.write(1, b'raw output\n')
+  python: |
+    _ = os.write(1, b'raw output\n')
+    with open("raw-output-release", "rb", buffering=0) as gate:
+        assert gate.read(1) == b"1"
+  timeout_ms: 1
 result:
   content:
     - type: text
-      text: |
+      text: |-
         raw output
+
+        [running; poll with an empty send]
+  isError: false
+---
+send: {}
+result:
+  content:
+    - type: text
+      text: "[done]"
   isError: false
 ---
 send:
