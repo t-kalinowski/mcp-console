@@ -894,7 +894,7 @@ fn start_relay_event_reader(
         let output = crate::process_output::RelayOutput::new(relay_stdout, output_exit);
         let output: Box<dyn Read> = match ssh.as_ref() {
             Some((session, retirement)) => Box::new(crate::ssh::Output::new(
-                output,
+                crate::ssh::lease::status::Output::new(output, session.clone(), false),
                 session.clone(),
                 retirement.clone(),
             )),
@@ -1204,7 +1204,12 @@ impl WorkerShutdownHandle {
             }
         }
         if !exited {
-            if let Err(error) = child.request_retirement() {
+            // Keep the SSH adapter alive for this existing cleanup allowance:
+            // it owns any pending reconnect and the original shutdown stream.
+            // SIGTERM would destroy that state before the receipt can return.
+            if !child.ssh
+                && let Err(error) = child.request_retirement()
+            {
                 errors.push(error);
             }
             match child.wait_timeout_without_reaping(LAUNCHER_RETIREMENT_GRACE) {

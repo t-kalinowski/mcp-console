@@ -1,4 +1,3 @@
 ---
 healthy_heartbeats_cannot_extend_shutdown: true
-stderr: |
-  SSH retirement deadline exceeded; cleanup is unconfirmed
+remote_owner_retired: true

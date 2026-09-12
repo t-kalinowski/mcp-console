@@ -54,6 +54,10 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
+        cli::Command::SshOwner => match ssh_owner() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => exit_with_error(error),
+        },
         cli::Command::SshLaunch => match ssh::run() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
@@ -91,6 +95,13 @@ fn main() -> ExitCode {
             Err(error) => exit_with_error(error),
         },
     }
+}
+
+fn ssh_owner() -> Result<(), String> {
+    #[cfg(unix)]
+    return ssh::lease::run_owner();
+    #[cfg(not(unix))]
+    Err("SSH execution requires macOS or Linux".into())
 }
 
 fn ssh_transport(remote: bool, operation: &str) -> Result<(), String> {

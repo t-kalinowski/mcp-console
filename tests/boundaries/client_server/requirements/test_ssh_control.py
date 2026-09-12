@@ -44,6 +44,7 @@ from support.ssh import (
     localhost,
     remote_command,
     poison_controller,
+    ownership_ancestor,
     read_exact,
 )
 from support.suites import run_this_suite
@@ -58,6 +59,8 @@ def gated_session(
     handoff=False,
     lease_ms=None,
     faults=False,
+    frame_gate=False,
+    isolated_libraries=False,
 ):
     with TemporaryDirectory() as temporary, Events() as exits:
         root = Path(temporary).resolve()
@@ -84,6 +87,9 @@ def gated_session(
                 "UV_CACHE_DIR",
             }
         }
+        if isolated_libraries:
+            for name in ("R_LIBS", "R_LIBS_USER", "R_LIBS_SITE"):
+                environment[name] = str(remote / "empty-library")
         fake_bin = remote / "bin"
         fake_bin.mkdir()
         fixture = Path(__file__).resolve().parents[3] / "fixtures/startup_ir"
@@ -145,6 +151,15 @@ def gated_session(
                     "/usr/bin/env -i MCP_CONSOLE_TEST_SPAWN_SERVER=ssh-prepare ",
                 )
             )
+        if frame_gate:
+            gates = root / "gates"
+            gates.mkdir()
+            prefix = [
+                sys.executable,
+                str(Path(__file__).resolve().parents[3] / "fixtures/ssh_frame_gate.py"),
+                str(gates),
+                *prefix,
+            ]
         config = configure(local, remote, prefix)
         if lease_ms is not None:
             value = json.loads(config.read_text())
@@ -184,12 +199,12 @@ def gated_session(
                 release.close()
 
 
-def observe(remote, started, exits, identities):
+def observe(remote, started, exits, identities, *, direct=False):
     started.wait("remote resolver and descendant reached checkpoint")
     for pid in map(int, (remote / "identity").read_text().split()):
         identities.append(capture_process_identity(pid))
         exits.watch_process(pid)
-    return capture_process_identity(int((remote / "preparation-owner").read_text()))
+    return ownership_ancestor(identities[-2], "ssh-prepare" if direct else "ssh-owner")
 
 
 def exited(exits, identities):
@@ -357,7 +372,14 @@ def test_input_closure_cancels_discovery_before_mcp_ready(binary):
 
 @requires(SSH, WORKER, PROCESS_EVENTS, command("ir"), command("uv"))
 def test_detected_transport_loss_blocks_preparation_and_replacement(binary):
-    with gated_session(binary) as (client, remote, started, release, exits, identities):
+    with gated_session(binary, lease_ms=1500) as (
+        client,
+        remote,
+        started,
+        release,
+        exits,
+        identities,
+    ):
         client.send(r="must_not_run <- TRUE", timeout_ms=0)
         owner = observe(remote, started, exits, identities)
         exits.watch_process(owner[0])
@@ -431,7 +453,7 @@ def test_connection_closure_reaps_preparation_with_backpressured_output(binary):
             assert read_message()["Completed"]["id"] == 0
             process.stdin.write(frame({"Run": {"id": 1, "operation": "Bootstrap"}}))
             process.stdin.flush()
-            owner = observe(remote, started, exits, identities)
+            owner = observe(remote, started, exits, identities, direct=True)
             exits.watch_process(owner[0])
             # Fill SSH's output window with explicit stale-control replies,
             # then observe a real EAGAIN at the remote helper's stdout.

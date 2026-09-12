@@ -1,0 +1,3 @@
+---
+retirement_bounded_by_owned_helper: true
+direct_descendant_cleanup_guaranteed: false

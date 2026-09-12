@@ -24,7 +24,7 @@ from support.processes import (
 )
 from support.r import r_test_environment
 from support.requirements import PROCESS_EVENTS, SANDBOX, WORKER, requires
-from support.ssh import SSH, configure, localhost, remote_command
+from support.ssh import SSH, configure, localhost, remote_command, ownership_ancestor
 from support.suites import run_this_suite
 
 
@@ -80,9 +80,7 @@ def stalled_worker(binary, direction, workload=None):
                 identity = capture_process_identity(
                     host_process_id(int(pid), os.getpid())
                 )
-                owner = capture_process_identity(
-                    int((remote / "launch-owner").read_text())
-                )
+                owner = ownership_ancestor(identity)
                 controller_pid = [
                     child[0]
                     for child in child_process_identities(server)

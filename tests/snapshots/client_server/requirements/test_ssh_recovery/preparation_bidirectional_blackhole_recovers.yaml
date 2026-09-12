@@ -1,0 +1,5 @@
+---
+during_discovery: false
+fault: up down
+same_preparation_owner: true
+resolver_repeated: false

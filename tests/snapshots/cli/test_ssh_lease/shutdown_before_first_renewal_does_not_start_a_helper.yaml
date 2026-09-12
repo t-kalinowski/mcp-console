@@ -1,0 +1,2 @@
+---
+shutdown_before_liveness_started_no_helper: true

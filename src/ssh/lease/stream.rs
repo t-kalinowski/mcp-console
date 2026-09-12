@@ -1,290 +1,478 @@
-//! One readiness loop owns framing, bounded flow control, and lease deadlines.
-//! Workload backpressure disables data reads, never control reads or expiry.
+//! One readiness loop services the application, replay window, and lease.
+//! A missing attachment or a full output pipe cannot suspend its deadline.
 
 use std::collections::VecDeque;
-use std::io::{Read, Write};
+use std::fs::File;
+use std::io::{self, Read, Write};
 use std::os::fd::AsRawFd;
 use std::time::{Duration, Instant};
 
-use super::{ACK, BLOCK, DATA, END, ENDED, LIMIT, PING, PONG, WINDOW, challenge, frame};
-use crate::ssh::launch_io::poll;
+use super::attachment::Link;
+use super::flow::{Cursor, Flow};
+use super::status;
+use super::{
+    ACK, BLOCK, DATA, END, ENDED, FAILED, PING, PONG, READY, RETIREMENT, Secret, challenge,
+    invalid, json,
+};
 
-fn nonblocking(fd: i32) -> Result<(), String> {
+pub(super) fn nonblocking(fd: i32) -> io::Result<()> {
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
     if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
-        return Err(std::io::Error::last_os_error().to_string());
+        return Err(io::Error::last_os_error());
     }
     Ok(())
 }
-
-fn write(writer: &mut impl Write, bytes: &mut VecDeque<u8>) -> Result<(), String> {
+pub(super) fn would_block(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+    )
+}
+pub(super) fn write(writer: &mut impl Write, bytes: &mut VecDeque<u8>) -> io::Result<()> {
     if bytes.is_empty() {
         return Ok(());
     }
     match writer.write(bytes.as_slices().0) {
-        Ok(0) => Err("SSH stream write returned zero".into()),
+        Ok(0) => Err(io::ErrorKind::WriteZero.into()),
         Ok(count) => {
             bytes.drain(..count);
             Ok(())
         }
-        Err(e)
-            if matches!(
-                e.kind(),
-                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
-            ) =>
-        {
-            Ok(())
-        }
-        Err(e) => Err(e.to_string()),
+        Err(error) if would_block(&error) => Ok(()),
+        Err(error) => Err(error),
     }
 }
 
-pub(super) fn pump(
-    remote: bool,
-    lease_ms: u64,
-    mut wire_in: impl Read + AsRawFd,
-    mut wire_out: impl Write + AsRawFd,
-    mut source: impl Read + AsRawFd,
-    destination: impl Write + AsRawFd,
-    retirement: &mut Option<Instant>,
-) -> Result<(), String> {
-    for fd in [
-        wire_in.as_raw_fd(),
-        wire_out.as_raw_fd(),
-        source.as_raw_fd(),
-        destination.as_raw_fd(),
-    ] {
-        nonblocking(fd)?;
+pub(super) enum Destination {
+    Remote(File),
+    Local(status::Writer),
+}
+impl AsRawFd for Destination {
+    fn as_raw_fd(&self) -> i32 {
+        match self {
+            Self::Remote(file) => file.as_raw_fd(),
+            Self::Local(writer) => writer.as_raw_fd(),
+        }
     }
-    let mut destination = Some(destination);
-    let lease = Duration::from_millis(lease_ms);
-    let heartbeat = lease / 6;
-    let mut deadline = Instant::now() + lease;
-    let mut last_response = Instant::now();
-    let mut next_ping = Instant::now() + heartbeat;
-    let mut pending_ping = None;
-    let mut encoded = VecDeque::new();
-    let mut incoming = Vec::new();
-    let mut application = VecDeque::new();
-    let mut sent = 0u64;
-    let mut acknowledged = 0u64;
-    let mut received = 0u64;
-    let mut delivered = 0u64;
-    let mut advertised = 0u64;
-    let mut source_closed = false;
-    let mut peer_closed = false;
-    let mut end_sent = false;
-    let mut ended_sent = false;
-    let mut finished = false;
-    loop {
+}
+impl Write for Destination {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        match self {
+            Self::Remote(file) => file.write(bytes),
+            Self::Local(writer) => writer.write(bytes),
+        }
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+pub(super) struct Engine {
+    pub link: Option<Link>,
+    pub source: Option<File>,
+    pub diagnostics: Option<File>,
+    pub destination: Option<Destination>,
+    pub stderr: Option<File>,
+    pub source_closed: bool,
+    pub activated: bool,
+    pub helper_exited: bool,
+    pub output_abandoned: bool,
+    input_closed: bool,
+    pub retirement: Option<Instant>,
+    pub deadline: Instant,
+    pub flow: Flow,
+    pub remote: bool,
+    lease: Duration,
+    heartbeat: Duration,
+    next_ping: Instant,
+    pending_ping: Option<Secret>,
+    last_response: Instant,
+    last_challenge: Instant,
+    advertised: Cursor,
+    peer_closed: bool,
+    peer_end_seen: bool,
+    end_sent: bool,
+    ended_sent: bool,
+    finished: bool,
+}
+
+impl Engine {
+    pub fn new(remote: bool, lease_ms: u64) -> Self {
         let now = Instant::now();
-        if (remote && peer_closed) || (!remote && source_closed) {
-            retirement.get_or_insert(now + Duration::from_secs(8));
+        let lease = Duration::from_millis(lease_ms);
+        Self {
+            link: None,
+            source: None,
+            diagnostics: None,
+            destination: None,
+            stderr: None,
+            source_closed: false,
+            activated: false,
+            helper_exited: false,
+            output_abandoned: false,
+            input_closed: false,
+            retirement: None,
+            deadline: now
+                + if remote {
+                    lease
+                } else {
+                    crate::ssh::SETUP_TIMEOUT
+                },
+            flow: Flow::default(),
+            remote,
+            lease,
+            heartbeat: lease / 6,
+            next_ping: now,
+            pending_ping: None,
+            last_response: now,
+            last_challenge: now,
+            advertised: Cursor::default(),
+            peer_closed: false,
+            peer_end_seen: false,
+            end_sent: false,
+            ended_sent: false,
+            finished: false,
         }
-        if retirement.is_some_and(|deadline| now >= deadline) {
-            return Err("SSH retirement deadline exceeded; cleanup is unconfirmed".into());
+    }
+    pub fn status(&mut self, state: &'static str) {
+        if let Some(Destination::Local(writer)) = &mut self.destination {
+            writer.status(state);
         }
-        if encoded.len() > LIMIT * 2 {
-            return Err("SSH control output capacity exhausted".into());
+    }
+    pub fn install(
+        &mut self,
+        mut link: Link,
+        cursor: Option<Cursor>,
+        started: Instant,
+    ) -> io::Result<()> {
+        if self.retirement.is_some() || Instant::now() >= self.deadline {
+            return Err(invalid(
+                "SSH ownership expired or retirement already requested",
+            ));
         }
-        if now >= deadline {
-            return Err("SSH controller lease expired; remote retirement is unconfirmed".into());
+        if !self.remote && !self.activated {
+            self.deadline = started + self.lease;
+            self.activated = true;
+            self.last_response = started;
         }
-        if encoded.is_empty() {
-            if remote && pending_ping.is_none() && now >= next_ping {
-                let token = challenge()?;
-                encoded.extend(frame(PING, &token));
-                pending_ping = Some(token);
-            } else if advertised != delivered {
-                encoded.extend(frame(ACK, &delivered.to_be_bytes()));
-                advertised = delivered;
-            } else if peer_closed && application.is_empty() && !ended_sent {
-                destination.take();
-                encoded.extend(frame(ENDED, &[]));
-                ended_sent = true;
-            } else if source_closed && !end_sent {
-                encoded.extend(frame(END, &sent.to_be_bytes()));
-                end_sent = true;
-            }
+        if let Some(cursor) = cursor {
+            self.flow.resume(cursor)?;
+            link.wire.ready = true;
         }
-        if !remote && ended_sent && encoded.is_empty() {
-            return Ok(());
-        }
-        if remote && finished && encoded.is_empty() {
-            return Ok(());
-        }
-        let wake = if remote && pending_ping.is_none() {
-            deadline.min(next_ping)
+        link.wire.queue(READY, &json(&self.flow.delivered))?;
+        self.link = Some(link); // Dropping the old stream fences its epoch.
+        self.pending_ping = None;
+        self.next_ping = Instant::now();
+        self.last_challenge = Instant::now();
+        self.advertised = self.flow.delivered;
+        self.end_sent = false;
+        self.peer_end_seen = false;
+        self.ended_sent = false;
+        self.status("connected");
+        Ok(())
+    }
+    pub fn lost(&mut self) {
+        self.link.take();
+        self.pending_ping = None;
+        self.status("recovering");
+    }
+    fn application_closed(&mut self) {
+        self.destination.take();
+        self.flow.discard_input(); // Unwritten bytes are never acknowledged.
+        if self.remote {
+            // The helper can close stdin before its queued terminal receipt is
+            // drained. Late generation controls must not destroy that receipt.
+            self.input_closed = true;
         } else {
-            deadline
-        };
-        let wake = retirement.map_or(wake, |retirement| wake.min(retirement));
-        // A partially buffered frame never postpones the absolute lease deadline.
-        let events = match poll(
-            &[
-                (wire_in.as_raw_fd(), libc::POLLIN),
-                (
-                    if encoded.is_empty() {
-                        -1
-                    } else {
-                        wire_out.as_raw_fd()
-                    },
-                    libc::POLLOUT,
-                ),
-                (
-                    if !source_closed
-                        && (remote || !peer_closed)
-                        && encoded.is_empty()
-                        && sent - acknowledged < WINDOW as u64
-                    {
-                        source.as_raw_fd()
-                    } else {
-                        -1
-                    },
-                    libc::POLLIN,
-                ),
-                (
-                    if application.is_empty() {
-                        -1
-                    } else {
-                        destination.as_ref().map_or(-1, AsRawFd::as_raw_fd)
-                    },
-                    libc::POLLOUT,
-                ),
-                (
-                    if remote || source_closed {
-                        -1
-                    } else {
-                        source.as_raw_fd()
-                    },
-                    0,
-                ),
-            ],
-            Some(wake),
-        ) {
-            Ok(events) => events,
-            Err(_) if Instant::now() >= wake => continue,
-            Err(error) => return Err(error),
-        };
-        if events[1] != 0 {
-            write(&mut wire_out, &mut encoded)?;
+            // The server cancelled its reader. Request retirement, then leave
+            // without representing discarded output as ingested or confirmed.
+            self.output_abandoned = true;
+            self.local_closed();
         }
-        if events[4] != 0 && events[2] == 0 {
-            source_closed = true;
-        }
-        if events[3] != 0 {
-            let before = application.len();
-            write(
-                destination.as_mut().ok_or("SSH application input closed")?,
-                &mut application,
-            )?;
-            delivered += (before - application.len()) as u64;
-        }
-        if events[2] != 0 {
-            let mut bytes = [0; BLOCK];
-            let capacity = BLOCK.min(WINDOW - (sent - acknowledged) as usize);
-            match source.read(&mut bytes[..capacity]) {
-                Ok(0) => source_closed = true,
-                Ok(count) => {
-                    let mut data = sent.to_be_bytes().to_vec();
-                    data.extend(&bytes[..count]);
-                    sent += count as u64;
-                    encoded.extend(frame(DATA, &data));
-                }
-                Err(e)
-                    if matches!(
-                        e.kind(),
-                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
-                    ) => {}
-                Err(e) => return Err(e.to_string()),
+    }
+    pub fn local_closed(&mut self) {
+        self.source_closed = true;
+        self.source.take();
+        self.retirement.get_or_insert(Instant::now() + RETIREMENT);
+        self.status("retiring");
+    }
+    pub fn tick(&mut self) -> io::Result<bool> {
+        if self.activated
+            && self.source.is_none()
+            && self.diagnostics.is_none()
+            && (!self.remote || self.helper_exited)
+        {
+            self.source_closed = true;
+            if !self.remote {
+                self.local_closed();
             }
         }
-        if events[0] != 0 {
-            let mut bytes = [0; LIMIT + 5];
-            // Read only the current frame. Control cannot accumulate behind an
-            // unbounded queue of data frames or an incomplete peer header.
-            let needed = if incoming.len() < 5 {
-                5 - incoming.len()
+        let now = Instant::now();
+        if self.retirement.is_some_and(|deadline| now >= deadline) {
+            return Err(io::Error::other(
+                "SSH retirement deadline exceeded; cleanup is unconfirmed",
+            ));
+        }
+        if now >= self.deadline {
+            return Err(io::Error::other(
+                "SSH controller lease expired; remote retirement is unconfirmed",
+            ));
+        }
+        if !self.remote && self.link.is_some() && now >= self.last_challenge + self.heartbeat * 2 {
+            self.lost();
+        }
+        let Some(link) = &mut self.link else {
+            return Ok(false);
+        };
+        if link.wire.empty() && link.wire.ready {
+            if self.remote && self.pending_ping.is_none() && now >= self.next_ping {
+                let token = challenge()?;
+                link.wire.queue(PING, &token)?;
+                self.pending_ping = Some(token);
+            } else if self.advertised != self.flow.delivered {
+                link.wire.queue(ACK, &json(&self.flow.delivered))?;
+                self.advertised = self.flow.delivered;
+            } else if self.peer_end_seen
+                && !self.output_abandoned
+                && self.flow.destination().is_none()
+                && !self.ended_sent
+            {
+                if self.remote {
+                    self.destination.take();
+                }
+                link.wire.queue(ENDED, &json(&self.flow.delivered))?;
+                self.ended_sent = true;
+            } else if let Some(bytes) = self.flow.send() {
+                link.wire.queue(DATA, &bytes)?;
+            } else if self.source_closed && !self.end_sent && self.flow.transmitted() {
+                link.wire.queue(END, &json(&self.flow.end()))?;
+                self.end_sent = true;
+            }
+        }
+        Ok(link.wire.empty()
+            && if self.remote {
+                self.finished
             } else {
-                let length =
-                    u32::from_be_bytes(incoming[1..5].try_into().expect("length")) as usize;
-                if length > LIMIT {
-                    return Err("SSH lease frame exceeds 32 KiB".into());
-                }
-                5 + length - incoming.len()
-            };
-            if needed > 0 {
-                match wire_in.read(&mut bytes[..needed]) {
-                    Ok(0) => return Err("SSH connection closed before stream retirement".into()),
-                    Ok(count) => incoming.extend(&bytes[..count]),
-                    Err(e)
-                        if matches!(
-                            e.kind(),
-                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
-                        ) => {}
-                    Err(e) => return Err(e.to_string()),
-                }
+                self.ended_sent || (self.output_abandoned && self.end_sent)
+            })
+    }
+    pub fn wake(&self) -> Instant {
+        let mut deadline = self
+            .retirement
+            .map_or(self.deadline, |time| time.min(self.deadline));
+        if let Some(link) = &self.link {
+            if !self.remote {
+                deadline = deadline.min(self.last_challenge + self.heartbeat * 2);
             }
-            if incoming.len() < 5 {
-                continue;
+            if self.remote && link.wire.ready && link.wire.empty() && self.pending_ping.is_none() {
+                deadline = deadline.min(self.next_ping);
             }
-            let length = u32::from_be_bytes(incoming[1..5].try_into().expect("length")) as usize;
-            if length > LIMIT {
-                return Err("SSH lease frame exceeds 32 KiB".into());
-            }
-            if incoming.len() != length + 5 {
-                continue;
-            }
-            let body = &incoming[5..];
-            match incoming[0] {
-                DATA if !peer_closed && body.len() > 8 && body.len() <= BLOCK + 8 => {
-                    let offset = u64::from_be_bytes(body[..8].try_into().expect("offset"));
-                    if offset != received || application.len() + body.len() - 8 > WINDOW {
-                        return Err("invalid SSH data sequence or exhausted receive window".into());
-                    }
-                    application.extend(&body[8..]);
-                    received += (body.len() - 8) as u64;
-                }
-                ACK if body.len() == 8 => {
-                    let offset = u64::from_be_bytes(body.try_into().expect("offset"));
-                    if offset < acknowledged || offset > sent {
-                        return Err("invalid SSH ingestion acknowledgment".into());
-                    }
-                    acknowledged = offset;
-                }
-                PING if !remote && body.len() == 32 => {
-                    encoded.extend(frame(PONG, body));
-                    // This challenge proves receipt of the previous response.
-                    // Its local enqueue time precedes the remote renewal; an
-                    // arbitrarily delayed challenge cannot move that bound.
-                    deadline = last_response + lease;
-                    last_response = Instant::now();
-                }
-                PONG if remote && pending_ping.as_deref() == Some(body) => {
-                    pending_ping = None;
-                    deadline = Instant::now() + lease;
-                    next_ping = Instant::now() + heartbeat;
-                }
-                END if body.len() == 8 && !peer_closed => {
-                    if u64::from_be_bytes(body.try_into().expect("offset")) != received {
-                        return Err("invalid SSH end offset".into());
-                    }
-                    peer_closed = true;
-                    if remote {
-                        // Controller input closure cancels pending work, even
-                        // when the application has stopped reading its pipe.
-                        application.clear();
-                        destination.take();
-                    }
-                }
-                ENDED if body.is_empty() && end_sent => {
-                    if remote {
-                        finished = true;
-                    }
-                }
-                _ => return Err("unexpected SSH lease frame".into()),
-            }
-            incoming.clear();
         }
+        deadline
+    }
+    pub fn descriptors(&self) -> Vec<(i32, libc::c_short)> {
+        let capacity = self.flow.capacity() > 0;
+        let status =
+            matches!(&self.destination, Some(Destination::Local(writer)) if writer.pending());
+        let destination = match self.flow.destination() {
+            Some(1) => self.stderr.as_ref().map_or(-1, AsRawFd::as_raw_fd),
+            Some(0) => self.destination.as_ref().map_or(-1, AsRawFd::as_raw_fd),
+            _ => -1,
+        };
+        vec![
+            (
+                self.link
+                    .as_ref()
+                    .map_or(-1, |link| link.wire.input.as_raw_fd()),
+                libc::POLLIN,
+            ),
+            (
+                self.link
+                    .as_ref()
+                    .filter(|link| !link.wire.empty())
+                    .map_or(-1, |link| link.wire.output.as_raw_fd()),
+                libc::POLLOUT,
+            ),
+            (
+                self.source
+                    .as_ref()
+                    .filter(|_| {
+                        capacity && !self.source_closed && (self.remote || !self.peer_closed)
+                    })
+                    .map_or(-1, AsRawFd::as_raw_fd),
+                libc::POLLIN,
+            ),
+            (
+                self.diagnostics
+                    .as_ref()
+                    .filter(|_| capacity)
+                    .map_or(-1, AsRawFd::as_raw_fd),
+                libc::POLLIN,
+            ),
+            (destination, libc::POLLOUT),
+            (
+                if self.remote {
+                    -1
+                } else {
+                    self.source.as_ref().map_or(-1, AsRawFd::as_raw_fd)
+                },
+                0,
+            ),
+            (
+                if status {
+                    self.destination.as_ref().map_or(-1, AsRawFd::as_raw_fd)
+                } else {
+                    -1
+                },
+                libc::POLLOUT,
+            ),
+        ]
+    }
+    pub fn process(&mut self, events: &[libc::c_short]) -> io::Result<()> {
+        if !self.remote && events[5] != 0 && events[2] == 0 {
+            self.local_closed();
+        }
+        if events[6] != 0
+            && let Some(Destination::Local(writer)) = &mut self.destination
+            && let Err(error) = writer.service()
+        {
+            if error.kind() != io::ErrorKind::BrokenPipe {
+                return Err(error);
+            }
+            self.application_closed();
+        }
+        if events[4] != 0 && !self.input_closed && !self.output_abandoned {
+            match self.flow.destination() {
+                Some(1) => self.flow.deliver(
+                    self.stderr
+                        .as_mut()
+                        .ok_or_else(|| invalid("SSH diagnostic destination closed"))?,
+                )?,
+                Some(0) => {
+                    let result = self.flow.deliver(
+                        self.destination
+                            .as_mut()
+                            .ok_or_else(|| invalid("SSH application input closed"))?,
+                    );
+                    if let Err(error) = result {
+                        if error.kind() != io::ErrorKind::BrokenPipe {
+                            return Err(error);
+                        }
+                        self.application_closed();
+                    }
+                }
+                _ => {}
+            }
+        }
+        for (index, kind) in [(2, 0), (3, 1)] {
+            if events[index] == 0 || self.flow.capacity() == 0 {
+                continue;
+            }
+            let source = if kind == 0 {
+                &mut self.source
+            } else {
+                &mut self.diagnostics
+            };
+            let Some(reader) = source.as_mut() else {
+                continue;
+            };
+            let mut bytes = [0; BLOCK];
+            match reader.read(&mut bytes[..self.flow.capacity()]) {
+                Ok(0) => {
+                    source.take();
+                }
+                Ok(count) => self.flow.push(kind, bytes[..count].to_vec()),
+                Err(error) if would_block(&error) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        let result = (|| {
+            if events[1] != 0
+                && let Some(link) = &mut self.link
+            {
+                link.wire.write()?;
+            }
+            if events[0] != 0
+                && let Some(link) = &mut self.link
+                && let Some((tag, body)) = link.wire.read()?
+            {
+                self.receive(tag, &body)?;
+            }
+            Ok::<(), io::Error>(())
+        })();
+        if let Err(error) = result {
+            if error.kind() == io::ErrorKind::InvalidData {
+                return Err(error);
+            }
+            self.lost();
+        }
+        Ok(())
+    }
+    fn receive(&mut self, tag: u8, bytes: &[u8]) -> io::Result<()> {
+        if Instant::now() >= self.deadline {
+            return Err(invalid("SSH owner lease has expired"));
+        }
+        let link = self.link.as_mut().expect("current attachment");
+        let cursor = || serde_json::from_slice::<Cursor>(bytes).map_err(|e| invalid(e.to_string()));
+        match tag {
+            READY if self.remote && !link.wire.ready => {
+                self.flow.resume(cursor()?)?;
+                link.wire.ready = true;
+            }
+            DATA if link.wire.ready => {
+                self.flow.receive(bytes, self.remote)?;
+                if self.input_closed || self.output_abandoned {
+                    self.flow.discard_input();
+                }
+            }
+            ACK if link.wire.ready => self.flow.acknowledge(cursor()?)?,
+            PING if !self.remote && link.wire.ready && bytes.len() == 32 => {
+                link.wire.queue(PONG, bytes)?;
+                self.deadline = self.last_response + self.lease;
+                self.last_response = Instant::now();
+                self.last_challenge = Instant::now();
+            }
+            PONG if self.remote
+                && self.pending_ping.as_ref().map(|token| token.as_slice()) == Some(bytes) =>
+            {
+                self.pending_ping = None;
+                self.deadline = Instant::now() + self.lease;
+                self.next_ping = Instant::now() + self.heartbeat;
+                if self.retirement.is_none() {
+                    self.activated = true;
+                }
+            }
+            END if link.wire.ready => {
+                self.flow.accept_end(cursor()?)?;
+                self.peer_closed = true;
+                self.peer_end_seen = true;
+                if self.remote {
+                    self.retirement.get_or_insert(Instant::now() + RETIREMENT);
+                    self.flow.discard_input();
+                    self.destination.take();
+                    if !self.activated {
+                        self.source_closed = true;
+                    }
+                }
+            }
+            ENDED if self.end_sent => {
+                if self.remote {
+                    if cursor()? != self.flow.end() {
+                        return Err(invalid("invalid SSH terminal acknowledgment"));
+                    }
+                    self.finished = true;
+                } else {
+                    self.flow.acknowledge(cursor()?)?;
+                }
+            }
+            FAILED => {
+                return Err(invalid(format!(
+                    "remote SSH owner failed; retirement is unconfirmed: {}",
+                    String::from_utf8_lossy(bytes)
+                )));
+            }
+            _ => return Err(invalid("unexpected SSH recovery control frame")),
+        }
+        Ok(())
     }
 }
