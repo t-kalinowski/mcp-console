@@ -210,6 +210,9 @@ Controllers can run these tests on macOS or Linux; the image remains Linux.
 
 The September 12, 2026 validation used macOS 26.6.2 arm64 (Darwin 25.6.0) and a Debian 12 arm64 controller container against Docker Engine 29.5.2 in Colima 0.10.3, with kernel `6.8.0-117-generic`.
 Both controllers used Docker CLI 29.8.0; Linux also exercised Buildx 0.37.0 with BuildKit.
+All 23 Docker-focused cases passed on both controllers, including 19 cases using the real daemon.
+The macOS controller also passed `scripts/check` with Docker enabled, covering the complete applicable transcript suite, local and loopback SSH regressions, and source/wheel installations.
+Twenty simultaneous creation-cancellation runs passed with a controller file-descriptor limit of 1,048,575.
 Containers used ordinary daemon security settings, with no added capabilities or security-profile overrides.
 Native enforcement and explicit proxy setup failed with bubblewrap's namespace-permission error on this daemon; nested native permission success was not established.
 The permission assertions are enabled only when a real native probe succeeds.
