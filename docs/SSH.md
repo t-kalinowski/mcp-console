@@ -37,13 +37,14 @@ Selecting SSH alone grants no workspace writes.
 
 For example, `target.command: [uvx, mcp-console==0.0.3]` selects a package version, and `target.command: [/opt/console/bin/mcp-console]` selects a preinstalled build.
 The selected package must implement this SSH protocol; a version pin is not a compatibility guarantee.
+The command is a trusted executable prefix, not a shell program or a `send` argument.
+It must leave stdout exclusively for Console's launch protocol; setup diagnostics belong on stderr.
+Unexpected stdout is an error.
+
 `target.lease_ms` sets each channel's controller lease in integer milliseconds, from 1,000 through 300,000 (default 30,000).
 Heartbeat challenges are spaced at one sixth of that lease (5 seconds by default).
 The server freezes this setting with the target.
 Select a lease that allows for host scheduling and SSH latency; it does not extend connection or setup deadlines.
-The command is a trusted executable prefix, not a shell program or a `send` argument.
-It must leave stdout exclusively for Console's launch protocol; setup diagnostics belong on stderr.
-Unexpected stdout is an error.
 
 `serve --no-sandbox` retains the configured SSH target and remote directory.
 It launches the remote relay directly, with the remote account's permissions and the existing direct-worker cleanup limitations.
@@ -121,8 +122,9 @@ The preparation owner retains trusted resolver configuration, not session manife
 Each operation runs its own resolver process groups and reports an explicit result and cleanup status before the server can commit a candidate.
 An interrupt accepted between resolver stages remains owned by that preparation operation and applies to its next resolver.
 An ordinary installation failure with confirmed cleanup retains the existing transaction behavior, including preservation of a healthy old worker during failed restart preparation.
-Missing, malformed, or truncated results, failed cleanup, and detected transport loss prevent further preparation and worker replacement in that session.
-Preparation is never automatically replayed after uncertain completion.
+Missing, malformed, or truncated results and failed cleanup prevent further preparation and worker replacement in that session.
+A brief transport interruption can recover the original result from the same owner; it never reruns a resolver to discover whether installation succeeded.
+An unrecoverable interruption retains the uncertainty barrier.
 
 Accepted requirements retain the [existing trust boundary](REQUIREMENTS.md#host-resolution-and-trust): installation and build code may execute with the remote account's trusted setup permissions.
 Preparation has the remote account's network access, independently of workload restrictions.
@@ -149,12 +151,13 @@ Both SSH channels have independent leases, including during discovery before a w
 A healthy preparation channel cannot renew the worker channel, or the reverse.
 
 Evaluation, polling, stdin, output, images, interrupts, shutdown, and replacement use the existing relay protocol and generation rules.
-The remote helper observes connection closure independently of output backpressure and requests ordinary runner retirement, including before worker readiness.
+The remote session owner survives loss of an individual SSH attachment until its lease expires.
+Its launch helper remains the sandbox runner's caller throughout recovery, including before worker readiness.
 Local shutdown retains the existing staged bound of approximately 10 seconds, including forced local SSH termination if needed.
 The local SSH process exiting is not proof that remote cleanup completed.
 On a healthy connection, the helper acknowledges retirement after the runner exits successfully and queued output is forwarded.
 Without that acknowledgment, Console reports unconfirmed retirement and prevents further replacement in the session.
-Cells are never replayed after transport failure.
+Recovery retransmits missing transport data to the same surviving owner; it does not resubmit an evaluation to a new worker.
 
 Each remote channel issues an unpredictable challenge and requires its response before starting discovery, preflight, or other work.
 It issues the next challenge only after accepting the previous response and waiting the heartbeat interval.
@@ -165,30 +168,105 @@ The launch owner retires the ordinary sandbox launcher; the preparation owner st
 Idle sessions, busy cells, prompts, long installations, partial frames, and output backpressure remain subject to that deadline.
 The deadline bounds the retirement request, not completion of native cleanup.
 
-Transport loss, retirement requested, and retirement confirmed are separate outcomes.
-Without the original launch or preparation cleanup receipt, retirement remains unconfirmed and conflicting preparation or replacement stays blocked.
-The local adapter also bounds its SSH child's exit wait; it cannot manufacture a remote cleanup receipt by killing that child.
+### Recovery within one live local session
+
+The two channels recover independently, including preparation before a worker exists.
+A local adapter detects EOF or an I/O failure immediately; two missing heartbeat intervals also cause it to replace an otherwise stalled SSH attachment.
+It retries with delays of 100, 200, 400, 800, then at most 1,000 milliseconds, bounded by its conservative lease deadline.
+Each recovery attempt uses the ordinary 30-second setup budget, capped by the remaining lease.
+This includes OpenSSH and command-prefix startup; once connected, an owner bounds each authentication exchange to two seconds without pausing its lease.
+Authentication attempts do not renew the remote lease.
+A definite remote command failure, such as a missing executable, stops recovery and retains uncertainty about any prior ownership.
+
+The controller assigns each owner a random identity, channel, worker generation, and private capability before its first creation attempt.
+It requests creation only once.
+If a bootstrap or Hello reply is lost, subsequent attempts may only attach to that identity; a missing owner is an explicit uncertainty error.
+They never repeat creation, recapture resolver settings, reread YAML, or start a fresh worker.
+The same local MCP server and its adapters must remain alive.
+A stopped adapter loses its recovery state; another or restarted server cannot attach.
+There is no permanent service, global session registry, saved credential, or later-attachment interface.
+
+Transport states distinguish a connected attachment, recovery in progress, requested retirement, and terminal failure.
+During recovery, existing waits and polls retain their output and operation identity; MCP remains responsive.
+New cells, requirements, and restart requests are rejected while either channel reports recovery, with an explicit message that the work was not admitted.
+Already admitted evaluations, stdin, interrupts, activation replies, restart retirement, and preparation operations retain their ordered stream identities.
+They resume with that owner and generation or fail under the existing lifecycle bounds.
+A healthy channel does not clear uncertainty about the other.
+
+A successful attachment proves identity and resumes stream cursors; it cannot clear a missing cleanup receipt.
+The launch helper's original terminal receipt and preparation's confirmed completion results remain authoritative.
+Prepared environments still require the existing generation and activation checks before commit, including candidate preparation before old-worker retirement during restart.
+An ordinary installation failure retains its existing transaction behavior.
+Missing owners, host reboot, expiry, incompatible builds, protocol corruption, or lost retention cause terminal failure without a fresh session or automatic resubmission.
+An operation may already have had effects when its owner disappears.
+Console guarantees at-most-once dispatch while the same owner retains the necessary state, not exactly-once external effects or rollback of package-cache mutations.
+
 Explicit shutdown retains the existing protocol request and does not wait for lease expiry while communication is available.
-Controller input closure cancels queued transport input and starts a separate eight-second retirement deadline; continuing heartbeats cannot extend shutdown.
-Connection closure still requests immediate retirement in this change; reconnect and resume are not yet supported.
-The runner retains its own limits, including no independent recovery after runner death.
+Controller input closure stops recovery attempts and requests retirement through an available attachment.
+The remote owner cancels queued input when it receives that closure, even if the helper is not reading, and uses a separate eight-second retirement deadline.
+Continuing heartbeats cannot extend shutdown.
+When communication is unavailable, local shutdown remains bounded and remote lease expiry is the fallback.
+Expiry closes the helper input to initiate cleanup; elapsed time never proves that cleanup succeeded.
+Without an explicit valid launch or preparation receipt, retirement stays unconfirmed and conflicting preparation or replacement remains blocked.
+The runner retains its limits, including no independent recovery after runner death.
 Direct execution retains its lack of runner-owned descendant cleanup.
 
-### Private lease envelope
+### Ownership and attachment authentication
 
-Each local `ssh-connect` adapter runs OpenSSH, whose remote `ssh-tunnel` owns the existing `ssh-launch` or `ssh-prepare` helper through ordinary pipes.
-Lease protocol 1 checks the Console package version, channel name, and frozen lease before starting that helper.
-It wraps both directions; lease controls never enter relay JSONL or the typed preparation protocol.
-Each frame has a one-byte tag, a four-byte big-endian payload length, and at most 32 KiB of payload.
-Compatibility messages are structured JSON; challenge tokens have 32 random bytes.
-Data frames contain an eight-byte byte offset followed by at most 16 KiB of stream data.
-Acknowledgments identify the cumulative bytes written to the receiving application pipe, independently of MCP response delivery.
-Each direction allows at most 256 KiB of unacknowledged application data and applies backpressure at that bound.
-An end frame carries the final offset.
-Remote output is acknowledged after the receiving pipe drains and closes; controller input closure requests prompt cancellation even when application input is backpressured.
-Malformed framing, invalid offsets, and exhausted control capacity fail the channel explicitly.
-The readiness loop services control and monotonic deadlines independently of application reads and writes.
-Diagnostics remain on stderr, outside these frames.
+Each server-owned `ssh-connect` adapter runs disposable OpenSSH connections and remote `ssh-tunnel` forwarding processes.
+The first forwarding process creates a separate `ssh-owner` with a private Unix socket in a randomly named directory under `/tmp`.
+That owner holds the existing `ssh-launch` or `ssh-prepare` child, replay state, and monotonic lease across attachments.
+It leaves no listening network service.
+Normal terminal exit removes the socket and directory; a killed owner can leave an unusable directory, which never authorizes recreation or attachment.
+
+The directory has mode 0700, but same-UID permissions alone do not isolate it from a sandboxed workload.
+A 256-bit capability is generated locally and sent only through the first encrypted SSH bootstrap and a private owner startup pipe.
+It remains in owner and adapter memory and is absent from arguments, workload environment, files, logs, and recordings.
+The default sandbox's process and descriptor isolation prevents workload access to that trusted memory and its startup pipes.
+Deliberately unrestricted execution cannot provide this isolation from other processes of the same account.
+
+Attachments mutually authenticate with HMAC-SHA256 over fresh nonces and the complete immutable identity, channel, generation, lease, build, and requested epoch.
+They derive an attachment key and authenticate every subsequent frame, including its direction, epoch, serial, tag, and payload.
+This prevents a substituted Unix socket from stealing the capability or injecting commands after forwarding a valid handshake.
+Only an authenticated higher epoch can replace the current stream.
+The owner checks that epoch at installation, so simultaneous attempts cannot install two current attachments.
+Failed, stale, and partial handshakes neither displace a live attachment nor renew its lease.
+At most four bounded handshake candidates run alongside the owner; workload output cannot block authentication or expiry processing.
+
+### Private recovery envelope
+
+Recovery protocol 2 checks the Console package version, channel, generation, identity, and frozen lease before starting the helper.
+It wraps both directions; its controls never enter relay JSONL or the typed preparation protocol.
+Every frame has a one-byte tag, a four-byte big-endian payload length, and at most 32 KiB of payload.
+Initial request/challenge messages are structured JSON; nonce and capability values have 32 random bytes.
+Authenticated frames carry an eight-byte monotonically increasing attachment serial and a 32-byte HMAC around their body.
+The tags are Hello (1), data (2), ingestion acknowledgment (3), challenge (4), response (5), stream end (6), end acknowledgment (7), authentication proof (8), resume cursor (9), and terminal failure (10).
+
+A command is identified by its position and content in its owner's immutable input stream; packet boundaries can split or combine inner messages.
+Each data packet has a stable eight-byte stream ID, the preceding 32-byte SHA-256 chain anchor, a one-byte stream kind, and at most 16 KiB of data.
+Kind 0 carries the application stream; kind 1 carries remote diagnostics to local stderr.
+The next anchor hashes the preceding anchor, ID, kind, and exact bytes.
+Repeated delivery of a still-pending packet must match its content and never writes those bytes twice.
+Stale IDs outside retained history and IDs reused with different content are errors.
+
+Acknowledgments and resume/end cursors carry the last fully ingested packet's ID and chain anchor.
+Ingestion means that its bytes have been written to the receiving application pipe, independently of MCP response delivery.
+Local adapter records distinguish stream fragments from connection-status updates; decoding them preserves incomplete inner frames.
+On attachment replacement, both ends verify the peer's ingestion cursor, retain partially ingested packets, and resend only the unacknowledged suffix.
+The existing relay/preparation parsers survive, so evaluations, interactive input, control IDs, results, images, and terminal receipts are not dispatched or delivered twice.
+A worker or resolver that finishes just before disconnection can return its retained original terminal outcome.
+
+Each direction retains at most 256 KiB and 128 unacknowledged data packets.
+Larger outputs and results stream through that window; they need not fit in one replay message.
+Capacity applies backpressure to application and diagnostic reads while the readiness loop continues to service control, cancellation, partial frames, and monotonic deadlines.
+Authenticated input exceeding the receive window or bounded control capacity fails explicitly.
+Acknowledged payloads are removed.
+Each receiver retains at most 128 content-hash receipts to recognize replay that crosses an acknowledgment while local ingestion advances; older stale IDs fail.
+The terminal handshake is repeated on the current attachment, after its replay data, before closing local output.
+A helper can close input before its final output is drained; late input is left unacknowledged while that original terminal result is preserved.
+If the local server cancels its output reader, the adapter requests retirement and abandons delivery without acknowledging the discarded bytes or claiming cleanup.
+The end handshake drains remote output before local closure; controller input closure requests prompt cancellation even when application input is backpressured.
+Native cleanup and the existing inner receipts retain their separate ownership and meaning.
 
 Journals, output spools, transcripts, and returned image bytes stay in the local project's `.agents/console/sessions/`.
 Session metadata records the SSH destination and initial remote execution directory separately from the local recording workspace.

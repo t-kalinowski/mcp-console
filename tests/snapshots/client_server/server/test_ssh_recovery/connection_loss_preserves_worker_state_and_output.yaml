@@ -1,0 +1,6 @@
+---
+same_worker_and_language_state: true
+cell_effect_count: 1
+output: |
+  output after interruption
+local_image_count: 1

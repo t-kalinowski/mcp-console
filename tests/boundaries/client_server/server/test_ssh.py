@@ -172,9 +172,13 @@ def _preinstalled_remote_runtime(binary: Path, execution: Execution) -> Transcri
                 assert "[waiting for stdin]" in last_result_text(client), (
                     last_result_text(client)
                 )
-                client.send(stdin="interactive value\n")
-                assert "interactive value" in last_result_text(client), (
-                    last_result_text(client)
+                # Input delivery and wait-state observations are independent.
+                # Poll for consumption without submitting the line again.
+                wait_for_evaluation_output(
+                    client,
+                    "interactive value\n",
+                    "remote stdin consumption",
+                    stdin="interactive value\n",
                 )
                 plotted = client.send(r="plot(1:3)")
                 images = [
@@ -217,8 +221,9 @@ def _preinstalled_remote_runtime(binary: Path, execution: Execution) -> Transcri
                 config.write_text("invalid: [")
                 client.send(control="restart")
                 client.send(r="exists('x')")
-                assert last_result_text(client) == "[1] FALSE\n", last_result_text(
-                    client
+                assert last_result_text(client) == "[1] FALSE\n", (
+                    client.transcript[-3:],
+                    client._diagnostics(),
                 )
                 client.send(r="quit(save='no', status=23)")
                 client.send(r="exists('x')")

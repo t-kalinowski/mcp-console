@@ -17,12 +17,23 @@ pub(super) fn poll(
     descriptors: &[(RawFd, libc::c_short)],
     deadline: Option<Instant>,
 ) -> Result<Vec<libc::c_short>, String> {
-    let mut descriptors = descriptors
+    // Darwin reports readiness only on the last duplicate descriptor. Merge
+    // interests, then distribute readiness to every interested consumer.
+    let mut watched: Vec<libc::pollfd> = Vec::new();
+    let indices = descriptors
         .iter()
-        .map(|&(fd, events)| libc::pollfd {
-            fd,
-            events,
-            revents: 0,
+        .map(|&(fd, events)| {
+            if let Some(index) = watched.iter().position(|entry| entry.fd == fd) {
+                watched[index].events |= events;
+                index
+            } else {
+                watched.push(libc::pollfd {
+                    fd,
+                    events,
+                    revents: 0,
+                });
+                watched.len() - 1
+            }
         })
         .collect::<Vec<_>>();
     loop {
@@ -32,10 +43,16 @@ pub(super) fn poll(
                 + u128::from(!remaining.subsec_nanos().is_multiple_of(1_000_000)))
             .min(i32::MAX as u128) as i32
         });
-        let result =
-            unsafe { libc::poll(descriptors.as_mut_ptr(), descriptors.len() as _, timeout) };
+        let result = unsafe { libc::poll(watched.as_mut_ptr(), watched.len() as _, timeout) };
         if result > 0 {
-            return Ok(descriptors.iter().map(|event| event.revents).collect());
+            return Ok(indices
+                .iter()
+                .zip(descriptors)
+                .map(|(&index, &(_, events))| {
+                    watched[index].revents
+                        & (events | libc::POLLERR | libc::POLLHUP | libc::POLLNVAL)
+                })
+                .collect());
         }
         if result == 0 {
             return Err("SSH connection/bootstrap deadline exceeded".into());

@@ -117,5 +117,32 @@ def test_unavailable_remote_command(binary: Path) -> Transcript:
                 return [{"mcp_ready": False, "remote_shell_diagnostic_retained": True}]
 
 
+@requires(SSH)
+def test_malformed_owner_reply_is_terminal_before_setup_deadline(binary: Path):
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        peer = root / "bad-reply.py"
+        peer.write_text(
+            code("""
+            import sys
+            sys.stdout.buffer.write(bytes([1]) + (65536).to_bytes(4, 'big'))
+            sys.stdout.buffer.flush()
+            sys.stdin.buffer.read()
+            """)
+        )
+        configure(root, root, [sys.executable, str(peer)])
+        with localhost(root / "sshd") as environment:
+            with McpClient(
+                binary, ("serve", "--no-sandbox"), environment, root
+            ) as client:
+                client.process.wait(timeout=12)
+                client.stdin.close()
+                assert not client.stdout.read(timeout=12)
+                errors = client.stderr.read(timeout=12)
+                assert "SSH frame exceeds 32768 bytes" in errors, errors
+                assert "unconfirmed" in errors, errors
+                return [{"stderr": errors}]
+
+
 if __name__ == "__main__":
     run_this_suite(__file__)

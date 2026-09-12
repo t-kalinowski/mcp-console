@@ -30,6 +30,8 @@ pub(crate) struct Session {
     roots: Vec<PathBuf>,
     blocked: Arc<Mutex<Option<String>>>,
     pub preparation: Option<preparation::Preparation>,
+    pub(crate) status: lease::status::Status,
+    generation: Arc<std::sync::atomic::AtomicU64>,
     discovery: Option<preparation::Discovery>,
 }
 
@@ -40,6 +42,8 @@ impl Session {
             roots,
             blocked: Arc::default(),
             preparation: None,
+            status: Default::default(),
+            generation: Arc::default(),
             discovery: None,
         }
     }
@@ -59,7 +63,7 @@ impl Session {
             .map_err(|_| "SSH session lock poisoned")?
         {
             Some(error) => Err(error.clone()),
-            None => Ok(()),
+            None => self.status.check(),
         }
     }
 
@@ -76,6 +80,14 @@ impl Session {
             "MCP_CONSOLE_SSH_TARGET",
             serde_json::to_string(&self.target).map_err(|e| e.to_string())?,
         );
+        let generation = if operation == "ssh-launch" {
+            self.generation
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                + 1
+        } else {
+            0
+        };
+        command.env("MCP_CONSOLE_SSH_GENERATION", generation.to_string());
         Ok(command)
     }
 

@@ -1,0 +1,4 @@
+---
+bounded_replay_capacity: true
+overflow_rejected: true
+work_started: false

@@ -132,9 +132,11 @@ impl Preparation {
         let stdin = child.stdin.take().expect("SSH preparation stdin");
         let reader_abort = aborted.try_clone().map_err(|e| e.to_string())?;
         let read_events = events.clone();
+        let read_session = session.clone();
         let reader = thread::spawn(move || {
             let result = (|| {
-                let mut input = Io::new(stdout, Some(reader_abort), None)?;
+                let input = Io::new(stdout, Some(reader_abort), None)?;
+                let mut input = crate::ssh::lease::status::Output::new(input, read_session, true);
                 loop {
                     let message = super::read(&mut input)?;
                     let closed = matches!(message, Output::Closed);

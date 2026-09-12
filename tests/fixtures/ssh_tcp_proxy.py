@@ -73,7 +73,7 @@ while True:
             if action == "close":
                 request.sendall(b"ok")
                 break
-            paused = set(action.split())
+            paused = set() if action == "resume" else set(action.split())
             assert paused <= {"up", "down"}, paused
             request.sendall(b"ok")
     if 0 in readable:

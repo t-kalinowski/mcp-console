@@ -13,6 +13,8 @@ Exact live-worker messages and custom-worker receipts belong to the [worker prot
 
 [SSH targets](SSH.md) use the same capability discovery and managed preparation on the execution host.
 The preparation channel's remote controller lease applies throughout discovery and installation, independently of worker traffic and evaluation wait timeouts.
+A brief SSH interruption can recover the same trusted preparation owner and its original result, including a completed result whose delivery was lost.
+Recovery never reruns an uncertain resolver; candidate commits still require confirmed cleanup and the existing generation/activation checks.
 Expiry requests cancellation through the existing resolver process-group owner; a missing completion/cleanup receipt still blocks further preparation and replacement.
 The controller never discovers local R/Python or executes resolvers for remote sessions.
 A separate trusted remote preparation owner captures resolver settings before MCP readiness without preparing defaults or starting a worker.

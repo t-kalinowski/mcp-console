@@ -50,24 +50,30 @@ Available R, Python, and DuckDB dependency resolution runs in separate host proc
 For a configured SSH target, the process chain is:
 
 ```text
-local MCP server → ssh-connect → OpenSSH → remote ssh-tunnel → ssh-launch helper
+local MCP server → ssh-connect → OpenSSH → remote ssh-tunnel
+                                                  ↕ authenticated attachment
+                                              ssh-owner → ssh-launch helper
     → public sandbox frontend / private runner → relay → built-in worker
 ```
 
 The logical session, admission, output handling, and recording remain local.
-The remote helper owns only its ordinary launcher child and connection lifetime.
+The remote launch helper owns its ordinary launcher child.
 It consumes captured user policy, applies remote application defaults and preflight, and passes its own remote PID as the sandbox owner.
+The transport owner keeps that helper and its input pipe across attachments.
 The runner retains enforcement, private storage, and descendant cleanup.
 Direct SSH execution skips the sandbox at the same target.
-A separate `ssh-connect` adapter and OpenSSH connection reach the remote `ssh-tunnel` and `ssh-prepare` owner for capability discovery and dependency operations.
-That owner captures trusted resolver settings once and runs the existing resolver functions outside the worker sandbox.
+A separate `ssh-connect` adapter and OpenSSH connection reach the remote `ssh-tunnel`, independent `ssh-owner`, and `ssh-prepare` helper for capability discovery and dependency operations.
+The preparation helper captures trusted resolver settings once and runs the existing resolver functions outside the worker sandbox.
 It reports operation completion only after its resolver groups retire.
 The local server retains requirements, candidates, and activation decisions; remote execution never enters controller runtime discovery or resolver processes.
 See [SSH execution](SSH.md) for configuration and prerequisites.
-Each tunnel establishes a bidirectional challenge/response lease before starting its owner.
+Each remote session owner establishes a bidirectional challenge/response lease before starting its helper.
 Its readiness loop expires independently of workload execution, partial frames, and bounded data backpressure.
-Expiry closes the ordinary owner's input to request retirement; the original cleanup receipt remains authoritative.
-The two leases are independent, and this transport does not yet reconnect after loss.
+Expiry closes the helper's input to request retirement; the original cleanup receipt remains authoritative.
+The two leases are independent.
+A live local adapter can replace its SSH attachment within the lease while retaining the same owner, helper, and stream cursors.
+The remote owner and authenticated replay protocol preserve transport state; the local server keeps logical admission, generations, transactions, output cuts, delivery, and recording.
+Failed or expired recovery requires the existing cleanup proof before conflicting work can proceed.
 
 ## Communication boundaries
 
