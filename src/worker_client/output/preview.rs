@@ -38,6 +38,7 @@ pub(super) struct Gap {
 #[derive(Clone, Default)]
 pub(super) struct Preview {
     pub(super) parts: Vec<Part>,
+    collected_bytes: usize,
     image_bytes: usize,
     image_metadata_bytes: usize,
     image_events: usize,
@@ -66,13 +67,18 @@ impl Preview {
         } else {
             self.push_text(text);
         }
-        self.trim(COLLECT_BYTES);
+        // Amortize compaction over a bounded batch of new text. Tiny writes
+        // append in place; they do not recopy the retained head and tail.
+        if self.collected_bytes > COLLECT_BYTES + TEXT_BYTES {
+            self.trim(COLLECT_BYTES);
+        }
     }
 
     fn push_text(&mut self, text: &str) {
         if text.is_empty() {
             return;
         }
+        self.collected_bytes += text.len();
         if let Some(Part::Text(previous)) = self.parts.last_mut() {
             previous.push_str(text);
         } else {
@@ -86,8 +92,12 @@ impl Preview {
 
     fn omitted(&mut self, gap: Gap) {
         if gap.bytes != 0 {
-            self.parts.push(Part::Gap(gap));
-            self.trim(COLLECT_BYTES);
+            if let Some(Part::Gap(previous)) = self.parts.last_mut() {
+                previous.bytes += gap.bytes;
+                previous.notices += gap.notices;
+            } else {
+                self.parts.push(Part::Gap(gap));
+            }
         }
     }
 
@@ -132,8 +142,11 @@ impl Preview {
                 notices: text.len() as u64,
             });
         } else {
+            self.collected_bytes += text.len();
             self.parts.push(Part::Information(text));
-            self.trim(COLLECT_BYTES);
+            if self.collected_bytes > COLLECT_BYTES + TEXT_BYTES {
+                self.trim(COLLECT_BYTES);
+            }
         }
     }
 
@@ -172,6 +185,18 @@ impl Preview {
     }
 
     pub(super) fn source(&mut self, source: Source) {
+        let has_text = self
+            .parts
+            .iter()
+            .rev()
+            .take_while(|part| !matches!(part, Part::Source(_)))
+            .any(|part| matches!(part, Part::Text(_) | Part::Gap(_) | Part::Information(_)));
+        // Control-only recovery can seal arbitrarily many empty intervals.
+        // Keep a boundary for unrecorded text (including resolver notices),
+        // but do not retain receipts with nothing to attribute or publish.
+        if source.file.is_none() && source.raw_bytes == 0 && !has_text {
+            return;
+        }
         self.parts.push(Part::Source(source));
     }
 
@@ -297,6 +322,14 @@ impl Preview {
                 (_, part) => self.parts.push(part),
             }
         }
+        self.collected_bytes = self
+            .parts
+            .iter()
+            .map(|part| match part {
+                Part::Text(text) | Part::Information(text) => text.len(),
+                _ => 0,
+            })
+            .sum();
     }
 
     /// Reserve notices first, then divide ordinary text between its head and tail.
@@ -304,13 +337,13 @@ impl Preview {
         let mut allowance = TEXT_BYTES;
         loop {
             self.trim(allowance);
-            let mut bytes = text_bytes(&self.project(false));
+            let mut bytes = self.project(false).text_bytes;
             if bytes > TEXT_BYTES {
                 self.trim_controls(CONTROL_BYTES, TEXT_BYTES / 8);
-                bytes = text_bytes(&self.project(false));
+                bytes = self.project(false).text_bytes;
             }
             if bytes <= TEXT_BYTES {
-                return self.project(true);
+                return self.project(true).content.expect("rendered projection");
             }
             assert!(
                 allowance > 0,
@@ -322,16 +355,16 @@ impl Preview {
         }
     }
 
-    fn project(&self, account: bool) -> Vec<Content> {
-        let mut content = Vec::new();
+    fn project(&self, account: bool) -> Projection {
+        let mut projection = Projection {
+            content: account.then(Vec::new),
+            text_bytes: 0,
+        };
         if self.omitted_controls != 0 {
-            append_text(
-                &mut content,
-                &format!(
+            projection.text(&format!(
                     "[control preview: omitted {} earlier notices ({} rendered UTF-8 bytes); not retained]\n",
                     self.omitted_controls, self.omitted_control_bytes,
-                ),
-            );
+                ));
         }
         let mut image_marker = true;
         let mut start = 0;
@@ -362,26 +395,27 @@ impl Preview {
             let mut marker = (omitted != 0).then(|| source.notice(omitted, notices));
             for part in parts {
                 match part {
-                    Part::Text(text) | Part::Information(text) => append_text(&mut content, text),
-                    Part::Notice(control) => append_text(&mut content, &control.render()),
+                    Part::Text(text) | Part::Information(text) => projection.text(text),
+                    Part::Notice(control) => projection.text(&control.render()),
                     Part::Gap(_) => {
                         if let Some(marker) = marker.take() {
-                            append_text(&mut content, &marker);
+                            projection.text(&marker);
                         }
                     }
-                    Part::Image(image) => content.push(image.clone()),
+                    Part::Image(image) => {
+                        if let Some(content) = &mut projection.content {
+                            content.push(image.clone());
+                        }
+                    }
                     Part::ImageGap => {
                         if image_marker {
-                            append_text(
-                                &mut content,
-                                &format!(
+                            projection.text(&format!(
                                     "\n[image limit: omitted {} images ({} encoded bytes); {} already recorded, {} not retained]\n",
                                     self.omitted_images,
                                     self.omitted_image_bytes,
                                     self.recorded_omitted_images,
                                     self.omitted_images - self.recorded_omitted_images
-                                ),
-                            );
+                                ));
                             image_marker = false;
                         }
                     }
@@ -403,7 +437,7 @@ impl Preview {
                 }
             }
         }
-        content
+        projection
     }
 }
 
@@ -437,14 +471,26 @@ impl Source {
     }
 }
 
-fn append_text(content: &mut Vec<Content>, text: &str) {
-    if text.is_empty() {
-        return;
-    }
-    if let Some(Content::Text(previous)) = content.last_mut() {
-        previous.push_str(text);
-    } else {
-        content.push(Content::Text(text.to_owned()));
+/// Sizing visits the same text and notices as rendering, without allocating
+/// ordinary text blocks or cloning image payloads.
+struct Projection {
+    content: Option<Vec<Content>>,
+    text_bytes: usize,
+}
+
+impl Projection {
+    fn text(&mut self, text: &str) {
+        self.text_bytes += text.len();
+        if let Some(content) = &mut self.content {
+            if text.is_empty() {
+                return;
+            }
+            if let Some(Content::Text(previous)) = content.last_mut() {
+                previous.push_str(text);
+            } else {
+                content.push(Content::Text(text.to_owned()));
+            }
+        }
     }
 }
 
@@ -536,14 +582,4 @@ impl Control {
             omitted = next;
         }
     }
-}
-
-fn text_bytes(content: &[Content]) -> usize {
-    content
-        .iter()
-        .map(|part| match part {
-            Content::Text(text) => text.len(),
-            Content::Image { .. } => 0,
-        })
-        .sum()
 }

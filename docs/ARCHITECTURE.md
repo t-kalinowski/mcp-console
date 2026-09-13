@@ -431,8 +431,11 @@ The relay publishes observations to it, but neither the relay nor worker decides
 The server assigns output to an evaluation, poll, restart, controlled send, or later idle response; collects bounded head-and-tail text previews; preserves image order; adds lifecycle notices; and assembles MCP content.
 During ingestion, it incrementally decodes direct streams and compacts carriage-return and backspace redraws within each consecutive run from one producer.
 It retains bounded text at the beginning and latest tail, coalesces adjacent text and omission metadata, and admits images under separate byte, metadata, and count limits.
+Small text appends reuse the current buffer; compaction runs after a bounded batch of new bytes.
 A response cut seals this projection and its raw-file receipt without reading the file.
+Empty unrecorded intervals do not add source receipts during delivery recovery; unrecorded text still keeps its source boundary.
 The canonical response builder preserves typed control notices during composition; its final projection applies one 8 KiB UTF-8 text budget, including all generated notices, across the complete tool result.
+Sizing counts the projected text and notices without constructing content blocks or copying images.
 Collection and response composition keep bounded state even after raw-file retention fails or is disabled.
 
 A controlled send produces one MCP response.

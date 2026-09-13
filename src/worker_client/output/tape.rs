@@ -343,8 +343,8 @@ impl OutputTapeState {
         let response = std::mem::take(&mut self.current).finish();
         let cut = self.next_cut;
         self.next_cut += 1;
-        // Cuts are bounded by the single evaluation/delivery owner. Even empty
-        // intervals carry their file receipt until final response accounting.
+        // File intervals carry their receipt until final response accounting;
+        // source() discards empty unrecorded intervals before delivery recovery.
         self.sealed.push_back((cut, response));
         self.raw_bytes = 0;
         OutputCut(cut)
