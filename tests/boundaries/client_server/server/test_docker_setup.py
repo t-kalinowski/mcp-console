@@ -12,6 +12,7 @@ from support.docker import (
     DOCKER,
     ROOT,
     absent,
+    calls as peer_calls,
     cli_peer,
     configure,
     docker,
@@ -27,10 +28,7 @@ from support.suites import run_this_suite
 
 
 def calls(root: Path) -> list[list[str]]:
-    return [
-        json.loads(line)["args"]
-        for line in (root / "peer/calls").read_text().splitlines()
-    ]
+    return [call["args"] for call in peer_calls(root)]
 
 
 @requires(DOCKER)

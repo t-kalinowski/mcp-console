@@ -1,7 +1,6 @@
 #!/usr/bin/env -S uv run --script
 import json
 import os
-import shutil
 import subprocess
 import sys
 from contextlib import closing
@@ -16,6 +15,7 @@ from support.docker_sandbox import (
     calls,
     cli_peer,
     configure,
+    isolated_controller,
     normalize_recording,
     workspace,
 )
@@ -32,24 +32,7 @@ def test_compute_selection_skips_native_bundle_and_captures_configuration(
     with workspace() as root:
         # A relocated executable with no companion bundle. Provider and resolver
         # sentinels fail on invocation; the fake peer only tests orchestration.
-        prefix = root / "installation"
-        (prefix / "bin").mkdir(parents=True)
-        (prefix / "libexec").mkdir()
-        relocated = prefix / "bin/mcp-console"
-        shutil.copyfile(binary, relocated)
-        relocated.chmod(0o755)
-        native = prefix / "libexec/mcp-console-sandbox"
-        native.write_text(
-            f"#!/bin/sh\necho invoked >> '{root / 'sentinel'}'\nexit 99\n"
-        )
-        native.chmod(0o755)
-        environment = cli_peer(root / "peer")
-        for name in ("mcp-console-sandbox", "R", "Rscript", "uv", "ir"):
-            path = root / "peer" / name
-            path.write_text(
-                f"#!/bin/sh\necho invoked >> '{root / 'sentinel'}'\nexit 99\n"
-            )
-            path.chmod(0o755)
+        relocated, environment = isolated_controller(binary, root)
         config = configure(root, template=TEMPLATE)
         for flags in ((), ("--no-sandbox",)):
             config = configure(root, template=TEMPLATE)

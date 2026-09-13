@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use super::{Discovery, Input, Operation, Output, Selections};
 use crate::resolver::{self, ResolverControlOutcome, ResolverStopHandle};
-use crate::ssh::launch_io::{Io, duplicate};
+use crate::target_launch::transfer::{Io, duplicate};
 
 struct Context {
     bootstrap: Option<resolver::ManagedRBootstrap>,
@@ -168,7 +168,7 @@ pub(super) fn run() -> Result<(), String> {
     let mut input = Io::new(
         duplicate(0)?,
         None,
-        Some(Instant::now() + crate::ssh::SETUP_TIMEOUT),
+        Some(Instant::now() + super::SETUP_TIMEOUT),
     )?;
     let Input::Open {
         version,

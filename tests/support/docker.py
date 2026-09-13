@@ -11,6 +11,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from uuid import uuid4
 
+from support.capture import read_jsonl_path
 from support.requirements import Requirement
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -156,13 +157,16 @@ def cli_peer(root: Path) -> dict[str, str]:
     }
 
 
+def calls(root: Path) -> list[dict]:
+    return read_jsonl_path(root / "peer/calls")
+
+
 def normalize_recording(records: list, root: Path) -> list:
     """Keep complete output, replacing only identities observed by this case."""
     text = json.dumps(records)
-    calls = root / "peer/calls"
-    if calls.exists():
-        for line in calls.read_text().splitlines():
-            args = json.loads(line)["args"]
+    if (root / "peer/calls").exists():
+        for call in calls(root):
+            args = call["args"]
             if "create" in args:
                 text = text.replace(args[args.index("--name") + 1], "<owned container>")
             if "start" in args:

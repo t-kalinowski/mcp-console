@@ -120,8 +120,7 @@ struct ClientInner {
     lifecycle: Mutex<LifecycleControl>,
     environment: Option<Mutex<Environment>>,
     dynamic_resolution: bool,
-    ssh: Option<crate::ssh::Session>,
-    compute: Option<crate::compute_session::Session>,
+    target: Option<crate::target_session::Session>,
     recording: Mutex<Option<crate::transcript::Transcript>>,
 }
 
@@ -151,8 +150,7 @@ struct WorkerSpec<'a> {
     managed_r: Option<&'a crate::resolver::ManagedR>,
     dynamic_resolution: bool,
     callbacks: WorkerCallbacks,
-    ssh: Option<&'a crate::ssh::Session>,
-    compute: Option<&'a crate::compute_session::Session>,
+    target: Option<&'a crate::target_session::Session>,
 }
 
 struct IdleResponseSnapshot {
@@ -466,8 +464,7 @@ impl Client {
             lifecycle: Mutex::new(LifecycleControl::new()),
             environment: environment.map(Mutex::new),
             dynamic_resolution,
-            ssh: None,
-            compute: None,
+            target: None,
             recording: Mutex::new(None),
         }))
     }
@@ -482,7 +479,9 @@ impl Client {
             return Self::ssh(crate::ssh::Session::new(target, roots), no_sandbox, policy);
         }
         let session = startup::with_input_owner(|started| {
-            crate::compute_session::Session::setup(target, roots, &policy, no_sandbox, started)
+            crate::target_session::Session::setup_compute(
+                target, roots, &policy, no_sandbox, started,
+            )
         })?;
         let mut client = Self::with_arguments(
             std::env::current_exe().map_err(|error| error.to_string())?,
@@ -499,7 +498,7 @@ impl Client {
                 r_resolver: RResolver::Disabled,
             }),
         );
-        Arc::get_mut(&mut client.0).expect("new client").compute = Some(session);
+        Arc::get_mut(&mut client.0).expect("new client").target = Some(session);
         Ok(client)
     }
 
@@ -508,21 +507,9 @@ impl Client {
     }
 
     pub(crate) fn target_metadata(&self) -> Option<serde_json::Value> {
-        let mut metadata = self
-            .0
-            .ssh
-            .as_ref()
-            .map(crate::ssh::Session::metadata)
-            .or_else(|| {
-                self.0
-                    .compute
-                    .as_ref()
-                    .map(crate::compute_session::Session::metadata)
-            })?;
-        let provider = self.0.compute.as_ref().map_or(
-            crate::settings::Provider::Native,
-            crate::compute_session::Session::provider,
-        );
+        let target = self.0.target.as_ref()?;
+        let mut metadata = target.metadata();
+        let provider = target.provider();
         metadata["provider"] = serde_json::json!(provider);
         metadata["inner_native_runner"] = provider.needs_native_runner(self.0.no_sandbox).into();
         Some(metadata)
@@ -577,7 +564,7 @@ impl Client {
         );
         Arc::get_mut(&mut client.0)
             .expect("new client has one owner")
-            .ssh = Some(session);
+            .target = Some(crate::target_session::Session::Ssh(session));
         Ok(client)
     }
 
@@ -587,12 +574,13 @@ impl Client {
 
     /// Interprets preparation, control, evaluation, stdin, and polling for the session.
     pub(crate) async fn send(&self, request: SendRequest) -> Result<Response, String> {
-        if let Some(compute) = &self.0.compute
+        if let Some(target) = &self.0.target
+            && !target.is_ssh()
             && request.requirements.is_some()
         {
             return Err(format!(
                 "dynamic environment resolution is disabled for {} targets; install packages in the image and start a new server session",
-                compute.protocol().0
+                target.protocol().0
             ));
         }
         request.validate(self.dynamic_resolution())?;
@@ -1638,8 +1626,7 @@ impl Client {
                 .as_ref()
                 .and_then(|environment| environment.r.as_ref());
             let spec = WorkerSpec {
-                ssh: self.0.ssh.as_ref(),
-                compute: self.0.compute.as_ref(),
+                target: self.0.target.as_ref(),
                 executable: &self.0.program,
                 arguments: &self.0.arguments,
                 relay: self.0.relay.as_deref(),

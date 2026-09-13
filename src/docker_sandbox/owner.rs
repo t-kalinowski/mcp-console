@@ -4,14 +4,7 @@ use crate::target_launch::process::Cancel;
 use crate::target_launch::transfer::{Io, duplicate};
 use crate::target_launch::{Hello, SandboxIdentity};
 
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct Request {
-    pub session: Session,
-    pub name: String,
-    pub probe: bool,
-    pub bootstrap: Bootstrap,
-}
+type Request = target_launch::owner::Request<super::Captured>;
 
 pub(super) fn run() -> Result<(), String> {
     let mut input = Io::new(duplicate(0)?, None, Some(Instant::now() + COMMAND_TIMEOUT))?;

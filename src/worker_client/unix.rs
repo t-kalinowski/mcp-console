@@ -58,14 +58,7 @@ struct RelayConnection {
     child: Arc<Mutex<RelayProcess>>,
     commands: RelayCommandSender,
     tasks: Option<Box<RelayTasks>>,
-    ssh: Option<Box<(crate::ssh::Session, crate::ssh::Retirement)>>,
-    compute: Option<
-        Box<(
-            crate::compute_session::Session,
-            crate::target_launch::Retirement,
-            String,
-        )>,
-    >,
+    target: Option<Box<crate::target_session::Generation>>,
 }
 
 struct RelayProcess {
@@ -145,8 +138,7 @@ impl WorkerRuntime {
         on_ready: impl FnOnce() -> Result<(), String>,
     ) -> Result<Worker, SendFailure> {
         let super::WorkerSpec {
-            ssh,
-            compute,
+            target,
             executable,
             arguments,
             relay,
@@ -158,45 +150,39 @@ impl WorkerRuntime {
             callbacks,
         } = spec;
 
-        let mut bootstrap = ssh
-            .map(|ssh| {
-                ssh.bootstrap(
-                    sandbox_settings,
-                    no_sandbox,
-                    managed_r,
-                    python.and_then(super::PythonEnvironment::managed),
-                )
-            })
-            .transpose()?;
-        let current_executable = std::env::current_exe()
-            .map_err(|error| format!("failed to locate the current executable: {error}"))?;
-        let target = relay_command_line(&current_executable, executable, arguments, relay);
-        let mut compute_launch = compute
-            .map(|session| session.launch(sandbox_settings, no_sandbox, false))
-            .transpose()?;
-        let compute_name = compute_launch.as_ref().map(|(_, _, name)| name.clone());
-        let mut command = if let Some((command, bytes, _)) = compute_launch.take() {
-            bootstrap = Some(bytes);
-            command
-        } else if let Some(ssh) = ssh {
-            ssh.command()?
-        } else if no_sandbox {
-            let mut command = Command::new(&target[0]);
-            command
-                .args(&target[1..])
-                .env_remove(crate::settings::ENVIRONMENT);
-            command
+        let (mut command, bootstrap, generation) = if let Some(session) = target {
+            let (command, bytes, generation) = session.launch(
+                sandbox_settings,
+                no_sandbox,
+                managed_r,
+                python.and_then(super::PythonEnvironment::managed),
+                false,
+            )?;
+            (command, Some((session.protocol(), bytes)), Some(generation))
         } else {
-            let mut command = Command::new(&current_executable);
-            command
-                .arg("sandbox")
-                .arg("--exit-with-parent")
-                .arg(std::process::id().to_string());
-            command.args(["--settings-env", crate::settings::ENVIRONMENT]);
-            command.arg("--").args(target);
-            command
+            let current_executable = std::env::current_exe()
+                .map_err(|error| format!("failed to locate the current executable: {error}"))?;
+            let relay_target =
+                relay_command_line(&current_executable, executable, arguments, relay);
+            let command = if no_sandbox {
+                let mut command = Command::new(&relay_target[0]);
+                command
+                    .args(&relay_target[1..])
+                    .env_remove(crate::settings::ENVIRONMENT);
+                command
+            } else {
+                let mut command = Command::new(&current_executable);
+                command
+                    .arg("sandbox")
+                    .arg("--exit-with-parent")
+                    .arg(std::process::id().to_string());
+                command.args(["--settings-env", crate::settings::ENVIRONMENT]);
+                command.arg("--").args(relay_target);
+                command
+            };
+            (command, None, None)
         };
-        if ssh.is_none() && compute.is_none() {
+        if target.is_none() {
             if let Some(python) = python {
                 python.configure_worker(&mut command);
             }
@@ -233,10 +219,10 @@ impl WorkerRuntime {
         let mut child = RelayProcess::new(
             child,
             no_sandbox,
-            ssh.is_some(),
-            compute.map_or(
+            target.is_some_and(crate::target_session::Session::is_ssh),
+            target.map_or(
                 LAUNCHER_RETIREMENT_GRACE,
-                crate::compute_session::Session::retirement_grace,
+                crate::target_session::Session::retirement_grace,
             ),
             notify_output_exit,
         )
@@ -260,22 +246,13 @@ impl WorkerRuntime {
         let ready_commit = ReadyCommit(Arc::new(Mutex::new(Some(ready_commit_sender))));
         let shutdown_started = ShutdownAcceptance::default();
 
-        let owned = compute.map(|session| {
-            (
-                session.clone(),
-                crate::target_launch::Retirement::default(),
-                compute_name.expect("compute launch name"),
-            )
-        });
-        let remote = ssh.map(|session| (session.clone(), crate::ssh::Retirement::default()));
         let (commands, command_writer) =
             start_relay_command_writer(relay_stdin, worker_events.clone(), bootstrap);
         let event_reader = start_relay_event_reader(
             relay_stdout,
             output_exit,
             worker_events,
-            remote.clone(),
-            owned.clone(),
+            generation.clone(),
             callbacks
                 .client
                 .0
@@ -297,8 +274,7 @@ impl WorkerRuntime {
         );
 
         let relay = RelayConnection {
-            ssh: remote.map(Box::new),
-            compute: owned.map(Box::new),
+            target: generation.map(Box::new),
             child,
             commands: commands.clone(),
             tasks: Some(Box::new(RelayTasks {
@@ -321,7 +297,7 @@ impl WorkerRuntime {
             let error = worker.startup_failure(error);
             return Err(error);
         }
-        let started = if ssh.is_some() || compute.is_some() {
+        let started = if target.is_some() {
             startup_receiver
                 .recv_timeout(crate::target_launch::SETUP_TIMEOUT)
                 .map_err(|error| match error {
@@ -882,7 +858,7 @@ fn receive_operation(
 fn start_relay_command_writer(
     mut relay_stdin: std::process::ChildStdin,
     events: mpsc::Sender<WorkerEvent>,
-    bootstrap: Option<Vec<u8>>,
+    bootstrap: Option<(crate::target_launch::Protocol, Vec<u8>)>,
 ) -> (RelayCommandSender, RelayCommandThread) {
     let (writer, receiver) = mpsc::channel();
     let sender = RelayCommandSender {
@@ -890,11 +866,12 @@ fn start_relay_command_writer(
         events: events.clone(),
     };
     let thread = thread::spawn(move || {
-        if let Some(bootstrap) = bootstrap
+        if let Some((protocol, bootstrap)) = bootstrap
             && let Err(error) = relay_stdin.write_all(&bootstrap)
         {
             let _ = events.send(WorkerEvent::TransportFailure(format!(
-                "SSH bootstrap write failed: {error}"
+                "{} bootstrap write failed: {error}",
+                protocol.0
             )));
             return;
         }
@@ -935,30 +912,14 @@ fn start_relay_event_reader(
     relay_stdout: std::process::ChildStdout,
     output_exit: std::io::PipeReader,
     events: mpsc::Sender<WorkerEvent>,
-    ssh: Option<(crate::ssh::Session, crate::ssh::Retirement)>,
-    compute: Option<(
-        crate::compute_session::Session,
-        crate::target_launch::Retirement,
-        String,
-    )>,
+    target: Option<crate::target_session::Generation>,
     recording: Option<crate::transcript::Transcript>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let output = crate::process_output::RelayOutput::new(relay_stdout, output_exit);
-        let output: Box<dyn Read> = if let Some((session, retirement, _)) = &compute {
-            Box::new(
-                crate::target_launch::Output::new(output, session.protocol(), retirement.clone())
-                    .with_recording(recording),
-            )
-        } else {
-            match ssh.as_ref() {
-                Some((_session, retirement)) => Box::new(crate::target_launch::Output::new(
-                    output,
-                    crate::target_launch::Protocol("SSH"),
-                    retirement.clone(),
-                )),
-                None => Box::new(output),
-            }
+        let output: Box<dyn Read> = match &target {
+            Some(generation) => Box::new(generation.output(output, recording)),
+            None => Box::new(output),
         };
         let mut reader = JsonlReader::new(BufReader::new(output));
         let result = (|| -> Result<(), String> {
@@ -975,13 +936,8 @@ fn start_relay_event_reader(
         if let Err(error) = result {
             let _ = events.send(WorkerEvent::TransportFailure(error));
         }
-        if let Some((session, retirement)) = ssh
-            && let Err(error) = session.check_retirement(&retirement)
-        {
-            let _ = events.send(WorkerEvent::TransportFailure(error));
-        }
-        if let Some((session, retirement, name)) = compute
-            && let Err(error) = session.check_retirement(&retirement, &name)
+        if let Some(generation) = target
+            && let Err(error) = generation.check_retirement()
         {
             let _ = events.send(WorkerEvent::TransportFailure(error));
         }
@@ -1410,17 +1366,9 @@ impl RelayConnection {
         };
         let cleanup = combine_shutdown_results(
             cleanup,
-            self.ssh.as_deref().map_or(Ok(()), |(session, retirement)| {
-                session.check_retirement(retirement)
-            }),
-        );
-        let cleanup = combine_shutdown_results(
-            cleanup,
-            self.compute
+            self.target
                 .as_deref()
-                .map_or(Ok(()), |(session, retirement, name)| {
-                    session.check_retirement(retirement, name)
-                }),
+                .map_or(Ok(()), crate::target_session::Generation::check_retirement),
         );
         match (tasks, cleanup) {
             (Ok(outcome), Ok(())) => Ok(outcome),

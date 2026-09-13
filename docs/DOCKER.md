@@ -107,7 +107,7 @@ Unknown Console target fields and unsupported combinations are errors.
 Native sandbox fields remain raw values for native runner validation; this target schema adds no native-policy allowlist.
 
 Omitting `target` keeps the existing local host path.
-An explicit local transport with host compute selects that same path and uses the controller launch directory and built-in command; `workspace` and `command` overrides require SSH or Docker.
+An explicit local transport with host compute selects that same path and uses the controller launch directory and built-in command; `workspace` and `command` overrides require SSH, Docker, or Docker Sandbox.
 Existing SSH configurations retain their `[uvx, mcp-console]` default command.
 
 There are no implicit home, project, credential, agent, or Docker socket binds.
@@ -163,7 +163,7 @@ No additional outer networking modes are implemented.
 
 `serve --no-sandbox` retains Docker target selection and workload environment controls.
 It skips the inner native sandbox while retaining the outer owned container and its retirement.
-Standalone `mcp-console sandbox -- COMMAND` remains local regardless of `target`.
+Standalone `mcp-console sandbox -- COMMAND` remains local for supported native selections and rejects resolved compute enforcement.
 
 ## Image identity, lifetime, and records
 
@@ -193,7 +193,7 @@ Console reports that uncertainty with the ownership name; a delayed daemon opera
 Submitted cells are never replayed after transport failure.
 
 Setup pulls and builds are cancellable without a short build deadline; image/build caches may remain.
-Daemon commands and container retirement have bounded waits.
+Daemon commands and container retirement have bounded waits; the [architecture timing reference](ARCHITECTURE.md#selected-target-sessions-and-timing) records their independent allowances.
 After daemon, host, or ownership-helper failure, Console cannot guarantee cleanup that it cannot confirm.
 There is no reconnect, resume, later attachment, heartbeat, or recovery after the local owner itself is killed.
 

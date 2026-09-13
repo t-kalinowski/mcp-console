@@ -1,16 +1,24 @@
 //! Docker Sandboxes' local sbx adapter. Docker owns policy and microVM lifetime.
-use crate::settings::{Access, Compute, DockerSandbox, Provider, SandboxSettings, Target};
-use crate::target_launch::{self, Bootstrap, Protocol, process};
+use crate::settings::{Access, Compute, DockerSandbox, SandboxSettings, Target};
+use crate::target_launch::{self, Protocol, process};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 mod owner;
-const PROTOCOL: Protocol = Protocol("Docker Sandbox");
+pub(crate) const PROTOCOL: Protocol = Protocol("Docker Sandbox");
+pub(crate) const PROFILE: crate::target_session::ComputeProfile =
+    crate::target_session::ComputeProfile {
+        protocol: PROTOCOL,
+        resource: "microVM",
+        owner_command: "docker-sandbox-owner",
+        probe_output: process::OutputMode::Data,
+        probe_retirement_grace: Duration::from_secs(20),
+        retirement_grace: Duration::from_secs(20),
+    };
+
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub(crate) fn validate_policy(
@@ -34,14 +42,7 @@ pub(crate) fn validate_policy(
         ));
     }
     // These are workload controls, not provider/daemon configuration.
-    #[derive(Deserialize)]
-    struct Environment {
-        #[serde(default)]
-        environment: std::collections::BTreeMap<String, String>,
-        #[serde(default, rename = "inherit_environment")]
-        _inherit_environment: bool,
-    }
-    let environment: Environment = serde_json::from_value(Value::Object(policy.clone()))
+    let environment = target_launch::WorkloadEnvironment::from_policy(policy)
         .map_err(|error| format!("invalid Docker Sandbox workload environment: {error}"))?;
     for (name, value) in environment.environment {
         if name.is_empty() || name.contains(['=', '\0']) || value.contains('\0') {
@@ -91,25 +92,16 @@ pub(crate) fn capture(config: &mut DockerSandbox) -> Result<(), String> {
 }
 
 #[derive(Clone, Deserialize, Serialize)]
-pub(crate) struct Session {
-    target: Target,
+pub(crate) struct Captured {
+    pub target: Target,
     version: String,
-    #[serde(skip)]
-    blocked: Arc<Mutex<Option<String>>>,
 }
 
-impl Session {
-    pub fn setup(
-        target: Target,
-        policy: &SandboxSettings,
-        no_sandbox: bool,
-        started: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
-    ) -> Result<Self, String> {
-        let cancel = process::Cancel::new(PROTOCOL)?;
-        started(crate::resolver::ResolverStopHandle::new(cancel.clone()))?;
+impl Captured {
+    pub fn capture(target: Target, cancel: &process::Cancel) -> Result<Self, String> {
         let mut command = Command::new("sbx");
         command.arg("version");
-        let bytes = process::run(command, &cancel, Some(Instant::now() + COMMAND_TIMEOUT), process::OutputMode::Data, None)
+        let bytes = process::run(command, cancel, Some(Instant::now() + COMMAND_TIMEOUT), process::OutputMode::Data, None)
             .map_err(|error| format!("{error}; install standalone sbx v0.42.1 and complete Docker login and policy setup before starting Console; see docs/DOCKER_SANDBOX.md"))?;
         let version = String::from_utf8(bytes).map_err(|error| error.to_string())?;
         // This first adapter targets a verified CLI contract, not legacy docker sandbox.
@@ -119,34 +111,10 @@ impl Session {
                 version.trim()
             ));
         }
-        let session = Self {
+        Ok(Self {
             target,
             version: version.trim().into(),
-            blocked: Arc::default(),
-        };
-        let (command, request, _) = session.launch(policy, no_sandbox, true)?;
-        let bytes = process::run(
-            command,
-            &cancel,
-            Some(Instant::now() + Duration::from_secs(40)),
-            process::OutputMode::Data,
-            Some(process::OwnerInput {
-                bytes: request,
-                retirement_grace: Duration::from_secs(20),
-            }),
-        )?;
-        let retirement = target_launch::Retirement::default();
-        let mut output =
-            target_launch::Output::new(std::io::Cursor::new(bytes), PROTOCOL, retirement.clone());
-        let mut unexpected = Vec::new();
-        output
-            .read_to_end(&mut unexpected)
-            .map_err(|error| error.to_string())?;
-        retirement.check()?;
-        if !unexpected.is_empty() {
-            return Err("unexpected Docker Sandbox runtime probe output".into());
-        }
-        Ok(session)
+        })
     }
 
     pub fn metadata(&self) -> Value {
@@ -156,57 +124,6 @@ impl Session {
         json!({"transport": self.target.transport, "workspace": self.target.workspace,
             "compute": {"kind": "docker_sandbox", "template": config.template,
                 "template_identity": config.template, "mounts": config.mounts, "cli_version": self.version}})
-    }
-
-    pub fn launch(
-        &self,
-        policy: &SandboxSettings,
-        no_sandbox: bool,
-        probe: bool,
-    ) -> Result<(Command, Vec<u8>, String), String> {
-        if let Some(error) = &*self
-            .blocked
-            .lock()
-            .map_err(|_| "Docker Sandbox session lock poisoned")?
-        {
-            return Err(error.clone());
-        }
-        let name = format!("mcp-console-{}", target_launch::owner::token()?);
-        let request = owner::Request {
-            session: self.clone(),
-            name: name.clone(),
-            probe,
-            bootstrap: Bootstrap {
-                version: target_launch::VERSION,
-                build: env!("CARGO_PKG_VERSION").into(),
-                workspace: self.target.workspace.clone(),
-                policy: policy.clone(),
-                writable_roots: Vec::new(),
-                no_sandbox,
-                provider: Provider::Compute,
-                environment: None,
-            },
-        };
-        let mut command = Command::new(std::env::current_exe().map_err(|error| error.to_string())?);
-        command.arg("docker-sandbox-owner");
-        Ok((command, target_launch::encode(&request)?, name))
-    }
-
-    pub fn check_retirement(
-        &self,
-        retirement: &target_launch::Retirement,
-        name: &str,
-    ) -> Result<(), String> {
-        retirement.check().map_err(|error| {
-            let error = format!(
-                "Docker Sandbox microVM '{name}': {error}; this session cannot start a replacement"
-            );
-            self.blocked
-                .lock()
-                .expect("Docker Sandbox session lock")
-                .get_or_insert(error.clone());
-            error
-        })
     }
 }
 

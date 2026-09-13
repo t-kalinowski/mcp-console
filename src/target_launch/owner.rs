@@ -10,6 +10,16 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::{Duration, Instant};
 
+/// The same bounded controller-to-owner envelope carries either captured provider.
+#[derive(serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Request<T> {
+    pub session: T,
+    pub name: String,
+    pub probe: bool,
+    pub bootstrap: Bootstrap,
+}
+
 static SIGNAL: AtomicI32 = AtomicI32::new(-1);
 
 pub(crate) fn token() -> Result<String, String> {

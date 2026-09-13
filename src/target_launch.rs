@@ -62,6 +62,34 @@ pub(crate) struct Bootstrap {
     pub environment: Option<preparation::WorkerEnvironment>,
 }
 
+/// Workload-only controls for direct target execution. Native policy remains opaque.
+#[derive(Deserialize)]
+pub(crate) struct WorkloadEnvironment {
+    #[serde(default)]
+    pub environment: std::collections::BTreeMap<String, String>,
+    #[serde(default = "inherit_environment")]
+    inherit_environment: bool,
+}
+
+fn inherit_environment() -> bool {
+    true
+}
+
+impl WorkloadEnvironment {
+    pub fn from_policy(
+        policy: &crate::settings::SandboxSettings,
+    ) -> Result<Self, serde_json::Error> {
+        serde_json::from_value(serde_json::Value::Object(policy.clone()))
+    }
+
+    fn configure(self, command: &mut std::process::Command) {
+        if !self.inherit_environment {
+            command.env_clear();
+        }
+        command.envs(self.environment);
+    }
+}
+
 pub(crate) fn enter_workspace(workspace: &str) -> Result<(), String> {
     if !workspace.starts_with('/') {
         return Err("target.workspace must be an absolute remote directory path".into());
@@ -190,7 +218,7 @@ impl<R: Read> Output<R> {
                     .retirement
                     .0
                     .lock()
-                    .expect("SSH retirement lock is not poisoned") = retired.confirmed;
+                    .expect("target retirement lock is not poisoned") = retired.confirmed;
                 self.finished = true;
                 // The adapter validates its cleanup receipt. An outer owned
                 // container can retire descendants after its inner launcher

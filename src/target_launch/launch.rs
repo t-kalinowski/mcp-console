@@ -77,7 +77,9 @@ fn launch(
     };
     let mut command = Command::new(&executable);
     if !native {
-        configure_direct_environment(&mut command, &policy)?;
+        super::WorkloadEnvironment::from_policy(&policy)
+            .map_err(|error| format!("invalid direct worker environment: {error}"))?
+            .configure(&mut command);
     } else {
         command
             .args(["sandbox", "--exit-with-parent"])
@@ -115,7 +117,7 @@ fn launch(
                 }
             }
         }
-        supervise(probe, false, true, Some(deadline), confirmed)?;
+        supervise(probe, false, true, Some(deadline), confirmed, protocol)?;
     }
     let hello = serde_json::to_vec(&Hello {
         container_id: None,
@@ -131,39 +133,13 @@ fn launch(
             command.arg(&executable);
         }
         command.arg("image-runtime-probe");
-        return supervise(command, false, native, Some(deadline), confirmed);
+        return supervise(command, false, native, Some(deadline), confirmed, protocol);
     }
     if native {
         command.arg(&executable);
     }
     command.arg("worker-relay").arg(&executable).arg("worker");
-    supervise(command, true, native, None, confirmed)
-}
-
-fn configure_direct_environment(
-    command: &mut Command,
-    policy: &crate::settings::SandboxSettings,
-) -> Result<(), String> {
-    // The direct path has no native runner. Only its existing target-environment
-    // controls apply; permission settings do not affect the SSH/helper process.
-    #[derive(serde::Deserialize)]
-    struct Environment {
-        #[serde(default = "inherit_environment")]
-        inherit_environment: bool,
-        #[serde(default)]
-        environment: std::collections::BTreeMap<String, String>,
-    }
-    fn inherit_environment() -> bool {
-        true
-    }
-    let environment: Environment =
-        serde_json::from_value(serde_json::Value::Object(policy.clone()))
-            .map_err(|error| format!("invalid direct worker environment: {error}"))?;
-    if !environment.inherit_environment {
-        command.env_clear();
-    }
-    command.envs(environment.environment);
-    Ok(())
+    supervise(command, true, native, None, confirmed, protocol)
 }
 
 struct Owner {
@@ -222,7 +198,9 @@ fn supervise(
     sandbox: bool,
     deadline: Option<Instant>,
     confirmed: &mut bool,
+    protocol: super::Protocol,
 ) -> Result<(), String> {
+    let label = protocol.0;
     command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -310,20 +288,20 @@ fn supervise(
                 deadline,
             )?;
             if events[0] != 0 {
-                return Err("SSH connection closed".into());
+                return Err(format!("{label} connection closed"));
             }
             if events[2] != 0 {
                 match input_task
                     .take()
                     .expect("input task is running")
                     .join()
-                    .map_err(|_| "SSH input task panicked")?
+                    .map_err(|_| format!("{label} input task panicked"))?
                 {
-                    Ok(()) => return Err("SSH connection closed".into()),
+                    Ok(()) => return Err(format!("{label} connection closed")),
                     // Relay stdin may close before its final output and exit.
-                    // That is not EOF on the authenticated SSH input stream.
+                    // That is not EOF on the target connection input stream.
                     Err(error) if error.kind() == io::ErrorKind::BrokenPipe => {}
-                    Err(error) => return Err(format!("SSH input forwarding failed: {error}")),
+                    Err(error) => return Err(format!("{label} input forwarding failed: {error}")),
                 }
             }
             if events[3] != 0 {
@@ -331,7 +309,7 @@ fn supervise(
                     .take()
                     .expect("output task is running")
                     .join()
-                    .map_err(|_| "SSH output task panicked")??;
+                    .map_err(|_| format!("{label} output task panicked"))??;
             }
             if events[1] != 0 {
                 break;
@@ -344,13 +322,13 @@ fn supervise(
         if output_task.is_some() {
             let events = poll(&[(0, 0), (output_finished.as_raw_fd(), libc::POLLIN)], None)?;
             if events[0] != 0 {
-                return Err("SSH connection closed".into());
+                return Err(format!("{label} connection closed"));
             }
             output_task
                 .take()
                 .expect("output task is running")
                 .join()
-                .map_err(|_| "SSH output task panicked")??;
+                .map_err(|_| format!("{label} output task panicked"))??;
         }
         Ok(())
     })();

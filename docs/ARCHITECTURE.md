@@ -38,7 +38,8 @@ That relay leads the target process group; an explicit relay wrapper can instead
 Linux retains native namespace-init and bubblewrap helper processes.
 Those native processes and all sandbox descendant supervision belong to the runner executable.
 
-A standalone `mcp-console sandbox -- COMMAND [ARG]...` uses the same frontend-to-runner exec, with the requested command in place of the relay and worker.
+For supported native selections, standalone `mcp-console sandbox -- COMMAND [ARG]...` uses the same local frontend-to-runner exec, with the requested command in place of the relay and worker.
+It rejects resolved compute enforcement.
 No waiting Console adapter remains.
 The runner sees the original caller as its direct parent and inherits the original standard streams.
 The [sandbox integration](SANDBOX.md) defines Console policy defaults, installation verification, supported hosts, and lifetime limits.
@@ -143,8 +144,9 @@ Relay standard error is inherited separately and is not part of that protocol.
 The server's ordinary child-exit observer also wakes the relay reader.
 On launcher exit, that reader drains already-queued bytes and ends the generation even if an unsupervised descendant retains stdout.
 The server joins the reader and dispatcher before replacement; a reaped local launcher permits replacement while any cleanup failure is still reported.
-For SSH, an adapter removes explicit bootstrap and retirement frames around relay bytes.
-It requires remote cleanup acknowledgment before replacement; local SSH exit alone leaves retirement unconfirmed and blocks another generation.
+The selected-target session removes explicit bootstrap and retirement frames around SSH, Docker, and SBX relay bytes.
+Each generation retains its own retirement receipt and, for compute targets, its allocated resource name.
+The receipt must confirm the selected owner's cleanup before replacement; transport exit alone leaves retirement unconfirmed and blocks another generation.
 The remote helper monitors connection loss independently of both forwarding directions, so backpressured output does not hide closure.
 The transport is private and keeps worker connections and direct-worker supervision in the relay, inside the sandbox by default.
 [`RELAY_PROTOCOL.md`](RELAY_PROTOCOL.md) defines its commands, events, framing, and retirement behavior.
@@ -283,6 +285,45 @@ In sandboxed mode, the frontend execs the runner with that environment and those
 The relay creates the worker sideband and standard streams, launches the worker, and forwards its startup events.
 The server admits the worker only after the required readiness exchange succeeds.
 If sandbox setup fails before relay readiness, the launcher writes the detailed infrastructure error to inherited standard error and exits; the server reports a stable relay-startup failure from the closed transport.
+
+### Selected-target sessions and timing
+
+`src/target_session.rs` provides one concrete session enum for SSH, Docker, and SBX.
+Worker orchestration asks it for the command and bootstrap, keeps the returned generation receipt, and reads the unchanged relay protocol through that generation's output adapter.
+Ordinary local and custom-worker commands retain their direct launch path.
+SSH preparation remains accessible separately and closes alongside worker shutdown; startup cancellation keeps the worker SSH connection open long enough to receive remote cleanup confirmation.
+
+The same session code registers compute-setup cancellation, runs and decodes disposable runtime probes, rejects unexpected probe data, constructs owner requests, and latches unconfirmed retirement before another launch.
+Only captured provider data enters the serialized owner request; controller replacement state stays local.
+Docker owns endpoint/TLS capture, immutable image resolution, and exact container cleanup.
+SBX owns CLI/template validation, creation acknowledgment, name/UUID checks, shared-path checks, and microVM removal.
+`target_launch::owner` shares connection observation and byte forwarding while these adapters supply concrete creation and retirement operations.
+Inner-launcher failure and outer-resource removal remain separate outcomes.
+
+The waits retain distinct owners and allowances:
+
+| Wait                                                          | Owner                             | Allowance                                                       |
+| ------------------------------------------------------------- | --------------------------------- | --------------------------------------------------------------- |
+| Target bootstrap/preflight and controller worker readiness    | `target_launch::SETUP_TIMEOUT`    | 30 seconds per setup wait                                       |
+| SSH preparation discovery                                     | `ssh::preparation::SETUP_TIMEOUT` | 30 seconds; dependency operations have no installation deadline |
+| Disposable compute runtime probe                              | `target_session::PROBE_TIMEOUT`   | 40 seconds                                                      |
+| Docker owner after probe cancellation / generation retirement | Docker profile                    | 8 / 6 seconds                                                   |
+| SBX owner after probe cancellation / generation retirement    | SBX profile                       | 20 / 20 seconds                                                 |
+| SSH transport during generation retirement                    | SSH adapter                       | 6 seconds                                                       |
+| Local launcher after retirement request                       | Worker orchestration              | 6 seconds                                                       |
+| Target-side inner launcher retirement                         | Target launcher                   | 6 seconds, then a 1-second forced-exit wait                     |
+
+Provider CLI deadlines belong to their adapters: Docker setup commands and owner-request reads allow 10 seconds; cleanup listing, stop, removal, and confirmation each allow 2 seconds.
+SBX version and owner-request reads allow 10 seconds, creation 25 seconds, listing 2 seconds, and forced removal 10 seconds.
+Pulls and builds remain cancellable without a short setup deadline.
+The outer allowances are independent fail-safes, not sums of these CLI deadlines: Docker cleanup can perform three sequential 2-second operations, or four when creation returned no identity, before transport and final-frame overhead.
+SBX cleanup can list, remove, and list again under separate deadlines.
+An outer deadline can therefore end observation before every individual cleanup allowance is exhausted; a missing receipt continues to block replacement.
+These values preserve the existing timing behavior rather than establish a worst-case cleanup guarantee.
+
+Provider diagnostic routing also remains explicit: `Capture` retains command stderr for failure reporting, `Data` captures stdout while streaming stderr, and `Diagnostics` streams setup output to controller stderr.
+Owner probes keep provider diagnostics outside their framed stdout, including Docker's existing owner-input stderr inheritance.
+The [relay protocol](RELAY_PROTOCOL.md#target-launch-envelope) defines the envelope once; each provider guide retains its configuration and lifecycle rules.
 
 ### Evaluation
 

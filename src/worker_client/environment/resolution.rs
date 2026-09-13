@@ -174,7 +174,9 @@ impl Client {
                 configuration.resolve_r(requirements, on_started)
             }
             super::super::RResolver::Disabled => {
-                let message = if let Some(session) = &self.0.compute {
+                let message = if let Some(session) = &self.0.target
+                    && !session.is_ssh()
+                {
                     format!(
                         "dynamic environment resolution is unavailable for {} targets; install packages in the image and start a new server session",
                         session.protocol().0
@@ -233,7 +235,10 @@ impl Client {
                 .map_err(EnvironmentResolutionFailure::Operation)?;
             let mut stop_handle = None;
             let result = crate::resolver::execution::resolve_duckdb_extensions(
-                self.0.ssh.as_ref().and_then(|ssh| ssh.preparation.as_ref()),
+                self.0
+                    .target
+                    .as_ref()
+                    .and_then(crate::target_session::Session::ssh_preparation),
                 managed_r,
                 extensions,
                 |handle| {

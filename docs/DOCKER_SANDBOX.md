@@ -151,7 +151,7 @@ Configuration discovery stays on the controller and is captured once.
 Edits to YAML during a session affect only a later `serve` invocation.
 `serve --no-sandbox` skips an inner native runner where applicable; this provider already launches directly inside its microVM.
 The flag retains the microVM, shared-path access, and Docker policy.
-Standalone `sandbox -- COMMAND` remains local and rejects a resolved compute selection, including the implicit selection above.
+Standalone `sandbox -- COMMAND` remains local for supported native selections and rejects a resolved compute selection, including the implicit selection above.
 
 ## Runtime and policy
 
@@ -222,7 +222,7 @@ sbx ls --json
 These are fixed argument arrays; the configured in-VM Console prefix replaces `mcp-console`.
 No command uses a login shell, `sbx run shell`, or TTY allocation.
 The [create](https://docs.docker.com/reference/cli/sbx/create/) and [exec](https://docs.docker.com/reference/cli/sbx/exec/) contracts are version-checked.
-The bounded target bootstrap and HELLO/DATA/RETIRED envelope are protocol version 3, which adds the explicit provider selector.
+The shared [target launch envelope](RELAY_PROTOCOL.md#target-launch-envelope) carries the bootstrap, compatibility response, relay bytes, and retirement receipt.
 The relay protocol is unchanged.
 Provider setup output stays outside the relay stream; unexpected execution stdout fails the launch with a bounded diagnostic.
 
@@ -244,7 +244,8 @@ An empty listing after an unacknowledged create is not proof that a service-side
 Even removing an observed partial VM does not convert an unacknowledged creation into a confirmed receipt.
 An uncertain create, failed removal, unavailable daemon, missing receipt, or identity mismatch blocks replacement and reports the owned name and UUID when known.
 The cell is never replayed automatically.
-Provider operations and owner retirement have bounded deadlines; recovery after uncertainty requires inspecting that exact identity through SBX's supported tools.
+Provider operations and owner retirement have bounded deadlines; the [architecture timing reference](ARCHITECTURE.md#selected-target-sessions-and-timing) records their independent allowances.
+Recovery after uncertainty requires inspecting that exact identity through SBX's supported tools.
 There is no global prune, reset, daemon termination, adoption, reconnect, or later attachment path.
 
 Forced removal retires the whole microVM, including processes or containers started outside the relay's process group.
