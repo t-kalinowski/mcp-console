@@ -207,13 +207,14 @@ def test_unrestricted_and_external_policies_preserve_network_and_cleanup(
                 assert not temporary.parent.exists(), output
                 assert (host / "created").read_text(encoding="utf-8") == "allowed"
                 (host / "created").unlink()
-                output["temporary"] = "<private data>"
                 transcript.append(
                     {
                         "filesystem": kind,
                         "network": network,
                         "exit_code": result.returncode,
-                        "stdout_json": output,
+                        "stdout": result.stdout.replace(
+                            str(temporary), "<private data>"
+                        ),
                         "private_storage_removed": True,
                     }
                 )
@@ -257,14 +258,13 @@ def test_environment_overrides_and_arguments_are_literal(binary: Path) -> Transc
         result = invoke(binary, config, sys.executable, "-c", script, *arguments)
         assert result.returncode == 0, result.stderr
         assert result.stderr == ""
-        output = json.loads(result.stdout)
-        assert output == {
+        assert json.loads(result.stdout) == {
             "inherited": "from launcher" if inherit else None,
             "marker": value,
             "value": value,
             "arguments": arguments,
         }
-        transcript.append({"inherit_environment": inherit, "stdout_json": output})
+        transcript.append({"inherit_environment": inherit, "stdout": result.stdout})
     return transcript
 
 

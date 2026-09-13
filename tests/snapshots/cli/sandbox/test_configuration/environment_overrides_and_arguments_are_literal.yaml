@@ -1,36 +1,16 @@
 ---
 inherit_environment: true
-stdout_json:
-  inherited: from launcher
-  marker: |-
-    雪, café; 'quoted' "double" $() `literal` \ newline
-    end
-  value: |-
-    雪, café; 'quoted' "double" $() `literal` \ newline
-    end
-  arguments:
-    - |-
-      雪, café; 'quoted' "double" $() `literal` \ newline
-      end
-    - --config-env
-    - ANOTHER_POLICY
-    - --bootstrap-fd
-    - "3"
+stdout: >
+  {"inherited": "from launcher", "marker": "雪, café; 'quoted' \"double\"
+  $() `literal` \\ newline\nend", "value": "雪, café; 'quoted' \"double\"
+  $() `literal` \\ newline\nend", "arguments": ["雪, café; 'quoted'
+  \"double\" $() `literal` \\ newline\nend", "--config-env",
+  "ANOTHER_POLICY", "--bootstrap-fd", "3"]}
 ---
 inherit_environment: false
-stdout_json:
-  inherited: ~
-  marker: |-
-    雪, café; 'quoted' "double" $() `literal` \ newline
-    end
-  value: |-
-    雪, café; 'quoted' "double" $() `literal` \ newline
-    end
-  arguments:
-    - |-
-      雪, café; 'quoted' "double" $() `literal` \ newline
-      end
-    - --config-env
-    - ANOTHER_POLICY
-    - --bootstrap-fd
-    - "3"
+stdout: >
+  {"inherited": null, "marker": "雪, café; 'quoted' \"double\" $()
+  `literal` \\ newline\nend", "value": "雪, café; 'quoted' \"double\" $()
+  `literal` \\ newline\nend", "arguments": ["雪, café; 'quoted' \"double\"
+  $() `literal` \\ newline\nend", "--config-env", "ANOTHER_POLICY",
+  "--bootstrap-fd", "3"]}
