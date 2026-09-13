@@ -5,8 +5,6 @@ result:
   content:
     - type: text
       text: |
-        dynamic environment resolution is unavailable; install `ir` or `uv` and restart MCP Console
-        dynamic environment resolution is unavailable
         dynamic environment resolution is unavailable
   isError: false
 ---

@@ -105,6 +105,9 @@ The initialization, initialized notification, and tool-list exchange have full r
 Its primary snapshot records the sandboxed handshake; its `.direct.yaml` companion records the direct handshake.
 The `.bare.yaml` and `.bare.direct.yaml` companions preserve the corresponding interfaces when resolver commands are unavailable.
 The `.proxy.yaml` companion records the sandboxed interface with a project-configured network proxy.
+The `.workspace.yaml` companion records the native workspace profile.
+The `.ssh.yaml` and `.ssh.direct.yaml` companions record bare SSH targets with that profile, using a deterministic preparation peer without starting a remote worker.
+The `.r-sql.direct.yaml` companion records the interface with Python cells disabled.
 When selected, this reference case runs before the other cases, including during updates.
 At each position in a transcript, the runner compares the complete exchange against the appropriate reference before abbreviating it.
 This includes multiple client sessions in one case.

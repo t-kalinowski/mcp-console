@@ -68,29 +68,27 @@ for line in sys.stdin.buffer:
         if mode == "lost":
             sys.exit(255)
         if mode == "resolver":
-            callbacks = [
-                {"kind": "resolve_r", "packages": ["praise"]},
-                {
+            callbacks = {
+                "resolve_r": {"kind": "resolve_r", "packages": ["praise"]},
+                "resolve_python": {
                     "kind": "resolve_python",
                     "request": {
                         "requirements": {"packages": []},
                         "retained_requirements": {"packages": []},
                     },
                 },
-                {
+                "resolve_python_version": {
                     "kind": "resolve_python_version",
                     "request": {"constraints": [">=3.11"]},
                 },
-            ]
-            for callback in callbacks:
-                frame(2, callback)
-                response = json.loads(sys.stdin.buffer.readline())
-                assert response["kind"].endswith("resolution_failed"), response
-                assert (
-                    "dynamic environment resolution is unavailable"
-                    in response["message"]
-                ), response
-                frame(2, {"kind": "console_output", "data": response["message"] + "\n"})
+            }
+            frame(2, callbacks[os.environ["CONSOLE_SSH_CALLBACK"]])
+            response = json.loads(sys.stdin.buffer.readline())
+            assert response["kind"].endswith("resolution_failed"), response
+            assert (
+                "dynamic environment resolution is unavailable" in response["message"]
+            ), response
+            frame(2, {"kind": "console_output", "data": response["message"] + "\n"})
         frame(2, {"kind": "completed"})
     elif command["kind"] == "shutdown":
         frame(2, {"kind": "shutdown_started"})

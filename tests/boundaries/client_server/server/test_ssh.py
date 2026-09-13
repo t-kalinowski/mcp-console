@@ -24,7 +24,7 @@ from support.normalization import code
 from support.records import Transcript
 from support.r import r_test_environment
 from support.requirements import SANDBOX, WORKER, requires
-from support.ssh import SSH, configure, localhost
+from support.ssh import SSH, configure, localhost, peer_environment
 from support.suites import run_this_suite
 
 
@@ -32,17 +32,22 @@ def _preinstalled_remote_runtime(binary: Path, execution: Execution) -> Transcri
     with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
         local = root / "controller"
-        remote = root / "remote space ' ; $()"
+        remote = root / "remote workspace"
         local.mkdir()
         remote.mkdir()
-        value = "literal space ' \" ; $(echo unexpected) $HOME"
+        value = "remote environment value"
+        # OpenSSH passes the executable prefix through the remote shell.
+        argument = "literal space ' \" ; $(echo unexpected) $HOME"
         remote_environment, rscript = r_test_environment()
         preinstalled_libraries = subprocess.check_output(
             [
                 rscript,
                 "--vanilla",
                 "-e",
-                "cat(paste(.libPaths(), collapse = .Platform$path.sep))",
+                # fmt: r
+                code("""
+                    cat(paste(.libPaths(), collapse = .Platform$path.sep))
+                    """),
             ],
             env=remote_environment,
             text=True,
@@ -55,7 +60,7 @@ def _preinstalled_remote_runtime(binary: Path, execution: Execution) -> Transcri
                 shift
                 exec /usr/bin/env -i PATH=/usr/bin:/bin R_HOME=RHOME R_LIBS_USER=/unavailable R_LIBS_SITE=/unavailable EXECUTABLE "$@"
                 """)
-            .replace("VALUE", shlex.quote(value))
+            .replace("VALUE", shlex.quote(argument))
             .replace("EXECUTABLE", shlex.quote(str(binary)))
             .replace("RHOME", shlex.quote(remote_environment["R_HOME"]))
         )
@@ -63,7 +68,7 @@ def _preinstalled_remote_runtime(binary: Path, execution: Execution) -> Transcri
         config = configure(
             local,
             remote,
-            [str(prefix), value],
+            [str(prefix), argument],
             extends=":workspace",
             sandbox={
                 "environment": {
@@ -106,14 +111,23 @@ def _preinstalled_remote_runtime(binary: Path, execution: Execution) -> Transcri
                 send = client.transcript[-1]["result"]["tools"][0]
                 assert "requirements" not in send["inputSchema"]["properties"], send
                 assert "console-test" in send["description"], send
-                client.send(r="x <- 41; x + 1")
+                client.send(
+                    # fmt: r
+                    r=code("""
+                        x <- 41
+                        x + 1
+                        """)
+                )
                 assert last_result_text(client) == "[1] 42\n", last_result_text(client)
                 client.send(
-                    r="stopifnot(getwd() == "
-                    + json.dumps(str(remote))
-                    + ", Sys.getenv('CONSOLE_SSH_LITERAL') == "
-                    + json.dumps(value)
-                    + "); x"
+                    # fmt: r
+                    r=code("""
+                        stopifnot(
+                          getwd() == REMOTE_WORKSPACE,
+                          Sys.getenv("CONSOLE_SSH_LITERAL") == "remote environment value"
+                        )
+                        x
+                        """).replace("REMOTE_WORKSPACE", json.dumps(str(remote)))
                 )
                 assert last_result_text(client) == "[1] 41\n", last_result_text(client)
                 client.send(
@@ -129,7 +143,15 @@ def _preinstalled_remote_runtime(binary: Path, execution: Execution) -> Transcri
                 client.send(r="x")
                 assert last_result_text(client) == "[1] 41\n", last_result_text(client)
                 client.send(
-                    python="import os, sys; answer = 42; print(answer); print(sys.executable == os.environ['RETICULATE_PYTHON'])"
+                    # fmt: python
+                    python=code("""
+                        import os
+                        import sys
+
+                        answer = 42
+                        print(answer)
+                        print(sys.executable == os.environ["RETICULATE_PYTHON"])
+                        """)
                 )
                 assert "42\nTrue\n" in last_result_text(client), last_result_text(
                     client
@@ -265,26 +287,13 @@ def test_preinstalled_sandbox(binary: Path) -> Transcript:
     return _preinstalled_remote_runtime(binary, SANDBOXED)
 
 
-def _peer(binary: Path, mode: str) -> Transcript:
+def _peer(binary: Path, mode: str, callback: str = "resolve_r") -> Transcript:
     with TemporaryDirectory() as temporary:
         root = Path(temporary)
         configure(root, root, [str(binary)])
-        peer = Path(__file__).resolve().parents[3] / "fixtures/ssh_peer.py"
-        ssh = root / "ssh"
-        ssh.write_text(
-            code(r"""
-                #!/bin/sh
-                exec COMMAND "$@"
-                """).replace("COMMAND", shlex.join([sys.executable, str(peer)]))
-        )
-        ssh.chmod(0o755)
         log = root / "calls"
-        environment = {
-            **os.environ,
-            "PATH": str(root) + os.pathsep + os.environ["PATH"],
-            "CONSOLE_SSH_PEER": mode,
-            "CONSOLE_SSH_PEER_LOG": str(log),
-        }
+        environment = peer_environment(root, mode)
+        environment["CONSOLE_SSH_CALLBACK"] = callback
         with McpClient(binary, ("serve", "--no-sandbox"), environment, root) as client:
             client.initialize_and_list_tools()
             client.send(r="one_cell_only <- TRUE")
@@ -297,6 +306,11 @@ def _peer(binary: Path, mode: str) -> Transcript:
                 "resolver": "dynamic environment resolution is unavailable",
             }[mode]
             assert expected in result, result
+            if mode == "resolver":
+                message = "dynamic environment resolution is unavailable"
+                if callback == "resolve_r":
+                    message += "; install `ir` or `uv` and restart MCP Console"
+                assert result == message + "\n", result
             if mode != "resolver":
                 client.send(r="must_not_replay <- TRUE")
                 client.send(control="restart", r="must_not_replace <- TRUE")
@@ -330,8 +344,18 @@ def test_transport_loss_blocks_replacement(binary: Path) -> Transcript:
     return _peer(binary, "lost")
 
 
-def test_remote_callbacks_cannot_run_local_resolvers(binary: Path) -> Transcript:
+def test_remote_r_callback_cannot_run_local_resolvers(binary: Path) -> Transcript:
     return _peer(binary, "resolver")
+
+
+def test_remote_python_callback_cannot_run_local_resolvers(binary: Path) -> Transcript:
+    return _peer(binary, "resolver", "resolve_python")
+
+
+def test_remote_python_version_callback_cannot_run_local_resolvers(
+    binary: Path,
+) -> Transcript:
+    return _peer(binary, "resolver", "resolve_python_version")
 
 
 if __name__ == "__main__":
