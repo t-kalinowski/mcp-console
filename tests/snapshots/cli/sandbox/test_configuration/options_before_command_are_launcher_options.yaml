@@ -15,9 +15,9 @@ exit_code: 2
 stderr: |
   error: unexpected argument '--config-file' found
 
-    tip: a similar argument exists: '--config-env'
+    tip: a similar argument exists: '--config'
     tip: to pass '--config-file' as a value, use '-- --config-file'
 
-  Usage: mcp-console sandbox --config-env <NAME> <COMMAND>...
+  Usage: mcp-console sandbox --config-env <NAME> --config <KEY=VALUE> <COMMAND>...
 
   For more information, try '--help'.

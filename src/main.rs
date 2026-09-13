@@ -4,6 +4,7 @@ use clap::Parser;
 
 mod cell;
 mod cli;
+mod config;
 mod docker;
 mod docker_sandbox;
 #[cfg(unix)]
@@ -46,16 +47,22 @@ mod worker_protocol;
 mod worker_relay;
 
 fn main() -> ExitCode {
-    match cli::Cli::parse().command {
+    let cli = cli::Cli::parse();
+    let mut overrides = cli.overrides.values;
+    match cli.command {
         cli::Command::Serve {
             worker,
             relay,
             no_sandbox,
             writable_root,
-        } => match run_server(worker, relay, no_sandbox, writable_root) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(error) => exit_with_error(error),
-        },
+            overrides: command_overrides,
+        } => {
+            overrides.extend(command_overrides.values);
+            match run_server(worker, relay, no_sandbox, writable_root, &overrides) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => exit_with_error(error),
+            }
+        }
         cli::Command::Worker => match worker::run() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
@@ -114,16 +121,21 @@ fn main() -> ExitCode {
             config_env,
             settings_env,
             writable_root,
-        } => match sandbox::run(
-            &command,
-            exit_with_parent,
-            config_env.as_deref(),
-            settings_env.as_deref(),
-            writable_root,
-        ) {
-            Ok(exit_code) => exit_code,
-            Err(error) => exit_with_error(error),
-        },
+            overrides: command_overrides,
+        } => {
+            overrides.extend(command_overrides.values);
+            match sandbox::run(
+                &command,
+                exit_with_parent,
+                config_env.as_deref(),
+                settings_env.as_deref(),
+                writable_root,
+                &overrides,
+            ) {
+                Ok(exit_code) => exit_code,
+                Err(error) => exit_with_error(error),
+            }
+        }
     }
 }
 
@@ -132,13 +144,14 @@ fn run_server(
     relay: Option<std::path::PathBuf>,
     no_sandbox: bool,
     writable_roots: Vec<std::path::PathBuf>,
+    overrides: &[String],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let settings::Captured {
         source,
         policy,
         target,
         provider,
-    } = settings::discover()?;
+    } = settings::discover(overrides)?;
     if provider == settings::Provider::Compute {
         docker_sandbox::validate_policy(&policy, false, &writable_roots)?;
     }

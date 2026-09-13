@@ -1,7 +1,7 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 
 const ROOT_EXAMPLES: &str = "\
 Examples:
@@ -21,14 +21,27 @@ Examples:
     after_help = ROOT_EXAMPLES
 )]
 pub struct Cli {
+    #[command(flatten)]
+    pub overrides: ConfigOverrides,
+
     #[command(subcommand)]
     pub command: Command,
+}
+
+#[derive(Debug, Args)]
+pub struct ConfigOverrides {
+    /// Override project configuration; repeat for multiple dotted KEY=VALUE assignments
+    #[arg(short = 'c', long = "config", value_name = "KEY=VALUE")]
+    pub values: Vec<String>,
 }
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Run the MCP server over standard input and output
     Serve {
+        #[command(flatten)]
+        overrides: ConfigOverrides,
+
         /// Skip inner native enforcement; retain any selected Docker container or Sandbox microVM and its provider policy
         #[arg(long)]
         no_sandbox: bool,
@@ -90,6 +103,9 @@ pub enum Command {
     /// Run a command with the default or an explicit sandbox policy
     #[command(after_help = SANDBOX_EXAMPLES)]
     Sandbox {
+        #[command(flatten)]
+        overrides: ConfigOverrides,
+
         /// Read the runner configuration as JSON from this launch environment variable
         #[arg(long, value_name = "NAME", conflicts_with = "exit_with_parent")]
         config_env: Option<String>,

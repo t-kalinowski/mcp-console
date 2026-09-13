@@ -354,10 +354,12 @@ Repeating its native metadata defaults is unnecessary.
 
 ### Proposed custom-profile composition and sandbox policy
 
-For the proposed general configuration layering, omitted values would inherit, scalar values replace, mappings merge by key, and sequences replace.
-This is not the implemented built-in adapter: current restricted filesystem entries augment the native baseline, network values replace its network setting, and unrestricted/external filesystem kinds replace its filesystem.
-Changing a tagged object's `kind` replaces that whole object rather than retaining incompatible fields from its old kind.
-For example, changing a Python environment from `managed` to `existing` does not retain the managed requirements list.
+The implemented [project-file and CLI layering](../docs/CONFIGURATION.md) preserves omitted keys, merges mappings recursively, and replaces scalar values and sequences.
+Explicit null remains a value.
+These generic rules run before the built-in adapter: current restricted filesystem entries augment the native baseline, network values replace its network setting, and unrestricted/external filesystem kinds replace its filesystem.
+For future custom-profile composition, changing a tagged object's `kind` could replace that whole object rather than retaining incompatible fields from its old kind.
+That field-specific behavior is not part of the implemented generic layering module.
+Under that proposal, changing a Python environment from `managed` to `existing` would not retain the managed requirements list.
 
 Permission blocks describe the policy requested from the sandbox.
 Console does not evaluate access rules, compare permissions, or add a separate set-delta language.

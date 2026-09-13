@@ -13,13 +13,16 @@ mod unsupported;
 
 const MARKER: &str = "MCP_CONSOLE_SANDBOX";
 
-pub fn capture_settings(roots: Vec<PathBuf>) -> Result<crate::settings::SandboxSettings, String> {
+pub fn capture_settings(
+    roots: Vec<PathBuf>,
+    overrides: &[String],
+) -> Result<crate::settings::SandboxSettings, String> {
     let crate::settings::Captured {
         source,
         policy: settings,
         provider,
         ..
-    } = crate::settings::discover()?;
+    } = crate::settings::discover(overrides)?;
     if provider == crate::settings::Provider::Compute {
         return Err("standalone sandbox is local and cannot use the resolved compute provider; use mcp-console serve for Docker Sandbox execution".into());
     }
@@ -181,13 +184,19 @@ pub fn run(
     config_env: Option<&str>,
     settings_env: Option<&str>,
     writable_roots: Vec<PathBuf>,
+    overrides: &[String],
 ) -> Result<ExitCode, String> {
+    if !overrides.is_empty() && (config_env.is_some() || settings_env.is_some()) {
+        return Err(
+            "configuration overrides cannot be combined with --config-env or --settings-env".into(),
+        );
+    }
     let settings = if config_env.is_some() {
         crate::settings::SandboxSettings::default()
     } else if let Some(name) = settings_env {
         crate::settings::from_environment(name)?
     } else {
-        capture_settings(writable_roots)?
+        capture_settings(writable_roots, overrides)?
     };
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     {

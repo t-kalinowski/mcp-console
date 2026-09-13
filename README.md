@@ -164,6 +164,8 @@ Explicit native rules can override those defaults.
 Networking stays restricted, and Console grants private temporary storage without the native shared `/tmp` or inherited `TMPDIR` write grants.
 Use `extends: ":read-only"` for the native read-only baseline; omitting `extends` preserves today's defaults.
 The colon identifies a native built-in.
+For one launch, use `mcp-console serve -c extends=:workspace`.
+Repeated `-c KEY=VALUE` options [overlay the project configuration](docs/CONFIGURATION.md) using dotted keys and inline values.
 See [configuration and native precedence](docs/SANDBOX_CONFIGURATION.md#project-configuration), including Linux read-mask limitations.
 
 ## Security boundary
