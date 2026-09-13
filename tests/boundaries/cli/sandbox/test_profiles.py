@@ -456,10 +456,11 @@ def test_workspace_options_preserve_explicit_native_values(binary: Path) -> Tran
             TemporaryDirectory(dir="/tmp") as shared,
         ):
             host = Path(directory).resolve()
-            source = json.dumps(
-                {"extends": ":workspace", "sandbox": {"workspace_options": options}}
-            )
-            configure(host, source)
+            configuration = {
+                "extends": ":workspace",
+                "sandbox": {"workspace_options": options},
+            }
+            configure(host, json.dumps(configuration))
             result = run(
                 binary,
                 host,
@@ -492,7 +493,7 @@ def test_workspace_options_preserve_explicit_native_values(binary: Path) -> Tran
                     ),
                 },
             )
-            transcript.append({"configuration": source, **result})
+            transcript.append({"configuration": configuration, **result})
     return transcript
 
 

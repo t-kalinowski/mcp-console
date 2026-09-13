@@ -90,6 +90,12 @@ The runner passes the built binary path to each case, followed by the execution 
 Each case returns a `Transcript`: an ordered list of transcript entries.
 The runner serializes each entry as one document in the matching YAML 1.2 stream under `tests/snapshots/BOUNDARY/SUITE/CASE.yaml`.
 The snapshot hierarchy exactly parallels the suite hierarchy under `tests/boundaries/`.
+
+Use YAML mappings and sequences when the payload's values are what the reader needs to understand.
+Keep serialized JSON when its emitted form matters to the test, including quoting, escaping, and literal argument or stdin preservation.
+Keep source code, literal parser inputs, and exact runtime output as strings.
+Choose the representation in the owning case; the snapshot serializer must not infer it from whether a string parses as JSON.
+
 A case may return `TranscriptWithCompanions` to place named sibling files beside that stream.
 YAML companions use names such as `CASE.events.yaml` and are compared as YAML 1.2 values, so equivalent scalar spellings and layouts are accepted.
 Markdown and Quarto companions use `CASE.md` and `CASE.qmd` and are compared as exact UTF-8 text.
