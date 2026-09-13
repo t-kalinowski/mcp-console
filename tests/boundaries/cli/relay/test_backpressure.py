@@ -19,6 +19,7 @@ from support.checkpoints import FifoCheckpoint
 from support.events import Events
 from support.native import SHARED_LIBRARY_FLAG
 from support.native import LOADER_VARIABLE
+from support.normalization import code
 from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, WORKER, requires
 from support.suites import run_this_suite
@@ -321,10 +322,12 @@ def test_succeeds_when_deadline_passes_after_final_output(binary: Path) -> Trans
         root,
         environment,
     ):
-        worker = r"""
-import os
-os.write(int(os.environ["MCP_CONSOLE_SIDEBAND_WRITE_FD"]), b'{"kind":"ready"}\n')
-"""
+        # fmt: python
+        worker = code(r"""
+            import os
+
+            os.write(int(os.environ["MCP_CONSOLE_SIDEBAND_WRITE_FD"]), b'{"kind":"ready"}\n')
+            """)
         result = subprocess.run(
             [binary, "worker-relay", sys.executable, "-c", worker],
             input="",
@@ -355,10 +358,12 @@ def test_writes_regular_file_after_retirement_deadline(binary: Path) -> Transcri
         root,
         environment,
     ):
-        worker = r"""
-import os
-os.write(int(os.environ["MCP_CONSOLE_SIDEBAND_WRITE_FD"]), b'{"kind":"ready"}\n')
-"""
+        # fmt: python
+        worker = code(r"""
+            import os
+
+            os.write(int(os.environ["MCP_CONSOLE_SIDEBAND_WRITE_FD"]), b'{"kind":"ready"}\n')
+            """)
         destination = root / "relay.jsonl"
         with destination.open("w") as output:
             result = subprocess.run(

@@ -21,6 +21,7 @@ from pathlib import Path
 
 from support.events import Events
 from support.native import SHARED_LIBRARY_FLAG
+from support.normalization import code
 from support.processes import (
     capture_process_identity,
     signal_process,
@@ -277,15 +278,17 @@ class TranscriptRunnerTests(unittest.TestCase):
         # fmt: python
         cargo.write_text(
             f"#!{sys.executable}\n"
-            + """
-import sys
-from pathlib import Path
+            + code(
+                """
+                import sys
+                from pathlib import Path
 
-profile = "release" if "--release" in sys.argv else "debug"
-binary = Path("target") / profile / "mcp-console"
-binary.parent.mkdir(parents=True, exist_ok=True)
-binary.write_text(profile, encoding="utf-8")
-""".lstrip(),
+                profile = "release" if "--release" in sys.argv else "debug"
+                binary = Path("target") / profile / "mcp-console"
+                binary.parent.mkdir(parents=True, exist_ok=True)
+                binary.write_text(profile, encoding="utf-8")
+                """
+            ),
             encoding="utf-8",
         )
         cargo.chmod(0o755)
@@ -295,11 +298,14 @@ binary.write_text(profile, encoding="utf-8")
         (self.root / "target" / "release" / "mcp-console").unlink()
         self.suite.write_text(
             PUBLIC_SUITE
-            + """
-def test_selected(binary: Path) -> list[dict[str, str]]:
-    assert binary.read_text(encoding="utf-8") == "release"
-    return record(binary, "selected")
-""",
+            # fmt: python
+            + code(
+                """
+                def test_selected(binary: Path) -> list[dict[str, str]]:
+                    assert binary.read_text(encoding="utf-8") == "release"
+                    return record(binary, "selected")
+                """
+            ),
             encoding="utf-8",
         )
         result = subprocess.run(
@@ -316,14 +322,19 @@ def test_selected(binary: Path) -> list[dict[str, str]]:
     def test_case_requirements_and_skip_reporting(self) -> None:
         self.suite.write_text(
             PUBLIC_SUITE
-            + """
-from support.requirements import Requirement, command, requires
+            # fmt: python
+            + code(
+                """
+                from support.requirements import Requirement, command, requires
 
-available = Requirement("available fixture", True, "fixture is available")
-missing = Requirement("missing fixture", False, "fixture deliberately unavailable")
-test_selected = requires(available)(test_selected)
-test_unselected = requires(available, missing, command("mcp-console-deliberately-missing-test-command"))(test_unselected)
-""",
+                available = Requirement("available fixture", True, "fixture is available")
+                missing = Requirement("missing fixture", False, "fixture deliberately unavailable")
+                test_selected = requires(available)(test_selected)
+                test_unselected = requires(
+                    available, missing, command("mcp-console-deliberately-missing-test-command")
+                )(test_unselected)
+                """
+            ),
             encoding="utf-8",
         )
         listed = self.run_runner("--list")
@@ -402,13 +413,16 @@ test_unselected = requires(available, missing, command("mcp-console-deliberately
     def test_full_update_preserves_skipped_case_and_companions(self) -> None:
         self.suite.write_text(
             PUBLIC_SUITE
-            + """
-from support.requirements import Requirement, requires
+            # fmt: python
+            + code(
+                """
+                from support.requirements import Requirement, requires
 
-test_unselected = requires(
-    Requirement("unavailable", False, "deliberate skip")
-)(test_unselected)
-""",
+                test_unselected = requires(Requirement("unavailable", False, "deliberate skip"))(
+                    test_unselected
+                )
+                """
+            ),
             encoding="utf-8",
         )
         companion = self.snapshots / "unselected.md"
@@ -425,19 +439,23 @@ test_unselected = requires(
     def test_execution_requirements_share_one_behavior_snapshot(self) -> None:
         self.suite.write_text(
             PUBLIC_SUITE
-            + """
-from support.execution import Execution, executions
-from support.requirements import Requirement
+            # fmt: python
+            + code(
+                """
+                from support.execution import Execution, executions
+                from support.requirements import Requirement
 
-first = Execution("first")
-second = Execution("second")
-missing = Execution("missing", (Requirement("mode", False, "unavailable mode"),))
+                first = Execution("first")
+                second = Execution("second")
+                missing = Execution("missing", (Requirement("mode", False, "unavailable mode"),))
 
-@executions(first, missing, second)
-def test_selected(binary, execution):
-    record(binary, execution.name)
-    return [{"runner": "selected"}]
-""",
+
+                @executions(first, missing, second)
+                def test_selected(binary, execution):
+                    record(binary, execution.name)
+                    return [{"runner": "selected"}]
+                """
+            ),
             encoding="utf-8",
         )
         result = self.run_runner("--update", "--jobs", "1")
@@ -472,13 +490,16 @@ def test_selected(binary, execution):
         ]
         self.suite.write_text(
             PUBLIC_SUITE
-            + f"""
-def test_initializes_and_lists_tools(binary):
-    return {handshake!r}
+            # fmt: python
+            + code(
+                f"""
+                def test_initializes_and_lists_tools(binary):
+                    return {handshake!r}
 
-def test_selected(binary):
-    return [{{"runner": "before"}}] + {handshake!r} + [{{"runner": "between"}}] + {handshake!r} + {changed!r} + {handshake[:-1]!r}
-""",
+                def test_selected(binary):
+                    return [{{"runner": "before"}}] + {handshake!r} + [{{"runner": "between"}}] + {handshake!r} + {changed!r} + {handshake[:-1]!r}
+                """
+            ),
             encoding="utf-8",
         )
         result = self.run_runner("--update", "--jobs", "1")
@@ -492,31 +513,40 @@ def test_selected(binary):
     def test_sessions_use_the_reference_for_their_execution(self) -> None:
         self.suite.write_text(
             PUBLIC_SUITE
-            + """
-from support.execution import Execution, executions
-from support.records import TranscriptWithCompanions
+            # fmt: python
+            + code(
+                """
+                from support.execution import Execution, executions
+                from support.records import TranscriptWithCompanions
 
-sandbox = [{"id": 1, "input": {"method": "initialize"}, "result": "sandbox"}]
-direct = [{"id": 2, "input": {"method": "initialize"}, "result": "direct"}]
-bare_sandbox = [{"id": 3, "input": {"method": "initialize"}, "result": "bare sandbox"}]
-bare_direct = [{"id": 4, "input": {"method": "initialize"}, "result": "bare direct"}]
+                sandbox = [{"id": 1, "input": {"method": "initialize"}, "result": "sandbox"}]
+                direct = [{"id": 2, "input": {"method": "initialize"}, "result": "direct"}]
+                bare_sandbox = [{"id": 3, "input": {"method": "initialize"}, "result": "bare sandbox"}]
+                bare_direct = [{"id": 4, "input": {"method": "initialize"}, "result": "bare direct"}]
 
-def test_initializes_and_lists_tools(binary):
-    return TranscriptWithCompanions(sandbox, {
-        "direct.yaml": direct,
-        "bare.yaml": bare_sandbox,
-        "bare.direct.yaml": bare_direct,
-    })
 
-@executions(Execution("sandbox"), Execution("direct"))
-def test_selected(binary, execution):
-    handshake = sandbox if execution.name == "sandbox" else direct
-    bare = bare_sandbox if execution.name == "sandbox" else bare_direct
-    return handshake + [{"runner": "between sessions"}] + handshake + bare
+                def test_initializes_and_lists_tools(binary):
+                    return TranscriptWithCompanions(
+                        sandbox,
+                        {
+                            "direct.yaml": direct,
+                            "bare.yaml": bare_sandbox,
+                            "bare.direct.yaml": bare_direct,
+                        },
+                    )
 
-def test_unselected(binary):
-    return TranscriptWithCompanions(sandbox + direct, {"wire.yaml": direct})
-""",
+
+                @executions(Execution("sandbox"), Execution("direct"))
+                def test_selected(binary, execution):
+                    handshake = sandbox if execution.name == "sandbox" else direct
+                    bare = bare_sandbox if execution.name == "sandbox" else bare_direct
+                    return handshake + [{"runner": "between sessions"}] + handshake + bare
+
+
+                def test_unselected(binary):
+                    return TranscriptWithCompanions(sandbox + direct, {"wire.yaml": direct})
+                """
+            ),
             encoding="utf-8",
         )
         result = self.run_runner("--update", "--jobs", "1")
@@ -544,19 +574,26 @@ def test_unselected(binary):
             shutil.copy2(reference, self.snapshots / reference.name)
         self.suite.write_text(
             PUBLIC_SUITE
-            + """
-from yaml12 import read_yaml
+            # fmt: python
+            + code(
+                """
+                from yaml12 import read_yaml
 
-def test_selected(binary):
-    reference = binary.parents[2] / "tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml"
-    handshake = read_yaml(reference, multi=True)
-    send = handshake[-1]["result"]["tools"][0]
-    send["description"] = send["description"].replace(
-        "cannot directly access the network",
-        "can access the network subject to the launcher's proxy settings",
-    )
-    return [{"runner": "before"}] + handshake + [{"runner": "between"}] + handshake
-""",
+
+                def test_selected(binary):
+                    reference = (
+                        binary.parents[2]
+                        / "tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml"
+                    )
+                    handshake = read_yaml(reference, multi=True)
+                    send = handshake[-1]["result"]["tools"][0]
+                    send["description"] = send["description"].replace(
+                        "cannot directly access the network",
+                        "can access the network subject to the launcher's proxy settings",
+                    )
+                    return [{"runner": "before"}] + handshake + [{"runner": "between"}] + handshake
+                """
+            ),
             encoding="utf-8",
         )
         result = self.run_runner(
@@ -571,17 +608,24 @@ def test_selected(binary):
     def test_initialization_updates_only_available_execution_references(self) -> None:
         source = (
             PUBLIC_SUITE
-            + """
-from support.execution import Execution, executions
-from support.records import TranscriptWithCompanions
-from support.requirements import Requirement
+            # fmt: python
+            + code(
+                """
+                from support.execution import Execution, executions
+                from support.records import TranscriptWithCompanions
+                from support.requirements import Requirement
 
-@executions(Execution("direct"), Execution("sandbox", (Requirement("sandbox", AVAILABLE, "unavailable"),)))
-def test_initializes_and_lists_tools(binary, execution):
-    return TranscriptWithCompanions(
-        [{"mode": execution.name}], {"bare.yaml": [{"bare": execution.name}]}
-    )
-"""
+
+                @executions(
+                    Execution("direct"),
+                    Execution("sandbox", (Requirement("sandbox", AVAILABLE, "unavailable"),)),
+                )
+                def test_initializes_and_lists_tools(binary, execution):
+                    return TranscriptWithCompanions(
+                        [{"mode": execution.name}], {"bare.yaml": [{"bare": execution.name}]}
+                    )
+                """
+            )
         )
         self.suite.write_text(source.replace("AVAILABLE", "True"))
         result = self.run_runner("--update", "--jobs", "1")

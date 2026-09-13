@@ -95,13 +95,14 @@ def test_retires_descendants_after_exit_and_supervisor_loss(binary: Path) -> Tra
         import sys
         import textwrap
 
+        # fmt: python
         child = textwrap.dedent("""
             import signal
 
             signal.signal(signal.SIGTERM, signal.SIG_IGN)
             print("child ready", flush=True)
             signal.pause()
-        """)
+            """)
 
         descendant = subprocess.Popen(
             [sys.executable, "-c", child],

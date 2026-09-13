@@ -53,6 +53,7 @@ def test_workspace_yaml_forms_protect_metadata_and_private_temporary_storage(
         import os
         from pathlib import Path
         import subprocess
+        import textwrap
 
 
         def denied(operation, *args, **kwargs):
@@ -98,14 +99,18 @@ def test_workspace_yaml_forms_protect_metadata_and_private_temporary_storage(
                     [
                         os.environ["TEST_PYTHON"],
                         "-c",
-                        """
-        from pathlib import Path
-        import sys
-        p = Path(sys.argv[1])
-        if sys.argv[2] == "write": p.write_text("child")
-        if sys.argv[2] == "delete": p.unlink()
-        if sys.argv[2] == "rename": p.parent.rename(p.parent.with_name("moved"))
-        """,
+                        # fmt: python
+                        textwrap.dedent(
+                            """
+                            from pathlib import Path
+                            import sys
+
+                            p = Path(sys.argv[1])
+                            if sys.argv[2] == "write": p.write_text("child")
+                            if sys.argv[2] == "delete": p.unlink()
+                            if sys.argv[2] == "rename": p.parent.rename(p.parent.with_name("moved"))
+                            """
+                        ),
                         str(keep),
                         action,
                     ],

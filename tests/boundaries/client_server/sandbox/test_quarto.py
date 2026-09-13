@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.client import McpClient
 from support.execution import SANDBOXED
+from support.normalization import code
 from support.r import r_test_environment
 from support.records import Transcript
 from support.requirements import SANDBOX, command, requires
@@ -106,13 +107,13 @@ def test_renders_generated_document(binary: Path) -> Transcript:
             "document": document.read_text(encoding="utf-8"),
         }
 
-        render_script = r"""
-set -eu
-cp "$1" "$TMPDIR/transcript.qmd"
-cd "$TMPDIR"
-export HOME="$TMPDIR"
-exec ir render transcript.qmd --to html --output - --quiet
-""".lstrip()
+        render_script = code(r"""
+            set -eu
+            cp "$1" "$TMPDIR/transcript.qmd"
+            cd "$TMPDIR"
+            export HOME="$TMPDIR"
+            exec ir render transcript.qmd --to html --output - --quiet
+            """)
         rendering = subprocess.run(
             [
                 binary,

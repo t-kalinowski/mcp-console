@@ -8,6 +8,7 @@ import shutil
 import socket
 import subprocess
 import struct
+import sys
 from contextlib import contextmanager
 from pathlib import Path
 import select
@@ -91,6 +92,24 @@ def configure(
         )
     )
     return config
+
+
+def peer_environment(root: Path, mode: str) -> dict[str, str]:
+    peer = Path(__file__).resolve().parents[1] / "fixtures/ssh_peer.py"
+    ssh = root / "ssh"
+    ssh.write_text(
+        code(r"""
+            #!/bin/sh
+            exec COMMAND "$@"
+            """).replace("COMMAND", shlex.join([sys.executable, str(peer)]))
+    )
+    ssh.chmod(0o755)
+    return {
+        **os.environ,
+        "PATH": str(root) + os.pathsep + os.environ["PATH"],
+        "CONSOLE_SSH_PEER": mode,
+        "CONSOLE_SSH_PEER_LOG": str(root / "calls"),
+    }
 
 
 @contextmanager

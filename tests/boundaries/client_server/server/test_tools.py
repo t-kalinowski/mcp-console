@@ -15,6 +15,7 @@ from support.records import Transcript, TranscriptWithCompanions
 from support.requirements import SANDBOX, WORKER, requires
 from support.resolvers import bare_runtime_environment
 from support.sandbox_configuration import NATIVE_PROXY
+from support.ssh import configure, peer_environment
 from support.suites import run_this_suite
 
 
@@ -85,6 +86,16 @@ def test_initializes_and_lists_tools(
         companions["proxy.yaml"] = _initializes_and_lists_tools(
             binary, execution, proxy=True
         )
+        companions["workspace.yaml"] = _initializes_and_lists_tools(
+            binary, execution, workspace_profile=True
+        )
+    else:
+        companions["r-sql.yaml"] = _initializes_and_lists_tools(
+            binary, execution, languages="r,sql"
+        )
+    companions["ssh.yaml"] = _initializes_and_lists_tools(
+        binary, execution, bare=True, workspace_profile=True, ssh=True
+    )
     return TranscriptWithCompanions(
         _initializes_and_lists_tools(binary, execution),
         companions,
@@ -92,20 +103,43 @@ def test_initializes_and_lists_tools(
 
 
 def _initializes_and_lists_tools(
-    binary: Path, execution: Execution, *, bare: bool = False, proxy: bool = False
+    binary: Path,
+    execution: Execution,
+    *,
+    bare: bool = False,
+    proxy: bool = False,
+    workspace_profile: bool = False,
+    ssh: bool = False,
+    languages: str | None = None,
 ) -> Transcript:
     environment = os.environ.copy()
     environment.pop("MCP_CONSOLE_LANGUAGES", None)
+    if languages is not None:
+        environment["MCP_CONSOLE_LANGUAGES"] = languages
     with tempfile.TemporaryDirectory() as library:
-        if bare:
+        if bare and not ssh:
             environment = bare_runtime_environment(environment, Path(library))
         workspace = Path(library) / "workspace"
         workspace.mkdir()
-        if proxy:
+        if ssh:
+            environment = peer_environment(Path(library), "resolver")
+            environment.pop("MCP_CONSOLE_LANGUAGES", None)
+            config = configure(
+                workspace,
+                Path(library).resolve() / "remote workspace",
+                [str(binary)],
+                extends=":workspace",
+            )
+        elif proxy or workspace_profile:
             config = workspace / ".agents/console/config.yaml"
             config.parent.mkdir(parents=True)
             config.write_text(
-                json.dumps({"sandbox": {"proxy": NATIVE_PROXY}}), encoding="utf-8"
+                json.dumps(
+                    {"extends": ":workspace"}
+                    if workspace_profile
+                    else {"sandbox": {"proxy": NATIVE_PROXY}}
+                ),
+                encoding="utf-8",
             )
         with McpClient(binary, execution.serve(), environment, workspace) as client:
             client.initialize_and_list_tools()
@@ -124,13 +158,20 @@ def _initializes_and_lists_tools(
             assert '"$defs"' not in send_schema, send["inputSchema"]
             assert '"$ref"' not in send_schema, send["inputSchema"]
 
-            if proxy:
+            if proxy or workspace_profile:
                 assert list(config.parent.iterdir()) == [config], workspace
             else:
                 assert not (workspace / ".agents/console").exists(), workspace
             if bare:
                 assert "requirements" not in send["inputSchema"]["properties"]
-                return client.finish()
+                transcript = client.finish()
+                if ssh:
+                    transcript = json.loads(
+                        json.dumps(transcript).replace(
+                            str(Path(library).resolve()), "<ssh-test>"
+                        )
+                    )
+                return transcript
             send_requirements = send["inputSchema"]["properties"]["requirements"]
             assert send_requirements["type"] == ["object", "null"], send_requirements
             assert send_requirements["additionalProperties"] is False, send_requirements

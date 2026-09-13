@@ -12,6 +12,7 @@ from tempfile import TemporaryDirectory
 
 from support.client import McpClient
 from support.capture import read_jsonl_path
+from support.normalization import code
 from support.requirements import WORKER, Requirement
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -169,10 +170,13 @@ def isolated_controller(
         for name in ("mcp-console-sandbox", "R", "Rscript", "uv", "ir")
     )
     for path in paths:
-        path.write_text(f"""#!/bin/sh
-echo invoked >> '{root / "sentinel"}'
-exit 99
-""")
+        path.write_text(
+            code(f"""
+                #!/bin/sh
+                echo invoked >> '{root / "sentinel"}'
+                exit 99
+                """)
+        )
         path.chmod(0o755)
     return relocated, environment
 

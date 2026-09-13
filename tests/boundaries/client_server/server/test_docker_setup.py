@@ -41,15 +41,18 @@ def test_build_and_image_defaults_captured_once(binary: Path) -> Transcript:
         (context / "ignored").write_text("excluded by dockerignore")
         (context / ".dockerignore").write_text("ignored\n")
         dockerfile = root / "separate Dockerfile"
-        dockerfile.write_text(f"""FROM {base}
-COPY . /build-input/
-ENV IMAGE_VALUE=initial
-LABEL org.mcp-console.test={json.dumps(root.name)}
-USER 1234:1234
-ENTRYPOINT ["/bin/false"]
-HEALTHCHECK CMD exit 1
-STOPSIGNAL SIGKILL
-""")
+        dockerfile.write_text(
+            code(f"""
+                FROM {base}
+                COPY . /build-input/
+                ENV IMAGE_VALUE=initial
+                LABEL org.mcp-console.test={json.dumps(root.name)}
+                USER 1234:1234
+                ENTRYPOINT ["/bin/false"]
+                HEALTHCHECK CMD exit 1
+                STOPSIGNAL SIGKILL
+                """)
+        )
         environment = cli_peer(root / "peer")
         docker_config = root / "docker config"
         docker_config.mkdir()
@@ -225,13 +228,18 @@ def test_setup_failures_retire_containers(binary: Path) -> Transcript:
             elif case == "python_version":
                 # Execute the probe with an older interpreter's version report.
                 program = root / "python-version"
-                program.write_text("""#!/opt/analysis/bin/python
-from collections import namedtuple
-import sys
-VersionInfo = namedtuple("VersionInfo", "major minor micro releaselevel serial")
-sys.version_info = VersionInfo(3, 9, 0, "final", 0)
-exec(sys.argv[2])
-""")
+                program.write_text(
+                    # fmt: python
+                    code("""
+                        #!/opt/analysis/bin/python
+                        from collections import namedtuple
+                        import sys
+
+                        VersionInfo = namedtuple("VersionInfo", "major minor micro releaselevel serial")
+                        sys.version_info = VersionInfo(3, 9, 0, "final", 0)
+                        exec(sys.argv[2])
+                        """)
+                )
                 program.chmod(0o755)
                 value["sandbox"]["environment"] = {
                     "RETICULATE_PYTHON": "/python-version",
@@ -242,11 +250,16 @@ exec(sys.argv[2])
                 ]
             elif case == "compatibility":
                 program = root / "incompatible.py"
-                program.write_text("""import json, struct, sys
-payload = json.dumps({"version": 999, "build": "incompatible"}).encode()
-sys.stdout.buffer.write(bytes([1]) + struct.pack(">I", len(payload)) + payload)
-sys.stdout.buffer.flush()
-""")
+                program.write_text(
+                    # fmt: python
+                    code("""
+                        import json, struct, sys
+
+                        payload = json.dumps({"version": 999, "build": "incompatible"}).encode()
+                        sys.stdout.buffer.write(bytes([1]) + struct.pack(">I", len(payload)) + payload)
+                        sys.stdout.buffer.flush()
+                        """)
+                )
                 value["target"]["command"] = ["/opt/analysis/bin/python", "/peer.py"]
                 value["target"]["compute"]["mounts"] = [
                     {"source": str(program), "target": "/peer.py"}
