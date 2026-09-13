@@ -15,10 +15,18 @@ The shared `SSH` capability requires `sshd` and `ssh-keygen`; CI installs the Li
 `MCP_CONSOLE_TEST_SSH_R_LIBS` can supply preinstalled R libraries to this fixture without adding dependency setup to SSH execution.
 Deterministic peers cover wire failures, while real SSH covers remote-shell quoting, runtime state, policy, cancellation, and shared connection ownership.
 
-For cross-host policy validation, set `MCP_CONSOLE_TEST_SSH_EXTERNAL` to a JSON object with `target` (the documented target shape), `environment` (remote worker environment strings), `ssh_config` (an absolute controller OpenSSH configuration path), and `platform` (the expected R `Sys.info()[['sysname']]`).
-The test infrastructure must provision the compatible build, R, and the existing target workspace with `results`, `cli`, and `denied` subdirectories.
+Cross-host policy validation automatically probes the optional host selected in `tests/support/ssh_external.py` using batch SSH with a bounded connection timeout.
+Set `MCP_CONSOLE_TEST_SSH_HOST` to another OpenSSH destination, or to an empty string to disable automatic remote coverage.
+An unavailable host skips the external case; localhost SSH cases still run, including in CI.
+Once connected, setup and test failures fail the case.
+The host needs Python, `uv`, R, native build prerequisites, and a supported sandbox environment; its login shell must expose the build tools.
+The test uploads the current working-tree source and installs it privately under `~/.cache/mcp-console-tests/`, retaining build data across runs and serializing installation.
+It prepends that installation to the remote command's `PATH` to exercise default command discovery.
+It creates and removes its own temporary remote workspace and leaves ordinary user installations unchanged.
+
+To use an already provisioned target instead, set `MCP_CONSOLE_TEST_SSH_EXTERNAL` to a JSON object with `target` (the documented target shape), `environment` (remote worker environment strings), `ssh_config` (an absolute controller OpenSSH configuration path), and `platform` (the expected R `Sys.info()[['sysname']]`).
+That target must provide a compatible build, R, and an existing workspace with `results`, `cli`, and `denied` subdirectories.
 Run `scripts/test client_server/server/test_ssh_policy::external_execution_host_policy`.
-This exercises actual execution-host policy enforcement; an unset variable skips the case and records why.
 
 A boundary suite is a Python file under one of four directories whose relative path has no component beginning with `_`:
 

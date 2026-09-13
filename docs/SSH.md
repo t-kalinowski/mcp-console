@@ -8,7 +8,7 @@ It does not install R or synchronize files.
 
 ## Configure a target
 
-For an existing `ssh mule` configuration, first create or select the remote project yourself and confirm that `ssh mule uvx mcp-console --version` works.
+For an existing `ssh analysis-host` configuration, first create or select the remote project yourself.
 Save this in the local project's `.agents/console/config.yaml`:
 
 ```yaml
@@ -16,29 +16,32 @@ extends: :workspace
 target:
   transport:
     kind: ssh
-    host: mule
+    host: analysis-host
   workspace: /srv/projects/analysis
 ```
 
 Then run `mcp-console serve` from the local project.
-Before advertising MCP tools, Console connects to `mule`, checks compatibility and the remote directory, and discovers that host's resolver capability.
+Before advertising MCP tools, Console connects to `analysis-host`, checks protocol compatibility and the remote directory, and discovers that host's resolver capability.
 This does not install analysis packages or start a worker.
 The first operation that needs an environment prepares the managed defaults there; worker launch then validates the sandbox and starts the relay and worker in `/srv/projects/analysis`.
 `extends` is optional: omitting it preserves Console's restricted policy with host reads and private temporary writes.
 Selecting SSH alone grants no workspace writes.
 
-| Field                   | Default and meaning                                                                                                                                                                                                                                            |
-| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `target`                | Omitted: local host execution. With SSH transport, selects one host for the implicit session. Applies only to `serve`.                                                                                                                                         |
-| `target.transport.kind` | Select `ssh` for this host target; Docker and Docker Sandbox separately accept local transport.                                                                                                                                                                |
-| `target.transport.host` | Required, nonempty OpenSSH destination, including a host alias. Uses the controller's SSH configuration for identity, user, port, jump hosts, and host keys.                                                                                                   |
-| `target.workspace`      | Required absolute path on the execution host. The helper verifies that it exists and is a directory; it never creates it or substitutes another cwd. Relative or missing values fail locally; inaccessible, nonexistent, or non-directory paths fail remotely. |
-| `target.command`        | Optional nonempty string argv; defaults to `[uvx, mcp-console]`. Its first element must name an executable. NUL bytes are rejected. Console quotes each argument for the remote shell and appends a fixed internal launch or preparation operation.            |
+| Field                   | Default and meaning                                                                                                                                                                                                                                                   |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `target`                | Omitted: local host execution. With SSH transport, selects one host for the implicit session. Applies only to `serve`.                                                                                                                                                |
+| `target.transport.kind` | Select `ssh` for this host target; Docker and Docker Sandbox separately accept local transport.                                                                                                                                                                       |
+| `target.transport.host` | Required, nonempty OpenSSH destination, including a host alias. Uses the controller's SSH configuration for identity, user, port, jump hosts, and host keys.                                                                                                          |
+| `target.workspace`      | Required absolute path on the execution host. The helper verifies that it exists and is a directory; it never creates it or substitutes another cwd. Relative or missing values fail locally; inaccessible, nonexistent, or non-directory paths fail remotely.        |
+| `target.command`        | Optional nonempty string argv. When omitted, runs `mcp-console` from the remote `PATH`, or `uvx mcp-console` if it is absent. Console quotes each argument for the remote shell and appends a fixed internal launch or preparation operation. NUL bytes are rejected. |
 
 `target.compute` is optional for SSH and accepts `{kind: host}`; SSH plus Docker or Docker Sandbox is unsupported.
 
 For example, `target.command: [uvx, mcp-console==0.0.3]` selects a package version, and `target.command: [/opt/console/bin/mcp-console]` selects a preinstalled build.
 The selected package must implement this SSH protocol; a version pin is not a compatibility guarantee.
+Console does not preflight the selected executable or command prefix.
+Missing commands, installation failures, and command errors propagate through ordinary startup failure handling.
+An installed `mcp-console` that fails does not trigger the `uvx` fallback.
 The command is a trusted executable prefix, not a shell program or a `send` argument.
 It must leave stdout exclusively for Console's launch protocol; setup diagnostics belong on stderr.
 Unexpected stdout is an error.
@@ -72,7 +75,7 @@ For an installation outside the remote SSH `PATH`, configure the execution-host 
 
 ```yaml
 target:
-  transport: {kind: ssh, host: mule}
+  transport: {kind: ssh, host: analysis-host}
   workspace: /srv/projects/analysis
 sandbox:
   environment:

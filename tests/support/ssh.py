@@ -28,11 +28,6 @@ SSH = Requirement(
     "requires sshd and ssh-keygen with permission to run a localhost SSH server",
 )
 CONFIG = ".agents/console/config.yaml"
-EXTERNAL_SSH = Requirement(
-    "configured external SSH target",
-    bool(os.environ.get("MCP_CONSOLE_TEST_SSH_EXTERNAL")),
-    "set MCP_CONSOLE_TEST_SSH_EXTERNAL to a provisioned test target JSON object",
-)
 
 
 def bootstrap(
@@ -75,7 +70,7 @@ def read_frame(stream, timeout: float = 15) -> tuple[int, bytes]:
 
 
 def configure(
-    workspace: Path, remote: Path, prefix: list[str], **policy: object
+    workspace: Path, remote: Path, prefix: list[str] | None, **policy: object
 ) -> Path:
     config = workspace / CONFIG
     config.parent.mkdir(parents=True, exist_ok=True)
@@ -113,7 +108,7 @@ def peer_environment(root: Path, mode: str) -> dict[str, str]:
 
 
 @contextmanager
-def localhost(root: Path):
+def localhost(root: Path, *, remote_path: Path | None = None):
     assert SSHD is not None
     root.mkdir()
     for name in ("host", "client"):
@@ -156,18 +151,9 @@ LogLevel VERBOSE
   ControlPath {root}/control
 """
     )
-    # Only supply a test configuration file. All transport and quoting are real
-    # OpenSSH, including the production-selected options and destination alias.
-    executable = shutil.which("ssh")
-    assert executable is not None
-    launcher = root / "ssh"
-    launcher.write_text(
-        code(r"""
-            #!/bin/sh
-            exec COMMAND "$@"
-            """).replace("COMMAND", shlex.join([executable, "-F", str(client_config)]))
+    environment = client_environment(
+        root, config=str(client_config), remote_path=remote_path
     )
-    launcher.chmod(0o755)
     process = subprocess.Popen(
         [SSHD, "-D", "-e", "-f", str(server_config)],
         stderr=subprocess.PIPE,
@@ -178,11 +164,49 @@ LogLevel VERBOSE
     try:
         line = reader.readline(timeout=10)
         assert "Server listening on" in line, line
-        yield {**os.environ, "PATH": str(root) + os.pathsep + os.environ["PATH"]}
+        yield environment
     finally:
         process.terminate()
         process.wait(timeout=10)
         reader.close()
+
+
+def client_environment(
+    root: Path, *, config: str | None = None, remote_path: str | Path | None = None
+) -> dict[str, str]:
+    # Preserve real OpenSSH transport, options, and remote-shell quoting.
+    executable = shutil.which("ssh")
+    assert executable is not None
+    command = [executable, *(["-F", config] if config else [])]
+    launcher = root / "ssh"
+    launcher.write_text(
+        code(r"""
+            #!/bin/sh
+            exec COMMAND "$@"
+            """).replace("COMMAND", shlex.join(command))
+    )
+    launcher.chmod(0o755)
+    if remote_path is not None:
+        # Keep the real SSH connection and remote shell, but give command
+        # discovery a controlled PATH independent of account startup files.
+        # fmt: python
+        launcher.write_text(
+            f"#!{sys.executable}\n"
+            + code("""
+                import os
+                import shlex
+                import sys
+
+                command, remote_path = CONFIGURATION
+                arguments = sys.argv[1:]
+                arguments[-1] = shlex.join([
+                    "/usr/bin/env", "PATH=" + remote_path,
+                    "/bin/sh", "-c", arguments[-1],
+                ])
+                os.execv(command[0], [*command, *arguments])
+                """).replace("CONFIGURATION", repr((command, str(remote_path))))
+        )
+    return {**os.environ, "PATH": str(root) + os.pathsep + os.environ["PATH"]}
 
 
 def remote_command(root: Path, binary: Path, environment: dict[str, str]) -> list[str]:

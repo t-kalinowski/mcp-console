@@ -204,9 +204,8 @@ For example:
 ```yaml
 extends: :workspace
 target:
-  transport: {kind: ssh, host: mule}
+  transport: {kind: ssh, host: analysis-host}
   workspace: /srv/projects/analysis
-  command: [uvx, mcp-console]
 ```
 
 The server reads YAML locally and captures the target and user policy once.

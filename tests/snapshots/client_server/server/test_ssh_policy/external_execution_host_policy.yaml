@@ -1,8 +1,17 @@
 ---
 send:
   r: |
-    stopifnot(Sys.info()[['sysname']] == "Linux"); writable <- function(path) {
-      tryCatch({writeLines("remote value", path); TRUE}, error = function(error) FALSE)
+    stopifnot(
+      Sys.info()[["sysname"]] == Sys.getenv("MCP_CONSOLE_TEST_SSH_PLATFORM")
+    )
+    writable <- function(path) {
+      tryCatch(
+        {
+          writeLines("remote value", path)
+          TRUE
+        },
+        error = function(error) FALSE
+      )
     }
     suppressWarnings(stopifnot(
       writable("results/value"),

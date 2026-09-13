@@ -49,6 +49,7 @@ An optional `target` independently selects transport and compute for `serve`, in
 Omitted target and explicit local host selection share the existing local launch path.
 Capture its required absolute remote workspace, executable prefix, and raw user policy locally once; materialize paths, platform additions, and native preflight on that execution host without rediscovering YAML.
 SSH discovers capability and executes managed preparation on the remote host, independently of the relay and worker.
+Its default command uses remote PATH `mcp-console`, falling back to `uvx mcp-console` only when absent; configured argv prefixes run without executable preflight validation.
 The preparation owner captures trusted resolver settings once; the local server owns requirements, candidates, and activation decisions.
 Only explicit remote R_HOME and RETICULATE_PYTHON workload selections also inform preparation.
 Never discover controller interpreters, invoke controller resolvers, or validate remote paths on the controller.
@@ -76,6 +77,7 @@ Windows is not supported.
 Other Unix operating systems are not supported build or runtime targets; shared `cfg(unix)` modules do not imply support for them.
 Retain platform conditionals for modules that use OS-specific APIs and for selecting different implementations or unsupported-platform stubs; avoid redundant gates on shared code.
 CI runs core checks and all capability-applicable transcript modes on macOS and Linux.
+External SSH tests automatically use a reachable optional host, with selection and availability confined to `tests/support/ssh_external.py`; absent hosts skip those cases while localhost SSH coverage remains available.
 Keep Python SDK integration test dependencies free of exact version pins, retain the published dependency lower bounds, and constrain MCP to the supported major using `==2.*`.
 Keep one CI job per platform.
 CI restores Cargo build data across source and dependency changes within the same OS version, architecture, toolchain, applicable R version, and UTC week, with incremental compilation enabled.
@@ -209,6 +211,7 @@ Keep these invariants intact:
 ### Tests and development scripts
 
 - `tests/support/` — shared capability requirements, explicit execution fixtures, transcript records, snapshots, normalization, checkpoints, capture, process, platform event, native fixture, macOS, assertion, R, resolver, client, and direct-suite helpers.
+- `tests/support/ssh_external.py`, `tests/fixtures/ssh_install.py` — optional real-host availability, test-owned source installation and build cache, and temporary remote workspace setup.
 - `tests/fixtures/` — deterministic workers, resolvers, package fixtures, searchable native interposers, and boundary-specific relay and worker programs.
 - `tests/boundaries/client_server/` — public MCP client-server behavior, including real Python SDK integrations under `integrations/`.
 - `tests/boundaries/server_relay/` — private server-relay wire behavior.

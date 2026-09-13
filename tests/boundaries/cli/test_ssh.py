@@ -33,7 +33,7 @@ def test_invalid_target_configuration(binary: Path) -> Transcript:
                 json.dumps(
                     {
                         "target": {
-                            "transport": {"kind": "ssh", "host": "mule"},
+                            "transport": {"kind": "ssh", "host": "console-test"},
                             **values,
                         }
                     }

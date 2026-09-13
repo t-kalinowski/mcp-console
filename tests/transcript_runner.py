@@ -319,6 +319,56 @@ class TranscriptRunnerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((self.root / "selected.marker").exists())
 
+    def test_external_ssh_availability_gates_public_cases(self) -> None:
+        shutil.copy2(
+            ROOT / "tests/support/ssh_external.py",
+            self.root / "tests/support/ssh_external.py",
+        )
+        self.suite.write_text(
+            PUBLIC_SUITE
+            # fmt: python
+            + code("""
+                from support.requirements import requires
+                from support.ssh_external import EXTERNAL_SSH
+
+                test_selected = requires(EXTERNAL_SSH)(test_selected)
+                """),
+            encoding="utf-8",
+        )
+        commands = self.root / "commands"
+        commands.mkdir()
+        ssh = commands / "ssh"
+        for status in (0, 255):
+            with self.subTest(status=status):
+                ssh.write_text(
+                    code(f"""
+                        #!/bin/sh
+                        exit {status}
+                        """)
+                )
+                ssh.chmod(0o755)
+                marker = self.root / "selected.marker"
+                marker.unlink(missing_ok=True)
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        self.boundaries / "_run.py",
+                        "client_server/server/test_tools::selected",
+                    ],
+                    env={
+                        **os.environ,
+                        "PATH": str(commands),
+                        "MCP_CONSOLE_TEST_SSH_HOST": "optional-test-host",
+                        "MCP_CONSOLE_TEST_SSH_EXTERNAL": "",
+                    },
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(marker.exists(), status == 0)
+                self.assertEqual("skipped" in result.stdout, status != 0)
+
     def test_case_requirements_and_skip_reporting(self) -> None:
         self.suite.write_text(
             PUBLIC_SUITE
