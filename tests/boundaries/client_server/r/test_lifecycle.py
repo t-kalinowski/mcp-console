@@ -356,22 +356,29 @@ def test_restart_skips_direct_stdin_boundary_callback(
         )
         fifo.write_bytes(b"x")
 
-        waiting = client.start_send(
+        # The callback can start while the worker is idle, so its checkpoint
+        # does not prove that the server has admitted this evaluation.
+        # Receive the running response before requesting restart.
+        client.send(
             r='cat("direct stdin cell ran\\n")',
-            timeout_ms=30_000,
+            timeout_ms=0,
         )
+        assert last_tool_text(client) == "\n[running; poll with an empty send]"
         wait_for_worker_file(
             directory,
             "direct-stdin-boundary-checkpoint",
             client,
         )
 
-        restarted = client.start_send(control="restart")
-        client.receive(waiting)
-        client.receive(restarted)
-        assert "direct callback released" in waiting["result"]["content"][0]["text"]
-        assert "direct stdin cell ran" not in waiting["result"]["content"][0]["text"]
-        assert "direct stdin cell ran" not in restarted["result"]["content"][0]["text"]
+        client.send(control="restart")
+        output = last_tool_text(client)
+        assert output == (
+            "direct callback released\n"
+            "[active evaluation stopped by session restart request]\n"
+            "[worker stopped: in-memory state lost]\n"
+            "[starting new worker]\n"
+            "[idle]"
+        ), output
         return client.finish()
 
 
