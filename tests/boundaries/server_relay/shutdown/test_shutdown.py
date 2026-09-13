@@ -1,5 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
+import json
 import os
 import sys
 import tempfile
@@ -24,6 +25,7 @@ from support.assertions import tool_text as _tool_text
 from support.checkpoints import FifoCheckpoint
 from support.client import stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.previews import assert_preview, normalize_preview_paths
 from support.records import Transcript
 from support.resolvers import fake_ir_environment as _fake_ir_environment
 from support.suites import run_this_suite
@@ -164,8 +166,6 @@ def test_cancelled_send_returns_owned_output_to_restart(
         }, result
 
         cell_prefix = "cell before image\n"
-        retained = "x" * (PENDING_TEXT_BUDGET - len(cell_prefix))
-        omitted = len(cell_prefix) + 7
         assert client.client.temporary_directory is not None
         workspace = Path(client.client.temporary_directory.name)
         session = next((workspace / ".agents/console" / "sessions").iterdir())
@@ -173,32 +173,39 @@ def test_cancelled_send_returns_owned_output_to_restart(
         public_output = (
             f".agents/console/sessions/{session.name}/{relative_output.as_posix()}"
         )
-        truncation = (
-            f"[output truncated: omitted {omitted} text bytes and "
-            "0 encoded image bytes across 1 event; "
-            f"retained text: {public_output} ({omitted} of {omitted} omitted text bytes)]"
-        )
         tail = result["content"][4]["text"]
-        assert tail.startswith(retained + "\n" + truncation), (
-            f"unexpected reclaimed tail: length={len(tail)}, tail={tail[-500:]!r}"
-        )
-        assert (session / relative_output).read_text(encoding="utf-8") == (
-            cell_prefix + "x" * (PENDING_TEXT_BUDGET + 7)
-        )
-        for notice in (
-            truncation,
+        raw = cell_prefix + "x" * (PENDING_TEXT_BUDGET + 7)
+        assert (session / relative_output).read_text(encoding="utf-8") == raw
+        notices = (
             "[stopped by session restart request before evaluation finished]",
             "[worker stopped: in-memory state lost]",
             "[active evaluation stopped by session restart request]",
             "[starting new worker]",
             "[idle]",
-        ):
+        )
+        suffix = "\n" + "\n".join(notices)
+        assert tail.endswith(suffix), tail[-1_000:]
+        for notice in notices:
             assert tail.count(notice) == 1, (notice, tail[-1_000:])
-        result["content"][4]["text"] = tail.replace(
-            retained,
-            f"<retained {len(retained)} text bytes>",
-            1,
-        ).replace(session.name, "<run ID>")
+        omitted = assert_preview(cell_prefix + tail.removesuffix(suffix), raw)
+        assert f"raw cell log: {public_output}" in tail
+        assert (
+            sum(len(block.get("text", "").encode()) for block in result["content"])
+            <= 8192
+        )
+        events = [
+            json.loads(line)
+            for line in (session / "internal/events.jsonl").read_text().splitlines()
+        ]
+        summary = [
+            event
+            for event in events
+            if event["event"] == "cell_output" and event["call_id"] == 2
+        ][-1]
+        assert summary["retained_bytes"] == len(raw.encode())
+        assert summary["inline_omitted_bytes"] == omitted
+        assert summary["discarded_bytes"] == 0
+        normalize_preview_paths(client.client)
 
         client.send()
         assert _tool_text(client.client.transcript[-1]["result"]) == "\n[idle]"

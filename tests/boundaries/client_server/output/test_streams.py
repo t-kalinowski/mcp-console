@@ -15,7 +15,15 @@ from support.assertions import (
 )
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
-from support.native import build_interposer
+from support.native import LOADER_VARIABLE, build_interposer
+from support.checkpoints import FifoCheckpoint
+from support.previews import (
+    TEXT_BUDGET,
+    assert_preview,
+    cell_text,
+    normalize_preview_paths,
+    normalize_pipe_counts,
+)
 from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, requires
 from support.suites import run_this_suite
@@ -44,16 +52,10 @@ def test_captures_worker_stdout(binary: Path, execution: Execution) -> Transcrip
     client.initialize_and_list_tools()
     client.send(r="emit stdout")
     output = last_tool_text(client)
-    assert_large_output(output, "zod stdout 👩🏽‍💻\n")
-    assert client.temporary_directory is not None
-    workspace = Path(client.temporary_directory.name)
-    session = next((workspace / ".agents/console" / "sessions").iterdir())
-    assert (session / "outputs" / "call-000001.log").read_text(
-        encoding="utf-8"
-    ) == output
-    client.transcript[-1]["result"]["content"][0]["text"] = (
-        "zod stdout 👩🏽‍💻\n<large output>\n"
-    )
+    raw = cell_text(client, 1)
+    assert_large_output(raw, "zod stdout 👩🏽‍💻\n")
+    assert_preview(output, raw)
+    normalize_preview_paths(client)
     return client.finish()
 
 
@@ -141,10 +143,15 @@ def test_preserves_invalid_raw_output_when_worker_exits(
         raw_output = output.removesuffix(failure)
         marker_prefix = f"zod expected {stream} crash tail: "
         raw_output, tail_size = remove_length_marker(raw_output, marker_prefix)
-        assert raw_output == large_output(prefix) + ("z" * tail_size), (
+        raw, recorded_tail = remove_length_marker(
+            cell_text(client, 1 if stream == "stdout" else 2), marker_prefix
+        )
+        assert recorded_tail == tail_size
+        assert raw == large_output(prefix) + ("z" * tail_size), (
             f"worker crash lost {stream} bytes"
         )
-        result["content"][0]["text"] = prefix + "<large output>" + failure
+        assert_preview(raw_output, raw)
+        normalize_pipe_counts(client)
 
     return client.finish()
 
@@ -202,32 +209,20 @@ def test_preserves_raw_output_during_malformed_sideband_failure(
                     "[starting new worker]",
                     "[idle]",
                 ]
-                assert output.count(raw) == 1, f"malformed frame lost {stream} bytes"
+                recorded, recorded_tail = remove_length_marker(
+                    cell_text(client, 1 if stream == "stdout" else 2), marker_prefix
+                )
+                assert recorded_tail == tail_size
+                assert recorded == raw, f"malformed frame lost {stream} bytes"
                 assert all(output.count(notice) == 1 for notice in notices), repr(
                     output
                 )
                 assert [output.index(notice) for notice in notices] == sorted(
                     output.index(notice) for notice in notices
-                ), repr(output)
-                remainder = output.replace(raw, "")
-                for notice in notices:
-                    remainder = remainder.replace(notice, "")
-                assert not remainder.replace("\n", ""), repr(output)
-                result["content"][0]["text"] = (
-                    f"{prefix}<large output>\n"
-                    "[worker sideband read failed: <invalid frame>]\n"
-                    "[worker terminated by signal 9]\n"
-                    "[worker stopped: in-memory state lost]\n"
-                    "[starting new worker]\n[idle]"
                 )
-                client.transcript[-1]["transcript_normalization"] = {
-                    "target": "result.content[0].text",
-                    "cross_source_position": "omitted",
-                    "replacements": {
-                        "large_output": "<large output>",
-                        "sideband_failure_detail": "<invalid frame>",
-                    },
-                }
+                assert output.endswith("\n".join(notices)), output[-500:]
+                assert_preview(output.removesuffix("\n".join(notices)), raw)
+                normalize_pipe_counts(client)
 
             transcript, standard_error = client.finish_with_standard_error()
             diagnostics = standard_error.splitlines()
@@ -268,21 +263,17 @@ def test_preserves_raw_output_during_semantically_invalid_sideband_message(
         "[starting new worker]",
         "[idle]",
     ]
-    assert output.count(raw) == 1, "semantic failure lost raw stdout bytes"
+    recorded, recorded_tail = remove_length_marker(cell_text(client, 1), marker_prefix)
+    assert recorded_tail == tail_size
+    assert recorded == raw, "semantic failure lost raw stdout bytes"
     assert all(output.count(notice) == 1 for notice in notices), repr(output)
     assert [output.index(notice) for notice in notices] == sorted(
         output.index(notice) for notice in notices
-    ), repr(output)
-    remainder = output.replace(raw, "")
-    for notice in notices:
-        remainder = remainder.replace(notice, "")
-    assert not remainder.replace("\n", ""), repr(output)
-    result["content"][0]["text"] = f"{prefix}<large output>\n" + "\n".join(notices)
-    client.transcript[-1]["transcript_normalization"] = {
-        "target": "result.content[0].text",
-        "cross_source_position": "omitted",
-        "replacements": {"large_output": "<large output>"},
-    }
+    )
+    assert output.endswith("\n".join(notices)), output[-500:]
+    # The builder terminates the raw line before its failure notices.
+    assert_preview(output.removesuffix("\n".join(notices)).removesuffix("\n"), raw)
+    normalize_pipe_counts(client)
     return client.finish()
 
 
@@ -319,12 +310,12 @@ def test_drains_background_stderr_while_idle(
         client.send(timeout_ms=0)
         output = last_tool_text(client)
         assert output.endswith("\n[idle]"), output[-100:]
-        assert_large_output(
-            output.removesuffix("\n[idle]"),
-            "zod background stderr\n",
-        )
-        client.transcript[-1]["result"]["content"][0]["text"] = (
-            "zod background stderr\n<large output>\n[idle]"
+        assert len(output.encode()) <= TEXT_BUDGET
+        assert "no retained cell log" in output
+        assert "outputs/call-" not in output
+        assert cell_text(client, 1) == ""
+        assert_preview(
+            output.removesuffix("\n[idle]"), large_output("zod background stderr\n")
         )
         return client.finish()
 
@@ -407,6 +398,7 @@ def test_drains_pending_sideband_output_while_running(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(NATIVE_FIXTURES)
 def test_orders_queued_cancellation_behind_incomplete_response(
     binary: Path,
     execution: Execution,
@@ -415,6 +407,13 @@ def test_orders_queued_cancellation_behind_incomplete_response(
     environment = os.environ.copy()
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
+        write_reached = FifoCheckpoint.create(temporary / "response-write-reached")
+        write_release = FifoCheckpoint.create(temporary / "response-write-release")
+        environment[LOADER_VARIABLE] = str(
+            build_interposer(temporary, "response_write_interposer")
+        )
+        environment["MCP_CONSOLE_TEST_RESPONSE_WRITE_REACHED"] = str(write_reached.path)
+        environment["MCP_CONSOLE_TEST_RESPONSE_WRITE_RELEASE"] = str(write_release.path)
         release = temporary / "response-gate-released"
         environment["TMPDIR"] = temporary_directory
         environment["ZOD_TEST_RESPONSE_GATE_RELEASED"] = str(release)
@@ -444,6 +443,7 @@ def test_orders_queued_cancellation_behind_incomplete_response(
                     requirements={"python": [invalid_requirement]}
                 )
                 assert first["id"] == first_id, first
+                write_reached.wait("response prefix written")
                 buffered = client.stdout.wait_for_incomplete_response(
                     first_id,
                     len(invalid_requirement),
@@ -490,6 +490,7 @@ def test_orders_queued_cancellation_behind_incomplete_response(
                 client.wait_until_input_is_read("staged receive barrier", control)
                 control.record_client_event(live_id, "operation_accepted")
 
+                write_release.release()
                 client.stdout.release_completed_response(
                     first_id,
                     release,
@@ -498,21 +499,16 @@ def test_orders_queued_cancellation_behind_incomplete_response(
                 observer.finish()
                 control.record_client_event(first_id, "response_write_completed")
                 client.receive(first)
-                expected_error = (
-                    f"Python requirement `{invalid_requirement}` is not accepted: "
-                    "host-side managed resolution accepts named package "
-                    "requirements only"
+                assert first["result"]["isError"] is True
+                error = first["result"]["content"][0]["text"]
+                assert len(error.encode()) <= TEXT_BUDGET
+                assert error.startswith("Python requirement `https://invalid.example/")
+                assert error.endswith(
+                    "host-side managed resolution accepts named package requirements only"
                 )
-                assert first["result"] == {
-                    "content": [{"type": "text", "text": expected_error}],
-                    "isError": True,
-                }, first
                 first["send"]["requirements"]["python"] = [
                     "<large invalid Python requirement>"
                 ]
-                first["result"]["content"][0]["text"] = (
-                    "<large invalid Python requirement rejected>"
-                )
 
                 control.connect(client)
                 started = control.wait_for(live_id, "worker_operation_started")
@@ -548,6 +544,9 @@ def test_orders_queued_cancellation_behind_incomplete_response(
                 finished = True
                 return transcript
             finally:
+                write_release.release()
+                write_reached.close()
+                write_release.close()
                 if not finished:
                     stop_client(client)
                 if observer is not None:

@@ -19,6 +19,7 @@ from support.normalization import (
 )
 from support.r import r_test_environment
 from support.records import Transcript
+from support.previews import assert_preview, cell_text, normalize_preview_paths
 from support.suites import run_this_suite
 
 
@@ -1166,9 +1167,10 @@ def test_bounds_query_previews_without_materializing_results(
         """)
     client.send(sql=sql, timeout_ms=1000)
     large = last_tool_text(client)
+    normalize_preview_paths(client)
     transcript = client.finish()
 
-    assert len(wide.encode("utf-8")) <= 12 * 1024
+    assert len(wide.encode("utf-8")) <= 8 * 1024
     assert "[additional rows omitted]" in wide
     assert "[2 additional columns omitted]" in wide
     assert "[cell values truncated to 160 characters]" in wide
@@ -1176,7 +1178,7 @@ def test_bounds_query_previews_without_materializing_results(
     assert f'"{"z" * 159}…"' in long_cell
     assert "[cell values truncated to 160 characters]" in long_cell
     assert large != "\n[running; poll with an empty send]"
-    assert len(large.encode("utf-8")) <= 12 * 1024
+    assert len(large.encode("utf-8")) <= 8 * 1024
     assert "[additional rows omitted]" in large
     return transcript
 
@@ -1211,17 +1213,20 @@ def test_keeps_repeated_previews_deterministic(
         SELECT * FROM wide_values
         """)
     outputs = []
-    for _ in range(3):
+    retained = []
+    for call_id in range(2, 5):
         client.send(sql=sql)
-        outputs.append(last_tool_text(client))
-    transcript = client.finish()
+        output = last_tool_text(client)
+        raw = cell_text(client, call_id)
+        assert_preview(output, raw)
+        retained.append(raw)
+        outputs.append(output.replace(f"call-{call_id:06}.log", "call-<cell>.log"))
 
+    assert retained[0] == retained[1] == retained[2]
     assert outputs[0] == outputs[1] == outputs[2]
-    assert len(outputs[0].encode("utf-8")) <= 12 * 1024
     assert outputs[0].startswith("# A tibble:")
-    for entry in transcript[-3:]:
-        entry["result"]["content"][0]["text"] = "<same bounded preview>\n"
-    return transcript
+    normalize_preview_paths(client)
+    return client.finish()
 
 
 def normalize_duckdb_extension_error(client: McpClient) -> str:

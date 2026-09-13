@@ -461,38 +461,54 @@ After `[worker starting]`, poll with `send` without code or stdin until the repl
 Do not submit another cell while replacement startup is still active.
 The failing call does not repeat a failed startup attempt; after that failure is collected, a later code-bearing `send` makes a fresh startup attempt and, if it succeeds, runs only the new cell.
 
-Ordinary newline-terminated output is preserved exactly.
-Within each delivered output segment, the server compacts single-line progress redraws in consecutive text from the same worker output stream.
-A bare carriage return makes following text replace the whole frame, and backspace removes one Unicode scalar.
+Small outputs retain their text and text/image ordering.
+Each complete tool result has an 8 KiB rendered UTF-8 text budget, including omission markers, preparation diagnostics, input prompts, errors, and lifecycle notices.
+This initial default approximates two to three printed pages; it is not a layout guarantee and has no per-call or configuration control yet.
+For oversized output, the server reserves space for notices and divides the remaining text allowance approximately evenly between the beginning and the latest tail.
+Collection continues throughout an undrained interval, so a diagnostic after a large output flood can appear in its preview.
+An omission notice counts **rendered UTF-8 bytes**, which can differ from emitted raw-byte counts.
+Omitted generated informational notices are counted separately because the raw cell log does not retain them.
+Long control details and input prompts are also bounded; the final state and error status remain separate from ordinary text.
+If repeated input reports exhaust their own bounded storage, the preview summarizes omitted earlier reports and retains the latest active report.
+Combined control-and-cell calls share this same result budget and retain their lifecycle separators.
+
+Within each response interval, the server compacts single-line progress redraws in consecutive text from the same worker output stream before applying preview limits.
+A bare carriage return makes following text replace the whole frame, and backspace removes one Unicode scalar from retained line text.
+Backspacing through an entire retained suffix cannot reconstruct an already omitted middle; that gap remains until a carriage return replaces the frame.
 CRLF remains an ordinary newline.
 Other controls and escape sequences are preserved literally.
 Compaction does not cross response boundaries, so a long-running cell may return one current progress frame in each poll.
-Pending-output limits are applied before compaction; if a segment is truncated, its final redraw may not have been retained.
+Raw standard-stream bytes are decoded incrementally; invalid UTF-8 is replaced for display, while incomplete characters may complete in a later poll.
 
-Each undrained output segment is limited to:
+Images have independent limits: 8 MiB of encoded data, 64 KiB of MIME-type data, and 4,096 images per undrained interval and complete result.
+Images are admitted as whole blocks.
+Filling the text preview does not consume the image allowance or suppress a later plot.
+Image-limit omissions are reported separately.
+The language-level 12 KiB SQL-table preview limit still applies before SQL text enters the complete-result budget.
 
-- 8 MiB of console text and raw standard-stream bytes;
-- 8 MiB of encoded image data;
-- 64 KiB of image MIME-type data; and
-- 4,096 ordinary output events.
-
-The first event that exceeds a limit adds a typed `[output truncated: ...]` notice.
-A fitting text prefix is retained, while an image that does not fit is omitted as a whole.
-After that first overflow, all later console text, raw standard-stream output, and images in the same undrained segment are discarded, even if another budget still has room.
-Lifecycle and control events remain available.
-The separate 12 KiB SQL-preview limit is applied before SQL text enters these budgets.
-
-For each recorded evaluation, the server also creates `outputs/call-NNNNNN.log` in the private session directory when the worker operation is admitted.
-It appends console text and direct stdout and stderr bytes in server observation order before applying the pending-output limits, and flushes the file before each response cut and at evaluation completion.
+For each recorded evaluation, the server creates `outputs/call-NNNNNN.log` in its private session directory when the worker operation is admitted.
+It appends emitted console text and direct stdout and stderr bytes in server observation order, independently of preview collection, and flushes the file before each response cut and at evaluation completion.
 Direct standard-stream bytes are preserved as written, so a worker that writes invalid UTF-8 can produce a log that is not UTF-8 text.
-Images and server-owned notices are not written to this file.
+Images, progress normalization, and server-owned notices are not written to this file.
 
 Each cell output file retains at most 1 GiB.
-The server continues draining worker output after the file limit or a write failure and reports that later text is not retained in the file.
-Such text can still be delivered inline when the pending-output budget permits it.
-When pending text is omitted but remains in the file, the truncation notice includes its workspace-relative path as `retained text` and the number of omitted bytes actually retained there.
-Startup and cell omissions are reported separately; a cell log does not capture preceding startup or idle output.
-Later polls still return only newly observed output; reading or searching the file does not change polling state.
+The server continues collecting previews after the file limit or a write failure; its latest tail does not depend on the file.
+The response reports the raw bytes retained and the raw bytes not retained through that cut.
+A partial file is explicitly identified as a prefix; omitted text outside that prefix is unavailable.
+Some bytes missing from the file may still appear in the preview, so these raw loss counts are not counts of inline omissions.
+Startup, idle, and other sources without an active cell log report that their omitted text is unavailable, without borrowing a later cell's path.
+
+Advertised `.agents/console/sessions/...` paths are relative to the **Console server's recording workspace**.
+For SSH, Docker, and Docker Sandbox, this is the controller's workspace.
+Full retained text requires a filesystem tool with access to that directory; a tool that can read only the worker filesystem or another client host is insufficient.
+Console does not discover file tools or provide a read/search interface in this version.
+Clients without appropriate filesystem access still receive bounded previews and final diagnostics.
+Re-running a cell is not retrieval of its original output and is never an automatic retrieval action.
+
+Polls return newly observed output only.
+Once a response owns an interval, its omitted middle is consumed with that response and does not reappear in later polls or the next cell.
+Reading a retained file does not change this cursor.
+The journal and Markdown transcript record the bounded result actually assembled for the client, while the raw file retains the larger emitted stream.
 
 These files retain emitted cell text, including text omitted from tool responses.
 They do not recover values that a language printer or SQL preview omitted before producing output, preserve stream labels, or provide a lossless record beyond the file limit.
@@ -510,7 +526,7 @@ The [implemented architecture](ARCHITECTURE.md) describes the session record and
 - Restart and failure replacement discard every in-memory language, database, debugger, graphics, and unread-input state.
 - No general worker-frame or stdin-queue size limit is defined.
 - Cell output has a per-evaluation limit but no aggregate session quota or automatic retention cleanup yet.
-- The pending-text budget remains 8 MiB; a smaller rendered-response limit with a head-and-tail preview is not implemented yet.
+- Full retained-output retrieval requires filesystem access to the server recording workspace; Console-owned retrieval and aggregate cleanup remain deferred.
 - Direct fd-0 readers do not participate in managed input notifications.
 - Managed DuckDB cannot query Python objects until they are bound as R data; a selected Python driver sees only objects registered on its own connection.
 - SQL previews do not include affected-row counts or total result counts.

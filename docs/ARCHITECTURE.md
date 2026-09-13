@@ -428,8 +428,12 @@ The protocol documents define the exact closure and retirement order.
 
 The server owns one ordered pending-output tape across worker lifetimes.
 The relay publishes observations to it, but neither the relay nor worker decides which MCP call receives them.
-The server assigns output to an evaluation, poll, restart, controlled send, or later idle response; applies pending-output limits; preserves image order; adds lifecycle notices; and assembles MCP content.
-Before MCP projection, it compacts single-line carriage-return and backspace redraws within each consecutive run of text from one worker output stream in that delivered segment.
+The server assigns output to an evaluation, poll, restart, controlled send, or later idle response; collects bounded head-and-tail text previews; preserves image order; adds lifecycle notices; and assembles MCP content.
+During ingestion, it incrementally decodes direct streams and compacts carriage-return and backspace redraws within each consecutive run from one producer.
+It retains bounded text at the beginning and latest tail, coalesces adjacent text and omission metadata, and admits images under separate byte, metadata, and count limits.
+A response cut seals this projection and its raw-file receipt without reading the file.
+The canonical response builder preserves typed control notices during composition; its final projection applies one 8 KiB UTF-8 text budget, including all generated notices, across the complete tool result.
+Collection and response composition keep bounded state even after raw-file retention fails or is disabled.
 
 A controlled send produces one MCP response.
 When a completed or interrupted evaluation precedes a new cell, the server transfers the prior response region into the new evaluation's prelude instead of acknowledging it separately.
@@ -485,12 +489,15 @@ uv tool run --from r-lib-ir ir render transcript.qmd
 When `ir` is installed on `PATH`, `ir render transcript.qmd` is equivalent.
 
 Each admitted evaluation also owns `outputs/call-NNNNNN.log` beneath the run directory.
-The server attaches that file to the ordered output tape at the same boundary as the worker operation, appends console text and direct stdout and stderr before pending-output admission can discard it, and detaches it at the evaluation's completion or restart cut.
+The server attaches that file to the ordered output tape at the same boundary as the worker operation, appends console text and direct stdout and stderr before preview collection omits the middle, and detaches it at the evaluation's completion or restart cut.
 Response cuts flush the active file, so output already returned by `send` is also visible through ordinary file reads while the evaluation remains active.
 The file is limited to 1 GiB; later worker output is still drained and counted after the limit or a file failure.
 
-At file completion, a `cell_output` journal event records its initiating call, relative path, retained bytes, bytes omitted from inline responses, bytes not retained in the file (`discarded_bytes`), and retention limit.
-These counts describe separate projections: text not retained in the file may still have been delivered inline.
+A `cell_output` journal event records the initiating call, relative path, retained raw bytes, rendered UTF-8 bytes omitted from previews (`inline_omitted_bytes`), raw bytes not retained in the file (`discarded_bytes`), and retention limit.
+File completion seals the raw totals; final response projection accounts for its omissions before publishing this summary and the corresponding tool result.
+Shared interval receipts prevent delivery recovery from counting the same omission twice.
+If a recovered response is later composed with more output, additional omissions can publish an updated cumulative summary for the same cell; the most recent summary owns its totals.
+These counts describe separate projections: normalization can change rendered byte counts, and raw bytes not retained in the file may still appear in the preview.
 The Markdown projection links to the file when either projection omitted text.
 The source-only Quarto projection ignores cell output events.
 

@@ -1,0 +1,377 @@
+//! Streaming projection and response cuts under the existing output owner.
+
+use super::preview::Source;
+use super::*;
+use std::collections::VecDeque;
+
+#[derive(Default)]
+pub(super) struct OutputTapeState {
+    stdout: Decoder,
+    stderr: Decoder,
+    stream: Option<Stream>,
+    terminal: terminal::Stream,
+    current: ResponseBuilder,
+    sealed: VecDeque<(u64, Response)>,
+    next_cut: u64,
+    next_event: u64,
+    cell_output: Option<crate::transcript::CellOutput>,
+    raw_bytes: u64,
+    recovered: Option<Response>,
+}
+
+#[derive(Default)]
+struct Decoder {
+    bytes: Vec<u8>,
+    origin: u64,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Stream {
+    Output,
+    Diagnostic,
+    Stdout,
+    Stderr,
+}
+
+impl OutputTape {
+    pub(in crate::worker_client) fn new() -> Self {
+        Self(Arc::new(Mutex::new(OutputTapeState::default())))
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, OutputTapeState> {
+        self.0.lock().unwrap_or_else(|error| error.into_inner())
+    }
+
+    pub(in crate::worker_client) fn direct_stdout(&self) -> DirectOutput {
+        DirectOutput {
+            output: self.clone(),
+            stream: DirectOutputStream::Stdout,
+        }
+    }
+    pub(in crate::worker_client) fn direct_stderr(&self) -> DirectOutput {
+        DirectOutput {
+            output: self.clone(),
+            stream: DirectOutputStream::Stderr,
+        }
+    }
+
+    pub(in crate::worker_client) fn push_console_text(
+        &self,
+        channel: crate::worker_protocol::ConsoleChannel,
+        text: impl Into<String>,
+    ) {
+        let text = text.into();
+        if text.is_empty() {
+            return;
+        }
+        let mut state = self.lock();
+        let notice = state.spool(text.as_bytes());
+        state.flush_decoders();
+        state.text(
+            match channel {
+                crate::worker_protocol::ConsoleChannel::Output => Stream::Output,
+                crate::worker_protocol::ConsoleChannel::Diagnostic => Stream::Diagnostic,
+            },
+            &text,
+        );
+        state.recording_notice(notice);
+    }
+
+    pub(in crate::worker_client) fn push_image(
+        &self,
+        data: String,
+        mime_type: String,
+        artifact: Option<crate::transcript::Artifact>,
+    ) {
+        self.push_image_with_artifact(data, mime_type, move |_, _| Ok(artifact))
+            .expect("infallible artifact closure");
+    }
+
+    pub(in crate::worker_client) fn push_image_with_artifact<F>(
+        &self,
+        data: String,
+        mime_type: String,
+        make_artifact: F,
+    ) -> Result<(), String>
+    where
+        F: FnOnce(&str, &str) -> Result<Option<crate::transcript::Artifact>, String>,
+    {
+        let mut state = self.lock();
+        state.flush_decoders();
+        state.flush_terminal();
+        if state
+            .current
+            .response
+            .preview
+            .admits_image(&data, &mime_type)
+        {
+            let artifact = make_artifact(&data, &mime_type)?;
+            state.current.image(data, mime_type, artifact);
+        } else {
+            state.current.response.preview.omit_image(data.len());
+        }
+        Ok(())
+    }
+
+    pub(in crate::worker_client) fn push_notice_line(&self, message: impl Into<String>) {
+        let mut state = self.lock();
+        state.flush_decoders();
+        state.flush_terminal();
+        state.current.notice_line(message);
+    }
+
+    pub(in crate::worker_client) fn push_bounded_notice_line(&self, message: impl Into<String>) {
+        let mut state = self.lock();
+        state.flush_decoders();
+        state.flush_terminal();
+        // Informational resolver messages share the ordinary text allowance.
+        let prefix = if state.current.needs_line_break() && !state.current.response.is_empty() {
+            "\n"
+        } else {
+            ""
+        };
+        state
+            .current
+            .response
+            .preview
+            .information(format!("{prefix}{}\n", render_notice(message)));
+    }
+
+    pub(in crate::worker_client) fn push_failure(&self, failure: SendFailure) {
+        let mut state = self.lock();
+        state.flush_decoders();
+        state.flush_terminal();
+        state.current.send_failure(failure);
+    }
+
+    pub(in crate::worker_client) fn cut(&self) -> OutputCut {
+        self.lock().seal(false)
+    }
+
+    pub(in crate::worker_client) fn take(&self) -> Response {
+        let mut state = self.lock();
+        let cut = state.seal(false);
+        state.drain(cut)
+    }
+
+    pub(in crate::worker_client) fn take_prelude(&self) -> Response {
+        self.take_prelude_before(|| {})
+    }
+
+    pub(in crate::worker_client) fn take_prelude_before(
+        &self,
+        boundary: impl FnOnce(),
+    ) -> Response {
+        let mut state = self.lock();
+        let cut = state.seal(true);
+        let response = state.drain(cut);
+        boundary();
+        response
+    }
+
+    pub(in crate::worker_client) fn begin_cell_output_before(
+        &self,
+        cell_output: Option<crate::transcript::CellOutput>,
+        capture_prelude: bool,
+        boundary: impl FnOnce(),
+    ) -> Response {
+        let mut state = self.lock();
+        assert!(
+            state.cell_output.is_none(),
+            "only one cell output file can be active"
+        );
+        // Always seal the preceding source, even if this caller does not own it.
+        let cut = state.seal(true);
+        let response = if capture_prelude {
+            state.drain(cut)
+        } else {
+            Response::default()
+        };
+        state.cell_output = cell_output;
+        boundary();
+        response
+    }
+
+    pub(in crate::worker_client) fn finish_cell_output(&self) -> OutputCut {
+        let mut state = self.lock();
+        let cut = state.seal(false);
+        let notice = state.cell_output.take().and_then(|output| output.finish());
+        if notice.is_some() {
+            state.recording_notice(notice);
+            return state.seal(false);
+        }
+        cut
+    }
+
+    pub(in crate::worker_client) fn drain_through(&self, cut: OutputCut) -> Response {
+        self.lock().drain(cut)
+    }
+
+    pub(in crate::worker_client) fn recover(&self, response: Response) {
+        let mut state = self.lock();
+        assert!(
+            state.recovered.is_none(),
+            "only one response can be recovered at a time"
+        );
+        state.recovered = Some(response);
+    }
+}
+
+impl DirectOutput {
+    pub(in crate::worker_client) fn push(&self, bytes: &[u8]) {
+        if bytes.is_empty() {
+            return;
+        }
+        let mut state = self.output.lock();
+        let notice = state.spool(bytes);
+        let stream = match self.stream {
+            DirectOutputStream::Stdout => Stream::Stdout,
+            DirectOutputStream::Stderr => Stream::Stderr,
+        };
+        let other = if stream == Stream::Stdout {
+            Stream::Stderr
+        } else {
+            Stream::Stdout
+        };
+        state.flush_decoder(other);
+        state.next_event += 1;
+        let origin = state.next_event;
+        let decoder = state.decoder(stream);
+        if decoder.bytes.is_empty() {
+            decoder.origin = origin;
+        }
+        // Only an incomplete UTF-8 scalar survives ingestion. Decode the incoming
+        // publication before retaining any text, including after preview overflow.
+        let mut pending = std::mem::take(&mut decoder.bytes);
+        pending.extend_from_slice(bytes);
+        let complete = complete_utf8_prefix(&pending);
+        decoder.bytes.extend_from_slice(&pending[complete..]);
+        state.text(stream, &String::from_utf8_lossy(&pending[..complete]));
+        state.recording_notice(notice);
+    }
+
+    pub(in crate::worker_client) fn close(&self) {
+        let mut state = self.output.lock();
+        state.flush_decoders();
+        let stream = match self.stream {
+            DirectOutputStream::Stdout => Stream::Stdout,
+            DirectOutputStream::Stderr => Stream::Stderr,
+        };
+        if state.stream == Some(stream) {
+            state.flush_terminal();
+        }
+    }
+}
+
+impl OutputTapeState {
+    fn spool(&mut self, bytes: &[u8]) -> Option<String> {
+        self.raw_bytes = self.raw_bytes.saturating_add(bytes.len() as u64);
+        self.cell_output
+            .as_mut()
+            .and_then(|output| output.append(bytes).1)
+    }
+
+    fn text(&mut self, stream: Stream, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        if self.stream != Some(stream) {
+            self.flush_terminal();
+            self.stream = Some(stream);
+        }
+        self.terminal
+            .ingest(text, &mut self.current.response.preview);
+    }
+
+    fn flush_terminal(&mut self) {
+        self.terminal.finish(&mut self.current.response.preview);
+        self.stream = None;
+    }
+
+    fn decoder(&mut self, stream: Stream) -> &mut Decoder {
+        match stream {
+            Stream::Stdout => &mut self.stdout,
+            Stream::Stderr => &mut self.stderr,
+            _ => unreachable!(),
+        }
+    }
+
+    fn flush_decoder(&mut self, stream: Stream) {
+        let bytes = std::mem::take(&mut self.decoder(stream).bytes);
+        self.text(stream, &String::from_utf8_lossy(&bytes));
+    }
+
+    fn flush_decoders(&mut self) {
+        let streams = if self.stdout.origin <= self.stderr.origin {
+            [Stream::Stdout, Stream::Stderr]
+        } else {
+            [Stream::Stderr, Stream::Stdout]
+        };
+        for stream in streams {
+            self.flush_decoder(stream);
+        }
+    }
+
+    fn recording_notice(&mut self, notice: Option<String>) {
+        if let Some(notice) = notice {
+            self.flush_decoders();
+            self.flush_terminal();
+            self.current.notice_line(notice);
+        }
+    }
+
+    fn seal(&mut self, flush_decoders: bool) -> OutputCut {
+        if flush_decoders {
+            self.flush_decoders();
+        }
+        self.flush_terminal();
+        let notice = self.cell_output.as_mut().and_then(|output| output.flush());
+        self.recording_notice(notice);
+        let source = match &self.cell_output {
+            Some(output) => Source {
+                file: Some(output.record()),
+                raw_bytes: self.raw_bytes,
+                retained_bytes: output.retained_bytes(),
+                discarded_bytes: output.discarded_bytes(),
+            },
+            None => Source {
+                raw_bytes: self.raw_bytes,
+                ..Source::default()
+            },
+        };
+        self.current.response.preview.source(source);
+        let response = std::mem::take(&mut self.current).finish();
+        let cut = self.next_cut;
+        self.next_cut += 1;
+        // Cuts are bounded by the single evaluation/delivery owner. Even empty
+        // intervals carry their file receipt until final response accounting.
+        self.sealed.push_back((cut, response));
+        self.raw_bytes = 0;
+        OutputCut(cut)
+    }
+
+    fn drain(&mut self, cut: OutputCut) -> Response {
+        let mut output = self.recovered.take().unwrap_or_default();
+        while self
+            .sealed
+            .front()
+            .is_some_and(|(sequence, _)| *sequence <= cut.0)
+        {
+            output.extend(self.sealed.pop_front().expect("checked sealed interval").1);
+        }
+        output
+    }
+}
+
+fn complete_utf8_prefix(bytes: &[u8]) -> usize {
+    let mut offset = 0;
+    loop {
+        match std::str::from_utf8(&bytes[offset..]) {
+            Ok(_) => return bytes.len(),
+            Err(error) => match error.error_len() {
+                Some(length) => offset += error.valid_up_to() + length,
+                None => return offset + error.valid_up_to(),
+            },
+        }
+    }
+}

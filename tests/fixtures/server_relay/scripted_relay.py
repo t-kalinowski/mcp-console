@@ -1199,10 +1199,28 @@ def run_startup_output(relay: ScriptedRelay) -> None:
     relay.retire()
 
 
+def run_preview_raw(relay: ScriptedRelay) -> None:
+    relay.ready()
+    relay.expect(EVALUATION)
+    for chunk in (
+        b"raw head\n\xe2",
+        b"\x82\xac",
+        b"\xff" * 20000,
+        b"\xe2",
+        b"\x82\xac raw tail\n",
+    ):
+        relay.send(
+            {"kind": "stdout_bytes", "data": base64.b64encode(chunk).decode("ascii")}
+        )
+    relay.complete()
+    relay.retire()
+
+
 def main() -> None:
     scenarios = {
         "ready": run_ready,
         "startup_output": run_startup_output,
+        "preview_raw": run_preview_raw,
         "evaluate": run_evaluate,
         "raw_output": run_raw_output,
         "split_terminal_redraws": run_split_terminal_redraws,

@@ -4,6 +4,7 @@ exec "${MCP_CONSOLE_TEST_PYTHON:?}" "$0" "$@"
 ":"""
 
 import array
+import base64
 import errno
 import fcntl
 import json
@@ -639,7 +640,7 @@ def main() -> None:
         if source == "unexpected input receipt after stdout":
             emit_large_output(1, b"zod unexpected input receipt: ")
             tail_size = fill_nonblocking(1, b"z" * LARGE_OUTPUT_SIZE)
-            write_all(1, f"zod expected semantic tail: {tail_size}\n".encode())
+            write_all(1, f"zod expected semantic tail: {tail_size:010d}\n".encode())
             send(writer, {"kind": "input_received"})
             while True:
                 signal.pause()
@@ -657,7 +658,7 @@ def main() -> None:
             tail_size = fill_nonblocking(descriptor, b"z" * LARGE_OUTPUT_SIZE)
             write_all(
                 descriptor,
-                f"zod expected {stream} malformed tail: {tail_size}\n".encode(),
+                f"zod expected {stream} malformed tail: {tail_size:010d}\n".encode(),
             )
             write_all(descriptor, b"zod malformed output read\n")
             # Hold the complete tail in the raw reader until retirement joins it.
@@ -722,6 +723,37 @@ def main() -> None:
 
         if source == "overflow console output":
             send_output(writer, "x" * (PENDING_TEXT_BUDGET + 7))
+            send(writer, {"kind": "completed"})
+            continue
+
+        if source == "preview image limit":
+            send_output(writer, "before oversized image\n")
+            data = base64.b64encode(b"\0" * (6 * 1024 * 1024 + 3)).decode("ascii")
+            send(writer, {"kind": "image", "data": data, "mime_type": "image/png"})
+            send_output(writer, "before accepted image\n")
+            send(writer, {"kind": "image", "data": PNG_1X1, "mime_type": "image/png"})
+            send_output(writer, "after accepted image\n")
+            send(writer, {"kind": "completed"})
+            continue
+
+        if source in {"preview huge line", "preview tiny events", "preview redraw"}:
+            send_output(writer, "preview head\n")
+            if source == "preview huge line":
+                send_output(writer, "x" * (2 * PENDING_TEXT_BUDGET))
+            elif source == "preview tiny events":
+                for index in range(12000):
+                    send_output(
+                        writer,
+                        "ab",
+                        ConsoleKind.DIAGNOSTIC if index % 2 else ConsoleKind.OUTPUT,
+                    )
+            else:
+                for _ in range(5000):
+                    send_output(writer, "\r" + "x" * 2048)
+                send_output(writer, "\rprogress final")
+            send_output(writer, "\npreview tail: final diagnostic\n")
+            send(writer, {"kind": "image", "data": PNG_1X1, "mime_type": "image/png"})
+            send_output(writer, "after final image\n")
             send(writer, {"kind": "completed"})
             continue
 
@@ -800,7 +832,7 @@ def main() -> None:
             tail_size = fill_nonblocking(descriptor, b"z" * LARGE_OUTPUT_SIZE)
             write_all(
                 descriptor,
-                f"zod expected {stream} crash tail: {tail_size}\n".encode(),
+                f"zod expected {stream} crash tail: {tail_size:010d}\n".encode(),
             )
             os._exit(86)
 
@@ -1043,6 +1075,26 @@ def main() -> None:
             send(writer, {"kind": "completed"})
             wait_for_server_to_process_sideband(reader, writer)
             publish_marker(temporary / "zod-prompted-input-processed")
+            continue
+
+        if source == "preview prompt":
+            send_output(
+                writer,
+                "prompt output head\n"
+                + "x" * (2 * PENDING_TEXT_BUDGET)
+                + "\nprompt output tail\n",
+            )
+            send(
+                writer,
+                {
+                    "kind": "input_requested",
+                    "prompt": "prompt head " + "p" * 20000 + " prompt tail> ",
+                },
+            )
+            stdin = input()
+            send(writer, {"kind": "input_received"})
+            send_output(writer, f"received {stdin}\n")
+            send(writer, {"kind": "completed"})
             continue
 
         if source == "language error":

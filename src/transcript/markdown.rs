@@ -364,7 +364,7 @@ fn render_event(document: &mut String, envelope: &Envelope<'_>) -> Result<(), St
             if *inline_omitted_bytes != 0 || *discarded_bytes != 0 {
                 writeln!(
                     document,
-                    "## Retained output for call {call_id}\n\n[Retained text output for call {call_id}](<{path}>)\n\n{retained_bytes} bytes retained; {inline_omitted_bytes} bytes omitted from inline responses; {discarded_bytes} bytes not retained in this file.\n"
+                    "## Retained output for call {call_id}\n\n[Retained text output for call {call_id}](<{path}>)\n\n{retained_bytes} raw bytes retained; {inline_omitted_bytes} rendered UTF-8 bytes omitted from inline responses; {discarded_bytes} raw bytes not retained in this file.\n"
                 )
                 .expect("writing to a String cannot fail");
             }
