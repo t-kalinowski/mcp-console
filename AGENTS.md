@@ -247,10 +247,13 @@ Keep these invariants intact:
   Normalize only incidental values such as run-specific temporary paths; do not replace behavior with summaries or placeholders.
 - Keep embedded R, Python, SQL, and shell fixture programs as readable multiline strings.
   Use escapes such as `\n` only when the character is data.
+- Put `# fmt: r` or `# fmt: python` immediately before each embedded R or Python test program, including `code(...)` calls nested inside other calls.
+  Indent the payload and closing delimiter one Python indentation level deeper than the line containing `code(`, preserving the embedded program's own indentation.
+  Recheck this indentation after running `scripts/format` and in the committed source.
 - Refactor internal modules when the implemented responsibilities have a clearer boundary.
   Do not add structure for planned behavior.
   Treat roughly 500 lines of production source as a prompt to reassess a file, not a hard limit, and keep one Cargo package until the implementation presents a concrete crate boundary.
 - Update design documents in the same PR only when they describe changed behavior.
   Update this file when repository-wide constraints or navigation change.
-- Run `scripts/format` and review its changes before every commit.
+- Run `scripts/format` unchanged and review its changes before every commit.
   Run `scripts/check` before opening a PR.

@@ -47,20 +47,29 @@ def run(
 def test_workspace_yaml_forms_protect_metadata_and_private_temporary_storage(
     binary: Path,
 ) -> Transcript:
-    exercise = code(r"""
+    # fmt: python
+    exercise = code(r'''
         import errno
         import os
         from pathlib import Path
         import subprocess
+
 
         def denied(operation, *args, **kwargs):
             try:
                 operation(*args, **kwargs)
             except OSError as error:
                 # Native Linux mounts can deny replacement across a mount boundary.
-                assert error.errno in (errno.EACCES, errno.EPERM, errno.EROFS, errno.EBUSY, errno.EXDEV), error
+                assert error.errno in (
+                    errno.EACCES,
+                    errno.EPERM,
+                    errno.EROFS,
+                    errno.EBUSY,
+                    errno.EXDEV,
+                ), error
             else:
                 raise AssertionError(f"unexpected success: {operation} {args}")
+
 
         ordinary = Path("ordinary")
         _ = ordinary.write_text("created")
@@ -85,14 +94,24 @@ def test_workspace_yaml_forms_protect_metadata_and_private_temporary_storage(
             denied(os.replace, replacement, empty)
             replacement.rmdir()
             for action in ("write", "delete", "rename"):
-                child = subprocess.run([os.environ["TEST_PYTHON"], "-c", '''
+                child = subprocess.run(
+                    [
+                        os.environ["TEST_PYTHON"],
+                        "-c",
+                        """
         from pathlib import Path
         import sys
         p = Path(sys.argv[1])
         if sys.argv[2] == "write": p.write_text("child")
         if sys.argv[2] == "delete": p.unlink()
         if sys.argv[2] == "rename": p.parent.rename(p.parent.with_name("moved"))
-        ''', str(keep), action], capture_output=True, text=True)
+        """,
+                        str(keep),
+                        action,
+                    ],
+                    capture_output=True,
+                    text=True,
+                )
                 assert child.returncode != 0, (name, action, child)
                 assert "PermissionError" in child.stderr or "OSError" in child.stderr, child
             assert keep.read_text() == "readable"
@@ -100,8 +119,10 @@ def test_workspace_yaml_forms_protect_metadata_and_private_temporary_storage(
             denied((Path(root) / "outside").write_text, "blocked")
         private = Path(os.environ["TMPDIR"])
         _ = (private / "private").write_text("writable")
-        print("project edits; readable metadata; denied writes, creation, deletion, replacement and child mutations; private-only temp")
-        """)
+        print(
+            "project edits; readable metadata; denied writes, creation, deletion, replacement and child mutations; private-only temp"
+        )
+        ''')
     transcript = []
     for quoted in (True, False):
         with (
@@ -154,19 +175,23 @@ def test_absent_metadata_stays_absent_and_git_worktree_indirection_is_native(
         absent = run(
             binary,
             host,
+            # fmt: python
             code(r"""
-            import errno
-            from pathlib import Path
-            for name in (".git", ".codex", ".claude"):
-                try:
-                    (Path(name) / "new").mkdir(parents=True)
-                except OSError as error:
-                    # A native Linux placeholder can represent an absent path as a file.
-                    assert error.errno in (errno.EACCES, errno.EPERM, errno.EROFS, errno.ENOTDIR), error
-                else:
-                    raise AssertionError(name)
-            print("absent metadata cannot be created")
-            """),
+                import errno
+                from pathlib import Path
+
+                for name in (".git", ".codex", ".claude"):
+                    try:
+                        (Path(name) / "new").mkdir(parents=True)
+                    except OSError as error:
+                        # A native Linux placeholder can represent an absent path as a file.
+                        assert error.errno in (errno.EACCES, errno.EPERM, errno.EROFS, errno.ENOTDIR), (
+                            error
+                        )
+                    else:
+                        raise AssertionError(name)
+                print("absent metadata cannot be created")
+                """),
         )
         assert all(not (host / name).exists() for name in (".git", ".codex", ".claude"))
         metadata = host / "worktree-metadata"
@@ -177,19 +202,23 @@ def test_absent_metadata_stays_absent_and_git_worktree_indirection_is_native(
         indirect = run(
             binary,
             host,
+            # fmt: python
             code(r"""
-            import errno
-            from pathlib import Path
-            for path in (Path(".git"), Path("worktree-metadata/HEAD"), Path("alias/HEAD")):
-                assert path.read_text()
-                try:
-                    _ = path.write_text("changed")
-                except OSError as error:
-                    assert error.errno in (errno.EACCES, errno.EPERM, errno.EROFS), error
-                else:
-                    raise AssertionError(path)
-            print("git pointer and referenced metadata remain readable and protected through aliases")
-            """),
+                import errno
+                from pathlib import Path
+
+                for path in (Path(".git"), Path("worktree-metadata/HEAD"), Path("alias/HEAD")):
+                    assert path.read_text()
+                    try:
+                        _ = path.write_text("changed")
+                    except OSError as error:
+                        assert error.errno in (errno.EACCES, errno.EPERM, errno.EROFS), error
+                    else:
+                        raise AssertionError(path)
+                print(
+                    "git pointer and referenced metadata remain readable and protected through aliases"
+                )
+                """),
         )
         return [{"absent": absent, "worktree": indirect}]
 
@@ -223,20 +252,24 @@ def test_profile_adjustments_keep_native_write_exceptions_and_read_denials(
         result = run(
             binary,
             host,
+            # fmt: python
             code(r"""
-            import errno
-            from pathlib import Path
-            for name in (".claude/new", ".agents/allowed/new", ".codex/new"):
-                _ = Path(name).write_text("deliberate exception")
-            try:
-                _ = Path(".git/keep").read_text()
-            except OSError as error:
-                assert error.errno in (errno.EACCES, errno.EPERM), error
-            else:
-                raise AssertionError("read denial ignored")
-            assert Path(".agents/keep").read_text() == "readable"
-            print("equal-path and descendant write exceptions, native field forwarding and read denial verified")
-            """),
+                import errno
+                from pathlib import Path
+
+                for name in (".claude/new", ".agents/allowed/new", ".codex/new"):
+                    _ = Path(name).write_text("deliberate exception")
+                try:
+                    _ = Path(".git/keep").read_text()
+                except OSError as error:
+                    assert error.errno in (errno.EACCES, errno.EPERM), error
+                else:
+                    raise AssertionError("read denial ignored")
+                assert Path(".agents/keep").read_text() == "readable"
+                print(
+                    "equal-path and descendant write exceptions, native field forwarding and read denial verified"
+                )
+                """),
             "--writable-root",
             ".codex",
         )
@@ -256,19 +289,21 @@ def test_read_only_and_explicit_filesystem_kinds_preserve_their_meaning(
                 run(
                     binary,
                     host,
+                    # fmt: python
                     code(r"""
-                import errno
-                import os
-                from pathlib import Path
-                try:
-                    _ = Path("blocked").write_text("no")
-                except OSError as error:
-                    assert error.errno in (errno.EACCES, errno.EPERM, errno.EROFS), error
-                else:
-                    raise AssertionError("read-only allowed project write")
-                _ = (Path(os.environ["TMPDIR"]) / "allowed").write_text("private")
-                print("read-only workspace and writable private temp")
-                """),
+                        import errno
+                        import os
+                        from pathlib import Path
+
+                        try:
+                            _ = Path("blocked").write_text("no")
+                        except OSError as error:
+                            assert error.errno in (errno.EACCES, errno.EPERM, errno.EROFS), error
+                        else:
+                            raise AssertionError("read-only allowed project write")
+                        _ = (Path(os.environ["TMPDIR"]) / "allowed").write_text("private")
+                        print("read-only workspace and writable private temp")
+                        """),
                 )
             )
     for kind in ("unrestricted", "external-sandbox"):
@@ -284,11 +319,13 @@ def test_read_only_and_explicit_filesystem_kinds_preserve_their_meaning(
                     **run(
                         binary,
                         host,
+                        # fmt: python
                         code(r"""
-                from pathlib import Path
-                _ = Path(".agents/console/explicit").write_text("full filesystem access")
-                print("explicit filesystem kind replaced the profile restrictions")
-                """),
+                            from pathlib import Path
+
+                            _ = Path(".agents/console/explicit").write_text("full filesystem access")
+                            print("explicit filesystem kind replaced the profile restrictions")
+                            """),
                     ),
                 }
             )
@@ -330,25 +367,37 @@ def test_empty_protected_directories_cannot_be_removed_or_replaced(
             run(
                 binary,
                 host,
+                # fmt: python
                 code(r"""
-            import errno
-            import os
-            from pathlib import Path
-            for name in (".git", ".codex", ".claude"):
-                protected = Path(name)
-                replacement = Path("replacement")
-                replacement.mkdir()
-                for operation, args in ((os.rmdir, (protected,)), (os.replace, (replacement, protected)), (os.rename, (protected, Path("moved")))):
-                    try:
-                        operation(*args)
-                    except OSError as error:
-                        assert error.errno in (errno.EACCES, errno.EPERM, errno.EROFS, errno.EBUSY, errno.EXDEV), error
-                    else:
-                        raise AssertionError((operation, name))
-                replacement.rmdir()
-                assert protected.is_dir()
-            print("empty protected directories resist removal, replacement and rename")
-            """),
+                    import errno
+                    import os
+                    from pathlib import Path
+
+                    for name in (".git", ".codex", ".claude"):
+                        protected = Path(name)
+                        replacement = Path("replacement")
+                        replacement.mkdir()
+                        for operation, args in (
+                            (os.rmdir, (protected,)),
+                            (os.replace, (replacement, protected)),
+                            (os.rename, (protected, Path("moved"))),
+                        ):
+                            try:
+                                operation(*args)
+                            except OSError as error:
+                                assert error.errno in (
+                                    errno.EACCES,
+                                    errno.EPERM,
+                                    errno.EROFS,
+                                    errno.EBUSY,
+                                    errno.EXDEV,
+                                ), error
+                            else:
+                                raise AssertionError((operation, name))
+                        replacement.rmdir()
+                        assert protected.is_dir()
+                    print("empty protected directories resist removal, replacement and rename")
+                    """),
             )
         ]
 
@@ -373,12 +422,14 @@ def test_complete_policy_selector_bypasses_project_and_console_adjustments(
             run(
                 binary,
                 host,
+                # fmt: python
                 code(r"""
-            from pathlib import Path
-            _ = Path("ordinary").write_text("native workspace")
-            _ = Path(".claude/native").write_text("no Console adjustment")
-            print("complete native selector bypasses project discovery and application adjustments")
-            """),
+                    from pathlib import Path
+
+                    _ = Path("ordinary").write_text("native workspace")
+                    _ = Path(".claude/native").write_text("no Console adjustment")
+                    print("complete native selector bypasses project discovery and application adjustments")
+                    """),
                 "--config-env",
                 "TEST_POLICY",
                 environment={"TEST_POLICY": json.dumps(policy)},
@@ -407,20 +458,26 @@ def test_workspace_options_preserve_explicit_native_values(binary: Path) -> Tran
             result = run(
                 binary,
                 host,
+                # fmt: python
                 code(r"""
-                import errno
-                import json
-                import os
-                from pathlib import Path
-                for key, allowed in json.loads(os.environ["EXPECTED_WRITES"]).items():
-                    try:
-                        _ = (Path(os.environ[key]) / "explicit").write_text("native option")
-                    except OSError as error:
-                        assert not allowed and error.errno in (errno.EACCES, errno.EPERM, errno.EROFS), error
-                    else:
-                        assert allowed, key
-                print("explicit native temporary-directory options preserved")
-                """),
+                    import errno
+                    import json
+                    import os
+                    from pathlib import Path
+
+                    for key, allowed in json.loads(os.environ["EXPECTED_WRITES"]).items():
+                        try:
+                            _ = (Path(os.environ[key]) / "explicit").write_text("native option")
+                        except OSError as error:
+                            assert not allowed and error.errno in (
+                                errno.EACCES,
+                                errno.EPERM,
+                                errno.EROFS,
+                            ), error
+                        else:
+                            assert allowed, key
+                    print("explicit native temporary-directory options preserved")
+                    """),
                 environment={
                     "TMPDIR": inherited,
                     "INHERITED_TEMP": inherited,

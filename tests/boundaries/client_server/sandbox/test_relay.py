@@ -30,14 +30,15 @@ def test_restart_and_shutdown_with_relay_below_sandbox_root(binary: Path) -> Tra
         # relay as an ordinary child. Only standard streams carry relay data.
         wrapper.write_text(
             "#!/usr/bin/env python3\n"
+            # fmt: python
             + code(r"""
                 import os
                 import subprocess
                 import sys
 
-                relay = subprocess.Popen([
-                    os.environ["MCP_CONSOLE_TEST_BINARY"], "worker-relay", *sys.argv[1:]
-                ])
+                relay = subprocess.Popen(
+                    [os.environ["MCP_CONSOLE_TEST_BINARY"], "worker-relay", *sys.argv[1:]]
+                )
                 sys.exit(relay.wait())
                 """),
             encoding="utf-8",
@@ -46,6 +47,7 @@ def test_restart_and_shutdown_with_relay_below_sandbox_root(binary: Path) -> Tra
         worker = Path(directory) / "worker-wrapper"
         worker.write_text(
             "#!/usr/bin/env python3\n"
+            # fmt: python
             + code(r"""
                 import os
 
@@ -67,14 +69,15 @@ def test_restart_and_shutdown_with_relay_below_sandbox_root(binary: Path) -> Tra
             client.initialize_and_list_tools()
             for retirement in ("restart", "shutdown"):
                 client.send(
+                    # fmt: python
                     python=code(r"""
-                    import os
-                    import subprocess
+                        import os
+                        import subprocess
 
-                    child = subprocess.Popen(["/bin/sleep", "60"])
-                    print(os.getpgrp(), os.getppid(), os.getpid(), child.pid)
-                    print(os.environ["TMPDIR"])
-                    """)
+                        child = subprocess.Popen(["/bin/sleep", "60"])
+                        print(os.getpgrp(), os.getppid(), os.getpid(), child.pid)
+                        print(os.environ["TMPDIR"])
+                        """)
                 )
                 processes, temporary_directory = last_tool_text(client).splitlines()
                 root, relay, worker_pid, descendant = map(int, processes.split())

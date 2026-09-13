@@ -42,16 +42,21 @@ def test_inherited_allow_and_owned_rules_preserve_global_policy(binary: Path) ->
         with McpClient(binary, ("serve",), current_directory=root) as client:
             client.initialize_and_list_tools()
             client.send(
+                # fmt: python
                 python=code("""
-                import urllib.request, urllib.error
-                def fetch(host):
-                    try:
-                        with urllib.request.urlopen("https://" + host, timeout=15) as response:
-                            print(host, response.status)
-                    except urllib.error.URLError as error:
-                        print(host, type(error).__name__, str(error))
-                fetch("pypi.org")
-            """)
+                    import urllib.request, urllib.error
+
+
+                    def fetch(host):
+                        try:
+                            with urllib.request.urlopen("https://" + host, timeout=15) as response:
+                                print(host, response.status)
+                        except urllib.error.URLError as error:
+                            print(host, type(error).__name__, str(error))
+
+
+                    fetch("pypi.org")
+                    """)
             )
             assert last_result_text(client) == "pypi.org 200\n", last_result_text(
                 client

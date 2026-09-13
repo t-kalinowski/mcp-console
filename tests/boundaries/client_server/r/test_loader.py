@@ -105,10 +105,11 @@ def test_loads_native_libraries_from_selected_r_home(binary: Path) -> Transcript
         ) as client:
             client.initialize_and_list_tools()
             result = client.send(
+                # fmt: r
                 r=code("""
-                dyn.load("loader_probe.so")
-                .C("loader_probe", result = 0L)$result
-                """)
+                    dyn.load("loader_probe.so")
+                    .C("loader_probe", result = 0L)$result
+                    """)
             )
             assert tool_text(result) == "[1] 42\n", result
             return client.finish()

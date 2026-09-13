@@ -75,40 +75,41 @@ def test_mixed_runtime_shares_recordings_and_restart_without_native(
             )
             assert last_result_text(client) == "[1] 42\n", last_result_text(client)
             client.send(
+                # fmt: python
                 python=code(f"""
-                import os, sys, shutil
-                from pathlib import Path
-                assert sys.platform == "linux"
-                assert os.environ["CONSOLE_LITERAL"] == 'spaces "quotes" $HOME'
-                assert os.environ["MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION"] == "0"
-                assert os.environ["RETICULATE_USE_MANAGED_VENV"] == "no"
-                assert shutil.which("uv")
-                assert not Path("/usr/local/libexec/mcp-console-sandbox").exists()
-                assert not Path("/usr/local/bin/mcp-console-sandbox").exists()
-                sentinels = Path("/tmp/resolver-sentinels")
-                sentinels.mkdir()
-                for name in ("uv", "ir", "mcp-console-sandbox"):
-                    executable = sentinels / name
-                    executable.write_text("#!/bin/sh\\necho invoked >> /tmp/resolver-invoked\\nexit 99\\n")
-                    executable.chmod(0o755)
-                os.environ["PATH"] = str(sentinels) + os.pathsep + os.environ["PATH"]
-                assert Path({str(readonly / "value")!r}).read_text() == "read-only data"
-                try:
-                    Path({str(readonly / "forbidden")!r}).write_text("bad")
-                except OSError:
-                    print("read-only share enforced")
-                else:
-                    raise AssertionError("read-only share was writable")
-                Path("result.txt").write_text("persistent share")
-                Path("/tmp/generation-state").write_text("ephemeral")
-                Path(".git").mkdir(exist_ok=True)
-                Path(".git/visible").write_text("host metadata is writable")
-                assert list(Path(".agents/console/sessions").glob("*/internal/events.jsonl"))
-                print(r.x + 1)
-                import duckdb
-                connection = duckdb.connect()
-                console_sql_connection(connection)
-            """)
+                    import os, sys, shutil
+                    from pathlib import Path
+                    assert sys.platform == "linux"
+                    assert os.environ["CONSOLE_LITERAL"] == 'spaces "quotes" $HOME'
+                    assert os.environ["MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION"] == "0"
+                    assert os.environ["RETICULATE_USE_MANAGED_VENV"] == "no"
+                    assert shutil.which("uv")
+                    assert not Path("/usr/local/libexec/mcp-console-sandbox").exists()
+                    assert not Path("/usr/local/bin/mcp-console-sandbox").exists()
+                    sentinels = Path("/tmp/resolver-sentinels")
+                    sentinels.mkdir()
+                    for name in ("uv", "ir", "mcp-console-sandbox"):
+                        executable = sentinels / name
+                        executable.write_text("#!/bin/sh\\necho invoked >> /tmp/resolver-invoked\\nexit 99\\n")
+                        executable.chmod(0o755)
+                    os.environ["PATH"] = str(sentinels) + os.pathsep + os.environ["PATH"]
+                    assert Path({str(readonly / "value")!r}).read_text() == "read-only data"
+                    try:
+                        Path({str(readonly / "forbidden")!r}).write_text("bad")
+                    except OSError:
+                        print("read-only share enforced")
+                    else:
+                        raise AssertionError("read-only share was writable")
+                    Path("result.txt").write_text("persistent share")
+                    Path("/tmp/generation-state").write_text("ephemeral")
+                    Path(".git").mkdir(exist_ok=True)
+                    Path(".git/visible").write_text("host metadata is writable")
+                    assert list(Path(".agents/console/sessions").glob("*/internal/events.jsonl"))
+                    print(r.x + 1)
+                    import duckdb
+                    connection = duckdb.connect()
+                    console_sql_connection(connection)
+                    """)
             )
             assert last_result_text(client) == "read-only share enforced\n42.0\n", (
                 last_result_text(client)
@@ -245,15 +246,16 @@ def test_workload_environment_does_not_configure_controller_sbx(binary: Path) ->
             with McpClient(binary, ("serve",), current_directory=root) as client:
                 client.initialize_and_list_tools()
                 client.send(
+                    # fmt: python
                     python=code(f"""
-                    import os, sys
-                    assert sys.platform == "linux"
-                    assert os.environ["HOME"] == "/tmp/vm-workload-home"
-                    assert ("R_PROFILE_USER" in os.environ) == {inherit!r}
-                    assert os.environ["MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION"] == "0"
-                    assert os.environ["RETICULATE_USE_MANAGED_VENV"] == "no"
-                    print("VM workload environment")
-                """)
+                        import os, sys
+                        assert sys.platform == "linux"
+                        assert os.environ["HOME"] == "/tmp/vm-workload-home"
+                        assert ("R_PROFILE_USER" in os.environ) == {inherit!r}
+                        assert os.environ["MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION"] == "0"
+                        assert os.environ["RETICULATE_USE_MANAGED_VENV"] == "no"
+                        print("VM workload environment")
+                        """)
                 )
                 assert last_result_text(client) == "VM workload environment\n", (
                     last_result_text(client)

@@ -2,6 +2,7 @@
 send:
   python: |
     import os
+
     with open("attempt", "a") as attempts:
         attempts.write("once\n")
         attempts.flush()

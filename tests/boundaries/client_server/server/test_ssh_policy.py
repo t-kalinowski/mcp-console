@@ -30,9 +30,16 @@ from support.ssh import (
 from support.suites import run_this_suite
 
 
+# fmt: r
 EXERCISE = code(r"""
     writable <- function(path) {
-      tryCatch({writeLines("remote value", path); TRUE}, error = function(error) FALSE)
+      tryCatch(
+        {
+          writeLines("remote value", path)
+          TRUE
+        },
+        error = function(error) FALSE
+      )
     }
     suppressWarnings(stopifnot(
       writable("results/value"),

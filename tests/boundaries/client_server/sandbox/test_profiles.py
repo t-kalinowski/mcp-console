@@ -22,6 +22,7 @@ from support.suites import run_this_suite
 def test_workspace_permissions_and_description_survive_worker_replacement(
     binary: Path,
 ) -> TranscriptWithCompanions:
+    # fmt: python
     exercise = code(r"""
         import errno
         import os
@@ -37,7 +38,10 @@ def test_workspace_permissions_and_description_survive_worker_replacement(
         _ = ordinary.write_text("edited")
         assert ordinary.read_text() == "edited"
         ordinary.unlink()
-        for path in [outside / "blocked", *[workspace / name / "keep" for name in (".git", ".agents", ".codex", ".claude")]]:
+        for path in [
+            outside / "blocked",
+            *[workspace / name / "keep" for name in (".git", ".agents", ".codex", ".claude")],
+        ]:
             try:
                 _ = path.write_text("blocked")
             except OSError as error:
@@ -45,8 +49,19 @@ def test_workspace_permissions_and_description_survive_worker_replacement(
             else:
                 raise AssertionError(path)
         assert (workspace / ".claude/keep").read_text() == "readable"
-        child = subprocess.run([sys.executable, "-c", "from pathlib import Path; Path('.claude/new').write_text('blocked')"], cwd=workspace, capture_output=True, text=True)
-        assert child.returncode != 0 and ("PermissionError" in child.stderr or "Read-only file system" in child.stderr), child
+        child = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "from pathlib import Path; Path('.claude/new').write_text('blocked')",
+            ],
+            cwd=workspace,
+            capture_output=True,
+            text=True,
+        )
+        assert child.returncode != 0 and (
+            "PermissionError" in child.stderr or "Read-only file system" in child.stderr
+        ), child
         _ = (Path(os.environ["TMPDIR"]) / "private").write_text("private")
         print("fixed workspace permits edits and protects metadata after cwd changes")
         """)

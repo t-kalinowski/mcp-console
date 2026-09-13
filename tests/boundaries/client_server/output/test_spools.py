@@ -79,19 +79,19 @@ def test_reports_partial_retention_and_later_unretained_output(
         launcher = workspace / "limited-server"
         # Limit regular-file writes using the OS, while leaving enough room for
         # the journal and both projections of the two bounded tool responses.
-        # fmt: python
         launcher.write_text(
             f"#!{sys.executable}\n"
+            # fmt: python
             + code(f"""
-            import os
-            import resource
-            import signal
-            import sys
+                import os
+                import resource
+                import signal
+                import sys
 
-            signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
-            resource.setrlimit(resource.RLIMIT_FSIZE, ({file_limit}, {file_limit}))
-            os.execv({str(binary)!r}, [{str(binary)!r}, *sys.argv[1:]])
-            """),
+                signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+                resource.setrlimit(resource.RLIMIT_FSIZE, ({file_limit}, {file_limit}))
+                os.execv({str(binary)!r}, [{str(binary)!r}, *sys.argv[1:]])
+                """),
             encoding="utf-8",
         )
         launcher.chmod(0o755)

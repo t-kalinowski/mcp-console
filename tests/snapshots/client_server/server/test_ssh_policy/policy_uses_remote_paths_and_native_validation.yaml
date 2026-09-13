@@ -2,7 +2,13 @@
 send:
   r: |
     writable <- function(path) {
-      tryCatch({writeLines("remote value", path); TRUE}, error = function(error) FALSE)
+      tryCatch(
+        {
+          writeLines("remote value", path)
+          TRUE
+        },
+        error = function(error) FALSE
+      )
     }
     suppressWarnings(stopifnot(
       writable("results/value"),

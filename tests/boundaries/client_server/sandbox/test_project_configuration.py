@@ -22,6 +22,7 @@ from support.suites import run_this_suite
 def _snapshot_survives_replacement(
     binary: Path, configured: bool
 ) -> TranscriptWithCompanions:
+    # fmt: python
     exercise = code(r"""
         import errno
         import os
@@ -43,7 +44,9 @@ def _snapshot_survives_replacement(
             else:
                 assert allowed, name
         try:
-            socket.create_connection(("127.0.0.1", int(os.environ["MCP_CONSOLE_TEST_PORT"])), timeout=2)
+            socket.create_connection(
+                ("127.0.0.1", int(os.environ["MCP_CONSOLE_TEST_PORT"])), timeout=2
+            )
         except OSError:
             pass
         else:

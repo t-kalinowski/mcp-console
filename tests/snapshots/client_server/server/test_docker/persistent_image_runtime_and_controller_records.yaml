@@ -14,6 +14,7 @@ send:
   python: |
     import os, sys, json
     from pathlib import Path
+
     assert sys.executable == os.environ["RETICULATE_PYTHON"]
     assert os.environ["MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION"] == "0"
     assert os.environ["RETICULATE_USE_MANAGED_VENV"] == "no"

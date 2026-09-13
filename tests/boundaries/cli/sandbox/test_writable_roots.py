@@ -27,6 +27,7 @@ def test_project_grants_combine_with_cli_roots(binary: Path) -> Transcript:
 
 
 def _augment_default_permissions(binary: Path, configured: bool = False) -> Transcript:
+    # fmt: python
     script = code(r"""
         import errno
         import os
@@ -42,6 +43,7 @@ def _augment_default_permissions(binary: Path, configured: bool = False) -> Tran
         (temporary / "private").write_text("still writable")
         print("private storage remains writable")
 
+
         def denied(path: Path) -> None:
             try:
                 path.write_text("must not be written")
@@ -50,6 +52,7 @@ def _augment_default_permissions(binary: Path, configured: bool = False) -> Tran
                 print(f"write denied: {path.relative_to(host)}")
             else:
                 raise AssertionError(f"unexpected write: {path}")
+
 
         for name in ("output café 雪", "cache"):
             root = host / name
@@ -150,6 +153,7 @@ def _augment_default_permissions(binary: Path, configured: bool = False) -> Tran
 
 
 def _file_and_missing_writable_roots(binary: Path, *, supported: bool) -> Transcript:
+    # fmt: python
     script = code(r"""
         import errno
         from pathlib import Path

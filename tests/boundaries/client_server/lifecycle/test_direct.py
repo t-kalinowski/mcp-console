@@ -61,6 +61,7 @@ def test_builtin_worker_runs_directly_with_host_access(binary: Path) -> Transcri
             assert "without a sandbox" in description, description
             assert "server's permissions" in description, description
             client.send(
+                # fmt: python
                 python=code(r"""
                     import os
                     from pathlib import Path
@@ -96,6 +97,7 @@ def test_custom_worker_runs_directly_with_host_access(binary: Path) -> Transcrip
         relay = Path(directory) / "relay-wrapper"
         relay.write_text(
             "#!/usr/bin/env python3\n"
+            # fmt: python
             + code(r"""
                 import os
                 import sys

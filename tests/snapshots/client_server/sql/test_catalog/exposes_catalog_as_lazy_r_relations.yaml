@@ -19,9 +19,15 @@ send:
     lazy_values <- dplyr::tbl(connection, "live_sql_values") |>
       dplyr::mutate(doubled = value * 2L)
     cat(
-      "same connection: ", identical(connection, sql_connection()), "\n",
-      "lazy table: ", inherits(table_values, "tbl_lazy"), "\n",
-      "lazy view: ", inherits(lazy_values, "tbl_lazy"), "\n",
+      "same connection: ",
+      identical(connection, sql_connection()),
+      "\n",
+      "lazy table: ",
+      inherits(table_values, "tbl_lazy"),
+      "\n",
+      "lazy view: ",
+      inherits(lazy_values, "tbl_lazy"),
+      "\n",
       sep = ""
     )
 result:

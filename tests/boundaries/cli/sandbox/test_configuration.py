@@ -68,6 +68,7 @@ def invoke(binary: Path, config: dict | str, *command: str, launch_prefix=(), **
 
 @requires(SANDBOX)
 def test_explicit_policy_controls_filesystem_and_network(binary: Path) -> Transcript:
+    # fmt: python
     script = code(r"""
         import errno
         import pathlib
@@ -138,6 +139,7 @@ def test_explicit_policy_controls_filesystem_and_network(binary: Path) -> Transc
 def test_unrestricted_and_external_policies_preserve_network_and_cleanup(
     binary: Path,
 ) -> Transcript:
+    # fmt: python
     script = code("""
         import json
         import os
@@ -155,11 +157,15 @@ def test_unrestricted_and_external_policies_preserve_network_and_cleanup(
                 network = "allowed"
         except OSError:
             network = "denied"
-        print(json.dumps({
-            "network": network,
-            "temporary": str(temporary),
-            "input": (temporary / "input").read_text(encoding="utf-8"),
-        }))
+        print(
+            json.dumps(
+                {
+                    "network": network,
+                    "temporary": str(temporary),
+                    "input": (temporary / "input").read_text(encoding="utf-8"),
+                }
+            )
+        )
         sys.exit(23)
         """)
     transcript = []
@@ -218,6 +224,7 @@ def test_unrestricted_and_external_policies_preserve_network_and_cleanup(
 @requires(SANDBOX)
 def test_environment_overrides_and_arguments_are_literal(binary: Path) -> Transcript:
     value = "雪, café; 'quoted' \"double\" $() `literal` \\ newline\nend"
+    # fmt: python
     script = code(r"""
         import json
         import os
@@ -225,12 +232,17 @@ def test_environment_overrides_and_arguments_are_literal(binary: Path) -> Transc
 
         assert "TEST_POLICY" not in os.environ
         assert "MCP_CONSOLE_SANDBOX_CONFIG" not in os.environ
-        print(json.dumps({
-            "inherited": os.environ.get("INHERITED"),
-            "marker": os.environ.get("MCP_CONSOLE_SANDBOX"),
-            "value": os.environ["VALUE"],
-            "arguments": sys.argv[1:],
-        }, ensure_ascii=False))
+        print(
+            json.dumps(
+                {
+                    "inherited": os.environ.get("INHERITED"),
+                    "marker": os.environ.get("MCP_CONSOLE_SANDBOX"),
+                    "value": os.environ["VALUE"],
+                    "arguments": sys.argv[1:],
+                },
+                ensure_ascii=False,
+            )
+        )
         """)
     transcript = []
     for inherit in (True, False):
@@ -380,6 +392,7 @@ def test_large_environment_configuration_preserves_stdin(binary: Path) -> Transc
 
 @requires(SANDBOX)
 def test_target_cannot_replace_active_policy(binary: Path) -> Transcript:
+    # fmt: python
     script = code(r"""
         import errno
         import json
@@ -405,12 +418,20 @@ def test_target_cannot_replace_active_policy(binary: Path) -> Transcript:
         else:
             raise AssertionError("target environment or files changed policy")
         child = subprocess.run(
-            [sys.argv[1], "sandbox", "--config-env", "TEST_POLICY", "--",
-             sys.executable, "-c",
-             "from pathlib import Path; import sys; Path(sys.argv[1]).write_text('escaped')",
-             str(forbidden)],
+            [
+                sys.argv[1],
+                "sandbox",
+                "--config-env",
+                "TEST_POLICY",
+                "--",
+                sys.executable,
+                "-c",
+                "from pathlib import Path; import sys; Path(sys.argv[1]).write_text('escaped')",
+                str(forbidden),
+            ],
             env={**os.environ, "TEST_POLICY": json.dumps(policy)},
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
         )
         assert child.returncode != 0
         assert child.stdout == b""
@@ -546,16 +567,18 @@ def test_explicit_landlock_preserves_policy_and_rejects_supervised_lifetime(
             config,
             sys.executable,
             "-c",
+            # fmt: python
             code(r"""
-            import os
-            import sys
-            try:
-                os.truncate(sys.argv[1], 0)
-            except PermissionError:
-                print("truncate denied")
-            else:
-                raise AssertionError("host truncation succeeded")
-            """),
+                import os
+                import sys
+
+                try:
+                    os.truncate(sys.argv[1], 0)
+                except PermissionError:
+                    print("truncate denied")
+                else:
+                    raise AssertionError("host truncation succeeded")
+                """),
             str(sentinel),
         )
         assert result.returncode == 0 and not result.stderr, result
@@ -792,6 +815,7 @@ def test_landlock_rejects_policies_requiring_direct_enforcement(
 
 @requires(LINUX_SANDBOX, NESTED_PROCFS)
 def test_bubblewrap_enforces_root_write_carveouts(binary: Path) -> Transcript:
+    # fmt: python
     script = code(r"""
         import errno
         from pathlib import Path

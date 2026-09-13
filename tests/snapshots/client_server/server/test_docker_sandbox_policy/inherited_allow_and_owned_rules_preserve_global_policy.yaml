@@ -2,12 +2,16 @@
 send:
   python: |
     import urllib.request, urllib.error
+
+
     def fetch(host):
         try:
             with urllib.request.urlopen("https://" + host, timeout=15) as response:
                 print(host, response.status)
         except urllib.error.URLError as error:
             print(host, type(error).__name__, str(error))
+
+
     fetch("pypi.org")
 result:
   content:

@@ -62,30 +62,32 @@ def _managed_environment(binary: Path, inherit: bool) -> Transcript:
                 # Inspect the retained manifest before activating Python; automatic
                 # resolution must not mask a lost generation environment.
                 client.send(
+                    # fmt: r
                     r=code(r"""
-                    stopifnot(
-                      identical(Sys.getenv("MCP_CONSOLE_SANDBOX"), "1"),
-                      identical(Sys.getenv("MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION"), "1"),
-                      identical(Sys.getenv("RETICULATE_PYTHON"), "managed"),
-                      identical(Sys.getenv("MCP_CONSOLE_TEST_PROJECT_ENV"), "project"),
-                      identical(dirname(find.package("praise")), .libPaths()[[1L]]),
-                      "py-yaml12" %in% reticulate::py_require()$packages
-                    )
-                    cat("managed R and Python requirements retained\n")
-                    """)
+                        stopifnot(
+                          identical(Sys.getenv("MCP_CONSOLE_SANDBOX"), "1"),
+                          identical(Sys.getenv("MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION"), "1"),
+                          identical(Sys.getenv("RETICULATE_PYTHON"), "managed"),
+                          identical(Sys.getenv("MCP_CONSOLE_TEST_PROJECT_ENV"), "project"),
+                          identical(dirname(find.package("praise")), .libPaths()[[1L]]),
+                          "py-yaml12" %in% reticulate::py_require()$packages
+                        )
+                        cat("managed R and Python requirements retained\n")
+                        """)
                 )
                 assert (
                     last_tool_text(client)
                     == "managed R and Python requirements retained\n"
                 ), last_tool_text(client)
                 client.send(
+                    # fmt: python
                     python=code("""
-                    import os
-                    import yaml12
+                        import os
+                        import yaml12
 
-                    print(yaml12.__name__)
-                    print(os.environ.get("MCP_CONSOLE_TEST_INHERITED_ENV", "absent"))
-                    """)
+                        print(yaml12.__name__)
+                        print(os.environ.get("MCP_CONSOLE_TEST_INHERITED_ENV", "absent"))
+                        """)
                 )
                 assert last_tool_text(client) == "yaml12\n" + (
                     "caller\n" if inherit else "absent\n"
@@ -132,13 +134,14 @@ def test_preserves_caller_selected_python_over_project_environment(
         with McpClient(binary, ("serve",), environment, workspace) as client:
             client.initialize_and_list_tools()
             client.send(
+                # fmt: python
                 python=code("""
-                import os
-                import sys
+                    import os
+                    import sys
 
-                assert sys.executable == os.environ["MCP_CONSOLE_TEST_SELECTED_PYTHON"]
-                print("caller-selected Python retained")
-                """)
+                    assert sys.executable == os.environ["MCP_CONSOLE_TEST_SELECTED_PYTHON"]
+                    print("caller-selected Python retained")
+                    """)
             )
             assert last_tool_text(client) == "caller-selected Python retained\n", (
                 last_tool_text(client)

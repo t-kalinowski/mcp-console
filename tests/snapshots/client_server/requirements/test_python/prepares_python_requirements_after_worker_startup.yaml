@@ -3,8 +3,13 @@
 ---
 send:
   python: |
-    import importlib.util; import os; import sys
-    sentinel = 42; worker_pid = os.getpid(); initial_prefix = sys.prefix
+    import importlib.util
+    import os
+    import sys
+
+    sentinel = 42
+    worker_pid = os.getpid()
+    initial_prefix = sys.prefix
     importlib.util.find_spec("yaml12") is None
 result:
   content:
@@ -38,7 +43,10 @@ result:
 ---
 send:
   python: |
-    import os; import sys; import yaml12
+    import os
+    import sys
+    import yaml12
+
     (sentinel, os.getpid() == worker_pid, sys.prefix != initial_prefix, yaml12.__name__)
   requirements:
     python:

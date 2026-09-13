@@ -9,6 +9,7 @@ send:
   python: |
     import os
     from pathlib import Path
+
     assert os.getuid() == 4321
     assert os.environ["WORKLOAD_VALUE"] == "selected"
     assert os.environ["DOCKER_HOST"] == "must-not-configure-the-launcher"
@@ -63,6 +64,7 @@ send:
   python: |
     import os
     from pathlib import Path
+
     assert os.getuid() == 4321
     assert os.environ["WORKLOAD_VALUE"] == "selected"
     assert os.environ["DOCKER_HOST"] == "must-not-configure-the-launcher"

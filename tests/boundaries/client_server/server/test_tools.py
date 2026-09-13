@@ -307,7 +307,7 @@ def test_validates_send_arguments(binary: Path) -> Transcript:
             # fmt: python
             python=code("""
                 print("hello")
-            """),
+                """),
             wait_ms=0,
         )
         result = client.send(

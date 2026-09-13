@@ -32,6 +32,7 @@ def test_psutil_sees_host_processes_without_sandbox(binary: Path) -> Transcript:
                 client.initialize_and_list_tools()
                 client.send(python="import os")
                 assert last_tool_text(client) == "[done]"
+                # fmt: python
                 python = code("""
                     import os
 
