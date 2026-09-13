@@ -1,0 +1,26 @@
+---
+selection: configured
+arguments:
+  - command space ' ; $()
+  - literal ' ; $HOME
+  - ssh-prepare
+standard_error: |
+  selected command failed
+  SSH preparation retirement is unconfirmed: truncated SSH frame length: failed to fill whole buffer
+---
+selection: PATH
+arguments:
+  - mcp-console
+  - ssh-prepare
+standard_error: |
+  selected command failed
+  SSH preparation retirement is unconfirmed: truncated SSH frame length: failed to fill whole buffer
+---
+selection: fallback
+arguments:
+  - uvx
+  - mcp-console
+  - ssh-prepare
+standard_error: |
+  selected command failed
+  SSH preparation retirement is unconfirmed: truncated SSH frame length: failed to fill whole buffer

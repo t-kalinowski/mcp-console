@@ -1,0 +1,22 @@
+---
+selection: PATH
+---
+send:
+  r: 6 * 7
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false
+---
+selection: fallback
+---
+send:
+  r: 6 * 7
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false

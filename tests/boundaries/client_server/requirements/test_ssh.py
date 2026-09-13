@@ -617,9 +617,10 @@ def test_large_successful_resolver_result_preserves_completion(binary):
 @executions(DIRECT, SANDBOXED)
 def test_failed_remote_activation_preserves_worker_until_restart(binary, execution):
     with managed_session(binary, execution) as (client, remote, ir_record, uv_record):
-        send_and_collect_runtime_python_resolution(
+        initial = send_and_collect_runtime_python_resolution(
             client, r="sentinel <- 42L; worker <- Sys.getpid()"
         )
+        assert initial == "[done]", initial
         baseline = len(ir_run_records(ir_record))
         send_and_collect_runtime_python_resolution(
             client,

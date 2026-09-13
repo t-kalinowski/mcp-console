@@ -108,7 +108,7 @@ Native sandbox fields remain raw values for native runner validation; this targe
 
 Omitting `target` keeps the existing local host path.
 An explicit local transport with host compute selects that same path and uses the controller launch directory and built-in command; `workspace` and `command` overrides require SSH, Docker, or Docker Sandbox.
-Existing SSH configurations retain their `[uvx, mcp-console]` default command.
+SSH targets prefer `mcp-console` on the remote `PATH`, falling back to `uvx mcp-console` when it is absent.
 
 There are no implicit home, project, credential, agent, or Docker socket binds.
 Docker mount arguments preserve spaces, commas, and quotes using Docker's CSV grammar.

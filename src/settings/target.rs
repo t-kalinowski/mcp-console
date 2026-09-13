@@ -150,7 +150,12 @@ impl Target {
         }
         if self.command.is_none() {
             self.command = Some(match self.compute {
-                Compute::Host {} => vec!["uvx".into(), "mcp-console".into()],
+                Compute::Host {} => vec![
+                    "sh".into(),
+                    "-c".into(),
+                    "if command -v mcp-console >/dev/null 2>&1; then exec mcp-console \"$@\"; else exec uvx mcp-console \"$@\"; fi".into(),
+                    "mcp-console".into(),
+                ],
                 Compute::Docker(_) | Compute::DockerSandbox(_) => vec!["mcp-console".into()],
             });
         }
