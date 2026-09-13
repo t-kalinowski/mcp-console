@@ -33,15 +33,12 @@ def test_startup_cancellation_preserves_shared_connection(binary: Path) -> Trans
         state = remote / "state"
         r = remote / "R"
         r.write_text(
-            code(r"""
-            #!/bin/sh
-            printf '%s\n' "$$" > STATE
-            printf 1 > CHECKPOINT
-            exec /bin/cat GATE
-            """)
-            .replace("STATE", shlex.quote(str(state)))
-            .replace("CHECKPOINT", shlex.quote(str(checkpoint.path)))
-            .replace("GATE", shlex.quote(str(gate)))
+            code(rf"""
+                #!/bin/sh
+                printf '%s\n' "$$" > {shlex.quote(str(state))}
+                printf 1 > {shlex.quote(str(checkpoint.path))}
+                exec /bin/cat {shlex.quote(str(gate))}
+                """)
         )
         r.chmod(0o755)
         configure(

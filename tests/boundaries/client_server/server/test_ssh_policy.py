@@ -239,10 +239,10 @@ def test_external_execution_host_policy(binary: Path) -> Transcript:
         )
         ssh = local / "ssh"
         ssh.write_text(
-            code(r"""
+            code(rf"""
                 #!/bin/sh
-                exec /usr/bin/ssh -F CONFIG "$@"
-                """).replace("CONFIG", shlex.quote(external["ssh_config"]))
+                exec /usr/bin/ssh -F {shlex.quote(external["ssh_config"])} "$@"
+                """)
         )
         ssh.chmod(0o755)
         environment = {

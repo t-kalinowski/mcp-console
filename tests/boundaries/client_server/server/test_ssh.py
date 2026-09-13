@@ -56,13 +56,14 @@ def _preinstalled_remote_runtime(binary: Path, execution: Execution) -> Transcri
         prefix.write_text(
             code(r"""
                 #!/bin/sh
-                [ "$1" = VALUE ] || exit 23
+                [ "$1" = {argument} ] || exit 23
                 shift
-                exec /usr/bin/env -i PATH=/usr/bin:/bin R_HOME=RHOME R_LIBS_USER=/unavailable R_LIBS_SITE=/unavailable EXECUTABLE "$@"
-                """)
-            .replace("VALUE", shlex.quote(argument))
-            .replace("EXECUTABLE", shlex.quote(str(binary)))
-            .replace("RHOME", shlex.quote(remote_environment["R_HOME"]))
+                exec /usr/bin/env -i PATH=/usr/bin:/bin R_HOME={r_home} R_LIBS_USER=/unavailable R_LIBS_SITE=/unavailable {executable} "$@"
+                """).format(
+                argument=shlex.quote(argument),
+                r_home=shlex.quote(remote_environment["R_HOME"]),
+                executable=shlex.quote(str(binary)),
+            )
         )
         prefix.chmod(0o755)
         config = configure(
@@ -92,11 +93,11 @@ def _preinstalled_remote_runtime(binary: Path, execution: Execution) -> Transcri
             for name in ("R", "Rscript", "uv", "uvx", "ir", "python", "python3"):
                 executable = root / "sshd" / name
                 executable.write_text(
-                    code("""
+                    code(f"""
                         #!/bin/sh
-                        printf called >> TRAP
+                        printf called >> {shlex.quote(str(trap))}
                         exit 93
-                        """).replace("TRAP", shlex.quote(str(trap)))
+                        """)
                 )
                 executable.chmod(0o755)
             environment["PATH"] = str(root / "sshd")

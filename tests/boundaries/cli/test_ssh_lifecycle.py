@@ -52,15 +52,12 @@ def _connection_closed(
             os.mkfifo(gate)
             r = root / "R"
             r.write_text(
-                code(r"""
+                code(rf"""
                     #!/bin/sh
-                    printf '%s\n' "$PPID" "$TMPDIR" > STATE
-                    printf 1 > CHECKPOINT
-                    exec /bin/cat GATE
+                    printf '%s\n' "$PPID" "$TMPDIR" > {shlex.quote(str(state))}
+                    printf 1 > {shlex.quote(str(checkpoint.path))}
+                    exec /bin/cat {shlex.quote(str(gate))}
                     """)
-                .replace("STATE", shlex.quote(str(state)))
-                .replace("CHECKPOINT", shlex.quote(str(checkpoint.path)))
-                .replace("GATE", shlex.quote(str(gate)))
             )
             r.chmod(0o755)
             policy["inherit_environment"] = False

@@ -120,14 +120,12 @@ def gated_session(binary: Path, *, probe=False, advance_clock=False, handoff=Fal
         launcher.write_text(
             launcher.read_text().replace(
                 "#!/bin/sh\n",
-                code(r"""
+                code(rf"""
                     #!/bin/sh
                     if [ "$1" = ssh-prepare ]; then
-                      printf '%s\n' "$$" > OWNER
+                      printf '%s\n' "$$" > {shlex.quote(str(remote / "preparation-owner"))}
                     fi
-                    """).replace(
-                    "OWNER", shlex.quote(str(remote / "preparation-owner"))
-                ),
+                    """),
             )
         )
         if handoff:

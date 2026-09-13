@@ -98,10 +98,10 @@ def peer_environment(root: Path, mode: str) -> dict[str, str]:
     peer = Path(__file__).resolve().parents[1] / "fixtures/ssh_peer.py"
     ssh = root / "ssh"
     ssh.write_text(
-        code(r"""
+        code(rf"""
             #!/bin/sh
-            exec COMMAND "$@"
-            """).replace("COMMAND", shlex.join([sys.executable, str(peer)]))
+            exec {shlex.join([sys.executable, str(peer)])} "$@"
+            """)
     )
     ssh.chmod(0o755)
     return {
@@ -162,10 +162,10 @@ LogLevel VERBOSE
     assert executable is not None
     launcher = root / "ssh"
     launcher.write_text(
-        code(r"""
+        code(rf"""
             #!/bin/sh
-            exec COMMAND "$@"
-            """).replace("COMMAND", shlex.join([executable, "-F", str(client_config)]))
+            exec {shlex.join([executable, "-F", str(client_config)])} "$@"
+            """)
     )
     launcher.chmod(0o755)
     process = subprocess.Popen(
@@ -208,11 +208,11 @@ def poison_controller(root: Path, environment: dict[str, str]) -> Path:
     for name in ("R", "Rscript", "uv", "uvx", "ir", "python", "python3"):
         executable = root / name
         executable.write_text(
-            code("""
+            code(f"""
                 #!/bin/sh
-                printf called >> TRAP
+                printf called >> {shlex.quote(str(trap))}
                 exit 93
-                """).replace("TRAP", shlex.quote(str(trap)))
+                """)
         )
         executable.chmod(0o755)
     environment.update(
