@@ -870,15 +870,9 @@ def test_exposes_catalog_as_lazy_r_relations(
         lazy_values <- dplyr::tbl(connection, "live_sql_values") |>
           dplyr::mutate(doubled = value * 2L)
         cat(
-          "same connection: ",
-          identical(connection, sql_connection()),
-          "\n",
-          "lazy table: ",
-          inherits(table_values, "tbl_lazy"),
-          "\n",
-          "lazy view: ",
-          inherits(lazy_values, "tbl_lazy"),
-          "\n",
+          c("same connection: ", identical(connection, sql_connection()), "\n"),
+          c("lazy table: ", inherits(table_values, "tbl_lazy"), "\n"),
+          c("lazy view: ", inherits(lazy_values, "tbl_lazy"), "\n"),
           sep = ""
         )
         """)

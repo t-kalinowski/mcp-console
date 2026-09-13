@@ -156,7 +156,7 @@ See [Recording and artifacts](https://github.com/t-kalinowski/mcp-console/blob/m
 Put this complete configuration in `.agents/console/config.yaml` and launch `mcp-console serve` from the project directory:
 
 ```yaml
-extends: ":workspace"
+extends: :workspace
 ```
 
 The native `":workspace"` profile permits project edits while keeping `.git`, `.agents`, `.codex`, and `.claude` readable and protected from writes by default.

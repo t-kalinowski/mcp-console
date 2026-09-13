@@ -12,7 +12,7 @@ For an existing `ssh mule` configuration, first create or select the remote proj
 Save this in the local project's `.agents/console/config.yaml`:
 
 ```yaml
-extends: ":workspace"
+extends: :workspace
 target:
   transport:
     kind: ssh

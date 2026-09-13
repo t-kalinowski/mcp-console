@@ -250,6 +250,9 @@ Keep these invariants intact:
 - Put `# fmt: r` or `# fmt: python` immediately before each embedded R or Python test program, including `code(...)` calls nested inside other calls.
   Indent the payload and closing delimiter one Python indentation level deeper than the line containing `code(`, preserving the embedded program's own indentation.
   Recheck this indentation after running `scripts/format` and in the committed source.
+  When formatting a shared payload, refresh each platform's affected snapshots, including cases skipped on the current host.
+- Keep related arguments grouped so formatters preserve their relationship.
+  Use separate `.args([option, value])` calls for command options and `c(label, value, "\n")` groups for related R `cat()` diagnostics, preserving the command arguments and printed output.
 - Refactor internal modules when the implemented responsibilities have a clearer boundary.
   Do not add structure for planned behavior.
   Treat roughly 500 lines of production source as a prompt to reassess a file, not a hard limit, and keep one Cargo package until the implementation presents a concrete crate boundary.

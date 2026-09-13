@@ -22,18 +22,18 @@ Console supplies only its application policy and launch requirements.
 For project editing, put this complete configuration in `.agents/console/config.yaml`:
 
 ```yaml
-extends: ":workspace"
+extends: :workspace
 ```
 
 `":workspace"` grants workspace write access with protected metadata paths: `.git`, `.agents`, `.codex`, and `.claude` beneath the fixed launch working directory are readable but protected from writes by default, including from subprocesses.
 Protecting `.agents` also covers `.agents/console/config.yaml` and Console's managed state.
 The colon is part of the string and reserves the name for a native built-in.
-Quote these identifiers in configuration examples; valid unquoted YAML such as `extends: :workspace` has the same meaning through the ordinary YAML parser.
+Quoted YAML such as `extends: ":workspace"` and unquoted YAML such as `extends: :workspace` have the same meaning through the ordinary YAML parser.
 
 To select the native read-only baseline explicitly:
 
 ```yaml
-extends: ":read-only"
+extends: :read-only
 ```
 
 Omitting `extends` preserves Console's existing defaults.
@@ -57,7 +57,7 @@ Native specificity applies: a more specific entry overrides an ancestor, and equ
 For example, this deliberate exception permits writes under `.claude`:
 
 ```yaml
-extends: ":workspace"
+extends: :workspace
 sandbox:
   filesystem:
     entries:
@@ -202,7 +202,7 @@ An SSH transport under top-level `target` selects SSH execution for `serve` only
 For example:
 
 ```yaml
-extends: ":workspace"
+extends: :workspace
 target:
   transport: {kind: ssh, host: mule}
   workspace: /srv/projects/analysis
