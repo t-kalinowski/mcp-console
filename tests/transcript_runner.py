@@ -18,10 +18,10 @@ import unittest
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from pathlib import Path
-from textwrap import dedent
 
 from support.events import Events
 from support.native import SHARED_LIBRARY_FLAG
+from support.normalization import code
 from support.processes import (
     capture_process_identity,
     signal_process,
@@ -278,7 +278,7 @@ class TranscriptRunnerTests(unittest.TestCase):
         # fmt: python
         cargo.write_text(
             f"#!{sys.executable}\n"
-            + dedent(
+            + code(
                 """
                 import sys
                 from pathlib import Path
@@ -288,7 +288,7 @@ class TranscriptRunnerTests(unittest.TestCase):
                 binary.parent.mkdir(parents=True, exist_ok=True)
                 binary.write_text(profile, encoding="utf-8")
                 """
-            ).lstrip(),
+            ),
             encoding="utf-8",
         )
         cargo.chmod(0o755)
@@ -299,7 +299,7 @@ class TranscriptRunnerTests(unittest.TestCase):
         self.suite.write_text(
             PUBLIC_SUITE
             # fmt: python
-            + dedent(
+            + code(
                 """
                 def test_selected(binary: Path) -> list[dict[str, str]]:
                     assert binary.read_text(encoding="utf-8") == "release"
@@ -323,7 +323,7 @@ class TranscriptRunnerTests(unittest.TestCase):
         self.suite.write_text(
             PUBLIC_SUITE
             # fmt: python
-            + dedent(
+            + code(
                 """
                 from support.requirements import Requirement, command, requires
 
@@ -414,7 +414,7 @@ class TranscriptRunnerTests(unittest.TestCase):
         self.suite.write_text(
             PUBLIC_SUITE
             # fmt: python
-            + dedent(
+            + code(
                 """
                 from support.requirements import Requirement, requires
 
@@ -440,7 +440,7 @@ class TranscriptRunnerTests(unittest.TestCase):
         self.suite.write_text(
             PUBLIC_SUITE
             # fmt: python
-            + dedent(
+            + code(
                 """
                 from support.execution import Execution, executions
                 from support.requirements import Requirement
@@ -491,7 +491,7 @@ class TranscriptRunnerTests(unittest.TestCase):
         self.suite.write_text(
             PUBLIC_SUITE
             # fmt: python
-            + dedent(
+            + code(
                 f"""
                 def test_initializes_and_lists_tools(binary):
                     return {handshake!r}
@@ -514,7 +514,7 @@ class TranscriptRunnerTests(unittest.TestCase):
         self.suite.write_text(
             PUBLIC_SUITE
             # fmt: python
-            + dedent(
+            + code(
                 """
                 from support.execution import Execution, executions
                 from support.records import TranscriptWithCompanions
@@ -575,7 +575,7 @@ class TranscriptRunnerTests(unittest.TestCase):
         self.suite.write_text(
             PUBLIC_SUITE
             # fmt: python
-            + dedent(
+            + code(
                 """
                 from yaml12 import read_yaml
 
@@ -609,7 +609,7 @@ class TranscriptRunnerTests(unittest.TestCase):
         source = (
             PUBLIC_SUITE
             # fmt: python
-            + dedent(
+            + code(
                 """
                 from support.execution import Execution, executions
                 from support.records import TranscriptWithCompanions

@@ -14,11 +14,12 @@ import stat
 import subprocess
 import sys
 import tempfile
-import textwrap
 import tomllib
 import unittest
 import zipfile
 from pathlib import Path
+
+from support.normalization import code
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts" / "release.py"
@@ -26,7 +27,7 @@ STAGE_SCRIPT = ROOT / "scripts" / "stage-sandbox-runner"
 
 
 def write_executable(path: Path, source: str) -> None:
-    path.write_text(textwrap.dedent(source).lstrip(), encoding="utf-8")
+    path.write_text(code(source), encoding="utf-8")
     path.chmod(0o755)
 
 
@@ -337,7 +338,7 @@ class ReleaseScriptTests(unittest.TestCase):
 
         write_executable(
             commands / "uv",
-            """
+            r"""
             #!/bin/sh
             if test "$1 $2 $3 $5" = "tool run --from mcp-console"; then
               case "$6" in

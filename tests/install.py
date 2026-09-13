@@ -9,11 +9,12 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import textwrap
 import unittest
 import zipfile
 from email.parser import BytesParser
 from pathlib import Path
+
+from support.normalization import code
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -40,29 +41,29 @@ class InstallationTests(unittest.TestCase):
             data.mkdir(parents=True)
             (data / ".gitignore").write_text("/*\n!/.gitignore\n")
             (source / "Cargo.toml").write_text(
-                textwrap.dedent("""
-                [package]
-                name = "mcp-console"
-                version = "0.0.3"
-                edition = "2024"
-                [build-dependencies]
-                cc = "1"
-                serde_json = "1"
-                sha2 = "0.11"
-            """)
+                code("""
+                    [package]
+                    name = "mcp-console"
+                    version = "0.0.3"
+                    edition = "2024"
+                    [build-dependencies]
+                    cc = "1"
+                    serde_json = "1"
+                    sha2 = "0.11"
+                    """)
             )
             shutil.copyfile(ROOT / "Cargo.lock", source / "Cargo.lock")
             (source / "src/main.rs").write_text(
-                textwrap.dedent("""
-                fn main() {
-                    println!("console {}", env!("RUSTUP_TOOLCHAIN"));
-                    let executable = std::env::current_exe().unwrap().canonicalize().unwrap();
-                    let runner = executable.parent().unwrap().parent().unwrap()
-                        .join("libexec/mcp-console-sandbox");
-                    let status = std::process::Command::new(runner).status().unwrap();
-                    assert!(status.success());
-                }
-            """)
+                code("""
+                    fn main() {
+                        println!("console {}", env!("RUSTUP_TOOLCHAIN"));
+                        let executable = std::env::current_exe().unwrap().canonicalize().unwrap();
+                        let runner = executable.parent().unwrap().parent().unwrap()
+                            .join("libexec/mcp-console-sandbox");
+                        let status = std::process::Command::new(runner).status().unwrap();
+                        assert!(status.success());
+                    }
+                    """)
             )
             for name in ("r_graphics.c", "r_repl.c"):
                 (source / "src" / name).touch()
@@ -83,11 +84,11 @@ class InstallationTests(unittest.TestCase):
             )
             (runner_source / ".gitignore").write_text("/codex-rs/target\n")
             (workspace / "Cargo.toml").write_text(
-                textwrap.dedent("""
-                [workspace]
-                members = ["mcp-console-sandbox", "bwrap"]
-                resolver = "2"
-            """)
+                code("""
+                    [workspace]
+                    members = ["mcp-console-sandbox", "bwrap"]
+                    resolver = "2"
+                    """)
             )
             (workspace / ".cargo").mkdir()
             (workspace / ".cargo/config.toml").touch()
@@ -98,54 +99,54 @@ class InstallationTests(unittest.TestCase):
                 crate = workspace / package
                 (crate / "src").mkdir(parents=True)
                 (crate / "Cargo.toml").write_text(
-                    textwrap.dedent(f"""
-                    [package]
-                    name = "codex-{package}"
-                    version = "0.1.0"
-                    edition = "2024"
-                    [[bin]]
-                    name = "{binary}"
-                    path = "src/main.rs"
-                    [build-dependencies]
-                    cc = "1"
-                """)
+                    code(f"""
+                        [package]
+                        name = "codex-{package}"
+                        version = "0.1.0"
+                        edition = "2024"
+                        [[bin]]
+                        name = "{binary}"
+                        path = "src/main.rs"
+                        [build-dependencies]
+                        cc = "1"
+                        """)
                 )
                 (crate / "build.rs").write_text(
-                    textwrap.dedent("""
-                    fn main() {
-                        let mut build = cc::Build::new();
-                        build.file("value.c");
-                        if std::env::var("CARGO_CFG_TARGET_OS").unwrap() == "linux"
-                            && std::env::var("CARGO_PKG_NAME").unwrap() == "codex-bwrap"
-                        {
-                            build.define("LINK_LIBCAP", None);
-                            println!("cargo:rustc-link-lib=cap");
+                    code("""
+                        fn main() {
+                            let mut build = cc::Build::new();
+                            build.file("value.c");
+                            if std::env::var("CARGO_CFG_TARGET_OS").unwrap() == "linux"
+                                && std::env::var("CARGO_PKG_NAME").unwrap() == "codex-bwrap"
+                            {
+                                build.define("LINK_LIBCAP", None);
+                                println!("cargo:rustc-link-lib=cap");
+                            }
+                            build.compile("value");
                         }
-                        build.compile("value");
-                    }
-                """)
+                        """)
                 )
                 (crate / "value.c").write_text(
-                    textwrap.dedent("""
-                    #ifdef LINK_LIBCAP
-                    extern void *cap_get_proc(void);
-                    extern int cap_free(void *);
-                    #endif
-                    int value(void) {
-                    #ifdef LINK_LIBCAP
-                        cap_free(cap_get_proc());
-                    #endif
-                        return FIXTURE_VALUE;
-                    }
-                """)
+                    code("""
+                        #ifdef LINK_LIBCAP
+                        extern void *cap_get_proc(void);
+                        extern int cap_free(void *);
+                        #endif
+                        int value(void) {
+                        #ifdef LINK_LIBCAP
+                            cap_free(cap_get_proc());
+                        #endif
+                            return FIXTURE_VALUE;
+                        }
+                        """)
                 )
                 (crate / "src/main.rs").write_text(
-                    textwrap.dedent("""
-                    unsafe extern "C" { fn value() -> i32; }
-                    fn main() {
-                        println!("{} {}", unsafe { value() }, env!("RUSTUP_TOOLCHAIN"));
-                    }
-                """)
+                    code("""
+                        unsafe extern "C" { fn value() -> i32; }
+                        fn main() {
+                            println!("{} {}", unsafe { value() }, env!("RUSTUP_TOOLCHAIN"));
+                        }
+                        """)
                 )
             for name in ("LICENSE", "NOTICE"):
                 (runner_source / name).write_text(name)
