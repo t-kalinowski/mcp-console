@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 mod target;
-mod yaml;
 pub(crate) use target::{Access, Compute, DockerSandbox, Pull, Target};
 
 /// Selected enforcement, independently of direct versus inner-runner launch.
@@ -95,25 +94,16 @@ pub(crate) struct Captured {
     pub provider: Provider,
 }
 
-pub fn discover() -> Result<Captured, String> {
+pub fn discover(overrides: &[String]) -> Result<Captured, String> {
     let name = ".agents/console/config.yaml";
-    // A dangling symlink or an unreadable existing file must reach read_to_string.
-    match std::fs::symlink_metadata(name) {
-        // No configuration file can exist below a non-directory component.
-        Err(error)
-            if matches!(
-                error.kind(),
-                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
-            ) =>
-        {
-            return Ok(Captured::default());
-        }
-        Err(error) => return Err(format!("cannot inspect '{name}': {error}")),
-        Ok(_) => {}
-    }
-    let source =
-        std::fs::read_to_string(name).map_err(|error| format!("cannot read '{name}': {error}"))?;
-    let value = yaml::load(&source).map_err(|error| format!("{name}: {error}"))?;
+    let Some(value) = crate::config::load(name, overrides)? else {
+        return Ok(Captured::default());
+    };
+    let name = if overrides.is_empty() {
+        name
+    } else {
+        "configuration with CLI overrides"
+    };
     let has_extends = value.get("extends").is_some();
     let mut project: Project =
         serde_path_to_error::deserialize(value).map_err(|error| format!("{name}: {error}"))?;

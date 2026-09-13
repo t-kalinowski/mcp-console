@@ -16,6 +16,26 @@ pub(super) fn load(source: &str) -> Result<Value, String> {
     to_json(document)
 }
 
+pub(super) fn quoted(source: &str) -> Result<Value, String> {
+    let documents = MarkedYaml::load_from_str(source).map_err(|error| error.to_string())?;
+    let [document] = documents.as_slice() else {
+        return Err("expected one quoted string".into());
+    };
+    to_json(document)
+}
+
+pub(super) fn scalar(value: &Scalar<'_>) -> Result<Value, String> {
+    Ok(match value {
+        Scalar::Null => Value::Null,
+        Scalar::Boolean(value) => (*value).into(),
+        Scalar::Integer(value) => (*value).into(),
+        Scalar::FloatingPoint(value) => serde_json::Number::from_f64(value.0)
+            .ok_or("non-finite numbers are unsupported")?
+            .into(),
+        Scalar::String(value) => value.as_ref().into(),
+    })
+}
+
 fn to_json(node: &MarkedYaml<'_>) -> Result<Value, String> {
     let error = |message: &str| {
         format!(
@@ -25,15 +45,7 @@ fn to_json(node: &MarkedYaml<'_>) -> Result<Value, String> {
         )
     };
     match &node.data {
-        YamlData::Value(value) => Ok(match value {
-            Scalar::Null => Value::Null,
-            Scalar::Boolean(value) => (*value).into(),
-            Scalar::Integer(value) => (*value).into(),
-            Scalar::FloatingPoint(value) => serde_json::Number::from_f64(value.0)
-                .ok_or_else(|| error("non-finite numbers are unsupported"))?
-                .into(),
-            Scalar::String(value) => value.as_ref().into(),
-        }),
+        YamlData::Value(value) => scalar(value).map_err(|message| error(&message)),
         YamlData::Sequence(values) => values.iter().map(to_json).collect(),
         YamlData::Mapping(values) => values
             .iter()

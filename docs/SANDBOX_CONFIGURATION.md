@@ -12,7 +12,9 @@ The native policy configuration below applies to native selection.
 
 `serve` and ordinary `sandbox` launches read only `.agents/console/config.yaml` beneath the launch working directory.
 Only that directory is searched: no ancestors, home directory, or global configuration.
-An absent file preserves the defaults; an unreadable or invalid existing file prevents launch.
+An absent file preserves the defaults; an unreadable file or malformed YAML prevents launch.
+Repeated `-c KEY=VALUE` options then overlay the project configuration before schema and native policy validation.
+See [configuration layering](CONFIGURATION.md) for dotted keys, inline values, merge rules, and precedence.
 
 Project configuration is trusted launcher input and can widen workload permissions.
 Review it before launching Console in a project.
@@ -37,7 +39,8 @@ extends: :read-only
 ```
 
 Omitting `extends` preserves Console's existing defaults.
-No version field, named user profiles, inheritance chains, alternate discovery locations, initializer, or CLI profile selector are implemented.
+No version field, named user profiles, inheritance chains, alternate discovery locations, or initializer are implemented.
+Use `-c extends=:workspace` or `-c extends=:read-only` to select a built-in for one launch.
 Unsupported identifiers reach the native runner and receive its diagnostic.
 
 Console reuses the native constructors and workspace materialization, including their Git pointer, symlink, and missing-path handling.

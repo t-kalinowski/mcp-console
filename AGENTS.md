@@ -15,6 +15,7 @@ Reconcile the relevant contracts, tests, and current documentation when implemen
 - `RELEASE.md` defines release preparation, wheel rehearsal, publication, verification, and recovery.
 - `docs/README.md` maps the implemented documentation by audience.
 - `docs/ARCHITECTURE.md` describes the implemented process structure, ownership, and lifecycle.
+- `docs/CONFIGURATION.md` defines project-file discovery, ordered CLI overrides, inline syntax, and schema-independent merge rules.
 - `docs/SANDBOX.md` describes application policy, runner integration, supported hosts, and lifetime guarantees.
 - `docs/SANDBOX_CONFIGURATION.md` defines the public configuration interface, environment ownership, caller examples, and transport integrity.
 - `docs/DOCKER.md` defines container targets, image setup, preinstalled environments, owned retirement, and controller records.
@@ -39,6 +40,8 @@ Do not treat `design-sketches/` as evidence of implemented behavior.
 ## Platform and development
 
 Project configuration is read only from `.agents/console/config.yaml` in the launch working directory.
+Repeated `-c KEY=VALUE` overrides apply in command-line order before application decoding and validation.
+Keep `src/config.rs` and its parsers independent of application field names: mappings merge recursively, while lists, scalars, and explicit null replace prior values.
 Top-level `extends` selects the native `":workspace"` or `":read-only"` built-in; omission preserves the default policy.
 Capture the workspace once at trusted launch and retain it across worker generations.
 Reuse native constructors and path handling, and keep explicit native adjustments subject to native precedence.
@@ -165,7 +168,8 @@ Keep these invariants intact:
 ### Public interface and records
 
 - `src/main.rs`, `src/cli.rs` — binary entry point and command definitions.
-- `src/settings.rs`, `src/settings/{yaml,target}.rs` — trusted project YAML discovery, node loading, and application settings retained across worker launches; native policy values remain JSON; the sandbox layer adds application launch requirements and delegates validation and defaults to the runner.
+- `src/config.rs`, `src/config/{inline,yaml}.rs` — schema-independent project-file loading, inline override parsing, and recursive configuration layering.
+- `src/settings.rs`, `src/settings/target.rs` — project-path selection and application settings decoded after layering and retained across worker launches; native policy values remain JSON; the sandbox layer adds application launch requirements and delegates validation and defaults to the runner.
 - `src/ssh.rs` — configured OpenSSH transport and remote retirement confirmation.
 - `src/target_launch.rs`, `src/target_launch/` — shared versioned bootstrap, relay envelope, direct/native launcher mechanics, image runtime selection, workload environment decoding, cancellable CLI transfer, and the shared local owner request and observation.
 - `src/target_session.rs` — selected SSH/Docker/SBX sessions, shared compute probes and controller replacement blocking, and generation-owned retirement receipts and resource names.

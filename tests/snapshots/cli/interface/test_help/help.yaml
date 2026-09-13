@@ -5,7 +5,7 @@ stdout: ""
 stderr: |
   Persistent R, Python, and SQL sessions for MCP clients
 
-  Usage: mcp-console <COMMAND>
+  Usage: mcp-console [OPTIONS] <COMMAND>
 
   Commands:
     serve    Run the MCP server over standard input and output
@@ -13,8 +13,9 @@ stderr: |
     help     Print this message or the help of the given subcommand(s)
 
   Options:
-    -h, --help     Print help
-    -V, --version  Print version
+    -c, --config <KEY=VALUE>  Override project configuration; repeat for multiple dotted KEY=VALUE assignments
+    -h, --help                Print help
+    -V, --version             Print version
 
   Examples:
     mcp-console serve
@@ -24,7 +25,7 @@ command: mcp-console --help
 stdout: |
   Persistent R, Python, and SQL sessions for MCP clients
 
-  Usage: mcp-console <COMMAND>
+  Usage: mcp-console [OPTIONS] <COMMAND>
 
   Commands:
     serve    Run the MCP server over standard input and output
@@ -32,8 +33,9 @@ stdout: |
     help     Print this message or the help of the given subcommand(s)
 
   Options:
-    -h, --help     Print help
-    -V, --version  Print version
+    -c, --config <KEY=VALUE>  Override project configuration; repeat for multiple dotted KEY=VALUE assignments
+    -h, --help                Print help
+    -V, --version             Print version
 
   Examples:
     mcp-console serve
@@ -46,6 +48,7 @@ stdout: |
   Usage: mcp-console serve [OPTIONS]
 
   Options:
+    -c, --config <KEY=VALUE>    Override project configuration; repeat for multiple dotted KEY=VALUE assignments
         --no-sandbox            Skip inner native enforcement; retain any selected Docker container or Sandbox microVM and its provider policy
         --writable-root <PATH>  Allow writes to an additional path (temporary launch option)
     -h, --help                  Print help
@@ -80,6 +83,7 @@ stdout: |
     <COMMAND>...  Command and arguments to run
 
   Options:
+    -c, --config <KEY=VALUE>    Override project configuration; repeat for multiple dotted KEY=VALUE assignments
         --config-env <NAME>     Read the runner configuration as JSON from this launch environment variable
         --writable-root <PATH>  Allow writes to an additional path (temporary launch option)
     -h, --help                  Print help
