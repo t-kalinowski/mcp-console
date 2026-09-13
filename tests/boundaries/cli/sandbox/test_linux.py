@@ -245,24 +245,22 @@ def test_relays_signal_and_preserves_target_status(binary: Path) -> Transcript:
         import signal
         import sys
 
-
-        def interrupted(number, frame):
-            os.write(1, b"interrupted\n")
-            sys.exit(23)
-
-
-        signal.signal(signal.SIGINT, interrupted)
-        # The signal may arrive before this write returns. Avoid reentering a
-        # buffered stdout writer from the handler.
+        # Block before readiness so an early SIGINT remains pending for sigwait.
+        # pause() can sleep after CPython has recorded a pending signal.
+        previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
+        assert signal.SIGINT not in previous_mask
         os.write(1, b"ready\n")
-        signal.pause()
+        assert signal.sigwait({signal.SIGINT}) == signal.SIGINT
+        os.write(1, b"interrupted\n")
+        sys.exit(23)
         """)
-    with subprocess.Popen(
+    process = subprocess.Popen(
         [binary, "sandbox", "--", sys.executable, "-c", script],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-    ) as process:
+    )
+    try:
         assert select.select([process.stdout], [], [], 15)[0]
         assert process.stdout.readline() == "ready\n"
         process.send_signal(signal.SIGINT)
@@ -272,6 +270,12 @@ def test_relays_signal_and_preserves_target_status(binary: Path) -> Transcript:
             stdout,
             stderr,
         )
+    finally:
+        if process.poll() is None:
+            process.kill()
+        process.wait(timeout=15)
+        process.stdout.close()
+        process.stderr.close()
     return [{"signal": "SIGINT", "stdout": "ready\ninterrupted\n", "exit_code": 23}]
 
 
