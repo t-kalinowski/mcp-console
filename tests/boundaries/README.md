@@ -20,9 +20,10 @@ Set `MCP_CONSOLE_TEST_SSH_HOST` to another OpenSSH destination, or to an empty s
 An unavailable host skips the external case; localhost SSH cases still run, including in CI.
 Once connected, setup and test failures fail the case.
 The host needs Python, `uv`, R, native build prerequisites, and a supported sandbox environment; its login shell must expose the build tools.
-The test uploads the current working-tree source and installs it privately under `~/.cache/mcp-console-tests/`, retaining build data across runs and serializing installation.
+The test uploads the current working-tree source to `~/.cache/mcp-console-tests/`, retaining build data across runs and serializing source updates and installation.
+Each run installs into its own temporary remote workspace, so overlapping runs retain their selected source revision.
 It prepends that installation to the remote command's `PATH` to exercise default command discovery.
-It creates and removes its own temporary remote workspace and leaves ordinary user installations unchanged.
+It removes the workspace and installation when the test finishes and leaves ordinary user installations unchanged.
 
 To use an already provisioned target instead, set `MCP_CONSOLE_TEST_SSH_EXTERNAL` to a JSON object with `target` (the documented target shape), `environment` (remote worker environment strings), `ssh_config` (an absolute controller OpenSSH configuration path), and `platform` (the expected R `Sys.info()[['sysname']]`).
 That target must provide a compatible build, R, and an existing workspace with `results`, `cli`, and `denied` subdirectories.

@@ -4,6 +4,7 @@ import fcntl
 import json
 import os
 import platform
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -23,27 +24,40 @@ with (cache / "install.lock").open("w") as lock:
             path = source / entry.name
             assert entry.isfile() and path.is_relative_to(source)
             data = archive.extractfile(entry).read()
+            for parent in path.parents:
+                if parent == source:
+                    break
+                if parent.is_file():
+                    parent.unlink()
+            if path.is_dir():
+                shutil.rmtree(path)
             path.parent.mkdir(parents=True, exist_ok=True)
             if not path.exists() or path.read_bytes() != data:
                 path.write_bytes(data)
             path.chmod(entry.mode)
             names.append(entry.name)
     for name in set(previous) - set(names):
-        (source / name).unlink()
+        path = source / name
+        if path.is_file():
+            path.unlink()
     manifest.write_text(json.dumps(names))
+    workspace = Path(tempfile.mkdtemp(prefix="mcp-console-ssh-"))
     environment = {
         **os.environ,
-        "UV_TOOL_DIR": str(cache / "tools"),
-        "UV_TOOL_BIN_DIR": str(cache / "bin"),
+        "UV_TOOL_DIR": str(workspace / "tools"),
+        "UV_TOOL_BIN_DIR": str(workspace / "bin"),
     }
-    subprocess.run(
-        ["uv", "tool", "install", "--reinstall", str(source)],
-        env=environment,
-        stdout=sys.stderr,
-        check=True,
-    )
+    try:
+        subprocess.run(
+            ["uv", "tool", "install", str(source)],
+            env=environment,
+            stdout=sys.stderr,
+            check=True,
+        )
+    except BaseException:
+        shutil.rmtree(workspace)
+        raise
 
-workspace = Path(tempfile.mkdtemp(prefix="mcp-console-ssh-"))
 for name in ("results", "cli", "denied"):
     (workspace / name).mkdir()
 print(
@@ -52,7 +66,7 @@ print(
             "target": {
                 "workspace": str(workspace),
             },
-            "path": str(cache / "bin") + os.pathsep + os.environ["PATH"],
+            "path": str(workspace / "bin") + os.pathsep + os.environ["PATH"],
             "environment": {"R_PROFILE_USER": os.devnull},
             "platform": platform.system(),
         }

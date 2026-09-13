@@ -369,6 +369,154 @@ class TranscriptRunnerTests(unittest.TestCase):
                 self.assertEqual(marker.exists(), status == 0)
                 self.assertEqual("skipped" in result.stdout, status != 0)
 
+    def run_external_ssh_installation(self, program: str) -> None:
+        fixtures = self.root / "tests/fixtures"
+        fixtures.mkdir()
+        for name in ("support/ssh_external.py", "fixtures/ssh_install.py"):
+            shutil.copy2(ROOT / "tests" / name, self.root / "tests" / name)
+        subprocess.run(["git", "init", "-q", self.root], check=True)
+        (self.root / ".gitignore").write_text("__pycache__/\n*.marker\n")
+        self.suite.write_text(
+            PUBLIC_SUITE
+            # fmt: python
+            + code("""
+                import os
+                import subprocess
+
+                from support.ssh_external import external_target
+
+
+                def installed_revision(external: dict[str, object]) -> str:
+                    return subprocess.check_output(
+                        ["mcp-console"],
+                        env={**os.environ, "PATH": external["path"]},
+                        text=True,
+                    )
+                """)
+            + program
+        )
+        remote = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        commands = remote / "commands"
+        commands.mkdir()
+        (commands / "python3").symlink_to(sys.executable)
+        # These command fixtures exercise source transfer and installation through
+        # the public runner without requiring an SSH host or a package build.
+        programs = {
+            # fmt: python
+            "ssh": code("""
+                import os
+                import shlex
+                import sys
+                from pathlib import Path
+
+                commands = Path(__file__).resolve().parent
+                command = shlex.split(sys.argv[-1])
+                if command[:2] == ["sh", "-lc"]:
+                    command[:2] = ["/bin/sh", "-c"]
+                os.execvpe(
+                    command[0],
+                    command,
+                    {
+                        **os.environ,
+                        "HOME": str(commands.parent),
+                        "PATH": str(commands) + os.pathsep + "/usr/bin:/bin",
+                    },
+                )
+                """),
+            # fmt: python
+            "uv": code("""
+                import os
+                import shutil
+                import sys
+                from pathlib import Path
+
+                source = Path(sys.argv[-1])
+                tool = Path(os.environ["UV_TOOL_DIR"]) / "mcp-console"
+                tool.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source / "revision", tool / "revision")
+                shutil.copy2(Path(__file__).with_name("console"), tool / "mcp-console")
+                commands = Path(os.environ["UV_TOOL_BIN_DIR"])
+                commands.mkdir(parents=True, exist_ok=True)
+                executable = commands / "mcp-console"
+                executable.unlink(missing_ok=True)
+                executable.symlink_to(tool / "mcp-console")
+                """),
+            # fmt: python
+            "console": code("""
+                from pathlib import Path
+
+                print(Path(__file__).resolve().with_name("revision").read_text(), end="")
+                """),
+        }
+        for name, body in programs.items():
+            path = commands / name
+            path.write_text(f"#!{sys.executable}\n" + body)
+            path.chmod(0o755)
+        result = subprocess.run(
+            [
+                sys.executable,
+                self.boundaries / "_run.py",
+                "client_server/server/test_tools::selected",
+            ],
+            cwd=self.root,
+            env={
+                **os.environ,
+                "PATH": str(commands) + os.pathsep + os.environ["PATH"],
+                "MCP_CONSOLE_TEST_SSH_HOST": "optional-test-host",
+                "MCP_CONSOLE_TEST_SSH_EXTERNAL": "",
+            },
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.root / "selected.marker").exists())
+
+    def test_external_ssh_source_cache_handles_file_directory_changes(self) -> None:
+        self.run_external_ssh_installation(
+            # fmt: python
+            code("""
+                def test_selected(binary: Path) -> list[dict[str, str]]:
+                    root = binary.parents[2]
+                    (root / "revision").write_text("first")
+                    shape = root / "shape"
+                    shape.write_text("file")
+                    with external_target() as external:
+                        assert installed_revision(external) == "first"
+                    shape.unlink()
+                    shape.mkdir()
+                    (shape / "child").write_text("directory")
+                    with external_target() as external:
+                        assert installed_revision(external) == "first"
+                    (shape / "child").unlink()
+                    shape.rmdir()
+                    shape.write_text("file again")
+                    with external_target() as external:
+                        assert installed_revision(external) == "first"
+                    return record(binary, "selected")
+                """)
+        )
+
+    def test_external_ssh_runs_keep_their_installed_revision(self) -> None:
+        self.run_external_ssh_installation(
+            # fmt: python
+            code("""
+                def test_selected(binary: Path) -> list[dict[str, str]]:
+                    revision = binary.parents[2] / "revision"
+                    revision.write_text("first")
+                    with external_target() as first:
+                        assert installed_revision(first) == "first"
+                        revision.write_text("second")
+                        with external_target() as second:
+                            assert installed_revision(second) == "second"
+                            assert installed_revision(first) == "first"
+                        assert not Path(second["target"]["workspace"]).exists()
+                        assert installed_revision(first) == "first"
+                    assert not Path(first["target"]["workspace"]).exists()
+                    return record(binary, "selected")
+                """)
+        )
+
     def test_case_requirements_and_skip_reporting(self) -> None:
         self.suite.write_text(
             PUBLIC_SUITE
