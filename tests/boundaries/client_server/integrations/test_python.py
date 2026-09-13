@@ -40,28 +40,29 @@ def test_initialization_keeps_one_lifecycle_while_startup_is_pending(
     with tempfile.TemporaryDirectory() as directory:
         gate = Path(directory) / "startup.py"
         gate.write_text(
+            # fmt: python
             code("""
-            import json
-            import subprocess
-            import sys
+                import json
+                import subprocess
+                import sys
 
-            pending = [sys.stdin.buffer.readline()]
-            if json.loads(pending[0])["method"] == "server/discover":
-                # Release on the SDK's initialize fallback, without a timing sleep.
-                # The real server sees every request, including the pending discovery.
-                pending.append(sys.stdin.buffer.readline())
-            child = subprocess.Popen(sys.argv[1:], stdin=subprocess.PIPE)
-            try:
-                for message in pending:
-                    child.stdin.write(message)
-                child.stdin.flush()
-                for message in sys.stdin.buffer:
-                    child.stdin.write(message)
+                pending = [sys.stdin.buffer.readline()]
+                if json.loads(pending[0])["method"] == "server/discover":
+                    # Release on the SDK's initialize fallback, without a timing sleep.
+                    # The real server sees every request, including the pending discovery.
+                    pending.append(sys.stdin.buffer.readline())
+                child = subprocess.Popen(sys.argv[1:], stdin=subprocess.PIPE)
+                try:
+                    for message in pending:
+                        child.stdin.write(message)
                     child.stdin.flush()
-            finally:
-                child.stdin.close()
-                child.wait(timeout=10)
-            """)
+                    for message in sys.stdin.buffer:
+                        child.stdin.write(message)
+                        child.stdin.flush()
+                finally:
+                    child.stdin.close()
+                    child.wait(timeout=10)
+                """)
         )
         settings = options(binary, execution)
         settings["command"] = sys.executable

@@ -3,6 +3,7 @@ send:
   python: |
     import os
     from pathlib import Path
+
     assert os.getuid() == 1234
     assert os.environ["IMAGE_VALUE"] == "initial"
     assert Path("/build-input/included").read_text() == "from context"
@@ -30,6 +31,7 @@ send:
   python: |
     import os
     from pathlib import Path
+
     print(os.environ["IMAGE_VALUE"])
     print(Path("/build-input/included").read_text())
     print(Path("/etc/hostname").read_text().strip())

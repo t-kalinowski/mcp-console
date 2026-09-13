@@ -29,10 +29,12 @@ def _connection_closed(
         checkpoint = FifoCheckpoint.create(root / "reached")
         state = root / "worker-state"
         setup = (
+            # fmt: r
             code("""
                 writeLines(c(as.character(Sys.getpid()), Sys.getenv('TMPDIR')), STATE)
-                con <- fifo(CHECKPOINT, open='wb', blocking=TRUE)
-                writeBin(as.raw(49), con); close(con)
+                con <- fifo(CHECKPOINT, open = 'wb', blocking = TRUE)
+                writeBin(as.raw(49), con)
+                close(con)
                 """)
             .replace("STATE", json.dumps(str(state)))
             .replace("CHECKPOINT", json.dumps(str(checkpoint.path)))

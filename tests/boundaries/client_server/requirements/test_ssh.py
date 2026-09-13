@@ -261,8 +261,11 @@ def test_bootstraps_managed_requirements_through_uv(
         output = send_and_collect_runtime_python_resolution(
             client,
             requirements={"r": ["praise"], "python": ["humanize"]},
+            # fmt: r
             r=code(r"""
-                r_library <- strsplit(Sys.getenv("R_LIBS"), .Platform$path.sep, fixed = TRUE)[[1L]][[1L]]
+                r_library <- strsplit(Sys.getenv("R_LIBS"), .Platform$path.sep, fixed = TRUE)[[
+                  1L
+                ]][[1L]]
                 stopifnot(
                   Sys.which("ir") == "",
                   requireNamespace("praise", quietly = TRUE),
@@ -287,10 +290,14 @@ def test_bootstraps_managed_requirements_through_uv(
 
         output = send_and_collect_runtime_python_resolution(
             client,
+            # fmt: python
             python=code("""
                 import humanize, sys
                 from pathlib import Path
-                assert Path(sys.prefix).resolve().is_relative_to((Path.cwd() / "uv-cache").resolve()), sys.prefix
+
+                assert Path(sys.prefix).resolve().is_relative_to((Path.cwd() / "uv-cache").resolve()), (
+                    sys.prefix
+                )
                 print(humanize.intcomma(12345))
                 print(r.x)
                 """),
@@ -329,13 +336,20 @@ def test_managed_requirements_and_callbacks(binary, execution) -> Transcript:
         assert len(uv_tool_run_requirements(uv_record)) == baseline_python
         output = send_and_collect_runtime_python_resolution(
             client,
+            # fmt: r
             r=code("""
-            x <- 42L
-            stopifnot(requireNamespace("praise", quietly = TRUE), requireNamespace("tidyverse", quietly = TRUE))
-            Sys.setenv(RETICULATE_UV = "/worker-must-not-select-uv", IR_CACHE_DIR = "/worker-must-not-select-cache")
-            library(zeallot)
-            cat("R ready:", x, "\\n")
-            """),
+                x <- 42L
+                stopifnot(
+                  requireNamespace("praise", quietly = TRUE),
+                  requireNamespace("tidyverse", quietly = TRUE)
+                )
+                Sys.setenv(
+                  RETICULATE_UV = "/worker-must-not-select-uv",
+                  IR_CACHE_DIR = "/worker-must-not-select-cache"
+                )
+                library(zeallot)
+                cat("R ready:", x, "\\n")
+                """),
         )
         assert "R ready: 42" in output, output
         assert any(
@@ -343,11 +357,13 @@ def test_managed_requirements_and_callbacks(binary, execution) -> Transcript:
         )
         output = send_and_collect_runtime_python_resolution(
             client,
+            # fmt: python
             python=code("""
-            import humanize, pyfiglet
-            print(humanize.intcomma(12345))
-            print(r.x)
-            """),
+                import humanize, pyfiglet
+
+                print(humanize.intcomma(12345))
+                print(r.x)
+                """),
         )
         assert "12,345" in output and "42" in output, output
         assert any(
@@ -448,9 +464,12 @@ def test_failed_restart_and_invalid_requirements_preserve_worker(binary, executi
             client.send(r="sentinel <- 0L", requirements=requirements)
             assert client.transcript[-1]["result"]["isError"]
         client.send(
+            # fmt: r
             r=code(r"""
                 options(useFancyQuotes = FALSE)
-                tryCatch(library("../untrusted"), error = function(e) cat(conditionMessage(e), "\n"))
+                tryCatch(library("../untrusted"), error = function(e) {
+                  cat(conditionMessage(e), "\n")
+                })
                 """)
         )
         assert counts == (
@@ -557,6 +576,7 @@ def test_large_successful_resolver_result_preserves_completion(binary):
         fixture = Path(__file__).resolve().parents[3] / "fixtures/ordered_retirement_ir"
         counter = remote / "ir-counter"
         ir.write_text(
+            # fmt: python
             code(f"""
                 #!/usr/bin/env python3
                 import os
@@ -603,17 +623,19 @@ def test_failed_remote_activation_preserves_worker_until_restart(binary, executi
         baseline = len(ir_run_records(ir_record))
         send_and_collect_runtime_python_resolution(
             client,
+            # fmt: r
             r=code(r"""
-            local({
-              invisible(suppressMessages(trace(
-                ".libPaths",
-                tracer = quote(if (!missing(new)) stop("remote activation failed")),
-                print = FALSE, where = baseenv()
-              )))
-              on.exit(invisible(suppressMessages(untrace(".libPaths", where = baseenv()))))
-              do.call(loadNamespace, list(package = "zeallot"))
-            })
-            """),
+                local({
+                  invisible(suppressMessages(trace(
+                    ".libPaths",
+                    tracer = quote(if (!missing(new)) stop("remote activation failed")),
+                    print = FALSE,
+                    where = baseenv()
+                  )))
+                  on.exit(invisible(suppressMessages(untrace(".libPaths", where = baseenv()))))
+                  do.call(loadNamespace, list(package = "zeallot"))
+                })
+                """),
         )
         assert last_tool_text(client) == "Error: remote activation failed\n", (
             last_tool_text(client)
@@ -644,8 +666,10 @@ def test_worker_network_stays_denied_during_remote_preparation(binary):
         listener.bind(("127.0.0.1", 0))
         listener.listen()
         port = listener.getsockname()[1]
+        # fmt: python
         network = code(f"""
             import socket
+
             try:
                 with socket.socket() as connection:
                     assert connection.connect_ex(("127.0.0.1", {port})) != 0

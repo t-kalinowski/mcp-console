@@ -2,7 +2,10 @@
 send:
   python: |
     import subprocess, sys
-    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"], start_new_session=True)
+
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(600)"], start_new_session=True
+    )
     print("detached output writer started")
 result:
   content:

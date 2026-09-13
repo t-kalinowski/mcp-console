@@ -48,7 +48,9 @@ result:
 send:
   r: |
     options(useFancyQuotes = FALSE)
-    tryCatch(library("../untrusted"), error = function(e) cat(conditionMessage(e), "\n"))
+    tryCatch(library("../untrusted"), error = function(e) {
+      cat(conditionMessage(e), "\n")
+    })
 result:
   content:
     - type: text

@@ -95,6 +95,7 @@ def test_augments_both_restricted_representations(binary: Path) -> Transcript:
                         "--",
                         sys.executable,
                         "-c",
+                        # fmt: python
                         code("""
                             from pathlib import Path
                             import sys
@@ -369,6 +370,7 @@ def test_forwards_native_fields_without_proxy_expansion(binary: Path) -> Transcr
                 "--",
                 sys.executable,
                 "-c",
+                # fmt: python
                 code("""
                     import os
 

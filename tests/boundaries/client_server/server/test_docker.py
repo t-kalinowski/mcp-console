@@ -54,23 +54,25 @@ def test_persistent_image_runtime_and_controller_records(binary: Path) -> Transc
             )
             assert last_result_text(client) == "[1] 42\n", last_result_text(client)
             client.send(
+                # fmt: python
                 python=code("""
-                import os, sys, json
-                from pathlib import Path
-                assert sys.executable == os.environ["RETICULATE_PYTHON"]
-                assert os.environ["MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION"] == "0"
-                assert os.environ["RETICULATE_USE_MANAGED_VENV"] == "no"
-                assert Path('/read only, "quoted"/value').read_text() == "read-only data"
-                try:
-                    Path('/read only, "quoted"/forbidden').write_text("bad")
-                except OSError:
-                    print("read-only mount enforced")
-                else:
-                    raise AssertionError("read-only mount was writable")
-                Path("result.txt").write_text("persistent bind")
-                Path("/tmp/layer-state").write_text("ephemeral layer")
-                print(r.x + 1)
-                """)
+                    import os, sys, json
+                    from pathlib import Path
+
+                    assert sys.executable == os.environ["RETICULATE_PYTHON"]
+                    assert os.environ["MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION"] == "0"
+                    assert os.environ["RETICULATE_USE_MANAGED_VENV"] == "no"
+                    assert Path('/read only, "quoted"/value').read_text() == "read-only data"
+                    try:
+                        Path('/read only, "quoted"/forbidden').write_text("bad")
+                    except OSError:
+                        print("read-only mount enforced")
+                    else:
+                        raise AssertionError("read-only mount was writable")
+                    Path("result.txt").write_text("persistent bind")
+                    Path("/tmp/layer-state").write_text("ephemeral layer")
+                    print(r.x + 1)
+                    """)
             )
             assert "read-only mount enforced\n42" in last_result_text(client), (
                 last_result_text(client)

@@ -663,7 +663,9 @@ def test_uses_reticulate_managed_uv_for_python_resolution(
         path_uv_log = temporary / "path-uv.log"
         write_python_executable(
             path_uv,
-            code("""                #!/usr/bin/env python3
+            # fmt: python
+            code("""
+                #!/usr/bin/env python3
                 import os
                 from pathlib import Path
 
@@ -824,7 +826,9 @@ def test_interrupts_python_cache_warmup_without_committing(
         cleanup.callback(warmup_release.close)
         write_python_executable(
             fake_python,
-            code("""                #!/usr/bin/env python3
+            # fmt: python
+            code("""
+                #!/usr/bin/env python3
                 import os
                 import signal
                 import sys
@@ -840,22 +844,22 @@ def test_interrupts_python_cache_warmup_without_committing(
                         )
                         return
                     if arguments[:2] == ["-I", "-c"]:
-                        preflight = Path(
-                            os.environ["MCP_CONSOLE_TEST_PREFLIGHT_WARMUP"]
-                        )
+                        preflight = Path(os.environ["MCP_CONSOLE_TEST_PREFLIGHT_WARMUP"])
                         if not preflight.exists():
                             preflight.touch()
                             return
-                        blocked = Path(
-                            os.environ["MCP_CONSOLE_TEST_BLOCKED_WARMUP"]
-                        )
+                        blocked = Path(os.environ["MCP_CONSOLE_TEST_BLOCKED_WARMUP"])
                         if not blocked.exists():
                             signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
                             blocked.touch()
-                            with open(os.environ["MCP_CONSOLE_TEST_WARMUP_STARTED"], "wb", buffering=0) as started:
+                            with open(
+                                os.environ["MCP_CONSOLE_TEST_WARMUP_STARTED"], "wb", buffering=0
+                            ) as started:
                                 started.write(b"1")
                             signal.sigwait({signal.SIGINT})
-                            with open(os.environ["MCP_CONSOLE_TEST_WARMUP_RELEASE"], "rb", buffering=0) as release:
+                            with open(
+                                os.environ["MCP_CONSOLE_TEST_WARMUP_RELEASE"], "rb", buffering=0
+                            ) as release:
                                 assert release.read(1) == b"1"
                         return
                     raise SystemExit(f"unexpected fake Python arguments: {arguments!r}")
@@ -923,7 +927,9 @@ def test_stops_before_cache_warmup_after_python_resolver_interrupt(
         unexpected_warmup = temporary / "unexpected-warmup"
         write_python_executable(
             fake_python,
-            code("""                #!/usr/bin/env python3
+            # fmt: python
+            code("""
+                #!/usr/bin/env python3
                 import os
                 import signal
                 import sys
@@ -938,10 +944,14 @@ def test_stops_before_cache_warmup_after_python_resolver_interrupt(
                             # Block SIGINT before publishing readiness, so an
                             # early interrupt stays pending for sigwait().
                             signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
-                            with open(os.environ["MCP_CONSOLE_TEST_TOOL_RUN_STARTED"], "wb", buffering=0) as started:
+                            with open(
+                                os.environ["MCP_CONSOLE_TEST_TOOL_RUN_STARTED"], "wb", buffering=0
+                            ) as started:
                                 started.write(b"1")
                             signal.sigwait({signal.SIGINT})
-                            with open(os.environ["MCP_CONSOLE_TEST_TOOL_RUN_RELEASE"], "rb", buffering=0) as release:
+                            with open(
+                                os.environ["MCP_CONSOLE_TEST_TOOL_RUN_RELEASE"], "rb", buffering=0
+                            ) as release:
                                 assert release.read(1) == b"1"
                         Path(arguments[-1]).write_text(
                             os.environ["MCP_CONSOLE_TEST_UV_PYTHON"],
@@ -950,9 +960,7 @@ def test_stops_before_cache_warmup_after_python_resolver_interrupt(
                         return
                     if arguments[:2] == ["-I", "-c"]:
                         if blocked.exists():
-                            Path(
-                                os.environ["MCP_CONSOLE_TEST_UNEXPECTED_WARMUP"]
-                            ).touch()
+                            Path(os.environ["MCP_CONSOLE_TEST_UNEXPECTED_WARMUP"]).touch()
                         return
                     raise SystemExit(f"unexpected fake Python arguments: {arguments!r}")
 

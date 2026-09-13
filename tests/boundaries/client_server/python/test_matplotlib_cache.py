@@ -52,17 +52,18 @@ def test_preserves_matplotlib_cache_across_activation_and_restart(
         assert len(persistent_caches) == 1, persistent_caches
         persistent_cache_bytes = persistent_caches[0].read_bytes()
         client.send(
+            # fmt: python
             python=code("""
-            import os
-            from pathlib import Path
+                import os
+                from pathlib import Path
 
-            import matplotlib
+                import matplotlib
 
-            invalid_cache = Path(os.environ["MPLCONFIGDIR"]) / "fontlist-v999.json"
-            _ = invalid_cache.write_text(
-                '{"__class__":"FontManager","_version":999}', encoding="utf-8"
-            )
-            """)
+                invalid_cache = Path(os.environ["MPLCONFIGDIR"]) / "fontlist-v999.json"
+                _ = invalid_cache.write_text(
+                    '{"__class__":"FontManager","_version":999}', encoding="utf-8"
+                )
+                """)
         )
         assert last_result_text(client) == "[done]"
         # Replacing the private link must not make a later runtime resolution
@@ -144,32 +145,35 @@ def test_keeps_python_caches_private_between_workers(
             for client in (first, second):
                 client.initialize_and_list_tools()
                 result = client.send(
+                    # fmt: python
                     python=code("""
-                    import os
-                    from pathlib import Path
+                        import os
+                        from pathlib import Path
 
-                    cache = Path(os.environ["MPLCONFIGDIR"])
-                    cache.mkdir(parents=True, exist_ok=True)
-                    marker = cache / "session-marker"
-                    print(marker.exists())
-                    """)
+                        cache = Path(os.environ["MPLCONFIGDIR"])
+                        cache.mkdir(parents=True, exist_ok=True)
+                        marker = cache / "session-marker"
+                        print(marker.exists())
+                        """)
                 )
                 assert tool_text(result) == "False\n", result
                 result = client.send(
+                    # fmt: python
                     python=code("""
-                    marker.write_text("private")
-                    print(marker.read_text())
-                    """)
+                        marker.write_text("private")
+                        print(marker.read_text())
+                        """)
                 )
                 assert tool_text(result) == "private\n", result
             first.send(control="restart")
             result = first.send(
+                # fmt: python
                 python=code("""
-                import os
-                from pathlib import Path
+                    import os
+                    from pathlib import Path
 
-                print((Path(os.environ["MPLCONFIGDIR"]) / "session-marker").exists())
-                """)
+                    print((Path(os.environ["MPLCONFIGDIR"]) / "session-marker").exists())
+                    """)
             )
             assert tool_text(result) == "False\n", result
             return first.finish() + second.finish()

@@ -110,6 +110,7 @@ def test_retires_python_resolver_descendant_after_leader_exit(
         identity = temporary / "descendant-identity"
         wrapper = temporary / "uv"
         wrapper.write_text(
+            # fmt: python
             code(r"""
                 #!/usr/bin/env python3
 
@@ -443,9 +444,15 @@ def test_prepares_python_requirements_after_worker_startup(
 ) -> Transcript:
     client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
+    # fmt: python
     python = code("""
-        import importlib.util; import os; import sys
-        sentinel = 42; worker_pid = os.getpid(); initial_prefix = sys.prefix
+        import importlib.util
+        import os
+        import sys
+
+        sentinel = 42
+        worker_pid = os.getpid()
+        initial_prefix = sys.prefix
         importlib.util.find_spec("yaml12") is None
         """)
     client.send(python=python)
@@ -459,14 +466,19 @@ def test_prepares_python_requirements_after_worker_startup(
     assert result["isError"] is True, result
     assert result["content"][0]["text"] == named_requirement_error(invalid)
 
+    # fmt: python
     python = code("""
         sentinel, os.getpid() == worker_pid, importlib.util.find_spec("yaml12") is None
         """)
     client.send(python=python)
     assert last_tool_text(client) == "(42, True, True)\n"
 
+    # fmt: python
     python = code("""
-        import os; import sys; import yaml12
+        import os
+        import sys
+        import yaml12
+
         (sentinel, os.getpid() == worker_pid, sys.prefix != initial_prefix, yaml12.__name__)
         """)
     client.send(
@@ -538,6 +550,7 @@ def test_failed_live_python_requirements_do_not_run_cell(
     client.send(r=r)
     assert last_tool_text(client) == "[done]"
 
+    # fmt: python
     python = code("""
         import os
         import yaml12

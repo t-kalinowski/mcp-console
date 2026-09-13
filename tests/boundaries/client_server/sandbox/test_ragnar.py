@@ -46,6 +46,7 @@ def creates_ragnar_store_after_workspace_write_denial(
             client.send(requirements={"r": ["ragnar"]})
             assert last_tool_text(client) == "[prepared]"
 
+            # fmt: r
             r = code(r"""
                 ragnar::ragnar_store_create(
                   "knowledge.ragnar.duckdb",

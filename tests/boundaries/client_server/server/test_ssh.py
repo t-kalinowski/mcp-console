@@ -143,8 +143,9 @@ def _preinstalled_remote_runtime(binary: Path, execution: Execution) -> Transcri
                         client,
                         "raw output\n\n[running; poll with an empty send]",
                         "remote raw stdout",
+                        # fmt: python
                         python=code(r"""
-                            _ = os.write(1, b'raw output\n')
+                            _ = os.write(1, b"raw output\n")
                             with open("raw-output-release", "rb", buffering=0) as gate:
                                 assert gate.read(1) == b"1"
                             """),
@@ -155,6 +156,7 @@ def _preinstalled_remote_runtime(binary: Path, execution: Execution) -> Transcri
                         client, "[done]", "remote raw output completion"
                     )
                 client.send(
+                    # fmt: python
                     python=code("""
                         try:
                             import mcpConsoleDefinitelyMissingPackage
@@ -193,12 +195,15 @@ def _preinstalled_remote_runtime(binary: Path, execution: Execution) -> Transcri
                 )
                 with closing(FifoCheckpoint.create(remote / "loop-started")) as started:
                     client.send(
+                        # fmt: r
                         r=code(r"""
                             local({
                               checkpoint <- fifo("loop-started", open = "wb", blocking = TRUE)
                               writeBin(charToRaw("1"), checkpoint)
                               close(checkpoint)
-                              repeat Sys.sleep(60)
+                              repeat {
+                                Sys.sleep(60)
+                              }
                             })
                             """),
                         timeout_ms=1,

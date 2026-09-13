@@ -39,12 +39,8 @@ def test_routes_sql_cells_to_a_selected_dbi_connection(
         sqlite <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")
         console_sql_connection(connection = sqlite)
         cat(
-          "selected: ",
-          identical(sql_connection(), sqlite),
-          "\n",
-          "valid: ",
-          DBI::dbIsValid(sql_connection()),
-          "\n",
+          c("selected: ", identical(sql_connection(), sqlite), "\n"),
+          c("valid: ", DBI::dbIsValid(sql_connection()), "\n"),
           sep = ""
         )
         """)
@@ -59,12 +55,8 @@ def test_routes_sql_cells_to_a_selected_dbi_connection(
           error = conditionMessage
         )
         cat(
-          "rejected: ",
-          message,
-          "\n",
-          "unchanged: ",
-          identical(sql_connection(), selected),
-          "\n",
+          c("rejected: ", message, "\n"),
+          c("unchanged: ", identical(sql_connection(), selected), "\n"),
           sep = ""
         )
         """)
@@ -143,9 +135,7 @@ def test_routes_sql_cells_to_a_selected_dbi_connection(
         selected <- sql_connection()
         invisible(DBI::dbDisconnect(selected))
         cat(
-          "disconnected: ",
-          !DBI::dbIsValid(selected),
-          "\n",
+          c("disconnected: ", !DBI::dbIsValid(selected), "\n"),
           sep = ""
         )
         """)
@@ -162,9 +152,7 @@ def test_routes_sql_cells_to_a_selected_dbi_connection(
     r = code(r"""
         console_sql_connection(NULL)
         cat(
-          "restored: ",
-          !identical(sql_connection(), selected),
-          "\n",
+          c("restored: ", !identical(sql_connection(), selected), "\n"),
           sep = ""
         )
         """)

@@ -43,6 +43,7 @@ def test_rejects_python_preparation_while_evaluation_is_running(
         environment["MCP_CONSOLE_TEST_UV_RECORD"] = str(uv_record)
         client = McpClient(binary, execution.serve(), environment)
         client.initialize_and_list_tools()
+        # fmt: python
         python = code("""
             runtime_generation_marker = "original runtime retained"
             preparation_gate = input("preparation gate> ")

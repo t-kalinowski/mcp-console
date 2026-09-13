@@ -68,15 +68,17 @@ STOPSIGNAL SIGKILL
         with McpClient(binary, ("serve",), environment, root) as client:
             client.initialize_and_list_tools()
             client.send(
+                # fmt: python
                 python=code("""
-                import os
-                from pathlib import Path
-                assert os.getuid() == 1234
-                assert os.environ["IMAGE_VALUE"] == "initial"
-                assert Path("/build-input/included").read_text() == "from context"
-                assert not Path("/build-input/ignored").exists()
-                print(Path("/etc/hostname").read_text().strip())
-            """)
+                    import os
+                    from pathlib import Path
+
+                    assert os.getuid() == 1234
+                    assert os.environ["IMAGE_VALUE"] == "initial"
+                    assert Path("/build-input/included").read_text() == "from context"
+                    assert not Path("/build-input/ignored").exists()
+                    print(Path("/etc/hostname").read_text().strip())
+                    """)
             )
             first = last_result_text(client).strip()
             state = json.loads(docker("inspect", first).stdout)[0]
@@ -93,13 +95,15 @@ STOPSIGNAL SIGKILL
             client.send(control="restart")
             absent(first)
             client.send(
+                # fmt: python
                 python=code("""
-                import os
-                from pathlib import Path
-                print(os.environ["IMAGE_VALUE"])
-                print(Path("/build-input/included").read_text())
-                print(Path("/etc/hostname").read_text().strip())
-            """)
+                    import os
+                    from pathlib import Path
+
+                    print(os.environ["IMAGE_VALUE"])
+                    print(Path("/build-input/included").read_text())
+                    print(Path("/etc/hostname").read_text().strip())
+                    """)
             )
             text = last_result_text(client)
             assert text.startswith("initial\nfrom context\n"), text

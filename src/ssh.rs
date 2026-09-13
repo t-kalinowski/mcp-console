@@ -57,25 +57,15 @@ impl Session {
             .collect::<Vec<_>>()
             .join(" ");
         let mut command = Command::new("ssh");
-        command.args([
-            "-T",
-            "-a",
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "ConnectTimeout=10",
-            "-o",
-            "ControlMaster=no",
-            "-o",
-            "ControlPersist=no",
-            "-o",
-            "ClearAllForwardings=yes",
-            "-o",
-            "PermitLocalCommand=no",
-            "--",
-            self.target.host(),
-            &remote,
-        ]);
+        command
+            .args(["-T", "-a"])
+            .args(["-o", "BatchMode=yes"])
+            .args(["-o", "ConnectTimeout=10"])
+            .args(["-o", "ControlMaster=no"])
+            .args(["-o", "ControlPersist=no"])
+            .args(["-o", "ClearAllForwardings=yes"])
+            .args(["-o", "PermitLocalCommand=no"])
+            .args(["--", self.target.host(), &remote]);
         Ok(command)
     }
 

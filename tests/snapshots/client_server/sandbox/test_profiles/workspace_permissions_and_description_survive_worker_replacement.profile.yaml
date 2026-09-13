@@ -1,5 +1,5 @@
 ---
-native_profile: ':workspace'
+native_profile: :workspace
 fixed_workspace: true
 identical_launches: 5
 network_inherited: true

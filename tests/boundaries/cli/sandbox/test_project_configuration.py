@@ -333,6 +333,7 @@ def test_no_sandbox_bypasses_project_configuration(binary: Path) -> Transcript:
 
 @requires(SANDBOX)
 def test_explicit_policy_bypasses_project_configuration(binary: Path) -> Transcript:
+    # fmt: python
     script = code("""
         import os
         import sys

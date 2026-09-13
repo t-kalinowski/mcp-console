@@ -98,17 +98,18 @@ def test_prepares_system_fonts_and_protects_host_cache(binary: Path) -> Transcri
         host_discovery.unlink()
 
         client.send(
+            # fmt: python
             python=code("""
-            import os
-            from pathlib import Path
+                import os
+                from pathlib import Path
 
-            import matplotlib
+                import matplotlib
 
-            invalid_cache = Path(os.environ["MPLCONFIGDIR"]) / "fontlist-v999.json"
-            _ = invalid_cache.write_text(
-                '{"__class__":"FontManager","_version":999}', encoding="utf-8"
-            )
-            """)
+                invalid_cache = Path(os.environ["MPLCONFIGDIR"]) / "fontlist-v999.json"
+                _ = invalid_cache.write_text(
+                    '{"__class__":"FontManager","_version":999}', encoding="utf-8"
+                )
+                """)
         )
         assert last_result_text(client) == "[done]"
         client.send(control="restart")

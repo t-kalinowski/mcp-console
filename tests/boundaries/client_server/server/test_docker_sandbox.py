@@ -69,18 +69,20 @@ def test_native_selection_is_enforced_or_rejected(binary: Path) -> Transcript:
             if capable:
                 client.initialize_and_list_tools()
                 client.send(
+                    # fmt: python
                     python=code("""
-                    from pathlib import Path
-                    Path("result").write_text("yes")
-                    Path("/allowed-writes/allowed").write_text("yes")
-                    for denied in (".claude/denied", "readonly/denied"):
-                        try:
-                            Path(denied).write_text("no")
-                        except PermissionError:
-                            print("write denied")
-                        else:
-                            raise AssertionError("protected write succeeded")
-                """)
+                        from pathlib import Path
+
+                        Path("result").write_text("yes")
+                        Path("/allowed-writes/allowed").write_text("yes")
+                        for denied in (".claude/denied", "readonly/denied"):
+                            try:
+                                Path(denied).write_text("no")
+                            except PermissionError:
+                                print("write denied")
+                            else:
+                                raise AssertionError("protected write succeeded")
+                        """)
                 )
                 assert last_result_text(client) == "write denied\nwrite denied\n", (
                     last_result_text(client)
@@ -158,17 +160,19 @@ def test_delegated_environment_and_no_sandbox(binary: Path) -> Transcript:
                 assert "cannot directly access the network" not in description
                 assert "with the server's permissions" not in description
                 client.send(
+                    # fmt: python
                     python=code("""
-                    import os
-                    from pathlib import Path
-                    assert os.getuid() == 4321
-                    assert os.environ["WORKLOAD_VALUE"] == "selected"
-                    assert os.environ["DOCKER_HOST"] == "must-not-configure-the-launcher"
-                    assert os.environ.get("HOME") != "/controller-home"
-                    assert os.environ.get("TMPDIR") != "/controller-temp"
-                    Path("/tmp/delegated-write").write_text("yes")
-                    print("container environment")
-                """)
+                        import os
+                        from pathlib import Path
+
+                        assert os.getuid() == 4321
+                        assert os.environ["WORKLOAD_VALUE"] == "selected"
+                        assert os.environ["DOCKER_HOST"] == "must-not-configure-the-launcher"
+                        assert os.environ.get("HOME") != "/controller-home"
+                        assert os.environ.get("TMPDIR") != "/controller-temp"
+                        Path("/tmp/delegated-write").write_text("yes")
+                        print("container environment")
+                        """)
                 )
                 assert last_result_text(client) == "container environment\n", (
                     last_result_text(client)
@@ -183,12 +187,13 @@ def test_delegated_environment_and_no_sandbox(binary: Path) -> Transcript:
                     client,
                     "No module named 'mcpConsoleDefinitelyMissingPackage'.\n\nMCP Console dynamic environment resolution is unavailable for Docker targets. Install the distribution in the image and start a new server session.\n",
                     "missing preinstalled Python package",
+                    # fmt: python
                     python=code("""
                         try:
                             import mcpConsoleDefinitelyMissingPackage
                         except ModuleNotFoundError as error:
                             print(error)
-                    """),
+                        """),
                 )
                 transcript = client.finish()[3:]
             records.append(
@@ -243,13 +248,14 @@ def test_runtime_discovery_uses_workload_environment(binary: Path) -> Transcript
                 with McpClient(binary, arguments, current_directory=root) as client:
                     client.initialize_and_list_tools()
                     client.send(
+                        # fmt: r
                         r=code("""
                             stopifnot(
                               R.home() == "/usr/lib/R",
                               Sys.getenv("DISCOVERY_VALUE") == "selected"
                             )
                             cat("workload R discovered\\n")
-                        """),
+                            """),
                     )
                     assert last_result_text(client) == "workload R discovered\n"
                     transcript = client.finish()[3:]

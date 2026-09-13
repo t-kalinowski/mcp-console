@@ -479,6 +479,7 @@ def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
     )
     assert last_tool_text(client) == "[prepared]"
 
+    # fmt: r
     r = code(r"""
         stopifnot(
           DBI::dbIsValid(store@con),
@@ -492,6 +493,7 @@ def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
         "index built after extension preparation\n"
     )
 
+    # fmt: r
     r = code(r"""
         creator_result <- ragnar::ragnar_retrieve(
           store,
@@ -505,6 +507,7 @@ def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
     assert "beta.md" in preview and "Bananas are yellow fruit" in preview
     assert "alpha.md" not in preview
 
+    # fmt: r
     r = code(r"""
         reader <- ragnar::ragnar_store_connect(
           store_path,
@@ -530,6 +533,7 @@ def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
     assert "Binder Error:" in output
     assert 'Referenced column "origin" not found' in output
 
+    # fmt: r
     r = code(r"""
         writeLines(paste(
           "R chunks columns:",
@@ -545,6 +549,7 @@ def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
     assert "Catalog Error:" in output
     assert "Table with name chunks does not exist" in output
 
+    # fmt: r
     r = code(r"""
         sql_connection(reader@con)
         """)
@@ -553,6 +558,7 @@ def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
         "Error in sql_connection(reader@con) : unused argument (reader@con)\n"
     )
 
+    # fmt: r
     r = code(r"""
         connection <- sql_connection()
         stopifnot(
@@ -734,6 +740,7 @@ def test_interrupts_running_sql_query(binary: Path, execution: Execution) -> Tra
 def test_queries_r_data_frames(binary: Path, execution: Execution) -> Transcript:
     client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
+    # fmt: r
     r = code(r"""
         measurements <- data.frame(
           label = c("a", "b"),
@@ -761,6 +768,7 @@ def test_sql_views_follow_rebound_r_data_frames(
 ) -> Transcript:
     client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
+    # fmt: r
     r = code(r"""
         measurements <- data.frame(value = 2L)
         """)
@@ -774,6 +782,7 @@ def test_sql_views_follow_rebound_r_data_frames(
     client.send(sql=sql)
     assert last_tool_text(client) == "[done]"
 
+    # fmt: r
     r = code(r"""
         measurements <- data.frame(value = 7L)
         """)
@@ -795,6 +804,7 @@ def test_prefers_catalog_relations_over_r_data_frames(
 ) -> Transcript:
     client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
+    # fmt: r
     r = code(r"""
         values <- data.frame(origin = "r")
         """)
@@ -818,6 +828,7 @@ def test_scans_r_bindings_named_like_bridge_state(
 ) -> Transcript:
     client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
+    # fmt: r
     r = code(r"""
         connection <- data.frame(name = "connection")
         source <- data.frame(name = "source")
@@ -852,15 +863,16 @@ def test_exposes_catalog_as_lazy_r_relations(
     client.send(sql=sql)
     assert last_tool_text(client) == "[done]"
 
+    # fmt: r
     r = code(r"""
         connection <- sql_connection()
         table_values <- dplyr::tbl(connection, "sql_values")
         lazy_values <- dplyr::tbl(connection, "live_sql_values") |>
           dplyr::mutate(doubled = value * 2L)
         cat(
-          "same connection: ", identical(connection, sql_connection()), "\n",
-          "lazy table: ", inherits(table_values, "tbl_lazy"), "\n",
-          "lazy view: ", inherits(lazy_values, "tbl_lazy"), "\n",
+          c("same connection: ", identical(connection, sql_connection()), "\n"),
+          c("lazy table: ", inherits(table_values, "tbl_lazy"), "\n"),
+          c("lazy view: ", inherits(lazy_values, "tbl_lazy"), "\n"),
           sep = ""
         )
         """)
@@ -875,6 +887,7 @@ def test_exposes_catalog_as_lazy_r_relations(
     client.send(sql=sql)
     assert last_tool_text(client) == "[done]"
 
+    # fmt: r
     r = code(r"""
         values <- lazy_values |>
           dplyr::arrange(label) |>
@@ -900,6 +913,7 @@ def test_keeps_connection_helper_after_clearing_r_workspace(
     client.send(sql=sql)
     assert last_tool_text(client) == "[done]"
 
+    # fmt: r
     r = code(r"""
         rm(list = ls())
         values <- DBI::dbGetQuery(
@@ -1001,6 +1015,7 @@ def test_previews_schema_and_exact_values(
 ) -> Transcript:
     client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
+    # fmt: r
     r = code(r"""
         invisible(options(
           width = 20L,

@@ -215,24 +215,29 @@ def _loss(binary: Path, victim: str) -> Transcript:
         if victim == "process_group_interrupt":
             launcher = root / "server"
             launcher.write_text(
+                # fmt: python
                 code(f"""
-                #!{sys.executable}
-                import os, sys
-                os.setsid()
-                os.execv({str(binary)!r}, [{str(binary)!r}, *sys.argv[1:]])
-            """)
+                    #!{sys.executable}
+                    import os, sys
+                    os.setsid()
+                    os.execv({str(binary)!r}, [{str(binary)!r}, *sys.argv[1:]])
+                    """)
             )
             launcher.chmod(0o755)
             binary = launcher
         with McpClient(binary, ("serve", "--no-sandbox"), environment, root) as client:
             client.initialize_and_list_tools()
             client.send(
+                # fmt: python
                 python=code("""
-                import os, sys, subprocess
-                from pathlib import Path
-                child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"], start_new_session=True)
-                print(Path("/etc/hostname").read_text().strip())
-                """)
+                    import os, sys, subprocess
+                    from pathlib import Path
+
+                    child = subprocess.Popen(
+                        [sys.executable, "-c", "import time; time.sleep(600)"], start_new_session=True
+                    )
+                    print(Path("/etc/hostname").read_text().strip())
+                    """)
             )
             identity = last_result_text(client).strip()
             assert docker("inspect", identity).returncode == 0, identity
@@ -295,20 +300,22 @@ def test_attachment_loss_retires_with_backpressured_output(binary: Path) -> Tran
                 ) as client:
                     client.initialize_and_list_tools()
                     client.send(
+                        # fmt: python
                         python=code('''
-                        import os, sys, subprocess
-                        from pathlib import Path
-                        os.mkfifo("/tmp/output-gate")
-                        producer = """
-                        import os, time
-                        with open("/tmp/output-gate") as gate:
-                            gate.read(1)
-                        os.write(1, b"x" * (64 * 1024 * 1024))
-                        time.sleep(600)
-                        """
-                        child = subprocess.Popen([sys.executable, "-c", producer], start_new_session=True)
-                        print(Path("/etc/hostname").read_text().strip())
-                    ''')
+                            import os, sys, subprocess
+                            from pathlib import Path
+
+                            os.mkfifo("/tmp/output-gate")
+                            producer = """
+                            import os, time
+                            with open("/tmp/output-gate") as gate:
+                                gate.read(1)
+                            os.write(1, b"x" * (64 * 1024 * 1024))
+                            time.sleep(600)
+                            """
+                            child = subprocess.Popen([sys.executable, "-c", producer], start_new_session=True)
+                            print(Path("/etc/hostname").read_text().strip())
+                            ''')
                     )
                     identity = last_result_text(client).strip()
                     calls = peer_calls(root)
@@ -429,12 +436,14 @@ def test_worker_failure_retires_container_without_replaying_cell(
             first = last_result_text(client).strip()
             with removal_event(first) as removed:
                 client.send(
+                    # fmt: python
                     python=code("""
-                    import os
-                    with open("submissions", "a") as stream:
-                        stream.write("once\\n")
-                    os._exit(23)
-                """)
+                        import os
+
+                        with open("submissions", "a") as stream:
+                            stream.write("once\\n")
+                        os._exit(23)
+                        """)
                 )
                 removed()
             absent(first)

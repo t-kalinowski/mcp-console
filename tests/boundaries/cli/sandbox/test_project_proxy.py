@@ -34,6 +34,7 @@ class Origin(BaseHTTPRequestHandler):
 
 
 def _enforces_native_proxy_settings(binary: Path, network: str) -> Transcript:
+    # fmt: python
     script = code(r"""
         import errno
         import http.client
@@ -206,6 +207,7 @@ def test_proxy_enforcement_with_network_enabled(binary: Path) -> Transcript:
 
 @requires(SANDBOX)
 def test_project_network_enabled_allows_direct_connection(binary: Path) -> Transcript:
+    # fmt: python
     script = code("""
         import socket
         import sys

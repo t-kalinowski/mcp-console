@@ -236,7 +236,7 @@ result:
 ---
 send:
   python: |
-    _ = os.write(1, b'raw output\n')
+    _ = os.write(1, b"raw output\n")
     with open("raw-output-release", "rb", buffering=0) as gate:
         assert gate.read(1) == b"1"
   timeout_ms: 1
@@ -321,7 +321,9 @@ send:
       checkpoint <- fifo("loop-started", open = "wb", blocking = TRUE)
       writeBin(charToRaw("1"), checkpoint)
       close(checkpoint)
-      repeat Sys.sleep(60)
+      repeat {
+        Sys.sleep(60)
+      }
     })
   timeout_ms: 1
 result:

@@ -2,6 +2,7 @@
 send:
   python: |
     import socket
+
     try:
         with socket.socket() as connection:
             assert connection.connect_ex(("127.0.0.1", <listening-port>)) != 0
@@ -27,6 +28,7 @@ result:
 send:
   python: |
     import socket
+
     try:
         with socket.socket() as connection:
             assert connection.connect_ex(("127.0.0.1", <listening-port>)) != 0

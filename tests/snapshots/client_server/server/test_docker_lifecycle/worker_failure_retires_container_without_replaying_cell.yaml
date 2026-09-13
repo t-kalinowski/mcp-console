@@ -13,6 +13,7 @@ result:
 send:
   python: |
     import os
+
     with open("submissions", "a") as stream:
         stream.write("once\n")
     os._exit(23)

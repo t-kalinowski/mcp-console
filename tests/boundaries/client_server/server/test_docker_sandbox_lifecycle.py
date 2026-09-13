@@ -53,11 +53,15 @@ def loss(binary: Path, victim: str) -> list:
             with McpClient(binary, ("serve",), environment, root) as client:
                 client.initialize_and_list_tools()
                 client.send(
+                    # fmt: python
                     python=code("""
-                    import subprocess, sys
-                    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"], start_new_session=True)
-                    print("detached output writer started")
-                """)
+                        import subprocess, sys
+
+                        child = subprocess.Popen(
+                            [sys.executable, "-c", "import time; time.sleep(600)"], start_new_session=True
+                        )
+                        print("detached output writer started")
+                        """)
                 )
                 assert last_result_text(client) == "detached output writer started\n"
                 identity = generations(root)[0]
@@ -135,19 +139,21 @@ def test_failed_exec_retires_despite_output_backpressure(binary: Path) -> list:
                 with McpClient(binary, ("serve",), environment, root) as client:
                     client.initialize_and_list_tools()
                     client.send(
+                        # fmt: python
                         python=code('''
-                        import os, sys, subprocess
-                        os.mkfifo("/tmp/output-gate")
-                        producer = """
-                        import os, time
-                        with open("/tmp/output-gate") as gate:
-                            gate.read(1)
-                        os.write(1, b"x" * (64 * 1024 * 1024))
-                        time.sleep(600)
-                        """
-                        child = subprocess.Popen([sys.executable, "-c", producer], start_new_session=True)
-                        print("producer waiting")
-                    ''')
+                            import os, sys, subprocess
+
+                            os.mkfifo("/tmp/output-gate")
+                            producer = """
+                            import os, time
+                            with open("/tmp/output-gate") as gate:
+                                gate.read(1)
+                            os.write(1, b"x" * (64 * 1024 * 1024))
+                            time.sleep(600)
+                            """
+                            child = subprocess.Popen([sys.executable, "-c", producer], start_new_session=True)
+                            print("producer waiting")
+                            ''')
                     )
                     assert last_result_text(client) == "producer waiting\n"
                     identity = generations(root)[0]
@@ -288,13 +294,15 @@ def test_worker_exit_status_is_preserved_without_replaying_cell(binary: Path) ->
         with McpClient(binary, ("serve",), current_directory=root) as client:
             client.initialize_and_list_tools()
             client.send(
+                # fmt: python
                 python=code("""
-                import os
-                with open("attempt", "a") as attempts:
-                    attempts.write("once\\n")
-                    attempts.flush()
-                os._exit(23)
-            """)
+                    import os
+
+                    with open("attempt", "a") as attempts:
+                        attempts.write("once\\n")
+                        attempts.flush()
+                    os._exit(23)
+                    """)
             )
             assert "23" in last_result_text(client), last_result_text(client)
             first = generations(root)[0]
@@ -325,16 +333,20 @@ def test_restart_retires_independently_started_process_and_container(
                 identity["name"],
                 "/opt/analysis/bin/python",
                 "-c",
+                # fmt: python
                 code("""
-                import subprocess, sys
-                from pathlib import Path
-                child = subprocess.Popen(
-                    [sys.executable, "-c", "import time; time.sleep(600)"],
-                    start_new_session=True, stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                )
-                Path("/tmp/independent-process").write_text(str(child.pid))
-            """),
+                    import subprocess, sys
+                    from pathlib import Path
+
+                    child = subprocess.Popen(
+                        [sys.executable, "-c", "import time; time.sleep(600)"],
+                        start_new_session=True,
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                    Path("/tmp/independent-process").write_text(str(child.pid))
+                    """),
             )
             assert independent.returncode == 0, independent.stderr
             container = sbx(

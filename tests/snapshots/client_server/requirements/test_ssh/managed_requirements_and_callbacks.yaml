@@ -30,8 +30,14 @@ result:
 send:
   r: |
     x <- 42L
-    stopifnot(requireNamespace("praise", quietly = TRUE), requireNamespace("tidyverse", quietly = TRUE))
-    Sys.setenv(RETICULATE_UV = "/worker-must-not-select-uv", IR_CACHE_DIR = "/worker-must-not-select-cache")
+    stopifnot(
+      requireNamespace("praise", quietly = TRUE),
+      requireNamespace("tidyverse", quietly = TRUE)
+    )
+    Sys.setenv(
+      RETICULATE_UV = "/worker-must-not-select-uv",
+      IR_CACHE_DIR = "/worker-must-not-select-cache"
+    )
     library(zeallot)
     cat("R ready:", x, "\n")
 result:
@@ -44,6 +50,7 @@ result:
 send:
   python: |
     import humanize, pyfiglet
+
     print(humanize.intcomma(12345))
     print(r.x)
 result:

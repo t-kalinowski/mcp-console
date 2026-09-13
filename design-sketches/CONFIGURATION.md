@@ -69,7 +69,7 @@ The most consequential choices are:
 The implemented project-editing configuration is one line:
 
 ```yaml
-extends: ":workspace"
+extends: :workspace
 ```
 
 This grants writes beneath the fixed launch workspace, with `.git`, `.agents`, `.codex`, and `.claude` readable and protected from writes by default.
@@ -202,7 +202,7 @@ Do not add a config-path or storage-root override that scatters Console-managed 
 
 ```yaml
 version: 1
-extends: ":read-only"
+extends: :read-only
 permissions:
   filesystem:
     allow_write: [.]
@@ -210,7 +210,7 @@ permissions:
 
 profiles:
   review:
-    extends: ":read-only"
+    extends: :read-only
 
   api_work:
     extends: default
@@ -247,7 +247,7 @@ To remove sandboxing while retaining an already selected remote target, use the 
 
 ```yaml
 version: 1
-extends: ":read-only"
+extends: :read-only
 
 definitions:
   targets:
@@ -366,7 +366,7 @@ Use a profile with the desired baseline and supply its requested rules:
 ```yaml
 profiles:
   write_results_only:
-    extends: ":read-only"
+    extends: :read-only
     permissions:
       filesystem:
         allow_write: [results]
@@ -383,7 +383,7 @@ This built-in selector is a proposal:
 
 ```yaml
 version: 1
-extends: ":danger-full-access"
+extends: :danger-full-access
 ```
 
 It may add a target, environments, and resources; document-wide storage settings still apply.
@@ -556,7 +556,7 @@ None should imply the others.
 
 ```yaml
 version: 1
-extends: ":workspace"
+extends: :workspace
 permissions:
   network:
     mode: none
