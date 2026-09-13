@@ -60,6 +60,7 @@ def helper_metadata(pin: dict[str, object], helper: bytes) -> dict[str, object]:
 def write_readelf_fixture(commands: Path) -> None:
     write_executable(
         commands / "readelf",
+        # fmt: python
         """
         #!/usr/bin/env python3
         import os
@@ -104,6 +105,7 @@ class ReleaseScriptTests(unittest.TestCase):
         commands.mkdir()
         write_executable(
             commands / "git",
+            # fmt: python
             """
             #!/usr/bin/env python3
             import os
@@ -125,6 +127,7 @@ class ReleaseScriptTests(unittest.TestCase):
         )
         write_executable(
             commands / "gh",
+            # fmt: python
             """
             #!/usr/bin/env python3
             import json
@@ -228,6 +231,7 @@ class ReleaseScriptTests(unittest.TestCase):
         tool_bin = directory / "bin"
         tool_bin.mkdir()
 
+        # fmt: python
         executable_source = """
             #!/usr/bin/env python3
             import hashlib
@@ -254,18 +258,23 @@ class ReleaseScriptTests(unittest.TestCase):
                 )
             elif sys.argv[1:] in (["serve"], ["serve", "--no-sandbox"]):
                 initialize = json.loads(sys.stdin.readline())
-                print(json.dumps({
-                    "jsonrpc": "2.0",
-                    "id": initialize["id"],
-                    "result": {
-                        "protocolVersion": "2025-11-25",
-                        "capabilities": {"tools": {}},
-                        "serverInfo": {
-                            "name": "mcp-console",
-                            "version": "0.0.2",
-                        },
-                    },
-                }), flush=True)
+                print(
+                    json.dumps(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": initialize["id"],
+                            "result": {
+                                "protocolVersion": "2025-11-25",
+                                "capabilities": {"tools": {}},
+                                "serverInfo": {
+                                    "name": "mcp-console",
+                                    "version": "0.0.2",
+                                },
+                            },
+                        }
+                    ),
+                    flush=True,
+                )
                 json.loads(sys.stdin.readline())
                 startup = json.loads(sys.stdin.readline())
                 assert startup["params"] == {
@@ -274,17 +283,24 @@ class ReleaseScriptTests(unittest.TestCase):
                 }
                 if os.environ.get("FAKE_MCP_STARTUP_HANG"):
                     signal.pause()
-                print(json.dumps({
-                    "jsonrpc": "2.0",
-                    "id": startup["id"],
-                    "result": {
-                        "content": [{
-                            "type": "text",
-                            "text": "[starting new worker]\\n[idle]",
-                        }],
-                        "isError": False,
-                    },
-                }), flush=True)
+                print(
+                    json.dumps(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": startup["id"],
+                            "result": {
+                                "content": [
+                                    {
+                                        "type": "text",
+                                        "text": "[starting new worker]\\n[idle]",
+                                    }
+                                ],
+                                "isError": False,
+                            },
+                        }
+                    ),
+                    flush=True,
+                )
                 evaluation = json.loads(sys.stdin.readline())
                 assert evaluation["params"] == {
                     "name": "send",
@@ -292,14 +308,19 @@ class ReleaseScriptTests(unittest.TestCase):
                 }
                 if os.environ.get("FAKE_MCP_EVALUATION_HANG"):
                     signal.pause()
-                print(json.dumps({
-                    "jsonrpc": "2.0",
-                    "id": evaluation["id"],
-                    "result": {
-                        "content": [{"type": "text", "text": "[1] 42\\n"}],
-                        "isError": False,
-                    },
-                }), flush=True)
+                print(
+                    json.dumps(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": evaluation["id"],
+                            "result": {
+                                "content": [{"type": "text", "text": "[1] 42\\n"}],
+                                "isError": False,
+                            },
+                        }
+                    ),
+                    flush=True,
+                )
             else:
                 raise SystemExit(2)
         """
@@ -716,6 +737,7 @@ class ReleaseScriptTests(unittest.TestCase):
             launcher = scripts / "macos-stage.py"
             write_executable(
                 launcher,
+                # fmt: python
                 """
                 import runpy
                 import sys
@@ -750,6 +772,7 @@ class ReleaseScriptTests(unittest.TestCase):
             commands.mkdir()
             write_executable(
                 commands / "git",
+                # fmt: python
                 """
                 #!/usr/bin/env python3
                 import os
@@ -765,6 +788,7 @@ class ReleaseScriptTests(unittest.TestCase):
             )
             write_executable(
                 commands / "rustc",
+                # fmt: python
                 """
                 #!/usr/bin/env python3
                 import sys
@@ -775,6 +799,7 @@ class ReleaseScriptTests(unittest.TestCase):
             )
             write_executable(
                 commands / "cargo",
+                # fmt: python
                 """
                 #!/usr/bin/env python3
                 import json
@@ -783,8 +808,20 @@ class ReleaseScriptTests(unittest.TestCase):
                 from pathlib import Path
 
                 with Path(os.environ["FAKE_CARGO_ARGUMENTS"]).open("a") as record:
-                    record.write(json.dumps({"arguments": sys.argv[1:], "helper_sha256": os.environ.get("CODEX_BWRAP_SHA256")}) + "\\n")
-                target = sys.argv[sys.argv.index("--target") + 1] if "--target" in sys.argv else os.environ["CARGO_BUILD_TARGET"]
+                    record.write(
+                        json.dumps(
+                            {
+                                "arguments": sys.argv[1:],
+                                "helper_sha256": os.environ.get("CODEX_BWRAP_SHA256"),
+                            }
+                        )
+                        + "\\n"
+                    )
+                target = (
+                    sys.argv[sys.argv.index("--target") + 1]
+                    if "--target" in sys.argv
+                    else os.environ["CARGO_BUILD_TARGET"]
+                )
                 output = Path(os.environ["CARGO_TARGET_DIR"]) / target / "release"
                 output.mkdir(parents=True, exist_ok=True)
                 (output / "mcp-console-sandbox").write_bytes(b"runner bytes with debug symbols")
@@ -793,6 +830,7 @@ class ReleaseScriptTests(unittest.TestCase):
             )
             write_executable(
                 commands / "rustup",
+                # fmt: python
                 """
                 #!/usr/bin/env python3
                 import os
@@ -806,6 +844,7 @@ class ReleaseScriptTests(unittest.TestCase):
             for name in ("xcrun", "strip"):
                 write_executable(
                     commands / name,
+                    # fmt: python
                     """
                     #!/usr/bin/env python3
                     import sys

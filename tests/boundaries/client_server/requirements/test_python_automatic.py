@@ -725,12 +725,14 @@ def test_requires_explicit_python_requirements_for_ambiguous_or_installed_roots(
         fromlist_parent.mkdir()
         (fromlist_parent / "__init__.py").write_text("", encoding="utf-8")
         (fromlist_parent / "missing.py").write_text(
-            """try:
-    import mcp_console_available_root.nested_missing
-except ModuleNotFoundError as error:
-    missing_name = error.name
-    answer = 42
-""",
+            # fmt: python
+            code("""
+                try:
+                    import mcp_console_available_root.nested_missing
+                except ModuleNotFoundError as error:
+                    missing_name = error.name
+                    answer = 42
+                """),
             encoding="utf-8",
         )
         environment, record = recording_uv_environment(directory)

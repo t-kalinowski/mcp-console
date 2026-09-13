@@ -3,6 +3,7 @@
 import subprocess
 import sys
 import tempfile
+from textwrap import dedent
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -106,13 +107,15 @@ def test_renders_generated_document(binary: Path) -> Transcript:
             "document": document.read_text(encoding="utf-8"),
         }
 
-        render_script = r"""
-set -eu
-cp "$1" "$TMPDIR/transcript.qmd"
-cd "$TMPDIR"
-export HOME="$TMPDIR"
-exec ir render transcript.qmd --to html --output - --quiet
-""".lstrip()
+        render_script = dedent(
+            r"""
+            set -eu
+            cp "$1" "$TMPDIR/transcript.qmd"
+            cd "$TMPDIR"
+            export HOME="$TMPDIR"
+            exec ir render transcript.qmd --to html --output - --quiet
+            """
+        ).lstrip()
         rendering = subprocess.run(
             [
                 binary,

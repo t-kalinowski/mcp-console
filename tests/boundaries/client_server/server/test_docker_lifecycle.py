@@ -92,10 +92,13 @@ def test_cancelled_real_build_stops_setup_container(binary: Path) -> Transcript:
     with workspace() as root:
         marker = "build-cancel-" + root.name.replace(" ", "-")
         dockerfile = root / "Dockerfile"
-        dockerfile.write_text(f"""FROM {reference}
-LABEL org.mcp-console.build-cancel={marker}
-RUN echo {marker} && exec sleep 3600
-""")
+        dockerfile.write_text(
+            code(f"""
+                FROM {reference}
+                LABEL org.mcp-console.build-cancel={marker}
+                RUN echo {marker} && exec sleep 3600
+                """)
+        )
         configure(
             root,
             reference,
