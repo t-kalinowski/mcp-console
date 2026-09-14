@@ -172,6 +172,8 @@ def interrupted_initialization(
         if hook != "sitecustomize":
             (site / "console-startup.pth").write_text(f"import {hook}\n")
         environment = selected_python(root, python)
+        # Select this hook ahead of distro-provided sitecustomize modules.
+        environment["PYTHONPATH"] = str(site)
         environment["PYTHONNODEBUGRANGES"] = "1"
         try:
             with McpClient(
