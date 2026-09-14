@@ -30,6 +30,7 @@ TEST_RESPONSE_QUERY_FIFO_NAME = "zod-test-response-query"
 TEST_RESPONSE_RESULT_FIFO_NAME = "zod-test-response-result"
 TEST_CONTROL_READY_NAME = "zod-test-control-ready"
 LARGE_OUTPUT_SIZE = 2 * 1024 * 1024
+PIPE_TAIL_PREFIX_SIZE = 16 * 1024
 PENDING_TEXT_BUDGET = 8 * 1024 * 1024
 PNG_1X1 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42Y"
@@ -250,13 +251,13 @@ def emit_large_output(descriptor: int, prefix: bytes) -> None:
 
 
 def fill_nonblocking(descriptor: int, data: bytes) -> int:
-    assert data
-    # Guarantee a nonempty tail even when the preceding blocking write refills
-    # the pipe before this process can switch the descriptor to nonblocking.
-    write_all(descriptor, data[:1])
+    assert len(data) > PIPE_TAIL_PREFIX_SIZE
+    # Cover the retained preview tail even when the pipe accepts few additional
+    # bytes. The nonblocking remainder still measures the native pipe fill.
+    write_all(descriptor, data[:PIPE_TAIL_PREFIX_SIZE])
     flags = fcntl.fcntl(descriptor, fcntl.F_GETFL)
     fcntl.fcntl(descriptor, fcntl.F_SETFL, flags | os.O_NONBLOCK)
-    written = 1
+    written = PIPE_TAIL_PREFIX_SIZE
     try:
         while written < len(data):
             try:

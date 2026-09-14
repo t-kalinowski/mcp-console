@@ -62,7 +62,7 @@ def normalize_preview_paths(client: McpClient) -> None:
 
 
 def normalize_pipe_counts(client: McpClient) -> None:
-    """Normalize measured pipe capacity after exact raw-file assertions."""
+    """Normalize variable pipe-fill counts after exact raw-file assertions."""
     normalize_preview_paths(client)
     for entry in client.transcript:
         for block in entry.get("result", {}).get("content", []):
