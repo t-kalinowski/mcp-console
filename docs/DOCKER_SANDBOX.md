@@ -163,6 +163,7 @@ The [Python-only template example](../examples/python-only/Sandbox.Dockerfile) p
 They do not provide SQL independent of both R and Python.
 Explicit `R_HOME` and `RETICULATE_PYTHON` are VM paths.
 The disposable probe validates them before readiness and captures R availability for every worker generation.
+It runs Console's Python discovery and shared-library loading check inside the microVM.
 Image environment is preserved by default.
 Workload controls are applied inside the VM, after the SBX CLI has launched, and cannot configure the controller CLI or daemon.
 

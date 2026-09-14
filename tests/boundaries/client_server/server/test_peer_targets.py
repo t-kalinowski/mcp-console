@@ -49,6 +49,68 @@ def test_prepared_docker_rejects_invalid_r_home(binary: Path) -> list:
             return reject_invalid_r_home(client)
 
 
+@requires(docker.DOCKER, PYTHON_ONLY_TARGETS)
+def test_prepared_docker_rejects_unusable_python_library(binary: Path) -> list:
+    records = []
+    for name in ("missing", "unloadable"):
+        with docker.workspace() as root:
+            program = root / "python-library"
+            program.write_text(
+                # fmt: python
+                code(f"""
+                    #!/usr/bin/env python3
+                    import sys
+                    import sysconfig
+
+                    original = sysconfig.get_config_var
+
+
+                    def selected_library(key):
+                        if key == "LIBDIR":
+                            return "/selected-library"
+                        if key == "INSTSONAME":
+                            return "{name}.so"
+                        return original(key)
+
+
+                    sysconfig.get_config_var = selected_library
+                    exec(sys.argv[2])
+                    """)
+            )
+            program.chmod(0o755)
+            library = root / "unloadable.so"
+            library.write_text("not a shared library\n")
+            docker.configure(
+                root,
+                docker.image(),
+                environment={"RETICULATE_PYTHON": "/python-library"},
+                mounts=[
+                    {"source": str(program), "target": "/python-library"},
+                    {
+                        "source": str(library),
+                        "target": "/selected-library/unloadable.so",
+                    },
+                ],
+            )
+            with McpClient(
+                binary, ("serve", "--no-sandbox"), current_directory=root
+            ) as client:
+                client.start_request(
+                    "initialize",
+                    protocolVersion="2025-11-25",
+                    capabilities={},
+                    clientInfo={"name": "prepared-python-library", "version": "1"},
+                )
+                response = client.stdout.readline(timeout=40)
+                assert response == "", (name, response)
+                error = client.stderr.read(timeout=40)
+                assert "container Python probe failed" in error, error
+                assert f"/selected-library/{name}.so" in error, error
+                assert client.process.wait(timeout=5) != 0
+                records.append({"library": name, "stderr": error})
+    return records
+
+
 def exercise_no_r_catalog(client: McpClient, *, managed: bool) -> None:
     client.initialize_and_list_tools()
     properties = client.transcript[-1]["result"]["tools"][0]["inputSchema"][
@@ -155,6 +217,16 @@ def test_prepared_no_r_docker_image(binary: Path) -> list:
             )
             transcript = client.finish()
         docker.absent(second)
+        tool = transcript[2]["result"]["tools"][0]
+        digest_field = '"repository_digest":' + json.dumps(
+            digests[0] if digests else None
+        )
+        assert digest_field in tool["description"], tool["description"]
+        # Locally built images have no repository digest; normalize the value
+        # only after verifying it matches the inspected image's metadata.
+        tool["description"] = tool["description"].replace(
+            digest_field, '"repository_digest":"<digest>"'
+        )
         recorded = json.dumps(transcript)
         for digest in digests:
             recorded = recorded.replace(digest, "<digest>")

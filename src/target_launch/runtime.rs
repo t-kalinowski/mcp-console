@@ -59,13 +59,7 @@ pub(crate) fn runtime_probe() -> Result<(), String> {
     }
     let python = selected.unwrap_or_else(|| "python3".into());
     let output = Command::new(&python)
-        .args([
-            "-c",
-            r#"import sys
-if sys.version_info < (3, 10):
-    sys.exit("MCP Console requires Python 3.10 or later")
-"#,
-        ])
+        .args(["-c", include_str!("../python/discovery.py")])
         .output()
         .map_err(|error| format!("container Python probe failed: {error}"))?;
     if !output.status.success() {
