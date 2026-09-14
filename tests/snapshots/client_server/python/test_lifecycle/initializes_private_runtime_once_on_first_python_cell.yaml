@@ -8,7 +8,7 @@ result:
   content:
     - type: text
       text: |
-        [1] 1
+        [1] 0
   isError: false
 ---
 send:
@@ -27,5 +27,5 @@ result:
   content:
     - type: text
       text: |
-        [1] 1
+        [1] 0
   isError: false

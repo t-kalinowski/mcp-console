@@ -35,7 +35,7 @@ result:
   isError: false
 ---
 send:
-  python: "42"
+  r: reticulate::py_eval("42")
   timeout_ms: 0
 result:
   content:
@@ -158,7 +158,8 @@ result:
       text: |
         Traceback (most recent call last):
           File "<string>", line 467, in _mcp_console_eval_cell
-          File "<mcp-console:python:e2>", line 36, in <module>
+          File "<mcp-console:python:e1>", line 36, in <module>
+          File "<string>", line 92, in _interrupt
         KeyboardInterrupt
   isError: false
 ---

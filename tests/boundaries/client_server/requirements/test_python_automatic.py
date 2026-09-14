@@ -213,35 +213,24 @@ def test_retries_new_meta_path_finders_after_automatic_resolution(
         client.send(python=python)
         assert last_result_text(client) == "[done]"
 
-        # Register the finder only after reticulate activates the inferred
-        # environment, while the original import is waiting in this runtime.
-        # fmt: r
-        r = code(r"""
-            reticulate_namespace <- asNamespace("reticulate")
-            original_py_require <- get("py_require", envir = reticulate_namespace)
-            automatic_meta_finder_registered <- FALSE
-            unlockBinding("py_require", reticulate_namespace)
-            assign(
-              "py_require",
-              function(...) {
-                result <- original_py_require(...)
-                if (!automatic_meta_finder_registered) {
-                  reticulate::py_run_string(
-                    paste0(
-                      "import sys, __main__; ",
-                      "sys.meta_path.insert(0, __main__.automatic_meta_finder)"
-                    ),
-                    local = TRUE
-                  )
-                  automatic_meta_finder_registered <<- TRUE
-                }
-                result
-              },
-              envir = reticulate_namespace
-            )
-            lockBinding("py_require", reticulate_namespace)
+        # Adding the candidate's site directory may install new import finders,
+        # as editable wheels and .pth files can do during activation.
+        # fmt: python
+        python = code("""
+            import site
+            import sys
+
+            original_addsitedir = site.addsitedir
+
+            def addsitedir_with_finder(*args, **kwargs):
+                result = original_addsitedir(*args, **kwargs)
+                if automatic_meta_finder not in sys.meta_path:
+                    sys.meta_path.insert(0, automatic_meta_finder)
+                return result
+
+            site.addsitedir = addsitedir_with_finder
             """)
-        client.send(r=r)
+        client.send(python=python)
         assert last_result_text(client) == "[done]"
 
         output = send_and_collect_runtime_python_resolution(
@@ -535,41 +524,30 @@ def test_does_not_reenter_automatic_python_resolution(
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
-        # Wrap the public reticulate requirement transition reached by the
-        # private callback. Its nested Python miss must not start another host
-        # resolver while the outer import owns resolution.
-        # fmt: r
-        r = code(rf"""
-            reticulate_namespace <- asNamespace("reticulate")
-            original_py_require <- get("py_require", envir = reticulate_namespace)
-            automatic_nested_calls <- 0L
-            automatic_nested_error <- NULL
-            automatic_nested_triggered <- FALSE
-            unlockBinding("py_require", reticulate_namespace)
-            assign(
-              "py_require",
-              function(...) {{
-                if (!automatic_nested_triggered) {{
-                  automatic_nested_triggered <<- TRUE
-                  automatic_nested_calls <<- automatic_nested_calls + 1L
-                  automatic_nested_error <<- tryCatch(
-                    {{
-                      reticulate::py_run_string(
-                        "import {nested}",
-                        local = TRUE
-                      )
-                      NA_character_
-                    }},
-                    error = conditionMessage
-                  )
-                }}
-                original_py_require(...)
-              }},
-              envir = reticulate_namespace
-            )
-            lockBinding("py_require", reticulate_namespace)
+        # Candidate activation visits site directories. A nested import from
+        # that hook must not start a second resolver while the outer import
+        # owns resolution.
+        # fmt: python
+        python = code(f"""
+            import site
+
+            original_addsitedir = site.addsitedir
+            automatic_nested_calls = 0
+            automatic_nested_error = None
+
+            def nested_addsitedir(*args, **kwargs):
+                global automatic_nested_calls, automatic_nested_error
+                site.addsitedir = original_addsitedir
+                automatic_nested_calls += 1
+                try:
+                    import {nested}
+                except ModuleNotFoundError as error:
+                    automatic_nested_error = str(error)
+                return original_addsitedir(*args, **kwargs)
+
+            site.addsitedir = nested_addsitedir
             """)
-        client.send(r=r)
+        client.send(python=python)
         assert last_result_text(client) == "[done]"
 
         output = send_and_collect_runtime_python_resolution(
@@ -583,16 +561,10 @@ def test_does_not_reenter_automatic_python_resolution(
         runs = uv_tool_run_requirements(record)[baseline:]
         assert len(runs) == 1 and "py-yaml12" in runs[0], runs
 
-        # fmt: r
-        r = code(rf"""
-            cat(
-              automatic_nested_calls,
-              grepl("{nested}", automatic_nested_error, fixed = TRUE),
-              sep = "\n"
-            )
-            """)
-        client.send(r=r)
-        assert last_result_text(client) == "1\nTRUE\n", repr(last_result_text(client))
+        client.send(
+            python=f"automatic_nested_calls, {nested!r} in automatic_nested_error"
+        )
+        assert last_result_text(client) == "(1, True)\n", last_result_text(client)
         client.send(python="6 * 7")
         assert last_result_text(client) == "42\n"
         return client.finish()

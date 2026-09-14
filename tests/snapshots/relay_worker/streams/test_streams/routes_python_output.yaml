@@ -44,8 +44,16 @@ worker:
 ---
 worker:
   kind: console_diagnostic
+  data: ""
+---
+worker:
+  kind: console_diagnostic
   data: |2
       File "<string>", line 467, in _mcp_console_eval_cell
+---
+worker:
+  kind: console_diagnostic
+  data: ""
 ---
 worker:
   kind: console_diagnostic
@@ -54,8 +62,16 @@ worker:
 ---
 worker:
   kind: console_diagnostic
+  data: ""
+---
+worker:
+  kind: console_diagnostic
   data: |
     ValueError: boom
+---
+worker:
+  kind: console_diagnostic
+  data: ""
 ---
 worker:
   kind: completed

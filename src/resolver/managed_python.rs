@@ -93,6 +93,7 @@ impl Drop for PythonPathOutput {
 impl ManagedPython {
     pub(crate) fn configure_worker(&self, command: &mut Command) {
         command.env("RETICULATE_PYTHON", "managed");
+        command.env("MCP_CONSOLE_PYTHON_EXECUTABLE", &self.python);
         command.env(
             "MCP_CONSOLE_MANAGED_PYTHON",
             serde_json::to_string(&self.requirements)
@@ -146,7 +147,7 @@ pub(crate) fn resolve_python_manifest(
     if !output.status.success() {
         let error = resolver_error(&output);
         let python = if requirements.python_version.is_empty() {
-            format!("{resolved_python} (reticulate default)")
+            format!("{resolved_python} (Console default)")
         } else {
             requirements.python_version.join(", ")
         };

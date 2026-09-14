@@ -4,6 +4,7 @@
 send:
   python: |
     import os
+    import sys
     import tempfile
 
     import duckdb
@@ -42,8 +43,11 @@ send:
 
     assert result[0] is not None
     assert progress.count(b"\r") >= 100
-    with os.fdopen(os.dup(1), "wb") as stdout:
-        stdout.write(progress)
+    # Replay the captured native redraws through the ordered console stream
+    # so the completion response includes them. Raw fd delivery has no
+    # ordering relationship with the independent completion sideband.
+    sys.stdout.write(progress.decode())
+    sys.stdout.flush()
   requirements:
     python:
       - duckdb==1.5.5
