@@ -13,6 +13,7 @@ static INITIALIZED: AtomicBool = AtomicBool::new(false);
 struct Configuration {
     selection: Mutex<Selection>,
     temporary: PathBuf,
+    managed_r: bool,
     thread: std::thread::ThreadId,
     process: u32,
     disabled_reason: String,
@@ -25,7 +26,7 @@ struct Selection {
     declared: Option<crate::worker_protocol::PythonRequirementManifest>,
 }
 
-pub(super) fn configure(temporary: &Path) -> Result<(), String> {
+pub(super) fn configure(temporary: &Path, managed_r: bool) -> Result<(), String> {
     let manifest = std::env::var("MCP_CONSOLE_MANAGED_PYTHON")
         .ok()
         .map(|value| serde_json::from_str(&value).map_err(|error| error.to_string()))
@@ -60,6 +61,7 @@ pub(super) fn configure(temporary: &Path) -> Result<(), String> {
                 declared: None,
             }),
             temporary: temporary.into(),
+            managed_r,
             thread: std::thread::current().id(),
             process: std::process::id(),
             disabled_reason: disabled_reason.into(),
@@ -122,6 +124,11 @@ pub(crate) fn ensure_initialized() -> Result<(), String> {
             }),
         )?;
         crate::sql::install_python_runtime()?;
+        super::library::call_json(
+            c"_mcp_console_sql",
+            c"configure",
+            &json!({"managed_r": configuration.managed_r, "temporary": configuration.temporary}),
+        )?;
         super::library::connect_interrupts()?;
         Ok(())
     })();
@@ -315,6 +322,7 @@ pub(super) fn call(request: Value) -> Result<Value, String> {
         }
         "discover_python" => discover(Path::new(payload.as_str().ok_or("invalid interpreter")?)),
         "interop" => {
+            crate::worker::require_r()?;
             super::reticulate::attach()?;
             Ok(Value::Null)
         }

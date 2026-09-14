@@ -58,7 +58,7 @@ result:
     - type: text
       text: |
         Traceback (most recent call last):
-          File "<string>", line 216, in _evaluate
+          File "<string>", line 250, in _evaluate
           File "<mcp-console:python:e1>", line 21, in execute
           File "<string>", line 92, in _interrupt
         KeyboardInterrupt

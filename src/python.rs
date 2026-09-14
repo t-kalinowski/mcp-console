@@ -30,9 +30,10 @@ pub(crate) enum SqlProvider {
 
 pub(crate) fn configure_worker_environment(
     temporary_directory: &std::path::Path,
+    managed_r: bool,
 ) -> std::io::Result<()> {
     platform::configure_worker_environment(temporary_directory)?;
-    native::configure(temporary_directory).map_err(std::io::Error::other)
+    native::configure(temporary_directory, managed_r).map_err(std::io::Error::other)
 }
 
 impl Runtime {
@@ -234,3 +235,7 @@ mod platform {
 }
 
 pub(crate) use platform::link_matplotlib_caches;
+
+pub(crate) fn ensure_initialized() -> Result<(), String> {
+    native::ensure_initialized()
+}

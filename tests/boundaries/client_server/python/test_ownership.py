@@ -10,6 +10,7 @@ from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code, normalize_python_traceback_paths
 from support.records import Transcript
+from support.requirements import R_RUNTIME, requires
 from support.suites import run_this_suite
 
 
@@ -28,6 +29,7 @@ def test_python_preserves_exact_queued_stdin(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R_RUNTIME)
 def test_r_activation_does_not_initialize_python_or_sql(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -70,6 +72,7 @@ def test_interrupts_python_input_without_losing_state(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R_RUNTIME)
 def test_routes_interrupts_across_nested_languages(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -153,6 +156,7 @@ def test_python_requirements_preserve_live_objects_and_input(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R_RUNTIME)
 def test_reticulate_tracks_console_python_activation(
     binary: Path, execution: Execution
 ) -> Transcript:

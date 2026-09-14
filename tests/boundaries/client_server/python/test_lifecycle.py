@@ -21,6 +21,7 @@ from support.native import SHARED_LIBRARY_FLAG
 from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, requires
 from support.resolvers import checkpoint_uv_environment, named_requirement_error
+from support.requirements import R_RUNTIME
 from support.suites import run_this_suite
 
 
@@ -103,6 +104,7 @@ def test_rejects_python_preparation_while_evaluation_is_running(
 
 @executions(DIRECT, SANDBOXED)
 @requires(NATIVE_FIXTURES)
+@requires(R_RUNTIME)
 def test_interrupts_running_python_evaluation(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -291,6 +293,7 @@ def test_interrupts_running_python_evaluation(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R_RUNTIME)
 def test_initializes_private_runtime_once_on_first_python_cell(
     binary: Path,
     execution: Execution,
@@ -315,6 +318,7 @@ def test_initializes_private_runtime_once_on_first_python_cell(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R_RUNTIME)
 def test_retries_python_runtime_initialization_after_interrupt(
     binary: Path,
     execution: Execution,
@@ -439,6 +443,7 @@ def test_dispatch_does_not_mutate_python_globals(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R_RUNTIME)
 def test_interrupts_live_python_resolver(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -527,6 +532,7 @@ def test_interrupts_live_python_resolver(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R_RUNTIME)
 def test_restart_cancels_live_python_preparation(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -650,6 +656,7 @@ def test_does_not_parse_requirements_as_rscript_options(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R_RUNTIME)
 def test_forces_uv_offline_in_builtin_worker(
     binary: Path, execution: Execution
 ) -> Transcript:

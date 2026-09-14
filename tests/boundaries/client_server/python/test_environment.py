@@ -10,16 +10,18 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.assertions import assert_exact_interleaving, last_result_text
+from support.assertions import last_result_text
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript
 from support.requirements import OLD_PYTHON, SYSTEM_PYTHON, requires
+from support.requirements import R_RUNTIME
 from support.suites import run_this_suite
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R_RUNTIME)
 def test_preserves_configured_python_environment(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -82,6 +84,7 @@ def test_preserves_configured_python_environment(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R_RUNTIME)
 def test_preserves_empty_python_environment(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -178,6 +181,7 @@ def managed_python_transcript(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R_RUNTIME)
 def test_evaluates_with_default_managed_python(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -185,6 +189,7 @@ def test_evaluates_with_default_managed_python(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R_RUNTIME)
 def test_evaluates_with_explicit_managed_python(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -362,6 +367,7 @@ def test_uses_200_column_default(binary: Path, execution: Execution) -> Transcri
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R_RUNTIME)
 def test_uses_200_column_default_after_r_initializes_python(
     binary: Path,
     execution: Execution,
@@ -393,6 +399,7 @@ def test_uses_200_column_default_after_r_initializes_python(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R_RUNTIME)
 def test_prints_requirements_with_host_uv_cache(
     binary: Path, execution: Execution
 ) -> Transcript:

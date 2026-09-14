@@ -20,7 +20,7 @@ from support.processes import (
 )
 from support.normalization import code, normalize_python_resolution_error
 from support.records import Transcript
-from support.requirements import PROCESS_EVENTS, requires
+from support.requirements import NO_R, PROCESS_EVENTS, R_RUNTIME, requires
 from support.resolvers import (
     checkpoint_uv_environment,
     initialize_python_and_record_baseline,
@@ -223,8 +223,25 @@ def test_times_out_and_polls_automatic_python_resolution(
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(PROCESS_EVENTS)
+@requires(PROCESS_EVENTS, R_RUNTIME)
 def test_interrupts_automatic_python_resolver_and_preserves_worker(
+    binary: Path,
+    execution: Execution,
+) -> Transcript:
+    return interrupts_automatic_python_resolver_and_preserves_worker(binary, execution)
+
+
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS, NO_R)
+def test_interrupts_no_r_automatic_python_resolver_and_preserves_worker(
+    binary: Path,
+    execution: Execution,
+) -> Transcript:
+    # The recorded candidate includes the no-R SQL provider's Python dependency.
+    return interrupts_automatic_python_resolver_and_preserves_worker(binary, execution)
+
+
+def interrupts_automatic_python_resolver_and_preserves_worker(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
@@ -309,6 +326,7 @@ def test_interrupts_automatic_python_resolver_and_preserves_worker(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R_RUNTIME)
 def test_restart_discards_unactivated_automatic_python_candidate(
     binary: Path,
     execution: Execution,

@@ -26,12 +26,14 @@ result:
       description: >-
         Persistent R, Python, and SQL workbench for exact computation, file and
         data inspection, transformation, visualization, statistics, simulation,
-        and modeling. State persists across calls. Choose the language best
-        suited to each cell and reuse live state when switching: Python reads R
-        globals through `r.name`, R reads Python globals through `py$name`, and
-        managed DuckDB SQL can query R data frames by name. R accesses its SQL
-        connection through `sql_connection()`; R or Python can select a
-        user-owned connection with `console_sql_connection(connection)`.
+        and modeling. State persists across calls. R is optional for Python and
+        SQL; without R, managed SQL requires Python DuckDB and Python accesses
+        its catalog through `sql_connection()`. When both languages are
+        available, Python reads R globals through `r.name`, R reads Python
+        globals through `py$name`, and R-managed DuckDB SQL can query R data
+        frames by name. R accesses its SQL connection through
+        `sql_connection()`; R or Python can select a user-owned connection with
+        `console_sql_connection(connection)`.
 
 
         Send one complete `r`, `python`, or `sql` cell per call. Code-bearing
@@ -67,7 +69,8 @@ result:
         properties:
           r:
             description: |-
-              One complete R cell evaluated in persistent global state. Its final visible expression
+              One complete R cell evaluated in persistent global state. Requires R on the execution host.
+              Its final visible expression
               autoprints through R's normal console display; R also autoprints earlier visible top-level
               expressions. Leave the primary result last and print only when additional output is needed.
               When dynamic resolution is available, the built-in worker resolves missing plain CRAN
@@ -92,7 +95,7 @@ result:
             description: |-
               One complete SQL cell evaluated through the active connection. The managed DuckDB backend is
               active by default and keeps a persistent catalog. A result with columns returns a bounded
-              preview. With managed DuckDB, an unqualified relation name can query a data frame in R global
+              preview. Without R, managed SQL requires Python DuckDB. With R-managed DuckDB, an unqualified relation name can query a data frame in R global
               state, and a DuckDB table or view with the same name takes precedence. A user-selected R
               connection receives cells through `DBI::dbSendQuery()`; a Python DB-API connection executes
               them through its connection or cursor protocol. The selected driver supplies its own SQL

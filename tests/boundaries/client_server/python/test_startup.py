@@ -17,7 +17,7 @@ from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.processes import capture_process_identity, host_process_id, live_processes
-from support.requirements import FRAMEWORK_PYTHON, PYTHON_FRAMEWORK, requires
+from support.requirements import NO_R, FRAMEWORK_PYTHON, PYTHON_FRAMEWORK, requires
 from support.resolvers import bare_runtime_environment
 from support.suites import run_this_suite
 
@@ -353,6 +353,14 @@ def test_interrupts_python_discovery(binary: Path, execution: Execution) -> list
 @executions(DIRECT, SANDBOXED)
 def test_restarts_during_python_discovery(binary: Path, execution: Execution) -> list:
     return interrupted_discovery(binary, execution, "python", "restart")
+
+
+@requires(NO_R)
+@executions(DIRECT, SANDBOXED)
+def test_interrupts_sql_first_python_discovery(
+    binary: Path, execution: Execution
+) -> list:
+    return interrupted_discovery(binary, execution, "sql")
 
 
 if __name__ == "__main__":

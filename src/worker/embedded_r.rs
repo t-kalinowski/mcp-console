@@ -76,19 +76,54 @@ struct REvents {
     rg_wait_usec: usize,
 }
 
-pub(super) struct Runtime {
+pub(super) struct Runtime(Option<State>);
+
+struct State {
     graphics: crate::r_graphics::Bridge,
     environment: crate::r_environment::Bridge,
     _interop: crate::python::Interop,
 }
 
+pub(super) const UNAVAILABLE: &str = "R is unavailable on the execution host; install R and restart MCP Console to use R cells or requirements.r";
+
+pub(crate) fn require_available() -> Result<(), String> {
+    R_EVENTS.get().map(|_| ()).ok_or_else(|| UNAVAILABLE.into())
+}
+
+pub(super) fn discover() -> Result<Option<std::path::PathBuf>, String> {
+    let home = if let Some(captured) = std::env::var_os("MCP_CONSOLE_R_HOME") {
+        serde_json::from_str::<Option<std::path::PathBuf>>(&captured.to_string_lossy())
+            .map_err(|error| format!("invalid captured R selection: {error}"))?
+    } else if std::env::var_os("R_HOME").is_some()
+        || crate::resolver::find_path_entry("R").is_some()
+    {
+        Some(harp::command::r_home_setup().map_err(|error| error.to_string())?)
+    } else {
+        None
+    };
+    if let Some(home) = &home {
+        // Capture precedes worker threads and language initialization.
+        unsafe { std::env::set_var("R_HOME", home) };
+    }
+    Ok(home)
+}
+
 impl Runtime {
-    pub(super) fn initialize() -> Result<Self, Box<dyn Error>> {
-        Ok(Self {
-            graphics: crate::r_graphics::Bridge::initialize()?,
-            environment: crate::r_environment::Bridge::initialize()?,
-            _interop: crate::python::Interop::initialize()?,
-        })
+    pub(super) fn initialize(available: bool) -> Result<Self, Box<dyn Error>> {
+        let state = if available {
+            Some(State {
+                graphics: crate::r_graphics::Bridge::initialize()?,
+                environment: crate::r_environment::Bridge::initialize()?,
+                _interop: crate::python::Interop::initialize()?,
+            })
+        } else {
+            None
+        };
+        Ok(Self(state))
+    }
+
+    pub(super) fn available(&self) -> bool {
+        self.0.is_some()
     }
 
     pub(super) fn temporary_directory() -> Result<std::path::PathBuf, Box<dyn Error>> {
@@ -96,22 +131,31 @@ impl Runtime {
     }
 
     pub(super) fn idle(&self) -> Result<(), String> {
-        run_ready_handlers(&self.graphics)
+        match &self.0 {
+            Some(state) => run_ready_handlers(&state.graphics),
+            None => Ok(()),
+        }
     }
 
     pub(super) fn prepare(
         &self,
         library: &str,
     ) -> Result<crate::r_environment::PreparationOutcome, String> {
+        let Some(state) = &self.0 else {
+            return Ok(crate::r_environment::PreparationOutcome::Failed {
+                message: UNAVAILABLE.into(),
+            });
+        };
         defer_interrupts(
-            || self.environment.prepare(std::path::Path::new(library)),
+            || state.environment.prepare(std::path::Path::new(library)),
             discard_interrupts,
         )
     }
 
     pub(super) fn begin_cell(&self, language: Language) -> Result<(), String> {
+        let Some(state) = &self.0 else { return Ok(()) };
         if !matches!(language, Language::Sql) {
-            defer_interrupts(|| self.graphics.begin(), check_interrupts)?;
+            defer_interrupts(|| state.graphics.begin(), check_interrupts)?;
         }
         if !matches!(language, Language::R) {
             EVALUATION_STARTED.store(true, Ordering::SeqCst);
@@ -121,17 +165,22 @@ impl Runtime {
     }
 
     pub(super) fn finish_cell(&self, language: Language) -> Result<(), String> {
+        let Some(state) = &self.0 else { return Ok(()) };
         if !matches!(language, Language::R) {
             EVALUATION_STARTED.store(false, Ordering::SeqCst);
         }
         SQL_EVALUATION_STARTED.store(false, Ordering::SeqCst);
         if !matches!(language, Language::Sql) {
-            defer_interrupts(|| self.graphics.finish(), check_interrupts)?;
+            defer_interrupts(|| state.graphics.finish(), check_interrupts)?;
         }
         Ok(())
     }
 
     pub(super) fn evaluate(&self, source: String) -> Result<(), String> {
+        if self.0.is_none() {
+            super::emit_diagnostic(&format!("Error: {UNAVAILABLE}\n"));
+            return Ok(());
+        }
         evaluate_r_cell(source)
     }
 }
@@ -193,6 +242,9 @@ pub(super) fn defer_interrupts<T>(
 }
 
 pub(super) fn discard_interrupts() {
+    if R_EVENTS.get().is_none() {
+        return;
+    }
     unsafe { libr::set(libr::R_interrupts_pending, 0) };
 }
 

@@ -11,8 +11,8 @@ MCP Console is being built as a persistent, sandboxed R, Python, and DuckDB SQL 
 It gives an MCP client one live computational workspace instead of a sequence of disposable shell commands.
 An agent can submit complete R, Python, or SQL cells, keep state across calls, answer interactive prompts, inspect partial output, and switch languages as a task evolves.
 
-The built-in worker embeds R.
-Python runs through reticulate, and SQL uses a persistent DuckDB connection by default while allowing R code to select another DBI connection or Python code to select a DB-API connection.
+Console embeds R and Python independently and supports local Python and SQL sessions without R.
+SQL uses a persistent DuckDB connection by default while allowing R code to select another DBI connection or Python code to select a DB-API connection.
 R and Python can access one another's globals through reticulate, while the managed DuckDB backend can query data frames in the R workspace directly.
 R plots made with the default device and open Matplotlib figures are returned as images, tool results share an 8 KiB text budget with previews of oversized output, and long-running work can be polled or interrupted.
 Emitted cell text is retained separately in raw session logs, up to 1 GiB per cell; retrieving omitted text requires filesystem access to the Console server recording workspace.
@@ -26,11 +26,13 @@ The release workflow builds native wheels for Apple Silicon and Intel macOS and 
 Linux wheels require glibc 2.39 or later; building from source uses the host glibc.
 On older Linux kernels or when seccomp denies `close_range` with `EPERM`, inherited-descriptor cleanup requires `/proc` to be mounted.
 
-A working R installation is required on the execution host.
-Set `R_HOME` or make `R` discoverable on that host's `PATH`.
+For local execution, R is optional for Python and SQL.
+Python execution requires a shared-library Python installation; managed Python from `uv` supplies one.
+For R cells and R/Python interoperability, install shared-library R and set `R_HOME` or make `R` discoverable on the execution host's `PATH`.
+Without R, managed SQL uses Python DuckDB; SQL without either R or Python is not yet supported.
 An SSH, Docker, or Docker Sandbox controller does not need a local R or Python analysis environment.
 For local execution, dynamic environment resolution normally starts from either `ir` 0.4.0 or later or `uv` on `PATH`.
-The first managed server start may download and install the default R and Python requirements.
+The first managed operation may download Python and its default packages through `uv`; available R installations also receive the default R requirements.
 If no resolver bootstrap is available, the server starts a bare runtime using installed packages.
 See [Requirements and environments](https://github.com/t-kalinowski/mcp-console/blob/main/docs/REQUIREMENTS.md) for bootstrap options, managed defaults, and bare runtime behavior.
 

@@ -10,7 +10,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import (
-    assert_exact_interleaving,
     assert_result_content,
     last_result_text,
     wait_for_evaluation_output,
@@ -22,10 +21,12 @@ from support.normalization import code
 from support.r import r_test_environment, reference_plots
 from support.records import Transcript
 from support.resolvers import matplotlib_test_environment
+from support.requirements import NO_R, R_RUNTIME, requires
 from support.suites import run_this_suite
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R_RUNTIME)
 def test_evaluates_cells_in_persistent_reticulate_state(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -158,6 +159,7 @@ def test_evaluates_cells_in_persistent_reticulate_state(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R_RUNTIME)
 def test_returns_r_plots_from_python_bridge(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -198,7 +200,22 @@ def test_returns_r_plots_from_python_bridge(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R_RUNTIME)
 def test_returns_matplotlib_plots(binary: Path, execution: Execution) -> Transcript:
+    return returns_matplotlib_plots(binary, execution, with_r=True)
+
+
+@executions(DIRECT, SANDBOXED)
+@requires(NO_R)
+def test_returns_no_r_matplotlib_plots(
+    binary: Path, execution: Execution
+) -> Transcript:
+    return returns_matplotlib_plots(binary, execution, with_r=False)
+
+
+def returns_matplotlib_plots(
+    binary: Path, execution: Execution, *, with_r: bool
+) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
         workspace = temporary / "workspace"
@@ -220,13 +237,17 @@ def test_returns_matplotlib_plots(binary: Path, execution: Execution) -> Transcr
             current_directory=workspace,
         )
         client.initialize_and_list_tools()
-        # fmt: r
-        r = code(r"""
-            reticulate::py_require("matplotlib")
-            invisible(reticulate::py_config())
-            """)
-        client.send(r=r)
-        assert last_result_text(client) == "[done]"
+        if with_r:
+            # fmt: r
+            r = code(r"""
+                reticulate::py_require("matplotlib")
+                invisible(reticulate::py_config())
+                """)
+            client.send(r=r)
+            assert last_result_text(client) == "[done]"
+        else:
+            client.send(requirements={"python": ["matplotlib"]})
+            assert last_result_text(client) == "[prepared]"
         # fmt: python
         python = code("""
             import os
@@ -451,6 +472,7 @@ def test_inherits_explicit_matplotlib_config(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R_RUNTIME)
 def test_inherits_default_matplotlib_config(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -458,6 +480,7 @@ def test_inherits_default_matplotlib_config(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R_RUNTIME)
 def test_inherits_xdg_matplotlib_config(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -626,6 +649,7 @@ def test_recovers_from_python_errors(binary: Path, execution: Execution) -> Tran
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R_RUNTIME)
 def test_releases_python_threads_before_running_init_hooks(
     binary: Path,
     execution: Execution,
@@ -799,6 +823,7 @@ def test_python_debugger_input(binary: Path, execution: Execution) -> Transcript
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R_RUNTIME)
 def test_python_evaluation_ignores_r_interpreter_mutations(
     binary: Path, execution: Execution
 ) -> Transcript:

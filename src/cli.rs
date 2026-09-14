@@ -59,7 +59,7 @@ pub enum Command {
         relay: Option<PathBuf>,
     },
 
-    /// Run the internal R worker
+    /// Run the internal Console worker
     #[command(hide = true)]
     Worker,
 

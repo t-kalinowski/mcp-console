@@ -34,7 +34,7 @@ if "Open" in bootstrap:
                 "result": {
                     "Ok": {
                         "managed": False,
-                        "selections": {"r_home": None, "python": None},
+                        "selections": {"r_home": "/remote/R", "python": None},
                     }
                 },
                 "control": None,

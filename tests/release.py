@@ -302,26 +302,30 @@ class ReleaseScriptTests(unittest.TestCase):
                     ),
                     flush=True,
                 )
-                evaluation = json.loads(sys.stdin.readline())
-                assert evaluation["params"] == {
-                    "name": "send",
-                    "arguments": {"r": "6 * 7"},
-                }
-                if os.environ.get("FAKE_MCP_EVALUATION_HANG"):
-                    signal.pause()
-                print(
-                    json.dumps(
-                        {
-                            "jsonrpc": "2.0",
-                            "id": evaluation["id"],
-                            "result": {
-                                "content": [{"type": "text", "text": "[1] 42\\n"}],
-                                "isError": False,
-                            },
-                        }
-                    ),
-                    flush=True,
-                )
+                evaluations = [("python", "42\\n")]
+                if not os.environ.get("FAKE_NO_R"):
+                    evaluations.append(("r", "[1] 42\\n"))
+                for language, output in evaluations:
+                    evaluation = json.loads(sys.stdin.readline())
+                    assert evaluation["params"] == {
+                        "name": "send",
+                        "arguments": {language: "6 * 7"},
+                    }
+                    if os.environ.get("FAKE_MCP_EVALUATION_HANG"):
+                        signal.pause()
+                    print(
+                        json.dumps(
+                            {
+                                "jsonrpc": "2.0",
+                                "id": evaluation["id"],
+                                "result": {
+                                    "content": [{"type": "text", "text": output}],
+                                    "isError": False,
+                                },
+                            }
+                        ),
+                        flush=True,
+                    )
             else:
                 raise SystemExit(2)
         """
@@ -372,6 +376,7 @@ class ReleaseScriptTests(unittest.TestCase):
         wheel = directory / "mcp_console-0.0.2-py3-none-macosx_11_0_arm64.whl"
         self.write_wheel(wheel)
         environment = os.environ.copy()
+        environment.pop("R_HOME", None)
         environment.update(
             {
                 "PATH": f"{commands}{os.pathsep}{environment['PATH']}",
@@ -478,7 +483,7 @@ class ReleaseScriptTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0, result.stdout)
             self.assertIn("private sandbox runner failed", result.stderr)
 
-    def test_smoke_wheel_evaluates_r_and_bounds_response_waits(self) -> None:
+    def test_smoke_wheel_evaluates_peers_and_bounds_response_waits(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)
             environment, wheel, cargo_bin = self.smoke_environment(directory)
@@ -537,6 +542,48 @@ class ReleaseScriptTests(unittest.TestCase):
 
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("MCP response timed out after 0.01 seconds", result.stderr)
+
+    def test_smoke_wheel_evaluates_r_selected_only_by_home(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            environment, wheel, cargo_bin = self.smoke_environment(directory)
+            commands = directory / "commands"
+            r_home = directory / "selected-R"
+            (r_home / "bin").mkdir(parents=True)
+            (commands / "R").rename(r_home / "bin" / "R")
+            environment.update(PATH=str(commands), R_HOME=str(r_home))
+            result = self.run_script(
+                "smoke-wheel",
+                str(wheel),
+                str(cargo_bin),
+                "--startup-timeout-seconds",
+                "1",
+                "--response-timeout-seconds",
+                "1",
+                cwd=directory,
+                env=environment,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_smoke_wheel_accepts_a_host_without_r(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            environment, wheel, cargo_bin = self.smoke_environment(directory)
+            commands = directory / "commands"
+            (commands / "R").unlink()
+            environment.update(PATH=str(commands), FAKE_NO_R="1")
+            result = self.run_script(
+                "smoke-wheel",
+                str(wheel),
+                str(cargo_bin),
+                "--startup-timeout-seconds",
+                "1",
+                "--response-timeout-seconds",
+                "1",
+                cwd=directory,
+                env=environment,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_smoke_wheel_bounds_runtime_startup_separately(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
