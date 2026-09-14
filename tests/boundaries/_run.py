@@ -362,8 +362,13 @@ def prune_stale_snapshots(checked_snapshots: set[Path], orphans: list[Path]) -> 
         if not snapshot.is_file() or snapshot.suffix not in {".yaml", ".md", ".qmd"}:
             continue
         owner = snapshot.parent / snapshot.name.split(".", 1)[0]
+        other_platform = bool(
+            ({"darwin", "linux"} - {sys.platform}) & set(snapshot.name.split(".")[1:])
+        )
         stale = snapshot in orphans or (
-            owner in checked_cases and snapshot not in checked_snapshots
+            owner in checked_cases
+            and snapshot not in checked_snapshots
+            and not other_platform
         )
 
         if stale:

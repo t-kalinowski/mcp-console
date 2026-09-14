@@ -235,6 +235,7 @@ Companion snapshots remain owned by the case-name prefix.
 Use `--update` only to accept an intentional transcript change.
 A full `scripts/test --update` also removes snapshots for deleted suites and cases, as well as obsolete companion snapshots for cases that ran; selected updates leave other snapshots alone.
 Skipped cases retain all their primary and companion snapshots during full updates, even when another case in the same suite runs.
+For existing cases, companions qualified with `.linux.` or `.darwin.` are pruned only on that platform.
 
 ## Requirements and execution modes
 

@@ -376,6 +376,7 @@ class ReleaseScriptTests(unittest.TestCase):
         wheel = directory / "mcp_console-0.0.2-py3-none-macosx_11_0_arm64.whl"
         self.write_wheel(wheel)
         environment = os.environ.copy()
+        environment.pop("R_HOME", None)
         environment.update(
             {
                 "PATH": f"{commands}{os.pathsep}{environment['PATH']}",
@@ -541,6 +542,28 @@ class ReleaseScriptTests(unittest.TestCase):
 
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("MCP response timed out after 0.01 seconds", result.stderr)
+
+    def test_smoke_wheel_evaluates_r_selected_only_by_home(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            environment, wheel, cargo_bin = self.smoke_environment(directory)
+            commands = directory / "commands"
+            r_home = directory / "selected-R"
+            (r_home / "bin").mkdir(parents=True)
+            (commands / "R").rename(r_home / "bin" / "R")
+            environment.update(PATH=str(commands), R_HOME=str(r_home))
+            result = self.run_script(
+                "smoke-wheel",
+                str(wheel),
+                str(cargo_bin),
+                "--startup-timeout-seconds",
+                "1",
+                "--response-timeout-seconds",
+                "1",
+                cwd=directory,
+                env=environment,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_smoke_wheel_accepts_a_host_without_r(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

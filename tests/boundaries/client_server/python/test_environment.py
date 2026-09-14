@@ -262,6 +262,7 @@ def test_compacts_native_duckdb_progress_bar(
     # fmt: python
     python = code(r"""
         import os
+        import sys
         import tempfile
 
         import duckdb
@@ -300,8 +301,11 @@ def test_compacts_native_duckdb_progress_bar(
 
         assert result[0] is not None
         assert progress.count(b"\r") >= 100
-        with os.fdopen(os.dup(1), "wb") as stdout:
-            stdout.write(progress)
+        # Replay the captured native redraws through the ordered console stream
+        # so the completion response includes them. Raw fd delivery has no
+        # ordering relationship with the independent completion sideband.
+        sys.stdout.write(progress.decode())
+        sys.stdout.flush()
         """)
     client.send(
         python=python,

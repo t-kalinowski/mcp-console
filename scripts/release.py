@@ -385,7 +385,14 @@ def smoke_wheel(args: argparse.Namespace) -> None:
     internal_ir = installed.resolve().with_name("ir")
     require(not internal_ir.exists(), f"wheel contains sibling `ir`: {internal_ir}")
 
-    r_home = command_output(["R", "RHOME"]) if shutil.which("R") else None
+    r_home = os.environ.get("R_HOME")
+    if r_home is not None:
+        require(
+            any((Path(r_home) / "bin" / name).is_file() for name in ("R", "Rscript")),
+            "R_HOME must select an existing R installation",
+        )
+    elif shutil.which("R"):
+        r_home = command_output(["R", "RHOME"])
     uv = shutil.which("uv")
     require(uv is not None, "host `uv` is not on `PATH`")
     with tempfile.TemporaryDirectory(prefix="mcp-console-uv-path-") as directory:
