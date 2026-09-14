@@ -80,6 +80,7 @@ mock_completion <- function(message, finish_reason) {
 }
 
 test_that("console_tool works when registered with an ellmer chat", {
+  # fmt: r
   source <- r"(
     x <- 41L
     cat("adapter head\n", strrep("x", 10000), "\nadapter tail\n", sep = "")
