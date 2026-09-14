@@ -433,7 +433,8 @@ During ingestion, it incrementally decodes direct streams and compacts carriage-
 It retains bounded text at the beginning and latest tail, coalesces adjacent text and omission metadata, and admits images under separate byte, metadata, and count limits.
 Small text appends reuse the current buffer; compaction runs after a bounded batch of new bytes.
 A response cut seals this projection and its raw-file receipt without reading the file.
-Empty unrecorded intervals do not add source receipts during delivery recovery; unrecorded text still keeps its source boundary.
+Intervals with no rendered text publish any finished file summary and discard their receipt; unrecorded text still keeps its source boundary.
+Fully omitted intervals account for their per-cell omissions and release their receipts into one bounded summary, which names the journal containing individual file paths and counts.
 The canonical response builder preserves typed control notices during composition; its final projection applies one 8 KiB UTF-8 text budget, including all generated notices, across the complete tool result.
 Sizing counts the projected text and notices without constructing content blocks or copying images.
 Collection and response composition keep bounded state even after raw-file retention fails or is disabled.
@@ -497,7 +498,7 @@ Response cuts flush the active file, so output already returned by `send` is als
 The file is limited to 1 GiB; later worker output is still drained and counted after the limit or a file failure.
 
 A `cell_output` journal event records the initiating call, relative path, retained raw bytes, rendered UTF-8 bytes omitted from previews (`inline_omitted_bytes`), raw bytes not retained in the file (`discarded_bytes`), and retention limit.
-File completion seals the raw totals; final response projection accounts for its omissions before publishing this summary and the corresponding tool result.
+File completion seals the raw totals; response projection or interval summarization accounts for its omissions before publishing this summary and the corresponding tool result.
 Shared interval receipts prevent delivery recovery from counting the same omission twice.
 If a recovered response is later composed with more output, additional omissions can publish an updated cumulative summary for the same cell; the most recent summary owns its totals.
 These counts describe separate projections: normalization can change rendered byte counts, and raw bytes not retained in the file may still appear in the preview.

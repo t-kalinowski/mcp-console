@@ -1,6 +1,8 @@
 #!/usr/bin/env -S uv run --script
 
+import json
 import os
+import re
 import sys
 import tempfile
 from contextlib import closing
@@ -13,7 +15,12 @@ from support.assertions import last_tool_text
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
 from support.execution import DIRECT
-from support.previews import assert_preview, normalize_preview_paths
+from support.previews import (
+    assert_preview,
+    cell_text,
+    normalize_preview_paths,
+    session_directory,
+)
 from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, requires
 from support.suites import run_this_suite
@@ -153,6 +160,116 @@ def test_cancelled_control_recovery_keeps_bounded_allocations(
             assert text == "\n[idle]" * 1025
             client.send()
             assert last_tool_text(client) == "\n[idle]"
+            return client.finish()
+
+
+@requires(NATIVE_FIXTURES)
+def test_recovered_recorded_cells_keep_bounded_source_markers(
+    binary: Path,
+) -> Transcript:
+    return recovered_recorded_cells(binary, count=32, silent=False)
+
+
+@requires(NATIVE_FIXTURES)
+def test_recovered_silent_cells_discard_file_receipts(binary: Path) -> Transcript:
+    return recovered_recorded_cells(binary, count=512, silent=True)
+
+
+def recovered_recorded_cells(binary: Path, *, count: int, silent: bool) -> Transcript:
+    worker = Path(__file__).resolve().parents[3] / "fixtures/zod"
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        with (
+            closing(FifoCheckpoint.create(root / "result-reached")) as reached,
+            closing(FifoCheckpoint.create(root / "result-release")) as release,
+            closing(AllocationProfile(root)) as profile,
+            McpClient(
+                binary,
+                DIRECT.serve("--worker", str(worker)),
+                {
+                    **os.environ,
+                    **profile.environment,
+                    "MCP_CONSOLE_TEST_RESULT_REACHED": str(reached.path),
+                    "MCP_CONSOLE_TEST_RESULT_RELEASE": str(release.path),
+                },
+            ) as client,
+        ):
+            client.initialize_and_list_tools()
+            client.send(r="echo ready")
+            profile.start()
+            profile.pause_results(True)
+            try:
+                for index in range(count):
+                    pending = client.start_send(
+                        control="restart",
+                        r="complete silently"
+                        if silent
+                        else f"preview recovery cell {index}",
+                    )
+                    reached.wait(
+                        "replacement cell result owns delivery before journaling"
+                    )
+                    client.notify("notifications/cancelled", requestId=pending["id"])
+                    assert client.request("ping")["result"] == {}
+                    release.release()
+                    assert "result" not in pending, pending
+            finally:
+                profile.pause_results(False)
+                release.release()
+            result = client.send(control="interrupt")
+            client.request("ping")
+            _, largest = profile.stop()
+            if silent:
+                # Control history is already summarized within 8 KiB. Repeated
+                # empty files must not add another unbounded receipt history.
+                assert largest <= 64 * 1024, largest
+            assert not result["isError"], result
+            text = result["content"][0]["text"]
+            assert len(text.encode()) <= 8192
+            assert text.endswith("[done]"), repr(text[-200:])
+            events = [
+                json.loads(line)
+                for line in (session_directory(client) / "internal/events.jsonl")
+                .read_text()
+                .splitlines()
+            ]
+            summaries = {
+                event["call_id"]: event
+                for event in events
+                if event["event"] == "cell_output"
+            }
+            assert len(summaries) == count + 1, summaries.keys()
+            if silent:
+                assert "output preview" not in text
+            else:
+                assert "cell 0 head\n" in text and f"cell {count - 1} tail\n" in text
+                assert "outputs/call-000002.log" in text
+                assert f"outputs/call-{count + 1:06}.log" in text
+                assert "internal/events.jsonl" in text
+                omitted = sum(
+                    map(int, re.findall(r"output preview: omitted (\d+)", text))
+                )
+                assert (
+                    sum(s["inline_omitted_bytes"] for s in summaries.values())
+                    == omitted
+                )
+            for index in range(count):
+                emitted = (
+                    ""
+                    if silent
+                    else f"cell {index} head\n" + "x" * 32768 + f"\ncell {index} tail\n"
+                )
+                assert cell_text(client, index + 2) == emitted
+                summary = summaries[index + 2]
+                assert summary["retained_bytes"] == len(emitted.encode())
+                assert summary["discarded_bytes"] == 0
+                if silent:
+                    assert summary["inline_omitted_bytes"] == 0
+                elif 0 < index < count - 1:
+                    assert summary["inline_omitted_bytes"] == len(emitted.encode())
+            client.send()
+            assert last_tool_text(client) == "\n[idle]"
+            normalize_preview_paths(client)
             return client.finish()
 
 

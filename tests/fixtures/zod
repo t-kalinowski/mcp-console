@@ -743,6 +743,12 @@ def main() -> None:
             send(writer, {"kind": "completed"})
             continue
 
+        if source.startswith("preview recovery cell "):
+            number = int(source.removeprefix("preview recovery cell "))
+            send_output(writer, f"cell {number} head\n" + "x" * 32768 + f"\ncell {number} tail\n")
+            send(writer, {"kind": "completed"})
+            continue
+
         if source in {"preview huge line", "preview tiny events", "preview many tiny events", "preview redraw"}:
             send_output(writer, "preview head\n")
             if source == "preview huge line":

@@ -503,6 +503,8 @@ For SSH, Docker, and Docker Sandbox, this is the controller's workspace.
 Full retained text requires a filesystem tool with access to that directory; a tool that can read only the worker filesystem or another client host is insufficient.
 Console does not discover file tools or provide a read/search interface in this version.
 Clients without appropriate filesystem access still receive bounded previews and final diagnostics.
+When repeated cancelled deliveries combine output from many cells, fully omitted intervals share one summary so their notices also fit the text budget.
+This summary names `internal/events.jsonl` in the recorded session for individual raw-log paths and per-cell counts; the beginning and latest tail retain their own log notices.
 Re-running a cell is not retrieval of its original output and is never an automatic retrieval action.
 
 Polls return newly observed output only.

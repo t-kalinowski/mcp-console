@@ -10,13 +10,9 @@ pub(super) const IMAGE_BYTES: usize = 8 * 1024 * 1024;
 const IMAGE_METADATA_BYTES: usize = 64 * 1024;
 const IMAGE_EVENTS: usize = 4096;
 
-#[derive(Clone, Default)]
-pub(super) struct Source {
-    pub(super) file: Option<crate::transcript::OutputRecord>,
-    pub(super) raw_bytes: u64,
-    pub(super) retained_bytes: u64,
-    pub(super) discarded_bytes: u64,
-}
+mod source;
+pub(super) use source::Source;
+use source::Summary;
 
 #[derive(Clone)]
 pub(super) enum Part {
@@ -27,6 +23,7 @@ pub(super) enum Part {
     Image(Content),
     ImageGap,
     Source(Source),
+    Summary(Summary),
 }
 
 #[derive(Clone, Copy, Default)]
@@ -191,13 +188,16 @@ impl Preview {
             .rev()
             .take_while(|part| !matches!(part, Part::Source(_)))
             .any(|part| matches!(part, Part::Text(_) | Part::Gap(_) | Part::Information(_)));
-        // Control-only recovery can seal arbitrarily many empty intervals.
-        // Keep a boundary for unrecorded text (including resolver notices),
-        // but do not retain receipts with nothing to attribute or publish.
-        if source.file.is_none() && source.raw_bytes == 0 && !has_text {
+        // Publish empty files, but retain no receipt when there is no rendered
+        // text to attribute. Raw terminal edits can also render no text.
+        if !has_text {
+            if let Some(file) = source.file {
+                file.publish();
+            }
             return;
         }
         self.parts.push(Part::Source(source));
+        self.summarize_sources();
     }
 
     pub(super) fn extend(&mut self, other: Self) {
@@ -210,6 +210,7 @@ impl Preview {
                 Part::ImageGap => self.parts.push(Part::ImageGap),
                 Part::Image(image) => self.image(image),
                 Part::Source(source) => self.source(source),
+                Part::Summary(summary) => self.parts.push(Part::Summary(summary)),
             }
         }
         self.omitted_images += other.omitted_images;
@@ -217,6 +218,7 @@ impl Preview {
         self.recorded_omitted_images += other.recorded_omitted_images;
         self.omitted_controls += other.omitted_controls;
         self.omitted_control_bytes += other.omitted_control_bytes;
+        self.summarize_sources();
     }
 
     pub(super) fn is_empty(&self) -> bool {
@@ -231,6 +233,7 @@ impl Preview {
         match self.last_visible() {
             Some(Part::Text(text) | Part::Information(text)) => text.ends_with('\n'),
             Some(Part::Notice(control)) => control.ends_with_newline(),
+            Some(Part::Summary(_)) => true,
             _ => false,
         }
     }
@@ -258,6 +261,7 @@ impl Preview {
             .map(|part| match part {
                 Part::Text(text) | Part::Information(text) => text.len() as u64,
                 Part::Gap(gap) => gap.bytes,
+                Part::Summary(summary) => summary.gap.bytes,
                 _ => 0,
             })
             .sum();
@@ -297,6 +301,10 @@ impl Preview {
                     position += gap.bytes;
                     parts.push(Part::Gap(gap));
                 }
+                Part::Summary(summary) => {
+                    position += summary.gap.bytes;
+                    parts.push(Part::Summary(summary));
+                }
                 Part::Information(text) => {
                     let end = position + text.len() as u64;
                     if end <= head_end || position >= tail_start {
@@ -330,6 +338,54 @@ impl Preview {
                 _ => 0,
             })
             .sum();
+        self.summarize_sources();
+    }
+
+    /// Fully omitted intervals no longer need live per-file receipts. Account
+    /// them once, then keep one summary at the first such omission. Text-bearing
+    /// intervals retain their own receipts so later trims can update their counts.
+    fn summarize_sources(&mut self) {
+        let mut start = 0;
+        for end in 0..self.parts.len() {
+            let Part::Source(source) = &self.parts[end] else {
+                continue;
+            };
+            let parts = &self.parts[start..end];
+            if !parts
+                .iter()
+                .any(|part| matches!(part, Part::Text(_) | Part::Information(_)))
+            {
+                let mut gap = Gap::default();
+                for part in parts {
+                    if let Part::Gap(omitted) = part {
+                        gap.bytes += omitted.bytes;
+                        gap.notices += omitted.notices;
+                    }
+                }
+                let mut summary = Summary::new(source, gap);
+                for part in &mut self.parts[start..=end] {
+                    if matches!(part, Part::Gap(_) | Part::Source(_)) {
+                        *part = Part::Summary(std::mem::take(&mut summary));
+                    }
+                }
+            }
+            start = end + 1;
+        }
+        let mut combined = Summary::default();
+        let mut first = None;
+        for (index, part) in self.parts.iter_mut().enumerate() {
+            if let Part::Summary(summary) = part {
+                if summary.gap.bytes != 0 {
+                    first.get_or_insert(index);
+                }
+                combined.extend(std::mem::take(summary));
+            }
+        }
+        if let Some(first) = first {
+            self.parts[first] = Part::Summary(combined);
+        }
+        self.parts
+            .retain(|part| !matches!(part, Part::Summary(summary) if summary.gap.bytes == 0));
     }
 
     /// Reserve notices first, then divide ordinary text between its head and tail.
@@ -402,6 +458,7 @@ impl Preview {
                             projection.text(&marker);
                         }
                     }
+                    Part::Summary(summary) => projection.text(&summary.notice()),
                     Part::Image(image) => {
                         if let Some(content) = &mut projection.content {
                             content.push(image.clone());
@@ -438,36 +495,6 @@ impl Preview {
             }
         }
         projection
-    }
-}
-
-impl Source {
-    fn notice(&self, omitted: u64, notices: u64) -> String {
-        let location = match &self.file {
-            Some(file) => format!(
-                "raw cell log: {} (Console server recording workspace; controller for remote targets); {} raw bytes retained, {} raw bytes not retained{}",
-                file.public_path(),
-                self.retained_bytes,
-                self.discarded_bytes,
-                if self.discarded_bytes == 0 {
-                    ""
-                } else {
-                    "; file contains only a prefix; omitted text beyond it is unavailable"
-                },
-            ),
-            None => format!(
-                "no retained cell log ({} raw bytes observed); omitted text is unavailable",
-                self.raw_bytes
-            ),
-        };
-        let generated = if notices == 0 {
-            String::new()
-        } else {
-            format!("; {notices} generated notice bytes not retained")
-        };
-        format!(
-            "\n[output preview: omitted {omitted} rendered UTF-8 bytes{generated}; {location}]\n"
-        )
     }
 }
 

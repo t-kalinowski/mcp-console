@@ -343,8 +343,7 @@ impl OutputTapeState {
         let response = std::mem::take(&mut self.current).finish();
         let cut = self.next_cut;
         self.next_cut += 1;
-        // File intervals carry their receipt until final response accounting;
-        // source() discards empty unrecorded intervals before delivery recovery.
+        // Only intervals with rendered text need a receipt for later accounting.
         self.sealed.push_back((cut, response));
         self.raw_bytes = 0;
         OutputCut(cut)
