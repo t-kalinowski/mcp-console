@@ -8,6 +8,7 @@ use super::requirements::push_duckdb_r_target;
 #[derive(Clone)]
 pub(in crate::worker_client) struct Environment {
     pub(in crate::worker_client) custom_worker: bool,
+    pub(in crate::worker_client) r_home: Option<std::path::PathBuf>,
     pub(in crate::worker_client) setup: Option<super::super::BuiltinSetup>,
     pub(in crate::worker_client) duckdb_extensions: BTreeSet<String>,
     /// R libraries that may have supplied DuckDB in the current worker generation.

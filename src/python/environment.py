@@ -161,12 +161,14 @@ def initialize(request):
 
 def _activate(discovery):
     previous = set(_discovery["site_packages"]) if _discovery is not None else set()
+    selected = set(discovery["site_packages"])
     paths = list(sys.path)
     prefix, exec_prefix, executable = sys.prefix, sys.exec_prefix, sys.executable
     try:
-        sys.path[:] = [path for path in sys.path if path not in previous]
+        sys.path[:] = [path for path in sys.path if path not in previous - selected]
         for path in discovery["site_packages"]:
-            site.addsitedir(path)
+            if path not in sys.path:
+                site.addsitedir(path)
         sys.prefix = sys.exec_prefix = discovery["prefix"]
         runtime.activate_process_environment(discovery["executable"])
         importlib.invalidate_caches()

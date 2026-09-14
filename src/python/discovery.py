@@ -10,14 +10,16 @@ import sysconfig
 if sys.version_info < (3, 10):
     sys.exit("MCP Console requires Python 3.10 or later")
 
-library = os.path.join(
-    sysconfig.get_config_var("LIBDIR"), sysconfig.get_config_var("LDLIBRARY")
+library_directory = sysconfig.get_config_var(
+    "PYTHONFRAMEWORKPREFIX" if sysconfig.get_config_var("PYTHONFRAMEWORK") else "LIBDIR"
 )
+library = os.path.join(library_directory, sysconfig.get_config_var("INSTSONAME"))
 if not os.path.isfile(library):
     sys.exit(f"Python requires a shared library; selected interpreter has no {library}")
 
 print(
-    json.dumps(
+    "\x1eMCP_CONSOLE_PYTHON_DISCOVERY\x1e"
+    + json.dumps(
         {
             "executable": sys.executable,
             "prefix": sys.prefix,

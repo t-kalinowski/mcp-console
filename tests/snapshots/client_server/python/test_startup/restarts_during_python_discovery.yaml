@@ -1,0 +1,36 @@
+---
+!same-as bare MCP initialization for this execution mode
+---
+send:
+  python: never_run = True
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running; poll with an empty send]
+  isError: false
+---
+send:
+  control: restart
+  timeout_ms: 10000
+result:
+  content:
+    - type: text
+      text: |-
+        Error: Python is unavailable: cannot run `<workspace>/python`: worker is shutting down
+        [active evaluation stopped by session restart request]
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: false
+---
+send:
+  python: "'never_run' in globals()"
+result:
+  content:
+    - type: text
+      text: |
+        False
+  isError: false

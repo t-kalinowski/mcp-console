@@ -9,6 +9,7 @@ Ordinary Docker retains native provider selection by default; its `external-sand
 The MCP server and recordings stay on the controller.
 Each worker generation gets a fresh Console-owned container containing both the relay and built-in worker.
 Docker image setup happens once before MCP readiness.
+The disposable probe validates explicit runtime selections and captures R availability for every worker generation.
 Python, Console, its companion bundle, analysis packages, and optional R must come from the image; this mode never prepares packages dynamically.
 The [Python-only example](../examples/python-only/Dockerfile) builds and installs Console without R and includes Python DuckDB for managed SQL.
 

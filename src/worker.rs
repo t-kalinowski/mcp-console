@@ -8,6 +8,8 @@ mod embedded_r;
 mod input;
 #[cfg(unix)]
 pub(crate) mod interrupt;
+#[cfg(unix)]
+mod process;
 
 // Keep the rest of the crate dependent on the worker facade. The core owns
 // shared sideband state and host callbacks. The coordinator dispatches cells;
@@ -23,6 +25,8 @@ pub(crate) use core::{
 pub(crate) use embedded_r::{ensure_active as activate_r, resolve_r};
 #[cfg(unix)]
 pub(crate) use input::read_line;
+#[cfg(unix)]
+pub(crate) use process::output as process_output;
 
 #[cfg(not(unix))]
 pub(crate) fn run() -> Result<(), Box<dyn std::error::Error>> {

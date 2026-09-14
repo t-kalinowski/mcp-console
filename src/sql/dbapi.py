@@ -17,11 +17,13 @@ _PROVIDER_MANAGED = 1
 _PROVIDER_HANDLED = 2
 _managed_r = True
 _managed_connection = None
+_temporary = None
 
 
 def configure(request):
-    global _managed_r
-    _managed_r = _json.loads(request)["managed_r"]
+    global _managed_r, _temporary
+    config = _json.loads(request)
+    _managed_r, _temporary = config["managed_r"], config["temporary"]
     return "null"
 
 
@@ -34,7 +36,7 @@ def sql_connection():
     if _managed_connection is None:
         import duckdb
 
-        storage = _tempfile.mkdtemp(prefix="mcp-console-duckdb-")
+        storage = _tempfile.mkdtemp(prefix="duckdb-", dir=_temporary)
         _managed_connection = duckdb.connect(
             config={
                 "secret_directory": _os.path.join(storage, "stored-secrets"),

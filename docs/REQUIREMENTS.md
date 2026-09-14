@@ -53,6 +53,9 @@ The built-in server prepares these defaults when an operation first needs an env
 These defaults apply when startup finds a resolver bootstrap from `ir` on `PATH`, `uv` on `PATH`, an explicit `uv` selection, or ambient reticulate.
 Server-managed Python additionally needs `uv`; when only `ir` is on `PATH`, the resolved reticulate installation supplies it.
 Python/uv discovery is independent of R discovery.
+An explicit `R_HOME` must contain `bin/Rscript`; an invalid selection fails startup on the execution host.
+The captured R selection, including absence, applies to every worker generation.
+Installing or changing R requires a new server session.
 A host with `uv` and no R prepares Python and Python DuckDB without invoking Rscript or resolving R packages.
 If no resolver bootstrap is available, the built-in server retains no managed environment, exposes no `requirements` field, and starts a bare runtime from the packages already installed for its available languages.
 R, Python, and SQL cells remain available, with ordinary R missing-package errors and explicit unavailable-adapter diagnostics where appropriate.

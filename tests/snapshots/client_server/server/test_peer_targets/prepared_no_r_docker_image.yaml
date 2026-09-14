@@ -56,7 +56,7 @@ result:
 
 
         Execution target:
-        {"transport":{"kind":"local"},"workspace":"/workspace","compute":{"kind":"docker","image":"<image>","build":null,"image_id":"<image>","repository_digest":"console-peer-runtimes@<image>"},"provider":"native","inner_native_runner":false}.
+        {"transport":{"kind":"local"},"workspace":"/workspace","compute":{"kind":"docker","image":"<image>","build":null,"image_id":"<image>","repository_digest":"<digest>"},"provider":"native","inner_native_runner":false}.
         Each generation uses the captured immutable image identity. Use
         preinstalled R, Python, and SQL packages; dynamic package preparation is
         disabled even if ir or uv is installed. Records, output spools, and

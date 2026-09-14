@@ -279,7 +279,13 @@ fn discover_rscript(
 ) -> Result<Option<PathBuf>, String> {
     if let Some(r_home) = std::env::var_os("R_HOME") {
         let rscript = PathBuf::from(r_home).join("bin/Rscript");
-        return Ok(rscript.is_file().then_some(rscript));
+        if !rscript.is_file() {
+            return Err(format!(
+                "R_HOME must select an existing R installation: {} is missing",
+                rscript.display()
+            ));
+        }
+        return Ok(Some(rscript));
     }
     let Some(program) = find_path_entry("R") else {
         return Ok(None);

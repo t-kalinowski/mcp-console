@@ -199,7 +199,7 @@ Keep these invariants intact:
 - `src/process_exit.rs` — ordinary direct-child exit observation without reaping, used by server launcher ownership.
 - `src/process_output.rs` — output draining bounded by an owned child exit, including a surviving inherited writer; used for local launchers, the SSH child, and the remote helper's launcher without equating their cleanup guarantees.
 - `src/sandbox.rs`, `src/sandbox/{installation,runner,unsupported}.rs` — thin sandbox frontend, verified runner selection, application policy, and unsupported-platform errors.
-- `src/worker.rs`, `src/worker/{coordinator,core,input,interrupt}.rs`, `src/worker/embedded_r.rs`, `src/r_repl.c` — Console-owned event loop and shared services, optional embedded-R backend, native interrupt routing, and C-owned DLL-REPL error boundary.
+- `src/worker.rs`, `src/worker/{coordinator,core,input,interrupt,process}.rs`, `src/worker/embedded_r.rs`, `src/r_repl.c` — Console-owned event loop and shared services, optional embedded-R backend, native interrupt routing, and C-owned DLL-REPL error boundary.
 
 ### Language adapters
 

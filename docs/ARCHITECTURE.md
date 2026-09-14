@@ -230,7 +230,8 @@ The built-in worker's `worker::core` owns shared sideband state, deferred operat
 The `worker::coordinator` owns the outer operation loop, cell lifecycle, dispatch, and shutdown.
 `worker::input` coordinates managed reads on shared fd 0; `worker::interrupt` wakes blocked reads and coordinates native interrupt acknowledgment.
 Only activated backends contribute idle events and cell hooks.
-Shared temporary storage exists before either language initializes.
+Shared temporary storage exists before either language initializes; it also owns Python DuckDB spill and secret storage.
+Runtime discovery children use the same interrupt wakeup and input-closure observation, and are terminated and reaped on cancellation.
 
 The built-in worker activates R on its main thread when an R cell, the R SQL provider, or an interoperability call requires it.
 On Linux, a worker with R available re-executes at startup, before activating either interpreter, with the selected `R_HOME/lib` first in `LD_LIBRARY_PATH`, preserving inherited library paths and its sideband endpoint.
@@ -239,18 +240,23 @@ R evaluation retains the C-owned top-level boundaries that contain R errors and 
 Ordinary R activation does not initialize Python or reticulate.
 Python activation does not load libR or initialize a SQL connection.
 The SQL router uses a DBI provider in embedded R or a DB-API provider in CPython.
-The managed provider is selected once per worker generation: R DuckDB when R is available, otherwise Python DuckDB.
+The server captures R availability and its selected home on the execution host during startup, including the disposable readiness probe for prepared targets.
+Every worker generation retains that selection: R DuckDB when R was available, otherwise Python DuckDB.
 Its catalog survives language activation and temporary selection of a user-owned DBI or DB-API connection.
 The Python adapter owns no R objects and needs no R runtime; its Python dependency remains explicit.
 An SQL provider independent of both languages is a follow-up.
 Its private R environment bridge conditionally wraps `base::library` and runs R's unchanged `base::loadNamespace` body in a private lexical environment that intercepts its retry restart; it applies accepted managed libraries and reports activation outcomes.
 The Rust Python facade loads, retains, and initializes the selected file-backed `libpython`.
 It installs the same private evaluator, input callbacks, plotting hooks, and environment activation implementation whether R is absent, inactive, or active.
+Discovery frames its result separately from interpreter startup and exit output, and uses the configured runtime library name and framework location.
+Initial activation preserves the site directories already initialized by CPython; adding a new managed environment processes its site directories.
 Ordinary Python text and managed input notices share the ordered sideband stream.
 Binary buffers, native descriptors, background threads, and descendants retain raw stdout/stderr capture.
 CPython's GIL and saved main-thread state remain owned by that embedding implementation.
 Reticulate attaches only for conversion and cross-language calls.
+Once attached, it also supplies event polling that services R events during Python execution and a notifier that services pending Python calls through R's input handlers.
 Its requirement APIs delegate to Console's manifest; its interpreter selection, output remapping, and interrupt installation do not control ordinary Python cells.
+Console replaces reticulate's interrupt handlers while retaining its event integration.
 Console installs its Python interrupt handler explicitly because `Py_InitializeEx(0)` does not install one.
 During nested language calls, the first runtime to handle an interrupt consumes it, respecting R's suspended-interrupt state.
 Before normal worker exit, it restores the main Python thread's saved attachment so extension-library exit destructors, including DuckDB's, can use Python safely.

@@ -26,8 +26,11 @@ impl Bridge {
     }
 
     pub(crate) fn evaluate(&mut self, source: &str) -> Result<(), String> {
-        if !managed_r() {
-            crate::python::ensure_initialized()?;
+        if !managed_r()
+            && let Err(message) = crate::python::ensure_initialized()
+        {
+            crate::worker::emit_diagnostic(&format!("Error: {message}\n"));
+            return Ok(());
         }
         EVALUATING.store(true, Ordering::SeqCst);
         let result = (|| match py_dbapi::dispatch(source)? {

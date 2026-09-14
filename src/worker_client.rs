@@ -149,6 +149,7 @@ struct WorkerSpec<'a> {
     sandbox_settings: &'a crate::settings::SandboxSettings,
     python: Option<&'a PythonEnvironment>,
     managed_r: Option<&'a crate::resolver::ManagedR>,
+    r_home: Option<&'a Option<PathBuf>>,
     dynamic_resolution: bool,
     callbacks: WorkerCallbacks,
     target: Option<&'a crate::target_session::Session>,
@@ -357,6 +358,7 @@ impl Client {
             sandbox_settings,
             Some(Environment {
                 custom_worker: true,
+                r_home: None,
                 setup: None,
                 duckdb_extensions: Default::default(),
                 duckdb_r_targets: Vec::new(),
@@ -389,8 +391,13 @@ impl Client {
         let program = std::env::current_exe()
             .map_err(|error| format!("failed to locate the worker executable: {error}"))?;
         #[cfg(unix)]
-        let (r, duckdb_extensions, python, r_resolver, setup) = {
+        let (r, duckdb_extensions, python, r_resolver, setup, r_home) = {
             let (bootstrap, rscript) = crate::resolver::discover(&mut python_resolver, on_started)?;
+            let r_home = rscript
+                .as_deref()
+                .and_then(std::path::Path::parent)
+                .and_then(std::path::Path::parent)
+                .map(std::path::Path::to_path_buf);
             if bootstrap.is_some()
                 || (python_resolver.has_uv()
                     && PythonEnvironment::uses_managed(configured_python.as_deref()))
@@ -411,6 +418,7 @@ impl Client {
                         ),
                         configured_python,
                     }),
+                    r_home,
                 )
             } else {
                 (
@@ -423,11 +431,12 @@ impl Client {
                         RResolver::Unavailable
                     },
                     None,
+                    r_home,
                 )
             }
         };
         #[cfg(not(unix))]
-        let (r, duckdb_extensions, python, r_resolver, setup) = (
+        let (r, duckdb_extensions, python, r_resolver, setup, r_home) = (
             Option::<crate::resolver::ManagedR>::None,
             Default::default(),
             Some(PythonEnvironment::builtin(
@@ -438,6 +447,7 @@ impl Client {
             )?),
             RResolver::Discover,
             None,
+            None,
         );
         Ok(Self::with_arguments(
             program,
@@ -447,6 +457,7 @@ impl Client {
             sandbox_settings,
             Some(Environment {
                 custom_worker: false,
+                r_home,
                 setup,
                 duckdb_extensions,
                 duckdb_r_targets: Vec::new(),
@@ -522,12 +533,17 @@ impl Client {
             policy,
             Some(Environment {
                 custom_worker: false,
+                r_home: session.compute_r_home(),
                 setup: None,
                 duckdb_extensions: Default::default(),
                 duckdb_r_targets: Vec::new(),
                 python: Some(PythonEnvironment::bare(None)),
                 r: None,
-                r_resolver: RResolver::Disabled,
+                r_resolver: if session.compute_r_home().is_some() {
+                    RResolver::Disabled
+                } else {
+                    RResolver::Unavailable
+                },
             }),
         );
         Arc::get_mut(&mut client.0).expect("new client").target = Some(session);
@@ -599,6 +615,7 @@ impl Client {
             policy,
             Some(Environment {
                 custom_worker: false,
+                r_home: discovery.selections.r_home.map(PathBuf::from),
                 setup,
                 duckdb_extensions: Default::default(),
                 duckdb_r_targets: Vec::new(),
@@ -1691,6 +1708,10 @@ impl Client {
                 sandbox_settings: &self.0.sandbox_settings,
                 python,
                 managed_r,
+                r_home: environment
+                    .as_ref()
+                    .filter(|environment| !environment.custom_worker)
+                    .map(|environment| &environment.r_home),
                 dynamic_resolution: self.dynamic_resolution(),
                 callbacks: WorkerCallbacks {
                     client: self.clone(),

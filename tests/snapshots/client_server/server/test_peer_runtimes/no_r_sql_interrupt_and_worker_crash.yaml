@@ -69,10 +69,10 @@ result:
           <string>(92): _interrupt
           <string>(83): _input
           <mcp-console:python:e1>(2): sql_gate
-          <string>(248): _evaluate
-          <string>(284): _dispatch
+          <string>(250): _evaluate
+          <string>(286): _dispatch
           <string>(602): _mcp_console_without_automatic_resolution
-          <string>(295): dispatch
+          <string>(297): dispatch
 
   isError: false
 ---

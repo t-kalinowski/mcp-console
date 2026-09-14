@@ -24,6 +24,7 @@ pub(crate) struct ComputeProfile {
 pub(crate) struct ComputeState {
     profile: &'static ComputeProfile,
     roots: Vec<PathBuf>,
+    selections: Option<crate::ssh::preparation::Selections>,
     blocked: Arc<Mutex<Option<String>>>,
 }
 
@@ -52,9 +53,10 @@ impl Session {
         let state = ComputeState {
             profile,
             roots,
+            selections: None,
             blocked: Arc::default(),
         };
-        let session = match target.compute {
+        let mut session = match target.compute {
             Compute::Docker(_) => {
                 Self::Docker(crate::docker::Captured::capture(target, &cancel)?, state)
             }
@@ -76,16 +78,22 @@ impl Session {
             }),
         )?;
         let mut output = generation.output(std::io::Cursor::new(bytes), None);
-        let mut unexpected = Vec::new();
+        let mut discovery = Vec::new();
         output
-            .read_to_end(&mut unexpected)
+            .read_to_end(&mut discovery)
             .map_err(|error| error.to_string())?;
         generation.retirement.check()?;
-        if !unexpected.is_empty() {
-            return Err(format!(
-                "unexpected {} runtime probe output",
+        let selections = serde_json::from_slice(&discovery).map_err(|error| {
+            format!(
+                "invalid {} runtime probe output: {error}",
                 profile.protocol.0
-            ));
+            )
+        })?;
+        match &mut session {
+            Self::Docker(_, state) | Self::DockerSandbox(_, state) => {
+                state.selections = Some(selections)
+            }
+            Self::Ssh(_) => unreachable!(),
         }
         Ok(session)
     }
@@ -95,6 +103,13 @@ impl Session {
             Self::Ssh(_) => None,
             Self::Docker(_, state) | Self::DockerSandbox(_, state) => Some(state),
         }
+    }
+
+    pub fn compute_r_home(&self) -> Option<PathBuf> {
+        self.compute()
+            .and_then(|state| state.selections.as_ref())
+            .and_then(|selections| selections.r_home.as_ref())
+            .map(PathBuf::from)
     }
 
     pub fn is_ssh(&self) -> bool {
@@ -208,7 +223,17 @@ impl ComputeState {
                 writable_roots: self.roots.clone(),
                 no_sandbox,
                 provider,
-                environment: None,
+                environment: self.selections.as_ref().map(|selections| {
+                    crate::ssh::preparation::WorkerEnvironment {
+                        discovery: crate::ssh::preparation::Discovery {
+                            managed: false,
+                            managed_r: false,
+                            selections: selections.clone(),
+                        },
+                        r: None,
+                        python: None,
+                    }
+                }),
             },
         };
         let mut command = Command::new(std::env::current_exe().map_err(|error| error.to_string())?);

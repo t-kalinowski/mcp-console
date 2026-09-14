@@ -69,6 +69,10 @@ extern "C" fn interrupt(_: libc::c_int) {
         let signal: unsafe extern "C" fn() = unsafe { std::mem::transmute(python) };
         unsafe { signal() };
     }
+    wake();
+}
+
+pub(super) fn wake() {
     if let Some(wakeup) = WAKEUP.get() {
         unsafe { libc::write(wakeup[1].as_raw_fd(), b"i".as_ptr().cast(), 1) };
     }

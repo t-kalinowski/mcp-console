@@ -88,12 +88,26 @@ thread_local! {
 }
 static R_HOME: OnceLock<Option<PathBuf>> = OnceLock::new();
 
-pub(super) fn discover() -> Option<PathBuf> {
-    let home = harp::command::r_home_setup()
-        .ok()
-        .filter(|home| r_library(home).is_file());
-    R_HOME.set(home.clone()).expect("R discovery runs once");
-    home
+pub(super) fn discover() -> Result<Option<PathBuf>, String> {
+    let home = if let Some(captured) = std::env::var_os("MCP_CONSOLE_R_HOME") {
+        serde_json::from_str::<Option<PathBuf>>(&captured.to_string_lossy())
+            .map_err(|error| format!("invalid captured R selection: {error}"))?
+    } else {
+        // Direct worker-protocol clients have no server preparation owner.
+        if std::env::var_os("R_HOME").is_some() {
+            Some(harp::command::r_home_setup().map_err(|error| error.to_string())?)
+        } else {
+            harp::command::r_home_setup()
+                .ok()
+                .filter(|home| r_library(home).is_file())
+        }
+    };
+    if let Some(home) = &home {
+        // Capture precedes the worker's threads and language initialization.
+        unsafe { std::env::set_var("R_HOME", home) };
+    }
+    R_HOME.set(home.clone()).expect("R selection runs once");
+    Ok(home)
 }
 
 pub(crate) fn is_active() -> bool {

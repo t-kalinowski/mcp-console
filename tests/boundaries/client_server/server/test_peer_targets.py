@@ -25,6 +25,30 @@ PYTHON_ONLY_TARGETS = Requirement(
 )
 
 
+def reject_invalid_r_home(client: McpClient) -> list:
+    client.start_request(
+        "initialize",
+        protocolVersion="2025-11-25",
+        capabilities={},
+        clientInfo={"name": "prepared-r-selection", "version": "1"},
+    )
+    assert client.stdout.readline(timeout=40) == "", "invalid R_HOME reached readiness"
+    error = client.stderr.read(timeout=40)
+    assert "R_HOME must select an existing R installation" in error, error
+    assert client.process.wait(timeout=5) != 0
+    return [{"stderr": error}]
+
+
+@requires(docker.DOCKER, PYTHON_ONLY_TARGETS)
+def test_prepared_docker_rejects_invalid_r_home(binary: Path) -> list:
+    with docker.workspace() as root:
+        docker.configure(root, docker.image(), environment={"R_HOME": "/missing-r"})
+        with McpClient(
+            binary, ("serve", "--no-sandbox"), current_directory=root
+        ) as client:
+            return reject_invalid_r_home(client)
+
+
 def exercise_no_r_catalog(client: McpClient, *, managed: bool) -> None:
     client.initialize_and_list_tools()
     properties = client.transcript[-1]["result"]["tools"][0]["inputSchema"][
@@ -103,6 +127,9 @@ def test_managed_no_r_host_over_openssh_with_sandbox(binary: Path) -> list:
 def test_prepared_no_r_docker_image(binary: Path) -> list:
     with docker.workspace() as root:
         reference = docker.image()
+        inspection = docker.docker("image", "inspect", reference)
+        assert inspection.returncode == 0, inspection.stderr
+        digests = json.loads(inspection.stdout)[0]["RepoDigests"]
         docker.configure(root, reference)
         environment = {
             **os.environ,
@@ -128,7 +155,10 @@ def test_prepared_no_r_docker_image(binary: Path) -> list:
             )
             transcript = client.finish()
         docker.absent(second)
-        return json.loads(json.dumps(transcript).replace(reference, "<image>"))
+        recorded = json.dumps(transcript)
+        for digest in digests:
+            recorded = recorded.replace(digest, "<digest>")
+        return json.loads(recorded.replace(reference, "<image>"))
 
 
 @requires(docker_sandbox.DOCKER_SANDBOX, PYTHON_ONLY_TARGETS)

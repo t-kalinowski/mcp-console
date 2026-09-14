@@ -1,0 +1,5 @@
+---
+stderr: |
+  R_HOME must select an existing R installation: /missing-r/bin/Rscript is missing
+  remote launcher exited with exit status: 1
+  remote launcher exited with exit status: 1

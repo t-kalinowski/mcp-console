@@ -118,7 +118,7 @@ pub(crate) fn ensure_initialized() -> Result<(), String> {
         super::library::call_json(
             c"_mcp_console_sql",
             c"configure",
-            &json!({"managed_r": crate::sql::managed_r()}),
+            &json!({"managed_r": crate::sql::managed_r(), "temporary": configuration.temporary}),
         )?;
         super::library::connect_interrupts()?;
         Ok(())
@@ -134,24 +134,33 @@ pub(crate) fn ensure_initialized() -> Result<(), String> {
 }
 
 pub(super) fn discover(python: &Path) -> Result<Value, String> {
-    let output = std::process::Command::new(python)
-        .args(["-c", DISCOVERY_SOURCE])
-        .stdin(std::process::Stdio::null())
-        .output()
-        .map_err(|error| {
-            format!(
-                "Python is unavailable: cannot run `{}`: {error}",
-                python.display()
-            )
-        })?;
+    let output = crate::worker::process_output(
+        std::process::Command::new(python).args(["-c", DISCOVERY_SOURCE]),
+    )
+    .map_err(|error| {
+        format!(
+            "Python is unavailable: cannot run `{}`: {error}",
+            python.display()
+        )
+    })?;
     if !output.status.success() {
         return Err(format!(
             "Python discovery failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         ));
     }
-    serde_json::from_slice(&output.stdout)
-        .map_err(|error| format!("invalid Python discovery: {error}"))
+    const FRAME: &[u8] = b"\x1eMCP_CONSOLE_PYTHON_DISCOVERY\x1e";
+    let start = output
+        .stdout
+        .windows(FRAME.len())
+        .position(|bytes| bytes == FRAME)
+        .ok_or("Python discovery omitted its result")?
+        + FRAME.len();
+    let payload = output.stdout[start..]
+        .split(|byte| *byte == b'\n')
+        .next()
+        .unwrap();
+    serde_json::from_slice(payload).map_err(|error| format!("invalid Python discovery: {error}"))
 }
 
 pub(super) fn state() -> Result<Value, String> {

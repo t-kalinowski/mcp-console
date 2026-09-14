@@ -8,7 +8,7 @@ use crate::worker_protocol::{ConsoleChannel, ServerMessage, WorkerMessage};
 
 pub(crate) fn run() -> Result<(), Box<dyn Error>> {
     let (reader, writer) = crate::sideband::connect_from_env()?;
-    let r_home = embedded_r::discover();
+    let r_home = embedded_r::discover()?;
     #[cfg(target_os = "linux")]
     if let Some(home) = &r_home {
         reexec_with_r_library_path(home, &reader, &writer)?;

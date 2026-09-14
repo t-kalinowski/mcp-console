@@ -115,6 +115,7 @@ elif args[0] == "exec":
         gate()
     frame(1, {"version": bootstrap["version"], "build": bootstrap["build"]})
     if probe:
+        frame(2, {"r_home": "/prepared/R", "python": "/prepared/python"})
         frame(3, {"confirmed": True, "error": None})
     else:
         frame(2, {"kind": "ready"})

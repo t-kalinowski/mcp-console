@@ -207,6 +207,11 @@ pub(crate) struct WorkerEnvironment {
 impl WorkerEnvironment {
     #[cfg(unix)]
     pub fn configure(&self, command: &mut std::process::Command) -> Result<(), String> {
+        command.env(
+            "MCP_CONSOLE_R_HOME",
+            serde_json::to_string(&self.discovery.selections.r_home)
+                .map_err(|error| error.to_string())?,
+        );
         if let Some(home) = &self.discovery.selections.r_home {
             command.env("R_HOME", home);
         }
