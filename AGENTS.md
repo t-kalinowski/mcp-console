@@ -196,7 +196,8 @@ Keep these invariants intact:
 - `src/process_exit.rs` — ordinary direct-child exit observation without reaping, used by server launcher ownership.
 - `src/process_output.rs` — output draining bounded by an owned child exit, including a surviving inherited writer; used for local launchers, the SSH child, and the remote helper's launcher without equating their cleanup guarantees.
 - `src/sandbox.rs`, `src/sandbox/{installation,runner,unsupported}.rs` — thin sandbox frontend, verified runner selection, application policy, and unsupported-platform errors.
-- `src/worker.rs`, `src/worker/core.rs`, `src/worker/embedded_r.rs`, `src/r_repl.c` — worker-facing facade, shared process services, current embedded-R backend, cell dispatch, console callbacks, and the C-owned DLL-REPL boundary.
+- `src/worker.rs`, `src/worker/{coordinator,core,input}.rs` — worker facade, language coordination, shared sideband services, and interactive stdin buffering.
+- `src/worker/embedded_r.rs`, `src/r_repl.c` — R runtime, native events, graphics, console callbacks, and the C-owned DLL-REPL boundary.
 
 ### Language adapters
 
