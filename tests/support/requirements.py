@@ -88,6 +88,14 @@ NO_SANDBOX = Requirement(
 )
 
 SYSTEM_PYTHON = Path("/usr/bin/python3")
+FRAMEWORK_PYTHON = Path(
+    "/Library/Frameworks/Python.framework/Versions/Current/bin/python3"
+)
+PYTHON_FRAMEWORK = Requirement(
+    "framework Python",
+    FRAMEWORK_PYTHON.is_file(),
+    "requires a macOS framework Python installation",
+)
 OLD_PYTHON = Requirement(
     "Python before 3.10",
     sys.platform == "darwin" and SYSTEM_PYTHON.is_file(),

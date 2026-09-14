@@ -1,0 +1,13 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  python: input()
+  stdin: "café\0tail\n"
+result:
+  content:
+    - type: text
+      text: |
+        [input requested: ""]
+        'café\x00tail'
+  isError: false

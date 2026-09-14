@@ -175,7 +175,7 @@ def test_interrupts_running_python_evaluation(
             started, release = [FifoCheckpoint.create(Path(path)) for path in paths]
             checkpoints.extend((started, release))
 
-            client.send(python="42", timeout_ms=0)
+            client.send(r='reticulate::py_eval("42")', timeout_ms=0)
             assert last_result_text(client) == "\n[running; poll with an empty send]"
             wait_for_worker_file(
                 temporary_path,
@@ -302,7 +302,7 @@ def test_initializes_private_runtime_once_on_first_python_cell(
         length(getHook("reticulate::matplotlib.pyplot::load"))
         """)
     client.send(r=r)
-    assert last_result_text(client) == "[1] 1\n"
+    assert last_result_text(client) == "[1] 0\n"
     client.send(python="42")
     assert last_result_text(client) == "42\n"
     # fmt: r
@@ -310,7 +310,7 @@ def test_initializes_private_runtime_once_on_first_python_cell(
         length(getHook("reticulate::matplotlib.pyplot::load"))
         """)
     client.send(r=r)
-    assert last_result_text(client) == "[1] 1\n"
+    assert last_result_text(client) == "[1] 0\n"
     return client.finish()
 
 
@@ -329,15 +329,8 @@ def test_retries_python_runtime_initialization_after_interrupt(
             # fmt: r
             r = code(r"""
                 invisible(suppressMessages(base::trace(
-                  "py_set_attr",
-                  tracer = quote({
-                    if (
-                      identical(name, "operation") &&
-                        identical(value, "configure_import_resolution")
-                    ) {
-                      invisible(readline("python runtime configuring> "))
-                    }
-                  }),
+                  "initialize_python",
+                  tracer = quote(invisible(readline("python runtime configuring> "))),
                   print = FALSE,
                   where = asNamespace("reticulate")
                 )))
@@ -348,7 +341,7 @@ def test_retries_python_runtime_initialization_after_interrupt(
 
             # The input request proves runtime configuration has started before
             # interrupting it, after any first-use Python preparation completes.
-            client.send(python="42")
+            client.send(r="invisible(reticulate::py_config())")
             assert last_result_text(client) == (
                 '[input requested: "python runtime configuring> "]\n[waiting for stdin]'
             )
@@ -363,13 +356,13 @@ def test_retries_python_runtime_initialization_after_interrupt(
             # fmt: r
             r = code(r"""
                 invisible(suppressMessages(base::untrace(
-                  "py_set_attr",
+                  "initialize_python",
                   where = asNamespace("reticulate")
                 )))
                 length(getHook("reticulate::matplotlib.pyplot::load"))
                 """)
             client.send(r=r)
-            assert last_result_text(client) == "[1] 1\n"
+            assert last_result_text(client) == "[1] 0\n"
 
             client.send(python="42")
             output = last_result_text(client)

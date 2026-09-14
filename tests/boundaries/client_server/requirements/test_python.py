@@ -1,5 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
+import json
 import os
 import shutil
 import subprocess
@@ -18,7 +19,7 @@ from support.assertions import (
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
-from support.normalization import code
+from support.normalization import code, normalize_python_resolution_error
 from support.processes import process_group_exists, stop_process_group
 from support.r import r_test_environment
 from support.events import Events
@@ -308,6 +309,7 @@ def test_restart_discards_pre_marker_python_activation(
             temporary,
             replacement_requirement,
             reuse_resolved_python_for=("py-yaml12", replacement_requirement),
+            provide_python_module=("py-yaml12", "yaml12"),
         )
         environment["TMPDIR"] = temporary_directory
         reuse_record = Path(environment["MCP_CONSOLE_TEST_UV_REUSE_RECORD"])
@@ -351,31 +353,37 @@ def test_restart_discards_pre_marker_python_activation(
                 (activation_ready, activation_release, activation_sent)
             )
 
-            # Pause the real managed worker after its new environment resolves,
-            # immediately before its active binding publishes python_activated.
-            # fmt: r
-            r = code(r"""
-                globals <- get(".globals", envir = asNamespace("reticulate"))
-                original <- activeBindingFunction("python_requirements", globals)
-                rm(list = "python_requirements", envir = globals)
-                makeActiveBinding("python_requirements", function(value) {
-                  if (missing(value)) {
-                    return(original())
-                  }
-                  ready <- fifo(activation_ready, open = "wb", blocking = TRUE)
-                  writeBin(charToRaw("1"), ready)
-                  close(ready)
-                  release <- fifo(activation_release, open = "rb", blocking = TRUE)
-                  stopifnot(identical(readBin(release, "raw", n = 1L), charToRaw("1")))
-                  close(release)
-                  original(value)
-                  sent <- fifo(activation_sent, open = "wb", blocking = TRUE)
-                  writeBin(charToRaw("1"), sent)
-                  close(sent)
-                }, globals)
-                reticulate::py_require("py-yaml12")
+            # Gate the native activation notification after resolution. The
+            # old generation must not commit across a restart admission cut.
+            # fmt: python
+            python = code(f"""
+                import json
+                import _mcp_console_native as native_services
+
+                original_call = native_services.call
+
+                def gated_call(request):
+                    if json.loads(request)["operation"] != "activate_python":
+                        return original_call(request)
+                    with open({json.dumps(str(activation_ready.path))}, "wb", buffering=0) as ready:
+                        ready.write(b"1")
+                    with open({json.dumps(str(activation_release.path))}, "rb", buffering=0) as release:
+                        assert release.read(1) == b"1"
+                    result = original_call(request)
+                    with open({json.dumps(str(activation_sent.path))}, "wb", buffering=0) as sent:
+                        sent.write(b"1")
+                    return result
+
+                native_services.call = gated_call
+                import yaml12
                 """)
-            evaluation = client.start_send(r=r, timeout_ms=0)
+            evaluation = client.start_send(python=python, timeout_ms=0)
+            for checkpoint, label in zip(
+                worker_checkpoints, ("ready", "release", "sent")
+            ):
+                evaluation["send"]["python"] = evaluation["send"]["python"].replace(
+                    str(checkpoint.path), f"<activation {label}>"
+                )
             activation_ready.wait("managed Python activation")
             client.receive(evaluation)
             evaluation_result = evaluation["result"]
@@ -513,42 +521,15 @@ def test_failed_live_python_requirements_do_not_run_cell(
     client.send(python="import os; live_sentinel = 42; live_worker_pid = os.getpid()")
     assert last_tool_text(client) == "[done]"
 
-    # fmt: r
-    r = code(r"""
-        reticulate_namespace <- asNamespace("reticulate")
-        original_py_require <- get("py_require", envir = reticulate_namespace)
-        unlockBinding("py_require", reticulate_namespace)
-        assign(
-          "py_require",
-          function(...) stop("synthetic live Python preparation failure"),
-          envir = reticulate_namespace
-        )
-        lockBinding("py_require", reticulate_namespace)
-        """)
-    client.send(r=r)
-    assert last_tool_text(client) == "[done]"
-
     result = client.send(
         python="failed_live_python_cell = True",
-        requirements={"python": ["py-yaml12"]},
+        requirements={"python": ["numpy<0"]},
     )
     assert result["isError"] is True, result
-    assert result["content"][0]["text"] == (
-        "synthetic live Python preparation failure"
-    ), result
-
-    # fmt: r
-    r = code(r"""
-        unlockBinding("py_require", reticulate_namespace)
-        assign(
-          "py_require",
-          original_py_require,
-          envir = reticulate_namespace
-        )
-        lockBinding("py_require", reticulate_namespace)
-        """)
-    client.send(r=r)
-    assert last_tool_text(client) == "[done]"
+    error = result["content"][0]["text"]
+    assert "managed Python resolution failed" in error, error
+    assert "numpy<0" in error, error
+    result["content"][0]["text"] = normalize_python_resolution_error(error)
 
     # fmt: python
     python = code("""

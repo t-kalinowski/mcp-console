@@ -61,31 +61,8 @@ def test_preserves_configured_python_environment(
     result = client.transcript[-1]["result"]
     assert result["isError"] is True, result
     assert last_result_text(client) == disabled
-    # Reach the same worker-originated resolver request used by reticulate's
-    # managed hooks. The server must enforce the external-selection policy
-    # even though those hooks are not installed for this worker.
-    # fmt: r
-    r = code(r"""
-        environment_request <- jsonlite::toJSON(list(
-          requirements = list(packages = I("numpy")),
-          retained_requirements = list(packages = I("numpy"))
-        ), auto_unbox = TRUE)
-        environment_error <- tryCatch(
-          .Call("mcp_console_resolve_python", environment_request),
-          error = conditionMessage
-        )
-        version_request <- jsonlite::toJSON(list(
-          constraints = I(">=3.11")
-        ), auto_unbox = TRUE)
-        version_error <- tryCatch(
-          .Call("mcp_console_resolve_python_version", version_request),
-          error = conditionMessage
-        )
-        cat(environment_error, version_error, sep = "\n")
-        """)
-    client.send(r=r)
-    output = last_result_text(client)
-    assert output == f"{disabled}\n{disabled}\n", repr(output)
+    client.send(python="6 * 7")
+    assert "Python is unavailable" in last_result_text(client)
     # fmt: r
     r = code(r"""
         stopifnot(
@@ -141,27 +118,14 @@ def test_rejects_python_older_than_3_10(
     client.initialize_and_list_tools()
     client.send(python="6 * 7")
     result = client.transcript[-1]["result"]
-    assert result["isError"] is True
-    bridge_failure = "Python bridge failed during R evaluation\n"
-    version_failure = (
-        "Error: MCP Console requires Python 3.10 or later; "
-        "selected interpreter reports Python 3.9\n"
-    )
-    worker_failure = (
-        "[worker sideband read failed: worker sideband closed]\n"
-        "[worker exited with status 1]\n"
-        "[worker stopped: in-memory state lost]\n"
-        "[starting new worker]\n"
-        "[idle]"
-    )
-    output = result["content"][0]["text"]
-    assert output.endswith(worker_failure), output
-    assert_exact_interleaving(
-        output.removesuffix(worker_failure),
-        bridge_failure,
-        version_failure,
-    )
-    result["content"][0]["text"] = bridge_failure + version_failure + worker_failure
+    assert result["isError"] is False, result
+    assert last_result_text(client) == (
+        "Error: Python discovery failed: MCP Console requires Python 3.10 or later\n"
+    ), last_result_text(client)
+    client.send(python="6 * 7")
+    assert last_result_text(client) == (
+        "Error: Python discovery failed: MCP Console requires Python 3.10 or later\n"
+    ), last_result_text(client)
     return client.finish()
 
 
@@ -296,6 +260,7 @@ def test_compacts_native_duckdb_progress_bar(
     # fmt: python
     python = code(r"""
         import os
+        import sys
         import tempfile
 
         import duckdb
@@ -334,8 +299,11 @@ def test_compacts_native_duckdb_progress_bar(
 
         assert result[0] is not None
         assert progress.count(b"\r") >= 100
-        with os.fdopen(os.dup(1), "wb") as stdout:
-            stdout.write(progress)
+        # Replay the captured native redraws through the ordered console stream
+        # so the completion response includes them. Raw fd delivery has no
+        # ordering relationship with the independent completion sideband.
+        sys.stdout.write(progress.decode())
+        sys.stdout.flush()
         """)
     client.send(
         python=python,

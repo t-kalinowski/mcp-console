@@ -232,7 +232,9 @@ The `worker::coordinator` owns the message loop, preparation and cell dispatch, 
 It retains R, Python, and SQL adapters as peers.
 The `worker::input` module owns interactive stdin buffering and preserves unfinished input across operations.
 The `worker::embedded_r` backend owns R initialization, native event handling, graphics, and R console callbacks, including suppression of R resolution during SQL callbacks.
-R initialization remains eager, and the existing Python and SQL adapters retain their runtime behavior.
+R initialization remains eager.
+`worker::interrupt` wakes blocked reads and coordinates native interrupt acknowledgment.
+Runtime discovery children use the same interrupt wakeup and input-closure observation, and are terminated and reaped on cancellation.
 
 The built-in worker embeds R on its main thread.
 On Linux, it re-executes before R initialization with the selected `R_HOME/lib` first in `LD_LIBRARY_PATH`, preserving inherited library paths and its sideband endpoint.
@@ -241,10 +243,21 @@ Its language adapters provide persistent Python and SQL within that worker proce
 The SQL router uses a DBI provider in embedded R or a DB-API provider in CPython.
 The R provider owns a managed DuckDB connection by default and can retain a user-selected DBI connection; the Python provider retains a user-selected DB-API connection without converting it or its result rows through reticulate.
 Its private R environment bridge conditionally wraps `base::library` and runs R's unchanged `base::loadNamespace` body in a private lexical environment that intercepts its retry restart; it applies accepted managed libraries and reports activation outcomes.
-The Rust Python facade loads, retains, and initializes the selected file-backed `libpython`, or attaches its own handle if CPython was already initialized.
-It embeds and installs the private evaluator and DB-API adapter through that CPython API; reticulate attaches to the interpreter and continues to own object conversion, Python-cell evaluation dispatch, its manifest, event handling, and interrupts.
+The Rust Python facade loads, retains, and initializes the selected file-backed `libpython`.
+It installs the same private evaluator, input callbacks, plotting hooks, and environment activation implementation for Python cells and mixed-language sessions.
+Discovery frames its result separately from interpreter startup and exit output, and uses the configured runtime library name and framework location.
+Initial activation preserves the site directories already initialized by CPython; adding a new managed environment processes its site directories.
+Ordinary Python text and managed input notices share the ordered sideband stream.
+Binary buffers, native descriptors, background threads, and descendants retain raw stdout/stderr capture.
+CPython's GIL and saved main-thread state remain owned by that embedding implementation.
+Reticulate attaches only for conversion and cross-language calls.
+Once attached, it also supplies event polling that services R events during Python execution and a notifier that services pending Python calls through R's input handlers.
+Its requirement APIs delegate to Console's manifest; its interpreter selection, output remapping, and interrupt installation do not control ordinary Python cells.
+Console replaces reticulate's interrupt handlers while retaining its event integration.
+Console installs its Python interrupt handler explicitly because `Py_InitializeEx(0)` does not install one.
+During nested language calls, the first runtime to handle an interrupt consumes it, respecting R's suspended-interrupt state.
 Before normal worker exit, it restores the main Python thread's saved attachment so extension-library exit destructors, including DuckDB's, can use Python safely.
-Its private Python runtime conditionally appends a last-chance import finder, while the R Python bridge owns the reticulate manifest and the callback into the existing managed-Python resolver.
+Its private Python runtime conditionally appends a last-chance import finder and calls shared worker services directly for host resolution and activation acknowledgment.
 Bare sessions leave both resolution adapters disabled.
 Their user-visible behavior belongs in the [built-in runtime guide](BUILTIN_RUNTIME.md), while the sideband contract remains independent of the interpreter implementation.
 
@@ -384,24 +397,24 @@ The private finder runs only after Python's existing import finders have failed,
 It also yields without a callback for optional-dependency misses reached while the default NumPy or pandas package is initializing, so importing those available defaults does not change the managed environment.
 It derives one bare distribution from the top-level import through a curated mapping or a conservative same-name fallback; the server validates that name through the existing managed-Python requirement validator.
 
-The Python finder calls a process-lifetime R closure through reticulate.
-That closure adds the distribution to reticulate's additive manifest and materializes it through the same helper used by explicit live Python preparation.
+The Python finder calls Console's native worker services.
+Console adds the distribution to its additive manifest and prepares it through the same implementation used by explicit live Python requirements.
 The worker then uses the existing synchronous `ResolvePython` request; the relay only forwards that message and its reply.
 
 The server resolves a complete managed-Python candidate on the host and returns it provisionally.
-Reticulate checks compatibility with the live interpreter and activates the environment without replacing Python or the worker.
-Its active manifest binding reports `PythonActivated`, and the server commits only a matching candidate owned by the current generation.
+Console checks the candidate interpreter and loaded distribution versions, then activates compatible site directories without replacing Python or the worker.
+The Python adapter reports `PythonActivated`, and the server commits only a matching candidate owned by the current generation.
 The worker emits that report before it invalidates import caches and resumes the original import through Python's current meta-path finders.
 An automatic request records a differently named import and distribution on its provisional candidate, and the server renders that mapping as a bounded bracketed notice only when it commits the matching activation.
 The cell is not replayed.
 
 A successful activation remains retained if the inferred distribution does not contain the requested module or later cell code fails.
-An ordinary pre-activation failure restores the earlier reticulate manifest and leaves the worker usable.
+An ordinary pre-activation failure retains the earlier Console manifest and leaves the worker usable.
 Restart, shutdown, and generation checks discard unactivated candidates owned by an old worker.
 
-The finder uses a reentrancy guard while the R callback runs.
+The finder uses a reentrancy guard while the native callback runs.
 It also records the worker PID and configuring Python thread; a missing import reached from a fork child or another thread fails without calling R, reticulate, the sideband, or a host resolver.
-These checks keep R callbacks on the embedded-R thread and prevent nested resolver waits.
+These checks keep worker services on the coordinator thread and prevent nested resolver waits.
 
 ### Interruption
 

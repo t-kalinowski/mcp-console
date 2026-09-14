@@ -1,4 +1,6 @@
+mod native;
 mod reticulate;
+pub(crate) use reticulate::Interop;
 
 const RUNTIME_SOURCE: &str = include_str!("python/runtime.py");
 
@@ -14,10 +16,11 @@ pub(crate) enum PreparationOutcome {
 
 /// Rust-owned Python runtime boundary.
 ///
-/// Rust owns the selected interpreter library, initialization, and private
-/// evaluator source, while the current backend delegates object conversion and
-/// evaluation dispatch to reticulate.
-pub(crate) struct Runtime(reticulate::Runtime);
+/// Console owns interpreter selection, initialization, the evaluator, and
+/// environment activation. Reticulate attaches only for R/Python conversion.
+pub(crate) struct Runtime {
+    next_evaluation_id: u64,
+}
 
 pub(crate) enum SqlProvider {
     R,
@@ -29,20 +32,36 @@ pub(crate) fn configure_worker_environment(
     temporary_directory: &std::path::Path,
 ) -> std::io::Result<()> {
     platform::configure_worker_environment(temporary_directory)?;
-    reticulate::configure_worker_environment()
+    native::configure(temporary_directory).map_err(std::io::Error::other)
 }
 
 impl Runtime {
     pub(crate) fn initialize() -> Result<Self, String> {
-        reticulate::Runtime::initialize().map(Self)
+        Ok(Self {
+            next_evaluation_id: 1,
+        })
     }
 
     pub(crate) fn evaluate(&mut self, source: &str) -> Result<(), String> {
-        self.0.evaluate(source)
+        if let Err(message) = native::ensure_initialized() {
+            crate::worker::emit_diagnostic(&format!("Error: {message}\n"));
+            return Ok(());
+        }
+        let filename = format!("<mcp-console:python:e{}>", self.next_evaluation_id);
+        self.next_evaluation_id += 1;
+        library::call_json(
+            c"_mcp_console_environment",
+            c"evaluate",
+            &serde_json::json!({
+                "source": source, "filename": filename,
+            }),
+        )
+        .map(|_| ())
     }
 
     pub(crate) fn prepare(&self, packages: Vec<String>) -> Result<PreparationOutcome, String> {
-        self.0.prepare(packages)
+        let result = native::prepare(serde_json::json!({"packages": packages}))?;
+        serde_json::from_value(result).map_err(|error| error.to_string())
     }
 }
 
