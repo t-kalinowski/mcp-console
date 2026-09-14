@@ -55,7 +55,7 @@ result:
         Traceback (most recent call last):
           File "<string>", line 469, in _mcp_console_eval_cell
           File "<mcp-console:python:e3>", line 1, in <module>
-          File "/Users/tomasz/Library/Caches/org.R-project.R/R/renv/cache/v5/macos/R-4.6/aarch64-apple-darwin23/reticulate/1.47.0/2682ea7ada0db9e037cf43f1933db537/reticulate/python/rpytools/call.py", line 6, in python_function
+          File "<reticulate>/python/rpytools/call.py", line 6, in python_function
             return call_r_function(f, *args, **kwargs)
                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
         KeyboardInterrupt
