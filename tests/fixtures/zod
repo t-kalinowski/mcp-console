@@ -1105,6 +1105,26 @@ def main() -> None:
             publish_marker(temporary / "zod-prompted-input-processed")
             continue
 
+        if source == "preview prompt":
+            send_output(
+                writer,
+                "prompt output head\n"
+                + "x" * (2 * PENDING_TEXT_BUDGET)
+                + "\nprompt output tail\n",
+            )
+            send(
+                writer,
+                {
+                    "kind": "input_requested",
+                    "prompt": "prompt head " + "p" * 20000 + " prompt tail> ",
+                },
+            )
+            stdin = input()
+            send(writer, {"kind": "input_received"})
+            send_output(writer, f"received {stdin}\n")
+            send(writer, {"kind": "completed"})
+            continue
+
         if source == "language error":
             send_output(
                 writer,

@@ -168,3 +168,12 @@ Session metadata records the SSH destination and initial remote execution direct
 Arbitrary files created by cells remain remote.
 The source-only Quarto projection includes remote target context, omits the controller `root.dir`, and defaults to `execute.eval: false`.
 Enable execution only after deliberately preparing an environment and filesystem for those cells; local rendering does not reproduce the remote filesystem.
+
+### Bounded output and retained text
+
+Tool results return bounded text previews with the beginning and latest tail under an 8 KiB total UTF-8 budget; images have separate limits.
+A retained-output path is relative to the Console server's recording workspace on the controller.
+Reading omitted text requires a filesystem tool with access to that controller directory; access only to the execution target or another client host is insufficient.
+Console does not transfer these files or expose a read/search tool.
+A log can contain only a retained prefix after the file limit or a write failure; the preview still observes the latest output and reports the loss.
+See [the built-in runtime guide](BUILTIN_RUNTIME.md#output-and-notices).

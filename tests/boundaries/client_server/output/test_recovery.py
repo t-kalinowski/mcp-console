@@ -75,7 +75,7 @@ def test_cancelled_control_recovery_keeps_bounded_allocations(
             assert largest <= 256 * 1024, largest
             assert not result["isError"], result
             text = result["content"][0]["text"]
-            assert len(text.encode()) <= 2 * 16 * 1024 + 2048
+            assert len(text.encode()) <= 8192
             assert text == "\n[idle]" * 1025
             client.send()
             assert last_tool_text(client) == "\n[idle]"
@@ -144,10 +144,10 @@ def recovered_recorded_cells(binary: Path, *, count: int, silent: bool) -> Trans
             if silent:
                 # Control history is already bounded independently of cell text. Repeated
                 # empty files must not add another unbounded receipt history.
-                assert largest <= 128 * 1024, largest
+                assert largest <= 64 * 1024, largest
             assert not result["isError"], result
             text = result["content"][0]["text"]
-            assert len(text.encode()) <= 2 * 16 * 1024 + 2048
+            assert len(text.encode()) <= 8192
             assert text.endswith("[done]"), repr(text[-200:])
             events = [
                 json.loads(line)

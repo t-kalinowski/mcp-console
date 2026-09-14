@@ -14,7 +14,8 @@ An agent can submit complete R, Python, or SQL cells, keep state across calls, a
 The built-in worker embeds R.
 Python runs through reticulate, and SQL uses a persistent DuckDB connection by default while allowing R code to select another DBI connection or Python code to select a DB-API connection.
 R and Python can access one another's globals through reticulate, while the managed DuckDB backend can query data frames in the R workspace directly.
-R plots made with the default device and open Matplotlib figures are returned as images, SQL results are returned as bounded previews, and long-running work can be polled or interrupted.
+R plots made with the default device and open Matplotlib figures are returned as images, tool results share an 8 KiB text budget with previews of oversized output, and long-running work can be polled or interrupted.
+Emitted cell text is retained separately in raw session logs, up to 1 GiB per cell; retrieving omitted text requires filesystem access to the Console server recording workspace.
 
 ## Install
 

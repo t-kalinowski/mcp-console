@@ -462,15 +462,15 @@ Do not submit another cell while replacement startup is still active.
 The failing call does not repeat a failed startup attempt; after that failure is collected, a later code-bearing `send` makes a fresh startup attempt and, if it succeeds, runs only the new cell.
 
 Small outputs retain their text and text/image ordering.
-Ordinary output is collected in a 16 KiB rendered UTF-8 window divided approximately evenly between the beginning and the latest tail.
-Control notices have a separate 16 KiB collection limit, with at most 8 KiB per notice.
-Omission markers and file references are added when rendering; these collection limits are not a complete-result text budget.
+Each complete tool result has an 8 KiB rendered UTF-8 text budget, including omission markers, preparation diagnostics, input prompts, errors, and lifecycle notices.
+This initial default approximates two to three printed pages; it is not a layout guarantee and has no per-call or configuration control yet.
+For oversized output, the server reserves space for notices and divides the remaining text allowance approximately evenly between the beginning and the latest tail.
 Collection continues throughout an undrained interval, so a diagnostic after a large output flood can appear in its preview.
 An omission notice counts **rendered UTF-8 bytes**, which can differ from emitted raw-byte counts.
 Omitted generated informational notices are counted separately because the raw cell log does not retain them.
 Long control details and input prompts are also bounded; the final state and error status remain separate from ordinary text.
 If repeated input reports exhaust their own bounded storage, the preview summarizes omitted earlier reports and retains the latest active report.
-Combined control-and-cell calls share these collection windows and retain their lifecycle separators.
+Combined control-and-cell calls share this same result budget and retain their lifecycle separators.
 
 Within each response interval, the server compacts single-line progress redraws in consecutive text from the same worker output stream before applying preview limits.
 A bare carriage return makes following text replace the whole frame, and backspace removes one Unicode scalar from retained line text.
@@ -484,7 +484,7 @@ Images have independent limits: 8 MiB of encoded data, 64 KiB of MIME-type data,
 Images are admitted as whole blocks.
 Filling the text preview does not consume the image allowance or suppress a later plot.
 Image-limit omissions are reported separately.
-The language-level 12 KiB SQL-table preview limit still applies before SQL text enters collection.
+The language-level 12 KiB SQL-table preview limit still applies before SQL text enters the complete-result budget.
 
 For each recorded evaluation, the server creates `outputs/call-NNNNNN.log` in its private session directory when the worker operation is admitted.
 It appends emitted console text and direct stdout and stderr bytes in server observation order, independently of preview collection, and flushes the file before each response cut and at evaluation completion.
@@ -503,7 +503,7 @@ For SSH, Docker, and Docker Sandbox, this is the controller's workspace.
 Full retained text requires a filesystem tool with access to that directory; a tool that can read only the worker filesystem or another client host is insufficient.
 Console does not discover file tools or provide a read/search interface in this version.
 Clients without appropriate filesystem access still receive bounded previews and final diagnostics.
-When repeated cancelled deliveries combine output from many cells, fully omitted intervals share one summary to bound their source metadata.
+When repeated cancelled deliveries combine output from many cells, fully omitted intervals share one summary so their notices also fit the text budget.
 This summary names `internal/events.jsonl` in the recorded session for individual raw-log paths and per-cell counts; the beginning and latest tail retain their own log notices.
 Re-running a cell is not retrieval of its original output and is never an automatic retrieval action.
 

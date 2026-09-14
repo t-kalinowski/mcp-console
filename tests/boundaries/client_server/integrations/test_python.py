@@ -18,6 +18,7 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.r import r_test_environment
 from support.normalization import code
 from support.records import Transcript
+from support.previews import assert_preview
 from support.requirements import WORKER, requires
 from support.resolvers import bare_runtime_environment
 from support.suites import run_this_suite
@@ -31,6 +32,38 @@ def options(binary: Path, execution: Execution) -> dict:
             "env": {**os.environ, "MCP_CONSOLE_TEST_PYTHON": sys.executable}
         },
     }
+
+
+@executions(DIRECT, SANDBOXED)
+def test_sync_and_async_clients_receive_bounded_previews(
+    binary: Path, execution: Execution
+) -> Transcript:
+    results = []
+    with tempfile.TemporaryDirectory() as temporary:
+        settings = options(binary, execution)
+        settings["server_parameters"]["cwd"] = temporary
+        emitted = "x" * (8 * 1024 * 1024 + 7)
+
+        def check(text: str) -> None:
+            assert_preview(text, emitted)
+            session = max(
+                (Path(temporary) / ".agents/console/sessions").iterdir(),
+                key=lambda path: path.name,
+            )
+            assert (session / "outputs/call-000001.log").read_text() == emitted
+            results.append({"preview": text.replace(session.name, "<run ID>")})
+
+        with MCPConsole(**settings) as console:
+            check(console.send(r="overflow console output"))
+            assert console.send() == "\n[idle]"
+
+        async def asynchronous() -> None:
+            async with AsyncMCPConsole(**settings) as console:
+                check(await console.send(r="overflow console output"))
+                assert await console.send() == "\n[idle]"
+
+        asyncio.run(asynchronous())
+    return results
 
 
 @executions(DIRECT, SANDBOXED)

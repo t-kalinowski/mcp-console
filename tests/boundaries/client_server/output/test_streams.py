@@ -18,7 +18,7 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.native import LOADER_VARIABLE, build_interposer
 from support.checkpoints import FifoCheckpoint
 from support.previews import (
-    COLLECTION_RESULT_BOUND,
+    TEXT_BUDGET,
     assert_preview,
     cell_text,
     normalize_preview_paths,
@@ -310,7 +310,7 @@ def test_drains_background_stderr_while_idle(
         client.send(timeout_ms=0)
         output = last_tool_text(client)
         assert output.endswith("\n[idle]"), output[-100:]
-        assert len(output.encode()) <= COLLECTION_RESULT_BOUND
+        assert len(output.encode()) <= TEXT_BUDGET
         assert "no retained cell log" in output
         assert "outputs/call-" not in output
         assert cell_text(client, 1) == ""
@@ -499,21 +499,16 @@ def test_orders_queued_cancellation_behind_incomplete_response(
                 observer.finish()
                 control.record_client_event(first_id, "response_write_completed")
                 client.receive(first)
-                expected_error = (
-                    f"Python requirement `{invalid_requirement}` is not accepted: "
-                    "host-side managed resolution accepts named package "
-                    "requirements only"
+                assert first["result"]["isError"] is True
+                error = first["result"]["content"][0]["text"]
+                assert len(error.encode()) <= TEXT_BUDGET
+                assert error.startswith("Python requirement `https://invalid.example/")
+                assert error.endswith(
+                    "host-side managed resolution accepts named package requirements only"
                 )
-                assert first["result"] == {
-                    "content": [{"type": "text", "text": expected_error}],
-                    "isError": True,
-                }, first
                 first["send"]["requirements"]["python"] = [
                     "<large invalid Python requirement>"
                 ]
-                first["result"]["content"][0]["text"] = (
-                    "<large invalid Python requirement rejected>"
-                )
 
                 control.connect(client)
                 started = control.wait_for(live_id, "worker_operation_started")

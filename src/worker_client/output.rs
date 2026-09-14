@@ -139,6 +139,12 @@ impl SendFailure {
 }
 
 impl Response {
+    pub(crate) fn tool_error(message: String) -> Self {
+        let mut response = Self::default();
+        response.push_tool_error(message);
+        response
+    }
+
     pub(crate) fn persist_images(
         &mut self,
         transcript: &crate::transcript::Transcript,

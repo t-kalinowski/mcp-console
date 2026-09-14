@@ -18,7 +18,7 @@ from support.checkpoints import (
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
-from support.previews import OMISSION, COLLECTION_RESULT_BOUND, assert_preview
+from support.previews import OMISSION, TEXT_BUDGET, assert_preview
 from support.records import Transcript
 from support.suites import run_this_suite
 
@@ -55,7 +55,7 @@ def test_separates_startup_omissions_from_retained_cell_text(
         session = next((workspace / ".agents/console" / "sessions").iterdir())
         path = f".agents/console/sessions/{session.name}/outputs/call-000001.log"
         assert (workspace / path).read_bytes() == b"cell output\n"
-        assert len(output.encode()) <= COLLECTION_RESULT_BOUND
+        assert len(output.encode()) <= TEXT_BUDGET
         assert output.endswith("cell output\n"), output[-1000:]
         marker = OMISSION.search(output)
         assert marker is not None
@@ -232,7 +232,7 @@ def test_reports_omitted_bytes_retained_at_the_file_limit(
             for _ in range(1024):
                 assert retained.read(len(block)) == block
             assert retained.read(1) == b""
-        assert len(output.encode()) <= COLLECTION_RESULT_BOUND
+        assert len(output.encode()) <= TEXT_BUDGET
         assert "tail\n" in output, output[-1500:]
         assert f"{limit} raw bytes retained, 5 raw bytes not retained" in output
         assert "file contains only a prefix" in output

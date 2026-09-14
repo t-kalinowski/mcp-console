@@ -5,9 +5,7 @@ from pathlib import Path
 
 from support.client import McpClient
 
-TEXT_COLLECTION_BYTES = 16 * 1024
-# These fixtures have at most two source markers beyond text and control windows.
-COLLECTION_RESULT_BOUND = 2 * TEXT_COLLECTION_BYTES + 2048
+TEXT_BUDGET = 8 * 1024
 OMISSION = re.compile(
     r"\n\[output preview: omitted (\d+) rendered UTF-8 bytes; [^\n]*\]\n"
 )
@@ -21,11 +19,11 @@ def assert_preview(
     text: str, emitted: str, *, pattern: re.Pattern[str] = OMISSION
 ) -> int:
     """Check the exact emitted prefix/suffix and accounting around one omission."""
+    assert len(text.encode()) <= TEXT_BUDGET, len(text.encode())
     matches = list(pattern.finditer(text))
     assert len(matches) == 1, text
     marker = matches[0]
     head, tail = text[: marker.start()], text[marker.end() :]
-    assert len(head.encode()) + len(tail.encode()) <= TEXT_COLLECTION_BYTES
     assert head and emitted.startswith(head), (head[:100], emitted[:100])
     assert tail and emitted.endswith(tail), (tail[-100:], emitted[-100:])
     omitted = int(marker[1])

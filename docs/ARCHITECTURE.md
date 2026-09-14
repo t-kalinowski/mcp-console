@@ -434,9 +434,7 @@ It retains bounded text at the beginning and latest tail, coalesces adjacent tex
 A response cut seals this projection and its raw-file receipt without reading the file.
 Intervals with no rendered text publish any finished file summary and discard their receipt; unrecorded text still keeps its source boundary.
 Fully omitted intervals account for their per-cell omissions and release their receipts into one bounded summary, which names the journal containing individual file paths and counts.
-The canonical response builder preserves typed control notices during composition.
-Ordinary text retains a 16 KiB head-and-tail window; control notices have a separate 16 KiB collection limit, with at most 8 KiB per notice.
-Rendering adds omission markers and file references to these windows; it does not yet impose one complete-result text budget.
+The canonical response builder preserves typed control notices during composition; its final projection applies one 8 KiB UTF-8 text budget, including all generated notices, across the complete tool result.
 Collection and response composition keep bounded state even after raw-file retention fails or is disabled.
 
 A controlled send produces one MCP response.

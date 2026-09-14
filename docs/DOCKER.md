@@ -206,6 +206,15 @@ Other files remain inside the container or declared binds.
 Quarto projections identify Docker, omit an incorrect controller execution root, and default to `execute.eval: false`.
 Deliberately recreate the target environment and filesystem before enabling execution.
 
+### Bounded output and retained text
+
+Tool results return bounded text previews with the beginning and latest tail under an 8 KiB total UTF-8 budget; images have separate limits.
+A retained-output path is relative to the Console server's recording workspace on the controller.
+Reading omitted text requires a filesystem tool with access to that controller directory; access only to the execution target or another client host is insufficient.
+Console does not transfer these files or expose a read/search tool.
+A log can contain only a retained prefix after the file limit or a write failure; the preview still observes the latest output and reports the loss.
+See [the built-in runtime guide](BUILTIN_RUNTIME.md#output-and-notices).
+
 ## Acceptance tests and deferred work
 
 Public Docker cases use the example image and an accessible Linux daemon.

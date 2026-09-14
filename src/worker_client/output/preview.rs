@@ -2,9 +2,10 @@
 
 use super::{Content, utf8_prefix_length};
 
-/// Ordinary text retained during collection; notices have separate bounds.
-pub(super) const TEXT_BYTES: usize = 8 * 1024;
+/// Complete rendered tool-result text, including all Console notices.
+pub(crate) const TEXT_BYTES: usize = 8 * 1024;
 const COLLECT_BYTES: usize = 2 * TEXT_BYTES;
+const CONTROL_BYTES: usize = TEXT_BYTES / 2;
 pub(super) const IMAGE_BYTES: usize = 8 * 1024 * 1024;
 const IMAGE_METADATA_BYTES: usize = 64 * 1024;
 const IMAGE_EVENTS: usize = 4096;
@@ -370,13 +371,30 @@ impl Preview {
             .retain(|part| !matches!(part, Part::Summary(summary) if summary.gap.bytes == 0));
     }
 
-    /// Render the collected text and its independently bounded notices.
+    /// Reserve notices first, then divide ordinary text between its head and tail.
     pub(super) fn render(&mut self) -> Vec<Content> {
-        self.trim(COLLECT_BYTES);
-        self.project()
+        let mut allowance = TEXT_BYTES;
+        loop {
+            self.trim(allowance);
+            let mut bytes = text_bytes(&self.project(false));
+            if bytes > TEXT_BYTES {
+                self.trim_controls(CONTROL_BYTES, TEXT_BYTES / 8);
+                bytes = text_bytes(&self.project(false));
+            }
+            if bytes <= TEXT_BYTES {
+                return self.project(true);
+            }
+            assert!(
+                allowance > 0,
+                "bounded response notices exceed the complete result budget"
+            );
+            // Reserve notices in small blocks so incidental path and count widths
+            // do not continually move the visible text boundaries.
+            allowance = allowance.saturating_sub(bytes - TEXT_BYTES) / 128 * 128;
+        }
     }
 
-    fn project(&self) -> Vec<Content> {
+    fn project(&self, account: bool) -> Vec<Content> {
         let mut content = Vec::new();
         if self.omitted_controls != 0 {
             append_text(
@@ -443,17 +461,19 @@ impl Preview {
                     Part::Source(_) => unreachable!(),
                 }
             }
-            if let Some(file) = &source.file {
+            if account && let Some(file) = &source.file {
                 file.note_inline_omission(omitted);
             }
             start = end + 1;
         }
-        for part in &self.parts {
-            if let Part::Source(Source {
-                file: Some(file), ..
-            }) = part
-            {
-                file.publish();
+        if account {
+            for part in &self.parts {
+                if let Part::Source(Source {
+                    file: Some(file), ..
+                }) = part
+                {
+                    file.publish();
+                }
             }
         }
         content
@@ -559,4 +579,14 @@ impl Control {
             omitted = next;
         }
     }
+}
+
+fn text_bytes(content: &[Content]) -> usize {
+    content
+        .iter()
+        .map(|part| match part {
+            Content::Text(text) => text.len(),
+            Content::Image { .. } => 0,
+        })
+        .sum()
 }

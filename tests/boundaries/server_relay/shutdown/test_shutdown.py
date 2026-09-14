@@ -26,7 +26,6 @@ from support.checkpoints import FifoCheckpoint
 from support.client import stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.previews import assert_preview, normalize_preview_paths
-from support.previews import COLLECTION_RESULT_BOUND
 from support.records import Transcript
 from support.resolvers import fake_ir_environment as _fake_ir_environment
 from support.suites import run_this_suite
@@ -192,7 +191,7 @@ def test_cancelled_send_returns_owned_output_to_restart(
         assert f"raw cell log: {public_output}" in tail
         assert (
             sum(len(block.get("text", "").encode()) for block in result["content"])
-            <= COLLECTION_RESULT_BOUND
+            <= 8192
         )
         events = [
             json.loads(line)

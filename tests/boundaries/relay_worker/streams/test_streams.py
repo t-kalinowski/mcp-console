@@ -9,7 +9,6 @@ from boundaries.relay_worker._harness import RelayWorkerClient
 from support.assertions import tool_text as _tool_text
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
-from support.previews import COLLECTION_RESULT_BOUND
 from support.records import Transcript
 from support.requirements import POSIX, command, requires
 from support.suites import run_this_suite
@@ -404,7 +403,7 @@ def test_drains_standard_streams_while_evaluating(
     result = client.send(python=python)
     output = _tool_text(result)
     assert not result["isError"]
-    assert len(output.encode()) <= COLLECTION_RESULT_BOUND
+    assert len(output.encode()) <= 8 * 1024
     assert "output preview: omitted" in output
     assert "raw cell log:" in output
 
