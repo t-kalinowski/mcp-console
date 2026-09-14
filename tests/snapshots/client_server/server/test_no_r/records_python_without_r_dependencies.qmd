@@ -14,13 +14,6 @@ mcp-console:
 <!-- Source projection from a Console session without R. Rendering or re-executing this document requires a separately prepared document engine. -->
 
 ```{python}
-import numpy, pandas
-
-retained = 42
-retained
-```
-
-```{python}
-retained
+6 * 7
 ```
 

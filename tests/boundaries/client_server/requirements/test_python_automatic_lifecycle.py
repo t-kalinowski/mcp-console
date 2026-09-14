@@ -2,6 +2,7 @@
 
 import re
 import signal
+import shlex
 import sys
 import tempfile
 from pathlib import Path
@@ -19,7 +20,8 @@ from support.processes import (
 )
 from support.normalization import code, normalize_python_resolution_error
 from support.records import Transcript
-from support.requirements import PROCESS_EVENTS, requires
+from support.requirements import PROCESS_EVENTS, R, requires
+from boundaries.client_server.python.test_peer_runtime import without_r
 from support.resolvers import (
     checkpoint_uv_environment,
     initialize_python_and_record_baseline,
@@ -223,10 +225,31 @@ def test_times_out_and_polls_automatic_python_resolution(
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(PROCESS_EVENTS)
+@requires(PROCESS_EVENTS, R)
 def test_interrupts_automatic_python_resolver_and_preserves_worker(
     binary: Path,
     execution: Execution,
+) -> Transcript:
+    return interrupts_automatic_python_resolver_and_preserves_worker(binary, execution)
+
+
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS)
+def test_interrupts_no_r_automatic_python_resolver_and_preserves_worker(
+    binary: Path,
+    execution: Execution,
+) -> Transcript:
+    # The recorded candidate includes the no-R SQL provider's Python dependency.
+    return interrupts_automatic_python_resolver_and_preserves_worker(
+        binary, execution, with_r=False
+    )
+
+
+def interrupts_automatic_python_resolver_and_preserves_worker(
+    binary: Path,
+    execution: Execution,
+    *,
+    with_r: bool = True,
 ) -> Transcript:
     requirement = "mcp_console_blocked_automatic_import"
     with tempfile.TemporaryDirectory() as temporary:
@@ -236,6 +259,15 @@ def test_interrupts_automatic_python_resolver_and_preserves_worker(
             requirement,
         )
         environment.pop("RETICULATE_PYTHON", None)
+        if not with_r:
+            uv = environment["RETICULATE_UV"]
+            without_r(environment, directory)
+            environment["RETICULATE_UV"] = uv
+            commands = Path(environment["PATH"])
+            wrapper = commands / "uv"
+            wrapper.write_text(f'#!/bin/sh\nexec {shlex.quote(uv)} "$@"\n')
+            wrapper.chmod(0o755)
+            (commands / "python3").symlink_to(sys.executable)
         environment["RUST_LOG"] = "error"
         previous_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
         previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
@@ -311,6 +343,7 @@ def test_interrupts_automatic_python_resolver_and_preserves_worker(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R)
 def test_restart_discards_unactivated_automatic_python_candidate(
     binary: Path,
     execution: Execution,

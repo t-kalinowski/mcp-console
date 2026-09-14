@@ -13,6 +13,7 @@ from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
 from support.processes import ProcessIdentity, child_process_identities
 from support.r import r_test_environment
+from support.requirements import R
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 PYTHON_DOWNLOAD_URL = "https://example.invalid/python.tar.zst"
@@ -271,10 +272,12 @@ def ir_cache_directory(environment: dict[str, str]) -> str:
 
 def matplotlib_test_environment(cache_home: Path) -> dict[str, str]:
     environment = os.environ.copy()
-    cache = ir_cache_directory(environment)
-    environment["IR_CACHE_DIR"] = cache
+    if R.available:
+        cache = ir_cache_directory(environment)
+        environment["IR_CACHE_DIR"] = cache
     environment["XDG_CACHE_HOME"] = str(cache_home)
-    assert ir_cache_directory(environment) == cache
+    if R.available:
+        assert ir_cache_directory(environment) == cache
     return environment
 
 
@@ -485,10 +488,16 @@ def initialize_python_and_record_baseline(client: McpClient, record: Path) -> in
     return len(uv_tool_run_requirements(record))
 
 
-def resolve_managed_python(binary: Path, execution: Execution, directory: Path) -> Path:
+def resolve_managed_python(
+    binary: Path,
+    execution: Execution,
+    directory: Path,
+    *,
+    environment: dict[str, str] | None = None,
+) -> Path:
     workspace = directory / "managed-python"
     workspace.mkdir()
-    environment = os.environ.copy()
+    environment = os.environ.copy() if environment is None else environment.copy()
     environment.pop("RETICULATE_PYTHON", None)
     environment.pop("UV_PYTHON", None)
     with McpClient(
@@ -512,7 +521,7 @@ def resolve_managed_python(binary: Path, execution: Execution, directory: Path) 
         next(
             line for line in output.splitlines() if line.startswith("managed-python=")
         ).split("=", 1)[1]
-    ).resolve()
+    ).absolute()
     assert executable.is_file(), executable
     return executable
 

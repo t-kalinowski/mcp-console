@@ -162,6 +162,8 @@ The initialization, initialized notification, and tool-list exchange have full r
 Its primary snapshot records the sandboxed handshake; its `.direct.yaml` companion records the direct handshake.
 The `.bare.yaml` and `.bare.direct.yaml` companions preserve the corresponding interfaces when resolver commands are unavailable.
 The `.python-only.yaml` and `.python-only.direct.yaml` companions record local Python sessions without R.
+`client_server/server/test_no_r` and `test_r_selection` cover local catalog retention, input, interruption, recording, captured R selection, and temporary-storage cleanup.
+Their no-R cases use a fixture-owned `PATH` so they also run on hosts with R installed.
 The `.proxy.yaml` companion records the sandboxed interface with a project-configured network proxy.
 The `.workspace.yaml` companion records the native workspace profile.
 The `.ssh.yaml` and `.ssh.direct.yaml` companions record bare SSH targets with that profile, using a deterministic preparation peer without starting a remote worker.

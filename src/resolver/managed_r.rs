@@ -280,7 +280,14 @@ fn discover_rscript(
     on_started: &mut Option<impl FnOnce(ResolverStopHandle) -> Result<(), String>>,
 ) -> Result<PathBuf, String> {
     if let Some(r_home) = std::env::var_os("R_HOME") {
-        return Ok(PathBuf::from(r_home).join("bin/Rscript"));
+        let rscript = PathBuf::from(r_home).join("bin/Rscript");
+        if !rscript.is_file() {
+            return Err(format!(
+                "R_HOME must select an existing R installation: {} is missing",
+                rscript.display()
+            ));
+        }
+        return Ok(rscript);
     }
     let program = Path::new("R");
     let mut command = resolver_command(program);

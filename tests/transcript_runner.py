@@ -359,6 +359,35 @@ class TranscriptRunnerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((self.root / "selected.marker").exists())
 
+    def test_script_uses_installed_binary_without_building(self) -> None:
+        environment = self.prepare_script()
+        installed = self.root / "installation" / "bin" / "mcp-console"
+        installed.parent.mkdir(parents=True)
+        installed.write_text("installed", encoding="utf-8")
+        environment["MCP_CONSOLE_TEST_BINARY"] = str(installed)
+        cargo = self.root / "commands" / "cargo"
+        cargo.write_text("#!/bin/sh\nexit 91\n", encoding="utf-8")
+        self.suite.write_text(
+            PUBLIC_SUITE
+            # fmt: python
+            + code("""
+                def test_selected(binary: Path) -> list[dict[str, str]]:
+                    assert binary.read_text(encoding="utf-8") == "installed"
+                    return record(binary, "selected")
+                """),
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            ["scripts/test", "client_server/server/test_tools::selected"],
+            cwd=self.root,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.root / "selected.marker").exists())
+
     def test_cases_isolate_console_home_and_preserve_host_environment(self) -> None:
         ambient_home = self.root / "ambient-home"
         console_home = self.root / "ambient-console"

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ast
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -109,6 +110,9 @@ def main() -> int:
     discovered = set(sources)
     included = included_sources()
     errors = []
+    r_available = shutil.which("Rscript") is not None
+    if not r_available:
+        print("R source syntax checks skipped: Rscript is unavailable", file=sys.stderr)
 
     for path in sorted(EXPECTED_SOURCES - discovered):
         errors.append(f"{path}: expected production source is missing")
@@ -126,7 +130,7 @@ def main() -> int:
         errors.extend(validate_placeholders(path, source))
         if source_path.suffix == ".py":
             errors.extend(validate_python(path, source))
-        else:
+        elif r_available:
             errors.extend(validate_r(path, source_path))
 
     if errors:

@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from contextlib import ExitStack
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -23,6 +24,7 @@ from support.r import r_test_environment, reference_plots
 from support.records import Transcript
 from support.resolvers import matplotlib_test_environment
 from support.suites import run_this_suite
+from boundaries.client_server.server.test_no_r import no_r_environment
 
 
 @executions(DIRECT, SANDBOXED)
@@ -199,7 +201,20 @@ def test_returns_r_plots_from_python_bridge(
 
 @executions(DIRECT, SANDBOXED)
 def test_returns_matplotlib_plots(binary: Path, execution: Execution) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary_directory:
+    return returns_matplotlib_plots(binary, execution, with_r=True)
+
+
+@executions(DIRECT, SANDBOXED)
+def test_returns_no_r_matplotlib_plots(
+    binary: Path, execution: Execution
+) -> Transcript:
+    return returns_matplotlib_plots(binary, execution, with_r=False)
+
+
+def returns_matplotlib_plots(
+    binary: Path, execution: Execution, *, with_r: bool
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory, ExitStack() as clients:
         temporary = Path(temporary_directory)
         workspace = temporary / "workspace"
         workspace.mkdir()
@@ -207,26 +222,37 @@ def test_returns_matplotlib_plots(binary: Path, execution: Execution) -> Transcr
         host_matplotlib.mkdir()
         host_matplotlibrc = host_matplotlib / "matplotlibrc"
         host_matplotlibrc.write_text("lines.linewidth: 7.25\n", encoding="utf-8")
-        environment = matplotlib_test_environment(temporary / "host-cache")
+        environment = (
+            matplotlib_test_environment(temporary / "host-cache")
+            if with_r
+            else no_r_environment(temporary)
+        )
+        environment["XDG_CACHE_HOME"] = str(temporary / "host-cache")
         environment["TMPDIR"] = temporary_directory
         environment["MPLCONFIGDIR"] = str(host_matplotlib)
         environment["MCP_CONSOLE_TEST_MATPLOTLIBRC"] = str(host_matplotlibrc)
         environment.pop("MATPLOTLIBRC", None)
         environment["MPL_IGNORE_SYSTEM_FONTS"] = "1"
-        client = McpClient(
-            binary,
-            execution.serve(),
-            environment,
-            current_directory=workspace,
+        client = clients.enter_context(
+            McpClient(
+                binary,
+                execution.serve(),
+                environment,
+                current_directory=workspace,
+            )
         )
         client.initialize_and_list_tools()
-        # fmt: r
-        r = code(r"""
-            reticulate::py_require("matplotlib")
-            invisible(reticulate::py_config())
-            """)
-        client.send(r=r)
-        assert last_result_text(client) == "[done]"
+        if with_r:
+            # fmt: r
+            r = code(r"""
+                reticulate::py_require("matplotlib")
+                invisible(reticulate::py_config())
+                """)
+            client.send(r=r)
+            assert last_result_text(client) == "[done]"
+        else:
+            client.send(requirements={"python": ["matplotlib"]})
+            assert last_result_text(client) == "[prepared]"
         # fmt: python
         python = code("""
             import os

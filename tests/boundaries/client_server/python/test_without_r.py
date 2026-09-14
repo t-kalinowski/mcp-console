@@ -2803,7 +2803,8 @@ def test_records_managed_python_defaults(
 """
             in quarto
         ), quarto
-        assert "  packages: []\n" in quarto, quarto
+        assert "\nknitr:" not in quarto and "\nir:" not in quarto, quarto
+        assert "eval: false" in quarto, quarto
         assert "six" not in quarto, quarto
         events = [
             json.loads(line)

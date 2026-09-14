@@ -11,10 +11,12 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript
 from support.requirements import POSIX, command, requires
+from support.requirements import R
 from support.suites import run_this_suite
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R)
 def test_routes_python_output(binary: Path, execution: Execution) -> Transcript:
     client = RelayWorkerClient(binary, execution=execution)
     # fmt: r
@@ -151,6 +153,7 @@ thread log
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R)
 def test_routes_r_console_channels(binary: Path, execution: Execution) -> Transcript:
     client = RelayWorkerClient(binary, execution=execution)
     # fmt: r
@@ -297,6 +300,7 @@ parent log
 
 @executions(DIRECT, SANDBOXED)
 @requires(POSIX, command("python3"))
+@requires(R)
 def test_preserves_python_output_from_fork_children(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -323,6 +327,7 @@ def test_preserves_python_output_from_fork_children(
 
 @executions(DIRECT, SANDBOXED)
 @requires(POSIX, command("python3"))
+@requires(R)
 def test_preserves_cached_python_streams_from_fork_children(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -352,6 +357,7 @@ def test_preserves_cached_python_streams_from_fork_children(
 
 @executions(DIRECT, SANDBOXED)
 @requires(POSIX, command("python3"))
+@requires(R)
 def test_preserves_cached_python_logging_from_fork_children(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -370,6 +376,7 @@ def test_preserves_cached_python_logging_from_fork_children(
 
 @executions(DIRECT, SANDBOXED)
 @requires(POSIX, command("python3"))
+@requires(R)
 def test_preserves_fork_stderr_after_stdout_is_closed(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -403,6 +410,7 @@ def test_preserves_fork_stderr_after_stdout_is_closed(
 
 @executions(DIRECT, SANDBOXED)
 @requires(POSIX, command("python3"))
+@requires(R)
 def test_preserves_redirected_python_streams_from_fork_children(
     binary: Path, execution: Execution
 ) -> Transcript:
