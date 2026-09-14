@@ -444,6 +444,59 @@ def test_validates_send_arguments(binary: Path) -> Transcript:
         return client.finish()
 
 
+@executions(DIRECT, SANDBOXED)
+def test_bounds_argument_decoding_errors(
+    binary: Path, execution: Execution
+) -> Transcript:
+    zod = Path(__file__).resolve().parents[3] / "fixtures/zod"
+    value = "argument head " + "éλ" * 4096 + " argument tail"
+    cases = (
+        ({value: True}, "unknown field", "`timeout_ms`"),
+        ({"control": value}, "unknown variant", "`interrupt` or `restart`"),
+        ({"timeout_ms": value}, "invalid type", "expected u64"),
+    )
+    with tempfile.TemporaryDirectory() as temporary:
+        workspace = Path(temporary)
+        started = workspace / "worker-started"
+        roots = ("--writable-root", str(workspace)) if execution == SANDBOXED else ()
+        with McpClient(
+            binary,
+            execution.serve("--worker", str(zod), *roots),
+            {**os.environ, "MCP_CONSOLE_TEST_ZOD_STARTED": str(started)},
+            current_directory=workspace,
+        ) as client:
+            client.initialize_and_list_tools()
+            results = []
+            for arguments, kind, ending in cases:
+                result = client.send(**arguments)
+                assert result["isError"] is True, result
+                text = "".join(block["text"] for block in result["content"])
+                assert text.startswith(f"failed to deserialize parameters: {kind}")
+                assert "argument head " in text and " argument tail" in text
+                assert text.endswith(ending), text[-200:]
+                results.append(result)
+            lengths = [
+                sum(len(block["text"].encode()) for block in result["content"])
+                for result in results
+            ]
+            assert all(length <= 8192 for length in lengths), lengths
+            assert all("omitted" in result["content"][0]["text"] for result in results)
+            assert not started.exists(), "invalid arguments started the worker"
+            session = next((workspace / ".agents/console/sessions").iterdir())
+            recorded = [
+                event["result"]
+                for line in (session / "internal/events.jsonl").read_text().splitlines()
+                if (event := json.loads(line))["event"] == "tool_result"
+            ]
+            assert recorded == results
+            result = client.send(r="echo ready")
+            assert result["content"] == [{"type": "text", "text": "zod: ready\n"}], (
+                result
+            )
+            assert result["isError"] is False, result
+            return client.finish()
+
+
 def test_validates_standalone_requirement_arguments(binary: Path) -> Transcript:
     with McpClient(binary, DIRECT.serve()) as client:
         client.initialize_and_list_tools()

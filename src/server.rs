@@ -11,7 +11,7 @@ use rmcp::{
     handler::server::{
         common::Extension, router::tool::ToolRouter, tool::ToolCallContext, wrapper::Parameters,
     },
-    model::{CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock},
+    model::{CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ErrorCode},
     schemars,
     service::RequestContext,
     tool, tool_handler, tool_router,
@@ -510,7 +510,7 @@ impl ServerHandler for ConsoleServer {
                 }
             }
         };
-        context.extensions.insert(delivery);
+        context.extensions.insert(delivery.clone());
         let transcript = self.transcript.clone();
         let request_meta = context.meta.clone();
         let request = Arc::new(request);
@@ -530,11 +530,25 @@ impl ServerHandler for ConsoleServer {
         let request =
             Arc::into_inner(request).expect("transcript task should release the tool request");
         context.extensions.insert(call.clone());
-        let result = Arc::new(
-            self.tool_router
-                .call(ToolCallContext::new(self, request, context))
-                .await,
-        );
+        // Call the known send route directly so argument decoding errors enter
+        // the bounded renderer before the router converts them to plain text.
+        let send = self
+            .tool_router
+            .map
+            .get("send")
+            .expect("send tool must be registered");
+        let result = (send.call)(ToolCallContext::new(self, request, context)).await;
+        let result = Arc::new(match result {
+            Err(error) if error.code == ErrorCode::INVALID_PARAMS => Ok(response_to_tool_result(
+                crate::worker_client::Response::tool_error(error.message.into_owned()),
+                &call,
+                &transcript,
+                &self.deliveries,
+                &delivery,
+            )
+            .into()),
+            result => result,
+        });
         let recorder = transcript.clone();
         let recording_result = Arc::clone(&result);
         if let Err(error) = tokio::task::spawn_blocking(move || {

@@ -112,6 +112,7 @@ See [Docker Sandbox execution](DOCKER_SANDBOX.md).
 The client and server exchange MCP JSON-RPC over the server's standard input and output.
 The server registers only the `send` tool.
 The MCP adapter in `src/server.rs` decodes arguments, applies language filtering, and translates responses into MCP text and image content.
+Argument decoding errors pass through the same bounded response renderer before recording and delivery.
 The session coordinator in `src/worker_client.rs` validates requirements and interprets every `send` combination, including standalone preparation.
 One `send` can poll, provide stdin, prepare requirements, evaluate a cell, interrupt, restart, or combine compatible parts under one ordered operation.
 [`TOOL_DESCRIPTIONS.md`](TOOL_DESCRIPTIONS.md) gives editorial guidance, and the [canonical handshake snapshot](../tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml) records the registered descriptions; `src/server.rs` and the actual `tools/list` result are authoritative.
