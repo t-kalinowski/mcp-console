@@ -1272,5 +1272,42 @@ class ReleaseScriptTests(unittest.TestCase):
                     staged_files[name].write_bytes(contents)
 
 
+class RuntimeSourceValidationTests(unittest.TestCase):
+    def test_r_home_selects_the_syntax_checker_without_r_on_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            shutil.copytree(ROOT / "src", root / "src")
+            (root / "scripts").mkdir()
+            script = root / "scripts/validate_runtime_sources.py"
+            shutil.copyfile(ROOT / "scripts/validate_runtime_sources.py", script)
+            r_home = root / "selected-R"
+            (r_home / "bin").mkdir(parents=True)
+            write_executable(
+                r_home / "bin/Rscript",
+                # fmt: python
+                f"""
+                #!{sys.executable}
+                import sys
+
+                assert sys.argv[1:3] == ["--vanilla", "-e"]
+                print("selected R syntax checker rejected source", file=sys.stderr)
+                raise SystemExit(1)
+                """,
+            )
+            environment = {**os.environ, "PATH": str(root), "R_HOME": str(r_home)}
+            result = subprocess.run(
+                [sys.executable, str(script)],
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertIn(
+                "src/python/bridge.R: selected R syntax checker rejected source",
+                result.stderr,
+            )
+            self.assertNotIn("checks skipped", result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
