@@ -20,6 +20,9 @@ Cases that exercise home discovery pass their chosen `HOME` or `MCP_CONSOLE_HOME
 
 The `client_server/server/test_no_r_ssh` cases use real OpenSSH and a fixture-owned remote PATH without R executables, including on R-enabled hosts.
 
+The unusable-library case in `client_server/python/test_prepared_without_r` shares its public startup rejection check across local Python, Docker, and SBX.
+The prepared modes use the existing Python-only image and template capabilities.
+
 Docker cases use the shared Linux daemon capability in `tests/support/docker.py` and the reproducible `examples/docker/Dockerfile`.
 Build the fixture before running tests and set `MCP_CONSOLE_TEST_DOCKER_IMAGE` to its tag or ID; see `docs/DOCKER.md` for commands.
 Missing Docker access or an unselected fixture skips integration cases; it is not Docker validation.

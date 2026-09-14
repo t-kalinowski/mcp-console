@@ -7,6 +7,7 @@ import shutil
 import sys
 from contextlib import contextmanager
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
@@ -32,9 +33,11 @@ from support.docker_sandbox import (
     absent as sbx_absent,
 )
 from support.events import Events
+from support.execution import DIRECT, Execution, executions
 from support.normalization import code
 from support.requirements import PROCESS_EVENTS, WORKER, Requirement, requires
 from support.suites import run_this_suite
+from boundaries.client_server.server.test_no_r import no_r_environment
 
 DOCKER_PYTHON = Requirement(
     "R-free Docker image",
@@ -432,12 +435,14 @@ def probe_setup(root: Path, value: dict, mode: str) -> None:
                 return original_import(name, *args, **kwargs)
             builtins.__import__ = without_analysis
             print("arbitrary Python startup stdout must not become protocol data")
-            if {mode!r} in ("missing-library", "ephemeral-library"):
+            if {mode!r} in ("missing-library", "ephemeral-library", "unusable-library"):
                 original = sysconfig.get_config_var
                 library = Path(original("LIBDIR")) / original("LDLIBRARY")
                 if {mode!r} == "ephemeral-library":
                     import shutil
                     shutil.copyfile(library, storage / library.name)
+                elif {mode!r} == "unusable-library":
+                    (storage / library.name).write_text("not a shared library\\n")
                 def get_config_var(name):
                     return str(storage) if name == "LIBDIR" else original(name)
                 sysconfig.get_config_var = get_config_var
@@ -494,6 +499,61 @@ def inspection_boundary(binary: Path, provider: str) -> list:
                 "startup_stdout_is_not_protocol_data": True,
             }
         ]
+
+
+@contextmanager
+def unusable_library_client(binary: Path, provider: str):
+    if provider == "direct":
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            library = root / "unusable.so"
+            library.write_text("not a shared library\n")
+            selected = root / "selected-python"
+            selected.write_text(
+                f"#!{sys.executable}\n"
+                + code(f"""
+                    import sys, sysconfig
+
+                    original = sysconfig.get_config_var
+                    def get_config_var(name):
+                        if name in ("LIBDIR", "PYTHONFRAMEWORKPREFIX"):
+                            return {str(root)!r}
+                        if name == "LDLIBRARY":
+                            return "unusable.so"
+                        return original(name)
+                    sysconfig.get_config_var = get_config_var
+                    program = sys.argv.index("-c") + 1
+                    source = sys.argv[program]
+                    sys.argv = ["-c", *sys.argv[program + 1:]]
+                    exec(source)
+                    """)
+            )
+            selected.chmod(0o755)
+            environment = no_r_environment(root)
+            environment["RETICULATE_PYTHON"] = str(selected)
+            with McpClient(binary, DIRECT.serve(), environment, root) as client:
+                yield client
+    else:
+        with prepared(
+            binary,
+            provider,
+            setup=lambda root, value: probe_setup(root, value, "unusable-library"),
+        ) as (client, _):
+            yield client
+
+
+@executions(
+    DIRECT,
+    Execution("docker", (DOCKER_PYTHON,)),
+    Execution("sbx", (SBX_PYTHON,)),
+)
+def test_rejects_unusable_python_library(binary: Path, execution: Execution) -> list:
+    with unusable_library_client(binary, execution.name) as client:
+        assert client.stdout.read(timeout=40) == ""
+        errors = client.stderr.read(timeout=40)
+        assert "selected Python embedding library is unusable" in errors, errors
+        assert client.process.wait(timeout=5) != 0
+    return [{"unusable_library_rejected_before_mcp_readiness": True}]
 
 
 def rejected_probes(binary: Path, provider: str) -> list:
