@@ -88,6 +88,9 @@ fn launch(
     }
     if let Some(compute) = compute {
         super::runtime::configure_runtime(&mut command, &policy, compute)?;
+        if let Some(environment) = &bootstrap.environment {
+            environment.configure(&mut command)?;
+        }
     } else if let Some(environment) = &bootstrap.environment {
         environment.configure(&mut command)?;
     } else {
@@ -96,6 +99,7 @@ fn launch(
             .env("MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION", "0")
             .env("RETICULATE_USE_MANAGED_VENV", "no")
             .env_remove("MCP_CONSOLE_MANAGED_PYTHON")
+            .env_remove("MCP_CONSOLE_PYTHON_EXECUTABLE")
             .env_remove("MCP_CONSOLE_PREINSTALLED");
     }
     command.env_remove(crate::settings::ENVIRONMENT);
@@ -117,7 +121,14 @@ fn launch(
                 }
             }
         }
-        supervise(probe, false, true, Some(deadline), confirmed, protocol)?;
+        supervise(
+            probe,
+            LaunchMode::Preflight,
+            true,
+            Some(deadline),
+            confirmed,
+            protocol,
+        )?;
     }
     let hello = serde_json::to_vec(&Hello {
         container_id: None,
@@ -133,13 +144,27 @@ fn launch(
             command.arg(&executable);
         }
         command.arg("image-runtime-probe");
-        return supervise(command, false, native, Some(deadline), confirmed, protocol);
+        return supervise(
+            command,
+            LaunchMode::Probe,
+            native,
+            Some(deadline),
+            confirmed,
+            protocol,
+        );
     }
     if native {
         command.arg(&executable);
     }
     command.arg("worker-relay").arg(&executable).arg("worker");
-    supervise(command, true, native, None, confirmed, protocol)
+    supervise(
+        command,
+        LaunchMode::Relay,
+        native,
+        None,
+        confirmed,
+        protocol,
+    )
 }
 
 struct Owner {
@@ -192,9 +217,16 @@ impl Drop for Owner {
     }
 }
 
+#[derive(Clone, Copy)]
+enum LaunchMode {
+    Preflight,
+    Probe,
+    Relay,
+}
+
 fn supervise(
     mut command: Command,
-    relay: bool,
+    mode: LaunchMode,
     sandbox: bool,
     deadline: Option<Instant>,
     confirmed: &mut bool,
@@ -225,7 +257,7 @@ fn supervise(
     };
     let (cancel_input, input_cancel) = io::pipe().map_err(|error| error.to_string())?;
     let (input_finished, input_done) = io::pipe().map_err(|error| error.to_string())?;
-    let mut input_task = if relay {
+    let mut input_task = if matches!(mode, LaunchMode::Relay) {
         let mut source = Io::new(
             duplicate(0)?,
             Some(cancel_input.try_clone().map_err(|e| e.to_string())?),
@@ -254,7 +286,7 @@ fn supervise(
             if count == 0 {
                 return Ok(());
             }
-            if !relay {
+            if matches!(mode, LaunchMode::Preflight) {
                 return Err("unexpected stdout during remote sandbox preflight".into());
             }
             super::write_frame(&mut destination, super::DATA, &bytes[..count])

@@ -7,6 +7,9 @@ Run `client_server/server/test_no_r`, `client_server/server/test_r_selection`, a
 
 The `client_server/server/test_no_r_ssh` cases use real OpenSSH and require an R-free host with the private localhost SSH fixture.
 
+Build `examples/python-only/Dockerfile` for an R-free installed-wheel environment.
+Select a prepared no-R Docker or SBX fixture and set `MCP_CONSOLE_TEST_PYTHON_ONLY_TARGETS=1` for `client_server/server/test_no_r_containers`.
+
 Docker cases use the shared Linux daemon capability in `tests/support/docker.py` and the reproducible `examples/docker/Dockerfile`.
 Build the fixture before running tests and set `MCP_CONSOLE_TEST_DOCKER_IMAGE` to its tag or ID; see `docs/DOCKER.md` for commands.
 Missing Docker access or an unselected fixture skips integration cases; it is not Docker validation.

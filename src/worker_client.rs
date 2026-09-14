@@ -533,13 +533,17 @@ impl Client {
             policy,
             Some(Environment {
                 custom_worker: false,
-                r_home: None,
+                r_home: session.compute_r_home(),
                 setup: None,
                 duckdb_extensions: Default::default(),
                 duckdb_r_targets: Vec::new(),
                 python: Some(PythonEnvironment::bare(None)),
                 r: None,
-                r_resolver: RResolver::Disabled,
+                r_resolver: if session.compute_r_home().is_some() {
+                    RResolver::Disabled
+                } else {
+                    RResolver::Unavailable
+                },
             }),
         );
         Arc::get_mut(&mut client.0).expect("new client").target = Some(session);

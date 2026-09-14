@@ -203,6 +203,7 @@ def test_setup_failures_retire_containers(binary: Path) -> Transcript:
         ("workspace", "workspace"),
         ("mount", "bind source path does not exist"),
         ("runtime", "RETICULATE_PYTHON"),
+        ("r_home", "R_HOME must select an existing R installation"),
         ("python_executable", "container Python probe failed"),
         ("python_version", "MCP Console requires Python 3.10 or later"),
         ("compatibility", "incompatible Docker bootstrap"),
@@ -223,6 +224,8 @@ def test_setup_failures_retire_containers(binary: Path) -> Transcript:
                 value["sandbox"]["environment"] = {
                     "RETICULATE_PYTHON": "/missing-python"
                 }
+            elif case == "r_home":
+                value["sandbox"]["environment"] = {"R_HOME": "/missing-r"}
             elif case == "python_executable":
                 value["sandbox"]["environment"] = {"RETICULATE_PYTHON": "/etc/hostname"}
             elif case == "python_version":
