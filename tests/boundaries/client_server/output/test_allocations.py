@@ -136,6 +136,7 @@ def test_cancelled_control_recovery_keeps_bounded_allocations(
             client.send(r="echo ready")
             profile.start()
             profile.pause_results(True)
+            cancellation_start = len(client.transcript)
             try:
                 for _ in range(1024):
                     pending = client.start_send(control="interrupt")
@@ -148,6 +149,7 @@ def test_cancelled_control_recovery_keeps_bounded_allocations(
             finally:
                 profile.pause_results(False)
                 release.release()
+            compact_cancelled_exchanges(client, cancellation_start, count=1024)
             result = client.send(control="interrupt")
             client.request("ping")
             _, largest = profile.stop()
@@ -198,6 +200,7 @@ def recovered_recorded_cells(binary: Path, *, count: int, silent: bool) -> Trans
             client.send(r="echo ready")
             profile.start()
             profile.pause_results(True)
+            cancellation_start = len(client.transcript)
             try:
                 for index in range(count):
                     pending = client.start_send(
@@ -216,6 +219,8 @@ def recovered_recorded_cells(binary: Path, *, count: int, silent: bool) -> Trans
             finally:
                 profile.pause_results(False)
                 release.release()
+            if silent:
+                compact_cancelled_exchanges(client, cancellation_start, count=count)
             result = client.send(control="interrupt")
             client.request("ping")
             _, largest = profile.stop()
@@ -271,6 +276,31 @@ def recovered_recorded_cells(binary: Path, *, count: int, silent: bool) -> Trans
             assert last_tool_text(client) == "\n[idle]"
             normalize_preview_paths(client)
             return client.finish()
+
+
+def compact_cancelled_exchanges(client: McpClient, start: int, *, count: int) -> None:
+    # Verify every repeated setup exchange before recording one representative.
+    # The final recovered tool result remains complete in the transcript.
+    entries = client.transcript[start:]
+    assert len(entries) == 3 * count
+    for pending, cancelled, ping in zip(
+        entries[::3], entries[1::3], entries[2::3], strict=True
+    ):
+        assert pending == {"id": pending["id"], "send": entries[0]["send"]}
+        assert cancelled == {
+            "input": {
+                "method": "notifications/cancelled",
+                "params": {"requestId": pending["id"]},
+            }
+        }
+        assert ping == {"id": ping["id"], "input": {"method": "ping"}, "result": {}}
+    entries[0]["transcript_normalization"] = {
+        "target": "repeated cancellation setup exchanges",
+        "repeated_exchange_count": count,
+        "exchange_entry_count": 3,
+        "request_ids": "distinct in each exchange",
+    }
+    client.transcript[start:] = entries[:3]
 
 
 if __name__ == "__main__":
