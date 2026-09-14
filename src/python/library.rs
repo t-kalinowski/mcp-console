@@ -44,6 +44,8 @@ type PyErrClear = unsafe extern "C" fn();
 type PyErrPrint = unsafe extern "C" fn();
 
 const PY_FILE_INPUT: libc::c_int = 257;
+// The seventh field of sys.flags on the supported CPython versions.
+const NO_SITE_FLAG_INDEX: isize = 6;
 const SQL_PROVIDER_R: libc::c_long = 0;
 const SQL_PROVIDER_MANAGED: libc::c_long = 1;
 const SQL_PROVIDER_HANDLED: libc::c_long = 2;
@@ -54,6 +56,7 @@ struct LoadedLibrary {
     api: PythonApi,
     interpreter: Interpreter,
     configuration: Option<Configuration>,
+    site_initialized: bool,
     sql_runtime_installed: bool,
 }
 
@@ -63,6 +66,11 @@ struct PythonApi {
     set_program_name: PySetProgramName,
     set_python_home: PySetPythonHome,
     initialize_ex: PyInitializeEx,
+    no_site_flag: usize,
+    sys_get_object: unsafe extern "C" fn(*const libc::c_char) -> *mut PyObject,
+    struct_sequence_get_item: unsafe extern "C" fn(*mut PyObject, isize) -> *mut PyObject,
+    struct_sequence_set_item: unsafe extern "C" fn(*mut PyObject, isize, *mut PyObject),
+    long_from_long: unsafe extern "C" fn(libc::c_long) -> *mut PyObject,
     set_argv: PySysSetArgv,
     set_signal: PyOsSetSignal,
     save_thread: PyEvalSaveThread,
@@ -149,23 +157,59 @@ pub(super) fn initialize(
 }
 
 pub(super) fn install_runtime(source: &str) -> Result<(), String> {
-    let mut library_slot = PYTHON_LIBRARY
-        .lock()
-        .map_err(|_| "Python shared library state is unavailable".to_string())?;
-    let library = library_slot
-        .as_mut()
-        .ok_or_else(|| "Python shared library is not loaded".to_string())?;
-    library.install_runtime(source)
+    let source = CString::new(source)
+        .map_err(|_| "embedded Python runtime source contains NUL".to_string())?;
+    api()?.with_gil(|api| unsafe { api.run_runtime(&source) })
 }
 
 pub(super) fn install_sql_runtime(source: &str) -> Result<(), String> {
-    let mut library_slot = PYTHON_LIBRARY
+    install_module(c"_mcp_console_sql", source)?;
+    PYTHON_LIBRARY
         .lock()
-        .map_err(|_| "Python shared library state is unavailable".to_string())?;
-    let library = library_slot
+        .map_err(|_| "Python library lock poisoned")?
         .as_mut()
-        .ok_or_else(|| "Python shared library is not loaded".to_string())?;
-    library.install_sql_runtime(source)
+        .expect("SQL installation has a loaded Python library")
+        .sql_runtime_installed = true;
+    Ok(())
+}
+
+pub(super) fn initialize_site() -> Result<(), String> {
+    let api = {
+        let slot = PYTHON_LIBRARY
+            .lock()
+            .map_err(|_| "Python library lock poisoned")?;
+        let library = slot.as_ref().ok_or("Python shared library is not loaded")?;
+        if library.site_initialized {
+            return Ok(());
+        }
+        library.api
+    };
+    // User startup hooks run with interrupts connected and without the library
+    // lock: their signal handler can call back into Console's native services.
+    api.with_gil(|api| {
+        // Restore normal site flags before hooks can launch child interpreters.
+        // multiprocessing and joblib forward sys.flags.no_site as -S, which
+        // would otherwise keep those children from finding installed packages.
+        unsafe {
+            let flags = (api.sys_get_object)(c"flags".as_ptr());
+            let enabled = (api.long_from_long)(0);
+            if enabled.is_null() {
+                return Err("cannot restore Python site flags".into());
+            }
+            let previous = (api.struct_sequence_get_item)(flags, NO_SITE_FLAG_INDEX);
+            (api.struct_sequence_set_item)(flags, NO_SITE_FLAG_INDEX, enabled);
+            (api.dec_ref)(previous);
+            *(api.no_site_flag as *mut libc::c_int) = 0;
+        }
+        api.call_unit(c"site", c"main")
+    })?;
+    PYTHON_LIBRARY
+        .lock()
+        .map_err(|_| "Python library lock poisoned")?
+        .as_mut()
+        .expect("site initialization has a loaded Python library")
+        .site_initialized = true;
+    Ok(())
 }
 
 pub(super) fn dispatch_sql(source: &str) -> Result<super::SqlProvider, String> {
@@ -254,6 +298,7 @@ impl LoadedLibrary {
             api,
             interpreter,
             configuration: None,
+            site_initialized: interpreter == Interpreter::External,
             sql_runtime_installed: false,
         })
     }
@@ -296,6 +341,9 @@ impl LoadedLibrary {
         unsafe {
             (self.api.set_program_name)(configuration.program_name_wide.as_ptr());
             (self.api.set_python_home)(configuration.python_home_wide.as_ptr());
+            // Defer executable .pth files and sitecustomize until Console can
+            // deliver KeyboardInterrupt through an ordinary Python boundary.
+            *(self.api.no_site_flag as *mut libc::c_int) = 1;
             (self.api.initialize_ex)(0);
         }
         // SAFETY: The resolved function has no preconditions.
@@ -327,27 +375,6 @@ impl LoadedLibrary {
             return Ok(());
         }
         Err("Python interpreter is already initialized with different configuration".to_string())
-    }
-
-    fn install_runtime(&self, source: &str) -> Result<(), String> {
-        let source = CString::new(source)
-            .map_err(|_| "embedded Python runtime source contains NUL".to_string())?;
-        self.api.with_gil(|api| {
-            // SAFETY: The GIL is held and the source is a valid NUL-terminated
-            // buffer for the duration of the call.
-            unsafe { api.run_runtime(&source) }
-        })
-    }
-
-    fn install_sql_runtime(&mut self, source: &str) -> Result<(), String> {
-        let source = CString::new(source)
-            .map_err(|_| "embedded Python SQL runtime source contains NUL".to_string())?;
-        self.api.with_gil(|api| {
-            // SAFETY: The GIL is held and both strings are valid for the call.
-            unsafe { api.run_module(c"_mcp_console_sql", &source) }
-        })?;
-        self.sql_runtime_installed = true;
-        Ok(())
     }
 
     fn finish_initialization(&mut self) -> Result<(), String> {
@@ -592,6 +619,17 @@ impl PythonApi {
             set_program_name: unsafe { load_symbol(library, path, b"Py_SetProgramName\0")? },
             set_python_home: unsafe { load_symbol(library, path, b"Py_SetPythonHome\0")? },
             initialize_ex: unsafe { load_symbol(library, path, b"Py_InitializeEx\0")? },
+            no_site_flag: unsafe {
+                load_symbol::<*mut libc::c_int>(library, path, b"Py_NoSiteFlag\0")? as usize
+            },
+            sys_get_object: unsafe { load_symbol(library, path, b"PySys_GetObject\0")? },
+            struct_sequence_get_item: unsafe {
+                load_symbol(library, path, b"PyStructSequence_GetItem\0")?
+            },
+            struct_sequence_set_item: unsafe {
+                load_symbol(library, path, b"PyStructSequence_SetItem\0")?
+            },
+            long_from_long: unsafe { load_symbol(library, path, b"PyLong_FromLong\0")? },
             set_argv: unsafe { load_symbol(library, path, b"PySys_SetArgv\0")? },
             set_signal: unsafe { load_symbol(library, path, b"PyOS_setsig\0")? },
             save_thread: unsafe { load_symbol(library, path, b"PyEval_SaveThread\0")? },
