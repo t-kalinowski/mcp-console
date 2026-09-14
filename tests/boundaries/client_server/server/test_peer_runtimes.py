@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from support.assertions import last_result_text
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
-from support.normalization import code
+from support.normalization import code, normalize_python_traceback_paths
 from support.records import Transcript, TranscriptWithCompanions
 from support.requirements import NO_R, R_RUNTIME, requires
 from support.resolvers import bare_runtime_environment, resolve_managed_python
@@ -84,7 +84,10 @@ def test_routes_interrupts_across_nested_languages(
         ):
             client.send(**cell)
             assert "[waiting for stdin]" in last_result_text(client)
-            client.send(control="interrupt")
+            result = client.send(control="interrupt")
+            result["content"][0]["text"] = normalize_python_traceback_paths(
+                last_result_text(client)
+            )
             client.send(python="answer + 1")
             assert last_result_text(client) == "42\n", last_result_text(client)
         return client.finish()
