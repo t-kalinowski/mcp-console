@@ -2,7 +2,7 @@
 
 `mcp-console serve` can keep the MCP server and recordings local while running its relay and built-in worker on one existing SSH host.
 The host needs a compatible Console build, a supported native sandbox environment, and an existing workspace.
-The host needs a working R installation, `uv` (or another supported resolver bootstrap), and system libraries and build tools required by the requested packages.
+The host needs `uv` for managed Python, a working R installation for R cells, and system libraries and build tools required by the requested packages.
 Console prepares its managed R, Python, and DuckDB environments there.
 It does not install R or synchronize files.
 
