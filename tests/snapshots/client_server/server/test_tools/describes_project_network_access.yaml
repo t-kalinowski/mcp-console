@@ -3,12 +3,13 @@ configuration: unrestricted restricted (string)
 description: >-
   Persistent R, Python, and SQL workbench for exact computation, file and data
   inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls. Choose the language best suited to each
-  cell and reuse live state when switching: Python reads R globals through
-  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
-  query R data frames by name. R accesses its SQL connection through
-  `sql_connection()`; R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  modeling. State persists across calls. R is optional for Python and SQL;
+  without R, managed SQL requires Python DuckDB and Python accesses its catalog
+  through `sql_connection()`. When both languages are available, Python reads R
+  globals through `r.name`, R reads Python globals through `py$name`, and
+  R-managed DuckDB SQL can query R data frames by name. R accesses its SQL
+  connection through `sql_connection()`; R or Python can select a user-owned
+  connection with `console_sql_connection(connection)`.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -32,12 +33,13 @@ configuration: unrestricted restricted (mapping)
 description: >-
   Persistent R, Python, and SQL workbench for exact computation, file and data
   inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls. Choose the language best suited to each
-  cell and reuse live state when switching: Python reads R globals through
-  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
-  query R data frames by name. R accesses its SQL connection through
-  `sql_connection()`; R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  modeling. State persists across calls. R is optional for Python and SQL;
+  without R, managed SQL requires Python DuckDB and Python accesses its catalog
+  through `sql_connection()`. When both languages are available, Python reads R
+  globals through `r.name`, R reads Python globals through `py$name`, and
+  R-managed DuckDB SQL can query R data frames by name. R accesses its SQL
+  connection through `sql_connection()`; R or Python can select a user-owned
+  connection with `console_sql_connection(connection)`.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -61,12 +63,13 @@ configuration: unrestricted enabled (string)
 description: >-
   Persistent R, Python, and SQL workbench for exact computation, file and data
   inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls. Choose the language best suited to each
-  cell and reuse live state when switching: Python reads R globals through
-  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
-  query R data frames by name. R accesses its SQL connection through
-  `sql_connection()`; R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  modeling. State persists across calls. R is optional for Python and SQL;
+  without R, managed SQL requires Python DuckDB and Python accesses its catalog
+  through `sql_connection()`. When both languages are available, Python reads R
+  globals through `r.name`, R reads Python globals through `py$name`, and
+  R-managed DuckDB SQL can query R data frames by name. R accesses its SQL
+  connection through `sql_connection()`; R or Python can select a user-owned
+  connection with `console_sql_connection(connection)`.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -90,12 +93,13 @@ configuration: unrestricted enabled (mapping)
 description: >-
   Persistent R, Python, and SQL workbench for exact computation, file and data
   inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls. Choose the language best suited to each
-  cell and reuse live state when switching: Python reads R globals through
-  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
-  query R data frames by name. R accesses its SQL connection through
-  `sql_connection()`; R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  modeling. State persists across calls. R is optional for Python and SQL;
+  without R, managed SQL requires Python DuckDB and Python accesses its catalog
+  through `sql_connection()`. When both languages are available, Python reads R
+  globals through `r.name`, R reads Python globals through `py$name`, and
+  R-managed DuckDB SQL can query R data frames by name. R accesses its SQL
+  connection through `sql_connection()`; R or Python can select a user-owned
+  connection with `console_sql_connection(connection)`.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -119,12 +123,13 @@ configuration: restricted restricted (string)
 description: >-
   Persistent R, Python, and SQL workbench for exact computation, file and data
   inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls. Choose the language best suited to each
-  cell and reuse live state when switching: Python reads R globals through
-  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
-  query R data frames by name. R accesses its SQL connection through
-  `sql_connection()`; R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  modeling. State persists across calls. R is optional for Python and SQL;
+  without R, managed SQL requires Python DuckDB and Python accesses its catalog
+  through `sql_connection()`. When both languages are available, Python reads R
+  globals through `r.name`, R reads Python globals through `py$name`, and
+  R-managed DuckDB SQL can query R data frames by name. R accesses its SQL
+  connection through `sql_connection()`; R or Python can select a user-owned
+  connection with `console_sql_connection(connection)`.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -150,12 +155,13 @@ configuration: restricted restricted (mapping)
 description: >-
   Persistent R, Python, and SQL workbench for exact computation, file and data
   inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls. Choose the language best suited to each
-  cell and reuse live state when switching: Python reads R globals through
-  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
-  query R data frames by name. R accesses its SQL connection through
-  `sql_connection()`; R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  modeling. State persists across calls. R is optional for Python and SQL;
+  without R, managed SQL requires Python DuckDB and Python accesses its catalog
+  through `sql_connection()`. When both languages are available, Python reads R
+  globals through `r.name`, R reads Python globals through `py$name`, and
+  R-managed DuckDB SQL can query R data frames by name. R accesses its SQL
+  connection through `sql_connection()`; R or Python can select a user-owned
+  connection with `console_sql_connection(connection)`.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -181,12 +187,13 @@ configuration: restricted enabled (string)
 description: >-
   Persistent R, Python, and SQL workbench for exact computation, file and data
   inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls. Choose the language best suited to each
-  cell and reuse live state when switching: Python reads R globals through
-  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
-  query R data frames by name. R accesses its SQL connection through
-  `sql_connection()`; R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  modeling. State persists across calls. R is optional for Python and SQL;
+  without R, managed SQL requires Python DuckDB and Python accesses its catalog
+  through `sql_connection()`. When both languages are available, Python reads R
+  globals through `r.name`, R reads Python globals through `py$name`, and
+  R-managed DuckDB SQL can query R data frames by name. R accesses its SQL
+  connection through `sql_connection()`; R or Python can select a user-owned
+  connection with `console_sql_connection(connection)`.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -212,12 +219,13 @@ configuration: restricted enabled (mapping)
 description: >-
   Persistent R, Python, and SQL workbench for exact computation, file and data
   inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls. Choose the language best suited to each
-  cell and reuse live state when switching: Python reads R globals through
-  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
-  query R data frames by name. R accesses its SQL connection through
-  `sql_connection()`; R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  modeling. State persists across calls. R is optional for Python and SQL;
+  without R, managed SQL requires Python DuckDB and Python accesses its catalog
+  through `sql_connection()`. When both languages are available, Python reads R
+  globals through `r.name`, R reads Python globals through `py$name`, and
+  R-managed DuckDB SQL can query R data frames by name. R accesses its SQL
+  connection through `sql_connection()`; R or Python can select a user-owned
+  connection with `console_sql_connection(connection)`.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -243,12 +251,13 @@ configuration: external-sandbox restricted (string)
 description: >-
   Persistent R, Python, and SQL workbench for exact computation, file and data
   inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls. Choose the language best suited to each
-  cell and reuse live state when switching: Python reads R globals through
-  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
-  query R data frames by name. R accesses its SQL connection through
-  `sql_connection()`; R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  modeling. State persists across calls. R is optional for Python and SQL;
+  without R, managed SQL requires Python DuckDB and Python accesses its catalog
+  through `sql_connection()`. When both languages are available, Python reads R
+  globals through `r.name`, R reads Python globals through `py$name`, and
+  R-managed DuckDB SQL can query R data frames by name. R accesses its SQL
+  connection through `sql_connection()`; R or Python can select a user-owned
+  connection with `console_sql_connection(connection)`.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -273,12 +282,13 @@ configuration: external-sandbox restricted (mapping)
 description: >-
   Persistent R, Python, and SQL workbench for exact computation, file and data
   inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls. Choose the language best suited to each
-  cell and reuse live state when switching: Python reads R globals through
-  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
-  query R data frames by name. R accesses its SQL connection through
-  `sql_connection()`; R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  modeling. State persists across calls. R is optional for Python and SQL;
+  without R, managed SQL requires Python DuckDB and Python accesses its catalog
+  through `sql_connection()`. When both languages are available, Python reads R
+  globals through `r.name`, R reads Python globals through `py$name`, and
+  R-managed DuckDB SQL can query R data frames by name. R accesses its SQL
+  connection through `sql_connection()`; R or Python can select a user-owned
+  connection with `console_sql_connection(connection)`.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -303,12 +313,13 @@ configuration: external-sandbox enabled (string)
 description: >-
   Persistent R, Python, and SQL workbench for exact computation, file and data
   inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls. Choose the language best suited to each
-  cell and reuse live state when switching: Python reads R globals through
-  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
-  query R data frames by name. R accesses its SQL connection through
-  `sql_connection()`; R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  modeling. State persists across calls. R is optional for Python and SQL;
+  without R, managed SQL requires Python DuckDB and Python accesses its catalog
+  through `sql_connection()`. When both languages are available, Python reads R
+  globals through `r.name`, R reads Python globals through `py$name`, and
+  R-managed DuckDB SQL can query R data frames by name. R accesses its SQL
+  connection through `sql_connection()`; R or Python can select a user-owned
+  connection with `console_sql_connection(connection)`.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -333,12 +344,13 @@ configuration: external-sandbox enabled (mapping)
 description: >-
   Persistent R, Python, and SQL workbench for exact computation, file and data
   inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls. Choose the language best suited to each
-  cell and reuse live state when switching: Python reads R globals through
-  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
-  query R data frames by name. R accesses its SQL connection through
-  `sql_connection()`; R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  modeling. State persists across calls. R is optional for Python and SQL;
+  without R, managed SQL requires Python DuckDB and Python accesses its catalog
+  through `sql_connection()`. When both languages are available, Python reads R
+  globals through `r.name`, R reads Python globals through `py$name`, and
+  R-managed DuckDB SQL can query R data frames by name. R accesses its SQL
+  connection through `sql_connection()`; R or Python can select a user-owned
+  connection with `console_sql_connection(connection)`.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -363,12 +375,13 @@ configuration: restricted
 description: >-
   Persistent R, Python, and SQL workbench for exact computation, file and data
   inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls. Choose the language best suited to each
-  cell and reuse live state when switching: Python reads R globals through
-  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
-  query R data frames by name. R accesses its SQL connection through
-  `sql_connection()`; R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  modeling. State persists across calls. R is optional for Python and SQL;
+  without R, managed SQL requires Python DuckDB and Python accesses its catalog
+  through `sql_connection()`. When both languages are available, Python reads R
+  globals through `r.name`, R reads Python globals through `py$name`, and
+  R-managed DuckDB SQL can query R data frames by name. R accesses its SQL
+  connection through `sql_connection()`; R or Python can select a user-owned
+  connection with `console_sql_connection(connection)`.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -394,12 +407,13 @@ configuration: enabled
 description: >-
   Persistent R, Python, and SQL workbench for exact computation, file and data
   inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls. Choose the language best suited to each
-  cell and reuse live state when switching: Python reads R globals through
-  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
-  query R data frames by name. R accesses its SQL connection through
-  `sql_connection()`; R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  modeling. State persists across calls. R is optional for Python and SQL;
+  without R, managed SQL requires Python DuckDB and Python accesses its catalog
+  through `sql_connection()`. When both languages are available, Python reads R
+  globals through `r.name`, R reads Python globals through `py$name`, and
+  R-managed DuckDB SQL can query R data frames by name. R accesses its SQL
+  connection through `sql_connection()`; R or Python can select a user-owned
+  connection with `console_sql_connection(connection)`.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -425,12 +439,13 @@ configuration: proxy
 description: >-
   Persistent R, Python, and SQL workbench for exact computation, file and data
   inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls. Choose the language best suited to each
-  cell and reuse live state when switching: Python reads R globals through
-  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
-  query R data frames by name. R accesses its SQL connection through
-  `sql_connection()`; R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  modeling. State persists across calls. R is optional for Python and SQL;
+  without R, managed SQL requires Python DuckDB and Python accesses its catalog
+  through `sql_connection()`. When both languages are available, Python reads R
+  globals through `r.name`, R reads Python globals through `py$name`, and
+  R-managed DuckDB SQL can query R data frames by name. R accesses its SQL
+  connection through `sql_connection()`; R or Python can select a user-owned
+  connection with `console_sql_connection(connection)`.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -456,12 +471,13 @@ configuration: proxy with local binding
 description: >-
   Persistent R, Python, and SQL workbench for exact computation, file and data
   inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls. Choose the language best suited to each
-  cell and reuse live state when switching: Python reads R globals through
-  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
-  query R data frames by name. R accesses its SQL connection through
-  `sql_connection()`; R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  modeling. State persists across calls. R is optional for Python and SQL;
+  without R, managed SQL requires Python DuckDB and Python accesses its catalog
+  through `sql_connection()`. When both languages are available, Python reads R
+  globals through `r.name`, R reads Python globals through `py$name`, and
+  R-managed DuckDB SQL can query R data frames by name. R accesses its SQL
+  connection through `sql_connection()`; R or Python can select a user-owned
+  connection with `console_sql_connection(connection)`.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -487,12 +503,13 @@ configuration: proxy with network enabled
 description: >-
   Persistent R, Python, and SQL workbench for exact computation, file and data
   inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls. Choose the language best suited to each
-  cell and reuse live state when switching: Python reads R globals through
-  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
-  query R data frames by name. R accesses its SQL connection through
-  `sql_connection()`; R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  modeling. State persists across calls. R is optional for Python and SQL;
+  without R, managed SQL requires Python DuckDB and Python accesses its catalog
+  through `sql_connection()`. When both languages are available, Python reads R
+  globals through `r.name`, R reads Python globals through `py$name`, and
+  R-managed DuckDB SQL can query R data frames by name. R accesses its SQL
+  connection through `sql_connection()`; R or Python can select a user-owned
+  connection with `console_sql_connection(connection)`.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -518,12 +535,13 @@ configuration: native network representation
 description: >-
   Persistent R, Python, and SQL workbench for exact computation, file and data
   inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls. Choose the language best suited to each
-  cell and reuse live state when switching: Python reads R globals through
-  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
-  query R data frames by name. R accesses its SQL connection through
-  `sql_connection()`; R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  modeling. State persists across calls. R is optional for Python and SQL;
+  without R, managed SQL requires Python DuckDB and Python accesses its catalog
+  through `sql_connection()`. When both languages are available, Python reads R
+  globals through `r.name`, R reads Python globals through `py$name`, and
+  R-managed DuckDB SQL can query R data frames by name. R accesses its SQL
+  connection through `sql_connection()`; R or Python can select a user-owned
+  connection with `console_sql_connection(connection)`.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -549,12 +567,13 @@ configuration: external enforcement
 description: >-
   Persistent R, Python, and SQL workbench for exact computation, file and data
   inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls. Choose the language best suited to each
-  cell and reuse live state when switching: Python reads R globals through
-  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
-  query R data frames by name. R accesses its SQL connection through
-  `sql_connection()`; R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  modeling. State persists across calls. R is optional for Python and SQL;
+  without R, managed SQL requires Python DuckDB and Python accesses its catalog
+  through `sql_connection()`. When both languages are available, Python reads R
+  globals through `r.name`, R reads Python globals through `py$name`, and
+  R-managed DuckDB SQL can query R data frames by name. R accesses its SQL
+  connection through `sql_connection()`; R or Python can select a user-owned
+  connection with `console_sql_connection(connection)`.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -579,12 +598,13 @@ configuration: no sandbox
 description: >-
   Persistent R, Python, and SQL workbench for exact computation, file and data
   inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls. Choose the language best suited to each
-  cell and reuse live state when switching: Python reads R globals through
-  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
-  query R data frames by name. R accesses its SQL connection through
-  `sql_connection()`; R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  modeling. State persists across calls. R is optional for Python and SQL;
+  without R, managed SQL requires Python DuckDB and Python accesses its catalog
+  through `sql_connection()`. When both languages are available, Python reads R
+  globals through `r.name`, R reads Python globals through `py$name`, and
+  R-managed DuckDB SQL can query R data frames by name. R accesses its SQL
+  connection through `sql_connection()`; R or Python can select a user-owned
+  connection with `console_sql_connection(connection)`.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls

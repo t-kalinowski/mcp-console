@@ -111,6 +111,7 @@ def smoke_mcp(
     env: dict[str, str],
     startup_timeout: float,
     response_timeout: float,
+    r_available: bool,
 ) -> None:
     process = subprocess.Popen(
         [str(executable), "serve"],
@@ -172,27 +173,33 @@ def smoke_mcp(
             "unexpected runtime startup response",
         )
 
-        send(
-            {
-                "jsonrpc": "2.0",
-                "id": 3,
-                "method": "tools/call",
-                "params": {
-                    "name": "send",
-                    "arguments": {"r": "6 * 7"},
+        evaluations = [("python", "42\n")]
+        if r_available:
+            evaluations.append(("r", "[1] 42\n"))
+        for identifier, (language, output) in enumerate(evaluations, start=3):
+            send(
+                {
+                    "jsonrpc": "2.0",
+                    "id": identifier,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "send",
+                        "arguments": {language: "6 * 7"},
+                    },
+                }
+            )
+            evaluation = receive(process, buffer, response_timeout)
+            require(
+                evaluation.get("id") == identifier, "unexpected evaluation response ID"
+            )
+            require(
+                evaluation.get("result")
+                == {
+                    "content": [{"type": "text", "text": output}],
+                    "isError": False,
                 },
-            }
-        )
-        evaluation = receive(process, buffer, response_timeout)
-        require(evaluation.get("id") == 3, "unexpected evaluation response ID")
-        require(
-            evaluation.get("result")
-            == {
-                "content": [{"type": "text", "text": "[1] 42\n"}],
-                "isError": False,
-            },
-            f"unexpected R evaluation response: {json.dumps(evaluation, ensure_ascii=False)}",
-        )
+                f"unexpected {language} evaluation response: {json.dumps(evaluation, ensure_ascii=False)}",
+            )
     except Exception as error:
         standard_error = terminate(process)
         if standard_error:
@@ -378,7 +385,7 @@ def smoke_wheel(args: argparse.Namespace) -> None:
     internal_ir = installed.resolve().with_name("ir")
     require(not internal_ir.exists(), f"wheel contains sibling `ir`: {internal_ir}")
 
-    r_home = command_output(["R", "RHOME"])
+    r_home = command_output(["R", "RHOME"]) if shutil.which("R") else None
     uv = shutil.which("uv")
     require(uv is not None, "host `uv` is not on `PATH`")
     with tempfile.TemporaryDirectory(prefix="mcp-console-uv-path-") as directory:
@@ -398,7 +405,8 @@ def smoke_wheel(args: argparse.Namespace) -> None:
 
         env = os.environ.copy()
         env.pop("RETICULATE_UV", None)
-        env["R_HOME"] = r_home
+        if r_home is not None:
+            env["R_HOME"] = r_home
         env["PATH"] = path
         smoke_mcp(
             installed,
@@ -406,6 +414,7 @@ def smoke_wheel(args: argparse.Namespace) -> None:
             env,
             args.startup_timeout_seconds,
             args.response_timeout_seconds,
+            r_available=r_home is not None,
         )
 
 

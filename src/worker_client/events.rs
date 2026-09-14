@@ -70,6 +70,7 @@ enum OperationKind {
     },
     PreparePython {
         commit: PythonPreparationCommit,
+        duckdb_extensions: Vec<String>,
         continue_environment_preparation: bool,
     },
 }
@@ -192,12 +193,26 @@ impl WorkerOperationState {
     pub(super) fn begin_python_preparation(
         &self,
         commit: PythonPreparationCommit,
+        duckdb_extensions: Vec<String>,
         continue_environment_preparation: bool,
     ) -> Result<mpsc::Receiver<Result<OperationResult, String>>, String> {
         self.begin_preparation(OperationKind::PreparePython {
             commit,
+            duckdb_extensions,
             continue_environment_preparation,
         })
+    }
+
+    fn python_duckdb_extensions(&self) -> Result<Vec<String>, String> {
+        let state = self.lock()?;
+        Ok(
+            match state.operation.as_ref().map(|operation| &operation.kind) {
+                Some(OperationKind::PreparePython {
+                    duckdb_extensions, ..
+                }) => duckdb_extensions.clone(),
+                _ => Vec::new(),
+            },
+        )
     }
 
     fn begin_preparation(
@@ -1051,17 +1066,18 @@ fn handle_semantic_event(
                 })?;
             }
             let import_resolution = request.import_resolution.clone();
-            let response = match callbacks.resolve_python(request) {
-                Ok(managed) => {
-                    let python = managed.python().to_string_lossy().into_owned();
-                    candidates.python.push(PendingPythonCandidate {
-                        managed,
-                        import_resolution,
-                    });
-                    RelayCommand::PythonResolved { python }
-                }
-                Err(message) => RelayCommand::PythonResolutionFailed { message },
-            };
+            let response =
+                match callbacks.resolve_python(request, operation.python_duckdb_extensions()?) {
+                    Ok(managed) => {
+                        let python = managed.python().to_string_lossy().into_owned();
+                        candidates.python.push(PendingPythonCandidate {
+                            managed,
+                            import_resolution,
+                        });
+                        RelayCommand::PythonResolved { python }
+                    }
+                    Err(message) => RelayCommand::PythonResolutionFailed { message },
+                };
             commands.send(response)
         }
         RelayEvent::ResolvePythonVersion { request } => {

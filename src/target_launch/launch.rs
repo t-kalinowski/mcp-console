@@ -96,6 +96,7 @@ fn launch(
             .env("MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION", "0")
             .env("RETICULATE_USE_MANAGED_VENV", "no")
             .env_remove("MCP_CONSOLE_MANAGED_PYTHON")
+            .env_remove("MCP_CONSOLE_PYTHON_EXECUTABLE")
             .env_remove("MCP_CONSOLE_PREINSTALLED");
     }
     command.env_remove(crate::settings::ENVIRONMENT);

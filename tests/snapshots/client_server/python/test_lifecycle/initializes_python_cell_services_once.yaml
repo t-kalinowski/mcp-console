@@ -1,0 +1,34 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  python: |
+    import builtins
+    import logging
+
+    original_input = builtins.input
+
+
+    def filters():
+        return sum(
+            getattr(filter_, "_mcp_console_filter", False)
+            for filter_ in logging.getLogger("matplotlib.font_manager").filters
+        )
+
+
+    filters()
+result:
+  content:
+    - type: text
+      text: |
+        1
+  isError: false
+---
+send:
+  python: original_input is builtins.input, filters()
+result:
+  content:
+    - type: text
+      text: |
+        (True, 1)
+  isError: false

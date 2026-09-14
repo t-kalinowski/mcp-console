@@ -28,6 +28,25 @@ class Requirement:
 WORKER = Requirement(
     "worker", sys.platform in {"darwin", "linux"}, "workers require macOS or Linux"
 )
+NO_R = Requirement(
+    "host without R",
+    shutil.which("R") is None
+    and shutil.which("Rscript") is None
+    and not os.environ.get("R_HOME")
+    and not any(
+        Path(path).exists()
+        for path in (
+            "/usr/lib/R",
+            "/usr/local/lib/R",
+            "/opt/R",
+            "/Library/Frameworks/R.framework",
+        )
+    ),
+    "requires an execution environment without R executables, libraries, or packages",
+)
+R_RUNTIME = Requirement(
+    "R runtime", not NO_R.available, "requires an available R installation"
+)
 SANDBOX = Requirement(
     "sandbox",
     sys.platform in {"darwin", "linux"},

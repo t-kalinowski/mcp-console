@@ -8,6 +8,7 @@ use super::requirements::push_duckdb_r_target;
 #[derive(Clone)]
 pub(in crate::worker_client) struct Environment {
     pub(in crate::worker_client) custom_worker: bool,
+    pub(in crate::worker_client) setup: Option<super::super::BuiltinSetup>,
     pub(in crate::worker_client) duckdb_extensions: BTreeSet<String>,
     /// R libraries that may have supplied DuckDB in the current worker generation.
     pub(in crate::worker_client) duckdb_r_targets: Vec<crate::resolver::ManagedR>,
@@ -108,11 +109,13 @@ impl PythonEnvironment {
             Self::UserSelected(python) => {
                 command
                     .env("RETICULATE_PYTHON", python)
+                    .env_remove("MCP_CONSOLE_PYTHON_EXECUTABLE")
                     .env_remove("MCP_CONSOLE_MANAGED_PYTHON");
             }
             Self::Ambient => {
                 command
                     .env_remove("RETICULATE_PYTHON")
+                    .env_remove("MCP_CONSOLE_PYTHON_EXECUTABLE")
                     .env_remove("MCP_CONSOLE_MANAGED_PYTHON");
             }
         }
@@ -129,7 +132,7 @@ pub(super) fn ensure_python_additions_available(
     if environment.custom_worker {
         return Err("Python requirements are unavailable with a custom worker".to_string());
     }
-    if let super::super::RResolver::Pending(setup) = &environment.r_resolver {
+    if let Some(setup) = &environment.setup {
         return if PythonEnvironment::uses_managed(setup.configured_python.as_deref()) {
             Ok(())
         } else {

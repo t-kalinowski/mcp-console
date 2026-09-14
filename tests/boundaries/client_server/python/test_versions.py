@@ -32,10 +32,12 @@ from support.resolvers import (
     write_python_executable,
     write_uv_python_inventories,
 )
+from support.requirements import R_RUNTIME, requires
 from support.suites import run_this_suite
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R_RUNTIME)
 def test_uses_current_r_library_for_managed_python_resolution(
     binary: Path,
     execution: Execution,
@@ -127,6 +129,7 @@ def test_uses_current_r_library_for_managed_python_resolution(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R_RUNTIME)
 def test_validates_registry_only_python_requirements(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -248,93 +251,54 @@ def test_validates_registry_only_python_requirements(
             "~=3.11",
             "===3.11",
         ]
-        uv_record.write_text("", encoding="utf-8")
-        # Reach both worker-originated resolver requests directly. Interpreter
-        # selectors must be rejected before either host resolver invokes uv.
         # fmt: r
-        r = code(rf"""
+        r = code("""
             selector_worker_pid <- Sys.getpid()
             selector_sentinel <- 42L
-            packages <- reticulate::py_require()$packages
-            accepted_package_request <- jsonlite::toJSON(list(
-              requirements = list(
-                packages = I(c({", ".join(json.dumps(package) for package in accepted_packages)})),
-                python_version = I("python3")
-              ),
-              retained_requirements = list(
-                packages = I(c({", ".join(json.dumps(package) for package in accepted_packages)})),
-                python_version = I(">=3.10")
-              )
-            ), auto_unbox = TRUE)
-            accepted_package_error <- tryCatch(
-              .Call("mcp_console_resolve_python", accepted_package_request),
-              error = conditionMessage
-            )
-            environment_request <- jsonlite::toJSON(list(
-              requirements = list(
-                packages = I(packages),
-                python_version = I({json.dumps(str(worker_executable))})
-              ),
-              retained_requirements = list(
-                packages = I(packages),
-                python_version = I(">=3.10")
-              )
-            ), auto_unbox = TRUE)
-            environment_error <- tryCatch(
-              .Call("mcp_console_resolve_python", environment_request),
-              error = conditionMessage
-            )
-            retained_environment_request <- jsonlite::toJSON(list(
-              requirements = list(
-                packages = I(packages),
-                python_version = I(">=3.10")
-              ),
-              retained_requirements = list(
-                packages = I(packages),
-                python_version = I({json.dumps(str(worker_retained_selector))})
-              )
-            ), auto_unbox = TRUE)
-            retained_environment_error <- tryCatch(
-              .Call("mcp_console_resolve_python", retained_environment_request),
-              error = conditionMessage
-            )
-            accepted_version_request <- jsonlite::toJSON(list(
-              constraints = I(c(
-                {", ".join(json.dumps(constraint) for constraint in accepted_version_constraints)},
-                {json.dumps(str(worker_installation))}
-              ))
-            ), auto_unbox = TRUE)
-            accepted_version_error <- tryCatch(
-              .Call(
-                "mcp_console_resolve_python_version",
-                accepted_version_request
-              ),
-              error = conditionMessage
-            )
-            rejected_version_errors <- vapply(
-              c({", ".join(json.dumps(constraint) for constraint in rejected_version_constraints)}),
-              function(constraint) {{
-                request <- jsonlite::toJSON(list(
-                  constraints = I(constraint)
-                ), auto_unbox = TRUE)
-                tryCatch(
-                  .Call("mcp_console_resolve_python_version", request),
-                  error = conditionMessage
-                )
-              }},
-              character(1L),
-              USE.NAMES = FALSE
-            )
-            cat(
-              accepted_package_error,
-              environment_error,
-              retained_environment_error,
-              accepted_version_error,
-              rejected_version_errors,
-              sep = "\n"
-            )
+            selector_packages <- reticulate::py_require()$packages
+            invisible(reticulate::py_config())
             """)
         client.send(r=r)
+        assert last_result_text(client) == "[done]"
+        uv_record.write_text("", encoding="utf-8")
+        # Reach both native worker callbacks. Worker-supplied interpreter
+        # selectors must be rejected before either host resolver invokes uv.
+        # fmt: python
+        python = code(f"""
+            import json
+            import _mcp_console_native as native_services
+
+            def rejected(operation, payload):
+                try:
+                    native_services.call(json.dumps({{
+                        "operation": operation, "payload": payload
+                    }}))
+                except RuntimeError as error:
+                    print(str(error))
+
+            def manifest(packages, version):
+                return {{"packages": packages, "python_version": [version]}}
+
+            packages = list(r.selector_packages)
+            rejected("resolve_python", {{
+                "requirements": manifest({accepted_packages!r}, "python3"),
+                "retained_requirements": manifest({accepted_packages!r}, ">=3.10"),
+            }})
+            rejected("resolve_python", {{
+                "requirements": manifest(packages, {str(worker_executable)!r}),
+                "retained_requirements": manifest(packages, ">=3.10"),
+            }})
+            rejected("resolve_python", {{
+                "requirements": manifest(packages, ">=3.10"),
+                "retained_requirements": manifest(packages, {str(worker_retained_selector)!r}),
+            }})
+            rejected("resolve_version", {{
+                "constraints": {accepted_version_constraints!r} + [{str(worker_installation)!r}]
+            }})
+            for constraint in {rejected_version_constraints!r}:
+                rejected("resolve_version", {{"constraints": [constraint]}})
+            """)
+        client.send(python=python)
         output = last_result_text(client)
         assert output == (
             python_version_constraint_error("python3")
@@ -394,6 +358,7 @@ def test_validates_registry_only_python_requirements(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R_RUNTIME)
 def test_recovers_from_python_version_resolution_failure(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -436,6 +401,7 @@ def test_recovers_from_python_version_resolution_failure(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R_RUNTIME)
 def test_resolves_python_version_inventory_semantics(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -469,6 +435,7 @@ def test_resolves_python_version_inventory_semantics(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R_RUNTIME)
 def test_resolves_python_version_constraint_semantics(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -516,6 +483,7 @@ def test_resolves_python_version_constraint_semantics(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R_RUNTIME)
 def test_falls_back_after_filtering_unsupported_python_versions(
     binary: Path,
     execution: Execution,
@@ -562,6 +530,7 @@ def test_falls_back_after_filtering_unsupported_python_versions(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R_RUNTIME)
 def test_respects_system_python_preference_with_custom_install_directory(
     binary: Path,
     execution: Execution,
@@ -615,6 +584,7 @@ def test_respects_system_python_preference_with_custom_install_directory(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R_RUNTIME)
 def test_uses_reticulate_managed_uv_for_python_resolution(
     binary: Path,
     execution: Execution,
@@ -744,6 +714,7 @@ def test_uses_reticulate_managed_uv_for_python_resolution(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R_RUNTIME)
 def test_retains_managed_python_when_uv_caching_is_disabled(
     binary: Path,
     execution: Execution,
@@ -781,6 +752,7 @@ def test_retains_managed_python_when_uv_caching_is_disabled(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R_RUNTIME)
 def test_removes_disabled_uv_python_source_aliases(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -811,6 +783,7 @@ def test_removes_disabled_uv_python_source_aliases(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R_RUNTIME)
 def test_interrupts_python_cache_warmup_without_committing(
     binary: Path,
     execution: Execution,
@@ -912,6 +885,7 @@ def test_interrupts_python_cache_warmup_without_committing(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R_RUNTIME)
 def test_stops_before_cache_warmup_after_python_resolver_interrupt(
     binary: Path,
     execution: Execution,

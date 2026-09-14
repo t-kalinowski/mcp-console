@@ -4,6 +4,9 @@ MCP Console releases are built from tags and published as binary-only PyPI wheel
 The release workflow publishes native Apple Silicon and Intel macOS wheels and ARM64 and x86-64 Linux wheels.
 Linux wheels are built on Ubuntu 24.04 and require glibc 2.39 or later.
 Wheel builds require Maturin 1.15 or later.
+R executables, libR, and R packages are not build or Python/SQL execution prerequisites.
+No-R SQL uses Python DuckDB; install it in prepared target images.
+Run the installed-wheel peer runtime acceptance on an R-free host in addition to mixed-language checks on an R-enabled host.
 It does not publish a source distribution, Windows wheels, or GitHub release archives.
 
 `Cargo.toml` is the package-version source of truth.
@@ -130,7 +133,8 @@ Installation checks cover unstaged sources, compiler-flag changes between reinst
 Linux staging first builds and strips the private bubblewrap helper, embeds that exact SHA-256 in the runner build, installs `libexec/bwrap`, and includes its license at `share/licenses/mcp-console/bubblewrap-COPYING`.
 Rebuilding the helper therefore invalidates the runner's tracked digest input.
 Builds require a C compiler, `pkg-config`, and libcap development files (`build-essential pkg-config libcap-dev` on Ubuntu); installations require `libcap.so.2`.
-Linux smoke tests exercise the bundled helper with an empty `PATH` and evaluate R through default sandboxed `serve`.
+Linux smoke tests exercise the bundled helper with an empty `PATH` and evaluate Python through default sandboxed `serve`.
+Hosts with R also evaluate an R cell.
 CI permits unprivileged namespace setup on its disposable Ubuntu runners by disabling their AppArmor user-namespace restriction.
 A local rehearsal must likewise run in an environment whose policy permits the bundled helper's namespace operations; an approved system `bwrap` alone does not verify that installation path.
 
@@ -180,7 +184,7 @@ Manual dispatch does not publish; the publication job should be skipped.
 The rehearsal exercises installation and runtime setup on fresh runners, which ordinary CI with cached dependencies can miss.
 
 Runtime preparation is lazy: MCP initialization alone does not start the worker.
-The wheel smoke test explicitly calls `send(control="restart")` under the startup timeout before evaluating R under the response timeout.
+The wheel smoke test explicitly calls `send(control="restart")` under the startup timeout before evaluating Python and, when installed, R under the response timeout.
 Keep these phases separate when changing the test; cold dependency setup must not consume the ordinary evaluation budget.
 
 ## Publish
@@ -240,7 +244,8 @@ uvx --isolated --no-cache --no-sources --default-index https://pypi.org/simple \
   "mcp-console@$release_version" serve
 ```
 
-through an MCP client, explicitly start the worker, and verify that R evaluates `6 * 7` to `42`.
+through an MCP client, explicitly start the worker, and verify that Python evaluates `6 * 7` to `42`.
+Also check R when it is installed.
 `serve` waits for protocol input; waiting is not an interactive-command failure.
 
 After exact-version verification, test unqualified resolution in fresh `uv` directories:

@@ -47,7 +47,11 @@ from support.snapshots import (
     snapshot_path,
 )
 
-binary = root / "target" / "release" / "mcp-console"
+binary = Path(
+    os.environ.get(
+        "MCP_CONSOLE_TEST_BINARY", root / "target" / "release" / "mcp-console"
+    )
+).resolve()
 boundaries = {"client_server", "server_relay", "relay_worker", "cli"}
 suite_paths = sorted(
     path

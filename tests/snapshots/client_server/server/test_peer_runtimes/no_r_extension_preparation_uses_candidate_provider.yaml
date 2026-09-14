@@ -1,0 +1,48 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  python: |
+    import os
+    import sys
+
+    original_pid = os.getpid()
+    original_executable = sys.executable
+    answer = 41
+    assert "duckdb" not in sys.modules
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  requirements:
+    python:
+      - duckdb==1.4.4
+    duckdb:
+      - not_a_real_duckdb_extension
+result:
+  content:
+    - type: text
+      text: |-
+        DuckDB extension resolution failed with exit status: 1: Traceback (most recent call last):
+          File "<string>", line 9, in <module>
+          File "<string>", line 16, in <module>
+        _duckdb.IOException: IO Error: Failed to download extension "not_a_real_duckdb_extension" at URL "http://extensions.duckdb.org/v1.4.4/linux_arm64/not_a_real_duckdb_extension.duckdb_extension.gz"
+
+        Candidate extensions: "motherduck", "delta", "core_functions", "uc_catalog", "ducklake"
+        For more info, visit https://duckdb.org/docs/stable/extensions/troubleshooting?version=v1.4.4&platform=linux_arm64&extension=not_a_real_duckdb_extension (ERROR Could not establish connection)
+  isError: true
+---
+send:
+  python: |
+    assert os.getpid() == original_pid
+    assert sys.executable == original_executable
+    answer + 1
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false

@@ -726,12 +726,15 @@ impl Worker {
     pub(super) fn prepare_python(
         &mut self,
         packages: Vec<String>,
+        duckdb_extensions: Vec<String>,
         continue_environment_preparation: bool,
         commit: PythonPreparationCommit,
     ) -> Result<PreparationOutcome, String> {
-        let result = self
-            .operation
-            .begin_python_preparation(commit, continue_environment_preparation)?;
+        let result = self.operation.begin_python_preparation(
+            commit,
+            duckdb_extensions,
+            continue_environment_preparation,
+        )?;
         self.relay
             .commands
             .send(RelayCommand::PreparePython { packages })?;

@@ -40,7 +40,7 @@ opened = read()["Open"]
 write(
     {
         "Hello": {
-            "version": 2 if mode == "incompatible" else 3,
+            "version": 2 if mode == "incompatible" else 4,
             "build": opened["build"],
         }
     }
@@ -48,7 +48,12 @@ write(
 if mode == "incompatible":
     raise SystemExit(0)
 complete(
-    0, {"managed": True, "selections": {"r_home": "/remote-only/R", "python": None}}
+    0,
+    {
+        "managed": True,
+        "managed_r": True,
+        "selections": {"r_home": "/remote-only/R", "python": None},
+    },
 )
 while (message := read()) is not None:
     if message == "Close":

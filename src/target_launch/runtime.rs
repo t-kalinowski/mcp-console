@@ -33,21 +33,14 @@ pub(crate) fn configure_runtime(
         .env("MCP_CONSOLE_EXECUTION_COMPUTE", compute)
         .env("RETICULATE_USE_MANAGED_VENV", "no")
         .env_remove("MCP_CONSOLE_MANAGED_PYTHON")
+        .env_remove("MCP_CONSOLE_PYTHON_EXECUTABLE")
         .env_remove("MCP_CONSOLE_PREINSTALLED");
     Ok(())
 }
 
 pub(crate) fn runtime_probe() -> Result<(), String> {
-    let home =
-        harp::command::r_home_setup().map_err(|e| format!("container R discovery failed: {e}"))?;
-    let library = home.join("lib/libR.so");
-    if !library.is_file() {
-        return Err("container R requires a shared libR.so; install R with shared-library support in the image".into());
-    }
-    // Loadability is checked in this disposable target probe, without starting
-    // R or the analysis worker. The image supplies this trusted native code.
-    unsafe { libloading::Library::new(library) }
-        .map_err(|error| format!("container R library cannot be loaded: {error}"))?;
+    // Prepared no-R targets use Python for both Python and managed SQL.
+    // The R backend discovers and loads its library only when requested.
     let selected = std::env::var_os("RETICULATE_PYTHON");
     if selected
         .as_ref()

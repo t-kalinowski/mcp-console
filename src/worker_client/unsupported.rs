@@ -59,10 +59,15 @@ impl Worker {
     pub(super) fn prepare_python(
         &mut self,
         packages: Vec<String>,
+        duckdb_extensions: Vec<String>,
         continue_environment_preparation: bool,
         _commit: super::PythonPreparationCommit,
     ) -> Result<super::PreparationOutcome, String> {
-        let _ = (packages, continue_environment_preparation);
+        let _ = (
+            packages,
+            duckdb_extensions,
+            continue_environment_preparation,
+        );
         unreachable!("unsupported workers cannot start")
     }
 

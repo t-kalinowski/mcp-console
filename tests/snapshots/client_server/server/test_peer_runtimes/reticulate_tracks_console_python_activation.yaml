@@ -1,0 +1,45 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  r: invisible(reticulate::py_config())
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  requirements:
+    python:
+      - py-yaml12
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+send:
+  r: |
+    stopifnot(
+      identical(
+        reticulate::py_config()$python,
+        reticulate::import("sys")$executable
+      ),
+      "py-yaml12" %in% reticulate::py_require()$packages
+    )
+    py$answer <- 42L
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  python: answer
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false

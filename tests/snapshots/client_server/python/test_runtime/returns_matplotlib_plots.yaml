@@ -2,13 +2,13 @@
 !same-as MCP initialization for this execution mode
 ---
 send:
-  r: |
-    reticulate::py_require("matplotlib")
-    invisible(reticulate::py_config())
+  requirements:
+    python:
+      - matplotlib
 result:
   content:
     - type: text
-      text: "[done]"
+      text: "[prepared]"
   isError: false
 ---
 send:

@@ -94,7 +94,8 @@ struct ConsoleServer {
 #[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct SendArguments {
-    /// One complete R cell evaluated in persistent global state. Its final visible expression
+    /// One complete R cell evaluated in persistent global state. Requires R on the execution host.
+    /// Its final visible expression
     /// autoprints through R's normal console display; R also autoprints earlier visible top-level
     /// expressions. Leave the primary result last and print only when additional output is needed.
     /// When dynamic resolution is available, the built-in worker resolves missing plain CRAN
@@ -125,15 +126,16 @@ struct SendArguments {
     /// import packages already installed there directly. Read R globals and call R functions through
     /// `r.name`. Select a user-owned DB-API connection for later SQL cells with
     /// `console_sql_connection(connection)` and restore managed DuckDB with
-    /// `console_sql_connection(None)`. Python data frames are not automatically visible to managed
-    /// DuckDB SQL; bind them to an R name before querying them there. At cell end, including after a
+    /// `console_sql_connection(None)`. Without R, `sql_connection()` accesses the Python-managed
+    /// DuckDB catalog; use `sql_connection().register(name, dataframe)` to expose data to SQL.
+    /// With the R-managed provider, bind Python data frames to an R name for SQL discovery. At cell end, including after a
     /// Python error, every open `matplotlib.pyplot` figure returns once as a PNG image and is closed.
     /// `show()` is optional. R plots called through `r` follow the R plot rules. Omit this field for
     /// polling or stdin-only calls.
     python: Option<String>,
     /// One complete SQL cell evaluated through the active connection. The managed DuckDB backend is
     /// active by default and keeps a persistent catalog. A result with columns returns a bounded
-    /// preview. With managed DuckDB, an unqualified relation name can query a data frame in R global
+    /// preview. Without R, managed SQL requires Python DuckDB. With R-managed DuckDB, an unqualified relation name can query a data frame in R global
     /// state, and a DuckDB table or view with the same name takes precedence. A user-selected R
     /// connection receives cells through `DBI::dbSendQuery()`; a Python DB-API connection executes
     /// them through its connection or cursor protocol. The selected driver supplies its own SQL
@@ -276,6 +278,7 @@ impl ConsoleServer {
         let transcript = crate::transcript::Transcript::with_target(
             recording_directory,
             dynamic_resolution,
+            worker.r_available(),
             target.clone(),
         );
         worker.record_with(transcript.clone());
@@ -348,7 +351,7 @@ impl ConsoleServer {
 #[tool_router]
 impl ConsoleServer {
     #[tool(
-        description = r#"Persistent R, Python, and SQL workbench for exact computation, file and data inspection, transformation, visualization, statistics, simulation, and modeling. State persists across calls. Choose the language best suited to each cell and reuse live state when switching: Python reads R globals through `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can query R data frames by name. R accesses its SQL connection through `sql_connection()`; R or Python can select a user-owned connection with `console_sql_connection(connection)`.
+        description = r#"Persistent R, Python, and SQL workbench for exact computation, file and data inspection, transformation, visualization, statistics, simulation, and modeling. State persists across calls. R is optional for Python and SQL; without R, managed SQL requires Python DuckDB and Python accesses its catalog through `sql_connection()`. When both languages are available, Python reads R globals through `r.name`, R reads Python globals through `py$name`, and R-managed DuckDB SQL can query R data frames by name. R accesses its SQL connection through `sql_connection()`; R or Python can select a user-owned connection with `console_sql_connection(connection)`.
 
 Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls must be sequential; a control-only interrupt may overlap a pending `send`. Inspect intermediate results before submitting dependent cells. Cells are not transactional; changes made before an error may remain.
 

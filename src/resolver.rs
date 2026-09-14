@@ -41,11 +41,15 @@ impl ManagedPythonResolverConfiguration {
             .as_ref()
             .filter(|uv| uv.as_os_str() != OsStr::new("managed"))
             .cloned();
-        Self {
+        let mut configuration = Self {
             environment: Arc::new(environment),
             reticulate_uv,
             uv,
+        };
+        if let Some(uv) = managed_r::find_path_entry("uv") {
+            configuration.set_default_uv(uv.as_os_str().to_os_string());
         }
+        configuration
     }
 
     fn explicit_uv(&self) -> Option<&OsStr> {
@@ -173,13 +177,12 @@ fn is_uv_environment_variable(name: &OsStr) -> bool {
 }
 
 #[cfg(unix)]
-pub(crate) use managed_duckdb::resolve_duckdb_extensions;
+pub(crate) use managed_duckdb::{resolve_duckdb_extensions, resolve_python_duckdb_extensions};
 #[cfg(unix)]
 pub(crate) use managed_python::{ManagedPython, resolve_python_manifest, resolve_python_version};
 #[cfg(unix)]
 pub(crate) use managed_r::{
-    ManagedR, ManagedRBootstrap, ManagedRResolverConfiguration, detect_r_bootstrap, discover,
-    resolve_r, resolve_r_with,
+    ManagedR, ManagedRBootstrap, ManagedRResolverConfiguration, discover, resolve_r, resolve_r_with,
 };
 #[cfg(unix)]
 pub(crate) use process::{ResolverControl, ResolverStopHandle};

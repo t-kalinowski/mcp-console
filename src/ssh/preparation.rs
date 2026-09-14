@@ -18,7 +18,7 @@ pub(crate) use client::Preparation;
 #[cfg(not(unix))]
 pub(crate) use unsupported::Preparation;
 
-const VERSION: u32 = 3;
+const VERSION: u32 = 4;
 const LIMIT: usize = 1024 * 1024;
 const SETUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
@@ -51,6 +51,7 @@ impl Selections {
 #[serde(deny_unknown_fields)]
 pub(crate) struct Discovery {
     pub managed: bool,
+    pub managed_r: bool,
     pub selections: Selections,
 }
 
@@ -67,7 +68,11 @@ pub(crate) enum Operation {
     },
     PythonVersion {
         constraints: Vec<String>,
-        r: ManagedR,
+        r: Option<ManagedR>,
+    },
+    PythonDuckdb {
+        python: ManagedPython,
+        extensions: Vec<String>,
     },
     Duckdb {
         r: ManagedR,

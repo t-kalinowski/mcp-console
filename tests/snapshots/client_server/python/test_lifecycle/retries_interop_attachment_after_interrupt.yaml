@@ -1,0 +1,58 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  python: bridge_interrupt_state = 41
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  r: |
+    invisible(suppressMessages(base::trace(
+      "initialize_python",
+      tracer = quote(invisible(readline("interop attaching> "))),
+      print = FALSE,
+      where = asNamespace("reticulate")
+    )))
+    invisible(reticulate::py_config())
+result:
+  content:
+    - type: text
+      text: |-
+        [input requested: "interop attaching> "]
+        [waiting for stdin]
+  isError: false
+---
+send:
+  control: interrupt
+result:
+  content:
+    - type: text
+      text: "\n"
+  isError: false
+---
+send:
+  python: bridge_interrupt_state + 1
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false
+---
+send:
+  r: |
+    invisible(suppressMessages(base::untrace(
+      "initialize_python",
+      where = asNamespace("reticulate")
+    )))
+    py$bridge_interrupt_state + 1L
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false
