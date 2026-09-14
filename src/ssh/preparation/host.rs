@@ -12,7 +12,7 @@ struct Context {
     bootstrap: Option<resolver::ManagedRBootstrap>,
     r: Option<resolver::ManagedRResolverConfiguration>,
     python: resolver::ManagedPythonResolverConfiguration,
-    rscript: PathBuf,
+    rscript: Option<PathBuf>,
     managed_python: bool,
 }
 
@@ -23,21 +23,20 @@ impl Context {
         let mut python = resolver::ManagedPythonResolverConfiguration::capture();
         let (bootstrap, rscript) = resolver::discover(&mut python, on_started)?;
         let configured_python = std::env::var("RETICULATE_PYTHON").ok();
-        let rscript = rscript.ok_or("R is unavailable on the SSH execution host")?;
         let managed_python = !configured_python
             .as_ref()
             .is_some_and(|python| !python.is_empty() && python != "managed");
         let discovery = Discovery {
-            managed: bootstrap.is_some(),
+            managed: bootstrap.is_some() || (python.has_uv() && managed_python),
+            managed_r: bootstrap.is_some(),
             selections: Selections {
-                r_home: Some(
-                    rscript
-                        .parent()
+                r_home: rscript.as_ref().map(|path| {
+                    path.parent()
                         .and_then(std::path::Path::parent)
-                        .ok_or("remote Rscript has no R home")?
+                        .expect("Rscript is under R home")
                         .to_string_lossy()
-                        .into_owned(),
-                ),
+                        .into_owned()
+                }),
                 python: configured_python,
             },
         };
@@ -79,7 +78,8 @@ impl Context {
                 serde_json::to_value(r).map_err(|error| error.to_string())
             }
             Operation::Python { requirements, r } => {
-                let r = r.map(|r| r.on_host(&self.rscript));
+                let r =
+                    r.map(|r| r.on_host(self.rscript.as_deref().expect("R operation selected R")));
                 self.prepare_uv(r.as_ref(), on_started)?;
                 let python = resolver::resolve_python_manifest(
                     requirements,
@@ -90,13 +90,18 @@ impl Context {
                 serde_json::to_value(python).map_err(|error| error.to_string())
             }
             Operation::PythonVersion { constraints, r } => {
-                let r = r.on_host(&self.rscript);
-                self.prepare_uv(Some(&r), on_started)?;
-                resolver::resolve_python_version(constraints, &self.python, Some(&r), on_started)
+                let r =
+                    r.map(|r| r.on_host(self.rscript.as_deref().expect("R operation selected R")));
+                self.prepare_uv(r.as_ref(), on_started)?;
+                resolver::resolve_python_version(constraints, &self.python, r.as_ref(), on_started)
                     .map(serde_json::Value::String)
             }
+            Operation::PythonDuckdb { python, extensions } => {
+                resolver::resolve_python_duckdb_extensions(&python, &extensions, on_started)?;
+                Ok(serde_json::Value::Null)
+            }
             Operation::Duckdb { r, extensions } => {
-                let r = r.on_host(&self.rscript);
+                let r = r.on_host(self.rscript.as_deref().expect("R operation selected R"));
                 resolver::resolve_duckdb_extensions(&r, &extensions, on_started)?;
                 Ok(serde_json::Value::Null)
             }

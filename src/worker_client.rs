@@ -576,12 +576,16 @@ impl Client {
         let configured_python = discovery.selections.python.map(OsString::from);
         let (r_resolver, python, setup) = if discovery.managed {
             (
-                RResolver::Discover,
+                if discovery.managed_r {
+                    RResolver::Discover
+                } else {
+                    RResolver::Unavailable
+                },
                 None,
                 Some(BuiltinSetup {
-                    bootstrap: Some(crate::resolver::execution::Bootstrap::Ssh(
-                        preparation.clone(),
-                    )),
+                    bootstrap: discovery
+                        .managed_r
+                        .then(|| crate::resolver::execution::Bootstrap::Ssh(preparation.clone())),
                     python_resolver: crate::resolver::execution::PythonConfiguration::Ssh(
                         preparation,
                     ),

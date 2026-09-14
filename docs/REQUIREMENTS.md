@@ -14,9 +14,10 @@ Exact live-worker messages and custom-worker receipts belong to the [worker prot
 [SSH targets](SSH.md) use the same capability discovery and managed preparation on the execution host.
 The controller never discovers local R/Python or executes resolvers for remote sessions.
 A separate trusted remote preparation owner captures resolver settings before MCP readiness without preparing defaults or starting a worker.
-When a bootstrap is available, `requirements`, first-use defaults, automatic R/Python requests, and restart preparation use the remote R installation, caches, filesystem, and temporary files.
+When a bootstrap is available, `requirements`, first-use defaults, automatic R/Python requests, and restart preparation use that host's available runtimes, caches, filesystem, and temporary files.
 Bare fallback remains available when no bootstrap is found; a selected bootstrap failure does not fall back.
-An explicit remote Python interpreter disables managed Python additions while retaining managed R and DuckDB.
+An explicit remote Python interpreter disables managed Python additions.
+Available managed R remains independent; without R, the selected interpreter must already contain DuckDB for SQL use.
 The local server keeps requirement merging, transaction and activation decisions, generation ownership, and recording.
 Remote results require confirmed resolver cleanup before commit; uncertain completion blocks further preparation and replacement.
 
