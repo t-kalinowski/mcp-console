@@ -97,6 +97,12 @@ impl Runtime {
         match message {
             ServerMessage::Evaluate { language, source } => {
                 embedded_r::idle()?;
+                if core::is_shutting_down() {
+                    return Ok(false);
+                }
+                if let Some(message) = core::take_worker_failure() {
+                    return Err(io::Error::other(message).into());
+                }
                 let result = self.evaluate(language, source);
                 interrupt::clear();
                 input::finish_console_stdin_operation()?;
