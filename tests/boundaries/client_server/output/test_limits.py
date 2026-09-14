@@ -13,6 +13,7 @@ from support.assertions import large_output, last_tool_text
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.native import SHARED_LIBRARY_FLAG
+from support.previews import assert_preview, cell_text, normalize_preview_paths
 from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, requires
 from support.suites import run_this_suite
@@ -45,14 +46,11 @@ def test_bounds_pending_output_and_resets_after_completion(
         public_output = (
             f".agents/console/sessions/{session.name}/{relative_output.as_posix()}"
         )
-        retained = "x" * PENDING_TEXT_BUDGET
-        notice = (
-            "\n[output truncated: omitted 7 text bytes and "
-            "0 encoded image bytes across 1 event; "
-            f"retained text: {public_output} (7 of 7 omitted text bytes)]"
-        )
-        assert output == retained + notice, (
-            f"unexpected bounded output: length={len(output)}, tail={output[-300:]!r}"
+        omitted = assert_preview(output, "x" * (PENDING_TEXT_BUDGET + 7))
+        assert f"raw cell log: {public_output}" in output
+        assert (
+            f"{PENDING_TEXT_BUDGET + 7} raw bytes retained, 0 raw bytes not retained"
+            in output
         )
 
         output_path = session / relative_output
@@ -82,7 +80,7 @@ def test_bounds_pending_output_and_resets_after_completion(
             "call_id": 1,
             "path": relative_output.as_posix(),
             "retained_bytes": PENDING_TEXT_BUDGET + 7,
-            "inline_omitted_bytes": 7,
+            "inline_omitted_bytes": omitted,
             "discarded_bytes": 0,
             "retention_limit_bytes": CELL_OUTPUT_RETENTION_LIMIT,
         }, cell_output
@@ -92,9 +90,8 @@ def test_bounds_pending_output_and_resets_after_completion(
             encoding="utf-8"
         )
 
-        normalized_notice = notice.replace(session.name, "<run ID>")
-        overflow["result"]["content"][0]["text"] = (
-            f"<retained {PENDING_TEXT_BUDGET} text bytes>{normalized_notice}"
+        overflow["result"]["content"][0]["text"] = output.replace(
+            session.name, "<run ID>"
         )
 
         client.send(r="echo echo")
@@ -164,27 +161,14 @@ def test_orders_failure_and_replacement_output(
                 "[starting new worker]",
                 "[idle]",
             ]
-            assert output.count(raw) == 1, (
-                f"protocol failure lost raw stdout bytes: length={len(output)}, "
-                f"tail={output[-500:]!r}"
-            )
+            assert cell_text(client, 2) == raw
             assert all(output.count(notice) == 1 for notice in notices), repr(output)
             assert [output.index(notice) for notice in notices] == sorted(
                 output.index(notice) for notice in notices
             ), repr(output)
-            remainder = output.replace(raw, "")
-            for notice in notices:
-                remainder = remainder.replace(notice, "")
-            assert not remainder.replace("\n", ""), repr(output)
-            result["content"][0]["text"] = (
-                "zod old stdout\n<large output>\n"
-                "<cross-source position follows serialized observation>\n"
-                "[worker sent an unexpected ready message]\n"
-                "[worker terminated by signal 9]\n"
-                "[worker stopped: in-memory state lost]\n"
-                "[starting new worker]\n"
-                "[idle]"
-            )
+            assert output.endswith("\n".join(notices)), output[-500:]
+            assert_preview(output.removesuffix("\n".join(notices)), raw)
+            normalize_preview_paths(client)
 
             client.send(r="echo echo")
             assert last_tool_text(client) == "zod: echo\n"

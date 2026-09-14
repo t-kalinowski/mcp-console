@@ -21,7 +21,7 @@ mod event;
 mod markdown;
 mod output;
 
-pub(crate) use output::CellOutput;
+pub(crate) use output::{CellOutput, OutputRecord};
 
 const SCHEMA_VERSION: u64 = 1;
 

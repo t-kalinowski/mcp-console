@@ -1,6 +1,7 @@
 #!/usr/bin/env -S uv run --script
 
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -9,6 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import last_tool_text
+from support.previews import assert_preview, cell_text, normalize_preview_paths
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.processes import (
@@ -53,20 +55,19 @@ def test_restart_closes_worker_stdin(binary: Path, execution: Execution) -> Tran
 
         client.send(control="restart")
         output = last_tool_text(client)
-        prefix = "zod stdin closed\n" + ("x" * LARGE_OUTPUT_SIZE)
+        raw = cell_text(client, 1)
+        assert raw == "", "output after the restart cut does not belong to the cell log"
+        marker = re.search(r"no retained cell log \((\d+) raw bytes observed\)", output)
+        assert marker is not None, output
+        prefix = "zod stdin closed\n" + "x" * LARGE_OUTPUT_SIZE
+        observed = int(marker[1])
+        assert observed > len(prefix), observed
+        raw = prefix + "y" * (observed - len(prefix))
         suffix = "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
         suffix = "[active evaluation stopped by session restart request]\n" + suffix
-        assert output.startswith(prefix), "worker stdin did not close before restart"
         assert output.endswith(suffix), "lifecycle notices followed old-worker output"
-        barrier = output.removeprefix(prefix).removesuffix(suffix)
-        assert barrier and not barrier.strip("y\n"), "unexpected old-worker output"
-        client.transcript[-1]["result"]["content"][0]["text"] = (
-            "zod stdin closed\n<large output>\n"
-            "[active evaluation stopped by session restart request]\n"
-            "[worker stopped: in-memory state lost]\n"
-            "[starting new worker]\n"
-            "[idle]"
-        )
+        assert_preview(output.removesuffix(suffix).removesuffix("\n"), raw)
+        normalize_preview_paths(client)
 
         client.send(r="echo echo")
         assert last_tool_text(client) == "zod: echo\n"
