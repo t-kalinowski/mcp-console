@@ -106,6 +106,13 @@ pub(crate) fn ensure_initialized() -> Result<(), String> {
         super::library::install_module(c"_mcp_console_environment", ENVIRONMENT_SOURCE)?;
         super::library::call_json(
             c"_mcp_console_environment",
+            c"connect_streams",
+            &Value::Null,
+        )?;
+        super::library::connect_interrupts()?;
+        super::library::initialize_site()?;
+        super::library::call_json(
+            c"_mcp_console_environment",
             c"initialize",
             &json!({
                 "discovery": discovered,

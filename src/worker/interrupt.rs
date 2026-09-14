@@ -54,6 +54,11 @@ pub(super) fn set_r_pending(pointer: *mut libc::c_int) {
 
 pub(crate) fn set_python_interrupt(function: unsafe extern "C" fn()) {
     PYTHON_INTERRUPT.store(function as *mut (), Ordering::SeqCst);
+    // A signal may have arrived while CPython's core was initializing, before
+    // its handler could be connected. Deliver it at the next Python boundary.
+    if pending() {
+        unsafe { function() };
+    }
 }
 
 extern "C" fn interrupt(_: libc::c_int) {

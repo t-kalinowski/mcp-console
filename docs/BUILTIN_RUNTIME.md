@@ -153,6 +153,9 @@ An interrupted automatic R or Python resolver reports an interrupted outcome to 
 The response contains available output and current state through the normal `send` conventions, commonly ending in `[running; poll with an empty send]`, `[waiting for stdin]`, `[idle]`, or the completed evaluation result.
 
 R, Python, and DuckDB observe interruption through their normal console/runtime mechanisms.
+Python startup hooks, including executable `.pth` files and `sitecustomize`, run after Console connects interrupt delivery.
+Interrupting a hook cancels the submitted cell; a later cell retries initialization in the same interpreter.
+Hook side effects before interruption remain, and incomplete site processing may run again during that retry.
 Managed console reads are cancelled when the active runtime accepts the interrupt.
 User code can catch, delay, replace, or block `SIGINT`, so interruption is cooperative rather than a termination guarantee.
 Use `control = "restart"` when the worker must be replaced.

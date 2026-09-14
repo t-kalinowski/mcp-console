@@ -249,7 +249,11 @@ Its private R environment bridge conditionally wraps `base::library` and runs R'
 The Rust Python facade loads, retains, and initializes the selected file-backed `libpython`.
 It installs the same private evaluator, input callbacks, plotting hooks, and environment activation implementation whether R is absent, inactive, or active.
 Discovery frames its result separately from interpreter startup and exit output, and uses the configured runtime library name and framework location.
-Initial activation preserves the site directories already initialized by CPython; adding a new managed environment processes its site directories.
+CPython core initialization disables automatic site processing with `Py_NoSiteFlag`; Console connects interrupt delivery before calling `site.main()` through its ordinary Python exception boundary.
+It restores the site flags before running hooks so child interpreters keep normal package discovery.
+Executable `.pth` files and site customization hooks can therefore be interrupted without terminating the interpreter.
+Successful site processing runs once; an interrupted attempt may run again when a later cell retries activation, retaining any earlier hook side effects.
+Initial environment activation preserves those site directories; adding a new managed environment processes its site directories.
 Ordinary Python text and managed input notices share the ordered sideband stream.
 Binary buffers, native descriptors, background threads, and descendants retain raw stdout/stderr capture.
 CPython's GIL and saved main-thread state remain owned by that embedding implementation.

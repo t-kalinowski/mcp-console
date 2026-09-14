@@ -143,10 +143,6 @@ def initialize(request):
     _activate(_discovery)
     sys.path.insert(0, "")
     connect_interrupts(None)
-    for stream in (sys.stdout, sys.stderr):
-        stream.reconfigure(line_buffering=True, write_through=True)
-    sys.stdout = _ConsoleStream(sys.stdout, "output")
-    sys.stderr = _ConsoleStream(sys.stderr, "diagnostic")
     builtins.input = _input
     builtins.r = _LazyR()
     builtins.__import__ = _import
@@ -291,4 +287,12 @@ def evaluate(request):
     runtime.eval_cell(request["source"], request["filename"])
     for image in runtime.take_images():
         call("plot", image)
+    return "null"
+
+
+def connect_streams(request):
+    for stream in (sys.stdout, sys.stderr):
+        stream.reconfigure(line_buffering=True, write_through=True)
+    sys.stdout = _ConsoleStream(sys.stdout, "output")
+    sys.stderr = _ConsoleStream(sys.stderr, "diagnostic")
     return "null"

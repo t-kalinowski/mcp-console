@@ -4,7 +4,9 @@
 send:
   python: |
     import builtins
+    import sys
 
+    assert sys.flags.no_site == 0
     builtins.console_startups == 2
 result:
   content:
