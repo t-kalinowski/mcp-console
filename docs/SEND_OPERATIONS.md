@@ -70,7 +70,7 @@ Idle stdin awaits preparation, startup, and input submission without a `timeout_
 ## Output and retained files
 
 Every complete result shares an 8 KiB rendered UTF-8 text budget, including preparation, old-worker output, replacement-cell output, input and lifecycle notices, and failures.
-Oversized output returns the beginning and end of text retained by the existing collector; images retained by that collector use a separate response allowance.
+Oversized output returns a bounded beginning and latest tail; images use a separate allowance.
 A poll consumes its newly observed interval, including omitted text, without replaying the middle in later responses.
 Retained raw cell logs are flushed at response cuts and remain accessible during evaluation.
 Their paths belong to the Console server's recording workspace, which is the controller workspace for remote and container targets.

@@ -1,67 +1,94 @@
-//! Carriage-return and backspace projection for one delivered output segment.
+//! Bounded carriage-return and backspace projection for one response interval.
+
+use super::preview::{Preview, TEXT_BYTES, suffix_start};
+use super::utf8_prefix_length;
 
 #[derive(Default)]
 pub(super) struct Stream {
-    line: String,
+    head: String,
+    tail: String,
+    omitted: u64,
+    head_closed: bool,
     pending_carriage_return: bool,
     replace_on_write: bool,
 }
 
 impl Stream {
-    pub(super) fn ingest(&mut self, text: &str) -> String {
-        let mut stable = String::new();
-        for character in text.chars() {
-            self.character(character, &mut stable);
-        }
-        stable
-    }
-
-    pub(super) fn finish(&mut self) -> String {
-        self.pending_carriage_return = false;
-        self.replace_on_write = false;
-        std::mem::take(&mut self.line)
-    }
-
-    fn character(&mut self, character: char, stable: &mut String) {
-        if self.pending_carriage_return {
-            if character == '\r' {
-                return;
-            }
-            if character == '\x08' {
-                self.pending_carriage_return = false;
-                self.line.pop();
-                self.replace_on_write = true;
-                return;
-            }
-            self.pending_carriage_return = false;
-            if character == '\n' {
-                self.newline("\r\n", stable);
-                return;
-            }
-            self.line.clear();
-        }
-
-        match character {
-            '\r' => self.pending_carriage_return = true,
-            '\n' => self.newline("\n", stable),
-            '\x08' => {
-                self.line.pop();
-            }
-            _ => {
-                if self.replace_on_write {
-                    self.line.clear();
-                    self.replace_on_write = false;
+    pub(super) fn ingest(&mut self, text: &str, output: &mut Preview) {
+        for run in text.split_inclusive(['\r', '\n', '\x08']) {
+            let (plain, control) = match run.as_bytes().last() {
+                Some(b'\r' | b'\n' | 8) => (&run[..run.len() - 1], run.chars().next_back()),
+                _ => (run, None),
+            };
+            if !plain.is_empty() {
+                if self.pending_carriage_return || self.replace_on_write {
+                    self.clear();
                 }
-                self.line.push(character);
+                self.append(plain);
+            }
+            match control {
+                Some('\r') => self.pending_carriage_return = true,
+                Some('\n') => {
+                    let delimiter = if self.pending_carriage_return {
+                        "\r\n"
+                    } else {
+                        "\n"
+                    };
+                    self.finish(output);
+                    output.text(delimiter);
+                }
+                Some('\x08') => {
+                    if self.pending_carriage_return {
+                        self.pending_carriage_return = false;
+                        self.replace_on_write = true;
+                    }
+                    // Backspace edits the retained suffix. It cannot reconstruct
+                    // an already omitted middle after erasing that entire suffix;
+                    // the gap remains until a carriage return replaces the frame.
+                    if self.tail.pop().is_none() && self.omitted == 0 {
+                        self.head.pop();
+                    }
+                }
+                _ => {}
             }
         }
     }
 
-    fn newline(&mut self, delimiter: &str, stable: &mut String) {
-        stable.push_str(&self.line);
-        stable.push_str(delimiter);
-        self.line.clear();
+    fn append(&mut self, text: &str) {
+        let head = if self.head_closed {
+            0
+        } else {
+            utf8_prefix_length(text, TEXT_BYTES.saturating_sub(self.head.len()))
+        };
+        self.head.push_str(&text[..head]);
+        let text = &text[head..];
+        self.head_closed |= !text.is_empty();
+        if text.len() >= TEXT_BYTES {
+            let start = suffix_start(text, TEXT_BYTES);
+            self.omitted += (self.tail.len() + start) as u64;
+            self.tail.clear();
+            self.tail.push_str(&text[start..]);
+        } else {
+            self.tail.push_str(text);
+            let start = suffix_start(&self.tail, TEXT_BYTES);
+            self.omitted += start as u64;
+            self.tail.drain(..start);
+        }
+    }
+
+    fn clear(&mut self) {
+        self.head.clear();
+        self.tail.clear();
+        self.omitted = 0;
+        self.head_closed = false;
         self.pending_carriage_return = false;
         self.replace_on_write = false;
+    }
+
+    pub(super) fn finish(&mut self, output: &mut Preview) {
+        output.text(&self.head);
+        output.gap(self.omitted);
+        output.text(&self.tail);
+        self.clear();
     }
 }

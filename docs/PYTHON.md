@@ -228,6 +228,6 @@ The helper creates no client, thread, subprocess, or temporary launcher.
 
 The synchronous and asynchronous clients and framework adapters receive the same bounded MCP results through their existing methods.
 Each complete result contains at most 8 KiB of rendered UTF-8 text across all text blocks, including notices; images have a separate allowance.
-Oversized output includes the beginning and end of retained text, and a raw-log path when available.
+Oversized output includes the beginning, latest tail, and a retained raw-log path when available.
 That path is relative to the Console server's recording workspace, including for SSH and container targets.
 Retrieving omitted text requires filesystem access to that directory through existing file tools; the clients add no retrieval methods and never re-run a cell to recover its original output.

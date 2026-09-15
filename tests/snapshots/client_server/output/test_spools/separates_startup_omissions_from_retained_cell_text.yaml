@@ -7,17 +7,15 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 8083
+        text_bytes: 8072
         concat:
           - repeat: s
-            count: 3840
+            count: 3968
           - |
 
-            [output preview: omitted 8380928 rendered UTF-8 bytes; no retained cell log (8388615 raw bytes observed); omitted text is unavailable]
+            [output preview: omitted 8380691 rendered UTF-8 bytes; no retained cell log (8388615 raw bytes observed); omitted text is unavailable]
           - repeat: s
-            count: 3840
-          - |-
-
-            [collector limit: omitted 7 text bytes and 0 encoded image bytes across 1 event]
-            [collector limit: omitted 12 text bytes and 0 encoded image bytes across 1 event; retained text: .agents/console/sessions/<run ID>/outputs/call-000001.log (12 of 12 omitted text bytes)]
+            count: 3956
+          - |
+            cell output
   isError: false

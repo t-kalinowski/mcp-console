@@ -51,14 +51,7 @@ def test_bounds_pending_output_and_resets_after_completion(
         public_output = (
             f".agents/console/sessions/{session.name}/{relative_output.as_posix()}"
         )
-        collector = (
-            "\n[collector limit: omitted 7 text bytes and 0 encoded image bytes across 1 event; "
-            f"retained text: {public_output} (7 of 7 omitted text bytes)]"
-        )
-        assert output.endswith(collector), output[-1000:]
-        omitted = assert_preview(
-            output.removesuffix(collector), "x" * PENDING_TEXT_BUDGET
-        )
+        omitted = assert_preview(output, "x" * (PENDING_TEXT_BUDGET + 7))
         assert f"raw cell log: {public_output}" in output
         assert (
             f"{PENDING_TEXT_BUDGET + 7} raw bytes retained, 0 raw bytes not retained"

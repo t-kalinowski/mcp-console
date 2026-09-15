@@ -85,16 +85,3 @@ def compact_previews(client: McpClient, *units: str) -> None:
         for block in entry.get("result", {}).get("content", []):
             if block["type"] == "text" and isinstance(block["text"], str):
                 block["text"] = compact_text(block["text"], *units)
-
-
-def collector_notice(
-    text_bytes: int, events: int, path: str | None = None, retained: int = 0
-) -> str:
-    """Exact pre-render loss notice while the original collector remains in use."""
-    location = (
-        f"; retained text: {path} ({retained} of {text_bytes} omitted text bytes)"
-        if path is not None
-        else ""
-    )
-    event = "event" if events == 1 else "events"
-    return f"\n[collector limit: omitted {text_bytes} text bytes and 0 encoded image bytes across {events} {event}{location}]"
