@@ -30,6 +30,7 @@ from support.resolvers import (
     resolve_public_python_version,
 )
 from support.ssh import SSH, configure, localhost, remote_command, poison_controller
+from support.evidence import compact_text
 from support.suites import run_this_suite
 
 
@@ -498,7 +499,8 @@ def test_failed_restart_and_invalid_requirements_preserve_worker(binary, executi
 def test_large_remote_install_failure_preserves_diagnostics_and_worker(
     binary, execution
 ):
-    diagnostic = ('compile: α\t"error"\\source ' * 128).rstrip()
+    diagnostic_unit = 'compile: α\t"error"\\source '
+    diagnostic = (diagnostic_unit * 128).rstrip()
     diagnostics = ((diagnostic + "\n") * 352) + "final diagnostic"
     with managed_session(binary, execution, failure_output=diagnostics) as (
         client,
@@ -522,6 +524,12 @@ def test_large_remote_install_failure_preserves_diagnostics_and_worker(
         assert last_tool_text(client) == "[1] 42\n"
         client.send(requirements={"r": ["praise"]}, r="sentinel")
         assert last_tool_text(client) == "[1] 42\n"
+        for entry in client.transcript[3:]:
+            for block in entry.get("result", {}).get("content", []):
+                if block["type"] == "text":
+                    block["text"] = compact_text(
+                        block["text"], diagnostic + "\n", diagnostic_unit
+                    )
         return client.finish()[3:]
 
 
