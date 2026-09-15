@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import large_output, last_tool_text
 from support.client import McpClient
+from support.evidence import compact_text
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.native import SHARED_LIBRARY_FLAG
 from support.records import Transcript
@@ -92,9 +93,8 @@ def test_bounds_pending_output_and_resets_after_completion(
             encoding="utf-8"
         )
 
-        normalized_notice = notice.replace(session.name, "<run ID>")
-        overflow["result"]["content"][0]["text"] = (
-            f"<retained {PENDING_TEXT_BUDGET} text bytes>{normalized_notice}"
+        overflow["result"]["content"][0]["text"] = compact_text(
+            output.replace(session.name, "<run ID>"), "x"
         )
 
         client.send(r="echo echo")
