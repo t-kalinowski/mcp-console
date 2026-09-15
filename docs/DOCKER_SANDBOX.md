@@ -259,6 +259,15 @@ Target metadata contains no workload environment or credential values.
 MicroVM UUIDs are not labeled Docker container IDs.
 Quarto exports remain source-only and non-executing by default; recreating the runtime and filesystem is an explicit user step.
 
+### Bounded output and retained text
+
+Tool results return bounded text previews with the beginning and end of text retained by the collector under an 8 KiB total UTF-8 budget; retained images have separate response limits.
+A retained-output path is relative to the Console server's recording workspace on the controller.
+Reading omitted text requires a filesystem tool with access to that controller directory; access only to the execution target or another client host is insufficient.
+Console does not transfer these files or expose a read/search tool.
+A log can contain only a retained prefix after the file limit or a write failure; the preview uses the output retained by the collector and reports the file loss.
+See [the built-in runtime guide](BUILTIN_RUNTIME.md#output-and-notices).
+
 ## Acceptance and scope
 
 Real acceptance requires standalone SBX availability and an explicitly prepared template:

@@ -34,14 +34,24 @@ result:
       data: iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=
       mimeType: image/png
     - type: text
-      text: |-
-        <retained 8388590 text bytes>
-        [output truncated: omitted 25 text bytes and 0 encoded image bytes across 1 event; retained text: .agents/console/sessions/<run ID>/outputs/call-000002.log (25 of 25 omitted text bytes)]
-        [stopped by session restart request before evaluation finished]
-        [worker stopped: in-memory state lost]
-        [active evaluation stopped by session restart request]
-        [starting new worker]
-        [idle]
+      text:
+        text_bytes: 7995
+        concat:
+          - repeat: x
+            count: 3659
+          - |
+
+            [output preview: omitted 8381219 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000002.log (Console server recording workspace; controller for remote targets); 8388633 raw bytes retained, 0 raw bytes not retained]
+          - repeat: x
+            count: 3712
+          - |-
+
+            [collector limit: omitted 25 text bytes and 0 encoded image bytes across 1 event; retained text: .agents/console/sessions/<run ID>/outputs/call-000002.log (25 of 25 omitted text bytes)]
+            [stopped by session restart request before evaluation finished]
+            [worker stopped: in-memory state lost]
+            [active evaluation stopped by session restart request]
+            [starting new worker]
+            [idle]
   isError: true
 ---
 input:

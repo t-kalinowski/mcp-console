@@ -11,7 +11,7 @@ use rmcp::{
     handler::server::{
         common::Extension, router::tool::ToolRouter, tool::ToolCallContext, wrapper::Parameters,
     },
-    model::{CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock},
+    model::{CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ErrorCode},
     schemars,
     service::RequestContext,
     tool, tool_handler, tool_router,
@@ -352,7 +352,9 @@ impl ConsoleServer {
 
 Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls must be sequential; a control-only interrupt may overlap a pending `send`. Inspect intermediate results before submitting dependent cells. Cells are not transactional; changes made before an error may remain.
 
-Omit code to poll, supply stdin, control the session, or prepare requirements when available. If a response ends in `[running; poll with an empty send]`, call `send` again without code or stdin; do not resubmit the cell. Send `stdin` alone to answer an active prompt or debugger. Field descriptions specify preparation, control, and timeout ordering."#
+Omit code to poll, supply stdin, control the session, or prepare requirements when available. If a response ends in `[running; poll with an empty send]`, call `send` again without code or stdin; do not resubmit the cell. Send `stdin` alone to answer an active prompt or debugger. Field descriptions specify preparation, control, and timeout ordering.
+
+Each result has at most 8 KiB of UTF-8 text, including notices; oversized output previews the beginning and end of text retained by the collector. Images have separate limits. Retained raw-log paths are relative to the Console server recording workspace (the controller for remote targets). Full retained text requires filesystem access there through existing tools; Console provides no read/search interface."#
     )]
     async fn send(
         &self,
@@ -411,7 +413,8 @@ Omit code to poll, supply stdin, control the session, or prepare requirements wh
                 transcript: self.transcript.clone(),
                 call_id: call.id(),
             })
-            .await?;
+            .await
+            .unwrap_or_else(crate::worker_client::Response::tool_error);
         Ok(response_to_tool_result(
             response,
             &call,
@@ -507,7 +510,7 @@ impl ServerHandler for ConsoleServer {
                 }
             }
         };
-        context.extensions.insert(delivery);
+        context.extensions.insert(delivery.clone());
         let transcript = self.transcript.clone();
         let request_meta = context.meta.clone();
         let request = Arc::new(request);
@@ -527,11 +530,25 @@ impl ServerHandler for ConsoleServer {
         let request =
             Arc::into_inner(request).expect("transcript task should release the tool request");
         context.extensions.insert(call.clone());
-        let result = Arc::new(
-            self.tool_router
-                .call(ToolCallContext::new(self, request, context))
-                .await,
-        );
+        // Call the known send route directly so argument decoding errors enter
+        // the bounded renderer before the router converts them to plain text.
+        let send = self
+            .tool_router
+            .map
+            .get("send")
+            .expect("send tool must be registered");
+        let result = (send.call)(ToolCallContext::new(self, request, context)).await;
+        let result = Arc::new(match result {
+            Err(error) if error.code == ErrorCode::INVALID_PARAMS => Ok(response_to_tool_result(
+                crate::worker_client::Response::tool_error(error.message.into_owned()),
+                &call,
+                &transcript,
+                &self.deliveries,
+                &delivery,
+            )
+            .into()),
+            result => result,
+        });
         let recorder = transcript.clone();
         let recording_result = Arc::clone(&result);
         if let Err(error) = tokio::task::spawn_blocking(move || {

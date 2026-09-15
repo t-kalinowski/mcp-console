@@ -7,13 +7,18 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 8388792
+        text_bytes: 8114
         concat:
           - repeat: x
-            count: 8388608
+            count: 3840
+          - |
+
+            [output preview: omitted 8380928 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000001.log (Console server recording workspace; controller for remote targets); 8388615 raw bytes retained, 0 raw bytes not retained]
+          - repeat: x
+            count: 3840
           - |-
 
-            [output truncated: omitted 7 text bytes and 0 encoded image bytes across 1 event; retained text: .agents/console/sessions/<run ID>/outputs/call-000001.log (7 of 7 omitted text bytes)]
+            [collector limit: omitted 7 text bytes and 0 encoded image bytes across 1 event; retained text: .agents/console/sessions/<run ID>/outputs/call-000001.log (7 of 7 omitted text bytes)]
   isError: false
 ---
 send:

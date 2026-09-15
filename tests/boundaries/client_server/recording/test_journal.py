@@ -262,7 +262,7 @@ def test_records_tool_calls_and_images(
             "tool_result",
         ], events
         run_id = events[0]["run_id"]
-        assert run_id
+        assert run_id.endswith(f"-{client.process.pid:010d}"), run_id
         assert session.name == run_id, (session, run_id)
         assert events[0]["session"] == "default", events[0]
         assert Path(events[0]["working_directory"]).samefile(workspace), events[0]

@@ -21,6 +21,7 @@ from support.processes import (
     stop_process,
 )
 from support.r import r_test_environment
+from support.previews import compact_previews, assert_preview, normalize_preview_paths
 from support.records import Transcript
 from support.requirements import PROCESS_EVENTS, requires
 from support.resolvers import record_resolved_r_library
@@ -282,23 +283,21 @@ def test_orders_explicit_restart_output(
         client.send(control="restart")
         result = client.transcript[-1]["result"]
         assert result["isError"] is False, result
-        expected = large_output("zod stdin closed\n") + (
+        suffix = (
             "\n[active evaluation stopped by session restart request]"
             "\n[worker stopped: in-memory state lost]"
             "\n[starting new worker]"
             "\n[idle]"
         )
-        assert result["content"] == [{"type": "text", "text": expected}], result
-        result["content"][0]["text"] = (
-            "zod stdin closed\n<large output>\n"
-            "[active evaluation stopped by session restart request]\n"
-            "[worker stopped: in-memory state lost]\n"
-            "[starting new worker]\n"
-            "[idle]"
-        )
+        output = last_tool_text(client)
+        assert output.endswith(suffix), output[-500:]
+        assert_preview(output.removesuffix(suffix), large_output("zod stdin closed\n"))
+        assert "no retained cell log" in output
+        normalize_preview_paths(client)
 
         client.send(r="echo echo")
         assert last_tool_text(client) == "zod: echo\n"
+        compact_previews(client, "x", "y")
         return client.finish()
 
 

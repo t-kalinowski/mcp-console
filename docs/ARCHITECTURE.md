@@ -112,6 +112,7 @@ See [Docker Sandbox execution](DOCKER_SANDBOX.md).
 The client and server exchange MCP JSON-RPC over the server's standard input and output.
 The server registers only the `send` tool.
 The MCP adapter in `src/server.rs` decodes arguments, applies language filtering, and translates responses into MCP text and image content.
+Argument decoding errors pass through the same bounded response renderer before recording and delivery.
 The session coordinator in `src/worker_client.rs` validates requirements and interprets every `send` combination, including standalone preparation.
 One `send` can poll, provide stdin, prepare requirements, evaluate a cell, interrupt, restart, or combine compatible parts under one ordered operation.
 [`TOOL_DESCRIPTIONS.md`](TOOL_DESCRIPTIONS.md) gives editorial guidance, and the [canonical handshake snapshot](../tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml) records the registered descriptions; `src/server.rs` and the actual `tools/list` result are authoritative.
@@ -429,12 +430,21 @@ The protocol documents define the exact closure and retirement order.
 The server owns one ordered pending-output tape across worker lifetimes.
 The relay publishes observations to it, but neither the relay nor worker decides which MCP call receives them.
 The server assigns output to an evaluation, poll, restart, controlled send, or later idle response; applies pending-output limits; preserves image order; adds lifecycle notices; and assembles MCP content.
-Before MCP projection, it compacts single-line carriage-return and backspace redraws within each consecutive run of text from one worker output stream in that delivered segment.
+The existing collector retains at most 8 MiB of text, 8 MiB of encoded images, 64 KiB of image metadata, and 4,096 ordinary events before a shared overflow latch discards later ordinary output.
+At each drain it decodes the retained direct output and compacts single-line redraws before building the response preview.
+A cut attaches a raw-file receipt before completion releases that cell's writer, so later response composition can still attribute omissions to the correct file.
+Collector-limit notices count bytes discarded before decoding and progress compaction, including dropped generated notices, separately from the renderer's omitted UTF-8 byte counts.
+Intervals with no rendered text publish any finished file summary and discard their receipt; unrecorded text still keeps its source boundary.
+Fully omitted intervals account for their per-cell omissions and release their receipts into one bounded summary, which names the journal containing individual file paths and counts.
+The canonical response builder preserves typed control notices during composition; its final projection applies one 8 KiB UTF-8 text budget, including all generated notices, across the complete tool result.
+Response composition keeps bounded state even after raw-file retention fails or is disabled.
 
 A controlled send produces one MCP response.
 When a completed or interrupted evaluation precedes a new cell, the server transfers the prior response region into the new evaluation's prelude instead of acknowledging it separately.
 The resulting delivery owner covers prior-operation output, restart lifecycle notices when present, new-cell output, and the final combined state marker in that order.
 If MCP response delivery is cancelled or its write fails, the complete combined response returns to its delivery owner and can be delivered exactly once.
+An active evaluation replays its unclaimed response before collecting later output.
+Restart finishes that cell's raw output record before composing its recovered intervals with later output, so a source summary can publish the journal entry before releasing the file receipt.
 
 Each relay producer preserves its own order.
 The ordered event stream gives the server one observation order, but it does not establish chronology between independent worker sideband, stdout, and stderr transports.
@@ -489,8 +499,11 @@ The server attaches that file to the ordered output tape at the same boundary as
 Response cuts flush the active file, so output already returned by `send` is also visible through ordinary file reads while the evaluation remains active.
 The file is limited to 1 GiB; later worker output is still drained and counted after the limit or a file failure.
 
-At file completion, a `cell_output` journal event records its initiating call, relative path, retained bytes, bytes omitted from inline responses, bytes not retained in the file (`discarded_bytes`), and retention limit.
-These counts describe separate projections: text not retained in the file may still have been delivered inline.
+A `cell_output` journal event records the initiating call, relative path, retained raw bytes, rendered UTF-8 bytes omitted from previews (`inline_omitted_bytes`), raw bytes not retained in the file (`discarded_bytes`), and retention limit.
+File completion seals the raw totals; response projection or interval summarization accounts for its omissions before publishing this summary and the corresponding tool result.
+Shared interval receipts prevent delivery recovery from counting the same omission twice.
+If a recovered response is later composed with more output, additional omissions can publish an updated cumulative summary for the same cell; the most recent summary owns its totals.
+These counts describe separate projections: normalization can change rendered byte counts, and raw bytes not retained in the file may still appear in the preview.
 The Markdown projection links to the file when either projection omitted text.
 The source-only Quarto projection ignores cell output events.
 

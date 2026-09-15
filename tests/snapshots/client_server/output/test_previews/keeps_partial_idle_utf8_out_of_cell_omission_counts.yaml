@@ -1,0 +1,26 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  r: "42"
+result:
+  content:
+    - type: text
+      text:
+        text_bytes: 8059
+        concat:
+          - |
+            idle head
+          - repeat: s
+            count: 3830
+          - |
+
+            [output preview: omitted 16173 rendered UTF-8 bytes; no retained cell log (20011 raw bytes observed); omitted text is unavailable]
+
+            [output preview: omitted 28949 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000001.log (Console server recording workspace; controller for remote targets); 32789 raw bytes retained, 0 raw bytes not retained]
+          - repeat: x
+            count: 3829
+          - |
+
+            cell tail
+  isError: false

@@ -48,6 +48,14 @@ result:
         ordering.
 
 
+        Each result has at most 8 KiB of UTF-8 text, including notices;
+        oversized output previews the beginning and end of text retained by the
+        collector. Images have separate limits. Retained raw-log paths are
+        relative to the Console server recording workspace (the controller for
+        remote targets). Full retained text requires filesystem access there
+        through existing tools; Console provides no read/search interface.
+
+
         Evaluated code runs without a sandbox, with the remote account's
         permissions, including filesystem and network access. Dependency
         resolution, when available, may execute installation or build code; use

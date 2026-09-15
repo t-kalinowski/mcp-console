@@ -400,11 +400,14 @@ def test_drains_standard_streams_while_evaluating(
         write_all(1, b"x" * {size})
         write_all(2, b"y" * {size})
         """)
-    output = _tool_text(client.send(python=python))
-    output = client._collect_output(output, 2 * size)
-    assert output.count("x") == size
-    assert output.count("y") == size
+    result = client.send(python=python)
+    output = _tool_text(result)
+    assert not result["isError"]
+    assert len(output.encode()) <= 8 * 1024
+    assert "output preview: omitted" in output
+    assert "raw cell log:" in output
 
+    # The wire capture verifies every emitted byte independently of the preview.
     transcript = client.finish()
     assert transcript[-2] == {"stdout": "x" * size, "stderr": "y" * size}
     assert transcript[-1] == {"worker": {"kind": "completed"}}

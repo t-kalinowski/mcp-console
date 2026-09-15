@@ -1,0 +1,110 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.direct.yaml
+---
+send:
+  r: echo ready
+result:
+  content:
+    - type: text
+      text: |
+        zod: ready
+  isError: false
+---
+send:
+  r: preview recovery intervals
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running; poll with an empty send]
+  isError: false
+---
+send:
+  timeout_ms: 0
+---
+input:
+  method: notifications/cancelled
+  params:
+    requestId: 5
+---
+input:
+  method: ping
+result: {}
+---
+send:
+  timeout_ms: 0
+---
+input:
+  method: notifications/cancelled
+  params:
+    requestId: 7
+---
+input:
+  method: ping
+result: {}
+---
+send:
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text:
+        text_bytes: 8090
+        concat:
+          - |
+            interval 0 head
+          - repeat: x
+            count: 3888
+          - |
+
+            [output preview: omitted 24993 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000002.log (Console server recording workspace; controller for remote targets); 32801 raw bytes retained, 0 raw bytes not retained]
+          - repeat: x
+            count: 3887
+          - |-
+
+            interval 0 tail
+
+            [running; poll with an empty send]
+  isError: false
+---
+send:
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text:
+        text_bytes: 8090
+        concat:
+          - |
+            interval 1 head
+          - repeat: x
+            count: 3888
+          - |
+
+            [output preview: omitted 57794 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000002.log (Console server recording workspace; controller for remote targets); 98403 raw bytes retained, 0 raw bytes not retained]
+          - repeat: x
+            count: 3887
+          - |-
+
+            interval 2 tail
+
+            [running; poll with an empty send]
+  isError: false
+---
+send: {}
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send: {}
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false

@@ -10,8 +10,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import large_output, last_tool_text
+from support.previews import (
+    assert_preview,
+    cell_text,
+    compact_previews,
+    normalize_preview_paths,
+)
 from support.client import McpClient
-from support.evidence import compact_text
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.native import SHARED_LIBRARY_FLAG
 from support.records import Transcript
@@ -46,14 +51,18 @@ def test_bounds_pending_output_and_resets_after_completion(
         public_output = (
             f".agents/console/sessions/{session.name}/{relative_output.as_posix()}"
         )
-        retained = "x" * PENDING_TEXT_BUDGET
-        notice = (
-            "\n[output truncated: omitted 7 text bytes and "
-            "0 encoded image bytes across 1 event; "
+        collector = (
+            "\n[collector limit: omitted 7 text bytes and 0 encoded image bytes across 1 event; "
             f"retained text: {public_output} (7 of 7 omitted text bytes)]"
         )
-        assert output == retained + notice, (
-            f"unexpected bounded output: length={len(output)}, tail={output[-300:]!r}"
+        assert output.endswith(collector), output[-1000:]
+        omitted = assert_preview(
+            output.removesuffix(collector), "x" * PENDING_TEXT_BUDGET
+        )
+        assert f"raw cell log: {public_output}" in output
+        assert (
+            f"{PENDING_TEXT_BUDGET + 7} raw bytes retained, 0 raw bytes not retained"
+            in output
         )
 
         output_path = session / relative_output
@@ -83,7 +92,7 @@ def test_bounds_pending_output_and_resets_after_completion(
             "call_id": 1,
             "path": relative_output.as_posix(),
             "retained_bytes": PENDING_TEXT_BUDGET + 7,
-            "inline_omitted_bytes": 7,
+            "inline_omitted_bytes": omitted,
             "discarded_bytes": 0,
             "retention_limit_bytes": CELL_OUTPUT_RETENTION_LIMIT,
         }, cell_output
@@ -93,8 +102,8 @@ def test_bounds_pending_output_and_resets_after_completion(
             encoding="utf-8"
         )
 
-        overflow["result"]["content"][0]["text"] = compact_text(
-            output.replace(session.name, "<run ID>"), "x"
+        overflow["result"]["content"][0]["text"] = output.replace(
+            session.name, "<run ID>"
         )
 
         client.send(r="echo echo")
@@ -102,6 +111,7 @@ def test_bounds_pending_output_and_resets_after_completion(
         assert (session / "outputs" / "call-000002.log").read_text(
             encoding="utf-8"
         ) == "zod: echo\n"
+        compact_previews(client, "x", "y", "z", "s", "p", "ab")
         return client.finish()
 
 
@@ -164,30 +174,18 @@ def test_orders_failure_and_replacement_output(
                 "[starting new worker]",
                 "[idle]",
             ]
-            assert output.count(raw) == 1, (
-                f"protocol failure lost raw stdout bytes: length={len(output)}, "
-                f"tail={output[-500:]!r}"
-            )
+            assert cell_text(client, 2) == raw
             assert all(output.count(notice) == 1 for notice in notices), repr(output)
             assert [output.index(notice) for notice in notices] == sorted(
                 output.index(notice) for notice in notices
             ), repr(output)
-            remainder = output.replace(raw, "")
-            for notice in notices:
-                remainder = remainder.replace(notice, "")
-            assert not remainder.replace("\n", ""), repr(output)
-            result["content"][0]["text"] = (
-                "zod old stdout\n<large output>\n"
-                "<cross-source position follows serialized observation>\n"
-                "[worker sent an unexpected ready message]\n"
-                "[worker terminated by signal 9]\n"
-                "[worker stopped: in-memory state lost]\n"
-                "[starting new worker]\n"
-                "[idle]"
-            )
+            assert output.endswith("\n".join(notices)), output[-500:]
+            assert_preview(output.removesuffix("\n".join(notices)), raw)
+            normalize_preview_paths(client)
 
             client.send(r="echo echo")
             assert last_tool_text(client) == "zod: echo\n"
+            compact_previews(client, "x", "y", "z", "s", "p", "ab")
             return client.finish()
 
 
@@ -233,6 +231,7 @@ def test_preserves_raw_output_during_forced_stop(
 
     client.send(r="echo echo")
     assert last_tool_text(client) == "zod: echo\n"
+    compact_previews(client, "x", "y", "z", "s", "p", "ab")
     return client.finish()
 
 
