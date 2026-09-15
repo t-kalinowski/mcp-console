@@ -1,18 +1,24 @@
 #[cfg(unix)]
+mod coordinator;
+#[cfg(unix)]
 mod core;
 #[cfg(unix)]
 mod embedded_r;
+#[cfg(unix)]
+mod input;
 
 // Keep the rest of the crate dependent on the worker facade. The core owns
-// runtime-neutral sideband state and host callbacks, while the embedded-R
-// backend owns R initialization, event handling, and language dispatch.
+// runtime-neutral sideband state and host callbacks. The coordinator owns
+// language dispatch; the R backend owns its interpreter and native events.
+#[cfg(unix)]
+pub(crate) use coordinator::run;
 #[cfg(unix)]
 pub(crate) use core::{
     publish_plot, publish_python_activation, publish_r_activation, publish_r_activation_failure,
     resolve_python, resolve_python_version,
 };
 #[cfg(unix)]
-pub(crate) use embedded_r::{resolve_r, run};
+pub(crate) use embedded_r::resolve_r;
 
 #[cfg(not(unix))]
 pub(crate) fn run() -> Result<(), Box<dyn std::error::Error>> {

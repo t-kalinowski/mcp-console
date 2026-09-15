@@ -228,7 +228,11 @@ The worker owns language-runtime state and implements the worker protocol.
 It reports readiness, accepts complete cells and supported preparation operations, consumes interactive stdin, publishes console events and images, and reports completion or failure through the sideband.
 
 The built-in worker's `worker::core` owns shared sideband state, deferred operation messages, resolver exchanges, output publication, and shutdown and failure state.
-The `worker::embedded_r` backend owns interpreter initialization, event handling, interactive input, interrupts, and language dispatch, including suppression of R resolution during SQL callbacks.
+The `worker::coordinator` owns the message loop, preparation and cell dispatch, and completion reporting.
+It retains R, Python, and SQL adapters as peers.
+The `worker::input` module owns interactive stdin buffering and preserves unfinished input across operations.
+The `worker::embedded_r` backend owns R initialization, native event handling, graphics, and R console callbacks, including suppression of R resolution during SQL callbacks.
+R initialization remains eager, and the existing Python and SQL adapters retain their runtime behavior.
 
 The built-in worker embeds R on its main thread.
 On Linux, it re-executes before R initialization with the selected `R_HOME/lib` first in `LD_LIBRARY_PATH`, preserving inherited library paths and its sideband endpoint.
