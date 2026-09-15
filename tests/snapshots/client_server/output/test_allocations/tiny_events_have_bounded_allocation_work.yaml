@@ -1,0 +1,44 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.direct.yaml
+---
+send:
+  r: echo ready
+result:
+  content:
+    - type: text
+      text: |
+        zod: ready
+  isError: false
+---
+send:
+  r: preview many tiny events
+  timeout_ms: 600000
+result:
+  content:
+    - type: text
+      text:
+        text_bytes: 8039
+        concat:
+          - |
+            preview head
+          - repeat: ab
+            count: 1945
+          - |
+            a
+            [output preview: omitted 192255 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000002.log (Console server recording workspace; controller for remote targets); 200063 raw bytes retained, 0 raw bytes not retained]
+          - repeat: ab
+            count: 1927
+          - |
+
+            preview tail: final diagnostic
+    - type: image
+      data: iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=
+      mimeType: image/png
+    - type: text
+      text: |
+        after final image
+  isError: false
+---
+input:
+  method: ping
+result: {}
