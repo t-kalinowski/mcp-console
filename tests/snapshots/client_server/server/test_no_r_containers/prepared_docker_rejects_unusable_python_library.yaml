@@ -1,0 +1,14 @@
+---
+library: missing
+stderr: |
+  container Python probe failed with exit status: 1: Python requires a shared library; selected interpreter has no /selected-library/missing.so
+
+  remote launcher exited with exit status: 1
+  remote launcher exited with exit status: 1
+---
+library: unloadable
+stderr: |
+  container Python probe failed with exit status: 1: Python shared library cannot be loaded: /selected-library/unloadable.so: file too short
+
+  remote launcher exited with exit status: 1
+  remote launcher exited with exit status: 1

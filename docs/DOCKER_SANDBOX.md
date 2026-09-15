@@ -156,8 +156,14 @@ Standalone `sandbox -- COMMAND` remains local for supported native selections an
 ## Runtime and policy
 
 The in-VM launcher verifies the existing working directory and compatible runtime, applies workload environment controls, and starts the ordinary relay and worker directly.
-R needs a loadable shared library; Python must satisfy Console's existing image-runtime compatibility checks.
+Python must satisfy Console's image-runtime compatibility checks and provide a shared library readable by the worker user.
+R is optional.
+When present, its shared library is checked during setup and each worker initializes R before readiness; R cells, the R-managed SQL provider, and interoperability use that installation and its packages.
+Prepared no-R templates need Python DuckDB for managed SQL.
+The [Python-only template example](../examples/python-only/Sandbox.Dockerfile) places its managed Python and packages under `/opt` for the worker user.
+They do not provide SQL independent of both R and Python.
 Explicit `R_HOME` and `RETICULATE_PYTHON` are VM paths.
+The disposable probe validates them before readiness and captures R availability for every worker generation.
 Image environment is preserved by default.
 Workload controls are applied inside the VM, after the SBX CLI has launched, and cannot configure the controller CLI or daemon.
 

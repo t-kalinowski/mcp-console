@@ -76,7 +76,7 @@ To run cells on an existing SSH host while keeping the server and recordings loc
 The remote workspace and resolver bootstrap must already exist; Console prepares managed dependencies on that host, including Python and SQL on hosts without R.
 
 To run the relay and worker in a fresh owned Linux container, configure a [Docker target](docs/DOCKER.md).
-The image supplies Console, R, Python, and analysis packages; the controller keeps the MCP connection and recordings.
+The image supplies Console, Python, analysis packages, and optionally R; the controller keeps the MCP connection and recordings.
 
 To use Docker's microVM isolation through standalone `sbx`, configure a [Docker Sandbox target](docs/DOCKER_SANDBOX.md).
 Both relay and worker run inside a Console-owned microVM from a prepared template.
