@@ -290,16 +290,23 @@ def test_keeps_partial_idle_utf8_out_of_cell_omission_counts(
     binary: Path, execution: Execution
 ) -> Transcript:
     fixtures = Path(__file__).resolve().parents[3] / "fixtures"
-    with McpClient(
-        binary,
-        execution.serve(
-            "--worker",
-            str(fixtures / "zod"),
-            "--relay",
-            str(fixtures / "server_relay/scripted_relay.py"),
-        ),
-        {**os.environ, "MCP_CONSOLE_TEST_RELAY_SCENARIO": "preview_raw_prelude"},
-    ) as client:
+    with (
+        tempfile.TemporaryDirectory() as temporary,
+        McpClient(
+            binary,
+            execution.serve(
+                "--worker",
+                str(fixtures / "zod"),
+                "--relay",
+                str(fixtures / "server_relay/scripted_relay.py"),
+            ),
+            {
+                **os.environ,
+                "TMPDIR": temporary,
+                "MCP_CONSOLE_TEST_RELAY_SCENARIO": "preview_raw_prelude",
+            },
+        ) as client,
+    ):
         client.initialize_and_list_tools()
         client.send(r="42")
         text = last_tool_text(client)
