@@ -196,13 +196,13 @@ Keep these invariants intact:
 - `src/process_exit.rs` — ordinary direct-child exit observation without reaping, used by server launcher ownership.
 - `src/process_output.rs` — output draining bounded by an owned child exit, including a surviving inherited writer; used for local launchers, the SSH child, and the remote helper's launcher without equating their cleanup guarantees.
 - `src/sandbox.rs`, `src/sandbox/{installation,runner,unsupported}.rs` — thin sandbox frontend, verified runner selection, application policy, and unsupported-platform errors.
-- `src/worker.rs`, `src/worker/{coordinator,core,input}.rs` — worker facade, language coordination, shared sideband services, and interactive stdin buffering.
+- `src/worker.rs`, `src/worker/{coordinator,core,input,interrupt,process}.rs` — worker facade, language coordination, shared sideband services, interactive stdin, native interrupts, and cancellable runtime discovery.
 - `src/worker/embedded_r.rs`, `src/r_repl.c` — R runtime, native events, graphics, console callbacks, and the C-owned DLL-REPL boundary.
 
 ### Language adapters
 
 - `src/r_bridge.rs` — shared Rust FFI for process-lifetime private R bridge environments.
-- `src/python.rs`, `src/python/library.rs`, `src/python/reticulate.rs`, `src/python/initialize.R`, `src/python/bridge.R`, `src/python/runtime.py` — Rust-owned Python runtime facade, CPython initialization, current reticulate backend, R bridges, and Python evaluator runtime.
+- `src/python.rs`, `src/python/{library,native,reticulate}.rs`, `src/python/{discovery,environment,runtime}.py`, `src/python/bridge.R` — Console-owned Python discovery, embedding, evaluator, environment activation, and optional reticulate interoperability.
 - `src/sql.rs`, `src/sql/r_dbi.rs`, `src/sql/py_dbapi.rs`, `src/sql/bridge.R`, `src/sql/dbapi.py` — worker-facing SQL router, R DBI and Python DB-API providers, and their runtime bridges.
 - `src/r_graphics.rs`, `src/r_graphics.c`, `src/r_graphics/bridge.R` — managed graphics orchestration, C callback boundary, and R bridge.
 - `src/r_environment.rs`, `src/r_environment/bridge.R` — live R-library bridge.

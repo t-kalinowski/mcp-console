@@ -12,7 +12,7 @@ def code(source: str) -> str:
 def normalize_python_resolution_error(error: str, invalid: str | None = None) -> str:
     error = normalize_python_traceback_paths(error)
     error, python_patch = re.subn(
-        r'(?m)^(  "python": "\d+\.\d+)\.\d+( \(reticulate default\))?(",)$',
+        r'(?m)^(  "python": "(?:==)?\d+\.\d+)\.\d+( \(Console default\))?(",)$',
         r"\1.x\2\3",
         error,
         count=1,
@@ -20,7 +20,7 @@ def normalize_python_resolution_error(error: str, invalid: str | None = None) ->
     assert python_patch == 1, error
     has_python_version = '\n  "python_version": [\n' in error
     error, python_version_patch = re.subn(
-        r'(?m)^(  "python_version": \[\n    "\d+\.\d+)\.\d+("\n  \])$',
+        r'(?m)^(  "python_version": \[\n    "(?:==)?\d+\.\d+)\.\d+("\n  \])$',
         r"\1.x\2",
         error,
         count=1,
@@ -34,7 +34,7 @@ def normalize_python_resolution_error(error: str, invalid: str | None = None) ->
 def normalize_python_traceback_paths(error: str) -> str:
     replacements = (
         (
-            r'(?m)^(\s+File ")[^"\n]*/reticulate/python/(rpytools/loader\.py")',
+            r'(?m)^(\s+File ")[^"\n]*/reticulate/python/(rpytools/(?:loader|call)\.py")',
             r"\1<reticulate>/python/\2",
         ),
         (

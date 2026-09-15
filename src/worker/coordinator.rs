@@ -3,7 +3,7 @@ use std::io;
 
 use super::core::{emit_output, take_pending_server_message, take_worker_failure};
 use super::input::finish_console_stdin_operation;
-use super::{core, embedded_r};
+use super::{core, embedded_r, interrupt};
 use crate::cell::{Cell, Language};
 use crate::worker_protocol::{ConsoleChannel, ServerMessage, WorkerMessage};
 
@@ -19,10 +19,10 @@ pub(crate) fn run() -> Result<(), Box<dyn Error>> {
     let r_home = harp::command::r_home_setup()?;
     #[cfg(target_os = "linux")]
     reexec_with_r_library_path(&r_home, &reader, &writer)?;
-    embedded_r::normalize_interrupt_signal()?;
     embedded_r::initialize_r(&r_home)?;
     crate::python::configure_worker_environment(&embedded_r::Runtime::temporary_directory()?)?;
     core::initialize(reader, writer.clone())?;
+    interrupt::initialize()?;
     let r = embedded_r::Runtime::initialize()?;
     let python = crate::python::Runtime::initialize()?;
     let sql = crate::sql::Bridge::initialize()?;
@@ -114,14 +114,14 @@ impl Runtime {
 
         match message {
             ServerMessage::Evaluate { language, source } => {
-                embedded_r::check_interrupts();
+                interrupt::clear();
                 let result = evaluate_cell(
                     Cell { language, source },
                     &self.r,
                     &mut self.python,
                     &mut self.sql,
                 );
-                embedded_r::check_interrupts();
+                interrupt::clear();
 
                 if core::is_shutting_down() {
                     return Ok(false);
@@ -131,13 +131,8 @@ impl Runtime {
                 }
                 self.writer.send(&WorkerMessage::Completed)?;
             }
-            // Keep worker-owned preparation state transitions atomic. Any
-            // nested host resolver registers its own interrupt target.
             ServerMessage::PreparePython { packages } => {
-                let result = embedded_r::defer_interrupts(
-                    || self.python.prepare(packages),
-                    embedded_r::discard_interrupts,
-                );
+                let result = self.python.prepare(packages);
                 if core::is_shutting_down() {
                     return Ok(false);
                 }
@@ -217,6 +212,7 @@ fn evaluate_cell(
             Language::Python => python.evaluate(&cell.source),
             Language::Sql => sql.evaluate(&cell.source),
         };
+        interrupt::clear();
         r.finish_cell(cell.language)?;
         result
     };

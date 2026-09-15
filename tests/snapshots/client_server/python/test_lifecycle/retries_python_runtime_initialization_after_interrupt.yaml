@@ -4,15 +4,8 @@
 send:
   r: |
     invisible(suppressMessages(base::trace(
-      "py_set_attr",
-      tracer = quote({
-        if (
-          identical(name, "operation") &&
-            identical(value, "configure_import_resolution")
-        ) {
-          invisible(readline("python runtime configuring> "))
-        }
-      }),
+      "initialize_python",
+      tracer = quote(invisible(readline("python runtime configuring> "))),
       print = FALSE,
       where = asNamespace("reticulate")
     )))
@@ -23,7 +16,7 @@ result:
   isError: false
 ---
 send:
-  python: "42"
+  r: invisible(reticulate::py_config())
 result:
   content:
     - type: text
@@ -44,7 +37,7 @@ result:
 send:
   r: |
     invisible(suppressMessages(base::untrace(
-      "py_set_attr",
+      "initialize_python",
       where = asNamespace("reticulate")
     )))
     length(getHook("reticulate::matplotlib.pyplot::load"))
@@ -52,7 +45,7 @@ result:
   content:
     - type: text
       text: |
-        [1] 1
+        [1] 0
   isError: false
 ---
 send:

@@ -634,6 +634,18 @@ class TranscriptRunnerTests(unittest.TestCase):
         self.assertEqual(companion.read_text(), "retained companion")
         self.assertFalse(stale.exists())
 
+    def test_full_update_preserves_other_platform_companions(self) -> None:
+        other_platform = "linux" if sys.platform == "darwin" else "darwin"
+        companion = self.snapshots / f"selected.{other_platform}.yaml"
+        companion.write_text("other platform output\n", encoding="utf-8")
+        stale = self.snapshots / f"selected.{sys.platform}.yaml"
+        stale.write_text("obsolete local output\n", encoding="utf-8")
+        result = self.run_runner("--update", "--jobs", "1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(companion.is_file(), result.stdout)
+        self.assertEqual(companion.read_text(), "other platform output\n")
+        self.assertFalse(stale.exists())
+
     def test_execution_requirements_share_one_behavior_snapshot(self) -> None:
         self.suite.write_text(
             PUBLIC_SUITE

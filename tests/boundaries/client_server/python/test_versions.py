@@ -248,93 +248,54 @@ def test_validates_registry_only_python_requirements(
             "~=3.11",
             "===3.11",
         ]
-        uv_record.write_text("", encoding="utf-8")
-        # Reach both worker-originated resolver requests directly. Interpreter
-        # selectors must be rejected before either host resolver invokes uv.
         # fmt: r
-        r = code(rf"""
+        r = code("""
             selector_worker_pid <- Sys.getpid()
             selector_sentinel <- 42L
-            packages <- reticulate::py_require()$packages
-            accepted_package_request <- jsonlite::toJSON(list(
-              requirements = list(
-                packages = I(c({", ".join(json.dumps(package) for package in accepted_packages)})),
-                python_version = I("python3")
-              ),
-              retained_requirements = list(
-                packages = I(c({", ".join(json.dumps(package) for package in accepted_packages)})),
-                python_version = I(">=3.10")
-              )
-            ), auto_unbox = TRUE)
-            accepted_package_error <- tryCatch(
-              .Call("mcp_console_resolve_python", accepted_package_request),
-              error = conditionMessage
-            )
-            environment_request <- jsonlite::toJSON(list(
-              requirements = list(
-                packages = I(packages),
-                python_version = I({json.dumps(str(worker_executable))})
-              ),
-              retained_requirements = list(
-                packages = I(packages),
-                python_version = I(">=3.10")
-              )
-            ), auto_unbox = TRUE)
-            environment_error <- tryCatch(
-              .Call("mcp_console_resolve_python", environment_request),
-              error = conditionMessage
-            )
-            retained_environment_request <- jsonlite::toJSON(list(
-              requirements = list(
-                packages = I(packages),
-                python_version = I(">=3.10")
-              ),
-              retained_requirements = list(
-                packages = I(packages),
-                python_version = I({json.dumps(str(worker_retained_selector))})
-              )
-            ), auto_unbox = TRUE)
-            retained_environment_error <- tryCatch(
-              .Call("mcp_console_resolve_python", retained_environment_request),
-              error = conditionMessage
-            )
-            accepted_version_request <- jsonlite::toJSON(list(
-              constraints = I(c(
-                {", ".join(json.dumps(constraint) for constraint in accepted_version_constraints)},
-                {json.dumps(str(worker_installation))}
-              ))
-            ), auto_unbox = TRUE)
-            accepted_version_error <- tryCatch(
-              .Call(
-                "mcp_console_resolve_python_version",
-                accepted_version_request
-              ),
-              error = conditionMessage
-            )
-            rejected_version_errors <- vapply(
-              c({", ".join(json.dumps(constraint) for constraint in rejected_version_constraints)}),
-              function(constraint) {{
-                request <- jsonlite::toJSON(list(
-                  constraints = I(constraint)
-                ), auto_unbox = TRUE)
-                tryCatch(
-                  .Call("mcp_console_resolve_python_version", request),
-                  error = conditionMessage
-                )
-              }},
-              character(1L),
-              USE.NAMES = FALSE
-            )
-            cat(
-              accepted_package_error,
-              environment_error,
-              retained_environment_error,
-              accepted_version_error,
-              rejected_version_errors,
-              sep = "\n"
-            )
+            selector_packages <- reticulate::py_require()$packages
+            invisible(reticulate::py_config())
             """)
         client.send(r=r)
+        assert last_result_text(client) == "[done]"
+        uv_record.write_text("", encoding="utf-8")
+        # Reach both native worker callbacks. Worker-supplied interpreter
+        # selectors must be rejected before either host resolver invokes uv.
+        # fmt: python
+        python = code(f"""
+            import json
+            import _mcp_console_native as native_services
+
+            def rejected(operation, payload):
+                try:
+                    native_services.call(json.dumps({{
+                        "operation": operation, "payload": payload
+                    }}))
+                except RuntimeError as error:
+                    print(str(error))
+
+            def manifest(packages, version):
+                return {{"packages": packages, "python_version": [version]}}
+
+            packages = list(r.selector_packages)
+            rejected("resolve_python", {{
+                "requirements": manifest({accepted_packages!r}, "python3"),
+                "retained_requirements": manifest({accepted_packages!r}, ">=3.10"),
+            }})
+            rejected("resolve_python", {{
+                "requirements": manifest(packages, {str(worker_executable)!r}),
+                "retained_requirements": manifest(packages, ">=3.10"),
+            }})
+            rejected("resolve_python", {{
+                "requirements": manifest(packages, ">=3.10"),
+                "retained_requirements": manifest(packages, {str(worker_retained_selector)!r}),
+            }})
+            rejected("resolve_version", {{
+                "constraints": {accepted_version_constraints!r} + [{str(worker_installation)!r}]
+            }})
+            for constraint in {rejected_version_constraints!r}:
+                rejected("resolve_version", {{"constraints": [constraint]}})
+            """)
+        client.send(python=python)
         output = last_result_text(client)
         assert output == (
             python_version_constraint_error("python3")

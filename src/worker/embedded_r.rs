@@ -79,6 +79,7 @@ struct REvents {
 pub(super) struct Runtime {
     graphics: crate::r_graphics::Bridge,
     environment: crate::r_environment::Bridge,
+    _interop: crate::python::Interop,
 }
 
 impl Runtime {
@@ -86,6 +87,7 @@ impl Runtime {
         Ok(Self {
             graphics: crate::r_graphics::Bridge::initialize()?,
             environment: crate::r_environment::Bridge::initialize()?,
+            _interop: crate::python::Interop::initialize()?,
         })
     }
 
@@ -168,23 +170,6 @@ unsafe extern "C-unwind" {
     ) -> c_int;
 }
 
-pub(super) fn normalize_interrupt_signal() -> io::Result<()> {
-    if unsafe { libc::signal(libc::SIGINT, libc::SIG_DFL) } == libc::SIG_ERR {
-        return Err(io::Error::last_os_error());
-    }
-    let mut signals = unsafe { std::mem::zeroed() };
-    if unsafe { libc::sigemptyset(&mut signals) } != 0
-        || unsafe { libc::sigaddset(&mut signals, libc::SIGINT) } != 0
-    {
-        return Err(io::Error::last_os_error());
-    }
-    let result =
-        unsafe { libc::pthread_sigmask(libc::SIG_UNBLOCK, &signals, std::ptr::null_mut()) };
-    (result == 0)
-        .then_some(())
-        .ok_or_else(|| io::Error::from_raw_os_error(result))
-}
-
 pub(super) fn check_interrupts() {
     if !interrupt_pending() {
         return;
@@ -215,7 +200,7 @@ fn interrupt_pending() -> bool {
     unsafe { libr::get(libr::R_interrupts_pending) != 0 }
 }
 
-fn console_interrupt_pending() -> bool {
+pub(super) fn console_interrupt_pending() -> bool {
     interrupt_pending()
         && unsafe { libr::get(libr::R_interrupts_suspended) == libr::Rboolean_FALSE }
 }
@@ -281,6 +266,7 @@ pub(super) fn initialize_r(r_home: &std::path::Path) -> Result<(), Box<dyn Error
     }
 
     libraries.initialize_post_setup_r();
+    super::interrupt::set_r_pending(unsafe { libr::R_interrupts_pending });
     unsafe {
         harp::CONSOLE_THREAD_ID = Some(thread::current().id());
     }
@@ -521,7 +507,7 @@ extern "C-unwind" fn r_read_console(
         return console_eof(buf);
     }
 
-    match read_console_stdin(buf, buflen, console_interrupt_pending) {
+    match read_console_stdin(buf, buflen) {
         Ok(read) => {
             let receipt = if read < 0 {
                 send_input_cancelled()
@@ -534,7 +520,7 @@ extern "C-unwind" fn r_read_console(
                 record_worker_failure(error);
                 return console_eof(buf);
             }
-            read
+            read.signum()
         }
         Err(error) => {
             record_worker_failure(error);

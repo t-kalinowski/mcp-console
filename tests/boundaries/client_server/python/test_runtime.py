@@ -799,7 +799,7 @@ def test_python_debugger_input(binary: Path, execution: Execution) -> Transcript
 
 
 @executions(DIRECT, SANDBOXED)
-def test_restarts_after_python_bridge_failure(
+def test_python_evaluation_ignores_r_interpreter_mutations(
     binary: Path, execution: Execution
 ) -> Transcript:
     client = McpClient(binary, execution.serve())
@@ -820,31 +820,9 @@ def test_restarts_after_python_bridge_failure(
         """)
     client.send(r=r)
     client.send(python="6 * 7")
-    result = client.transcript[-1]["result"]
-    assert result["isError"] is True
-    bridge_failure = "Python bridge failed during R evaluation\n"
-    python_failure = (
-        "Error in py_discover_config(required_module, use_environment) : \n"
-        "  Python specified in RETICULATE_PYTHON "
-        "(/mcp-console-missing-python) does not exist\n"
-    )
-    worker_failure = (
-        "[worker sideband read failed: worker sideband closed]\n"
-        "[worker exited with status 1]\n"
-        "[worker stopped: in-memory state lost]\n"
-        "[starting new worker]\n"
-        "[idle]"
-    )
-    output = result["content"][0]["text"]
-    assert output.endswith(worker_failure), output
-    assert_exact_interleaving(
-        output.removesuffix(worker_failure),
-        bridge_failure,
-        python_failure,
-    )
-    result["content"][0]["text"] = bridge_failure + python_failure + worker_failure
+    assert last_result_text(client) == "42\n"
     client.send(r='exists("python_worker_marker", inherits = FALSE)')
-    assert last_result_text(client) == "[1] FALSE\n"
+    assert last_result_text(client) == "[1] TRUE\n"
     client.send(python="6 * 7")
     assert last_result_text(client) == "42\n"
     return client.finish()
