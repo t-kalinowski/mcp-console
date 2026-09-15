@@ -15,7 +15,8 @@ from support.assertions import (
 )
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
-from support.native import build_interposer
+from support.native import LOADER_VARIABLE, build_interposer
+from support.checkpoints import FifoCheckpoint
 from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, requires
 from support.suites import run_this_suite
@@ -407,6 +408,7 @@ def test_drains_pending_sideband_output_while_running(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(NATIVE_FIXTURES)
 def test_orders_queued_cancellation_behind_incomplete_response(
     binary: Path,
     execution: Execution,
@@ -415,6 +417,13 @@ def test_orders_queued_cancellation_behind_incomplete_response(
     environment = os.environ.copy()
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
+        write_reached = FifoCheckpoint.create(temporary / "response-write-reached")
+        write_release = FifoCheckpoint.create(temporary / "response-write-release")
+        environment[LOADER_VARIABLE] = str(
+            build_interposer(temporary, "response_write_interposer")
+        )
+        environment["MCP_CONSOLE_TEST_RESPONSE_WRITE_REACHED"] = str(write_reached.path)
+        environment["MCP_CONSOLE_TEST_RESPONSE_WRITE_RELEASE"] = str(write_release.path)
         release = temporary / "response-gate-released"
         environment["TMPDIR"] = temporary_directory
         environment["ZOD_TEST_RESPONSE_GATE_RELEASED"] = str(release)
@@ -444,6 +453,7 @@ def test_orders_queued_cancellation_behind_incomplete_response(
                     requirements={"python": [invalid_requirement]}
                 )
                 assert first["id"] == first_id, first
+                write_reached.wait("response prefix written")
                 buffered = client.stdout.wait_for_incomplete_response(
                     first_id,
                     len(invalid_requirement),
@@ -490,6 +500,7 @@ def test_orders_queued_cancellation_behind_incomplete_response(
                 client.wait_until_input_is_read("staged receive barrier", control)
                 control.record_client_event(live_id, "operation_accepted")
 
+                write_release.release()
                 client.stdout.release_completed_response(
                     first_id,
                     release,
@@ -548,6 +559,9 @@ def test_orders_queued_cancellation_behind_incomplete_response(
                 finished = True
                 return transcript
             finally:
+                write_release.release()
+                write_reached.close()
+                write_release.close()
                 if not finished:
                     stop_client(client)
                 if observer is not None:

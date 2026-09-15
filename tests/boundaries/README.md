@@ -297,3 +297,8 @@ Their `__main__` blocks delegate to `scripts/test`, so direct runs build the bin
 The Python checkers invoked by `scripts/check-core` are executable uv scripts.
 Run the runner and MCP client regressions with `tests/transcript_runner.py` and `tests/mcp_client.py`, or together through `scripts/check-core`.
 These scripts prepare their Python dependencies before tests begin, then launch fixture runners with the same interpreter so package resolution does not consume test deadlines.
+
+Synthetic stress output may use `support.evidence.compact_text()` after checking the complete response.
+Its `text_bytes` and ordered `concat` entries represent the exact text: literal strings concatenate with each `repeat` string multiplied by its `count`.
+Choose fixture-specific repeat strings explicitly; retain diagnostics, head and tail text, omission markers, paths, totals, images, and final states.
+This notation changes only snapshot evidence, never the MCP response or recorded session.
