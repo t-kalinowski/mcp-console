@@ -252,11 +252,11 @@ impl DirectOutput {
 
     pub(in crate::worker_client) fn close(&self) {
         let mut state = self.output.lock();
-        state.flush_decoders();
         let stream = match self.stream {
             DirectOutputStream::Stdout => Stream::Stdout,
             DirectOutputStream::Stderr => Stream::Stderr,
         };
+        state.flush_decoder(stream);
         if state.stream == Some(stream) {
             state.flush_terminal();
         }

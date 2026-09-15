@@ -9,6 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.allocations import AllocationProfile
 from support.assertions import last_tool_text
 from support.previews import (
     CONTROL_OMISSION,
@@ -26,6 +27,7 @@ from support.checkpoints import (
 )
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.records import Transcript
+from support.requirements import NATIVE_FIXTURES, requires
 from support.suites import run_this_suite
 
 TEXT_BUDGET = 8 * 1024
@@ -97,6 +99,33 @@ def test_keeps_actual_tail_after_tiny_event_flood(
     binary: Path, execution: Execution
 ) -> Transcript:
     return check_preview(binary, execution, "preview tiny events")
+
+
+@requires(NATIVE_FIXTURES)
+def test_bounds_metadata_for_alternating_tiny_events(binary: Path) -> Transcript:
+    worker = Path(__file__).resolve().parents[3] / "fixtures/zod"
+    with (
+        tempfile.TemporaryDirectory() as temporary,
+        closing(AllocationProfile(Path(temporary))) as profile,
+        McpClient(
+            binary,
+            DIRECT.serve("--worker", str(worker)),
+            {**os.environ, **profile.environment},
+        ) as client,
+    ):
+        client.initialize_and_list_tools()
+        client.send(r="echo ready")
+        profile.start()
+        client.send(r="preview alternating bytes")
+        text = last_tool_text(client)
+        assert client.request("ping")["result"] == {}
+        _, largest = profile.stop()
+        assert text == "ab" * 4096
+        # This fits the text budget. Retaining one part per event would allocate
+        # a large vector and repeatedly scan it before any text is omitted.
+        assert largest <= 128 * 1024, largest
+        compact_previews(client, "ab")
+        return client.finish()
 
 
 @executions(DIRECT, SANDBOXED)

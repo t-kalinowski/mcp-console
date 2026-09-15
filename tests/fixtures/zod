@@ -771,6 +771,16 @@ def main() -> None:
             send(writer, {"kind": "completed"})
             continue
 
+        if source == "preview alternating bytes":
+            for index in range(8192):
+                send_output(
+                    writer,
+                    "b" if index % 2 else "a",
+                    ConsoleKind.DIAGNOSTIC if index % 2 else ConsoleKind.OUTPUT,
+                )
+            send(writer, {"kind": "completed"})
+            continue
+
         if source in {"preview huge line", "preview tiny events", "preview many tiny events", "preview redraw"}:
             send_output(writer, "preview head\n")
             if source == "preview huge line":
