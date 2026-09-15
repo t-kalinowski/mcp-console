@@ -5,6 +5,8 @@ The peer-runtime cases and common Python interaction, plot, and cache cases run 
 No-R acceptance uses an environment without R executables, libR, or R packages; hiding executables on `PATH` alone is insufficient.
 Run `client_server/server/test_no_r`, `client_server/server/test_r_selection`, and the applicable Python suites against an installed executable on that host.
 
+The `client_server/server/test_no_r_ssh` cases use real OpenSSH and require an R-free host with the private localhost SSH fixture.
+
 Docker cases use the shared Linux daemon capability in `tests/support/docker.py` and the reproducible `examples/docker/Dockerfile`.
 Build the fixture before running tests and set `MCP_CONSOLE_TEST_DOCKER_IMAGE` to its tag or ID; see `docs/DOCKER.md` for commands.
 Missing Docker access or an unselected fixture skips integration cases; it is not Docker validation.

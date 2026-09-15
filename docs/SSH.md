@@ -2,8 +2,10 @@
 
 `mcp-console serve` can keep the MCP server and recordings local while running its relay and built-in worker on one existing SSH host.
 The host needs a compatible Console build, a supported native sandbox environment, and an existing workspace.
-The host needs a working R installation, `uv` (or another supported resolver bootstrap), and system libraries and build tools required by the requested packages.
-Console prepares its managed R, Python, and DuckDB environments there.
+The host needs `uv` (or another supported resolver bootstrap) and the system libraries and build tools required by the requested packages.
+R is optional.
+Without R, Console prepares Python and Python DuckDB on that host; a selected preinstalled Python can also run in bare mode.
+R cells require a shared-library R installation on the host.
 It does not install R or synchronize files.
 
 ## Configure a target
@@ -84,9 +86,13 @@ sandbox:
     RETICULATE_PYTHON: /srv/venvs/analysis/bin/python
 ```
 
-The remote R installation must include its shared `libR` library and be discoverable through remote `R_HOME` or `PATH`.
-Managed mode prepares the same [defaults and additions](REQUIREMENTS.md) as local execution, including reticulate and SQL adapters.
-An explicit Python path disables managed Python additions and automatic Python imports, while managed R and DuckDB remain available.
+R is optional on the remote host.
+For R cells and interoperability, its installation must include shared `libR` and be discoverable through remote `R_HOME` or `PATH`.
+With `uv` and no R, Console prepares Python and Python DuckDB directly.
+A selected preinstalled Python can also run without a resolver.
+Managed mode prepares the same [defaults and additions](REQUIREMENTS.md) as local execution, including R packages and reticulate when R is available.
+An explicit Python path disables managed Python additions and automatic Python imports.
+Available managed R and its DuckDB provider remain independent; without R, the selected Python must already contain DuckDB for SQL use.
 Omitting that selection, using an empty value, or selecting `managed` retains managed Python when a bootstrap is available.
 The selected interpreter must already exist remotely and contain the Python packages needed by the analysis.
 

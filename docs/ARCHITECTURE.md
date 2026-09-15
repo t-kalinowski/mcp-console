@@ -245,7 +245,8 @@ R initialization does not initialize Python or load reticulate.
 Python initialization does not initialize a SQL connection.
 The SQL router uses a DBI provider in embedded R or a DB-API provider in CPython.
 The local server captures R availability and its selected home during startup.
-SSH and prepared targets still require an R installation.
+SSH uses the same R-optional discovery on the execution host.
+Prepared container targets still require an R installation.
 Every worker generation retains that selection: R DuckDB when R was available, otherwise Python DuckDB.
 Its catalog survives language activation and temporary selection of a user-owned DBI or DB-API connection.
 The Python adapter owns no R objects and needs no R runtime; its Python dependency remains explicit.

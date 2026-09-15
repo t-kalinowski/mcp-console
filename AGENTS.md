@@ -76,7 +76,7 @@ The worker relay, built-in worker, and managed resolvers support macOS and Linux
 Local Python and SQL sessions support hosts without R; managed SQL uses Python DuckDB on those hosts.
 Capture local R selection, including absence, before readiness and retain it across worker generations.
 Available R initializes eagerly; the coordinator retains explicit R, Python, and SQL runtime peers.
-SSH and prepared container targets continue to require R.
+SSH captures R presence or absence on the execution host; prepared container targets continue to require R.
 The default sandbox and standalone sandbox command support both platforms.
 Default Linux sandbox execution requires procfs, permitted native namespace operations, and the selected policy enforcement capabilities; see `docs/LINUX_COMPATIBILITY.md` for tested baselines, explicit enforcement modes, and constrained-host behavior.
 Do not infer support from a kernel version alone.
