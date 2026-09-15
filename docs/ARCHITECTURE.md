@@ -228,23 +228,31 @@ The worker owns language-runtime state and implements the worker protocol.
 It reports readiness, accepts complete cells and supported preparation operations, consumes interactive stdin, publishes console events and images, and reports completion or failure through the sideband.
 
 The built-in worker's `worker::core` owns shared sideband state, deferred operation messages, resolver exchanges, output publication, and shutdown and failure state.
-The `worker::coordinator` owns the message loop, preparation and cell dispatch, and completion reporting.
-It retains R, Python, and SQL adapters as peers.
-The `worker::input` module owns interactive stdin buffering and preserves unfinished input across operations.
-The `worker::embedded_r` backend owns R initialization, native event handling, graphics, and R console callbacks, including suppression of R resolution during SQL callbacks.
-R initialization remains eager.
-`worker::interrupt` wakes blocked reads and coordinates native interrupt acknowledgment.
+The `worker::coordinator` owns the outer operation loop, cell lifecycle, dispatch, and shutdown.
+It retains R, Python, and SQL as peer runtime values, each owning its language state and adapters.
+`worker::input` coordinates managed reads on shared fd 0; `worker::interrupt` wakes blocked reads and coordinates native interrupt acknowledgment.
+R contributes idle events and cell hooks when available.
+Python caches use the R session temporary directory when R is available, and an owned worker temporary directory otherwise.
+The latter also owns Python DuckDB spill and secret storage and is removed on normal worker exit.
 Runtime discovery children use the same interrupt wakeup and input-closure observation, and are terminated and reaped on cancellation.
 
-The built-in worker embeds R on its main thread.
-On Linux, it re-executes before R initialization with the selected `R_HOME/lib` first in `LD_LIBRARY_PATH`, preserving inherited library paths and its sideband endpoint.
+The built-in worker initializes available R on its main thread before reporting readiness.
+When R is absent, its runtime reports unavailable-R requests while preserving the other peers.
+On Linux, a worker with R available re-executes at startup, before initializing either interpreter, with the selected `R_HOME/lib` first in `LD_LIBRARY_PATH`, preserving inherited library paths and its sideband endpoint.
 This lets native R packages resolve R's shared libraries even when that R installation is absent from the system linker cache.
-Its language adapters provide persistent Python and SQL within that worker process.
+R evaluation retains the C-owned top-level boundaries that contain R errors and long jumps.
+R initialization does not initialize Python or load reticulate.
+Python initialization does not initialize a SQL connection.
 The SQL router uses a DBI provider in embedded R or a DB-API provider in CPython.
-The R provider owns a managed DuckDB connection by default and can retain a user-selected DBI connection; the Python provider retains a user-selected DB-API connection without converting it or its result rows through reticulate.
+The local server captures R availability and its selected home during startup.
+SSH and prepared targets still require an R installation.
+Every worker generation retains that selection: R DuckDB when R was available, otherwise Python DuckDB.
+Its catalog survives language activation and temporary selection of a user-owned DBI or DB-API connection.
+The Python adapter owns no R objects and needs no R runtime; its Python dependency remains explicit.
+An SQL provider independent of both languages is a follow-up.
 Its private R environment bridge conditionally wraps `base::library` and runs R's unchanged `base::loadNamespace` body in a private lexical environment that intercepts its retry restart; it applies accepted managed libraries and reports activation outcomes.
 The Rust Python facade loads, retains, and initializes the selected file-backed `libpython`.
-It installs the same private evaluator, input callbacks, plotting hooks, and environment activation implementation for Python cells and mixed-language sessions.
+It installs the same private evaluator, input callbacks, plotting hooks, and environment activation implementation whether R is absent or initialized.
 Discovery frames its result separately from interpreter startup and exit output, and uses the configured runtime library name and framework location.
 CPython core initialization disables automatic site processing with `Py_NoSiteFlag`; Console connects interrupt delivery before calling `site.main()` through its ordinary Python exception boundary.
 It restores the site flags before running hooks so child interpreters keep normal package discovery.
@@ -496,15 +504,17 @@ Fences expand when literal content contains backticks.
 It is a chronological call ledger: a timed-out cell, later polls, and eventual results remain separate calls because the journal does not infer evaluation-level grouping.
 The source-only Quarto document contains the source from calls with exactly one submitted R, Python, or SQL field in call order; it omits stdin, options, results, errors, polls, and artifacts.
 It includes qualifying source from rejected calls and failed evaluations.
-Its `ir` front matter declares the managed built-in R and Python requirements followed by cumulative explicit declarations from recorded calls.
+For local sessions with R available, its `ir` front matter declares the managed built-in R and Python requirements followed by cumulative explicit declarations from recorded calls.
 Bare sessions omit both managed defaults and rejected requirement payloads.
 It does not declare a Python version, so `ir render transcript.qmd` uses reticulate's default managed Python selection.
 The declarations are submitted inputs, not a lockfile or an exact record of successful retained and automatically inferred requirements.
-For local sessions, rendering executes the captured client-authored cells in order in a fresh Quarto/knitr runtime outside the MCP Console worker sandbox and exports their new output.
+For those local R-enabled sessions, rendering executes the captured client-authored cells in order in a fresh Quarto/knitr runtime outside the MCP Console worker sandbox and exports their new output.
 Rendering does not reconstruct session control, stdin, recorded results, or artifacts.
 SQL chunks require a DBI connection supplied by the document user.
 
-SSH, Docker, and Docker Sandbox projections identify the execution target, omit the local execution root, and set `execute.eval: false`.
+Local sessions without R omit R defaults and rendering dependencies and set `execute.eval: false`.
+Generating Markdown and Quarto source projections requires no R runtime.
+SSH, Docker, and Docker Sandbox projections identify the execution target, omit the local execution root, and also set `execute.eval: false`.
 By default, rendering them locally displays the captured source without executing it.
 Replaying remote cells requires the user to select and provision an appropriate execution environment; the document does not reproduce remote files.
 

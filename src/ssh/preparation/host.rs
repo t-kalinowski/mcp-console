@@ -23,6 +23,7 @@ impl Context {
         let mut python = resolver::ManagedPythonResolverConfiguration::capture();
         let (bootstrap, rscript) = resolver::discover(&mut python, on_started)?;
         let configured_python = std::env::var("RETICULATE_PYTHON").ok();
+        let rscript = rscript.ok_or("R is unavailable on the SSH execution host")?;
         let managed_python = !configured_python
             .as_ref()
             .is_some_and(|python| !python.is_empty() && python != "managed");
@@ -91,7 +92,7 @@ impl Context {
             Operation::PythonVersion { constraints, r } => {
                 let r = r.on_host(&self.rscript);
                 self.prepare_uv(Some(&r), on_started)?;
-                resolver::resolve_python_version(constraints, &self.python, &r, on_started)
+                resolver::resolve_python_version(constraints, &self.python, Some(&r), on_started)
                     .map(serde_json::Value::String)
             }
             Operation::Duckdb { r, extensions } => {

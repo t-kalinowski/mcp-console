@@ -7,7 +7,9 @@
 from __future__ import annotations
 
 import ast
+import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -23,6 +25,7 @@ EXPECTED_SOURCES = {
     "src/r_environment/bridge.R",
     "src/r_graphics/bridge.R",
     "src/resolver/programs/duckdb_extensions.R",
+    "src/resolver/programs/duckdb_extensions.py",
     "src/resolver/programs/r_library.R",
     "src/resolver/programs/uv_binary.R",
     "src/sql/bridge.R",
@@ -79,10 +82,10 @@ def validate_python(path: str, source: str) -> list[str]:
     return []
 
 
-def validate_r(path: str, source_path: Path) -> list[str]:
+def validate_r(path: str, source_path: Path, rscript: str) -> list[str]:
     result = subprocess.run(
         [
-            "Rscript",
+            rscript,
             "--vanilla",
             "-e",
             "invisible(parse(file = commandArgs(trailingOnly = TRUE)[[1L]], keep.source = TRUE))",
@@ -104,6 +107,13 @@ def main() -> int:
     discovered = set(sources)
     included = included_sources()
     errors = []
+    rscript = (
+        str(Path(os.environ["R_HOME"]) / "bin/Rscript")
+        if "R_HOME" in os.environ
+        else shutil.which("Rscript")
+    )
+    if rscript is None:
+        print("R source syntax checks skipped: Rscript is unavailable", file=sys.stderr)
 
     for path in sorted(EXPECTED_SOURCES - discovered):
         errors.append(f"{path}: expected production source is missing")
@@ -121,8 +131,8 @@ def main() -> int:
         errors.extend(validate_placeholders(path, source))
         if source_path.suffix == ".py":
             errors.extend(validate_python(path, source))
-        else:
-            errors.extend(validate_r(path, source_path))
+        elif rscript is not None:
+            errors.extend(validate_r(path, source_path, rscript))
 
     if errors:
         print("\n".join(errors), file=sys.stderr)

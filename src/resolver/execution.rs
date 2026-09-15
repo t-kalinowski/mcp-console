@@ -109,7 +109,7 @@ pub(crate) fn resolve_python_manifest(
 pub(crate) fn resolve_python_version(
     constraints: Vec<String>,
     configuration: &PythonConfiguration,
-    managed_r: &ManagedR,
+    managed_r: Option<&ManagedR>,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<String, String> {
     match configuration {
@@ -119,7 +119,9 @@ pub(crate) fn resolve_python_version(
         PythonConfiguration::Ssh(remote) => remote.call(
             Operation::PythonVersion {
                 constraints,
-                r: managed_r.clone(),
+                r: managed_r
+                    .cloned()
+                    .ok_or("SSH Python version resolution requires R")?,
             },
             on_started,
         ),
@@ -142,4 +144,16 @@ pub(crate) fn resolve_duckdb_extensions(
             on_started,
         ),
     }
+}
+
+pub(crate) fn resolve_python_duckdb_extensions(
+    remote: Option<&Preparation>,
+    python: &ManagedPython,
+    extensions: &[String],
+    on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
+) -> Result<(), String> {
+    if remote.is_some() {
+        return Err("SQL preparation over SSH requires R".into());
+    }
+    super::resolve_python_duckdb_extensions(python, extensions, on_started)
 }

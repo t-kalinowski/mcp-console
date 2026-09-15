@@ -18,10 +18,10 @@ pub(crate) fn initialize(
 ) -> io::Result<()> {
     WORKER_READER
         .set(Mutex::new(reader))
-        .map_err(|_| io::Error::other("R worker sideband was already initialized"))?;
+        .map_err(|_| io::Error::other("Console worker sideband was already initialized"))?;
     WORKER_WRITER
         .set(writer)
-        .map_err(|_| io::Error::other("R worker sideband was already initialized"))
+        .map_err(|_| io::Error::other("Console worker sideband was already initialized"))
 }
 
 pub(crate) fn sideband_activity() -> Result<(bool, RawFd), String> {
@@ -74,7 +74,7 @@ pub(crate) fn observe_stdin_shutdown() -> Result<(), String> {
 pub(crate) fn record_worker_failure(message: String) {
     let mut failure = WORKER_FAILURE
         .lock()
-        .expect("R worker failure lock should not be poisoned");
+        .expect("Console worker failure lock should not be poisoned");
     if failure.is_none() {
         *failure = Some(message);
     }
@@ -83,7 +83,7 @@ pub(crate) fn record_worker_failure(message: String) {
 pub(crate) fn take_worker_failure() -> Option<String> {
     WORKER_FAILURE
         .lock()
-        .expect("R worker failure lock should not be poisoned")
+        .expect("Console worker failure lock should not be poisoned")
         .take()
 }
 
@@ -96,27 +96,27 @@ pub(crate) fn emit_output(channel: ConsoleChannel, bytes: &[u8]) {
 pub(crate) fn send_input_requested(prompt: &str) -> Result<(), String> {
     WORKER_WRITER
         .get()
-        .expect("R worker sideband writer should be initialized")
+        .expect("Console worker sideband writer should be initialized")
         .send(&WorkerMessage::InputRequested {
             prompt: prompt.to_string(),
         })
-        .map_err(|error| format!("R worker failed to report an input request: {error}"))
+        .map_err(|error| format!("Console worker failed to report an input request: {error}"))
 }
 
 pub(crate) fn send_input_received() -> Result<(), String> {
     WORKER_WRITER
         .get()
-        .expect("R worker sideband writer should be initialized")
+        .expect("Console worker sideband writer should be initialized")
         .send(&WorkerMessage::InputReceived)
-        .map_err(|error| format!("R worker failed to report received input: {error}"))
+        .map_err(|error| format!("Console worker failed to report received input: {error}"))
 }
 
 pub(crate) fn send_input_cancelled() -> Result<(), String> {
     WORKER_WRITER
         .get()
-        .expect("R worker sideband writer should be initialized")
+        .expect("Console worker sideband writer should be initialized")
         .send(&WorkerMessage::InputCancelled)
-        .map_err(|error| format!("R worker failed to cancel an input request: {error}"))
+        .map_err(|error| format!("Console worker failed to cancel an input request: {error}"))
 }
 
 pub(crate) fn publish_plot(image: Result<String, String>) {
@@ -269,9 +269,9 @@ fn queue_server_message(message: ServerMessage) -> Result<(), String> {
 fn worker_reader() -> Result<std::sync::MutexGuard<'static, crate::sideband::Reader>, String> {
     WORKER_READER
         .get()
-        .ok_or_else(|| "R worker sideband reader is not initialized".to_string())?
+        .ok_or_else(|| "Console worker sideband reader is not initialized".to_string())?
         .lock()
-        .map_err(|_| "R worker sideband reader lock poisoned".to_string())
+        .map_err(|_| "Console worker sideband reader lock poisoned".to_string())
 }
 
 fn send_worker_message(message: &WorkerMessage) -> Result<(), String> {
@@ -280,7 +280,7 @@ fn send_worker_message(message: &WorkerMessage) -> Result<(), String> {
     }
     WORKER_WRITER
         .get()
-        .ok_or_else(|| "R worker sideband writer is not initialized".to_string())?
+        .ok_or_else(|| "Console worker sideband writer is not initialized".to_string())?
         .send(message)
         .map_err(|error| format!("worker sideband write failed: {error}"))
         .map_err(infrastructure_failure)
@@ -314,10 +314,10 @@ fn send_output(channel: ConsoleChannel, bytes: &[u8]) -> Result<(), String> {
 fn send_image(data: String) -> Result<(), String> {
     WORKER_WRITER
         .get()
-        .expect("R worker sideband writer should be initialized")
+        .expect("Console worker sideband writer should be initialized")
         .send(&WorkerMessage::Image {
             data,
             mime_type: "image/png".to_string(),
         })
-        .map_err(|error| format!("R worker failed to send a plot image: {error}"))
+        .map_err(|error| format!("Console worker failed to send a plot image: {error}"))
 }

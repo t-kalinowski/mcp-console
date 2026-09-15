@@ -43,18 +43,23 @@ The current API has no operation to remove a requirement, replace a manifest, se
 
 The built-in server prepares these defaults when an operation first needs an environment:
 
-| Environment | Defaults                                                             |
-| ----------- | -------------------------------------------------------------------- |
-| R           | `tidyverse`, `reticulate`, `DBI`, `duckdb`, `arrow`, and `nanoarrow` |
-| Python      | NumPy and pandas when Python is server-managed                       |
-| DuckDB      | ICU and JSON extensions                                              |
+| Environment | Defaults                                                                                  |
+| ----------- | ----------------------------------------------------------------------------------------- |
+| R           | When R is available: `tidyverse`, `reticulate`, `DBI`, `duckdb`, `arrow`, and `nanoarrow` |
+| Python      | NumPy and pandas when Python is server-managed; DuckDB is added for no-R SQL              |
+| DuckDB      | ICU and JSON extensions                                                                   |
 
 These defaults apply when startup finds a resolver bootstrap from `ir` on `PATH`, `uv` on `PATH`, an explicit `uv` selection, or ambient reticulate.
 Server-managed Python additionally needs `uv`; when only `ir` is on `PATH`, the resolved reticulate installation supplies it.
-If no resolver bootstrap is available, the built-in server retains no managed environment, exposes no `requirements` field, and starts a bare runtime from the packages already available to R, reticulate, and DuckDB.
+Python/uv discovery is independent of R discovery.
+An explicit `R_HOME` must contain `bin/Rscript`; an invalid selection fails startup on the execution host.
+The captured R selection, including absence, applies to every worker generation.
+Installing or changing R requires a new server session.
+A host with `uv` and no R prepares Python and Python DuckDB without invoking Rscript or resolving R packages.
+If no resolver bootstrap is available, the built-in server retains no managed environment, exposes no `requirements` field, and starts a bare runtime from the packages already installed for its available languages.
 R, Python, and SQL cells remain available, with ordinary R missing-package errors and explicit unavailable-adapter diagnostics where appropriate.
 
-Before starting the MCP transport, the server locates R and detects resolver capability without installing packages or invoking `ir`.
+Before starting the local MCP transport, the server discovers optional R and Python resolver capability without installing packages or invoking `ir`.
 When ambient reticulate supplies the bootstrap, this probe loads its namespace and checks that its `uv_binary` function exists; it does not call that function.
 These probes have no deadline.
 Closing a pipe or socket used for MCP standard input cancels an active probe and retires its resolver process group without consuming buffered MCP input.
@@ -291,6 +296,10 @@ Worker loss before either point loses the uncommitted declaration.
 DuckDB extension installation occurs entirely on the host.
 There is no DuckDB-specific live-worker request or receipt.
 The server installs the complete retained extension set for each relevant resolved R library, so the current worker and later generations can use the extension with their DuckDB version.
+For no-R SQL, it instead runs the selected Python provider's DuckDB extension installer.
+When a request changes Python packages and extensions together, extension preparation uses the candidate Python environment before activation.
+Failure leaves the running interpreter and its manifest unchanged.
+It never uses an R DuckDB artifact for a Python DuckDB version by assumption.
 It then retains the extension names without changing the worker's R, Python, SQL, or catalog state.
 
 Preparation does not load extension code.
@@ -345,7 +354,9 @@ That validator is separate from explicit `requirements.r`, so restricting runtim
 
 The built-in server uses `$R_HOME/bin/Rscript` when `R_HOME` is set.
 Otherwise it runs `R RHOME` using `R` from `PATH` and uses the reported home's `bin/Rscript`.
-It passes that exact `Rscript` to `ir` and uses it for DuckDB resolution.
+It passes that exact `Rscript` to `ir` and uses it for R-provider DuckDB resolution.
+Without R, DuckDB extension preparation executes the selected managed Python and uses its DuckDB version and platform.
+Statically linked or already installed extensions need no download.
 When Python is server-managed, the server-selected `uv` executable creates and updates the environment directly.
 The current managed R library is supplied through `R_LIBS` when one is available.
 Python version inventory and selection run directly through the same `uv` executable.

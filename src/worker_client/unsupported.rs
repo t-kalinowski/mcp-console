@@ -12,7 +12,7 @@ impl WorkerRuntime {
         _on_ready: impl FnOnce() -> Result<(), String>,
     ) -> Result<Worker, super::output::SendFailure> {
         let super::WorkerSpec {
-            ssh,
+            target,
             executable,
             arguments,
             relay,
@@ -20,11 +20,12 @@ impl WorkerRuntime {
             sandbox_settings,
             python,
             managed_r,
+            r_home,
             dynamic_resolution,
             callbacks,
         } = spec;
         let _ = (
-            ssh,
+            target,
             executable,
             arguments,
             relay,
@@ -32,6 +33,7 @@ impl WorkerRuntime {
             sandbox_settings,
             python,
             managed_r,
+            r_home,
             dynamic_resolution,
             callbacks,
         );
@@ -59,10 +61,15 @@ impl Worker {
     pub(super) fn prepare_python(
         &mut self,
         packages: Vec<String>,
+        duckdb_extensions: Vec<String>,
         continue_environment_preparation: bool,
         _commit: super::PythonPreparationCommit,
     ) -> Result<super::PreparationOutcome, String> {
-        let _ = (packages, continue_environment_preparation);
+        let _ = (
+            packages,
+            duckdb_extensions,
+            continue_environment_preparation,
+        );
         unreachable!("unsupported workers cannot start")
     }
 

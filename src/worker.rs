@@ -22,7 +22,7 @@ pub(crate) use core::{
     publish_r_activation_failure, resolve_python, resolve_python_version,
 };
 #[cfg(unix)]
-pub(crate) use embedded_r::resolve_r;
+pub(crate) use embedded_r::{require_available as require_r, resolve_r};
 
 #[cfg(not(unix))]
 pub(crate) fn run() -> Result<(), Box<dyn std::error::Error>> {

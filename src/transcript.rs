@@ -31,6 +31,7 @@ pub(crate) struct Transcript(Arc<Mutex<TranscriptState>>);
 struct TranscriptState {
     working_directory: Result<PathBuf, String>,
     dynamic_resolution: bool,
+    r_available: bool,
     target: Option<serde_json::Value>,
     active: Option<ActiveTranscript>,
     failure: Option<String>,
@@ -63,18 +64,20 @@ pub(crate) struct Artifact {
 impl Transcript {
     #[cfg(test)]
     pub(crate) fn new(dynamic_resolution: bool) -> Self {
-        Self::with_target(std::env::current_dir(), dynamic_resolution, None)
+        Self::with_target(std::env::current_dir(), dynamic_resolution, true, None)
     }
 
     pub(crate) fn with_target(
         working_directory: std::io::Result<PathBuf>,
         dynamic_resolution: bool,
+        r_available: bool,
         target: Option<serde_json::Value>,
     ) -> Self {
         Self(Arc::new(Mutex::new(TranscriptState {
             working_directory: working_directory
                 .map_err(|error| format!("failed to find the current working directory: {error}")),
             dynamic_resolution,
+            r_available,
             target,
             active: None,
             failure: None,
@@ -222,6 +225,7 @@ impl TranscriptState {
             self.active = Some(ActiveTranscript::create(
                 &working_directory,
                 self.dynamic_resolution,
+                self.r_available,
                 self.target.as_ref(),
             )?);
         }
@@ -248,6 +252,7 @@ impl ActiveTranscript {
     fn create(
         working_directory: &Path,
         dynamic_resolution: bool,
+        r_available: bool,
         target: Option<&serde_json::Value>,
     ) -> Result<Self, String> {
         let working_directory_text = working_directory.to_string_lossy();
@@ -300,6 +305,7 @@ impl ActiveTranscript {
                 quarto_path,
                 working_directory,
                 dynamic_resolution,
+                r_available,
                 target,
             ))
         })();

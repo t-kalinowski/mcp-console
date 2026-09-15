@@ -116,13 +116,15 @@ class InstallationTests(unittest.TestCase):
                         fn main() {
                             let mut build = cc::Build::new();
                             build.file("value.c");
-                            if std::env::var("CARGO_CFG_TARGET_OS").unwrap() == "linux"
-                                && std::env::var("CARGO_PKG_NAME").unwrap() == "codex-bwrap"
-                            {
+                            let libcap = std::env::var("CARGO_CFG_TARGET_OS").unwrap() == "linux"
+                                && std::env::var("CARGO_PKG_NAME").unwrap() == "codex-bwrap";
+                            if libcap {
                                 build.define("LINK_LIBCAP", None);
-                                println!("cargo:rustc-link-lib=cap");
                             }
                             build.compile("value");
+                            if libcap {
+                                println!("cargo:rustc-link-lib=cap");
+                            }
                         }
                         """)
                 )
@@ -268,7 +270,10 @@ class InstallationTests(unittest.TestCase):
             )
 
     def test_uv_installs_a_relocatable_bundle_from_unstaged_sources(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="mcp-console-install-") as temporary:
+        # Hiding the build artifacts below uses a rename on this filesystem.
+        with tempfile.TemporaryDirectory(
+            prefix="mcp-console-install-", dir=ROOT.parent
+        ) as temporary:
             directory = Path(temporary)
             source = directory / "source"
             target = ROOT / "target"

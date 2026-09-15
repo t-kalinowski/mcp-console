@@ -16,16 +16,27 @@ struct Runtime {
 
 pub(crate) fn run() -> Result<(), Box<dyn Error>> {
     let (reader, writer) = crate::sideband::connect_from_env()?;
-    let r_home = harp::command::r_home_setup()?;
+    let r_home = embedded_r::discover()?;
     #[cfg(target_os = "linux")]
-    reexec_with_r_library_path(&r_home, &reader, &writer)?;
-    embedded_r::initialize_r(&r_home)?;
-    crate::python::configure_worker_environment(&embedded_r::Runtime::temporary_directory()?)?;
+    if let Some(home) = &r_home {
+        reexec_with_r_library_path(home, &reader, &writer)?;
+    }
+    let temporary = if let Some(home) = &r_home {
+        embedded_r::initialize_r(home)?;
+        None
+    } else {
+        Some(TemporaryDirectory::new()?)
+    };
+    let temporary_path = match &temporary {
+        Some(temporary) => temporary.0.clone(),
+        None => embedded_r::Runtime::temporary_directory()?,
+    };
+    crate::python::configure_worker_environment(&temporary_path, r_home.is_some())?;
     core::initialize(reader, writer.clone())?;
     interrupt::initialize()?;
-    let r = embedded_r::Runtime::initialize()?;
+    let r = embedded_r::Runtime::initialize(r_home.is_some())?;
     let python = crate::python::Runtime::initialize()?;
-    let sql = crate::sql::Bridge::initialize()?;
+    let sql = crate::sql::Bridge::initialize(r_home.is_some())?;
     writer.send(&WorkerMessage::Ready)?;
 
     let mut runtime = Runtime {
@@ -87,11 +98,36 @@ impl Runtime {
             if buffered {
                 return core::receive_server_message();
             }
-            if embedded_r::wait_for_activity(sideband_fd)? {
-                return core::receive_server_message();
+            if self.r.available() {
+                if embedded_r::wait_for_activity(sideband_fd)? {
+                    return core::receive_server_message();
+                }
+                self.r.idle()?;
+            } else {
+                let mut descriptors = [
+                    libc::pollfd {
+                        fd: sideband_fd,
+                        events: libc::POLLIN,
+                        revents: 0,
+                    },
+                    libc::pollfd {
+                        fd: libc::STDIN_FILENO,
+                        events: 0,
+                        revents: 0,
+                    },
+                ];
+                let status = interrupt::wait(&mut descriptors)?;
+                if status < 0 && io::Error::last_os_error().kind() != io::ErrorKind::Interrupted {
+                    return Err(io::Error::last_os_error().to_string());
+                }
+                if descriptors[0].revents != 0 {
+                    return core::receive_server_message();
+                }
+                if descriptors[1].revents & libc::POLLHUP != 0 {
+                    return Ok(ServerMessage::Shutdown);
+                }
+                interrupt::clear();
             }
-
-            self.r.idle()?;
             if let Some(message) = take_worker_failure() {
                 return Err(message);
             }
@@ -224,4 +260,26 @@ fn evaluate_cell(
         r.idle()?;
     }
     result
+}
+
+struct TemporaryDirectory(std::path::PathBuf);
+
+impl TemporaryDirectory {
+    fn new() -> io::Result<Self> {
+        use std::os::unix::ffi::{OsStrExt, OsStringExt};
+        let template = std::env::temp_dir().join("mcp-console-worker-XXXXXX");
+        let mut template = template.as_os_str().as_bytes().to_vec();
+        template.push(0);
+        if unsafe { libc::mkdtemp(template.as_mut_ptr().cast()) }.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        template.pop();
+        Ok(Self(std::ffi::OsString::from_vec(template).into()))
+    }
+}
+
+impl Drop for TemporaryDirectory {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }

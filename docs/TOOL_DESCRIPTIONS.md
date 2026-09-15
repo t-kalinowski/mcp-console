@@ -15,6 +15,10 @@ Keep them concise and action-oriented, and include facts that affect whether or 
 - Preserve warnings about state changes that survive errors and controls that discard state.
   Include exact bridge names and familiar interfaces such as DuckDB, DBI, and dplyr when they tell the agent how to complete a workflow.
 
+Language fields describe accepted operations, not guaranteed installed runtimes.
+Keep R's optional status and the Python dependency of no-R managed SQL explicit.
+An unavailable R cell reports an execution-host error without replacing Python or SQL state.
+
 Leave tutorials and analysis-specific examples to the runtime guides.
 Omit implementation details that do not change agent behavior, such as interpreter backends, worker IPC, the internal journal, and exact output limits.
 

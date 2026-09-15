@@ -4,6 +4,8 @@ set -eu
 
 cd "$(dirname "$0")/.."
 
-cargo build --release --target-dir target
+if [ -z "${MCP_CONSOLE_TEST_BINARY:-}" ]; then
+    cargo build --release --target-dir target
+fi
 
 uv run --script tests/boundaries/_run.py "$@"

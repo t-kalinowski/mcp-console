@@ -73,6 +73,10 @@ Standalone `sandbox` remains local for supported native selections and rejects r
 SSH exit alone cannot confirm remote retirement; require the remote launcher's terminal acknowledgment before replacement, and block replacement after unconfirmed cleanup.
 
 The worker relay, built-in worker, and managed resolvers support macOS and Linux.
+Local Python and SQL sessions support hosts without R; managed SQL uses Python DuckDB on those hosts.
+Capture local R selection, including absence, before readiness and retain it across worker generations.
+Available R initializes eagerly; the coordinator retains explicit R, Python, and SQL runtime peers.
+SSH and prepared container targets continue to require R.
 The default sandbox and standalone sandbox command support both platforms.
 Default Linux sandbox execution requires procfs, permitted native namespace operations, and the selected policy enforcement capabilities; see `docs/LINUX_COMPATIBILITY.md` for tested baselines, explicit enforcement modes, and constrained-host behavior.
 Do not infer support from a kernel version alone.
@@ -210,7 +214,7 @@ Keep these invariants intact:
 ### Resolvers and sandbox
 
 - `src/resolver.rs`, `src/resolver/` — retained host environments, direct Python-version selection, validation, platform implementations, and resolver process-group lifecycle.
-- `src/resolver/programs/` — compile-time R programs for DuckDB extension preparation, R-library resolution, and `uv` discovery.
+- `src/resolver/programs/` — compile-time R and Python programs for DuckDB extension preparation, R-library resolution, and `uv` discovery.
 - `src/sandbox/runner.rs`, `src/sandbox/policy_extensions.sbpl`, `src/process_descriptors.rs` — immutable runner launch configuration, macOS policy additions, and ordinary child inherited-descriptor boundary.
 - `sandbox-runner.json`, `scripts/stage-sandbox-runner`, `build_backend.py`, `build.rs`, `src/sandbox/installation.rs` — pinned source preparation, companion bundle packaging, and streaming artifact verification.
 

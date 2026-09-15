@@ -13,12 +13,32 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript
 from support.resolvers import matplotlib_test_environment
+from support.requirements import NO_R, R_RUNTIME, requires
 from support.suites import run_this_suite
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R_RUNTIME)
 def test_preserves_matplotlib_cache_across_activation_and_restart(
     binary: Path, execution: Execution
+) -> Transcript:
+    return preserves_matplotlib_cache_across_activation_and_restart(
+        binary, execution, with_r=True
+    )
+
+
+@executions(DIRECT, SANDBOXED)
+@requires(NO_R)
+def test_preserves_no_r_matplotlib_cache_across_activation_and_restart(
+    binary: Path, execution: Execution
+) -> Transcript:
+    return preserves_matplotlib_cache_across_activation_and_restart(
+        binary, execution, with_r=False
+    )
+
+
+def preserves_matplotlib_cache_across_activation_and_restart(
+    binary: Path, execution: Execution, *, with_r: bool
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
@@ -41,13 +61,17 @@ def test_preserves_matplotlib_cache_across_activation_and_restart(
             current_directory=workspace,
         )
         client.initialize_and_list_tools()
-        # fmt: r
-        r = code(r"""
-            reticulate::py_require("matplotlib")
-            invisible(reticulate::py_config())
-            """)
-        client.send(r=r)
-        assert last_result_text(client) == "[done]"
+        if with_r:
+            # fmt: r
+            r = code(r"""
+                reticulate::py_require("matplotlib")
+                invisible(reticulate::py_config())
+                """)
+            client.send(r=r)
+            assert last_result_text(client) == "[done]"
+        else:
+            client.send(requirements={"python": ["matplotlib"]})
+            assert last_result_text(client) == "[prepared]"
         persistent_caches = list(host_matplotlib.glob("fontlist-v*.json"))
         assert len(persistent_caches) == 1, persistent_caches
         persistent_cache_bytes = persistent_caches[0].read_bytes()
@@ -83,12 +107,16 @@ def test_preserves_matplotlib_cache_across_activation_and_restart(
         client.send(python=python)
         assert last_result_text(client) == "[done]"
 
-        # fmt: r
-        r = code(r"""
-            reticulate::py_require("py-yaml12")
-            """)
-        client.send(r=r)
-        assert last_result_text(client) == "[done]"
+        if with_r:
+            # fmt: r
+            r = code(r"""
+                reticulate::py_require("py-yaml12")
+                """)
+            client.send(r=r)
+            assert last_result_text(client) == "[done]"
+        else:
+            client.send(requirements={"python": ["py-yaml12"]})
+            assert last_result_text(client) == "[prepared]"
         client.send(python="(cache_link_replaced, __import__('yaml12').__name__)")
         assert last_result_text(client) == "(True, 'yaml12')\n"
 
