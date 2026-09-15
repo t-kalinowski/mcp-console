@@ -47,6 +47,18 @@ def test_forwards_raw_stdout_and_stderr(
 
 
 @executions(DIRECT, SANDBOXED)
+def test_finishes_partial_utf8_with_its_cell(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = ServerRelayClient(binary, "partial_utf8_completion", execution=execution)
+    for expected in ("�", "��", "�", "��"):
+        output = _tool_text(client.send(r="42"))
+        assert output == expected, repr(output)
+        assert _tool_text(client.send()) == "\n[idle]"
+    return client.finish_active()
+
+
+@executions(DIRECT, SANDBOXED)
 def test_compacts_split_terminal_redraws(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -97,6 +109,30 @@ def test_empty_raw_close_does_not_split_console_redraw(
         binary, "empty_raw_close_between_redraws", execution=execution
     )
     assert _tool_text(client.send(r="42")) == "new\n"
+    return client.finish_active()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_stdout_close_preserves_pending_stderr_utf8(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = ServerRelayClient(
+        binary, "stdout_close_between_utf8_fragments", execution=execution
+    )
+    output = _tool_text(client.send(r="42"))
+    assert output == "€\n", repr(output)
+    return client.finish_active()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_stderr_close_preserves_pending_stdout_utf8(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = ServerRelayClient(
+        binary, "stderr_close_between_utf8_fragments", execution=execution
+    )
+    output = _tool_text(client.send(r="42"))
+    assert output == "€\n", repr(output)
     return client.finish_active()
 
 

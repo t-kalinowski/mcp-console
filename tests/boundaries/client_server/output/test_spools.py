@@ -19,7 +19,6 @@ from support.previews import (
     OMISSION,
     TEXT_BUDGET,
     assert_preview,
-    collector_notice,
     compact_previews,
 )
 from support.client import McpClient
@@ -62,17 +61,14 @@ def test_separates_startup_omissions_from_retained_cell_text(
         path = f".agents/console/sessions/{session.name}/outputs/call-000001.log"
         assert (workspace / path).read_bytes() == b"cell output\n"
         assert len(output.encode()) <= TEXT_BUDGET
-        collectors = collector_notice(7, 1) + collector_notice(12, 1, path, 12)
-        assert output.endswith(collectors), output[-1000:]
+        assert output.endswith("cell output\n"), output[-1000:]
         marker = OMISSION.search(output)
         assert marker is not None
         assert "no retained cell log" in marker[0]
         assert path not in marker[0]
-        startup_preview = output.removesuffix(collectors)
-        assert_preview(startup_preview, "s" * PENDING_TEXT_BUDGET)
-        client.transcript[-1]["result"]["content"][0]["text"] = output.replace(
-            session.name, "<run ID>"
-        )
+        startup_preview = output.removesuffix("cell output\n")
+        assert_preview(startup_preview, "s" * (PENDING_TEXT_BUDGET + 7))
+        client.transcript[-1]["result"]["content"][0]["text"] = output
         compact_previews(client, "x", "y", "z", "s", "p", "ab")
         return client.finish()
 
@@ -157,17 +153,11 @@ def test_reports_partial_retention_and_later_unretained_output(
             first_payload = first_payload.removesuffix(
                 "\n[running; poll with an empty send]"
             )
-            first_collector = collector_notice(
-                2 * PENDING_TEXT_BUDGET + 7, 1, path, file_limit - PENDING_TEXT_BUDGET
-            )
-            second_collector = collector_notice(7, 1)
-            assert first_payload.endswith(first_collector), first_payload[-1000:]
-            assert second_text.endswith(second_collector), second_text[-1000:]
             first_omitted = assert_preview(
-                first_payload.removesuffix(first_collector), "x" * PENDING_TEXT_BUDGET
+                first_payload, "x" * (3 * PENDING_TEXT_BUDGET + 7)
             )
             second_omitted = assert_preview(
-                second_text.removesuffix(second_collector), "y" * PENDING_TEXT_BUDGET
+                second_text, "y" * (PENDING_TEXT_BUDGET + 7)
             )
             for entry, text in ((first, first_text), (second, second_text)):
                 entry["result"]["content"][0]["text"] = text.replace(
@@ -250,13 +240,7 @@ def test_reports_omitted_bytes_retained_at_the_file_limit(
                 assert retained.read(len(block)) == block
             assert retained.read(1) == b""
         assert len(output.encode()) <= TEXT_BUDGET
-        collector = collector_notice(
-            limit - PENDING_TEXT_BUDGET + 5, 128, path, limit - PENDING_TEXT_BUDGET
-        )
-        assert collector in output, output[-1500:]
-        assert "tail\n" not in output, (
-            "the old collector discards output after overflow"
-        )
+        assert "tail\n" in output, output[-1500:]
         assert f"{limit} raw bytes retained, 5 raw bytes not retained" in output
         assert "file contains only a prefix" in output
         assert f"cell output retention limit reached at {limit} bytes" in output

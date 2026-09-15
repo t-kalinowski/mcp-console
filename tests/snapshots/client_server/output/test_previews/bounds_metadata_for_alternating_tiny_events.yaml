@@ -1,0 +1,27 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.direct.yaml
+---
+send:
+  r: echo ready
+result:
+  content:
+    - type: text
+      text: |
+        zod: ready
+  isError: false
+---
+send:
+  r: preview alternating bytes
+result:
+  content:
+    - type: text
+      text:
+        text_bytes: 8192
+        concat:
+          - repeat: ab
+            count: 4096
+  isError: false
+---
+input:
+  method: ping
+result: {}

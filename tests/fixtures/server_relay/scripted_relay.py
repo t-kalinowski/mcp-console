@@ -364,6 +364,41 @@ def run_empty_raw_close_between_redraws(relay: ScriptedRelay) -> None:
     )
 
 
+def run_raw_close_between_utf8_fragments(relay: ScriptedRelay) -> None:
+    closed = (
+        "stdout"
+        if os.environ[SCENARIO_ENV] == "stdout_close_between_utf8_fragments"
+        else "stderr"
+    )
+    pending = "stderr" if closed == "stdout" else "stdout"
+    relay.ready()
+    relay.expect(EVALUATION)
+    relay.send_batch(
+        [
+            {
+                "kind": f"{pending}_bytes",
+                "data": base64.b64encode(b"\xe2").decode("ascii"),
+            },
+            {"kind": f"{closed}_closed"},
+            {
+                "kind": f"{pending}_bytes",
+                "data": base64.b64encode(b"\x82\xac\n").decode("ascii"),
+            },
+        ]
+    )
+    relay.complete()
+    command = relay.receive()
+    assert command.get("kind") == "shutdown", command
+    relay.send_batch(
+        [
+            {"kind": "shutdown_started"},
+            {"kind": f"{pending}_closed"},
+            {"kind": "worker_sideband_closed"},
+            {"kind": "worker_exited", "code": 0},
+        ]
+    )
+
+
 def run_stdin(relay: ScriptedRelay) -> None:
     relay.ready()
     relay.expect({"kind": "stdin", "data": "answer\n"})
@@ -1231,12 +1266,23 @@ def run_preview_raw(relay: ScriptedRelay) -> None:
     relay.retire()
 
 
+def run_partial_utf8_completion(relay: ScriptedRelay) -> None:
+    relay.ready()
+    for kind in ("stdout_bytes", "stderr_bytes"):
+        for chunk in (b"\xe2", b"\x82\xac"):
+            relay.expect(EVALUATION)
+            relay.send({"kind": kind, "data": base64.b64encode(chunk).decode("ascii")})
+            relay.complete()
+    relay.retire()
+
+
 def main() -> None:
     scenarios = {
         "ready": run_ready,
         "startup_output": run_startup_output,
         "preview_raw": run_preview_raw,
         "preview_raw_prelude": run_preview_raw_prelude,
+        "partial_utf8_completion": run_partial_utf8_completion,
         "evaluate": run_evaluate,
         "raw_output": run_raw_output,
         "split_terminal_redraws": run_split_terminal_redraws,
@@ -1244,6 +1290,8 @@ def main() -> None:
         "interleaved_stream_redraws": run_interleaved_stream_redraws,
         "raw_malformed_redraw": run_raw_malformed_redraw,
         "empty_raw_close_between_redraws": run_empty_raw_close_between_redraws,
+        "stdout_close_between_utf8_fragments": run_raw_close_between_utf8_fragments,
+        "stderr_close_between_utf8_fragments": run_raw_close_between_utf8_fragments,
         "stdin": run_stdin,
         "initial_requirements_stdin_idempotent": (
             run_initial_requirements_stdin_idempotent

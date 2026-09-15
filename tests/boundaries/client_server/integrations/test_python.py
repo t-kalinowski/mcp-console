@@ -18,7 +18,7 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.r import r_test_environment
 from support.normalization import code
 from support.records import Transcript
-from support.previews import assert_preview, collector_notice
+from support.previews import assert_preview
 from support.evidence import compact_text
 from support.requirements import WORKER, requires
 from support.resolvers import bare_runtime_environment
@@ -46,14 +46,11 @@ def test_sync_and_async_clients_receive_bounded_previews(
         emitted = "x" * (8 * 1024 * 1024 + 7)
 
         def check(text: str) -> None:
+            assert_preview(text, emitted)
             session = max(
                 (Path(temporary) / ".agents/console/sessions").iterdir(),
                 key=lambda path: path.name,
             )
-            path = f".agents/console/sessions/{session.name}/outputs/call-000001.log"
-            collector = collector_notice(7, 1, path, 7)
-            assert text.endswith(collector), text[-1000:]
-            assert_preview(text.removesuffix(collector), emitted[:-7])
             assert (session / "outputs/call-000001.log").read_text() == emitted
             results.append(
                 {"preview": compact_text(text.replace(session.name, "<run ID>"), "x")}

@@ -11,8 +11,6 @@ from support.assertions import last_result_text
 from support.previews import (
     assert_preview,
     compact_previews,
-    normalize_preview_paths,
-    collector_notice,
 )
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
@@ -111,18 +109,64 @@ def test_keeps_mapped_resolution_notice_atomic_at_output_limit(
     client.send(python=python, timeout_ms=120_000)
     output = last_result_text(client)
     prefix = "x" * retained
+    notice = "\n[resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']\n"
+    assert notice in output
+    assert_preview(output, prefix + notice + "'yaml12'\n")
     assert client.temporary_directory is not None
     workspace = Path(client.temporary_directory.name)
-    session = next((workspace / ".agents/console/sessions").iterdir())
-    path = f".agents/console/sessions/{session.name}/outputs/call-000001.log"
-    collector = collector_notice(78, 3, path, 9)
-    assert output.endswith(collector), output[-1000:]
-    assert "resolved PyPI distribution" not in output
-    assert_preview(output.removesuffix(collector), prefix)
-    assert (workspace / path).read_text() == prefix + "'yaml12'\n"
-    normalize_preview_paths(client)
-    compact_previews(client, "x")
+    session = next((workspace / ".agents/console" / "sessions").iterdir())
+    relative_output = Path("outputs/call-000001.log")
+    public_output = (
+        f".agents/console/sessions/{session.name}/{relative_output.as_posix()}"
+    )
+    assert f"raw cell log: {public_output}" in output
+    assert (session / relative_output).read_text(encoding="utf-8") == (
+        prefix + "'yaml12'\n"
+    )
+    client.transcript[-1]["result"]["content"][0]["text"] = output.replace(
+        session.name, "<run ID>"
+    )
+    compact_previews(client, "x", "y", "z", "s", "p", "ab", "�")
     return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_distinguishes_omitted_resolution_notice_from_retained_raw_text(
+    binary: Path, execution: Execution
+) -> Transcript:
+    environment = os.environ.copy()
+    environment.pop("RETICULATE_PYTHON", None)
+    with McpClient(binary, execution.serve(), environment) as client:
+        client.initialize_and_list_tools()
+        # fmt: python
+        python = code("""
+            print("notice head\\n" + "x" * 10000, end="")
+            import yaml12
+
+            print("y" * 10000 + "\\nnotice tail")
+            """)
+        client.send(python=python, timeout_ms=120_000)
+        output = last_result_text(client)
+        head = "notice head\n" + "x" * 10000
+        tail = "y" * 10000 + "\nnotice tail\n"
+        notice = (
+            "\n[resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']\n"
+        )
+        assert_preview(output, head + notice + tail)
+        assert "generated notice bytes not retained" in output
+        assert "resolved PyPI distribution" not in output
+        assert client.temporary_directory is not None
+        session = next(
+            (
+                Path(client.temporary_directory.name) / ".agents/console/sessions"
+            ).iterdir()
+        )
+        assert (session / "outputs/call-000001.log").read_text() == head + tail
+        client.transcript[-1]["result"]["content"][0]["text"] = output.replace(
+            session.name, "<run ID>"
+        )
+        compact_previews(client, "x", "y", "z", "s", "p", "ab", "�")
+        return client.finish()
 
 
 @executions(DIRECT, SANDBOXED)

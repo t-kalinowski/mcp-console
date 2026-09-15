@@ -1,0 +1,43 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  r: preview prompt
+result:
+  content:
+    - type: text
+      text:
+        text_bytes: 8080
+        concat:
+          - |
+            prompt output head
+          - repeat: x
+            count: 3373
+          - |
+
+            [output preview: omitted 16770471 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000001.log (Console server recording workspace; controller for remote targets); 16777255 raw bytes retained, 0 raw bytes not retained]
+          - repeat: x
+            count: 3372
+          - |-
+
+            prompt output tail
+            [input requested: "prompt head 
+          - repeat: p
+            count: 452
+          - "[… omitted 19082 rendered UTF-8 bytes; not retained …]"
+          - repeat: p
+            count: 466
+          - |2-
+             prompt tail> "]
+            [waiting for stdin]
+  isError: false
+---
+send:
+  stdin: |
+    answer
+result:
+  content:
+    - type: text
+      text: |
+        received answer
+  isError: false

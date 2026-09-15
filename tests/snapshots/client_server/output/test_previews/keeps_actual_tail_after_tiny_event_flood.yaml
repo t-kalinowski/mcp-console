@@ -1,0 +1,48 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  r: preview tiny events
+result:
+  content:
+    - type: text
+      text:
+        text_bytes: 8037
+        concat:
+          - |
+            preview head
+          - repeat: ab
+            count: 1945
+          - |
+            a
+            [output preview: omitted 16255 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000001.log (Console server recording workspace; controller for remote targets); 24063 raw bytes retained, 0 raw bytes not retained]
+          - repeat: ab
+            count: 1927
+          - |
+
+            preview tail: final diagnostic
+    - type: image
+      data: iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=
+      mimeType: image/png
+    - type: text
+      text: |
+        after final image
+  isError: false
+---
+send: {}
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false
+---
+send:
+  r: echo fresh
+result:
+  content:
+    - type: text
+      text: |
+        zod: fresh
+  isError: false

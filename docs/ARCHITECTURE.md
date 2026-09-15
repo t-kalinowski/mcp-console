@@ -429,15 +429,14 @@ The protocol documents define the exact closure and retirement order.
 
 The server owns one ordered pending-output tape across worker lifetimes.
 The relay publishes observations to it, but neither the relay nor worker decides which MCP call receives them.
-The server assigns output to an evaluation, poll, restart, controlled send, or later idle response; applies pending-output limits; preserves image order; adds lifecycle notices; and assembles MCP content.
-The existing collector retains at most 8 MiB of text, 8 MiB of encoded images, 64 KiB of image metadata, and 4,096 ordinary events before a shared overflow latch discards later ordinary output.
-At each drain it decodes the retained direct output and compacts single-line redraws before building the response preview.
-A cut attaches a raw-file receipt before completion releases that cell's writer, so later response composition can still attribute omissions to the correct file.
-Collector-limit notices count bytes discarded before decoding and progress compaction, including dropped generated notices, separately from the renderer's omitted UTF-8 byte counts.
+The server assigns output to an evaluation, poll, restart, controlled send, or later idle response; collects bounded head-and-tail text previews; preserves image order; adds lifecycle notices; and assembles MCP content.
+During ingestion, it incrementally decodes direct streams and compacts carriage-return and backspace redraws within each consecutive run from one producer.
+It retains bounded text at the beginning and latest tail, coalesces adjacent text and omission metadata, and admits images under separate byte, metadata, and count limits.
+A response cut seals this projection and its raw-file receipt without reading the file.
 Intervals with no rendered text publish any finished file summary and discard their receipt; unrecorded text still keeps its source boundary.
 Fully omitted intervals account for their per-cell omissions and release their receipts into one bounded summary, which names the journal containing individual file paths and counts.
 The canonical response builder preserves typed control notices during composition; its final projection applies one 8 KiB UTF-8 text budget, including all generated notices, across the complete tool result.
-Response composition keeps bounded state even after raw-file retention fails or is disabled.
+Collection and response composition keep bounded state even after raw-file retention fails or is disabled.
 
 A controlled send produces one MCP response.
 When a completed or interrupted evaluation precedes a new cell, the server transfers the prior response region into the new evaluation's prelude instead of acknowledging it separately.
@@ -495,7 +494,7 @@ uv tool run --from r-lib-ir ir render transcript.qmd
 When `ir` is installed on `PATH`, `ir render transcript.qmd` is equivalent.
 
 Each admitted evaluation also owns `outputs/call-NNNNNN.log` beneath the run directory.
-The server attaches that file to the ordered output tape at the same boundary as the worker operation, appends console text and direct stdout and stderr before pending-output admission can discard it, and detaches it at the evaluation's completion or restart cut.
+The server attaches that file to the ordered output tape at the same boundary as the worker operation, appends console text and direct stdout and stderr before preview collection omits the middle, and detaches it at the evaluation's completion or restart cut.
 Response cuts flush the active file, so output already returned by `send` is also visible through ordinary file reads while the evaluation remains active.
 The file is limited to 1 GiB; later worker output is still drained and counted after the limit or a file failure.
 

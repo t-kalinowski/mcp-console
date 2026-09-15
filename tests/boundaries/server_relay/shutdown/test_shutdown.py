@@ -25,12 +25,7 @@ from support.assertions import tool_text as _tool_text
 from support.checkpoints import FifoCheckpoint
 from support.client import stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
-from support.previews import (
-    compact_previews,
-    assert_preview,
-    normalize_preview_paths,
-    collector_notice,
-)
+from support.previews import compact_previews, assert_preview, normalize_preview_paths
 from support.records import Transcript
 from support.resolvers import fake_ir_environment as _fake_ir_environment
 from support.suites import run_this_suite
@@ -192,13 +187,7 @@ def test_cancelled_send_returns_owned_output_to_restart(
         assert tail.endswith(suffix), tail[-1_000:]
         for notice in notices:
             assert tail.count(notice) == 1, (notice, tail[-1_000:])
-        collected = len(cell_prefix) + 7
-        collector = collector_notice(collected, 1, public_output, collected)
-        payload = tail.removesuffix(suffix)
-        assert payload.endswith(collector), payload[-1000:]
-        omitted = assert_preview(
-            cell_prefix + payload.removesuffix(collector), raw[:PENDING_TEXT_BUDGET]
-        )
+        omitted = assert_preview(cell_prefix + tail.removesuffix(suffix), raw)
         assert f"raw cell log: {public_output}" in tail
         assert (
             sum(len(block.get("text", "").encode()) for block in result["content"])

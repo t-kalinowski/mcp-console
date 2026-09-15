@@ -464,8 +464,8 @@ The failing call does not repeat a failed startup attempt; after that failure is
 Small outputs retain their text and text/image ordering.
 Each complete tool result has an 8 KiB rendered UTF-8 text budget, including omission markers, preparation diagnostics, input prompts, errors, and lifecycle notices.
 This initial default approximates two to three printed pages; it is not a layout guarantee and has no per-call or configuration control yet.
-For oversized output, the server reserves space for notices and divides the remaining text allowance approximately evenly between the beginning and the end of the text retained by the existing collector.
-The result is limited to 8 KiB and previews the output retained by the existing collector; text already discarded during collection is unavailable to the renderer.
+For oversized output, the server reserves space for notices and divides the remaining text allowance approximately evenly between the beginning and the latest tail.
+Collection continues throughout an undrained interval, so a diagnostic after a large output flood can appear in its preview.
 An omission notice counts **rendered UTF-8 bytes**, which can differ from emitted raw-byte counts.
 Omitted generated informational notices are counted separately because the raw cell log does not retain them.
 Long control details and input prompts are also bounded; the final state and error status remain separate from ordinary text.
@@ -473,17 +473,17 @@ If repeated input reports exhaust their own bounded storage, the preview summari
 Combined control-and-cell calls share this same result budget and retain their lifecycle separators.
 
 Within each response interval, the server compacts single-line progress redraws in consecutive text from the same worker output stream before applying preview limits.
-A bare carriage return makes following text replace the whole frame, and backspace removes one Unicode scalar.
+A bare carriage return makes following text replace the whole frame, and backspace removes one Unicode scalar from retained line text.
+Backspacing through an entire retained suffix cannot reconstruct an already omitted middle; that gap remains until a carriage return replaces the frame.
 CRLF remains an ordinary newline.
 Other controls and escape sequences are preserved literally.
 Compaction does not cross response boundaries, so a long-running cell may return one current progress frame in each poll.
 Raw standard-stream bytes are decoded incrementally; invalid UTF-8 is replaced for display, while incomplete characters may complete in a later poll.
 
-The existing collector limits each undrained interval to 8 MiB of text, 8 MiB of encoded image data, 64 KiB of image MIME-type data, and 4,096 ordinary output events.
-After the first overflow, it discards later ordinary text and images until that interval is drained; lifecycle and control events remain available.
-Its separate `[collector limit: ...]` notice counts bytes discarded before UTF-8 decoding or progress compaction, including dropped generated informational notices.
-Those counts are not added to rendered preview omissions or the journal's `inline_omitted_bytes`.
-Images retained by the collector are admitted as whole blocks during response composition under separate byte, metadata, and count limits.
+Images have independent limits: 8 MiB of encoded data, 64 KiB of MIME-type data, and 4,096 images per undrained interval and complete result.
+Images are admitted as whole blocks.
+Filling the text preview does not consume the image allowance or suppress a later plot.
+Image-limit omissions are reported separately.
 The language-level 12 KiB SQL-table preview limit still applies before SQL text enters the complete-result budget.
 
 For each recorded evaluation, the server creates `outputs/call-NNNNNN.log` in its private session directory when the worker operation is admitted.
@@ -492,7 +492,7 @@ Direct standard-stream bytes are preserved as written, so a worker that writes i
 Images, progress normalization, and server-owned notices are not written to this file.
 
 Each cell output file retains at most 1 GiB.
-The server continues draining output after the file limit or a write failure; the collector determines which text remains available for preview.
+The server continues collecting previews after the file limit or a write failure; its latest tail does not depend on the file.
 The response reports the raw bytes retained and the raw bytes not retained through that cut.
 A partial file is explicitly identified as a prefix; omitted text outside that prefix is unavailable.
 Some bytes missing from the file may still appear in the preview, so these raw loss counts are not counts of inline omissions.
@@ -502,9 +502,9 @@ Advertised `.agents/console/sessions/...` paths are relative to the **Console se
 For SSH, Docker, and Docker Sandbox, this is the controller's workspace.
 Full retained text requires a filesystem tool with access to that directory; a tool that can read only the worker filesystem or another client host is insufficient.
 Console does not discover file tools or provide a read/search interface in this version.
-Clients without appropriate filesystem access still receive bounded previews.
+Clients without appropriate filesystem access still receive bounded previews and final diagnostics.
 When repeated cancelled deliveries combine output from many cells, fully omitted intervals share one summary so their notices also fit the text budget.
-This summary names `internal/events.jsonl` in the recorded session for individual raw-log paths and per-cell counts; intervals with retained preview text keep their own log notices.
+This summary names `internal/events.jsonl` in the recorded session for individual raw-log paths and per-cell counts; the beginning and latest tail retain their own log notices.
 Re-running a cell is not retrieval of its original output and is never an automatic retrieval action.
 
 Polls return newly observed output only.

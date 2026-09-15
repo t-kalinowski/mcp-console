@@ -35,18 +35,17 @@ result:
       mimeType: image/png
     - type: text
       text:
-        text_bytes: 7995
+        text_bytes: 8065
         concat:
           - repeat: x
-            count: 3659
+            count: 3787
           - |
 
-            [output preview: omitted 8381219 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000002.log (Console server recording workspace; controller for remote targets); 8388633 raw bytes retained, 0 raw bytes not retained]
+            [output preview: omitted 8380988 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000002.log (Console server recording workspace; controller for remote targets); 8388633 raw bytes retained, 0 raw bytes not retained]
           - repeat: x
-            count: 3712
+            count: 3840
           - |-
 
-            [collector limit: omitted 25 text bytes and 0 encoded image bytes across 1 event; retained text: .agents/console/sessions/<run ID>/outputs/call-000002.log (25 of 25 omitted text bytes)]
             [stopped by session restart request before evaluation finished]
             [worker stopped: in-memory state lost]
             [active evaluation stopped by session restart request]

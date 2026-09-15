@@ -366,5 +366,37 @@ def test_cancelled_active_polls_replay_before_later_output(binary: Path) -> Tran
                     worker_release.release()
 
 
+@requires(NATIVE_FIXTURES)
+def test_recovered_image_omissions_keep_bounded_state(binary: Path) -> Transcript:
+    count = 1024
+    with recovery_client(binary) as (client, profile, reached, release):
+        start = len(client.transcript)
+        for _ in range(count):
+            pending = client.start_send(control="restart", r="preview rejected image")
+            cancel_result(client, pending, reached, release)
+        compact_cancelled_exchanges(client, start, count=count)
+        profile.pause_results(False)
+        # Measure recovery after image parsing and admission have completed.
+        profile.start()
+        result = client.send(control="interrupt")
+        client.request("ping")
+        _, largest = profile.stop()
+        assert largest <= 128 * 1024, largest
+        assert not result["isError"], result
+        text = result["content"][0]["text"]
+        assert text.count("[image limit:") == 1
+        assert (
+            f"omitted {count} images ({4 * count} encoded bytes); "
+            f"0 already recorded, {count} not retained"
+        ) in text
+        client.send()
+        assert last_tool_text(client) == "\n[idle]"
+        compact_previews(
+            client,
+            "\n[worker stopped: in-memory state lost]\n[starting new worker]\n[done]",
+        )
+        return client.finish()
+
+
 if __name__ == "__main__":
     run_this_suite(__file__)

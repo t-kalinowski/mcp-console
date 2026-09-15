@@ -70,7 +70,15 @@ impl Preview {
         if text.is_empty() {
             return;
         }
-        self.parts.push(Part::Text(text.to_owned()));
+        if let Some(Part::Text(previous)) = self.parts.last_mut() {
+            previous.push_str(text);
+        } else {
+            self.parts.push(Part::Text(text.to_owned()));
+        }
+    }
+
+    pub(super) fn gap(&mut self, bytes: u64) {
+        self.omitted(Gap { bytes, notices: 0 });
     }
 
     fn omitted(&mut self, gap: Gap) {
