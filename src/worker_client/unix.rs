@@ -146,6 +146,7 @@ impl WorkerRuntime {
             sandbox_settings,
             python,
             managed_r,
+            r_home,
             dynamic_resolution,
             callbacks,
         } = spec;
@@ -183,6 +184,12 @@ impl WorkerRuntime {
             (command, None, None)
         };
         if target.is_none() {
+            if let Some(home) = r_home {
+                command.env(
+                    "MCP_CONSOLE_R_HOME",
+                    serde_json::to_string(home).map_err(|error| error.to_string())?,
+                );
+            }
             if let Some(python) = python {
                 python.configure_worker(&mut command);
             }
@@ -726,12 +733,15 @@ impl Worker {
     pub(super) fn prepare_python(
         &mut self,
         packages: Vec<String>,
+        duckdb_extensions: Vec<String>,
         continue_environment_preparation: bool,
         commit: PythonPreparationCommit,
     ) -> Result<PreparationOutcome, String> {
-        let result = self
-            .operation
-            .begin_python_preparation(commit, continue_environment_preparation)?;
+        let result = self.operation.begin_python_preparation(
+            commit,
+            duckdb_extensions,
+            continue_environment_preparation,
+        )?;
         self.relay
             .commands
             .send(RelayCommand::PreparePython { packages })?;

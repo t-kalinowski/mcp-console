@@ -188,30 +188,25 @@ impl ManagedR {
     }
 }
 
-pub(crate) fn detect_r_bootstrap(
-    python: &mut super::ManagedPythonResolverConfiguration,
-    on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
-) -> Result<Option<ManagedRBootstrap>, String> {
-    discover(python, on_started).map(|(bootstrap, _)| bootstrap)
-}
-
 pub(crate) fn discover(
     python: &mut super::ManagedPythonResolverConfiguration,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
-) -> Result<(Option<ManagedRBootstrap>, PathBuf), String> {
+) -> Result<(Option<ManagedRBootstrap>, Option<PathBuf>), String> {
     let resolver = ResolverProcess::new();
     let mut on_started = Some(on_started);
-    let rscript = discover_rscript(&resolver, &mut on_started)?;
+    let Some(rscript) = discover_rscript(&resolver, &mut on_started)? else {
+        return Ok((None, None));
+    };
     let ir = select_ir_command(python);
     if ir.is_none() && !probe_ambient_uv(&resolver, &mut on_started, &rscript, python)? {
-        return Ok((None, rscript));
+        return Ok((None, Some(rscript)));
     }
     Ok((
         Some(ManagedRBootstrap {
             ir,
             rscript: rscript.clone(),
         }),
-        rscript,
+        Some(rscript),
     ))
 }
 
@@ -242,7 +237,8 @@ fn discover_r_resolver_with(
     on_started: &mut Option<impl FnOnce(ResolverStopHandle) -> Result<(), String>>,
     python: &mut super::ManagedPythonResolverConfiguration,
 ) -> Result<Option<ManagedRResolverConfiguration>, String> {
-    let rscript = discover_rscript(resolver, on_started)?;
+    let rscript = discover_rscript(resolver, on_started)?
+        .ok_or("R is unavailable on the execution host; install R and restart MCP Console")?;
     let ir = match select_ir_command(python) {
         Some(ir) => ir,
         None => {
@@ -280,11 +276,21 @@ fn select_ir_command(python: &mut super::ManagedPythonResolverConfiguration) -> 
 fn discover_rscript(
     resolver: &ResolverProcess,
     on_started: &mut Option<impl FnOnce(ResolverStopHandle) -> Result<(), String>>,
-) -> Result<PathBuf, String> {
+) -> Result<Option<PathBuf>, String> {
     if let Some(r_home) = std::env::var_os("R_HOME") {
-        return Ok(PathBuf::from(r_home).join("bin/Rscript"));
+        let rscript = PathBuf::from(r_home).join("bin/Rscript");
+        if !rscript.is_file() {
+            return Err(format!(
+                "R_HOME must select an existing R installation: {} is missing",
+                rscript.display()
+            ));
+        }
+        return Ok(Some(rscript));
     }
-    let program = Path::new("R");
+    let Some(program) = find_path_entry("R") else {
+        return Ok(None);
+    };
+    let program = program.as_path();
     let mut command = resolver_command(program);
     command
         .arg("RHOME")
@@ -313,7 +319,7 @@ fn discover_rscript(
     if r_home.is_empty() {
         return Err("worker R returned an empty home path".to_string());
     }
-    Ok(PathBuf::from(r_home).join("bin/Rscript"))
+    Ok(Some(PathBuf::from(r_home).join("bin/Rscript")))
 }
 
 fn resolve_uv_with_rscript(
@@ -505,7 +511,7 @@ fn resolve_r_with_process(
     })
 }
 
-fn find_path_entry(program: &str) -> Option<PathBuf> {
+pub(super) fn find_path_entry(program: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     // A broken symlink or non-executable entry is a broken installation, not
     // permission to select a different resolver.

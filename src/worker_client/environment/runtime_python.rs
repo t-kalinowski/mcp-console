@@ -10,6 +10,7 @@ impl Client {
         &self,
         generation: WorkerGeneration,
         request: crate::worker_protocol::PythonResolveRequest,
+        duckdb_extensions: Vec<String>,
     ) -> Result<crate::resolver::ManagedPython, String> {
         self.ensure_generation(&generation)?;
         let environment = self.0.environment.as_ref().ok_or_else(|| {
@@ -77,6 +78,20 @@ impl Client {
         };
         self.clear_resolver_stop_handle(&generation)?;
         self.ensure_generation(&generation)?;
+        let extensions = environment
+            .duckdb_extensions
+            .iter()
+            .cloned()
+            .chain(duckdb_extensions)
+            .collect::<std::collections::BTreeSet<_>>();
+        if environment.r.is_none() && !extensions.is_empty() {
+            self.resolve_python_duckdb_extensions(
+                &generation,
+                &managed,
+                &extensions.into_iter().collect::<Vec<_>>(),
+            )
+            .map_err(super::resolution::EnvironmentResolutionFailure::into_message)?;
+        }
         Ok(managed.with_retained_requirements(retained_requirements))
     }
 
@@ -100,9 +115,7 @@ impl Client {
             .as_ref()
             .ok_or_else(|| "managed Python environment is unavailable".to_string())?
             .managed_parts()?;
-        let managed_r = environment.r.as_ref().ok_or_else(|| {
-            "managed Python version resolution requires a managed R environment".to_string()
-        })?;
+        let managed_r = environment.r.as_ref();
         let result = crate::resolver::execution::resolve_python_version(
             request.constraints,
             resolver,

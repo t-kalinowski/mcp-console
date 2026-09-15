@@ -1,0 +1,20 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  python: |
+    import ctypes
+    import os
+    import sys
+
+    answer = 41
+    original_pid = os.getpid()
+    assert not hasattr(ctypes.CDLL(None), "Rf_initialize_R")
+    assert "duckdb" not in sys.modules
+    answer + 1
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false

@@ -10,11 +10,12 @@ from support.assertions import tool_text as _tool_text
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript
-from support.requirements import POSIX, command, requires
+from support.requirements import POSIX, R_RUNTIME, command, requires
 from support.suites import run_this_suite
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R_RUNTIME)
 def test_routes_python_output(binary: Path, execution: Execution) -> Transcript:
     client = RelayWorkerClient(binary, execution=execution)
     # fmt: r
@@ -78,6 +79,7 @@ def test_routes_python_output(binary: Path, execution: Execution) -> Transcript:
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R_RUNTIME)
 def test_routes_r_console_channels(binary: Path, execution: Execution) -> Transcript:
     client = RelayWorkerClient(binary, execution=execution)
     # fmt: r
@@ -97,14 +99,7 @@ def test_routes_r_console_channels(binary: Path, execution: Execution) -> Transc
 
 def _python_fork_client(binary: Path, execution: Execution) -> RelayWorkerClient:
     client = RelayWorkerClient(binary, execution=execution)
-    # fmt: r
-    r = code(r"""
-        python <- Sys.which("python3")
-        stopifnot(nzchar(python))
-        reticulate::use_python(python, required = TRUE)
-        suppressWarnings(invisible(reticulate::py_run_string("fork_ready = True")))
-        """)
-    assert _tool_text(client.send(r=r)) == "[done]"
+    assert _tool_text(client.send(python="fork_ready = True")) == "[done]"
 
     # fmt: python
     python = code(r"""
@@ -130,9 +125,9 @@ def _python_fork_client(binary: Path, execution: Execution) -> RelayWorkerClient
             if (
                 os.getpid() != worker_pid
                 and event == "c_call"
-                and getattr(function, "__module__", None) == "rpycall"
+                and getattr(function, "__module__", None) in {"rpycall", "_mcp_console_native"}
             ):
-                raise AssertionError("fork child called back into R")
+                raise AssertionError("fork child called back into Console or R")
 
 
         def run_child(action):
@@ -197,7 +192,7 @@ def _finish_python_fork_output(
     assert _tool_text(client.send(python=python)) == (
         "parent stdout\nparent stderr\nparent log\n"
     )
-    assert _tool_text(client.send(r="6 * 7")) == "[1] 42\n"
+    assert _tool_text(client.send(python="6 * 7")) == "42\n"
     transcript = client.finish()
     # These are the actual worker pipes, not sideband console events.
     assert "".join(event.get("stdout", "") for event in transcript) == stdout
@@ -208,7 +203,7 @@ def _finish_python_fork_output(
         for event in worker
     ), worker
     for kind, expected in (
-        ("console_output", "parent stdout\n[1] 42\n"),
+        ("console_output", "parent stdout\n42\n"),
         ("console_diagnostic", "parent stderr\nparent log\n"),
     ):
         actual = "".join(event["data"] for event in worker if event["kind"] == kind)

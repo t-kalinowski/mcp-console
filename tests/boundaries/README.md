@@ -1,5 +1,12 @@
 # Boundary tests
 
+Set `MCP_CONSOLE_TEST_BINARY` to an installed executable to run `scripts/test` without a Cargo build.
+The peer-runtime cases and common Python interaction, plot, and cache cases run against the same implementation with R available or absent.
+No-R acceptance uses an environment without R executables, libR, or R packages; hiding executables on `PATH` alone is insufficient.
+Build `examples/python-only/Dockerfile` for an R-free installed-wheel environment.
+Select a prepared no-R Docker or SBX fixture and set `MCP_CONSOLE_TEST_PYTHON_ONLY_TARGETS=1` for `client_server/server/test_peer_targets`.
+Its OpenSSH cases require a genuinely R-free host and the existing private localhost SSH fixture.
+
 Docker cases use the shared Linux daemon capability in `tests/support/docker.py` and the reproducible `examples/docker/Dockerfile`.
 Build the fixture before running tests and set `MCP_CONSOLE_TEST_DOCKER_IMAGE` to its tag or ID; see `docs/DOCKER.md` for commands.
 Missing Docker access or an unselected fixture skips integration cases; it is not Docker validation.
@@ -228,6 +235,7 @@ Companion snapshots remain owned by the case-name prefix.
 Use `--update` only to accept an intentional transcript change.
 A full `scripts/test --update` also removes snapshots for deleted suites and cases, as well as obsolete companion snapshots for cases that ran; selected updates leave other snapshots alone.
 Skipped cases retain all their primary and companion snapshots during full updates, even when another case in the same suite runs.
+For existing cases, companions qualified with `.linux.` or `.darwin.` are pruned only on that platform.
 
 ## Requirements and execution modes
 

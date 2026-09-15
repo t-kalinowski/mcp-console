@@ -60,26 +60,30 @@ impl Client {
             r_changed,
         } = delta;
         let mut environment = environment.clone();
-        let pending_python = if let RResolver::Pending(setup) = &environment.r_resolver {
+        let pending_python = if let Some(setup) = environment.setup.take() {
             let mut python = setup.python_resolver.clone();
             let mut stop_handle = None;
-            let result = setup.bootstrap.prepare(
-                &mut python,
-                |handle: crate::resolver::ResolverStopHandle| {
-                    stop_handle = Some(handle.clone());
-                    self.register_resolver_stop_handle(generation, handle)
-                },
-            );
-            self.clear_resolver_stop_handle(generation)
-                .map_err(EnvironmentResolutionFailure::Operation)?;
-            let resolver = classify_resolver_result(result, stop_handle.as_ref())?;
+            let resolver = if let Some(bootstrap) = &setup.bootstrap {
+                let result = bootstrap.prepare(
+                    &mut python,
+                    |handle: crate::resolver::ResolverStopHandle| {
+                        stop_handle = Some(handle.clone());
+                        self.register_resolver_stop_handle(generation, handle)
+                    },
+                );
+                self.clear_resolver_stop_handle(generation)
+                    .map_err(EnvironmentResolutionFailure::Operation)?;
+                RResolver::Configured(classify_resolver_result(result, stop_handle.as_ref())?)
+            } else {
+                RResolver::Unavailable
+            };
             let python = if PythonEnvironment::uses_managed(setup.configured_python.as_deref()) {
                 Some(python)
             } else {
                 environment.python = Some(PythonEnvironment::bare(setup.configured_python.clone()));
                 None
             };
-            environment.r_resolver = RResolver::Configured(resolver);
+            environment.r_resolver = resolver;
             python
         } else {
             None
@@ -91,7 +95,8 @@ impl Client {
                 r_requirements,
             )?);
         }
-        if !duckdb_extensions.is_empty() && (duckdb_changed || r_changed) {
+        if environment.r.is_some() && !duckdb_extensions.is_empty() && (duckdb_changed || r_changed)
+        {
             let target = environment.r.as_ref().ok_or_else(|| {
                 EnvironmentResolutionFailure::Operation(
                     "DuckDB extension preparation requires a managed R environment".to_string(),
@@ -149,6 +154,22 @@ impl Client {
         }
         self.ensure_startup(generation)
             .map_err(EnvironmentResolutionFailure::Operation)?;
+        if environment.r.is_none() && !duckdb_extensions.is_empty() {
+            let python = environment
+                .python
+                .as_ref()
+                .and_then(PythonEnvironment::managed)
+                .ok_or_else(|| {
+                    EnvironmentResolutionFailure::Host(
+                        "SQL without R requires a managed Python DuckDB environment".into(),
+                    )
+                })?;
+            self.resolve_python_duckdb_extensions(
+                generation,
+                python,
+                &duckdb_extensions.iter().cloned().collect::<Vec<_>>(),
+            )?;
+        }
         environment.duckdb_extensions = duckdb_extensions;
         Ok(environment)
     }
@@ -173,6 +194,9 @@ impl Client {
             super::super::RResolver::Configured(configuration) => {
                 configuration.resolve_r(requirements, on_started)
             }
+            super::super::RResolver::Unavailable => return Err(EnvironmentResolutionFailure::Host(
+                "R is unavailable on the execution host; install R and restart MCP Console to use requirements.r".into()
+            )),
             super::super::RResolver::Disabled => {
                 let message = if let Some(session) = &self.0.target
                     && !session.is_ssh()
@@ -185,9 +209,6 @@ impl Client {
                     "dynamic environment resolution is unavailable; install `ir` or `uv` and restart MCP Console".into()
                 };
                 return Err(EnvironmentResolutionFailure::Host(message));
-            }
-            super::super::RResolver::Pending(_) => {
-                unreachable!("built-in bootstrap must be prepared before R resolution")
             }
         };
         self.clear_resolver_stop_handle(generation)
@@ -251,5 +272,30 @@ impl Client {
             classify_resolver_result(result, stop_handle.as_ref())?;
         }
         Ok(())
+    }
+    pub(super) fn resolve_python_duckdb_extensions(
+        &self,
+        generation: &WorkerGeneration,
+        python: &crate::resolver::ManagedPython,
+        extensions: &[String],
+    ) -> Result<(), EnvironmentResolutionFailure> {
+        self.ensure_startup(generation)
+            .map_err(EnvironmentResolutionFailure::Operation)?;
+        let mut stop_handle = None;
+        let result = crate::resolver::execution::resolve_python_duckdb_extensions(
+            self.0
+                .target
+                .as_ref()
+                .and_then(crate::target_session::Session::ssh_preparation),
+            python,
+            extensions,
+            |handle| {
+                stop_handle = Some(handle.clone());
+                self.register_resolver_stop_handle(generation, handle)
+            },
+        );
+        self.clear_resolver_stop_handle(generation)
+            .map_err(EnvironmentResolutionFailure::Operation)?;
+        classify_resolver_result(result, stop_handle.as_ref())
     }
 }

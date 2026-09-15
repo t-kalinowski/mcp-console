@@ -19,6 +19,13 @@ stderr: |
   remote launcher exited with exit status: 1
   remote launcher exited with exit status: 1
 ---
+rejected_before_readiness: r_home
+container_absent: true
+stderr: |
+  R_HOME must select an existing R installation: /missing-r/bin/Rscript is missing
+  remote launcher exited with exit status: 1
+  remote launcher exited with exit status: 1
+---
 rejected_before_readiness: python_executable
 container_absent: true
 stderr: |

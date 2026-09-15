@@ -120,8 +120,9 @@ result:
     - type: text
       text: |
         Traceback (most recent call last):
-          File "<string>", line 254, in dispatch
+          File "<string>", line 296, in dispatch
           File "<mcp-console:python:e1>", line 49, in pause_provider_probe
+          File "<string>", line 92, in _interrupt
         KeyboardInterrupt
   isError: false
 ---

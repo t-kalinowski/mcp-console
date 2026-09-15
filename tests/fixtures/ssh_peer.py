@@ -26,7 +26,7 @@ if "Open" in bootstrap:
         sys.stdout.buffer.write(struct.pack(">I", len(body)) + body)
         sys.stdout.buffer.flush()
 
-    preparation_frame({"Hello": {"version": 3, "build": bootstrap["Open"]["build"]}})
+    preparation_frame({"Hello": {"version": 4, "build": bootstrap["Open"]["build"]}})
     preparation_frame(
         {
             "Completed": {
@@ -34,7 +34,8 @@ if "Open" in bootstrap:
                 "result": {
                     "Ok": {
                         "managed": False,
-                        "selections": {"r_home": None, "python": None},
+                        "managed_r": False,
+                        "selections": {"r_home": "/remote/R", "python": None},
                     }
                 },
                 "control": None,

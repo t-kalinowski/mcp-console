@@ -28,6 +28,25 @@ class Requirement:
 WORKER = Requirement(
     "worker", sys.platform in {"darwin", "linux"}, "workers require macOS or Linux"
 )
+NO_R = Requirement(
+    "host without R",
+    shutil.which("R") is None
+    and shutil.which("Rscript") is None
+    and not os.environ.get("R_HOME")
+    and not any(
+        Path(path).exists()
+        for path in (
+            "/usr/lib/R",
+            "/usr/local/lib/R",
+            "/opt/R",
+            "/Library/Frameworks/R.framework",
+        )
+    ),
+    "requires an execution environment without R executables, libraries, or packages",
+)
+R_RUNTIME = Requirement(
+    "R runtime", not NO_R.available, "requires an available R installation"
+)
 SANDBOX = Requirement(
     "sandbox",
     sys.platform in {"darwin", "linux"},
@@ -88,6 +107,14 @@ NO_SANDBOX = Requirement(
 )
 
 SYSTEM_PYTHON = Path("/usr/bin/python3")
+FRAMEWORK_PYTHON = Path(
+    "/Library/Frameworks/Python.framework/Versions/Current/bin/python3"
+)
+PYTHON_FRAMEWORK = Requirement(
+    "framework Python",
+    FRAMEWORK_PYTHON.is_file(),
+    "requires a macOS framework Python installation",
+)
 OLD_PYTHON = Requirement(
     "Python before 3.10",
     sys.platform == "darwin" and SYSTEM_PYTHON.is_file(),

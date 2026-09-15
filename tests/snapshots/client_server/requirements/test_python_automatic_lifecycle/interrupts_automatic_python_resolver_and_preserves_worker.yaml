@@ -41,15 +41,6 @@ result:
             return _bootstrap._gcd_import(name[level:], package, level)
                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
           File "<frozen importlib._bootstrap>", line 1387, in _gcd_import
-          File "<reticulate>/python/rpytools/loader.py", line 122, in _find_and_load_hook
-            return _run_hook(name, _hook)
-                   ^^^^^^^^^^^^^^^^^^^^^^
-          File "<reticulate>/python/rpytools/loader.py", line 96, in _run_hook
-            module = hook()
-                     ^^^^^^
-          File "<reticulate>/python/rpytools/loader.py", line 120, in _hook
-            return _find_and_load(name, import_)
-                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
           File "<frozen importlib._bootstrap>", line 1360, in _find_and_load
           File "<frozen importlib._bootstrap>", line 1322, in _find_and_load_unlocked
           File "<frozen importlib._bootstrap>", line 1262, in _find_spec
@@ -63,14 +54,14 @@ result:
         managed Python resolution failed:
         resolver input:
         {
-          "python": "3.12.x",
+          "python": "==3.12.x",
           "packages": [
             "numpy",
             "pandas",
             "mcp_console_blocked_automatic_import"
           ],
           "python_version": [
-            "3.12.x"
+            "==3.12.x"
           ]
         }
         uv output:

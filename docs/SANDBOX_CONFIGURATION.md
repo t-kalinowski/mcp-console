@@ -194,7 +194,8 @@ See [Docker execution](DOCKER.md) for the complete schema, image example, enviro
 `target.compute.kind: docker_sandbox` selects Docker Sandboxes through standalone `sbx` with local transport.
 It defaults to `sandbox.provider: compute` and requires a prepared digest-qualified template, existing absolute VM workspace, and explicitly declared shared paths.
 Shares use the same absolute path on host and guest; omitted mounts expose no project implicitly.
-The VM supplies preinstalled R, Python, and SQL packages, with no dynamic resolution or native companion calls.
+The VM supplies packages for its selected runtimes, with no dynamic resolution or native companion calls.
+R is optional; managed SQL without R uses Python DuckDB.
 Each generation gets a new owned microVM; only confirmed removal permits replacement.
 See [Docker Sandbox execution](DOCKER_SANDBOX.md) for setup, exact accepted fields, inherited policy and integrations, sharing limits, and recording visibility.
 Standalone `sandbox -- COMMAND` rejects this resolved provider instead of silently selecting local native enforcement.

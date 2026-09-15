@@ -1,0 +1,49 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.direct.yaml
+---
+send:
+  python: |
+    import json
+    from pathlib import Path
+
+    connection = sql_connection()
+    storage = Path(
+        connection.execute("SELECT current_setting('temp_directory')").fetchone()[0]
+    ).parent
+    (storage / "cleanup-marker").write_text("owned storage")
+    print(json.dumps(str(storage)))
+result:
+  content:
+    - type: text
+      text: |
+        "<SQL storage>"
+  isError: false
+---
+send:
+  control: restart
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: false
+---
+send:
+  python: |
+    import json
+    from pathlib import Path
+
+    connection = sql_connection()
+    storage = Path(
+        connection.execute("SELECT current_setting('temp_directory')").fetchone()[0]
+    ).parent
+    (storage / "cleanup-marker").write_text("owned storage")
+    print(json.dumps(str(storage)))
+result:
+  content:
+    - type: text
+      text: |
+        "<SQL storage>"
+  isError: false

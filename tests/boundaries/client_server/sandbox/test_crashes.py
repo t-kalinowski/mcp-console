@@ -116,13 +116,19 @@ def _wait_for_process_reaping(
 ) -> None:
     watched = {identity[0] for identity in identities}
     pending = watched.copy()
+    observed = []
     deadline = time.monotonic() + timeout
     while pending:
         remaining = deadline - time.monotonic()
         assert remaining > 0, f"processes were not reaped: {sorted(pending)}"
         events = process_events.control(None, len(watched), remaining)
-        assert events, f"processes were not reaped: {sorted(pending)}"
+        assert events, (
+            f"processes were not reaped: {sorted(pending)}; "
+            f"identities: {identities}; live: {live_darwin_processes(identities)}; "
+            f"events: {observed}"
+        )
         for event in events:
+            observed.append((event.ident, event.fflags))
             assert event.ident in watched, event
             assert event.filter == select.KQ_FILTER_PROC, event
             if event.fflags & _KQ_NOTE_REAP:

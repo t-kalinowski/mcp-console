@@ -22,8 +22,8 @@ pub(crate) fn configure_runtime(
                 command.env(name, value);
             }
             _ => {
-                // Without an explicit R_HOME, the runtime probe and worker
-                // discover R after the workload environment is applied.
+                // Without an explicit R_HOME, the runtime probe discovers R
+                // after the workload environment is applied.
                 command.env_remove(name);
             }
         }
@@ -33,21 +33,23 @@ pub(crate) fn configure_runtime(
         .env("MCP_CONSOLE_EXECUTION_COMPUTE", compute)
         .env("RETICULATE_USE_MANAGED_VENV", "no")
         .env_remove("MCP_CONSOLE_MANAGED_PYTHON")
+        .env_remove("MCP_CONSOLE_PYTHON_EXECUTABLE")
         .env_remove("MCP_CONSOLE_PREINSTALLED");
     Ok(())
 }
 
 pub(crate) fn runtime_probe() -> Result<(), String> {
-    let home =
-        harp::command::r_home_setup().map_err(|e| format!("container R discovery failed: {e}"))?;
-    let library = home.join("lib/libR.so");
-    if !library.is_file() {
-        return Err("container R requires a shared libR.so; install R with shared-library support in the image".into());
+    if let Some(home) = std::env::var_os("R_HOME") {
+        let rscript = PathBuf::from(home).join("bin/Rscript");
+        if !rscript.is_file() {
+            return Err(format!(
+                "R_HOME must select an existing R installation: {} is missing",
+                rscript.display()
+            ));
+        }
     }
-    // Loadability is checked in this disposable target probe, without starting
-    // R or the analysis worker. The image supplies this trusted native code.
-    unsafe { libloading::Library::new(library) }
-        .map_err(|error| format!("container R library cannot be loaded: {error}"))?;
+    // Prepared no-R targets use Python for both Python and managed SQL.
+    // The probe captures R selection; the worker loads libR only on activation.
     let selected = std::env::var_os("RETICULATE_PYTHON");
     if selected
         .as_ref()
@@ -56,14 +58,8 @@ pub(crate) fn runtime_probe() -> Result<(), String> {
         return Err("container RETICULATE_PYTHON must select an existing interpreter".into());
     }
     let python = selected.unwrap_or_else(|| "python3".into());
-    let output = Command::new(python)
-        .args([
-            "-c",
-            r#"import sys
-if sys.version_info < (3, 10):
-    sys.exit("MCP Console requires Python 3.10 or later")
-"#,
-        ])
+    let output = Command::new(&python)
+        .args(["-c", include_str!("../python/discovery.py")])
         .output()
         .map_err(|error| format!("container Python probe failed: {error}"))?;
     if !output.status.success() {
@@ -73,5 +69,21 @@ if sys.version_info < (3, 10):
             String::from_utf8_lossy(&output.stderr)
         ));
     }
+    let r_home = if std::env::var_os("R_HOME").is_some()
+        || std::env::var_os("PATH").is_some_and(|path| {
+            std::env::split_paths(&path).any(|directory| directory.join("R").is_file())
+        }) {
+        Some(harp::command::r_home_setup().map_err(|error| error.to_string())?)
+    } else {
+        None
+    };
+    println!(
+        "{}",
+        serde_json::to_string(&crate::ssh::preparation::Selections {
+            r_home: r_home.map(|home| home.to_string_lossy().into_owned()),
+            python: Some(python.to_string_lossy().into_owned()),
+        })
+        .map_err(|error| error.to_string())?
+    );
     Ok(())
 }

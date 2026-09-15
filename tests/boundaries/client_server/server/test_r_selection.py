@@ -1,0 +1,168 @@
+#!/usr/bin/env -S uv run --script
+
+import json
+import os
+import shlex
+import sys
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
+from support import ssh
+from support.assertions import last_result_text
+from support.client import McpClient
+from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.normalization import code
+from support.r import r_test_environment
+from support.requirements import NO_R, R_RUNTIME, requires
+from support.resolvers import bare_runtime_environment
+from support.suites import run_this_suite
+
+
+def rejected_selection(binary: Path, root: Path, environment: dict[str, str]) -> list:
+    with McpClient(binary, ("serve", "--no-sandbox"), environment, root) as client:
+        client.start_request(
+            "initialize",
+            protocolVersion="2025-11-25",
+            capabilities={},
+            clientInfo={"name": "r-selection", "version": "1"},
+        )
+        assert client.stdout.readline(timeout=20) == "", (
+            "invalid R_HOME reached readiness"
+        )
+        error = client.stderr.read(timeout=20)
+        assert "R_HOME" in error and "bin/Rscript" in error, error
+        assert client.process.wait(timeout=5) != 0
+        return [{"stderr": error.replace(str(root), "<workspace>")}]
+
+
+def test_rejects_invalid_local_r_home(binary: Path) -> list:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        environment = {**os.environ, "R_HOME": str(root / "missing-r")}
+        return rejected_selection(binary, root, environment)
+
+
+@requires(ssh.SSH)
+def test_rejects_invalid_remote_r_home(binary: Path) -> list:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        ssh.configure(
+            root,
+            root,
+            [str(binary)],
+            sandbox={"environment": {"R_HOME": str(root / "missing-r")}},
+        )
+        with ssh.localhost(root / "sshd") as environment:
+            return rejected_selection(binary, root, environment)
+
+
+@requires(R_RUNTIME)
+@executions(DIRECT, SANDBOXED)
+def test_retains_discovered_r_home_across_generations(
+    binary: Path, execution: Execution
+) -> list:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        environment, _ = r_test_environment()
+        selected = environment.pop("R_HOME")
+        environment = bare_runtime_environment(environment, root / "r-library")
+        commands = root / "bin"
+        commands.mkdir()
+        r = commands / "R"
+        r.write_text(
+            code(f"""
+                #!/bin/sh
+                printf '%s\\n' {shlex.quote(selected)}
+                """)
+        )
+        r.chmod(0o755)
+        environment["PATH"] = str(commands)
+        environment["RETICULATE_PYTHON"] = sys.executable
+        with McpClient(binary, execution.serve(), environment, root) as client:
+            client.initialize_and_list_tools()
+            r.write_text(
+                code("""
+                    #!/bin/sh
+                    exit 91
+                    """)
+            )
+            for restart in (False, True):
+                if restart:
+                    client.send(control="restart")
+                client.send(r="answer <- 41L; answer + 1L")
+                assert last_result_text(client) == "[1] 42\n", last_result_text(client)
+            return client.finish()
+
+
+@requires(NO_R)
+@executions(DIRECT, SANDBOXED)
+def test_retains_r_absence_across_generations(
+    binary: Path, execution: Execution
+) -> list:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        commands = root / "bin"
+        commands.mkdir()
+        marker = root / "discovered-r"
+        environment = bare_runtime_environment(os.environ.copy(), root / "r-library")
+        environment.pop("R_HOME", None)
+        environment.update(PATH=str(commands), RETICULATE_PYTHON=sys.executable)
+        with McpClient(binary, execution.serve(), environment, root) as client:
+            client.initialize_and_list_tools()
+            r = commands / "R"
+            r.write_text(
+                code(f"""
+                    #!/bin/sh
+                    printf called > {shlex.quote(str(marker))}
+                    exit 91
+                    """)
+            )
+            r.chmod(0o755)
+            for restart in (False, True):
+                if restart:
+                    client.send(control="restart")
+                client.send(python="answer = 41; answer + 1")
+                assert last_result_text(client) == "42\n", last_result_text(client)
+                client.send(r="1 + 1")
+                assert "R is unavailable" in last_result_text(client)
+                assert not marker.exists(), "worker rediscovered R after server startup"
+            return client.finish()
+
+
+@requires(NO_R)
+def test_removes_managed_sql_storage_on_restart_and_shutdown(binary: Path) -> list:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        with McpClient(binary, DIRECT.serve(), current_directory=root) as client:
+            client.initialize_and_list_tools()
+            for restart in (False, True):
+                if restart:
+                    client.send(control="restart")
+                    assert not storage.exists(), "SQL storage survived restart"
+                # fmt: python
+                python = code("""
+                    import json
+                    from pathlib import Path
+
+                    connection = sql_connection()
+                    storage = Path(
+                        connection.execute("SELECT current_setting('temp_directory')").fetchone()[0]
+                    ).parent
+                    (storage / "cleanup-marker").write_text("owned storage")
+                    print(json.dumps(str(storage)))
+                    """)
+                client.send(python=python)
+                storage = Path(json.loads(last_result_text(client)))
+                assert storage.is_dir()
+                client.transcript[-1]["result"]["content"][0]["text"] = (
+                    '"<SQL storage>"\n'
+                )
+            transcript = client.finish()
+        assert not storage.exists(), "SQL storage survived shutdown"
+        return transcript
+
+
+if __name__ == "__main__":
+    run_this_suite(__file__)

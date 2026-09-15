@@ -41,13 +41,8 @@ def test_preserves_matplotlib_cache_across_activation_and_restart(
             current_directory=workspace,
         )
         client.initialize_and_list_tools()
-        # fmt: r
-        r = code(r"""
-            reticulate::py_require("matplotlib")
-            invisible(reticulate::py_config())
-            """)
-        client.send(r=r)
-        assert last_result_text(client) == "[done]"
+        client.send(requirements={"python": ["matplotlib"]})
+        assert last_result_text(client) == "[prepared]"
         persistent_caches = list(host_matplotlib.glob("fontlist-v*.json"))
         assert len(persistent_caches) == 1, persistent_caches
         persistent_cache_bytes = persistent_caches[0].read_bytes()
@@ -83,12 +78,8 @@ def test_preserves_matplotlib_cache_across_activation_and_restart(
         client.send(python=python)
         assert last_result_text(client) == "[done]"
 
-        # fmt: r
-        r = code(r"""
-            reticulate::py_require("py-yaml12")
-            """)
-        client.send(r=r)
-        assert last_result_text(client) == "[done]"
+        client.send(requirements={"python": ["py-yaml12"]})
+        assert last_result_text(client) == "[prepared]"
         client.send(python="(cache_link_replaced, __import__('yaml12').__name__)")
         assert last_result_text(client) == "(True, 'yaml12')\n"
 

@@ -190,7 +190,11 @@ impl Client {
             } else {
                 None
             };
-            if !duckdb_extensions.is_empty() && (duckdb_changed || managed_r.is_some()) {
+            let python_provider_changes = environment.r.is_none() && python_candidate.is_some();
+            if !python_provider_changes
+                && !duckdb_extensions.is_empty()
+                && (duckdb_changed || managed_r.is_some())
+            {
                 let mut targets = Vec::new();
                 if duckdb_changed {
                     targets.extend(environment.duckdb_r_targets.iter().cloned());
@@ -199,9 +203,25 @@ impl Client {
                     push_duckdb_r_target(&mut targets, managed_r.clone());
                 }
                 let duckdb_extensions = duckdb_extensions.iter().cloned().collect::<Vec<_>>();
-                if let Err(failure) =
+                let resolved = if targets.is_empty() && !environment.custom_worker {
+                    match environment
+                        .python
+                        .as_ref()
+                        .and_then(super::state::PythonEnvironment::managed)
+                    {
+                        Some(python) => self.resolve_python_duckdb_extensions(
+                            generation,
+                            python,
+                            &duckdb_extensions,
+                        ),
+                        None => Err(super::resolution::EnvironmentResolutionFailure::Host(
+                            "SQL without R requires a managed Python DuckDB environment".into(),
+                        )),
+                    }
+                } else {
                     self.resolve_duckdb_extensions(generation, &targets, &duckdb_extensions)
-                {
+                };
+                if let Err(failure) = resolved {
                     return self.finish_environment_resolution_failure(generation, intent, failure);
                 }
             }
@@ -352,7 +372,15 @@ impl Client {
                 }
                 Ok(PreparationOutcome::Completed(Ok(())))
             });
-            let result = running.prepare_python(python_packages, includes_r, commit);
+            let result = running.prepare_python(
+                python_packages,
+                duckdb_extensions
+                    .as_ref()
+                    .map(|extensions| extensions.iter().cloned().collect())
+                    .unwrap_or_default(),
+                includes_r,
+                commit,
+            );
             match result {
                 Ok(PreparationOutcome::Completed(Ok(()))) => {}
                 Ok(PreparationOutcome::Completed(Err(error))) => {

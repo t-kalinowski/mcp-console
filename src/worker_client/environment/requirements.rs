@@ -90,10 +90,7 @@ impl RequirementDelta {
             r,
         } = requirements;
         ensure_python_additions_available(environment, &python)?;
-        let pending = match &environment.r_resolver {
-            super::super::RResolver::Pending(setup) => Some(setup),
-            _ => None,
-        };
+        let pending = environment.setup.as_ref();
         if pending.is_some() {
             duckdb.extend(
                 super::super::DEFAULT_DUCKDB_EXTENSIONS
@@ -123,7 +120,14 @@ impl RequirementDelta {
                 PythonEnvironment::uses_managed(setup.configured_python.as_deref())
             })
         {
-            python_candidate = Some(crate::worker_protocol::default_python_requirement_manifest());
+            let manifest = crate::worker_protocol::default_python_requirement_manifest();
+            python_candidate = Some(manifest);
+        }
+        if pending.is_some_and(|setup| setup.bootstrap.is_none())
+            && let Some(manifest) = &mut python_candidate
+        {
+            manifest.packages.push("duckdb".into());
+            *manifest = manifest.clone().normalized();
         }
 
         let (r_requirements, r_changed) = merge_r_requirements(environment, r);
@@ -148,7 +152,11 @@ pub(super) fn merge_r_requirements(
     additions: Vec<String>,
 ) -> (Vec<String>, bool) {
     let mut additions = additions.into_iter().collect::<BTreeSet<_>>();
-    if matches!(environment.r_resolver, super::super::RResolver::Pending(_)) {
+    if environment
+        .setup
+        .as_ref()
+        .is_some_and(|setup| setup.bootstrap.is_some())
+    {
         additions.extend(
             super::super::DEFAULT_R_REQUIREMENTS
                 .iter()
