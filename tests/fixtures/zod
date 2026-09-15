@@ -737,6 +737,13 @@ def main() -> None:
             send(writer, {"kind": "completed"})
             continue
 
+        if source in {"preview allocation image", "preview allocation image and text"}:
+            send(writer, {"kind": "image", "data": "A" * (8 * 1024 * 1024), "mime_type": "image/png"})
+            if source.endswith("and text"):
+                send_output(writer, "preview head\n" + "x" * 32768 + "\npreview tail\n")
+            send(writer, {"kind": "completed"})
+            continue
+
         if source == "preview rejected image":
             send(writer, {"kind": "image", "data": "AAAA", "mime_type": "m" * 65537})
             send(writer, {"kind": "completed"})
@@ -764,12 +771,12 @@ def main() -> None:
             send(writer, {"kind": "completed"})
             continue
 
-        if source in {"preview huge line", "preview tiny events", "preview redraw"}:
+        if source in {"preview huge line", "preview tiny events", "preview many tiny events", "preview redraw"}:
             send_output(writer, "preview head\n")
             if source == "preview huge line":
                 send_output(writer, "x" * (2 * PENDING_TEXT_BUDGET))
-            elif source == "preview tiny events":
-                for index in range(12000):
+            elif source in {"preview tiny events", "preview many tiny events"}:
+                for index in range(100000 if source == "preview many tiny events" else 12000):
                     send_output(
                         writer,
                         "ab",
