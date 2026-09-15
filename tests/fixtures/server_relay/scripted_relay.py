@@ -1231,12 +1231,23 @@ def run_preview_raw(relay: ScriptedRelay) -> None:
     relay.retire()
 
 
+def run_partial_utf8_completion(relay: ScriptedRelay) -> None:
+    relay.ready()
+    for kind in ("stdout_bytes", "stderr_bytes"):
+        for chunk in (b"\xe2", b"\x82\xac"):
+            relay.expect(EVALUATION)
+            relay.send({"kind": kind, "data": base64.b64encode(chunk).decode("ascii")})
+            relay.complete()
+    relay.retire()
+
+
 def main() -> None:
     scenarios = {
         "ready": run_ready,
         "startup_output": run_startup_output,
         "preview_raw": run_preview_raw,
         "preview_raw_prelude": run_preview_raw_prelude,
+        "partial_utf8_completion": run_partial_utf8_completion,
         "evaluate": run_evaluate,
         "raw_output": run_raw_output,
         "split_terminal_redraws": run_split_terminal_redraws,

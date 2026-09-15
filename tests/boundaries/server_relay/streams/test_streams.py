@@ -47,6 +47,18 @@ def test_forwards_raw_stdout_and_stderr(
 
 
 @executions(DIRECT, SANDBOXED)
+def test_finishes_partial_utf8_with_its_cell(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = ServerRelayClient(binary, "partial_utf8_completion", execution=execution)
+    for expected in ("�", "��", "�", "��"):
+        output = _tool_text(client.send(r="42"))
+        assert output == expected, repr(output)
+        assert _tool_text(client.send()) == "\n[idle]"
+    return client.finish_active()
+
+
+@executions(DIRECT, SANDBOXED)
 def test_compacts_split_terminal_redraws(
     binary: Path, execution: Execution
 ) -> Transcript:
