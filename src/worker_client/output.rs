@@ -1,7 +1,9 @@
 use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex};
 
+mod preview;
 mod terminal;
+use preview::{Part, Preview, Source};
 
 /// Maximum UTF-8 text and raw direct-output bytes retained between drains.
 const MAX_PENDING_TEXT_BYTES: usize = 8 * 1024 * 1024;
@@ -29,6 +31,7 @@ struct OutputTapeState {
     direct_stdout: DirectDecoder,
     direct_stderr: DirectDecoder,
     cell_output: Option<crate::transcript::CellOutput>,
+    raw_bytes: u64,
     next_event: u64,
     events: Vec<(u64, OutputEvent)>,
     /// A failed pre-evaluation response reclaimed after unsuccessful MCP delivery.
@@ -114,6 +117,8 @@ enum OutputEvent {
     ServerFailure(SendFailure),
     /// One bounded summary for ordinary payload discarded in this cut segment.
     Truncated(Truncation),
+    /// Raw-file ownership captured before completion releases the writer.
+    Source { source: Source, close_streams: bool },
 }
 
 #[derive(Default)]
@@ -139,7 +144,7 @@ enum DirectOutputStream {
 
 #[derive(Default)]
 pub(crate) struct Response {
-    content: Vec<Content>,
+    preview: Box<Preview>,
     is_error: bool,
     delivery: Option<ResponseDeliveryTarget>,
 }
@@ -173,7 +178,7 @@ pub(crate) enum Content {
     },
 }
 
-/// The only implementation of public content coalescing and newline projection.
+/// Constructs response regions and control state before bounded MCP projection.
 #[derive(Default)]
 pub(super) struct ResponseBuilder {
     response: Response,
@@ -240,12 +245,21 @@ impl SendFailure {
 }
 
 impl Response {
+    pub(crate) fn tool_error(message: String) -> Self {
+        let mut response = Self::default();
+        response.push_tool_error(message);
+        response
+    }
+
     pub(crate) fn persist_images(
         &mut self,
         transcript: &crate::transcript::Transcript,
         call_id: Option<u64>,
     ) -> Result<(), String> {
-        for content in &mut self.content {
+        for part in &mut self.preview.parts {
+            let Part::Image(content) = part else {
+                continue;
+            };
             let Content::Image {
                 data,
                 mime_type,
@@ -263,16 +277,16 @@ impl Response {
 
     /// Consumes the response for the MCP adapter.
     pub(crate) fn into_parts(mut self) -> (Vec<Content>, bool, Option<ResponseDelivery>) {
+        let content = self.preview.render();
         let is_error = self.is_error;
         let delivery = self.delivery.take().map(|target| ResponseDelivery {
             target: Some(target),
             unclaimed: Some(Response {
-                content: self.content.clone(),
+                preview: self.preview.clone(),
                 is_error,
                 delivery: None,
             }),
         });
-        let content = std::mem::take(&mut self.content);
         (content, is_error, delivery)
     }
 
@@ -310,7 +324,7 @@ impl Response {
     }
 
     fn is_empty(&self) -> bool {
-        self.content.is_empty()
+        self.preview.is_empty()
     }
 
     fn is_error(&self) -> bool {
@@ -346,6 +360,39 @@ impl Response {
 }
 
 impl ResponseBuilder {
+    fn truncation(&mut self, truncated: Truncation) {
+        let event = if truncated.events == 1 {
+            "event"
+        } else {
+            "events"
+        };
+        let mut message = if truncated.image_metadata_bytes == 0 {
+            format!(
+                "collector limit: omitted {} text bytes and {} encoded image bytes across {} {event}",
+                truncated.text_bytes, truncated.image_bytes, truncated.events
+            )
+        } else {
+            format!(
+                "collector limit: omitted {} text bytes, {} encoded image bytes, and {} image metadata bytes across {} {event}",
+                truncated.text_bytes,
+                truncated.image_bytes,
+                truncated.image_metadata_bytes,
+                truncated.events
+            )
+        };
+        if let Some(path) = truncated.output_path {
+            message.push_str(&format!(
+                "; retained text: {path} ({} of {} omitted text bytes)",
+                truncated.retained_text_bytes, truncated.text_bytes
+            ));
+        }
+        self.notice(message);
+    }
+
+    fn text(&mut self, text: impl AsRef<str>) {
+        self.response.preview.text(text.as_ref());
+    }
+
     pub(super) fn new() -> Self {
         Self::default()
     }
@@ -358,25 +405,13 @@ impl ResponseBuilder {
         self.response
     }
 
-    pub(super) fn text(&mut self, text: impl Into<String>) {
-        let text = text.into();
-        if text.is_empty() {
-            return;
-        }
-        if let Some(Content::Text(output)) = self.response.content.last_mut() {
-            output.push_str(&text);
-        } else {
-            self.response.content.push(Content::Text(text));
-        }
-    }
-
     pub(super) fn image(
         &mut self,
         data: String,
         mime_type: String,
         artifact: Option<crate::transcript::Artifact>,
     ) {
-        self.response.content.push(Content::Image {
+        self.response.preview.image(Content::Image {
             data,
             mime_type,
             artifact,
@@ -391,24 +426,20 @@ impl ResponseBuilder {
             );
             self.response.delivery = other.delivery.take();
         }
-        for content in std::mem::take(&mut other.content) {
-            match content {
-                Content::Text(text) => self.text(text),
-                Content::Image {
-                    data,
-                    mime_type,
-                    artifact,
-                } => self.image(data, mime_type, artifact),
-            }
-        }
+        self.response
+            .preview
+            .extend(*std::mem::take(&mut other.preview));
         self.response.is_error |= other.is_error;
     }
 
     pub(super) fn append_logical_region(&mut self, mut other: Response) {
-        if matches!(self.response.content.last(), Some(Content::Text(text)) if !text.ends_with('\n'))
-            && matches!(other.content.first(), Some(Content::Text(_)))
+        if matches!(
+            self.response.preview.last_visible(),
+            Some(Part::Text(_) | Part::Notice(_))
+        ) && !self.response.preview.ends_with_newline()
+            && other.preview.starts_with_text()
         {
-            self.text("\n");
+            self.response.preview.notice("\n".to_owned());
         }
         self.append_response(&mut other);
     }
@@ -421,12 +452,20 @@ impl ResponseBuilder {
     }
 
     pub(super) fn notice(&mut self, message: impl Into<String>) {
-        self.line(render_notice(message));
+        self.control_text(render_notice(message));
     }
 
     pub(super) fn notice_line(&mut self, message: impl Into<String>) {
-        self.notice(message);
-        self.text("\n");
+        self.control_text(format!("{}\n", render_notice(message)));
+    }
+
+    fn control_text(&mut self, text: String) {
+        let prefix = if !self.response.is_empty() && self.needs_line_break() {
+            "\n"
+        } else {
+            ""
+        };
+        self.response.preview.notice(format!("{prefix}{text}"));
     }
 
     pub(super) fn server_failure(&mut self, message: impl Into<String>) {
@@ -445,37 +484,8 @@ impl ResponseBuilder {
     }
 
     pub(super) fn tool_error(&mut self, message: impl Into<String>) {
-        self.line(message);
+        self.control_text(message.into());
         self.mark_error();
-    }
-
-    fn truncation(&mut self, truncated: Truncation) {
-        let event = if truncated.events == 1 {
-            "event"
-        } else {
-            "events"
-        };
-        let mut message = if truncated.image_metadata_bytes == 0 {
-            format!(
-                "output truncated: omitted {} text bytes and {} encoded image bytes across {} {event}",
-                truncated.text_bytes, truncated.image_bytes, truncated.events
-            )
-        } else {
-            format!(
-                "output truncated: omitted {} text bytes, {} encoded image bytes, and {} image metadata bytes across {} {event}",
-                truncated.text_bytes,
-                truncated.image_bytes,
-                truncated.image_metadata_bytes,
-                truncated.events
-            )
-        };
-        if let Some(path) = truncated.output_path {
-            message.push_str(&format!(
-                "; retained text: {path} ({} of {} omitted text bytes)",
-                truncated.retained_text_bytes, truncated.text_bytes
-            ));
-        }
-        self.notice(message);
     }
 
     pub(super) fn terminal(&mut self, state: TerminalState) {
@@ -487,10 +497,10 @@ impl ResponseBuilder {
             }
             TerminalState::Running => self.state_banner("running; poll with an empty send"),
             TerminalState::StdinNeeded => {
-                if self.needs_line_break() {
-                    self.text("\n");
-                }
-                self.text(render_notice("waiting for stdin"));
+                let prefix = if self.needs_line_break() { "\n" } else { "" };
+                self.response
+                    .preview
+                    .notice(format!("{prefix}{}", render_notice("waiting for stdin")));
             }
             TerminalState::Idle => {
                 if !self.response.is_error() {
@@ -506,23 +516,14 @@ impl ResponseBuilder {
         self.response.is_error = true;
     }
 
-    fn line(&mut self, text: impl Into<String>) {
-        if !self.response.is_empty() && self.needs_line_break() {
-            self.text("\n");
-        }
-        self.text(text);
-    }
-
     fn state_banner(&mut self, state: &str) {
-        self.text("\n");
-        self.text(render_notice(state));
+        self.response
+            .preview
+            .notice(format!("\n{}", render_notice(state)));
     }
 
     fn needs_line_break(&self) -> bool {
-        !matches!(
-            self.response.content.last(),
-            Some(Content::Text(text)) if text.ends_with('\n')
-        )
+        !self.response.preview.ends_with_newline()
     }
 }
 
@@ -562,7 +563,7 @@ impl Drop for Response {
             return;
         };
         let response = Self {
-            content: std::mem::take(&mut self.content),
+            preview: std::mem::take(&mut self.preview),
             is_error: self.is_error,
             delivery: None,
         };
@@ -678,14 +679,14 @@ impl OutputTape {
     pub(super) fn cut(&self) -> OutputCut {
         let mut state = self.lock();
         state.flush_cell_output();
-        state.seal_truncation();
+        state.seal_interval(false);
         OutputCut(state.next_event)
     }
 
     pub(super) fn take(&self) -> Response {
         let mut state = self.lock();
         state.flush_cell_output();
-        state.seal_truncation();
+        state.seal_interval(false);
         let cut = OutputCut(state.next_event);
         drain_through(&mut state, cut, false)
     }
@@ -702,7 +703,7 @@ impl OutputTape {
     /// tape remains locked.
     pub(super) fn take_prelude_before(&self, boundary: impl FnOnce()) -> Response {
         let mut state = self.lock();
-        state.seal_truncation();
+        state.seal_interval(true);
         let cut = OutputCut(state.next_event);
         let response = drain_through(&mut state, cut, true);
         boundary();
@@ -721,7 +722,7 @@ impl OutputTape {
             state.cell_output.is_none(),
             "only one cell output file can be active"
         );
-        state.seal_truncation();
+        state.seal_interval(true);
         let response = if capture_prelude {
             let cut = OutputCut(state.next_event);
             drain_through(&mut state, cut, true)
@@ -736,8 +737,8 @@ impl OutputTape {
     /// Finishes one cell's file at the same ordered boundary as its completion cut.
     pub(super) fn finish_cell_output(&self) -> OutputCut {
         let mut state = self.lock();
+        state.seal_interval(true);
         state.finish_cell_output();
-        state.seal_truncation();
         OutputCut(state.next_event)
     }
 
@@ -780,6 +781,7 @@ impl OutputTapeState {
             direct_stdout: DirectDecoder::default(),
             direct_stderr: DirectDecoder::default(),
             cell_output: None,
+            raw_bytes: 0,
             next_event: 0,
             events: Vec::new(),
             recovered: None,
@@ -800,6 +802,7 @@ impl OutputTapeState {
     }
 
     fn push_console_text(&mut self, channel: crate::worker_protocol::ConsoleChannel, text: String) {
+        self.raw_bytes += text.len() as u64;
         let original_length = text.len();
         let (spooled, cell_output_notice) = self
             .cell_output
@@ -907,6 +910,7 @@ impl OutputTapeState {
     }
 
     fn push_direct_output(&mut self, stream: DirectOutputStream, bytes: &[u8]) {
+        self.raw_bytes += bytes.len() as u64;
         if bytes.is_empty() {
             return;
         }
@@ -1019,8 +1023,7 @@ impl OutputTapeState {
 
     fn omit_cell_text(&mut self, text_bytes: usize, retained_text_bytes: usize) {
         let output_path = self.cell_output.as_mut().and_then(|output| {
-            output.note_inline_omission(text_bytes);
-            (retained_text_bytes > 0).then(|| Box::<str>::from(output.public_path()))
+            (retained_text_bytes > 0).then(|| Box::<str>::from(output.record().public_path()))
         });
         self.omit(text_bytes, 0, 0, 1, output_path, retained_text_bytes);
     }
@@ -1040,8 +1043,25 @@ impl OutputTapeState {
         position
     }
 
-    fn seal_truncation(&mut self) {
+    fn seal_interval(&mut self, close_streams: bool) {
         self.active_truncation = None;
+        let source = match &self.cell_output {
+            Some(output) => Source {
+                file: Some(output.record()),
+                raw_bytes: self.raw_bytes,
+                retained_bytes: output.retained_bytes(),
+                discarded_bytes: output.discarded_bytes(),
+            },
+            None => Source {
+                raw_bytes: self.raw_bytes,
+                ..Source::default()
+            },
+        };
+        self.push_control(OutputEvent::Source {
+            source,
+            close_streams,
+        });
+        self.raw_bytes = 0;
     }
 
     fn recompute_budget(&mut self) {
@@ -1082,7 +1102,8 @@ impl OutputTapeState {
                 OutputEvent::DirectStdout(DirectOutputEvent::Closed)
                 | OutputEvent::DirectStderr(DirectOutputEvent::Closed)
                 | OutputEvent::ServerNotice(_)
-                | OutputEvent::ServerFailure(_) => {}
+                | OutputEvent::ServerFailure(_)
+                | OutputEvent::Source { .. } => {}
             }
         }
         if self.active_truncation.is_some_and(|sequence| {
@@ -1144,6 +1165,10 @@ fn drain_through(
 
     for (sequence, event) in events {
         match &event {
+            OutputEvent::Source {
+                close_streams: false,
+                ..
+            } => {}
             OutputEvent::DirectStdout(DirectOutputEvent::Bytes(_)) => {
                 flush_direct_decoder_before(
                     &mut output,
@@ -1210,11 +1235,23 @@ fn drain_through(
             }
             OutputEvent::BoundedServerNotice(message) => {
                 compactor.flush(&mut output);
-                output.notice_line(message.into_string());
+                let prefix = if output.needs_line_break() && !output.response.is_empty() {
+                    "\n"
+                } else {
+                    ""
+                };
+                output
+                    .response
+                    .preview
+                    .information(format!("{prefix}[{message}]\n"));
             }
             OutputEvent::ServerFailure(failure) => {
                 compactor.flush(&mut output);
                 output.send_failure(failure);
+            }
+            OutputEvent::Source { source, .. } => {
+                compactor.flush(&mut output);
+                output.response.preview.source(source);
             }
             OutputEvent::Truncated(truncated) => {
                 compactor.flush(&mut output);
@@ -1335,6 +1372,19 @@ fn flush_direct_decoders_before(
     }
 }
 
+fn complete_utf8_prefix(bytes: &[u8]) -> usize {
+    let mut offset = 0;
+    loop {
+        match std::str::from_utf8(&bytes[offset..]) {
+            Ok(_) => return bytes.len(),
+            Err(error) => match error.error_len() {
+                Some(length) => offset += error.valid_up_to() + length,
+                None => return offset + error.valid_up_to(),
+            },
+        }
+    }
+}
+
 pub(super) fn project_completed(output: Response) -> Response {
     project_terminal(output, TerminalState::Completed)
 }
@@ -1384,382 +1434,10 @@ fn render_notice(message: impl Into<String>) -> String {
     format!("[{}]", message.into())
 }
 
-fn complete_utf8_prefix(bytes: &[u8]) -> usize {
-    let mut offset = 0;
-    loop {
-        match std::str::from_utf8(&bytes[offset..]) {
-            Ok(_) => return bytes.len(),
-            Err(error) => match error.error_len() {
-                Some(length) => offset += error.valid_up_to() + length,
-                None => return offset + error.valid_up_to(),
-            },
-        }
-    }
-}
-
 fn utf8_prefix_length(text: &str, limit: usize) -> usize {
     let mut length = text.len().min(limit);
     while !text.is_char_boundary(length) {
         length -= 1;
     }
     length
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    use crate::worker_protocol::ConsoleChannel::{Diagnostic, Output};
-
-    fn limits(text_bytes: usize, image_bytes: usize, events: usize) -> OutputLimits {
-        OutputLimits {
-            text_bytes,
-            image_bytes,
-            image_metadata_bytes: 1_024,
-            events,
-        }
-    }
-
-    fn limits_with_image_metadata(
-        text_bytes: usize,
-        image_bytes: usize,
-        image_metadata_bytes: usize,
-        events: usize,
-    ) -> OutputLimits {
-        OutputLimits {
-            text_bytes,
-            image_bytes,
-            image_metadata_bytes,
-            events,
-        }
-    }
-
-    fn response_text(mut response: Response) -> String {
-        std::mem::take(&mut response.content)
-            .into_iter()
-            .filter_map(|content| match content {
-                Content::Text(text) => Some(text),
-                Content::Image { .. } => None,
-            })
-            .collect()
-    }
-
-    fn response_content(mut response: Response) -> Vec<Content> {
-        std::mem::take(&mut response.content)
-    }
-
-    fn assert_text(response: Response, expected: &str) {
-        assert_eq!(response_text(response), expected);
-    }
-
-    fn assert_single_image(response: Response, data: &str, mime_type: &str) {
-        assert!(matches!(
-            response_content(response).as_slice(),
-            [Content::Image {
-                data: actual_data,
-                mime_type: actual_mime_type,
-                ..
-            }] if actual_data == data && actual_mime_type == mime_type
-        ));
-    }
-
-    fn text_response(text: &str) -> Response {
-        let mut builder = ResponseBuilder::new();
-        builder.text(text);
-        builder.finish()
-    }
-
-    #[test]
-    fn text_budget_retains_below_exact_and_prefix_above_limit() {
-        for (size, expected, omitted) in [(4, 4, None), (5, 5, None), (6, 5, Some(1))] {
-            let output = OutputTape::with_limits(limits(5, 20, 20));
-            output.push_console_text(Output, "x".repeat(size));
-
-            let text = response_text(output.take());
-            assert!(text.starts_with(&"x".repeat(expected)));
-            match omitted {
-                Some(omitted) => assert!(text.ends_with(&format!(
-                    "[output truncated: omitted {omitted} text bytes and 0 encoded image bytes across 1 event]"
-                ))),
-                None => assert_eq!(text, "x".repeat(expected)),
-            }
-        }
-    }
-
-    #[test]
-    fn one_chunk_larger_than_the_entire_budget_is_copied_only_to_the_limit() {
-        let output = OutputTape::with_limits(limits(5, 20, 20));
-        output.push_console_text(Output, "x".repeat(100));
-
-        {
-            let state = output.lock();
-            let OutputEvent::WorkerConsoleText { text, .. } = &state.events[0].1 else {
-                panic!("the retained prefix must be stored as console text")
-            };
-            assert_eq!(text.len(), 5);
-        }
-
-        assert_text(
-            output.take(),
-            "xxxxx\n[output truncated: omitted 95 text bytes and 0 encoded image bytes across 1 event]",
-        );
-        output.push_console_text(Output, "fresh");
-        assert_text(output.take(), "fresh");
-    }
-
-    #[test]
-    fn event_budget_retains_below_exact_and_aggregates_later_events() {
-        let output = OutputTape::with_limits(limits(100, 100, 2));
-        output.push_console_text(Output, "a");
-        output.push_console_text(Diagnostic, "b");
-        output.push_console_text(Output, "c");
-        output.push_console_text(Diagnostic, "de");
-
-        assert_text(
-            output.take(),
-            "ab\n[output truncated: omitted 3 text bytes and 0 encoded image bytes across 2 events]",
-        );
-        output.push_console_text(Output, "fresh");
-        assert_text(output.take(), "fresh");
-    }
-
-    #[test]
-    fn image_budget_is_all_or_nothing_and_preserves_order() {
-        for data in ["123", "1234"] {
-            let accepted = OutputTape::with_limits(limits(100, 4, 20));
-            accepted.push_console_text(Output, "before");
-            accepted.push_image(data.to_string(), "image/test".to_string(), None);
-            accepted.push_console_text(Diagnostic, "after");
-            let content = response_content(accepted.take());
-            assert!(matches!(&content[0], Content::Text(text) if text == "before"));
-            assert!(matches!(
-                &content[1],
-                Content::Image { data: actual, mime_type, .. }
-                    if actual == data && mime_type == "image/test"
-            ));
-            assert!(matches!(&content[2], Content::Text(text) if text == "after"));
-        }
-
-        let rejected = OutputTape::with_limits(limits(100, 4, 20));
-        rejected.push_console_text(Output, "before");
-        rejected.push_image("12345".to_string(), "image/test".to_string(), None);
-        rejected.push_console_text(Output, "discarded");
-        assert_text(
-            rejected.take(),
-            "before\n[output truncated: omitted 9 text bytes, 5 encoded image bytes, and 10 image metadata bytes across 2 events]",
-        );
-        rejected.push_image("1234".to_string(), "image/test".to_string(), None);
-        assert_single_image(rejected.take(), "1234", "image/test");
-    }
-
-    #[test]
-    fn image_metadata_budget_retains_below_exact_and_omits_above_limit() {
-        for mime_type in ["abc", "abcd"] {
-            let output = OutputTape::with_limits(limits_with_image_metadata(100, 100, 4, 20));
-            output.push_image("1".to_string(), mime_type.to_string(), None);
-            assert!(matches!(
-                response_content(output.take()).as_slice(),
-                [Content::Image { mime_type: retained, .. }] if retained == mime_type
-            ));
-        }
-
-        let output = OutputTape::with_limits(limits_with_image_metadata(100, 100, 4, 20));
-        output.push_image("1".to_string(), "abcde".to_string(), None);
-        assert_text(
-            output.take(),
-            "[output truncated: omitted 0 text bytes, 1 encoded image bytes, and 5 image metadata bytes across 1 event]",
-        );
-        output.push_image("1".to_string(), "abcd".to_string(), None);
-        assert_single_image(output.take(), "1", "abcd");
-    }
-
-    #[test]
-    fn overflow_skips_image_artifact_creation() {
-        let output = OutputTape::with_limits(limits(100, 2, 20));
-        let called = std::cell::Cell::new(false);
-        output
-            .push_image_with_artifact("123".to_string(), "image/test".to_string(), |_, _| {
-                called.set(true);
-                Ok(None)
-            })
-            .unwrap();
-
-        assert!(!called.get());
-        assert_text(
-            output.take(),
-            "[output truncated: omitted 0 text bytes, 3 encoded image bytes, and 10 image metadata bytes across 1 event]",
-        );
-    }
-
-    #[test]
-    fn control_failures_and_process_outcomes_survive_truncation() {
-        let output = OutputTape::with_limits(limits(3, 3, 1));
-        output.push_console_text(Output, "overflow");
-        output.push_notice_line("input requested: \"prompt> \"");
-        output.push_failure(
-            SendFailure::from("worker transport failed".to_string())
-                .worker_outcome(Some(super::super::WorkerProcessOutcome::Exited(86)))
-                .worker_stopped(),
-        );
-
-        let response = output.take();
-        assert!(response.is_error);
-        assert_text(
-            response,
-            "ove\n[output truncated: omitted 5 text bytes and 0 encoded image bytes across 1 event]\n[input requested: \"prompt> \"]\n[worker transport failed]\n[worker exited with status 86]\n[worker stopped: in-memory state lost]",
-        );
-    }
-
-    #[test]
-    fn a_cut_seals_truncation_counts_and_leaves_later_output_pending() {
-        let output = OutputTape::with_limits(limits(3, 10, 10));
-        output.push_console_text(Output, "four");
-        let cut = output.cut();
-        output.push_console_text(Output, "zz");
-
-        assert_text(
-            output.drain_through(cut),
-            "fou\n[output truncated: omitted 1 text bytes and 0 encoded image bytes across 1 event]",
-        );
-        assert_text(
-            output.take(),
-            "[output truncated: omitted 2 text bytes and 0 encoded image bytes across 1 event]",
-        );
-
-        output.push_console_text(Output, "new");
-        assert_text(output.take(), "new");
-    }
-
-    #[test]
-    fn direct_utf8_obeys_truncation_and_stream_order() {
-        let output = OutputTape::with_limits(limits(2, 100, 100));
-        let stdout = output.direct_stdout();
-        stdout.push(&[0xe2, 0x82, 0xac]);
-        assert_text(
-            output.take(),
-            "�\n[output truncated: omitted 1 text bytes and 0 encoded image bytes across 1 event]",
-        );
-        stdout.push(&[0xac, 0xff]);
-        assert_text(output.take(), "��");
-
-        let output = OutputTape::with_limits(limits(2, 100, 100));
-        output.direct_stderr().push(&[0xe2]);
-        output.direct_stdout().push(&[0xe2]);
-        output.push_console_text(Output, "overflow");
-        assert_text(
-            output.take(),
-            "��\n[output truncated: omitted 8 text bytes and 0 encoded image bytes across 1 event]",
-        );
-    }
-
-    #[test]
-    fn direct_utf8_respects_cut_and_prelude_boundaries() {
-        let output = OutputTape::with_limits(limits(100, 100, 100));
-        let stdout = output.direct_stdout();
-        stdout.push(&[0xe2, 0x82]);
-        let cut = output.cut();
-        assert_text(output.drain_through(cut), "");
-        stdout.push(&[0xac]);
-        assert_text(output.take(), "€");
-
-        let output = OutputTape::with_limits(limits(100, 100, 100));
-        let stdout = output.direct_stdout();
-        stdout.push(&[0xe2, 0x82]);
-        output.push_console_text(Output, "idle text");
-        let mut prelude = output.take_prelude();
-        stdout.push(&[0xac]);
-        prelude.extend_cell_after_idle_prelude(output.take());
-        assert_text(prelude, "�idle text\n[output produced while idle]\n�");
-
-        let output = OutputTape::with_limits(limits(100, 100, 100));
-        output.direct_stdout().push(&[0xe2]);
-        output.push_image("image".to_string(), "image/test".to_string(), None);
-        let content = response_content(output.take_prelude());
-        assert!(matches!(&content[0], Content::Text(text) if text == "�"));
-        assert!(matches!(&content[1], Content::Image { data, .. } if data == "image"));
-    }
-
-    #[test]
-    fn mixed_text_channels_direct_streams_images_and_notices_keep_order() {
-        let output = OutputTape::with_limits(limits(100, 100, 100));
-        output.push_console_text(Output, "console output|");
-        output.push_console_text(Diagnostic, "console diagnostic|");
-        output.direct_stdout().push(b"stdout|");
-        output.direct_stderr().push(b"stderr|");
-        output.push_image("image".to_string(), "image/test".to_string(), None);
-        output.push_notice_line("server notice");
-
-        let content = response_content(output.take());
-        assert!(matches!(
-            &content[0],
-            Content::Text(text)
-                if text == "console output|console diagnostic|stdout|stderr|"
-        ));
-        assert!(matches!(&content[1], Content::Image { data, .. } if data == "image"));
-        assert!(matches!(&content[2], Content::Text(text) if text == "\n[server notice]\n"));
-    }
-
-    #[test]
-    fn canonical_builder_delimits_idle_preludes_and_logical_regions() {
-        let mut prelude = text_response("idle output");
-        prelude.extend_cell_after_idle_prelude(text_response("cell output"));
-        assert_text(
-            prelude,
-            "idle output\n[output produced while idle]\ncell output",
-        );
-
-        let mut prelude_only = text_response("idle only");
-        prelude_only.extend_cell_after_idle_prelude(Response::default());
-        assert_text(prelude_only, "idle only");
-
-        let mut cell_only = Response::default();
-        cell_only.extend_cell_after_idle_prelude(text_response("cell only"));
-        assert_text(cell_only, "cell only");
-
-        let mut logical = text_response("first");
-        logical.extend_logical_region(text_response("second"));
-        assert_text(logical, "first\nsecond");
-    }
-
-    #[test]
-    fn every_terminal_state_uses_the_canonical_projection() {
-        let cases = [
-            (SendResponse::Completed(Response::default()), "[done]"),
-            (
-                SendResponse::Running(Response::default()),
-                "\n[running; poll with an empty send]",
-            ),
-            (
-                SendResponse::InputRequested(Response::default()),
-                "\n[waiting for stdin]",
-            ),
-            (SendResponse::Idle(Response::default()), "\n[idle]"),
-            (
-                SendResponse::ReplacementStarting(Response::default()),
-                "[worker starting]",
-            ),
-            (
-                SendResponse::ReplacementReady(Response::default()),
-                "[idle]",
-            ),
-        ];
-        for (response, expected) in cases {
-            assert_text(render_response(response), expected);
-        }
-
-        let mut failed = ResponseBuilder::new();
-        failed.server_failure("infrastructure failed");
-        assert_text(
-            render_response(SendResponse::Idle(failed.finish())),
-            "[infrastructure failed]",
-        );
-    }
-
-    #[test]
-    fn image_only_completion_does_not_add_done() {
-        let mut builder = ResponseBuilder::new();
-        builder.image("image".to_string(), "image/test".to_string(), None);
-        let content = response_content(render_response(SendResponse::Completed(builder.finish())));
-        assert!(matches!(content.as_slice(), [Content::Image { data, .. }] if data == "image"));
-    }
 }

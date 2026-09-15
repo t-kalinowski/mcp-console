@@ -14,8 +14,19 @@ send:
 result:
   content:
     - type: text
-      text: |-
-        zod background stderr
-        <large output>
-        [idle]
+      text:
+        text_bytes: 8079
+        concat:
+          - |
+            zod background stderr
+          - repeat: x
+            count: 3946
+          - |
+
+            [output preview: omitted 4186390 rendered UTF-8 bytes; no retained cell log (4194326 raw bytes observed); omitted text is unavailable]
+          - repeat: y
+            count: 3968
+          - |-
+
+            [idle]
   isError: false

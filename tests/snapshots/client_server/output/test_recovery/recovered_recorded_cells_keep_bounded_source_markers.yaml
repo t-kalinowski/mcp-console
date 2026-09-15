@@ -1,0 +1,90 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.direct.yaml
+---
+send:
+  r: echo ready
+result:
+  content:
+    - type: text
+      text: |
+        zod: ready
+  isError: false
+---
+send:
+  control: restart
+  r: preview recovery cell 0
+transcript_normalization:
+  target: repeated cancellation setup exchanges
+  repeated_exchange_count: 32
+  exchange_entry_count: 3
+  request_ids: distinct in each exchange
+  send.r:
+    template: preview recovery cell {index}
+    index_start: 0
+    index_count: 32
+---
+input:
+  method: notifications/cancelled
+  params:
+    requestId: 4
+---
+input:
+  method: ping
+result: {}
+---
+send:
+  control: interrupt
+result:
+  content:
+    - type: text
+      text:
+        text_bytes: 8033
+        concat:
+          - |
+            [worker stopped: in-memory state lost]
+            [starting new worker]
+            cell 0 head
+          - repeat: x
+            count: 2484
+          - |-
+
+            [output preview: omitted 30297 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000002.log (Console server recording workspace; controller for remote targets); 32793 raw bytes retained, 0 raw bytes not retained]
+
+            [done]
+            [worker stopped: in-memory state lost]
+            [starting new worker]
+
+            [output preview: omitted 983832 rendered UTF-8 bytes across 30 output intervals; 0 generated notice bytes not retained; 983832 raw bytes retained, 0 raw bytes not retained; raw cell log paths and per-cell counts: .agents/console/sessions/<run ID>/internal/events.jsonl (Console server recording workspace; controller for remote targets); unretained text is unavailable]
+            [done]
+          - repeat: |-
+
+              [worker stopped: in-memory state lost]
+              [starting new worker]
+              [done]
+            count: 29
+          - |
+
+            [worker stopped: in-memory state lost]
+            [starting new worker]
+
+            [output preview: omitted 30299 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000033.log (Console server recording workspace; controller for remote targets); 32795 raw bytes retained, 0 raw bytes not retained]
+          - repeat: x
+            count: 2482
+          - |-
+
+            cell 31 tail
+            [done]
+  isError: false
+---
+input:
+  method: ping
+result: {}
+---
+send: {}
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false

@@ -6,16 +6,22 @@ send:
 result:
   content:
     - type: text
-      text: |-
-        zod unexpected input receipt: <large output>
-        [worker reported received input without requesting it]
-        [worker terminated by signal 9]
-        [worker stopped: in-memory state lost]
-        [starting new worker]
-        [idle]
+      text:
+        text_bytes: 8114
+        concat:
+          - "zod unexpected input receipt: "
+          - repeat: x
+            count: 3810
+          - |
+
+            [output preview: omitted <omitted byte count> rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000001.log (Console server recording workspace; controller for remote targets); <raw byte count> raw bytes retained, 0 raw bytes not retained]
+          - repeat: z
+            count: 3802
+          - |-
+            od expected semantic tail: <pipe tail bytes>
+            [worker reported received input without requesting it]
+            [worker terminated by signal 9]
+            [worker stopped: in-memory state lost]
+            [starting new worker]
+            [idle]
   isError: true
-transcript_normalization:
-  target: result.content[0].text
-  cross_source_position: omitted
-  replacements:
-    large_output: <large output>

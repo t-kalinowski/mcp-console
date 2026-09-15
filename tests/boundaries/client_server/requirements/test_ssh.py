@@ -30,6 +30,7 @@ from support.resolvers import (
     resolve_public_python_version,
 )
 from support.ssh import SSH, configure, localhost, remote_command, poison_controller
+from support.previews import CONTROL_OMISSION, assert_preview
 from support.evidence import compact_text
 from support.suites import run_this_suite
 
@@ -519,7 +520,8 @@ def test_large_remote_install_failure_preserves_diagnostics_and_worker(
         assert client.transcript[-1]["result"]["isError"]
         output = last_result_text(client)
         expected = f"[R package resolution failed with exit status: 1: {diagnostics}]"
-        assert output == expected, {"length": len(output), "prefix": output[:500]}
+        assert_preview(output, expected, pattern=CONTROL_OMISSION)
+        assert "outputs/call-" not in output, "resolver diagnostics have no cell log"
         client.send(r="stopifnot(Sys.getpid() == worker); sentinel")
         assert last_tool_text(client) == "[1] 42\n"
         client.send(requirements={"r": ["praise"]}, r="sentinel")

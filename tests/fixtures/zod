@@ -726,6 +726,28 @@ def main() -> None:
             send(writer, {"kind": "completed"})
             continue
 
+        if source == "preview recovery intervals":
+            directory = Path(os.environ["MCP_CONSOLE_TEST_PREVIEW_DIRECTORY"])
+            release = directory / "preview-release"
+            processed = directory / "preview-processed"
+            for index in range(3):
+                with release.open("rb", buffering=0) as checkpoint:
+                    assert checkpoint.read(1) == b"1"
+                send_output(writer, f"interval {index} head\n" + "x" * 32768 + f"\ninterval {index} tail\n")
+                wait_for_server_to_process_sideband(reader, writer)
+                with processed.open("wb", buffering=0) as checkpoint:
+                    assert checkpoint.write(b"1") == 1
+            with release.open("rb", buffering=0) as checkpoint:
+                assert checkpoint.read(1) == b"1"
+            send(writer, {"kind": "completed"})
+            continue
+
+        if source.startswith("preview recovery cell "):
+            number = int(source.removeprefix("preview recovery cell "))
+            send_output(writer, f"cell {number} head\n" + "x" * 32768 + f"\ncell {number} tail\n")
+            send(writer, {"kind": "completed"})
+            continue
+
         if source == "exit zero":
             os._exit(0)
 

@@ -80,6 +80,12 @@ mock_completion <- function(message, finish_reason) {
 }
 
 test_that("console_tool works when registered with an ellmer chat", {
+  # fmt: r
+  source <- r"(
+    x <- 41L
+    cat("adapter head\n", strrep("x", 10000), "\nadapter tail\n", sep = "")
+    x + 1L
+  )"
   responses <- list(
     mock_completion(
       list(
@@ -90,7 +96,7 @@ test_that("console_tool works when registered with an ellmer chat", {
           type = "function",
           `function` = list(
             name = "send",
-            arguments = '{"r":"x <- 41L; x + 1L"}'
+            arguments = jsonlite::toJSON(list(r = source), auto_unbox = TRUE)
           )
         ))
       ),
@@ -121,6 +127,8 @@ test_that("console_tool works when registered with an ellmer chat", {
         tryCatch(
           {
             chat$register_tool(console_tool())
+            text <- NULL
+            chat$on_tool_result(function(result) text <<- result@value@text)
 
             expect_identical(
               as.character(chat$chat("Use the console.")),
@@ -137,6 +145,11 @@ test_that("console_tool works when registered with an ellmer chat", {
               "[1] 42",
               fixed = TRUE
             )
+            expect_type(text, "character")
+            expect_lte(nchar(text, type = "bytes"), 8192L)
+            expect_match(text, "adapter head\n", fixed = TRUE)
+            expect_match(text, "adapter tail\n", fixed = TRUE)
+            expect_match(text, "rendered UTF-8 bytes", fixed = TRUE)
           },
           finally = {
             rm(chat)

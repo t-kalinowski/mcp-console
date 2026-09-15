@@ -17,13 +17,24 @@ send:
 result:
   content:
     - type: text
-      text: |-
-        zod stdin closed
-        <large output>
-        [active evaluation stopped by session restart request]
-        [worker stopped: in-memory state lost]
-        [starting new worker]
-        [idle]
+      text:
+        text_bytes: 8067
+        concat:
+          - |
+            zod stdin closed
+          - repeat: x
+            count: 3887
+          - |
+
+            [output preview: omitted 4186513 rendered UTF-8 bytes; no retained cell log (4194321 raw bytes observed); omitted text is unavailable]
+          - repeat: y
+            count: 3904
+          - |-
+
+            [active evaluation stopped by session restart request]
+            [worker stopped: in-memory state lost]
+            [starting new worker]
+            [idle]
   isError: false
 ---
 send:

@@ -191,6 +191,7 @@ Keep these invariants intact:
 - `src/input_watch.rs`, `src/input_watch/` — platform input-closure observation shared by startup and the compute ownership helpers.
 - `src/relay_protocol.rs` — server-relay JSONL message and framing contract.
 - `src/worker_relay.rs`, `src/worker_relay/event_writer.rs` — worker launch, I/O forwarding, ordered event output, direct-worker signaling, termination, and reaping.
+- `src/worker_client/output.rs`, `src/worker_client/output/{preview,terminal}.rs` — response composition, bounded 8 KiB text previews, raw-file receipts, and progress projection.
 - `src/worker_client.rs`, `src/worker_client/` — session coordination and send planning, server-owned environment, evaluation, lifecycle, ordinary launcher child ownership, ordered event dispatch, output tape, shared Unix relay transport, and platform-specific startup observation.
 - `src/process_exit.rs` — ordinary direct-child exit observation without reaping, used by server launcher ownership.
 - `src/process_output.rs` — output draining bounded by an owned child exit, including a surviving inherited writer; used for local launchers, the SSH child, and the remote helper's launcher without equating their cleanup guarantees.

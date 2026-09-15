@@ -8,6 +8,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import last_result_text
+from support.previews import (
+    assert_preview,
+    compact_previews,
+    normalize_preview_paths,
+    collector_notice,
+)
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import (
@@ -105,27 +111,17 @@ def test_keeps_mapped_resolution_notice_atomic_at_output_limit(
     client.send(python=python, timeout_ms=120_000)
     output = last_result_text(client)
     prefix = "x" * retained
-    assert output.startswith(prefix), len(output)
-    remainder = output.removeprefix(prefix)
-    assert remainder.startswith("\n[output truncated: omitted "), repr(remainder[:200])
-    assert "resolved PyPI distribution" not in remainder, repr(remainder[:200])
     assert client.temporary_directory is not None
     workspace = Path(client.temporary_directory.name)
-    session = next((workspace / ".agents/console" / "sessions").iterdir())
-    relative_output = Path("outputs/call-000001.log")
-    public_output = (
-        f".agents/console/sessions/{session.name}/{relative_output.as_posix()}"
-    )
-    assert (
-        f"; retained text: {public_output} (9 of 78 omitted text bytes)]" in remainder
-    ), remainder[-300:]
-    assert (session / relative_output).read_text(encoding="utf-8") == (
-        prefix + "'yaml12'\n"
-    )
-    remainder = remainder.replace(session.name, "<run ID>")
-    client.transcript[-1]["result"]["content"][0]["text"] = (
-        f"<retained {retained} text bytes>{remainder}"
-    )
+    session = next((workspace / ".agents/console/sessions").iterdir())
+    path = f".agents/console/sessions/{session.name}/outputs/call-000001.log"
+    collector = collector_notice(78, 3, path, 9)
+    assert output.endswith(collector), output[-1000:]
+    assert "resolved PyPI distribution" not in output
+    assert_preview(output.removesuffix(collector), prefix)
+    assert (workspace / path).read_text() == prefix + "'yaml12'\n"
+    normalize_preview_paths(client)
+    compact_previews(client, "x")
     return client.finish()
 
 

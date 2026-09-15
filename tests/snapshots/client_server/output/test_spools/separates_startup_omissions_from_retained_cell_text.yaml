@@ -6,8 +6,18 @@ send:
 result:
   content:
     - type: text
-      text: |-
-        <retained 8388608 startup text bytes>
-        [output truncated: omitted 7 text bytes and 0 encoded image bytes across 1 event]
-        [output truncated: omitted 12 text bytes and 0 encoded image bytes across 1 event; retained text: .agents/console/sessions/<run ID>/outputs/call-000001.log (12 of 12 omitted text bytes)]
+      text:
+        text_bytes: 8083
+        concat:
+          - repeat: s
+            count: 3840
+          - |
+
+            [output preview: omitted 8380928 rendered UTF-8 bytes; no retained cell log (8388615 raw bytes observed); omitted text is unavailable]
+          - repeat: s
+            count: 3840
+          - |-
+
+            [collector limit: omitted 7 text bytes and 0 encoded image bytes across 1 event]
+            [collector limit: omitted 12 text bytes and 0 encoded image bytes across 1 event; retained text: .agents/console/sessions/<run ID>/outputs/call-000001.log (12 of 12 omitted text bytes)]
   isError: false

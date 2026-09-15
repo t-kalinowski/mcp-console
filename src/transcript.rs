@@ -21,7 +21,7 @@ mod event;
 mod markdown;
 mod output;
 
-pub(crate) use output::CellOutput;
+pub(crate) use output::{CellOutput, OutputRecord};
 
 const SCHEMA_VERSION: u64 = 1;
 
@@ -252,8 +252,9 @@ impl ActiveTranscript {
     ) -> Result<Self, String> {
         let working_directory_text = working_directory.to_string_lossy();
         let started_at = Utc::now();
+        // Keep incidental process-ID widths from shifting bounded output previews.
         let run_id = format!(
-            "{}-{}",
+            "{}-{:010}",
             started_at.format("%Y%m%dT%H%M%S%.9fZ"),
             std::process::id()
         );

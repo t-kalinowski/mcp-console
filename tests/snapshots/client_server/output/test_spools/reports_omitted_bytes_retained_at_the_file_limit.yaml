@@ -25,8 +25,18 @@ send:
 result:
   content:
     - type: text
-      text: |
-        <retained 8388608 text bytes>
-        [output truncated: omitted 1065353221 text bytes and 0 encoded image bytes across 128 events; retained text: .agents/console/sessions/<run ID>/outputs/call-000002.log (1065353216 of 1065353221 omitted text bytes)]
-        [cell output retention limit reached at 1073741824 bytes for .agents/console/sessions/<run ID>/outputs/call-000002.log; later text is not retained in this file]
+      text:
+        text_bytes: 7993
+        concat:
+          - repeat: x
+            count: 3648
+          - |
+
+            [output preview: omitted 8381312 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000002.log (Console server recording workspace; controller for remote targets); 1073741824 raw bytes retained, 5 raw bytes not retained; file contains only a prefix; omitted text beyond it is unavailable]
+          - repeat: x
+            count: 3648
+          - |
+
+            [collector limit: omitted 1065353221 text bytes and 0 encoded image bytes across 128 events; retained text: .agents/console/sessions/<run ID>/outputs/call-000002.log (1065353216 of 1065353221 omitted text bytes)]
+            [cell output retention limit reached at 1073741824 bytes for .agents/console/sessions/<run ID>/outputs/call-000002.log; later text is not retained in this file]
   isError: false

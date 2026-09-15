@@ -6,7 +6,16 @@ send:
 result:
   content:
     - type: text
-      text: |
-        zod stdout 👩🏽‍💻
-        <large output>
+      text:
+        text_bytes: 8059
+        concat:
+          - |
+            zod stdout 👩🏽‍💻
+          - repeat: x
+            count: 3877
+          - |
+
+            [output preview: omitted 4186523 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000001.log (Console server recording workspace; controller for remote targets); 4194331 raw bytes retained, 0 raw bytes not retained]
+          - repeat: y
+            count: 3904
   isError: false

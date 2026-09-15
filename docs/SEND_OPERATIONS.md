@@ -66,3 +66,13 @@ The built-in server prepares its initial environment on first use through these 
 For an ordinary first cell, the evaluation wait includes default environment preparation and worker startup.
 Explicit requirements and restart finish initial preparation before any following evaluation wait.
 Idle stdin awaits preparation, startup, and input submission without a `timeout_ms` deadline; see [retained environments](REQUIREMENTS.md#retained-environments).
+
+## Output and retained files
+
+Every complete result shares an 8 KiB rendered UTF-8 text budget, including preparation, old-worker output, replacement-cell output, input and lifecycle notices, and failures.
+Oversized output returns the beginning and end of text retained by the existing collector; images retained by that collector use a separate response allowance.
+A poll consumes its newly observed interval, including omitted text, without replaying the middle in later responses.
+Retained raw cell logs are flushed at response cuts and remain accessible during evaluation.
+Their paths belong to the Console server's recording workspace, which is the controller workspace for remote and container targets.
+Reading these logs requires a filesystem tool that can access that location and does not change polling state.
+See [output and errors](BUILTIN_RUNTIME.md#output-and-notices) for preview, retention, and loss reporting.

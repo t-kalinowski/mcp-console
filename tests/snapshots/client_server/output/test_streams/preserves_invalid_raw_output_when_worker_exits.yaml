@@ -6,13 +6,24 @@ send:
 result:
   content:
     - type: text
-      text: |-
-        zod invalid stdout: � trailing: �<large output>
-        [worker sideband read failed: worker sideband closed]
-        [worker exited with status 86]
-        [worker stopped: in-memory state lost]
-        [starting new worker]
-        [idle]
+      text:
+        text_bytes: 8112
+        concat:
+          - "zod invalid stdout: � trailing: �"
+          - repeat: x
+            count: 3803
+          - |
+
+            [output preview: omitted <omitted byte count> rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000001.log (Console server recording workspace; controller for remote targets); <raw byte count> raw bytes retained, 0 raw bytes not retained]
+          - repeat: z
+            count: 3798
+          - |-
+            od expected stdout crash tail: <pipe tail bytes>
+            [worker sideband read failed: worker sideband closed]
+            [worker exited with status 86]
+            [worker stopped: in-memory state lost]
+            [starting new worker]
+            [idle]
   isError: true
 ---
 send:
@@ -20,11 +31,22 @@ send:
 result:
   content:
     - type: text
-      text: |-
-        zod invalid stderr: � trailing: �<large output>
-        [worker sideband read failed: worker sideband closed]
-        [worker exited with status 86]
-        [worker stopped: in-memory state lost]
-        [starting new worker]
-        [idle]
+      text:
+        text_bytes: 8112
+        concat:
+          - "zod invalid stderr: � trailing: �"
+          - repeat: x
+            count: 3803
+          - |
+
+            [output preview: omitted <omitted byte count> rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000002.log (Console server recording workspace; controller for remote targets); <raw byte count> raw bytes retained, 0 raw bytes not retained]
+          - repeat: z
+            count: 3798
+          - |-
+            od expected stderr crash tail: <pipe tail bytes>
+            [worker sideband read failed: worker sideband closed]
+            [worker exited with status 86]
+            [worker stopped: in-memory state lost]
+            [starting new worker]
+            [idle]
   isError: true
