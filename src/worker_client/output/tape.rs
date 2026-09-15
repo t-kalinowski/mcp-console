@@ -194,7 +194,7 @@ impl OutputTape {
 
     pub(in crate::worker_client) fn finish_cell_output(&self) -> OutputCut {
         let mut state = self.lock();
-        let cut = state.seal(false);
+        let cut = state.seal(true);
         let notice = state.cell_output.take().and_then(|output| output.finish());
         if notice.is_some() {
             state.recording_notice(notice);
