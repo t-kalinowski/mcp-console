@@ -1,0 +1,48 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  python: |
+    import signal
+
+
+    def finite_python():
+        signal.raise_signal(signal.SIGINT)
+        print("Python completed")
+        return 42
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  r: |
+    tryCatch(
+      {
+        suspendInterrupts({
+          answer <- reticulate::py_eval("finite_python()")
+          cat("R received:", answer, "\n")
+        })
+        # Check the deferred R interrupt while the handler is active.
+        Sys.sleep(0)
+      },
+      interrupt = function(condition) cat("R interrupt delivered\n")
+    )
+result:
+  content:
+    - type: text
+      text: |
+        Python completed
+        R received: 42 
+        R interrupt delivered
+  isError: false
+---
+send:
+  python: 6 * 7
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false

@@ -1,0 +1,27 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  python: |
+    import threading
+
+    answers = []
+
+
+    def ask():
+        answer = input("background> ")
+        answers.append(answer)
+        print(repr(answer))
+
+
+    thread = threading.Thread(target=ask)
+    thread.start()
+    thread.join()
+    assert answers == ["caf\u00e9\0tail"]
+  stdin: "café\0tail\n"
+result:
+  content:
+    - type: text
+      text: |
+        background> 'café\x00tail'
+  isError: false

@@ -1,0 +1,44 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  python: |
+    answer = 41
+    input("ready> ")
+result:
+  content:
+    - type: text
+      text: |-
+        [input requested: "ready> "]
+        [waiting for stdin]
+  isError: false
+---
+send:
+  control: interrupt
+result:
+  content:
+    - type: text
+      text: |
+        Traceback (most recent call last):
+          File "<string>", line 87, in _input
+          File "<string>", line 77, in call
+        RuntimeError: KeyboardInterrupt
+
+        During handling of the above exception, another exception occurred:
+
+        Traceback (most recent call last):
+          File "<string>", line 469, in _mcp_console_eval_cell
+          File "<mcp-console:python:e1>", line 2, in <module>
+          File "<string>", line 89, in _input
+          File "<string>", line 98, in _interrupt
+        KeyboardInterrupt
+  isError: false
+---
+send:
+  python: answer + 1
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false

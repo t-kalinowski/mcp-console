@@ -1,0 +1,104 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  requirements:
+    python:
+      - packaging
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+send:
+  python: |
+    import importlib.metadata
+    import os
+    import packaging
+
+    original_pid = os.getpid()
+    original_object = object()
+    original_identity = id(original_object)
+    packaging_version = importlib.metadata.version("packaging")
+    packaging_version
+result:
+  content:
+    - type: text
+      text: |
+        <loaded packaging version>
+  isError: false
+---
+send:
+  stdin: |
+    queued
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false
+---
+send:
+  requirements:
+    python:
+      - packaging==23.2
+result:
+  content:
+    - type: text
+      text: >-
+        Cannot replace loaded packaging <loaded packaging version> with 23.2.
+        Restart with compatible requirements; the running interpreter and
+        objects are unchanged.
+  isError: true
+---
+send:
+  requirements:
+    python:
+      - py-yaml12
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+send:
+  python: |
+    import yaml12
+    import defusedxml
+
+    assert os.getpid() == original_pid
+    assert id(original_object) == original_identity
+    assert importlib.metadata.version("packaging") == packaging_version
+    input()
+result:
+  content:
+    - type: text
+      text: |
+        [input requested: ""]
+        'queued'
+  isError: false
+---
+send:
+  control: restart
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: false
+---
+send:
+  python: |
+    import yaml12, defusedxml
+
+    "original_object" in globals()
+result:
+  content:
+    - type: text
+      text: |
+        False
+  isError: false

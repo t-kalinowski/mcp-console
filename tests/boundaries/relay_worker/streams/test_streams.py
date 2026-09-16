@@ -23,7 +23,8 @@ def test_routes_python_output(binary: Path, execution: Execution) -> Transcript:
           invisible(reticulate::py_run_string("initialized_from_r = True"))
         )
         """)
-    assert _tool_text(client.send(r=r)) == "[done]"
+    output = _tool_text(client.send(r=r))
+    assert output == "[done]", output
 
     # fmt: python
     python = code(r"""
@@ -99,12 +100,10 @@ def _python_fork_client(binary: Path, execution: Execution) -> RelayWorkerClient
     client = RelayWorkerClient(binary, execution=execution)
     # fmt: r
     r = code(r"""
-        python <- Sys.which("python3")
-        stopifnot(nzchar(python))
-        reticulate::use_python(python, required = TRUE)
         suppressWarnings(invisible(reticulate::py_run_string("fork_ready = True")))
         """)
-    assert _tool_text(client.send(r=r)) == "[done]"
+    output = _tool_text(client.send(r=r))
+    assert output == "[done]", output
 
     # fmt: python
     python = code(r"""
@@ -130,9 +129,9 @@ def _python_fork_client(binary: Path, execution: Execution) -> RelayWorkerClient
             if (
                 os.getpid() != worker_pid
                 and event == "c_call"
-                and getattr(function, "__module__", None) == "rpycall"
+                and getattr(function, "__module__", None) in {"rpycall", "_mcp_console_native"}
             ):
-                raise AssertionError("fork child called back into R")
+                raise AssertionError("fork child called back into Console or R")
 
 
         def run_child(action):

@@ -1,0 +1,40 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  python: |
+    import sys
+
+    sys.path.insert(0, "user-packages")
+    import console_user_package
+
+    original_value = console_user_package.value
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  requirements:
+    python:
+      - console-activation-fixture
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+send:
+  python: |
+    import console_unloaded
+
+    assert "user-packages" in sys.path
+    assert console_user_package.value is original_value
+    console_unloaded.origin
+result:
+  content:
+    - type: text
+      text: |
+        'candidate'
+  isError: false

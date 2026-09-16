@@ -1,0 +1,25 @@
+---
+!same-as bare MCP initialization for this execution mode
+---
+send:
+  r: |
+    Sys.setenv(PATH = "", RETICULATE_PYTHON = "missing-python")
+    setwd("elsewhere")
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  python: |
+    import sys
+
+    assert sys.prefix == '<workspace>/python'
+    6 * 7
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false

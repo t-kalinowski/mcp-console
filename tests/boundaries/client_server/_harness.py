@@ -18,16 +18,18 @@ import tempfile
 import termios
 import threading
 import time
+from contextlib import closing
 from pathlib import Path
 from typing import Self
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from support.assertions import last_result_text
-from support.checkpoints import release_fixture_checkpoint
+from support.checkpoints import FifoCheckpoint, release_fixture_checkpoint
 from support.client import McpClient, TextReader
 from support.events import Events
 from support.execution import SANDBOXED, Execution
+from support.previews import session_directory
 from support.processes import (
     capture_process_identity,
     child_process_identities,
@@ -527,6 +529,42 @@ def expose_idle_sideband_output(
         f"zod-background-sideband-emitted{suffix}",
         client,
     )
+
+
+def restart_with_retirement_output(
+    client: McpClient, marker: Path, *, call_id: int
+) -> None:
+    """Release shutdown output only after the recorded cell has closed."""
+    journal = session_directory(client) / "internal/events.jsonl"
+    with (
+        closing(
+            FifoCheckpoint.attach(marker.with_name("zod-stdin-close-output-release"))
+        ) as release,
+        Events() as events,
+    ):
+        events.watch_file(journal)
+        restarted = client.start_send(control="restart")
+        deadline = time.monotonic() + FIXTURE_CHECKPOINT_TIMEOUT_SECONDS
+        try:
+            while True:
+                records = [
+                    json.loads(line) for line in journal.read_text().splitlines()
+                ]
+                completed = [
+                    record
+                    for record in records
+                    if record["event"] == "cell_output" and record["call_id"] == call_id
+                ]
+                if completed:
+                    assert completed[-1]["retained_bytes"] == 0, completed
+                    break
+                remaining = deadline - time.monotonic()
+                assert remaining > 0 and events.wait(remaining), (
+                    "restart did not close the recorded cell"
+                )
+        finally:
+            release.release()
+        client.receive(restarted)
 
 
 def wait_for_marker(root: Path, name: str, client: McpClient) -> Path:

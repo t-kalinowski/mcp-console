@@ -35,6 +35,7 @@ PNG_1X1 = (
 
 from boundaries.client_server._harness import (
     expose_idle_sideband_output,
+    restart_with_retirement_output,
     wait_for_marker,
 )
 
@@ -273,14 +274,14 @@ def test_orders_explicit_restart_output(
 
         client.send(r="wait for stdin close", timeout_ms=0)
         assert last_tool_text(client) == "\n[running; poll with an empty send]"
-        wait_for_marker(
+        waiting = wait_for_marker(
             temporary_path,
             "zod-waiting-for-stdin-close",
             client,
         )
 
         startup_control.write_text("ready", encoding="utf-8")
-        client.send(control="restart")
+        restart_with_retirement_output(client, waiting, call_id=1)
         result = client.transcript[-1]["result"]
         assert result["isError"] is False, result
         suffix = (

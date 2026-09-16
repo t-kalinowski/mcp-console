@@ -1,0 +1,72 @@
+---
+!same-as bare MCP initialization for this execution mode
+---
+send:
+  r: startup_state <- 41L
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  python: never_run = True
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running; poll with an empty send]
+  isError: false
+---
+send:
+  control: interrupt
+  timeout_ms: 10000
+result:
+  content:
+    - type: text
+      text: |
+        Traceback (most recent call last):
+          File "<string>", line 146, in initialize_site
+          File "<frozen site>", line <line>, in main
+          File "<frozen site>", line <line>, in execsitecustomize
+          File "<site-packages>/sitecustomize.py", line 20, in <module>
+            signal.raise_signal(received)
+          File "<string>", line 98, in _interrupt
+        KeyboardInterrupt
+        Error: Python function `_mcp_console_environment.initialize_site` failed
+  isError: false
+---
+send:
+  python: |
+    import builtins
+    import os
+
+    assert os.getpid() == <worker pid>
+    assert builtins.startup_attempts == 2
+    "never_run" in globals()
+result:
+  content:
+    - type: text
+      text: |
+        False
+  isError: false
+---
+send:
+  python: builtins.startup_attempts
+result:
+  content:
+    - type: text
+      text: |
+        2
+  isError: false
+---
+send:
+  r: startup_state + 1L
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false

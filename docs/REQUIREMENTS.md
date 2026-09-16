@@ -175,10 +175,10 @@ These cases report an actionable import error instead of installing an ambiguous
 A direct missing-submodule import retains its ordinary `ModuleNotFoundError`; for the exact submodule lookup performed by `from package import missing`, MCP Console uses `ImportError` so CPython does not suppress the guidance.
 Both forms report the full missing-submodule name.
 
-When inference succeeds, the Python finder calls a private R closure supplied by the reticulate bridge.
-That closure snapshots reticulate's current requirement state, adds the inferred distribution through `reticulate::py_require(..., action = "add")`, and materializes the complete manifest through the existing managed-Python callback.
+When inference succeeds, the Python finder calls Console's native worker services directly.
+Console adds the inferred distribution to its own manifest and materializes the complete candidate through the existing managed-Python callback.
 The server returns a provisional environment in a `PythonResolved` reply to the existing `ResolvePython` request.
-After reticulate activates a compatible environment, the worker reports `PythonActivated` with the complete normalized logical manifest.
+After Console activates a compatible environment, the worker reports `PythonActivated` with the complete normalized logical manifest.
 The worker emits that report before the original Python import resumes.
 The server matches and commits the candidate when it processes the report; sideband order places it before any later evaluation outcome.
 
@@ -192,7 +192,10 @@ New subprocesses use the activated environment and can import its retained packa
 
 A successfully activated environment remains committed if the inferred distribution does not provide the requested module or if later code in the cell fails.
 A later cell and a replacement after restart reuse it.
-An ordinary failure before activation restores the previous reticulate manifest, discards the provisional candidate, and leaves the worker usable.
+An ordinary failure before activation preserves the previous Console manifest, discards the provisional candidate, and leaves the worker usable.
+Activation requires the same Python library and version and preserves the versions of loaded distributions.
+User-added `sys.path` entries remain in place, and distributions supplied by those retained paths do not have to appear in the candidate environment.
+An incompatible candidate reports an error without replacing the interpreter, downgrading loaded packages, restarting, or replaying code.
 Resolver diagnostics name the import and inferred distribution and show the `requirements.python` recovery shape.
 
 Resolution occurs only when execution reaches a missing import.
@@ -201,7 +204,7 @@ An automatic request belongs to the active Python evaluation, so `timeout_ms` ca
 An empty `send` polls that evaluation, and interrupt targets its active host resolver.
 Restart, shutdown, and generation checks cancel or discard unactivated candidates from an old worker; an earlier `PythonActivated` commit remains retained.
 
-The finder prevents a second automatic resolution while its R callback is active.
+The finder prevents a second automatic resolution while its worker callback is active.
 A recursive missing import follows ordinary import failure rather than starting another resolver.
 The callback is also limited to the main worker process and the Python thread that configured the runtime.
 A missing import reached from a fork child or another Python thread reports that the distribution must be prepared before that child or thread starts and does not call R, reticulate, the sideband, or `uv`.
@@ -265,18 +268,18 @@ An R transport, protocol, or bridge-infrastructure failure is different: the ser
 
 ### Live Python preparation
 
-Explicit Python preparation and automatic imports use the same reticulate additive requirement helper.
-The helper snapshots the current manifest before calling `reticulate::py_require(..., action = "add")`.
+Explicit Python preparation, automatic imports, and activated reticulate declarations use the same Console-owned additive requirement implementation.
+The implementation constructs a candidate from the current manifest and validates compatibility before changing Python's environment.
 Before Python initializes, the worker materializes the complete manifest.
-After initialization, reticulate checks that the candidate uses the live `libpython` and activates a compatible environment without replacing the interpreter or its objects.
+After initialization, Console checks that the candidate uses the live `libpython` and preserves loaded distribution versions, then activates it without replacing the interpreter or its objects.
 
-The server retains a Python environment when the worker reports that reticulate accepted its complete normalized manifest.
+The server retains a Python environment when the worker reports that Console accepted its complete normalized manifest.
 A runtime import reports that activation before the original import continues.
 A successful activation commits independently of later steps in the same mixed request.
 If Python succeeds and a following live R update fails, the Python addition remains retained and is available after restart.
 The same rule retains an automatically inferred distribution when the requested module or later cell code still fails.
 
-An ordinary Python preparation failure restores the prior reticulate manifest, discards unaccepted candidates, and leaves the worker usable.
+An ordinary Python preparation failure preserves the prior Console manifest, discards unaccepted candidates, and leaves the worker usable.
 By itself, this failure does not make restart mandatory.
 A Python transport, protocol, or bridge-infrastructure failure stops the worker instead.
 
@@ -504,7 +507,7 @@ A future request may reuse such cache entries.
 Live preparation has worker-confirmed commit boundaries.
 A Python activation is retained as soon as the worker reports it.
 It is not rolled back if an automatic import still cannot find its module, later Python code fails, or a later R step in the same request fails.
-An automatic Python candidate that fails before activation is discarded and the earlier reticulate manifest is restored.
+An automatic Python candidate that fails before activation is discarded and the earlier Console manifest remains active.
 An automatic R candidate is retained only after the worker reports that `.libPaths()` accepted its exact library, and it is not rolled back if later namespace loading or cell code fails.
 Explicit R and DuckDB changes commit only after their complete live operation succeeds.
 For a `send` with explicit requirements, any preparation failure returns through that send and prevents its cell from running, while retaining or discarding candidates according to these existing live-preparation boundaries.

@@ -58,29 +58,13 @@ result:
   isError: true
 ---
 send:
-  r: |
-    environment_request <- jsonlite::toJSON(list(
-      requirements = list(packages = I("numpy")),
-      retained_requirements = list(packages = I("numpy"))
-    ), auto_unbox = TRUE)
-    environment_error <- tryCatch(
-      .Call("mcp_console_resolve_python", environment_request),
-      error = conditionMessage
-    )
-    version_request <- jsonlite::toJSON(list(
-      constraints = I(">=3.11")
-    ), auto_unbox = TRUE)
-    version_error <- tryCatch(
-      .Call("mcp_console_resolve_python_version", version_request),
-      error = conditionMessage
-    )
-    cat(environment_error, version_error, sep = "\n")
+  python: 6 * 7
 result:
   content:
     - type: text
-      text: |
-        managed Python requirements are disabled because the session uses a user-selected Python environment
-        managed Python requirements are disabled because the session uses a user-selected Python environment
+      text: >
+        Error: Python is unavailable: cannot run `configured-by-user`: No such
+        file or directory (os error 2)
   isError: false
 ---
 send:
