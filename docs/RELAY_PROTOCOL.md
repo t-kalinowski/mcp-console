@@ -149,7 +149,7 @@ The server can send these flat frames:
 - `{"kind":"prepare_r","library":"..."}` sends the unchanged live R-preparation command.
 - `{"kind":"r_resolved","library":"..."}` returns one provisional host R-resolution result.
 - `{"kind":"r_resolution_failed","failure":"host","message":"..."}` returns one host R-resolution failure; `failure` is `host`, `interrupted`, or `operation`.
-- `{"kind":"prepare_python","packages":["py-yaml12"]}` asks the worker to perform explicit live reticulate preparation.
+- `{"kind":"prepare_python","packages":["py-yaml12"]}` asks the worker to perform explicit live Console-owned Python preparation.
 - `{"kind":"python_resolved","python":"..."}` returns one host Python-resolution result.
 - `{"kind":"python_resolution_failed","message":"..."}` returns one host Python-resolution failure.
 - `{"kind":"python_version_resolved","version":"3.12.11"}` returns one host Python-version result.
