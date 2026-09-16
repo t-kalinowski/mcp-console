@@ -135,10 +135,17 @@ impl Transcript {
         mime_type: &str,
     ) -> Result<Option<Artifact>, String> {
         let bytes = decode_image_data(data)?;
-        let Some(call_id) = call_id else {
-            return Ok(None);
-        };
-        Ok(self.update(|state| state.active()?.persist_image(call_id, &bytes, mime_type)))
+        Ok(self.persist_decoded_image(call_id, &bytes, mime_type))
+    }
+
+    pub(crate) fn persist_decoded_image(
+        &self,
+        call_id: Option<u64>,
+        bytes: &[u8],
+        mime_type: &str,
+    ) -> Option<Artifact> {
+        let call_id = call_id?;
+        self.update(|state| state.active()?.persist_image(call_id, bytes, mime_type))
     }
 
     pub(crate) fn finish(&self, call: Call, response: &Result<CallToolResponse, ErrorData>) {
@@ -209,7 +216,7 @@ pub(crate) fn validate_image_data(data: &str) -> Result<(), String> {
     decode_image_data(data).map(drop)
 }
 
-fn decode_image_data(data: &str) -> Result<Vec<u8>, String> {
+pub(crate) fn decode_image_data(data: &str) -> Result<Vec<u8>, String> {
     base64::engine::general_purpose::STANDARD
         .decode(data)
         .map_err(|error| format!("worker returned invalid base64 image data: {error}"))

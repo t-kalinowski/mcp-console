@@ -55,7 +55,7 @@ enum ResponseDeliveryTarget {
 
 /// Reports whether an assembled console response reached the MCP transport.
 ///
-/// A bounded recovery copy remains owned here after MCP projection so transport
+/// The bounded recovery response remains owned here after MCP projection so transport
 /// cancellation or write failure can return the complete reply to restart.
 pub(crate) struct ResponseDelivery {
     target: Option<ResponseDeliveryTarget>,
@@ -176,7 +176,7 @@ impl Response {
         let delivery = self.delivery.take().map(|target| ResponseDelivery {
             target: Some(target),
             unclaimed: Some(Response {
-                preview: self.preview.clone(),
+                preview: std::mem::take(&mut self.preview),
                 is_error,
                 delivery: None,
             }),

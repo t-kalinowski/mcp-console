@@ -266,6 +266,29 @@ def test_image_overflow_preserves_later_text_and_fitting_image(
 
 
 @executions(DIRECT, SANDBOXED)
+def test_validates_images_before_omitting_them(
+    binary: Path, execution: Execution
+) -> Transcript:
+    worker = Path(__file__).resolve().parents[3] / "fixtures/zod"
+    with McpClient(binary, execution.serve("--worker", str(worker))) as client:
+        client.initialize_and_list_tools()
+        result = client.send(r="preview invalid oversized image")
+        assert result["isError"], result
+        assert result["content"] == [
+            {
+                "type": "text",
+                "text": "before invalid image\n"
+                "[worker returned invalid base64 image data: Invalid symbol 63, offset 8388610.]\n"
+                "[worker terminated by signal 9]\n"
+                "[worker stopped: in-memory state lost]\n"
+                "[starting new worker]\n[idle]",
+            }
+        ], result
+        assert list((session_directory(client) / "artifacts").iterdir()) == []
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
 def test_combines_old_worker_and_replacement_cell_under_one_budget(
     binary: Path, execution: Execution
 ) -> Transcript:
