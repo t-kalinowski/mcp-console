@@ -30,8 +30,17 @@ def test_routes_python_output(binary: Path, execution: Execution) -> Transcript:
         import sys
 
         assert initialized_from_r
+
+
+        def reject_r_console(frame, event, function):
+            if event == "c_call" and getattr(function, "__module__", None) == "rpycall":
+                raise AssertionError("Python console output entered R")
+
+
+        sys.setprofile(reject_r_console)
         print("Python stdout")
         sys.stderr.write("Python stderr\n")
+        sys.setprofile(None)
         raise ValueError("boom")
         """)
     output = _tool_text(client.send(python=python))
@@ -74,7 +83,60 @@ def test_routes_python_output(binary: Path, execution: Execution) -> Transcript:
     output = _tool_text(client.send(python=python))
     output = client._collect_output(output, sum(len(line) + 1 for line in expected))
     assert sorted(output.splitlines()) == sorted(expected), repr(output)
-    return client.finish()
+    transcript = client.finish()
+    assert all(
+        event["worker"]["data"]
+        for event in transcript
+        if event.get("worker", {}).get("kind")
+        in {"console_output", "console_diagnostic"}
+    )
+    return transcript
+
+
+@executions(DIRECT, SANDBOXED)
+def test_routes_background_python_text_to_raw_streams(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = RelayWorkerClient(binary, execution=execution)
+    # fmt: python
+    python = code(r"""
+        import logging
+        import sys
+        import threading
+
+        saved_stdout, saved_stderr = sys.stdout, sys.stderr
+        logger = logging.Logger("thread-output")
+        logger.addHandler(logging.StreamHandler(saved_stderr))
+
+
+        def background():
+            saved_stdout.write("thread stdout\n")
+            saved_stdout.flush()
+            saved_stderr.write("thread stderr\n")
+            saved_stderr.flush()
+            logger.warning("thread log")
+
+
+        thread = threading.Thread(target=background)
+        thread.start()
+        thread.join()
+        """)
+    output = _tool_text(client.send(python=python))
+    expected = "thread stdout\nthread stderr\nthread log\n"
+    output = client._collect_output(output, len(expected))
+    assert sorted(output.splitlines()) == sorted(expected.splitlines()), output
+    transcript = client.finish()
+    assert "".join(event.get("stdout", "") for event in transcript) == "thread stdout\n"
+    assert (
+        "".join(event.get("stderr", "") for event in transcript)
+        == "thread stderr\nthread log\n"
+    )
+    assert all(
+        event["worker"]["kind"] in {"ready", "completed"}
+        for event in transcript
+        if "worker" in event
+    )
+    return transcript
 
 
 @executions(DIRECT, SANDBOXED)

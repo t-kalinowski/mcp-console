@@ -1,7 +1,11 @@
+#include <errno.h>
+#include <signal.h>
+#include <stdatomic.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/select.h>
+#include <unistd.h>
 
 typedef struct _InputHandler InputHandler;
 typedef void (*repl_init_fn)(void);
@@ -39,16 +43,45 @@ struct event_wait {
 
 static read_console_fn read_console;
 static check_interrupt_fn check_interrupt;
-static const volatile int *interrupts_pending;
+static volatile int *interrupts_pending;
+static _Atomic(check_interrupt_fn) python_interrupt;
+static int interrupt_wakeup;
 
-void mcp_r_console_configure(
+static void handle_interrupt(int signum) {
+    (void) signum;
+    int saved_errno = errno;
+    *interrupts_pending = 1;
+    check_interrupt_fn notify_python = atomic_load_explicit(&python_interrupt, memory_order_relaxed);
+    if (notify_python != NULL) notify_python();
+    /* Nonblocking self-pipe wakes managed input even if another thread got SIGINT. */
+    (void) write(interrupt_wakeup, "1", 1);
+    errno = saved_errno;
+}
+
+static int install_interrupt_handler(void) {
+    struct sigaction action = {0};
+    action.sa_handler = handle_interrupt;
+    action.sa_flags = SA_RESTART;
+    sigemptyset(&action.sa_mask);
+    return sigaction(SIGINT, &action, NULL);
+}
+
+int mcp_r_install_python_interrupt(void (*set_interrupt)(void)) {
+    atomic_store_explicit(&python_interrupt, set_interrupt, memory_order_relaxed);
+    return install_interrupt_handler();
+}
+
+int mcp_r_console_configure(
     read_console_fn read,
     check_interrupt_fn check,
-    const volatile int *pending
+    volatile int *pending,
+    int wakeup
 ) {
     read_console = read;
     check_interrupt = check;
     interrupts_pending = pending;
+    interrupt_wakeup = wakeup;
+    return install_interrupt_handler();
 }
 
 /*

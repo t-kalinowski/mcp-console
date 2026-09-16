@@ -20,8 +20,17 @@ relay:
     import sys
 
     assert initialized_from_r
+
+
+    def reject_r_console(frame, event, function):
+        if event == "c_call" and getattr(function, "__module__", None) == "rpycall":
+            raise AssertionError("Python console output entered R")
+
+
+    sys.setprofile(reject_r_console)
     print("Python stdout")
     sys.stderr.write("Python stderr\n")
+    sys.setprofile(None)
     raise ValueError("boom")
 ---
 worker:
@@ -45,12 +54,12 @@ worker:
 worker:
   kind: console_diagnostic
   data: |2
-      File "<string>", line 467, in _mcp_console_eval_cell
+      File "<string>", line 466, in _mcp_console_eval_cell
 ---
 worker:
   kind: console_diagnostic
   data: |2
-      File "<mcp-console:python:e1>", line 6, in <module>
+      File "<mcp-console:python:e1>", line 15, in <module>
 ---
 worker:
   kind: console_diagnostic

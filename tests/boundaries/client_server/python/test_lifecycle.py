@@ -291,6 +291,182 @@ def test_interrupts_running_python_evaluation(
 
 
 @executions(DIRECT, SANDBOXED)
+def test_interrupts_nested_language_calls_once(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with McpClient(binary, execution.serve()) as client:
+        client.initialize_and_list_tools()
+        # Initialize Python from R and keep objects in both runtimes throughout.
+        # fmt: r
+        r = code(r"""
+            nested_r_state <- new.env()
+            nested_r_original <- nested_r_state
+            nested_input <- function() readline("nested R> ")
+            invisible(reticulate::py_config())
+            """)
+        client.send(r=r)
+        assert last_result_text(client) == "[done]"
+        # fmt: python
+        python = code(r"""
+            import os
+            import signal
+
+            nested_state = object()
+            nested_original = nested_state
+
+
+            def signal_while_suspended():
+                os.kill(os.getpid(), signal.SIGINT)
+                print("Python completed while suspended")
+
+
+            def read_while_suspended():
+                global suspended_line
+                suspended_line = input("suspended Python> ")
+                print(suspended_line)
+
+
+            try:
+                r.nested_input()
+            except KeyboardInterrupt:
+                print("Python caught R interrupt")
+            print("Python continued")
+            """)
+        client.send(python=python)
+        assert last_result_text(client) == (
+            '[input requested: "nested R> "]\n[waiting for stdin]'
+        )
+        wait_for_evaluation_output(
+            client,
+            "Python caught R interrupt\nPython continued\n",
+            "Python-to-R interrupt acknowledged once",
+            control="interrupt",
+        )
+        # fmt: r
+        r = code(r"""
+            tryCatch(
+              reticulate::py_run_string("input('nested Python> ')"),
+              interrupt = function(condition) cat("R caught Python interrupt\n")
+            )
+            cat("R continued\n")
+            """)
+        client.send(r=r)
+        assert last_result_text(client) == (
+            '[input requested: "nested Python> "]\n[waiting for stdin]'
+        )
+        wait_for_evaluation_output(
+            client,
+            "R caught Python interrupt\nR continued\n",
+            "R-to-Python interrupt acknowledged once",
+            control="interrupt",
+        )
+        # A signal raised while R suspends interrupts must let Python finish
+        # its bytecode. Re-arming in the Python handler would spin here.
+        # fmt: r
+        r = code(r"""
+            tryCatch(
+              {
+                suspendInterrupts(reticulate::py_run_string(
+                  "signal_while_suspended()"
+                ))
+                Sys.sleep(0) # Explicitly check R interrupts inside the handler.
+              },
+              interrupt = function(condition) cat("R accepted deferred interrupt\n")
+            )
+            """)
+        client.send(r=r)
+        assert last_result_text(client) == (
+            "Python completed while suspended\nR accepted deferred interrupt\n"
+        ), repr(last_result_text(client))
+        # Managed input also remains usable inside that suspended state.
+        # fmt: r
+        r = code(r"""
+            tryCatch(
+              {
+                suspendInterrupts(reticulate::py_run_string(
+                  "read_while_suspended()"
+                ))
+                Sys.sleep(0)
+              },
+              interrupt = function(condition) cat("R accepted input interrupt\n")
+            )
+            """)
+        client.send(r=r)
+        assert last_result_text(client) == (
+            '[input requested: "suspended Python> "]\n[waiting for stdin]'
+        )
+        client.send(control="interrupt", timeout_ms=0)
+        assert last_result_text(client) == "\n[waiting for stdin]"
+        wait_for_evaluation_output(
+            client,
+            "accepted\nR accepted input interrupt\n",
+            "suspended Python input",
+            stdin="accepted\n",
+        )
+        client.send(python="nested_state is nested_original")
+        assert last_result_text(client) == "True\n"
+        client.send(r="identical(nested_r_state, nested_r_original)")
+        assert last_result_text(client) == "[1] TRUE\n"
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_releases_python_threads_during_managed_input(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with McpClient(binary, execution.serve()) as client:
+        client.initialize_and_list_tools()
+        # fmt: r
+        r = code(r"""
+            input_release <- tempfile("input-thread-release-")
+            input_completed <- tempfile("input-thread-completed-")
+            cat(input_release, input_completed, sep = "\n")
+            """)
+        client.send(r=r)
+        paths = last_result_text(client).splitlines()
+        assert len(paths) == 2, paths
+        client.transcript[-1]["result"]["content"][0]["text"] = (
+            "<thread release>\n<thread completed>"
+        )
+        release, completed = [FifoCheckpoint.create(Path(path)) for path in paths]
+        try:
+            # fmt: python
+            python = code(r"""
+                import threading
+
+                release_path = r.input_release
+                completed_path = r.input_completed
+
+
+                def input_thread():
+                    with open(release_path, "rb", buffering=0) as gate:
+                        assert gate.read(1) == b"1"
+                    with open(completed_path, "wb", buffering=0) as receipt:
+                        receipt.write(b"1")
+
+
+                background = threading.Thread(target=input_thread, daemon=True)
+                background.start()
+                line = input("thread progress> ")
+                background.join()
+                print(line)
+                """)
+            client.send(python=python)
+            assert last_result_text(client) == (
+                '[input requested: "thread progress> "]\n[waiting for stdin]'
+            )
+            release.release()
+            completed.wait("background Python progressed during managed input")
+            wait_for_evaluation_output(
+                client, "finished\n", "managed input completion", stdin="finished\n"
+            )
+            return client.finish()
+        finally:
+            release.close()
+            completed.close()
+
+
+@executions(DIRECT, SANDBOXED)
 def test_initializes_private_runtime_once_on_first_python_cell(
     binary: Path,
     execution: Execution,
@@ -398,6 +574,48 @@ def test_retries_python_runtime_initialization_after_interrupt(
         finally:
             if not passed:
                 stop_client(client)
+
+
+@executions(DIRECT, SANDBOXED)
+def test_dispatches_cells_without_reticulate_evaluation(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with McpClient(binary, execution.serve()) as client:
+        client.initialize_and_list_tools()
+        client.send(python="direct_state = [41]")
+        assert last_result_text(client) == "[done]"
+        # Bootstrap still uses reticulate; subsequent cells must not call its
+        # R evaluation entry points. This instrumentation is confined to R.
+        # fmt: r
+        r = code(r"""
+            for (name in c("py_eval", "py_run_string")) {
+              invisible(suppressMessages(base::trace(
+                name,
+                tracer = quote(stop("R-mediated Python cell dispatch")),
+                print = FALSE,
+                where = asNamespace("reticulate")
+              )))
+            }
+            invisible(suppressMessages(base::trace(
+              "readline",
+              tracer = quote(stop("R-mediated Python input")),
+              print = FALSE,
+              where = baseenv()
+            )))
+            """)
+        client.send(r=r)
+        assert last_result_text(client) == "[done]"
+        client.send(python="direct_state.append(42); direct_state")
+        assert last_result_text(client) == "[41, 42]\n"
+        client.send(python='input("direct> ")', stdin="still live\n")
+        assert last_result_text(client) == (
+            "[input requested: \"direct> \"]\n'still live'\n"
+        )
+        client.send(python='raise ValueError("direct exception")')
+        assert last_result_text(client).endswith("ValueError: direct exception\n")
+        client.send(python="direct_state")
+        assert last_result_text(client) == "[41, 42]\n"
+        return client.finish()
 
 
 @executions(DIRECT, SANDBOXED)

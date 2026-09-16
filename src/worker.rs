@@ -14,11 +14,13 @@ mod input;
 pub(crate) use coordinator::run;
 #[cfg(unix)]
 pub(crate) use core::{
-    publish_plot, publish_python_activation, publish_r_activation, publish_r_activation_failure,
-    resolve_python, resolve_python_version,
+    emit_output, publish_plot, publish_python_activation, publish_r_activation,
+    publish_r_activation_failure, resolve_python, resolve_python_version,
 };
 #[cfg(unix)]
-pub(crate) use embedded_r::resolve_r;
+pub(crate) use embedded_r::{acknowledge_python_interrupt, install_python_interrupt, resolve_r};
+#[cfg(unix)]
+pub(crate) use input::{PythonInput, read_python_input};
 
 #[cfg(not(unix))]
 pub(crate) fn run() -> Result<(), Box<dyn std::error::Error>> {
