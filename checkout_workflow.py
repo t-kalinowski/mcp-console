@@ -7,6 +7,7 @@ import fcntl
 import json
 import os
 import re
+import selectors
 import signal
 import subprocess
 import sys
@@ -31,7 +32,8 @@ def exclusive(paths: list[Path], label: str) -> Iterator[None]:
     inherited = os.environ.get(LOCKS_ENV, "{}")
     tokens = json.loads(inherited)
     owner = ""
-    for path in paths:
+    # A nested owner must find its inherited slot before claiming a free one.
+    for path in sorted(paths, key=lambda path: str(path) not in tokens):
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a+") as lock:
             try:
@@ -147,24 +149,35 @@ class Run:
             if owns_group
             else command
         )
-        print(f"[{name}] {' '.join(command)}", flush=True)
+        print(f"[{name}] {' '.join(command)}", file=sys.stderr, flush=True)
         try:
             with (
                 log_path.open("wb") as log,
                 subprocess.Popen(
                     launch,
                     stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
+                    stderr=subprocess.PIPE,
                     env=os.environ | {RUN_ENV: str(self.path)},
                     start_new_session=owns_group,
                 ) as process,
             ):
                 try:
-                    assert process.stdout is not None
-                    while chunk := process.stdout.read1(65536):
-                        log.write(chunk)
-                        sys.stdout.buffer.write(chunk)
-                        sys.stdout.buffer.flush()
+                    with selectors.DefaultSelector() as streams:
+                        streams.register(
+                            process.stdout, selectors.EVENT_READ, sys.stdout.buffer
+                        )
+                        streams.register(
+                            process.stderr, selectors.EVENT_READ, sys.stderr.buffer
+                        )
+                        while streams.get_map():
+                            for key, _ in streams.select():
+                                chunk = os.read(key.fd, 65536)
+                                if not chunk:
+                                    streams.unregister(key.fileobj)
+                                    continue
+                                log.write(chunk)
+                                key.data.write(chunk)
+                                key.data.flush()
                     status = process.wait()
                 except BaseException:
                     stop_phase(process, owns_group=owns_group)
@@ -255,20 +268,26 @@ def main() -> None:
         "run": [("command", options.arguments)],
     }[options.mode]
 
+    cancelling = False
+
     def interrupted(number: int, _frame: object) -> None:
-        raise SystemExit(128 + number)
+        nonlocal cancelling
+        if not cancelling:
+            cancelling = True
+            raise SystemExit(128 + number)
 
     with ExitStack() as stack:
         stack.enter_context(checkout_owner(root))
         if options.mode in {"check", "test"}:
             stack.enter_context(full_check_slot())
-        for number in (signal.SIGTERM, signal.SIGHUP):
+        for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
             previous = signal.signal(number, interrupted)
             stack.callback(signal.signal, number, previous)
         run = Run(root, sys.argv[1:])
         status = 1
         try:
             for name, command in phases:
+                status = 1
                 status = run.phase(name, command)
                 if status < 0:
                     status = 128 - status
@@ -283,7 +302,7 @@ def main() -> None:
         finally:
             run.record["exit_status"] = status
             run.save()
-            print(f"Validation record: {run.path}", flush=True)
+            print(f"Validation record: {run.path}", file=sys.stderr, flush=True)
         raise SystemExit(status)
 
 

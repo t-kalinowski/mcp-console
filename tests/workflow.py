@@ -14,6 +14,7 @@ import unittest
 from pathlib import Path
 
 from support.capture import read_lines
+from support.checkpoints import FifoCheckpoint
 from support.normalization import code
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -117,10 +118,11 @@ class WorkflowTests(unittest.TestCase):
             timeout=10,
         )
 
-    def start_check(self) -> subprocess.Popen[str]:
+    def start_check(self, root: Path | None = None) -> subprocess.Popen[str]:
+        root = root or self.root
         process = subprocess.Popen(
-            [self.root / "scripts/check"],
-            cwd=self.root,
+            [root / "scripts/check"],
+            cwd=root,
             env=self.environment | {"HOLD_STAGE": "1"},
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -178,7 +180,7 @@ class WorkflowTests(unittest.TestCase):
         for phase in record["phases"]:
             self.assertGreaterEqual(phase["elapsed_seconds"], 0)
             self.assertTrue(Path(phase["log"]).is_file())
-        self.assertIn("result.json", result.stdout)
+        self.assertIn("result.json", result.stderr)
 
     def test_signalled_phase_preserves_shell_exit_status(self) -> None:
         self.write_script(
@@ -199,11 +201,15 @@ class WorkflowTests(unittest.TestCase):
 
     def test_packaging_conflict_survives_target_rename(self) -> None:
         process = self.start_check()
-        result = self.run_command(
-            sys.executable, "-c", "import build_backend; build_backend.build_wheel('.')"
-        )
-        self.assertNotEqual(result.returncode, 0, result.stdout)
-        self.assertIn("checkout is busy", result.stdout + result.stderr)
+        for method in ("build_wheel", "build_sdist"):
+            with self.subTest(method=method):
+                result = self.run_command(
+                    sys.executable,
+                    "-c",
+                    f"import build_backend; build_backend.{method}('.')",
+                )
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn("checkout is busy", result.stdout + result.stderr)
         self.finish_check(process)
         result = self.run_command(
             sys.executable, "-c", "import build_backend; build_backend.build_wheel('.')"
@@ -322,6 +328,126 @@ class WorkflowTests(unittest.TestCase):
         result = self.run_command("scripts/check", root=other)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.finish_check(process)
+
+    def test_nested_check_reuses_later_slot_after_first_slot_is_released(self) -> None:
+        second, third = (self.directory / name for name in ("second", "third"))
+        for root in (second, third):
+            shutil.copytree(self.root, root)
+        self.environment["MCP_CONSOLE_CHECK_SLOTS"] = "2"
+        ready = FifoCheckpoint.create(self.directory / "nested-ready")
+        self.addCleanup(ready.close)
+        self.environment["NESTED_READY"] = str(ready.path)
+        self.write_script(
+            "scripts/check-core",
+            # fmt: python
+            """
+            import os
+            import subprocess
+            import sys
+
+            if os.environ.get("NESTED"):
+                with open(os.environ["NESTED_READY"], "wb", buffering=0) as receipt:
+                    receipt.write(b"1")
+                assert sys.stdin.buffer.read(1) == b"1"
+            else:
+                environment = os.environ | {"NESTED": "1"}
+                environment.pop("HOLD_STAGE", None)
+                subprocess.run(["scripts/check"], env=environment, check=True)
+            """,
+        )
+        shutil.copy2(self.root / "scripts/check-core", second / "scripts/check-core")
+        # The first holder and third caller use the ordinary, non-nesting fixture.
+        shutil.copy2(third / "scripts/check-core", self.root / "scripts/check-core")
+        first = self.start_check()
+        nested = self.start_check(second)
+        self.finish_check(first)
+        assert nested.stdin is not None
+        nested.stdin.write("1")
+        nested.stdin.flush()
+        ready.wait("nested check owns its inherited slot")
+        result = self.run_command("scripts/check", root=third)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.finish_check(nested)
+
+    def test_nested_launch_error_records_failure_after_successful_phase(self) -> None:
+        shutil.copy2(ROOT / "scripts/check-core", self.root / "scripts/check-core")
+        self.write_script("scripts/validate_runtime_sources.py", 'print("checked")')
+        result = self.run_command("scripts/check")
+        self.assertNotEqual(result.returncode, 0)
+        record = next(r for r in self.records() if r["command"] == ["check-core"])
+        self.assertEqual(record["phases"][0]["exit_status"], 0)
+        self.assertEqual(record["phases"][1]["exit_status"], 1)
+        self.assertEqual(record["exit_status"], 1)
+
+    def test_wrapped_command_preserves_stdout_and_stderr(self) -> None:
+        self.write_script(
+            "output.py",
+            # fmt: python
+            """
+            import sys
+
+            print('{"answer": 42}')
+            print("diagnostic", file=sys.stderr)
+            """,
+        )
+        result = self.run_command("scripts/with-checkout", sys.executable, "output.py")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, '{"answer": 42}\n')
+        self.assertIn("diagnostic\n", result.stderr)
+        self.assertIn("result.json", result.stderr)
+        (record,) = self.records()
+        output = Path(record["phases"][0]["log"]).read_text()
+        self.assertIn('{"answer": 42}\n', output)
+        self.assertIn("diagnostic\n", output)
+
+    def test_repeated_cancellation_cannot_interrupt_escalation(self) -> None:
+        self.write_script(
+            "stubborn.py",
+            # fmt: python
+            """
+            import os
+            import signal
+
+
+            def terminated(*_):
+                with open(os.environ["TERM_RECEIPT"], "wb", buffering=0) as receipt:
+                    receipt.write(b"1")
+
+
+            signal.signal(signal.SIGTERM, terminated)
+            print(f"stubborn ready {os.getpgrp()}", flush=True)
+            while True:
+                signal.pause()
+            """,
+        )
+        receipt = FifoCheckpoint.create(self.directory / "term-received")
+        self.addCleanup(receipt.close)
+        process = subprocess.Popen(
+            ["scripts/with-checkout", sys.executable, "stubborn.py"],
+            cwd=self.root,
+            env=self.environment | {"TERM_RECEIPT": str(receipt.path)},
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        group = None
+        try:
+            assert process.stdout is not None
+            output = read_lines(process.stdout, 2, "stubborn phase setup")
+            group = int(output[-1].rsplit(" ", 1)[1])
+            process.terminate()
+            receipt.wait("cancellation reached the phase")
+            process.send_signal(signal.SIGHUP)
+            self.assertEqual(process.wait(timeout=10), 128 + signal.SIGTERM)
+        finally:
+            if group is not None:
+                try:
+                    os.killpg(group, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            if process.poll() is None:
+                process.kill()
+            process.communicate(timeout=10)
 
 
 if __name__ == "__main__":

@@ -11,12 +11,18 @@ import maturin
 
 from checkout_workflow import checkout_owner
 
-build_sdist = maturin.build_sdist
 get_requires_for_build_editable = maturin.get_requires_for_build_editable
 get_requires_for_build_sdist = maturin.get_requires_for_build_sdist
 get_requires_for_build_wheel = maturin.get_requires_for_build_wheel
 prepare_metadata_for_build_editable = maturin.prepare_metadata_for_build_editable
 prepare_metadata_for_build_wheel = maturin.prepare_metadata_for_build_wheel
+
+
+def build_sdist(
+    sdist_directory: str, config_settings: dict[str, Any] | None = None
+) -> str:
+    with checkout_owner(Path(__file__).resolve().parent):
+        return maturin.build_sdist(sdist_directory, config_settings)
 
 
 def build_wheel(
