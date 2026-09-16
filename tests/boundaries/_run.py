@@ -254,6 +254,8 @@ class ProgressReporter:
     def __init__(self, *, update: bool, timeout: float) -> None:
         self.update = update
         self.rerun = ["scripts/test"]
+        if update:
+            self.rerun.append("--update")
         if timeout != parser.get_default("timeout"):
             self.rerun += ["--timeout", str(timeout)]
         self.running: dict[int, RunningCase] = {}

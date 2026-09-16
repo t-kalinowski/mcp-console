@@ -1449,6 +1449,24 @@ class TranscriptRunnerTests(unittest.TestCase):
             result.stderr,
         )
 
+    def test_failure_rerun_preserves_snapshot_update(self) -> None:
+        self.suite.write_text(
+            PUBLIC_SUITE
+            # fmt: python
+            + code("""
+                def test_selected(binary):
+                    raise RuntimeError("fixture failed before snapshot update")
+                """)
+        )
+        result = self.run_runner(
+            "--update", "client_server/server/test_tools::selected"
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "rerun: scripts/test --update client_server/server/test_tools::selected",
+            result.stderr,
+        )
+
     def test_parallel_failure_exits_and_reports_every_failure(self) -> None:
         self.suite.write_text(FAILING_SUITE, encoding="utf-8")
         for name in ("selected", "unselected"):
