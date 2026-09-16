@@ -11,8 +11,8 @@ A separate runtime process executes cells, with native sandboxing enabled by def
 ## Status
 
 This is a **development preview** with changing interfaces.
-The walkthrough below exercises the current checkout through an installed Python client and the default sandbox; it does not establish readiness for arbitrary workloads.
-It has been tested on Apple Silicon macOS.
+The scripted installation check exercises the current checkout and default sandbox on Apple Silicon macOS.
+That check does not establish readiness for arbitrary workloads.
 MCP Console supports macOS and Linux; Windows is unsupported.
 See the [runtime limitations](docs/BUILTIN_RUNTIME.md#current-limitations) and [sandbox lifetime limits](docs/SANDBOX.md#supported-hosts-and-lifetime-limits).
 
@@ -22,63 +22,73 @@ Python-only execution is not implemented.
 
 ## Quickstart
 
-This deterministic walkthrough needs no model API key, chat application, or external dataset.
-It installs **the current source checkout**, including its private sandbox runner.
-The published PyPI 0.0.3 wheels predate the Python client used here; installing `mcp-console[client]` from PyPI is not a substitute.
+Connect MCP Console to Codex and try an analysis that keeps its state across R, SQL, and Python.
+These commands install **the current source checkout**, including its private sandbox runner.
 
 Prerequisites:
 
+- A working, signed-in Codex CLI for the agent walkthrough.
 - R on `PATH` or selected by `R_HOME` (tested with R 4.6.1).
 - `uv`, Git, rustup, and Rust 1.95 or later; the commands select Python 3.12 (`uv` can download it).
 - Native build tools: Xcode Command Line Tools on macOS; a C compiler, `pkg-config`, libcap development files, and binutils on Linux.
 - On Linux, mounted `/proc` and permission for the native sandbox's namespace and policy operations; see [host requirements](docs/LINUX_COMPATIBILITY.md).
   Restricted containers or host security policy may prevent startup.
 
-Run these commands in a terminal:
+Install the checkout and register it with Codex:
 
 ```sh
 cd "$(mktemp -d)"
 git clone --depth 1 https://github.com/t-kalinowski/mcp-console.git
-uv venv --python 3.12
-uv pip install "./mcp-console[client]"
+uv tool install --python 3.12 --reinstall ./mcp-console
+codex mcp add console \
+  --env R_HOME="${R_HOME:-$(R RHOME)}" \
+  --env RETICULATE_PYTHON=managed -- uv tool run mcp-console serve
 mkdir workspace
 cd workspace
-../.venv/bin/python ../mcp-console/examples/persistent-analysis.py
+codex -c mcp_servers.console.tool_timeout_sec=600
 ```
 
-The first installation fetches and compiles the pinned runner with its own Rust toolchain.
-The walkthrough uses managed Python, ignoring any `RETICULATE_PYTHON` selection in your shell.
-The first cell prepares the default R and Python packages and DuckDB extensions; the plot also prepares Matplotlib.
-These steps may download interpreters, packages, and build dependencies and can take several minutes.
-No dataset is downloaded.
-See [source installation](RELEASE.md#private-sandbox-executable) and [managed dependencies](docs/REQUIREMENTS.md#retained-environments) for details.
+uv manages the installation environment; no virtual-environment creation or activation is needed.
+The registration selects managed Python so Console can prepare the analysis packages.
+The first installation builds the pinned runner with its own Rust toolchain; the first analysis prepares R and Python packages and DuckDB extensions.
+These steps can download interpreters, packages, and build dependencies and take several minutes.
+The Codex command allows up to ten minutes for a tool call, including dependency preparation.
+See [source installation](RELEASE.md#private-sandbox-executable), [managed dependencies](docs/REQUIREMENTS.md#retained-environments), and [Codex MCP configuration](https://developers.openai.com/codex/mcp) for details.
 
-Success includes `Total profit: 280`, a SQL table with store profit 120 and web profit 160, `Best channel: web ($160 profit)`, and `Profit gap: $40`.
-The script then prints `Session closed.` and the paths to the real Markdown transcript and PNG.
-The simple Python client prints `[image/png output]`; open the printed PNG path to view the plot.
+## Try it with Codex
 
-Records are under `workspace/.agents/console/sessions/<run-id>/`, relative to the temporary directory created above.
-Keep that directory if you want to inspect the results later.
-The script polls unfinished work and has a ten-minute deadline; its context manager closes the connection on completion or error.
-A timeout from an individual `send` limits waiting, not execution.
+In Codex, use `/mcp` to check that `console` exposes `send`, then ask:
 
-## One workspace, several languages
+> Use MCP Console for this analysis.
+> In R, create six orders: web revenues 120, 150, 180 with costs 80, 90, 120; store revenues 100, 140, 160 with costs 70, 100, 110.
+> Compute each order's profit and the total profit.
+> Query the live R data frame from SQL to aggregate profit by channel.
+> Then access that data from Python, retain the channel totals, and plot them.
 
-Read [the complete example](examples/persistent-analysis.py): it uses one live connection for four cells.
+Follow up in the same conversation:
 
-1. R creates six synthetic orders, computes each order's profit, and totals it.
-2. SQL groups the live R data frame by sales channel.
-3. Python accesses `r.orders`, prints the best channel, and creates a bar plot.
-4. A follow-up Python cell compares the previously computed totals without recreating the data.
+> Using the channel totals already in the console, calculate the profit gap in another Python call.
+> Show the plot and the path to the recorded transcript.
 
-For a model-driven version, connect an existing [supported Python integration](docs/PYTHON.md#chatlas) and ask:
+The expected total profit is 280: store contributes 120 and web contributes 160, a gap of 40.
+No external dataset is needed.
+Records and plot artifacts are written under `workspace/.agents/console/sessions/<run-id>/`, relative to the temporary directory created above.
+Keep that directory to inspect the results later.
+This is a model-driven workflow using your Codex account; the exact calls and responses can vary.
 
-> Use the synthetic orders in `examples/persistent-analysis.py`.
-> Compute profit in R, query the live data by channel with SQL, and plot it with Python.
-> Then compare the channels using the retained state and report the transcript and plot paths.
+### Scripted installation check
 
-That optional run needs your model provider's credentials and may incur charges.
-The scripted walkthrough above makes no model calls.
+To run the same analysis without a model, quit Codex and run this from the same `workspace` directory:
+
+```sh
+uv tool run --python 3.12 --from "../mcp-console[client]" \
+  python ../mcp-console/examples/persistent-analysis.py
+```
+
+The [complete example](examples/persistent-analysis.py) uses one connection for four cells, polls unfinished work, and closes the session on completion or error.
+It prints the results above, `Session closed.`, and paths to the transcript and PNG; the simple Python client represents the image as `[image/png output]`.
+See the [scripted check and Python integrations](docs/PYTHON.md#scripted-installation-check) for installation details and other clients.
+The published PyPI 0.0.3 wheels predate this Python client; the check uses the current checkout.
 
 ## Architecture
 
