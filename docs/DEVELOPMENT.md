@@ -12,6 +12,9 @@ A conflicting command exits with the active owner's PID, command, and lock path.
 Retry after that owner finishes; do not delete a lock file to bypass ownership.
 Sequential nested commands inherit the same ownership, including packaging invoked through `uv`.
 Do not start concurrent children under an inherited owner.
+Cancellation sends `SIGTERM`, allows up to five seconds for the phase to exit, and then kills any remaining members of its process group before releasing ownership.
+Nested validation commands share that group so escalation also reaches their children.
+Commands that deliberately detach into a new session remain responsible for their own cleanup.
 
 Use the same ownership for direct build commands:
 
