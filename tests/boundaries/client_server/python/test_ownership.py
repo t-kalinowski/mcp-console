@@ -93,6 +93,49 @@ def test_routes_interrupts_across_nested_languages(
 
 
 @executions(DIRECT, SANDBOXED)
+def test_defers_python_interrupts_until_r_resumes(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with McpClient(binary, execution.serve()) as client:
+        client.initialize_and_list_tools()
+        client.send(
+            # fmt: python
+            python=code("""
+                import signal
+
+
+                def finite_python():
+                    signal.raise_signal(signal.SIGINT)
+                    print("Python completed")
+                    return 42
+                """)
+        )
+        assert last_result_text(client) == "[done]", last_result_text(client)
+        client.send(
+            # fmt: r
+            r=code(r"""
+                tryCatch(
+                  {
+                    suspendInterrupts({
+                      answer <- reticulate::py_eval("finite_python()")
+                      cat("R received:", answer, "\n")
+                    })
+                    # Check the deferred R interrupt while the handler is active.
+                    Sys.sleep(0)
+                  },
+                  interrupt = function(condition) cat("R interrupt delivered\n")
+                )
+                """)
+        )
+        assert last_result_text(client) == (
+            "Python completed\nR received: 42 \nR interrupt delivered\n"
+        ), last_result_text(client)
+        client.send(python="6 * 7")
+        assert last_result_text(client) == "42\n", last_result_text(client)
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
 def test_python_requirements_preserve_live_objects_and_input(
     binary: Path, execution: Execution
 ) -> Transcript:

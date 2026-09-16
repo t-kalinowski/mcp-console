@@ -95,14 +95,9 @@ pub(super) fn pending() -> bool {
 /// signal; the first runtime to reach its safe boundary consumes it. R clears
 /// its pending flag when raising an R interrupt, so Python must acknowledge
 /// that consumption instead of raising again after the nested call returns.
+/// An interrupt suspended by R stays pending for R to deliver after resuming;
+/// re-arming Python from its own signal handler would repeat the same callback.
 pub(crate) fn take_python() -> bool {
-    let r = R_PENDING.load(Ordering::SeqCst);
-    if !r.is_null() && unsafe { std::ptr::read_volatile(r) } != 0 && !pending() {
-        let python = PYTHON_INTERRUPT.load(Ordering::SeqCst);
-        let signal: unsafe extern "C" fn() = unsafe { std::mem::transmute(python) };
-        unsafe { signal() };
-        return false;
-    }
     let pending = pending();
     if pending {
         clear();
