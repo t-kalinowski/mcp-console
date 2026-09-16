@@ -13,6 +13,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from support.capture import read_lines
 from support.normalization import code
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -40,6 +41,7 @@ class WorkflowTests(unittest.TestCase):
         }
         self.environment.pop("MCP_CONSOLE_CHECKOUT_LOCKS", None)
         self.environment.pop("MCP_CONSOLE_VALIDATION_RUN", None)
+        self.environment.pop("MCP_CONSOLE_VALIDATION_GROUP", None)
         self.write_script(
             "scripts/stage-sandbox-runner",
             # fmt: python
@@ -243,6 +245,71 @@ class WorkflowTests(unittest.TestCase):
             sys.executable, "-c", "import build_backend; build_backend.build_wheel('.')"
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_cancellation_escalates_for_direct_and_nested_stubborn_phases(self) -> None:
+        self.write_script(
+            "stubborn.py",
+            # fmt: python
+            """
+            import os
+            import signal
+
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            print(f"stubborn ready {os.getpgrp()}", flush=True)
+            signal.pause()
+            """,
+        )
+        for nested in (False, True):
+            with self.subTest(nested=nested):
+                command = ["scripts/with-checkout"]
+                if nested:
+                    command.append("scripts/with-checkout")
+                command += [sys.executable, "stubborn.py"]
+                process = subprocess.Popen(
+                    command,
+                    cwd=self.root,
+                    env=self.environment,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    start_new_session=True,
+                )
+                group = None
+                try:
+                    assert process.stdout is not None
+                    receipt = read_lines(
+                        process.stdout, 3 if nested else 2, "stubborn phase setup"
+                    )
+                    self.assertTrue(receipt[-1].startswith("stubborn ready "), receipt)
+                    group = int(receipt[-1].rsplit(" ", 1)[1])
+                    process.terminate()
+                    self.assertEqual(process.wait(timeout=10), 128 + signal.SIGTERM)
+                    # EOF also proves the stubborn writer has retired.
+                    process.communicate(timeout=10)
+                    record = next(
+                        r
+                        for r in self.records()
+                        if r["command"] == ["run", *command[1:]]
+                    )
+                    self.assertEqual(record["exit_status"], 128 + signal.SIGTERM)
+                    if not nested:
+                        self.assertEqual(
+                            record["phases"][0]["exit_status"], -signal.SIGKILL
+                        )
+                finally:
+                    if group is not None:
+                        try:
+                            os.killpg(group, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                    if process.poll() is None:
+                        process.kill()
+                    process.communicate(timeout=10)
+                result = self.run_command(
+                    "scripts/with-checkout", sys.executable, "-c", "pass"
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_full_gate_budget_is_shared_across_checkouts(self) -> None:
         other = self.directory / "other"

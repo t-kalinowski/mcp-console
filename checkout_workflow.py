@@ -19,6 +19,7 @@ from pathlib import Path
 
 LOCKS_ENV = "MCP_CONSOLE_CHECKOUT_LOCKS"
 RUN_ENV = "MCP_CONSOLE_VALIDATION_RUN"
+GROUP_ENV = "MCP_CONSOLE_VALIDATION_GROUP"
 FAILURE = re.compile(
     r"^((?:client_server|server_relay|relay_worker|cli)/\S+::\S+): failed(?: in .*)?$"
 )
@@ -82,6 +83,27 @@ def full_check_slot() -> Iterator[None]:
         yield
 
 
+def stop_phase(process: subprocess.Popen, *, owns_group: bool) -> None:
+    def deliver(number: int) -> None:
+        try:
+            if owns_group:
+                os.killpg(process.pid, number)
+            else:
+                os.kill(process.pid, number)
+        except ProcessLookupError:
+            pass
+
+    deliver(signal.SIGTERM)
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        pass
+    # An exited leader can still have descendants holding the output pipe.
+    if owns_group or process.poll() is None:
+        deliver(signal.SIGKILL)
+    process.wait()
+
+
 class Run:
     def __init__(self, root: Path, command: list[str]) -> None:
         runs = root / ".dev-workflow/runs"
@@ -119,16 +141,22 @@ class Run:
         log_path = self.directory / f"{len(self.record['phases']) + 1:02}-{name}.log"
         started = time.monotonic()
         status = 1
+        owns_group = os.environ.get(GROUP_ENV) != str(os.getpgrp())
+        launch = (
+            [sys.executable, str(Path(__file__).resolve()), "phase", *command]
+            if owns_group
+            else command
+        )
         print(f"[{name}] {' '.join(command)}", flush=True)
         try:
             with (
                 log_path.open("wb") as log,
                 subprocess.Popen(
-                    command,
+                    launch,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     env=os.environ | {RUN_ENV: str(self.path)},
-                    start_new_session=True,
+                    start_new_session=owns_group,
                 ) as process,
             ):
                 try:
@@ -138,10 +166,10 @@ class Run:
                         sys.stdout.buffer.write(chunk)
                         sys.stdout.buffer.flush()
                     status = process.wait()
+                except BaseException:
+                    stop_phase(process, owns_group=owns_group)
+                    raise
                 finally:
-                    if process.poll() is None:
-                        os.killpg(process.pid, signal.SIGTERM)
-                        process.wait()
                     status = process.returncode
         finally:
             failures = []
@@ -167,15 +195,20 @@ class Run:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("check", "check-core", "test", "run"))
+    parser.add_argument("mode", choices=("check", "check-core", "test", "run", "phase"))
     parser.add_argument("arguments", nargs=argparse.REMAINDER)
     options = parser.parse_args()
     if options.mode in {"check", "check-core"} and options.arguments:
         parser.error(f"{options.mode} does not accept arguments")
-    if options.mode == "run" and not options.arguments:
+    if options.mode in {"run", "phase"} and not options.arguments:
         parser.error("run requires a command")
     root = Path(__file__).resolve().parent
     os.chdir(root)
+    if options.mode == "phase":
+        # The new session has its final group identity here, before exec.
+        # Nested workflows keep this group so the outer owner can retire it.
+        os.environ[GROUP_ENV] = str(os.getpgrp())
+        os.execvp(options.arguments[0], options.arguments)
     core = [
         ("runtime-sources", ["scripts/validate_runtime_sources.py"]),
         ("release-tests", ["tests/release.py"]),
