@@ -28,7 +28,7 @@ These commands install **the current source checkout**, including its private sa
 Prerequisites:
 
 - A working, signed-in Codex CLI for the agent walkthrough.
-- R on `PATH` or selected by `R_HOME` (tested with R 4.6.1).
+- R on `PATH` (tested with R 4.6.1).
 - `uv`, Git, rustup, and Rust 1.95 or later; the commands select Python 3.12 (`uv` can download it).
 - Native build tools: Xcode Command Line Tools on macOS; a C compiler, `pkg-config`, libcap development files, and binutils on Linux.
 - On Linux, mounted `/proc` and permission for the native sandbox's namespace and policy operations; see [host requirements](docs/LINUX_COMPATIBILITY.md).
@@ -40,19 +40,14 @@ Install the checkout and register it with Codex:
 cd "$(mktemp -d)"
 git clone --depth 1 https://github.com/t-kalinowski/mcp-console.git
 uv tool install --python 3.12 --reinstall ./mcp-console
-codex mcp add console \
-  --env R_HOME="${R_HOME:-$(R RHOME)}" \
-  --env RETICULATE_PYTHON=managed -- uv tool run mcp-console serve
+codex mcp add console -- uvx mcp-console serve
 mkdir workspace
 cd workspace
-codex -c mcp_servers.console.tool_timeout_sec=600
+codex
 ```
 
-uv manages the installation environment; no virtual-environment creation or activation is needed.
-The registration selects managed Python so Console can prepare the analysis packages.
 The first installation builds the pinned runner with its own Rust toolchain; the first analysis prepares R and Python packages and DuckDB extensions.
 These steps can download interpreters, packages, and build dependencies and take several minutes.
-The Codex command allows up to ten minutes for a tool call, including dependency preparation.
 See [source installation](RELEASE.md#private-sandbox-executable), [managed dependencies](docs/REQUIREMENTS.md#retained-environments), and [Codex MCP configuration](https://developers.openai.com/codex/mcp) for details.
 
 ## Try it with Codex
