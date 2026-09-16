@@ -17,6 +17,7 @@ import math
 import os
 import pickle
 import runpy
+import shlex
 import signal
 import sys
 import time
@@ -295,6 +296,10 @@ class ProgressReporter:
             )
         else:
             self._line(f"{running.selector}: failed", error=True)
+        if not succeeded:
+            self._line(
+                f"rerun: scripts/test {shlex.quote(running.selector)}", error=True
+            )
 
     def cancel(self, index: int, diagnostics: str) -> None:
         running = self.running.pop(index)

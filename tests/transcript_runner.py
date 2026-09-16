@@ -19,6 +19,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from pathlib import Path
 
+from support.capture import read_lines
 from support.events import Events
 from support.native import SHARED_LIBRARY_FLAG
 from support.normalization import code
@@ -1407,17 +1408,16 @@ class TranscriptRunnerTests(unittest.TestCase):
                 acknowledgements += os.read(started, 2 - len(acknowledgements))
             self.assertEqual(os.write(release_first, b"1"), 1)
             assert process.stderr is not None
-            expected_failure = "client_server/server/test_tools::first_failure: failed"
-            observed_stderr = ""
-            deadline = time.monotonic() + 10
-            while expected_failure not in observed_stderr:
-                remaining = deadline - time.monotonic()
-                self.assertGreater(remaining, 0, "first failure was not reported")
-                ready, _, _ = select.select([process.stderr], [], [], remaining)
-                self.assertTrue(ready, "first failure was not reported")
-                line = process.stderr.readline()
-                self.assertNotEqual(line, "", "runner exited before reporting failure")
-                observed_stderr += line
+            # Descriptor reads avoid buffering part of the receipt above the pipe.
+            receipt = read_lines(process.stderr, 2, "first failure receipt")
+            self.assertEqual(
+                receipt,
+                [
+                    "client_server/server/test_tools::first_failure: failed",
+                    "rerun: scripts/test client_server/server/test_tools::first_failure",
+                ],
+            )
+            observed_stderr = "\n".join(receipt) + "\n"
             self.assertEqual(os.write(release_second, b"2"), 1)
             stdout, remaining_stderr = process.communicate(timeout=10)
             stderr = observed_stderr + remaining_stderr
@@ -1438,6 +1438,10 @@ class TranscriptRunnerTests(unittest.TestCase):
         self.assertNotEqual(process.returncode, 0)
         self.assertIn("client_server/server/test_tools::first_failure: failed", stderr)
         self.assertIn("client_server/server/test_tools::second_failure: failed", stderr)
+        for name in ("first_failure", "second_failure"):
+            self.assertIn(
+                f"rerun: scripts/test client_server/server/test_tools::{name}", stderr
+            )
         self.assertIn("runner: first actual", stderr)
         self.assertIn("runner: second actual", stderr)
         self.assertIn("multiple transcript cases failed (2 sub-exceptions)", stderr)
