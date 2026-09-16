@@ -5,6 +5,13 @@ Explanatory documents cover current behavior and ownership, and protocol documen
 The tool description guide links to the canonical snapshot of the registered tools and schemas.
 Source and public acceptance tests remain the final authority when prose disagrees with the implementation.
 
+## Start here
+
+1. Read the [overview and quickstart](../README.md#quickstart), then run the [persistent analysis example](../examples/persistent-analysis.py).
+2. Follow the [process diagram](ARCHITECTURE.md#process-layout) into the server, relay, worker, and runner ownership sections.
+3. Read the [runtime limitations](BUILTIN_RUNTIME.md#current-limitations), [sandbox lifetime limits](SANDBOX.md#supported-hosts-and-lifetime-limits), and [dependency trust boundary](REQUIREMENTS.md#host-resolution-and-trust).
+4. Inspect the [recording formats and rendering behavior](ARCHITECTURE.md#recording-cell-output-and-image-artifacts) before sharing or executing recorded source.
+
 ## Project and console users
 
 - The [project README](../README.md) is the short product overview and current project-status page.

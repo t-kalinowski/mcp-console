@@ -4,6 +4,7 @@ import asyncio
 import inspect
 import json
 import os
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -20,9 +21,76 @@ from support.normalization import code
 from support.records import Transcript
 from support.previews import assert_preview
 from support.evidence import compact_text
-from support.requirements import WORKER, requires
+from support.processes import process_group_exists, stop_process_group
+from support.requirements import SANDBOX, WORKER, requires
 from support.resolvers import bare_runtime_environment
 from support.suites import run_this_suite
+
+
+@requires(WORKER, SANDBOX)
+def test_persistent_analysis_example(binary: Path) -> Transcript:
+    environment, _ = r_test_environment()
+    environment["PYTHONPATH"] = str(ROOT / "python")
+    with tempfile.TemporaryDirectory() as temporary:
+        workspace = Path(temporary).resolve()
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                str(ROOT / "examples/persistent-analysis.py"),
+                str(binary),
+            ],
+            cwd=workspace,
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        try:
+            output, error = process.communicate(timeout=540)
+            assert process.returncode == 0, (output, error)
+            # The script and its MCP server have both exited after context closure.
+            assert not process_group_exists(process.pid)
+        finally:
+            stop_process_group(process.pid)
+            process.wait(timeout=10)
+        assert "Total profit: 280" in output, output
+        assert "Best channel: web ($160 profit)" in output, output
+        assert "Profit gap: $40" in output, output
+        assert "Session closed." in output, output
+        (session,) = (workspace / ".agents/console/sessions").iterdir()
+        events = [
+            json.loads(line)
+            for line in (session / "internal/events.jsonl").read_text().splitlines()
+        ]
+        cells = [
+            event["request"]["arguments"]
+            for event in events
+            if event["event"] == "tool_call"
+            and any(
+                key in event["request"]["arguments"] for key in ("r", "sql", "python")
+            )
+        ]
+        assert [
+            next(key for key in ("r", "sql", "python") if key in cell) for cell in cells
+        ] == ["r", "sql", "python", "python"]
+        assert all("control" not in cell for cell in cells), cells
+        (artifact,) = [
+            event for event in events if event["event"] == "artifact_created"
+        ]
+        plot = session / artifact["path"]
+        assert plot.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+        markdown = (session / "transcript.md").read_text()
+        assert artifact["path"] in markdown and "Profit gap: $40" in markdown
+        assert (session / "transcript.qmd").is_file()
+        assert len(list((session / "outputs").glob("*.log"))) == 4
+        return [
+            {
+                "output": output.replace(
+                    str(plot), "<session>/artifacts/<plot>.png"
+                ).replace(str(session), "<session>")
+            }
+        ]
 
 
 def options(binary: Path, execution: Execution) -> dict:

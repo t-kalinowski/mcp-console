@@ -1,17 +1,37 @@
 # Python integrations
 
-Install the extra for the interface you use, with Python 3.11 or newer:
+The clients below are part of the current source checkout and require Python 3.11 or newer.
+The published PyPI 0.0.3 wheels do not include these clients or extras.
+Start with the [installed-package walkthrough](../README.md#quickstart), which runs without a model API key.
 
-| Interface           | Install                                    |
-| ------------------- | ------------------------------------------ |
-| Python client       | `pip install "mcp-console[client]"`        |
-| chatlas             | `pip install "mcp-console[chatlas]"`       |
-| OpenAI Responses    | `pip install "mcp-console[openai]"`        |
-| OpenAI Agents       | `pip install "mcp-console[openai-agents]"` |
-| Anthropic           | `pip install "mcp-console[anthropic]"`     |
-| Official thread SDK | `pip install "mcp-console[codex]"`         |
+From the repository root, install a checkout into a virtual environment:
+
+```sh
+uv venv --python 3.12
+uv pip install ".[client]"
+```
+
+This builds the complete package and its private sandbox runner.
+It requires R, Git, rustup, and the [native build prerequisites](../RELEASE.md#private-sandbox-executable).
+Use the environment's Python to run client programs.
+For a framework integration, substitute the appropriate extra:
+
+| Interface           | Install                             |
+| ------------------- | ----------------------------------- |
+| Python client       | `uv pip install ".[client]"`        |
+| chatlas             | `uv pip install ".[chatlas]"`       |
+| OpenAI Responses    | `uv pip install ".[openai]"`        |
+| OpenAI Agents       | `uv pip install ".[openai-agents]"` |
+| Anthropic           | `uv pip install ".[anthropic]"`     |
+| Official thread SDK | `uv pip install ".[codex]"`         |
 
 The base package installs the executable without framework dependencies.
+For command-only use, `uv tool install --reinstall .` installs the complete checkout as a persistent tool.
+`cargo install` installs only the main binary and leaves out the required private companion.
+The [release guide](../RELEASE.md#private-sandbox-executable) explains the relocatable bundle and build caches.
+
+`mcp-console serve` speaks MCP over standard input and output; it waits for a client instead of displaying an interactive terminal prompt.
+The Python clients below own that connection.
 The client uses MCP 2.2 or newer within the 2.x series.
 Each framework extra declares the minimum SDK release used by the integration tests.
 
