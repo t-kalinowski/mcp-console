@@ -178,6 +178,23 @@ class WorkflowTests(unittest.TestCase):
             self.assertTrue(Path(phase["log"]).is_file())
         self.assertIn("result.json", result.stdout)
 
+    def test_signalled_phase_preserves_shell_exit_status(self) -> None:
+        self.write_script(
+            "scripts/check-core",
+            # fmt: python
+            """
+            import os
+            import signal
+
+            os.kill(os.getpid(), signal.SIGTERM)
+            """,
+        )
+        result = self.run_command("scripts/check")
+        self.assertEqual(result.returncode, 128 + signal.SIGTERM)
+        (record,) = self.records()
+        self.assertEqual(record["exit_status"], 128 + signal.SIGTERM)
+        self.assertEqual(record["phases"][-1]["exit_status"], -signal.SIGTERM)
+
     def test_packaging_conflict_survives_target_rename(self) -> None:
         process = self.start_check()
         result = self.run_command(

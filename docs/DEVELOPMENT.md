@@ -40,6 +40,7 @@ Validation commands print the path to `.dev-workflow/runs/<run>/result.json` on 
 Each record contains the checkout, command, Git revision and worktree status at admission, exit status, elapsed time, failing transcript selectors, and a log and timing for each phase that ran.
 Revision and worktree status are null for a source tree without Git metadata.
 A dirty worktree is recorded explicitly; its result is not evidence for an unchanged clean revision.
+The overall exit status uses the shell convention `128 + signal` for a phase killed by a signal; the phase retains its negative subprocess status.
 Nested runs reference their parent's record and retain their own phase details.
 Records are updated after each phase, so an unfinished run has a null exit status.
 Logs preserve command output, including errors and tracebacks.

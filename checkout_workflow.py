@@ -237,6 +237,8 @@ def main() -> None:
         try:
             for name, command in phases:
                 status = run.phase(name, command)
+                if status < 0:
+                    status = 128 - status
                 if status:
                     break
         except SystemExit as error:
