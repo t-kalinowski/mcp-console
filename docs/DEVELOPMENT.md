@@ -61,6 +61,7 @@ Retry after that owner finishes; do not delete a lock file to bypass ownership.
 Sequential nested commands inherit the same ownership, including packaging invoked through `uv`.
 Do not start concurrent children under an inherited owner.
 Cancellation sends `SIGTERM`, allows up to five seconds for the phase to exit, and then kills any remaining members of its process group before releasing ownership.
+Repeated cancellation signals do not interrupt that cleanup.
 Nested validation commands share that group so escalation also reaches their children.
 Commands that deliberately detach into a new session remain responsible for their own cleanup.
 
@@ -96,6 +97,8 @@ The overall exit status uses the shell convention `128 + signal` for a phase kil
 Nested runs reference their parent's record and retain their own phase details.
 Records are updated after each phase, so an unfinished run has a null exit status.
 Logs preserve command output, including errors and tracebacks.
+The command's stdout and stderr stay separate at the terminal; phase logs retain both streams in observed read order.
+Workflow banners and completion-record paths go to stderr.
 A forcibly killed owner may leave an unfinished record; a record is complete only when its exit status is present.
 
 These files are ignored by Git and survive installation checks that rename `target`.
