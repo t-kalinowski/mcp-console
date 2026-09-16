@@ -28,6 +28,39 @@ def test_python_preserves_exact_queued_stdin(
 
 
 @executions(DIRECT, SANDBOXED)
+def test_python_background_thread_reads_stdin(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with McpClient(binary, execution.serve()) as client:
+        client.initialize_and_list_tools()
+        client.send(
+            # fmt: python
+            python=code(r"""
+                import threading
+
+                answers = []
+
+
+                def ask():
+                    answer = input("background> ")
+                    answers.append(answer)
+                    print(repr(answer))
+
+
+                thread = threading.Thread(target=ask)
+                thread.start()
+                thread.join()
+                assert answers == ["caf\u00e9\0tail"]
+                """),
+            stdin="caf\u00e9\0tail\n",
+        )
+        assert last_result_text(client) == "background> 'caf\u00e9\\x00tail'\n", (
+            last_result_text(client)
+        )
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
 def test_r_activation_does_not_initialize_python_or_sql(
     binary: Path, execution: Execution
 ) -> Transcript:

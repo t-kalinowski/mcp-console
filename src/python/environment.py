@@ -22,6 +22,8 @@ _discovery = None
 _disabled_reason = None
 _configured_imports = set()
 _original_import = builtins.__import__
+_original_input = builtins.input
+_input_owner = os.getpid(), threading.get_ident()
 _site_paths = set()
 _interrupts_deferred = False
 
@@ -77,6 +79,8 @@ def call(operation, payload=None):
 
 
 def _input(prompt=""):
+    if (os.getpid(), threading.get_ident()) != _input_owner:
+        return _original_input(prompt)
     sys.stdout.flush()
     sys.stderr.flush()
     try:
@@ -178,13 +182,13 @@ def _activate(discovery: dict, manifest: dict | None = None) -> None:
     prefix, exec_prefix, executable = sys.prefix, sys.exec_prefix, sys.executable
     committed = False
     try:
+        sys.prefix, sys.exec_prefix = discovery["prefix"], discovery["exec_prefix"]
+        runtime.activate_process_environment(discovery["executable"])
         sys.path[:] = [path for path in sys.path if path not in previous]
         retained_paths = set(sys.path)
         for path in discovery["site_packages"]:
             if path not in sys.path:
                 site.addsitedir(path)
-        sys.prefix, sys.exec_prefix = discovery["prefix"], discovery["exec_prefix"]
-        runtime.activate_process_environment(discovery["executable"])
         importlib.invalidate_caches()
         site_paths = (_site_paths - previous) | (set(sys.path) - retained_paths)
         # Site hooks remain interruptible. Defer only publication and the local

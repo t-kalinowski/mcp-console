@@ -19,7 +19,7 @@ result:
     - type: text
       text: |
         Traceback (most recent call last):
-          File "<string>", line 142, in initialize_site
+          File "<string>", line 146, in initialize_site
           File "<frozen site>", line <line>, in main
           File "<frozen site>", line <line>, in execsitecustomize
           File "<site-packages>/sitecustomize.py", line 8, in <module>

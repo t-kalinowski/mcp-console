@@ -27,10 +27,10 @@ result:
     - type: text
       text: |
         Traceback (most recent call last):
-          File "<string>", line 322, in evaluate
-          File "<string>", line 73, in call
+          File "<string>", line 326, in evaluate
+          File "<string>", line 75, in call
           File "<mcp-console:python:e1>", line 15, in interrupt_publication
-          File "<string>", line 94, in _interrupt
+          File "<string>", line 98, in _interrupt
         KeyboardInterrupt
   isError: false
 ---

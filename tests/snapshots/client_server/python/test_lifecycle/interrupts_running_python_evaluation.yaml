@@ -159,7 +159,7 @@ result:
         Traceback (most recent call last):
           File "<string>", line 467, in _mcp_console_eval_cell
           File "<mcp-console:python:e1>", line 36, in <module>
-          File "<string>", line 94, in _interrupt
+          File "<string>", line 98, in _interrupt
         KeyboardInterrupt
   isError: false
 ---

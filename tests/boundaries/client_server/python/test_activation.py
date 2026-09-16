@@ -45,7 +45,17 @@ def managed_environments(root: Path, *, interrupt_site: bool = False) -> dict[st
         )
         if name == "initial":
             (extra / "console_retired.py").touch()
-        elif interrupt_site:
+        else:
+            (site / "console-identity.pth").write_text("import console_identity\n")
+            (site / "console_identity.py").write_text(
+                # fmt: python
+                code("""
+                    import sys
+
+                    identity = sys.prefix, sys.exec_prefix, sys.executable
+                    """)
+            )
+        if name == "candidate" and interrupt_site:
             (site / "console-interrupt.pth").write_text("import console_interrupt\n")
             (site / "console_interrupt.py").write_text(
                 # fmt: python
@@ -125,6 +135,39 @@ def test_removes_previous_environment_pth_paths(
                     """)
             )
             assert last_result_text(client) == "'candidate'\n", last_result_text(client)
+            return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_site_hooks_observe_candidate_identity(
+    binary: Path, execution: Execution
+) -> list:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        environment = managed_environments(root)
+        with McpClient(binary, execution.serve(), environment, root) as client:
+            client.initialize_and_list_tools()
+            client.send(
+                # fmt: python
+                python=code("""
+                    import sys
+
+                    original_identity = sys.prefix, sys.exec_prefix, sys.executable
+                    """)
+            )
+            assert last_result_text(client) == "[done]", last_result_text(client)
+            client.send(requirements={"python": ["console-activation-fixture"]})
+            assert last_result_text(client) == "[prepared]", last_result_text(client)
+            client.send(
+                # fmt: python
+                python=code("""
+                    import console_identity
+
+                    assert console_identity.identity != original_identity
+                    assert console_identity.identity == (sys.prefix, sys.exec_prefix, sys.executable)
+                    """)
+            )
+            assert last_result_text(client) == "[done]", last_result_text(client)
             return client.finish()
 
 

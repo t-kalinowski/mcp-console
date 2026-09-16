@@ -243,6 +243,7 @@ The built-in startup display width for NumPy and pandas is 200 columns, and eval
 
 Ordinary Python text writes use Console's ordered output channels directly.
 Binary stream buffers, native fd 1 or 2, background threads, and descendant processes use the captured standard streams.
+Calls to `input()` from background threads use Python's standard input behavior without emitting managed input notices.
 Python output does not pass through R or reticulate.
 There is no guaranteed chronology between independent sideband, stdout, and stderr sources, although each source's order is preserved.
 
