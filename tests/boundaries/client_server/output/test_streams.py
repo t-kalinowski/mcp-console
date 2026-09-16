@@ -3,6 +3,7 @@
 import os
 import sys
 import tempfile
+from contextlib import closing
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -41,6 +42,78 @@ from boundaries.client_server._harness import (
     ZodFixtureControl,
     wait_for_marker,
 )
+
+
+@executions(DIRECT, SANDBOXED)
+def test_keeps_partial_utf8_across_polls_and_orders_stream_switches(
+    binary: Path, execution: Execution
+) -> Transcript:
+    fixtures = Path(__file__).resolve().parents[3] / "fixtures"
+    with tempfile.TemporaryDirectory() as temporary:
+        directory = Path(temporary)
+        roots = ("--writable-root", temporary) if execution == SANDBOXED else ()
+        with (
+            closing(FifoCheckpoint.create(directory / "partial-release")) as release,
+            closing(
+                FifoCheckpoint.create(directory / "partial-processed")
+            ) as processed,
+            McpClient(
+                binary,
+                execution.serve(
+                    "--worker",
+                    str(fixtures / "zod"),
+                    "--relay",
+                    str(fixtures / "server_relay/scripted_relay.py"),
+                    *roots,
+                ),
+                {
+                    **os.environ,
+                    "TMPDIR": temporary,
+                    "MCP_CONSOLE_TEST_PREVIEW_DIRECTORY": temporary,
+                    "MCP_CONSOLE_TEST_RELAY_SCENARIO": "partial_utf8_polls",
+                },
+                current_directory=directory,
+            ) as client,
+        ):
+            try:
+                client.initialize_and_list_tools()
+                running = "\n[running; poll with an empty send]"
+                assert client.send(r="42", timeout_ms=0)["content"] == [
+                    {"type": "text", "text": running}
+                ]
+                session = next((directory / ".agents/console/sessions").iterdir())
+                raw = b""
+                for data, expected in (
+                    (b"A\xe2", "A"),
+                    (b"\x82\xacB\xe2", "€B"),
+                    (b"C\xf0\x9f", "�C"),
+                    (b" D\xe2", "� D"),
+                ):
+                    release.release()
+                    processed.wait("direct bytes reached the output tape")
+                    raw += data
+                    result = client.send(timeout_ms=0)
+                    assert result == {
+                        "content": [{"type": "text", "text": expected + running}],
+                        "isError": False,
+                    }, result
+                    assert client.send(timeout_ms=0)["content"] == [
+                        {"type": "text", "text": running}
+                    ]
+                    assert (session / "outputs/call-000001.log").read_bytes() == raw
+                release.release()
+                assert client.send()["content"] == [{"type": "text", "text": "�"}]
+                assert client.send(r="42")["content"] == [
+                    {"type": "text", "text": "��"}
+                ]
+                assert (session / "outputs/call-000011.log").read_bytes() == b"\x82\xac"
+                assert client.send()["content"] == [
+                    {"type": "text", "text": "\n[idle]"}
+                ]
+                return client.finish()
+            finally:
+                for _ in range(5):
+                    release.release()
 
 
 @executions(DIRECT, SANDBOXED)

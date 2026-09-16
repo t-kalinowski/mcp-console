@@ -1,0 +1,49 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  r: preview unicode suffix
+result:
+  content:
+    - type: text
+      text:
+        text_bytes: 8052
+        concat:
+          - |
+            preview head
+          - repeat: a€🙂b
+            count: 432
+          - |-
+            a
+            [output preview: omitted 82240 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000001.log (Console server recording workspace; controller for remote targets); 90052 raw bytes retained, 0 raw bytes not retained]
+            b
+          - repeat: a€🙂b
+            count: 429
+          - "a€🙂\r\npreview tail: final diagnostic\n"
+  isError: false
+---
+send: {}
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false
+---
+send:
+  r: preview unicode replacement
+result:
+  content:
+    - type: text
+      text: "preview head\nfinal frame\r\npreview tail: final diagnostic\n"
+  isError: false
+---
+send: {}
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false
