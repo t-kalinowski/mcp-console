@@ -28,13 +28,14 @@ result:
     - type: text
       text: |
         Traceback (most recent call last):
+          File "<string>", line 142, in initialize_site
           File "<frozen site>", line <line>, in main
           File "<frozen site>", line <line>, in execsitecustomize
           File "<site-packages>/sitecustomize.py", line 15, in <module>
             signal.pause()
-          File "<string>", line 92, in _interrupt
+          File "<string>", line 94, in _interrupt
         KeyboardInterrupt
-        Error: Python function `site.main` failed
+        Error: Python function `_mcp_console_environment.initialize_site` failed
   isError: false
 ---
 send:

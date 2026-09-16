@@ -290,6 +290,7 @@ The automatic resolver request carries a differently named import and distributi
 
 This transition does not restart the worker or Python interpreter.
 Python and R globals, Python objects, the DuckDB catalog, worker PID, and stdin state remain available.
+Paths added by the previous environment's site processing, including `.pth` files, are removed when another environment is activated; user-added paths remain.
 New subprocesses use the activated environment and can import its retained packages.
 In a sandboxed macOS worker, the built-in Python runtime makes psutil enumerate the dedicated process group instead of requesting the host-wide process table.
 On Linux, the PID namespace limits native process enumeration to the sandbox.

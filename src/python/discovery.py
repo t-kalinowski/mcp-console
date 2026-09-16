@@ -33,7 +33,9 @@ print(
         {
             "executable": sys.executable,
             "prefix": sys.prefix,
+            "exec_prefix": sys.exec_prefix,
             "base_prefix": sys.base_prefix,
+            "base_exec_prefix": sys.base_exec_prefix,
             "libpython": os.path.realpath(library),
             "version": list(sys.version_info[:3]),
             "site_packages": site.getsitepackages(),

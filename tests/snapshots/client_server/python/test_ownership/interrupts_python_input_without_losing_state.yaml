@@ -20,8 +20,8 @@ result:
     - type: text
       text: |
         Traceback (most recent call last):
-          File "<string>", line 81, in _input
-          File "<string>", line 73, in call
+          File "<string>", line 83, in _input
+          File "<string>", line 75, in call
         RuntimeError: KeyboardInterrupt
 
         During handling of the above exception, another exception occurred:
@@ -29,8 +29,8 @@ result:
         Traceback (most recent call last):
           File "<string>", line 469, in _mcp_console_eval_cell
           File "<mcp-console:python:e1>", line 2, in <module>
-          File "<string>", line 83, in _input
-          File "<string>", line 92, in _interrupt
+          File "<string>", line 85, in _input
+          File "<string>", line 94, in _interrupt
         KeyboardInterrupt
   isError: false
 ---

@@ -60,7 +60,7 @@ result:
         Traceback (most recent call last):
           File "<string>", line 216, in _evaluate
           File "<mcp-console:python:e1>", line 21, in execute
-          File "<string>", line 92, in _interrupt
+          File "<string>", line 94, in _interrupt
         KeyboardInterrupt
   isError: false
 ---

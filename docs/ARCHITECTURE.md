@@ -408,7 +408,9 @@ The worker then uses the existing synchronous `ResolvePython` request; the relay
 The server resolves a complete managed-Python candidate on the host and returns it provisionally.
 Console checks the candidate interpreter and loaded distribution versions, then activates compatible site directories without replacing Python or the worker.
 The Python adapter reports `PythonActivated`, and the server commits only a matching candidate owned by the current generation.
-The worker emits that report before it invalidates import caches and resumes the original import through Python's current meta-path finders.
+Site processing remains interruptible and restores the previous paths and process environment on failure.
+Console defers Python interrupts across publication and the local manifest update, then delivers any pending interrupt with the committed environment retained.
+The worker emits that report before it resumes the original import through Python's current meta-path finders.
 An automatic request records a differently named import and distribution on its provisional candidate, and the server renders that mapping as a bounded bracketed notice only when it commits the matching activation.
 The cell is not replayed.
 

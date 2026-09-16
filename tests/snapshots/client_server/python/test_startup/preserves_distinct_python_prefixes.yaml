@@ -1,0 +1,20 @@
+---
+!same-as bare MCP initialization for this execution mode
+---
+send:
+  python: |
+    import math
+    import os
+    import sys
+
+    prefix, exec_prefix = os.environ["PYTHONHOME"].split(os.pathsep)
+    assert sys.base_prefix == sys.prefix == prefix
+    assert sys.base_exec_prefix == sys.exec_prefix == exec_prefix
+    assert os.environ["MCP_CONSOLE_TEST_EXTENSION_PATH"] in sys.path
+    math.sqrt(1764)
+result:
+  content:
+    - type: text
+      text: |
+        42.0
+  isError: false

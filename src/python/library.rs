@@ -198,10 +198,12 @@ pub(super) fn initialize_site() -> Result<(), String> {
             }
             let previous = (api.struct_sequence_get_item)(flags, NO_SITE_FLAG_INDEX);
             (api.struct_sequence_set_item)(flags, NO_SITE_FLAG_INDEX, enabled);
+            // Like PyTuple_SET_ITEM, PyStructSequence_SetItem steals the new
+            // reference without releasing the slot's previous reference.
             (api.dec_ref)(previous);
             *(api.no_site_flag as *mut libc::c_int) = 0;
         }
-        api.call_unit(c"site", c"main")
+        api.call_unit(c"_mcp_console_environment", c"initialize_site")
     })?;
     PYTHON_LIBRARY
         .lock()

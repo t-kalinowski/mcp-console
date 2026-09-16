@@ -1,0 +1,70 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  python: |
+    import signal
+    import sys
+
+    original_prefix = sys.prefix
+    original_object = object()
+
+
+    def interrupt_activation(frame, event, argument):
+        if event != "call" or frame.f_code.co_name != "dumps":
+            return
+        message = frame.f_locals.get("obj")
+        if isinstance(message, dict) and message.get("operation") == "activate_python":
+            sys.setprofile(None)
+            assert sys.prefix != original_prefix
+            signal.raise_signal(signal.SIGINT)
+
+
+    sys.setprofile(interrupt_activation)
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  requirements:
+    python:
+      - console-activation-fixture
+result:
+  content:
+    - type: text
+      text: KeyboardInterrupt
+  isError: true
+---
+send:
+  python: sys.prefix != original_prefix, original_object is not None
+result:
+  content:
+    - type: text
+      text: |
+        (True, True)
+  isError: false
+---
+send:
+  control: restart
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: false
+---
+send:
+  python: |
+    import console_unloaded
+
+    console_unloaded.origin
+result:
+  content:
+    - type: text
+      text: |
+        'candidate'
+  isError: false

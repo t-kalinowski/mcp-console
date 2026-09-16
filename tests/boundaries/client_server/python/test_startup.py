@@ -6,6 +6,7 @@ import re
 import signal
 import subprocess
 import sys
+import sysconfig
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -134,6 +135,92 @@ def test_discovery_accepts_startup_and_exit_output(
             client.send(python="6 * 7")
             assert last_result_text(client) == "42\n", last_result_text(client)
             return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_preserves_distinct_python_prefixes(binary: Path, execution: Execution) -> list:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        platform_home = root / "platform"
+        extensions = Path(sysconfig.get_config_var("DESTSHARED"))
+        selected_extensions = platform_home / extensions.relative_to(
+            sys.base_exec_prefix
+        )
+        selected_extensions.parent.mkdir(parents=True)
+        selected_extensions.symlink_to(extensions, target_is_directory=True)
+        environment = selected_python(root, Path(sys._base_executable))
+        environment["PYTHONHOME"] = os.pathsep.join(
+            (sys.base_prefix, str(platform_home))
+        )
+        environment["MCP_CONSOLE_TEST_EXTENSION_PATH"] = str(selected_extensions)
+        with McpClient(binary, execution.serve(), environment, root) as client:
+            client.initialize_and_list_tools()
+            client.send(
+                # fmt: python
+                python=code("""
+                    import math
+                    import os
+                    import sys
+
+                    prefix, exec_prefix = os.environ["PYTHONHOME"].split(os.pathsep)
+                    assert sys.base_prefix == sys.prefix == prefix
+                    assert sys.base_exec_prefix == sys.exec_prefix == exec_prefix
+                    assert os.environ["MCP_CONSOLE_TEST_EXTENSION_PATH"] in sys.path
+                    math.sqrt(1764)
+                    """)
+            )
+            assert last_result_text(client) == "42.0\n", last_result_text(client)
+            return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_retries_after_sql_runtime_installation_interrupt(
+    binary: Path, execution: Execution
+) -> list:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        python, site = isolated_python(root)
+        # Interrupt after Console has installed its import hook, when the SQL
+        # connection selector is being installed. The audit hook fires once.
+        # fmt: python
+        source = code("""
+            import sys
+
+            interrupted = False
+
+            def interrupt_sql(event, arguments):
+                global interrupted
+                if event == "compile" and not interrupted:
+                    if b"def console_sql_connection(" in arguments[0]:
+                        interrupted = True
+                        raise KeyboardInterrupt
+
+            if sys.argv[0] != "-c":
+                sys.addaudithook(interrupt_sql)
+            """)
+        (site / "sitecustomize.py").write_text(source)
+        environment = selected_python(root, python)
+        environment["PYTHONPATH"] = str(site)
+        with McpClient(binary, execution.serve(), environment, root) as client:
+            client.initialize_and_list_tools()
+            client.send(python="never_run = True")
+            assert "KeyboardInterrupt" in last_result_text(client), last_result_text(
+                client
+            )
+            client.send(
+                # fmt: python
+                python=code("""
+                    import json
+
+                    assert "never_run" not in globals()
+                    assert callable(console_sql_connection)
+                    json.loads("42")
+                    """)
+            )
+            assert last_result_text(client) == "42\n", last_result_text(client)
+            return json.loads(
+                json.dumps(client.finish()).replace(str(site), "<site-packages>")
+            )
 
 
 def interrupted_initialization(

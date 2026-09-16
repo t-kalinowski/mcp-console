@@ -22,6 +22,8 @@ _discovery = None
 _disabled_reason = None
 _configured_imports = set()
 _original_import = builtins.__import__
+_site_paths = set()
+_interrupts_deferred = False
 
 
 class _ConsoleStream:
@@ -88,7 +90,7 @@ def _input(prompt=""):
 
 
 def _interrupt(signum, frame):
-    if call("interrupt"):
+    if not _interrupts_deferred and call("interrupt"):
         raise KeyboardInterrupt
 
 
@@ -134,6 +136,15 @@ def _import(*args, **kwargs):
     return result
 
 
+def initialize_site() -> None:
+    paths = set(sys.path)
+    try:
+        site.main()
+    finally:
+        # Include paths from .pth files, also across interrupted startup retries.
+        _site_paths.update(set(sys.path) - paths)
+
+
 def initialize(request):
     global _manifest, _discovery, _disabled_reason
     config = json.loads(request)
@@ -155,24 +166,46 @@ def initialize(request):
     return "null"
 
 
-def _activate(discovery):
-    previous = set(_discovery["site_packages"]) if _discovery is not None else set()
-    selected = set(discovery["site_packages"])
+def _activate(discovery: dict, manifest: dict | None = None) -> None:
+    global _discovery, _manifest, _site_paths, _interrupts_deferred
+    previous = _site_paths
+    if (
+        _discovery is not None
+        and discovery["site_packages"] == _discovery["site_packages"]
+    ):
+        previous = set()
     paths = list(sys.path)
     prefix, exec_prefix, executable = sys.prefix, sys.exec_prefix, sys.executable
+    committed = False
     try:
-        sys.path[:] = [path for path in sys.path if path not in previous - selected]
+        sys.path[:] = [path for path in sys.path if path not in previous]
+        retained_paths = set(sys.path)
         for path in discovery["site_packages"]:
             if path not in sys.path:
                 site.addsitedir(path)
-        sys.prefix = sys.exec_prefix = discovery["prefix"]
+        sys.prefix, sys.exec_prefix = discovery["prefix"], discovery["exec_prefix"]
         runtime.activate_process_environment(discovery["executable"])
         importlib.invalidate_caches()
-    except BaseException:
-        sys.path[:] = paths
-        sys.prefix, sys.exec_prefix = prefix, exec_prefix
-        runtime.activate_process_environment(executable)
-        raise
+        site_paths = (_site_paths - previous) | (set(sys.path) - retained_paths)
+        # Site hooks remain interruptible. Defer only publication and the local
+        # commit so a signal cannot leave the server retaining an older manifest.
+        _interrupts_deferred = True
+        if manifest is not None:
+            call("activate_python", manifest)
+            _manifest = manifest
+        _discovery = discovery
+        _site_paths = site_paths
+        committed = True
+    finally:
+        _interrupts_deferred = True
+        try:
+            if not committed:
+                sys.path[:] = paths
+                sys.prefix, sys.exec_prefix = prefix, exec_prefix
+                runtime.activate_process_environment(executable)
+        finally:
+            _interrupts_deferred = False
+            _interrupt(None, None)
 
 
 def _name(name):
@@ -215,7 +248,6 @@ def _check_compatible(discovery):
 
 
 def _prepare(candidate, import_resolution=None):
-    global _manifest, _discovery
     if _manifest is None:
         raise RuntimeError(_disabled_reason)
     candidate = _normalize(candidate)
@@ -235,10 +267,7 @@ def _prepare(candidate, import_resolution=None):
     executable = call("resolve_python", request)
     discovery = call("discover_python", executable)
     _check_compatible(discovery)
-    _activate(discovery)
-    _discovery = discovery
-    _manifest = candidate
-    call("activate_python", _manifest)
+    _activate(discovery, candidate)
 
 
 def _candidate(packages):

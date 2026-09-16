@@ -8,6 +8,7 @@ use std::sync::{
 const ENVIRONMENT_SOURCE: &str = include_str!("environment.py");
 const DISCOVERY_SOURCE: &str = include_str!("discovery.py");
 static CONFIGURATION: OnceLock<Configuration> = OnceLock::new();
+static SERVICES_INSTALLED: AtomicBool = AtomicBool::new(false);
 static INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 struct Configuration {
@@ -99,16 +100,26 @@ pub(crate) fn ensure_initialized() -> Result<(), String> {
     let home = discovered["base_prefix"]
         .as_str()
         .ok_or("Python discovery omitted base_prefix")?;
-    super::library::initialize(Path::new(library), executable, home)?;
+    let exec_home = discovered["base_exec_prefix"]
+        .as_str()
+        .ok_or("Python discovery omitted base_exec_prefix")?;
+    // CPython uses prefix:exec_prefix for its home on macOS and Linux.
+    let home = format!("{home}:{exec_home}");
+    super::library::initialize(Path::new(library), executable, &home)?;
     let result: Result<(), String> = (|| {
-        super::library::install_native()?;
-        super::library::install_runtime(super::RUNTIME_SOURCE)?;
-        super::library::install_module(c"_mcp_console_environment", ENVIRONMENT_SOURCE)?;
-        super::library::call_json(
-            c"_mcp_console_environment",
-            c"connect_streams",
-            &Value::Null,
-        )?;
+        // Retain module state and the original import function when later
+        // startup hooks or SQL installation fail in this same interpreter.
+        if !SERVICES_INSTALLED.load(Ordering::SeqCst) {
+            super::library::install_native()?;
+            super::library::install_runtime(super::RUNTIME_SOURCE)?;
+            super::library::install_module(c"_mcp_console_environment", ENVIRONMENT_SOURCE)?;
+            super::library::call_json(
+                c"_mcp_console_environment",
+                c"connect_streams",
+                &Value::Null,
+            )?;
+            SERVICES_INSTALLED.store(true, Ordering::SeqCst);
+        }
         super::library::connect_interrupts()?;
         super::library::initialize_site()?;
         super::library::call_json(
