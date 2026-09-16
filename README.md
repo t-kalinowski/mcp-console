@@ -37,12 +37,10 @@ Prerequisites:
 Install the checkout and register it with Codex:
 
 ```sh
-cd "$(mktemp -d)"
 git clone --depth 1 https://github.com/t-kalinowski/mcp-console.git
-uv tool install --python 3.12 --reinstall ./mcp-console
+cd mcp-console
+uv tool install --python 3.12 --reinstall .
 codex mcp add console -- uvx mcp-console serve
-mkdir workspace
-cd workspace
 codex
 ```
 
@@ -67,17 +65,15 @@ Follow up in the same conversation:
 
 The expected total profit is 280: store contributes 120 and web contributes 160, a gap of 40.
 No external dataset is needed.
-Records and plot artifacts are written under `workspace/.agents/console/sessions/<run-id>/`, relative to the temporary directory created above.
-Keep that directory to inspect the results later.
+Records and plot artifacts are written under `.agents/console/sessions/<run-id>/` in the directory where you start Codex.
 This is a model-driven workflow using your Codex account; the exact calls and responses can vary.
 
 ### Scripted installation check
 
-To run the same analysis without a model, quit Codex and run this from the same `workspace` directory:
+To run the same analysis without a model, quit Codex and run this from the repository root:
 
 ```sh
-uv tool run --python 3.12 --from "../mcp-console[client]" \
-  python ../mcp-console/examples/persistent-analysis.py
+uv tool run --python 3.12 --from ".[client]" python examples/persistent-analysis.py
 ```
 
 The [complete example](examples/persistent-analysis.py) uses one connection for four cells, polls unfinished work, and closes the session on completion or error.

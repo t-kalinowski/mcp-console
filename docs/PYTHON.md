@@ -7,11 +7,10 @@ For the agent workflow, start with the [Codex quickstart](../README.md#quickstar
 ## Scripted installation check
 
 The [persistent analysis example](../examples/persistent-analysis.py) runs R, SQL, and Python cells through one live connection without a model API key.
-From the `workspace` directory created in the quickstart, run:
+From the repository root, run:
 
 ```sh
-uv tool run --python 3.12 --from "../mcp-console[client]" \
-  python ../mcp-console/examples/persistent-analysis.py
+uv tool run --python 3.12 --from ".[client]" python examples/persistent-analysis.py
 ```
 
 uv installs the checkout and the `client` extra into an environment it manages, then runs the script with that environment's Python.
