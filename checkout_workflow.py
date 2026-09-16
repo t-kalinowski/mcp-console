@@ -290,6 +290,7 @@ def main() -> None:
         ("runtime-sources", ["scripts/validate_runtime_sources.py"]),
         ("fixtures", ["scripts/check-fixtures"]),
         ("fixture-tests", ["python3", "tests/fixture_authoring.py"]),
+        ("development-tests", ["python3", "tests/development.py"]),
         ("release-tests", ["tests/release.py"]),
         ("runner-tests", ["tests/transcript_runner.py"]),
         ("workflow-tests", ["python3", "tests/workflow.py"]),

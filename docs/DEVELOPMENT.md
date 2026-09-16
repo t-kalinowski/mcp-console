@@ -24,6 +24,37 @@ scripts/test --locate cli/test_config_overrides
 scripts/test cli/test_config_overrides::layers_project_then_cli_in_order
 ```
 
+## Choose the review boundary
+
+Before a change crosses modules or triggers broad snapshot regeneration, write down:
+
+```text
+Observable behavior (or behavior preserved by an internal refactor):
+Owning modules:
+Public acceptance cases:
+Expected snapshot changes and affected platforms:
+Intended PR base:
+```
+
+Use one observable behavior per PR and identify the parent branch of each stack layer before implementation spreads across them.
+This is a planning aid, not an approval requirement.
+Keep task-specific answers in temporary notes; durable contracts belong in the owning documentation.
+
+Inspect the actual diff against that base early, before regenerating unrelated snapshots:
+
+```sh
+scripts/review-diff BASE
+git diff BASE -- src/ tests/boundaries/
+```
+
+The report includes tracked staged and unstaged changes; stage intended new files before measuring.
+It reports production, tooling, tests, documentation, and generated snapshots separately, with binary-file counts outside line totals.
+Production means `src/`, `python/mcp_console/`, `r/R/`, and `r/src/`; generated snapshots mean `tests/snapshots/`.
+These path groups measure review volume, not semantic complexity or whether a change is mechanical.
+Renames count as deletion and addition so moves do not hide review work.
+Use `--json` for a reusable report, and review the full diff before opening the PR.
+For a stack, measure each layer against its intended parent rather than accumulating every earlier layer against `main`.
+
 ## Validation ladder
 
 1. For a behavior change, add a public acceptance or regression case and confirm it fails for the intended reason.

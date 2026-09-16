@@ -253,6 +253,7 @@ Keep these invariants intact:
   Prefer a larger coherent change over an artificial split.
 - Keep each behavior-changing PR to one observable behavior.
   Internal-only refactors may stand alone but must preserve observable behavior.
+  Choose its owning modules, public cases, expected snapshots, and intended base before cross-cutting implementation; use the planning template and `scripts/review-diff` in `docs/DEVELOPMENT.md`.
 - For a public behavior change, first add a public acceptance or regression test and confirm it fails.
   Verify an internal-only refactor with the existing public suite.
   Test public interfaces, not private helpers.
