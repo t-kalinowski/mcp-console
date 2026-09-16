@@ -1,6 +1,5 @@
 """Prepare the private companion before Maturin builds a wheel."""
 
-import fcntl
 import subprocess
 import sys
 from collections.abc import Iterator
@@ -9,6 +8,8 @@ from pathlib import Path
 from typing import Any
 
 import maturin
+
+from checkout_workflow import checkout_owner
 
 build_sdist = maturin.build_sdist
 get_requires_for_build_editable = maturin.get_requires_for_build_editable
@@ -41,12 +42,7 @@ def build_editable(
 @contextmanager
 def _staged_companion() -> Iterator[None]:
     root = Path(__file__).resolve().parent
-    target = root / "target"
-    target.mkdir(exist_ok=True)
-    # Staging and archiving share one owner. Hold the lock until Maturin has
-    # finished consuming wheel-data, including when Cargo reuses its output.
-    with (target / "wheel-build.lock").open("w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with checkout_owner(root):
         subprocess.run(
             [sys.executable, str(root / "scripts/stage-sandbox-runner")], check=True
         )

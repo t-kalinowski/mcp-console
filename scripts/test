@@ -2,8 +2,4 @@
 
 set -eu
 
-cd "$(dirname "$0")/.."
-
-cargo build --release --target-dir target
-
-uv run --script tests/boundaries/_run.py "$@"
+exec python3 "$(dirname "$0")/../checkout_workflow.py" test "$@"
