@@ -238,7 +238,10 @@ def _check_compatible(discovery):
     loaded = {name.partition(".")[0] for name in sys.modules}
     for root in loaded:
         for package in packages.get(root, ()):
-            version = importlib.metadata.version(package)
+            distribution = importlib.metadata.distribution(package)
+            if str(distribution.locate_file("")) not in _site_paths:
+                continue
+            version = distribution.version
             selected = candidate.get(_name(package))
             if selected != version:
                 raise RuntimeError(
@@ -313,9 +316,12 @@ def state(request):
 
 def evaluate(request):
     request = json.loads(request)
-    runtime.eval_cell(request["source"], request["filename"])
-    for image in runtime.take_images():
-        call("plot", image)
+    try:
+        runtime.eval_cell(request["source"], request["filename"])
+        for image in runtime.take_images():
+            call("plot", image)
+    except BaseException:
+        sys.excepthook(*sys.exc_info())
     return "null"
 
 

@@ -194,6 +194,7 @@ A successfully activated environment remains committed if the inferred distribut
 A later cell and a replacement after restart reuse it.
 An ordinary failure before activation preserves the previous Console manifest, discards the provisional candidate, and leaves the worker usable.
 Activation requires the same Python library and version and preserves the versions of loaded distributions.
+User-added `sys.path` entries remain in place, and distributions supplied by those retained paths do not have to appear in the candidate environment.
 An incompatible candidate reports an error without replacing the interpreter, downgrading loaded packages, restarting, or replaying code.
 Resolver diagnostics name the import and inferred distribution and show the `requirements.python` recovery shape.
 

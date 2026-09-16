@@ -196,6 +196,88 @@ def test_python_requirements_preserve_live_objects_and_input(
 
 
 @executions(DIRECT, SANDBOXED)
+def test_reticulate_attachment_preserves_python_signal_handler(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with McpClient(binary, execution.serve()) as client:
+        client.initialize_and_list_tools()
+        client.send(r="bridge_value <- 42L")
+        assert last_result_text(client) == "[done]", last_result_text(client)
+        client.send(
+            # fmt: python
+            python=code("""
+                import signal
+
+
+                def user_interrupt(signum, frame):
+                    print("user interrupt handler")
+
+
+                previous_handler = signal.signal(signal.SIGINT, user_interrupt)
+                """)
+        )
+        assert last_result_text(client) == "[done]", last_result_text(client)
+        client.send(
+            # fmt: python
+            python=code("""
+                assert r.bridge_value == 42
+                assert signal.getsignal(signal.SIGINT) is user_interrupt
+                signal.raise_signal(signal.SIGINT)
+                """)
+        )
+        assert last_result_text(client) == "user interrupt handler\n", last_result_text(
+            client
+        )
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_plot_publication_interrupt_preserves_python_state(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with McpClient(binary, execution.serve()) as client:
+        client.initialize_and_list_tools()
+        client.send(
+            # fmt: python
+            python=code("""
+                import os
+                import signal
+                import sys
+                import matplotlib.pyplot as plt
+
+                original_process = os.getpid()
+                original_object = object()
+
+
+                def interrupt_publication(frame, event, argument):
+                    if event != "call" or frame.f_code.co_name != "call":
+                        return
+                    if frame.f_locals.get("operation") == "plot":
+                        sys.setprofile(None)
+                        signal.raise_signal(signal.SIGINT)
+
+
+                _ = plt.plot([1, 2, 3])
+                sys.setprofile(interrupt_publication)
+                """)
+        )
+        assert "KeyboardInterrupt" in last_result_text(client), last_result_text(client)
+        client.transcript[-1]["result"]["content"][0]["text"] = (
+            normalize_python_traceback_paths(last_result_text(client))
+        )
+        client.send(
+            # fmt: python
+            python=code("""
+                assert os.getpid() == original_process
+                assert original_object is not None
+                6 * 7
+                """)
+        )
+        assert last_result_text(client) == "42\n", last_result_text(client)
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
 def test_reticulate_tracks_console_python_activation(
     binary: Path, execution: Execution
 ) -> Transcript:

@@ -129,6 +129,54 @@ def test_removes_previous_environment_pth_paths(
 
 
 @executions(DIRECT, SANDBOXED)
+def test_retains_loaded_distributions_on_user_paths(
+    binary: Path, execution: Execution
+) -> list:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        environment = managed_environments(root)
+        user_packages = root / "user-packages"
+        metadata = user_packages / "console_user_package-1.0.dist-info"
+        metadata.mkdir(parents=True)
+        (metadata / "METADATA").write_text("Name: console-user-package\nVersion: 1.0\n")
+        (metadata / "top_level.txt").write_text("console_user_package\n")
+        (user_packages / "console_user_package.py").write_text(
+            # fmt: python
+            code("""
+                value = object()
+                """)
+        )
+        with McpClient(binary, execution.serve(), environment, root) as client:
+            client.initialize_and_list_tools()
+            client.send(
+                # fmt: python
+                python=code("""
+                    import sys
+
+                    sys.path.insert(0, "user-packages")
+                    import console_user_package
+
+                    original_value = console_user_package.value
+                    """)
+            )
+            assert last_result_text(client) == "[done]", last_result_text(client)
+            client.send(requirements={"python": ["console-activation-fixture"]})
+            assert last_result_text(client) == "[prepared]", last_result_text(client)
+            client.send(
+                # fmt: python
+                python=code("""
+                    import console_unloaded
+
+                    assert "user-packages" in sys.path
+                    assert console_user_package.value is original_value
+                    console_unloaded.origin
+                    """)
+            )
+            assert last_result_text(client) == "'candidate'\n", last_result_text(client)
+            return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
 def test_rolls_back_interrupted_python_site_activation(
     binary: Path, execution: Execution
 ) -> list:

@@ -1,0 +1,38 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  r: bridge_value <- 42L
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  python: |
+    import signal
+
+
+    def user_interrupt(signum, frame):
+        print("user interrupt handler")
+
+
+    previous_handler = signal.signal(signal.SIGINT, user_interrupt)
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  python: |
+    assert r.bridge_value == 42
+    assert signal.getsignal(signal.SIGINT) is user_interrupt
+    signal.raise_signal(signal.SIGINT)
+result:
+  content:
+    - type: text
+      text: |
+        user interrupt handler
+  isError: false

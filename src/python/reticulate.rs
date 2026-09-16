@@ -23,13 +23,6 @@ pub(super) fn attach() -> Result<(), String> {
 
 #[allow(clippy::result_large_err)]
 #[harp::register]
-pub extern "C-unwind" fn mcp_console_python_connect_interrupts() -> harp::Result<SEXP> {
-    super::library::connect_interrupts().map_err(|error| harp::anyhow!("{error}"))?;
-    Ok(unsafe { libr::R_NilValue })
-}
-
-#[allow(clippy::result_large_err)]
-#[harp::register]
 pub extern "C-unwind" fn mcp_console_python_state() -> harp::Result<SEXP> {
     let state = super::native::state().map_err(|error| harp::anyhow!("{error}"))?;
     Ok(harp::object::RObject::from(state.to_string()).sexp)

@@ -106,6 +106,10 @@ pub(crate) fn take_python() -> bool {
 }
 
 pub(super) fn clear() {
+    // Requests coalesce at the active runtime's pending-flag reset. Once R is
+    // attached, its flag is authoritative: delivery before discard_interrupts
+    // belongs to this reset; delivery after it leaves that flag observable.
+    // PENDING only owns interrupt state before R attaches.
     PENDING.store(false, Ordering::SeqCst);
     super::embedded_r::discard_interrupts();
     drain();

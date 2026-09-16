@@ -69,7 +69,6 @@ base::local(
         )
         Sys.setenv(RETICULATE_PYTHON = current$discovery$executable)
         config <- original_initialize(...)
-        .Call("mcp_console_python_connect_interrupts")
         config$ephemeral <- !is.null(current$manifest)
         config
       })
