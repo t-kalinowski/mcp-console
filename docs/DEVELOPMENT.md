@@ -27,6 +27,7 @@ Keep separate checkouts' mutable build outputs separate; sharing download caches
 
 ## Host concurrency
 
+`scripts/test --help`, `--list`, and `--locate` run before ownership or compilation; invalid test arguments also fail before building.
 Full checks and transcript runs share a host budget of one active owner by default.
 Set `MCP_CONSOLE_CHECK_SLOTS` to a positive integer to select another budget, using the same setting for concurrent callers.
 When every slot is occupied, the command exits with `full-check budget is busy` before running a phase.

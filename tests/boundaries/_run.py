@@ -60,7 +60,22 @@ FREQUENT_STATUS_UNTIL_SECONDS = 600.0
 LATER_STATUS_SECONDS = 300.0
 FAILURE_SETTLE_SECONDS = 2.0
 
-parser = argparse.ArgumentParser(prog="scripts/test")
+
+class ArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        super().error(
+            f"{message}\nSee scripts/test --help for selectors and execution modes."
+        )
+
+
+parser = ArgumentParser(
+    prog="scripts/test",
+    epilog=(
+        "Execution modes come from @executions(DIRECT, SANDBOXED) in the suite. "
+        "Use execution.serve() for common arguments and SANDBOXED.serve("
+        "'--writable-root', str(path)) for sandbox-only policy."
+    ),
+)
 actions = parser.add_mutually_exclusive_group()
 actions.add_argument("--list", action="store_true", dest="list_tests")
 actions.add_argument("--locate", metavar="SELECTOR")
@@ -71,6 +86,7 @@ parser.add_argument(
     default=600.0,
     help="case deadline in seconds; increase for slow resolver workflows (default: 600)",
 )
+parser.add_argument("--build", action="store_true", help=argparse.SUPPRESS)
 parser.add_argument("--record-case", nargs=3, help=argparse.SUPPRESS)
 parser.add_argument("--supervise-case", nargs=4, help=argparse.SUPPRESS)
 parser.add_argument(
@@ -301,7 +317,7 @@ class ProgressReporter:
 
 
 def selected_cases(
-    suites: dict[str, Path], selectors: list[str]
+    suites: dict[str, Path], selectors: list[str], *, report: bool = True
 ) -> list[tuple[str, str, Path]]:
     selected_suites: dict[str, list[str] | None] = {}
     if selectors:
@@ -339,7 +355,7 @@ def selected_cases(
             (suite_name, case_name, suite_path)
             for case_name in case_names
             if available_executions(
-                cases[case_name], f"{suite_name}::{case_name}", report=True
+                cases[case_name], f"{suite_name}::{case_name}", report=report
             )
         )
     return selected
@@ -536,7 +552,6 @@ def main() -> None:
     if options.locate is not None and options.update:
         parser.error("--locate cannot be combined with --update")
 
-    assert binary.is_file(), f"{binary.relative_to(root)} is missing; run scripts/test"
     assert suite_paths, "no transcript suites found"
 
     suites = {suite_identifier(path): path for path in suite_paths}
@@ -564,7 +579,17 @@ def main() -> None:
         locate(suites, options.locate)
         return
 
-    selected = selected_cases(suites, options.selectors)
+    selected = selected_cases(suites, options.selectors, report=not options.build)
+    if options.build:
+        arguments = sys.argv[1:]
+        arguments.remove("--build")
+        # Re-enter through the shared owner only after metadata and arguments
+        # are valid. The execution child consumes the prepared release binary.
+        os.execv(
+            sys.executable,
+            [sys.executable, str(root / "checkout_workflow.py"), "test", *arguments],
+        )
+    assert binary.is_file(), f"{binary.relative_to(root)} is missing; run scripts/test"
     checked_snapshots: set[Path] = set()
     initialization: list[tuple[str, str, Path]] = []
     for index, (suite_name, case_name, _) in enumerate(selected):

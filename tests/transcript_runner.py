@@ -320,6 +320,77 @@ class TranscriptRunnerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((self.root / "selected.marker").exists())
 
+    def test_script_discovers_and_rejects_arguments_without_building(self) -> None:
+        scripts = self.root / "scripts"
+        scripts.mkdir()
+        shutil.copy2(ROOT / "scripts/test", scripts / "test")
+        shutil.copy2(ROOT / "checkout_workflow.py", self.root / "checkout_workflow.py")
+        commands = self.root / "commands"
+        commands.mkdir()
+        cargo = commands / "cargo"
+        cargo.write_text("#!/bin/sh\nexit 99\n")
+        cargo.chmod(0o755)
+        (self.root / "target/release/mcp-console").unlink()
+        suite = "client_server/server/test_tools"
+        for arguments, status, expected in (
+            (("--help",), 0, "usage: scripts/test"),
+            (("--list",), 0, f"{suite}::selected"),
+            (("--locate", f"{suite}::selected"), 0, "source: tests/boundaries/"),
+            (("--execution", "direct"), 2, "execution modes"),
+            (("--jobs", "0"), 2, "--jobs must be at least 1"),
+            (("--timeout", "nan"), 2, "--timeout must be a positive finite number"),
+            (("unknown/suite",), 2, "unknown transcript suite"),
+            ((f"{suite}::missing",), 2, "unknown transcript case"),
+            (("--locate", suite, "--update"), 2, "cannot be combined"),
+        ):
+            with self.subTest(arguments=arguments):
+                result = subprocess.run(
+                    [scripts / "test", *arguments],
+                    cwd=self.root,
+                    env=os.environ
+                    | {"PATH": f"{commands}{os.pathsep}{os.environ['PATH']}"},
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                self.assertEqual(
+                    result.returncode, status, result.stdout + result.stderr
+                )
+                self.assertIn(expected, result.stdout + result.stderr)
+                self.assertFalse((self.root / "target/release/mcp-console").exists())
+        self.assertFalse((self.root / ".dev-workflow").exists())
+
+    def test_execution_fixture_explains_conflicting_arguments(self) -> None:
+        for arguments, expected in (
+            (("--no-sandbox",), "execution.serve() selects --no-sandbox"),
+            (("--writable-root", "/workspace"), "use SANDBOXED.serve()"),
+            (("--writable-root=/workspace",), "use SANDBOXED.serve()"),
+        ):
+            with self.subTest(arguments=arguments):
+                self.suite.write_text(
+                    PUBLIC_SUITE
+                    # fmt: python
+                    + code("""
+                        from support.execution import DIRECT, executions
+
+
+                        @executions(DIRECT)
+                        def test_selected(binary, execution):
+                            execution.serve(*ARGUMENTS)
+                            return record(binary, "selected")
+                        """).replace("ARGUMENTS", repr(arguments))
+                )
+                result = self.run_runner("client_server/server/test_tools::selected")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected, result.stderr)
+
+    def test_runner_metadata_does_not_require_a_binary(self) -> None:
+        (self.root / "target/release/mcp-console").unlink()
+        for arguments in (("--list",), ("--locate", "client_server/server/test_tools")):
+            with self.subTest(arguments=arguments):
+                result = self.run_runner(*arguments)
+                self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_external_ssh_availability_gates_public_cases(self) -> None:
         shutil.copy2(
             ROOT / "tests/support/ssh_external.py",
