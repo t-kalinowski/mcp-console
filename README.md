@@ -46,7 +46,6 @@ cd workspace
 ../.venv/bin/python ../mcp-console/examples/persistent-analysis.py
 ```
 
-When reviewing a PR, use its checkout rather than `main` so the example and installed package come from the same revision.
 The first installation fetches and compiles the pinned runner with its own Rust toolchain.
 The first cell prepares the default R and Python packages and DuckDB extensions; the plot also prepares Matplotlib.
 These steps may download interpreters, packages, and build dependencies and can take several minutes.
