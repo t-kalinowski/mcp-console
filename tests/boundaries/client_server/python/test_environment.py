@@ -103,14 +103,22 @@ def test_preserves_empty_python_environment(
 def test_rejects_python_older_than_3_10(
     binary: Path, execution: Execution
 ) -> Transcript:
-    interpreter = SYSTEM_PYTHON
-    version = subprocess.run(
-        (interpreter, "-c", "import sys; print(sys.version_info[:2])"),
+    # Resolve Apple's launcher before entering the sandbox.
+    # fmt: python
+    source = code("""
+        import sys
+
+        print(sys.executable)
+        print(sys.version_info[:2])
+        """)
+    probe = subprocess.run(
+        (SYSTEM_PYTHON, "-c", source),
         check=True,
         capture_output=True,
         text=True,
     )
-    assert version.stdout.strip() == "(3, 9)", version.stdout
+    interpreter, version = probe.stdout.splitlines()
+    assert version == "(3, 9)", version
 
     environment = os.environ.copy()
     environment["RETICULATE_PYTHON"] = str(interpreter)

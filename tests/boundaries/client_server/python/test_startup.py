@@ -249,11 +249,16 @@ def interrupted_initialization(
                 builtins.startup_attempts = getattr(builtins, "startup_attempts", 0) + 1
                 marker = Path({str(marker)!r})
                 if not marker.exists():
+                    # Capture the external interrupt before delivering it through
+                    # the worker's real handler from a fixed Python frame.
+                    previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {{signal.SIGINT}})
+                    assert signal.SIGINT not in previous_mask
                     marker.write_text(str(os.getpid()))
                     with open({str(started.path)!r}, "wb", buffering=0) as ready:
                         ready.write(b"1")
-                    while True:
-                        signal.pause()
+                    received = signal.sigwait({{signal.SIGINT}})
+                    signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+                    signal.raise_signal(received)
             """)
         (site / f"{hook}.py").write_text(source)
         if hook != "sitecustomize":

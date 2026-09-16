@@ -27,8 +27,8 @@ result:
           File "<frozen site>", line <line>, in addsitedir
           File "<frozen site>", line <line>, in addpackage
           File "<string>", line 1, in <module>
-          File "<site-packages>/console_startup.py", line 15, in <module>
-            signal.pause()
+          File "<site-packages>/console_startup.py", line 20, in <module>
+            signal.raise_signal(received)
           File "<string>", line 94, in _interrupt
         KeyboardInterrupt
         Error: Python function `_mcp_console_environment.initialize_site` failed
