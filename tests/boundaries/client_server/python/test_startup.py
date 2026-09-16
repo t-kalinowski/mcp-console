@@ -43,6 +43,127 @@ def isolated_python(directory: Path) -> tuple[Path, Path]:
     return python, Path(site)
 
 
+def captured_interpreter(
+    binary: Path, execution: Execution, selection: str | None
+) -> list:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        python, _ = isolated_python(root)
+        (root / "elsewhere").mkdir()
+        environment = selected_python(root, python)
+        environment["PATH"] = os.pathsep.join((str(python.parent), environment["PATH"]))
+        if selection is None:
+            environment.pop("RETICULATE_PYTHON")
+        else:
+            environment["RETICULATE_PYTHON"] = selection
+        with McpClient(binary, execution.serve(), environment, root) as client:
+            client.initialize_and_list_tools()
+            client.send(
+                # fmt: r
+                r=code("""
+                    Sys.setenv(PATH = "", RETICULATE_PYTHON = "missing-python")
+                    setwd("elsewhere")
+                    """)
+            )
+            assert last_result_text(client) == "[done]", last_result_text(client)
+            client.send(
+                # fmt: python
+                python=code(f"""
+                    import sys
+
+                    assert sys.prefix == {str(python.parent.parent)!r}
+                    6 * 7
+                    """)
+            )
+            assert last_result_text(client) == "42\n", last_result_text(client)
+            return json.loads(
+                json.dumps(client.finish()).replace(str(root), "<workspace>")
+            )
+
+
+@executions(DIRECT, SANDBOXED)
+def test_captures_ambient_python_before_r(binary: Path, execution: Execution) -> list:
+    return captured_interpreter(binary, execution, None)
+
+
+@executions(DIRECT, SANDBOXED)
+def test_captures_python_command_before_r(binary: Path, execution: Execution) -> list:
+    return captured_interpreter(binary, execution, "python3")
+
+
+@executions(DIRECT, SANDBOXED)
+def test_captures_relative_python_before_r(binary: Path, execution: Execution) -> list:
+    return captured_interpreter(binary, execution, "./python/bin/python")
+
+
+def startup_input(binary: Path, execution: Execution, hook: str) -> list:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        python, site = isolated_python(root)
+        # Discovery runs without input; embedded startup uses Console's bridge.
+        # fmt: python
+        source = code("""
+            import builtins
+            import sys
+
+            if sys.argv[0] != "-c":
+                builtins.startup_attempts = getattr(builtins, "startup_attempts", 0) + 1
+                builtins.startup_input = input("startup> ")
+                if builtins.startup_attempts == 1:
+                    raise KeyboardInterrupt("retry startup")
+            """)
+        (site / f"{hook}.py").write_text(source)
+        if hook != "sitecustomize":
+            (site / "console-startup.pth").write_text(f"import {hook}\n")
+        environment = selected_python(root, python)
+        environment["PYTHONPATH"] = str(site)
+        environment["PYTHONNODEBUGRANGES"] = "1"
+        with McpClient(binary, execution.serve(), environment, root) as client:
+            client.initialize_and_list_tools()
+            client.send(python="never_run = True")
+            assert last_result_text(client) == (
+                '[input requested: "startup> "]\n[waiting for stdin]'
+            ), last_result_text(client)
+            result = client.send(stdin="retry\n")
+            interrupted = last_result_text(client)
+            assert "KeyboardInterrupt" in interrupted, interrupted
+            result["content"][0]["text"] = re.sub(
+                r'(File "<frozen site>", line )\d+', r"\1<line>", interrupted
+            )
+            client.send(
+                # fmt: python
+                python=code("""
+                    import builtins
+
+                    assert "never_run" not in globals()
+                    assert builtins.startup_attempts == 2
+                    builtins.startup_input
+                    """)
+            )
+            assert last_result_text(client) == (
+                '[input requested: "startup> "]\n[waiting for stdin]'
+            ), last_result_text(client)
+            client.send(stdin="caf\u00e9\0tail\n")
+            assert last_result_text(client) == "'caf\u00e9\\x00tail'\n", (
+                last_result_text(client)
+            )
+            return json.loads(
+                json.dumps(client.finish()).replace(str(site), "<site-packages>")
+            )
+
+
+@executions(DIRECT, SANDBOXED)
+def test_manages_sitecustomize_input_across_retries(
+    binary: Path, execution: Execution
+) -> list:
+    return startup_input(binary, execution, "sitecustomize")
+
+
+@executions(DIRECT, SANDBOXED)
+def test_manages_pth_input_across_retries(binary: Path, execution: Execution) -> list:
+    return startup_input(binary, execution, "console_startup")
+
+
 @executions(DIRECT, SANDBOXED)
 @requires(PYTHON_FRAMEWORK)
 def test_embeds_framework_python(binary: Path, execution: Execution) -> list:

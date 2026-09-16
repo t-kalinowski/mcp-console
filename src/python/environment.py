@@ -319,9 +319,10 @@ def evaluate(request):
     return "null"
 
 
-def connect_streams(request):
+def connect_io(request):
     for stream in (sys.stdout, sys.stderr):
         stream.reconfigure(line_buffering=True, write_through=True)
     sys.stdout = _ConsoleStream(sys.stdout, "output")
     sys.stderr = _ConsoleStream(sys.stderr, "diagnostic")
+    builtins.input = _input
     return "null"

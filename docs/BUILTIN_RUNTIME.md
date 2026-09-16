@@ -147,7 +147,7 @@ An interrupted automatic R or Python resolver reports an interrupted outcome to 
 The response contains available output and current state through the normal `send` conventions, commonly ending in `[running; poll with an empty send]`, `[waiting for stdin]`, `[idle]`, or the completed evaluation result.
 
 R, Python, and DuckDB observe interruption through their normal console/runtime mechanisms.
-Python startup hooks, including executable `.pth` files and `sitecustomize`, run after Console connects interrupt delivery.
+Python startup hooks, including executable `.pth` files and `sitecustomize`, run after Console connects interrupt delivery and managed `input()`.
 Interrupting a hook cancels the submitted cell; a later cell retries initialization in the same interpreter.
 Hook side effects before interruption remain, and incomplete site processing may run again during that retry.
 Managed console reads are cancelled when the active runtime accepts the interrupt.
@@ -325,6 +325,7 @@ Reticulate attaches to Console's Python interpreter for cross-language calls:
 - objects converted or proxied by reticulate remain subject to reticulate's conversion rules.
 
 Console captures interpreter selection at launch.
+Command names and relative executable paths are resolved before evaluated code can change `PATH` or the working directory, preserving virtual environment symlinks.
 Set `RETICULATE_PYTHON` before starting the server to select a preinstalled interpreter; R-side `reticulate::use_python()` and related hints cannot replace that selection.
 
 With the managed DuckDB backend, an R data frame can be queried by name from SQL.

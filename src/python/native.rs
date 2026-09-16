@@ -21,7 +21,7 @@ struct Configuration {
 
 #[derive(Clone)]
 struct Selection {
-    python: PathBuf,
+    python: Result<PathBuf, String>,
     manifest: Option<crate::worker_protocol::PythonRequirementManifest>,
     declared: Option<crate::worker_protocol::PythonRequirementManifest>,
 }
@@ -56,7 +56,7 @@ pub(super) fn configure(temporary: &Path) -> Result<(), String> {
     CONFIGURATION
         .set(Configuration {
             selection: Mutex::new(Selection {
-                python: selected.into(),
+                python: capture_executable(Path::new(&selected)),
                 manifest,
                 declared: None,
             }),
@@ -66,6 +66,35 @@ pub(super) fn configure(temporary: &Path) -> Result<(), String> {
             disabled_reason: disabled_reason.into(),
         })
         .map_err(|_| "Python configuration already captured".to_string())
+}
+
+fn capture_executable(selected: &Path) -> Result<PathBuf, String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let resolve = || -> std::io::Result<PathBuf> {
+        if selected.components().count() > 1 {
+            return std::path::absolute(selected);
+        }
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        let executable = std::env::split_paths(&path)
+            .map(|directory| directory.join(selected))
+            .find(|candidate| {
+                candidate.metadata().is_ok_and(|metadata| {
+                    metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+                })
+            })
+            .ok_or_else(|| std::io::Error::from_raw_os_error(libc::ENOENT))?;
+        // Preserve a virtual environment's executable symlink: canonicalizing
+        // it would select the base interpreter and lose the environment.
+        std::path::absolute(executable)
+    };
+    // A missing interpreter must not prevent the other languages from running.
+    resolve().map_err(|error| {
+        format!(
+            "Python is unavailable: cannot run `{}`: {error}",
+            selected.display()
+        )
+    })
 }
 
 pub(crate) fn ensure_initialized() -> Result<(), String> {
@@ -81,16 +110,17 @@ pub(crate) fn ensure_initialized() -> Result<(), String> {
         .map_err(|_| "Python selection lock poisoned")?
         .clone();
     if let Some(candidate) = selection.declared.take() {
-        selection.python =
-            crate::worker::resolve_python(crate::worker_protocol::PythonResolveRequest {
+        selection.python = Ok(crate::worker::resolve_python(
+            crate::worker_protocol::PythonResolveRequest {
                 requirements: candidate.clone(),
                 retained_requirements: candidate.clone(),
                 import_resolution: None,
-            })?
-            .into();
+            },
+        )?
+        .into());
         selection.manifest = Some(candidate);
     }
-    let discovered = discover(&selection.python)?;
+    let discovered = discover(selection.python.as_ref().map_err(Clone::clone)?)?;
     let library = discovered["libpython"]
         .as_str()
         .ok_or("Python discovery omitted libpython")?;
@@ -113,11 +143,7 @@ pub(crate) fn ensure_initialized() -> Result<(), String> {
             super::library::install_native()?;
             super::library::install_runtime(super::RUNTIME_SOURCE)?;
             super::library::install_module(c"_mcp_console_environment", ENVIRONMENT_SOURCE)?;
-            super::library::call_json(
-                c"_mcp_console_environment",
-                c"connect_streams",
-                &Value::Null,
-            )?;
+            super::library::call_json(c"_mcp_console_environment", c"connect_io", &Value::Null)?;
             SERVICES_INSTALLED.store(true, Ordering::SeqCst);
         }
         super::library::connect_interrupts()?;
@@ -262,7 +288,7 @@ pub(super) fn prepare(request: Value) -> Result<Value, String> {
             .selection
             .lock()
             .map_err(|_| "Python selection lock poisoned")? = Selection {
-            python: python.into(),
+            python: Ok(python.into()),
             manifest: Some(candidate.clone()),
             declared: None,
         };
