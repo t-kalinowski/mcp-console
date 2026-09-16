@@ -47,6 +47,7 @@ cd workspace
 ```
 
 The first installation fetches and compiles the pinned runner with its own Rust toolchain.
+The walkthrough uses managed Python, ignoring any `RETICULATE_PYTHON` selection in your shell.
 The first cell prepares the default R and Python packages and DuckDB extensions; the plot also prepares Matplotlib.
 These steps may download interpreters, packages, and build dependencies and can take several minutes.
 No dataset is downloaded.

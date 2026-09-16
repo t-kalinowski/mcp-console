@@ -29,9 +29,12 @@ async def main() -> None:
     previous = set(sessions.glob("*"))
     # An optional executable path follows the other examples' test convention.
     command = sys.argv[1] if len(sys.argv) > 1 else None
+    # This walkthrough prepares its packages in managed Python.
+    environment = os.environ.copy()
+    environment.pop("RETICULATE_PYTHON", None)
     with anyio.fail_after(600):
         async with AsyncMCPConsole(
-            command=command, server_parameters={"env": os.environ}
+            command=command, server_parameters={"env": environment}
         ) as console:
             await send_cell(
                 console,

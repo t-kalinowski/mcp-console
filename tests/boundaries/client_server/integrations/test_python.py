@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import venv
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -32,6 +33,11 @@ def test_persistent_analysis_example(binary: Path) -> Transcript:
     environment["PYTHONPATH"] = str(ROOT / "python")
     with tempfile.TemporaryDirectory() as temporary:
         workspace = Path(temporary).resolve()
+        # The walkthrough must prepare its own Python packages even when the
+        # caller selects an interpreter with no analysis packages installed.
+        selected_python = workspace / "selected-python"
+        venv.create(selected_python)
+        environment["RETICULATE_PYTHON"] = str(selected_python / "bin/python")
         # The MCP server inherits this stderr pipe. Capturing EOF waits for its
         # closure as well as the script's exit after the console context ends.
         result = subprocess.run(
