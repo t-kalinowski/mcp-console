@@ -781,6 +781,21 @@ def main() -> None:
             send(writer, {"kind": "completed"})
             continue
 
+        if source in {"preview same producer", "preview unicode suffix", "preview unicode replacement"}:
+            send_output(writer, "preview head\n")
+            unit, count = ("ab", 100000) if source == "preview same producer" else ("a€🙂b", 10000)
+            for _ in range(count):
+                send_output(writer, unit)
+            if source == "preview unicode suffix":
+                send_output(writer, "\b🙂\b\r\n")
+            elif source == "preview unicode replacement":
+                send_output(writer, "\b" * 8192 + "\r\bfinal 🙂\bframe\r\n")
+            else:
+                send_output(writer, "\n")
+            send_output(writer, "preview tail: final diagnostic\n")
+            send(writer, {"kind": "completed"})
+            continue
+
         if source in {"preview huge line", "preview tiny events", "preview many tiny events", "preview redraw"}:
             send_output(writer, "preview head\n")
             if source == "preview huge line":

@@ -7,6 +7,7 @@ use super::utf8_prefix_length;
 pub(super) struct Stream {
     head: String,
     tail: String,
+    tail_start: usize,
     omitted: u64,
     head_closed: bool,
     pending_carriage_return: bool,
@@ -45,7 +46,9 @@ impl Stream {
                     // Backspace edits the retained suffix. It cannot reconstruct
                     // an already omitted middle after erasing that entire suffix;
                     // the gap remains until a carriage return replaces the frame.
-                    if self.tail.pop().is_none() && self.omitted == 0 {
+                    if self.tail.len() > self.tail_start {
+                        self.tail.pop();
+                    } else if self.omitted == 0 {
                         self.head.pop();
                     }
                 }
@@ -63,22 +66,36 @@ impl Stream {
         self.head.push_str(&text[..head]);
         let text = &text[head..];
         self.head_closed |= !text.is_empty();
+        if text.is_empty() {
+            return;
+        }
         if text.len() >= TEXT_BYTES {
             let start = suffix_start(text, TEXT_BYTES);
-            self.omitted += (self.tail.len() + start) as u64;
+            self.omitted += (self.tail.len() - self.tail_start + start) as u64;
             self.tail.clear();
+            self.tail_start = 0;
             self.tail.push_str(&text[start..]);
         } else {
+            // Advance through the retained suffix between bounded compactions.
+            // Reserve only this fixed ceiling, including the discarded prefix.
+            if self.tail.len() + text.len() > 2 * TEXT_BYTES {
+                self.tail.drain(..self.tail_start);
+                self.tail_start = 0;
+            }
+            if self.tail.capacity() < self.tail.len() + text.len() {
+                self.tail.reserve_exact(2 * TEXT_BYTES - self.tail.len());
+            }
             self.tail.push_str(text);
-            let start = suffix_start(&self.tail, TEXT_BYTES);
+            let start = suffix_start(&self.tail[self.tail_start..], TEXT_BYTES);
             self.omitted += start as u64;
-            self.tail.drain(..start);
+            self.tail_start += start;
         }
     }
 
     fn clear(&mut self) {
         self.head.clear();
         self.tail.clear();
+        self.tail_start = 0;
         self.omitted = 0;
         self.head_closed = false;
         self.pending_carriage_return = false;
@@ -88,7 +105,7 @@ impl Stream {
     pub(super) fn finish(&mut self, output: &mut Preview) {
         output.text(&self.head);
         output.gap(self.omitted);
-        output.text(&self.tail);
+        output.text(&self.tail[self.tail_start..]);
         self.clear();
     }
 }
