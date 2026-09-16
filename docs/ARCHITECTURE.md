@@ -447,7 +447,9 @@ Collection and response composition keep bounded state even after raw-file reten
 A controlled send produces one MCP response.
 When a completed or interrupted evaluation precedes a new cell, the server transfers the prior response region into the new evaluation's prelude instead of acknowledging it separately.
 The resulting delivery owner covers prior-operation output, restart lifecycle notices when present, new-cell output, and the final combined state marker in that order.
-If MCP response delivery is cancelled or its write fails, the complete combined response returns to its delivery owner and can be delivered exactly once.
+Console retains one recoverable response until local transport write or cancellation settles ownership.
+A cancelled or failed delivery returns the complete combined response to its owner.
+This does not establish exactly-once client observation: cancellation can race with bytes already made visible to the client.
 An active evaluation replays its unclaimed response before collecting later output.
 Restart finishes that cell's raw output record before composing its recovered intervals with later output, so a source summary can publish the journal entry before releasing the file receipt.
 
