@@ -366,10 +366,12 @@ impl Evaluation {
     }
 
     pub(super) fn image(&self, data: String, mime_type: String) -> Result<(), String> {
-        crate::transcript::validate_image_data(&data)?;
+        let bytes = crate::transcript::decode_image_data(&data)?;
         self.output
-            .push_image_with_artifact(data, mime_type, |data, mime_type| {
-                self.transcript.persist_image(self.call_id, data, mime_type)
+            .push_image_with_artifact(data, mime_type, |_, mime_type| {
+                Ok(self
+                    .transcript
+                    .persist_decoded_image(self.call_id, &bytes, mime_type))
             })
     }
 

@@ -367,6 +367,70 @@ def test_cancelled_active_polls_replay_before_later_output(binary: Path) -> Tran
 
 
 @requires(NATIVE_FIXTURES)
+def test_image_recovery_moves_the_retained_preview(binary: Path) -> Transcript:
+    with recovery_client(binary) as (client, profile, reached, release):
+        pending = client.start_send(r="preview allocation image")
+        cancel_result(client, pending, reached, release)
+        # Stop at the next result journal write: image ingestion and persistence
+        # have finished, and MCP serialization has not started yet.
+        profile.start()
+        recovered = client.start_send()
+        reached.wait("recovered image owns delivery before journaling")
+        allocated, _ = profile.stop()
+        release.release()
+        client.receive(recovered)
+        result = recovered["result"]
+        assert result == {
+            "content": [
+                {
+                    "type": "image",
+                    "data": "A" * (8 * 1024 * 1024),
+                    "mimeType": "image/png",
+                }
+            ],
+            "isError": False,
+        }
+        session = session_directory(client)
+        events = [
+            json.loads(line)
+            for line in (session / "internal/events.jsonl").read_text().splitlines()
+        ]
+        artifacts = [event for event in events if event["event"] == "artifact_created"]
+        assert len(artifacts) == 1, artifacts
+        artifact = artifacts[0]
+        assert artifact["mime_type"] == "image/png"
+        assert artifact["bytes"] == 6 * 1024 * 1024
+        assert (session / artifact["path"]).read_bytes() == bytes(6 * 1024 * 1024)
+        recorded = [
+            event["result"]["content"]
+            for event in events
+            if event["event"] == "tool_result" and event["call_id"] in (2, 3)
+        ]
+        assert (
+            recorded
+            == [
+                [
+                    {
+                        "type": "image",
+                        "artifactId": artifact["artifact_id"],
+                        "path": artifact["path"],
+                        "mimeType": "image/png",
+                    }
+                ]
+            ]
+            * 2
+        ), recorded
+        # One encoded copy is required for MCP; retaining recovery must move the
+        # existing preview. Allow small response, journal, and transport overhead.
+        assert allocated < 9 * 1024 * 1024, allocated
+        result["content"][0]["data"] = "<image byte-identical to 6 MiB of zero bytes>"
+        profile.pause_results(False)
+        client.send()
+        assert last_tool_text(client) == "\n[idle]"
+        return client.finish()
+
+
+@requires(NATIVE_FIXTURES)
 def test_recovered_image_omissions_keep_bounded_state(binary: Path) -> Transcript:
     count = 1024
     with recovery_client(binary) as (client, profile, reached, release):
