@@ -781,7 +781,9 @@ impl EvaluationReservation {
         if !state.waiting {
             return Ok(RestartDelivery::Unclaimed(response));
         }
-        let (acknowledged, wait_for_acknowledgment) = mpsc::sync_channel(0);
+        // Publish the single settlement without waiting for restart's receiver
+        // to be scheduled. Restart still receives it before composing its reply.
+        let (acknowledged, wait_for_acknowledgment) = mpsc::sync_channel(1);
         response.acknowledge_with(acknowledged);
         state.restart_handoff = Some(response);
         self.evaluation.changed.notify_one();
