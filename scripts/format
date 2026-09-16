@@ -4,10 +4,33 @@ set -eu
 
 cd "${0%/*}/.."
 
-ruff format || :
+strict=0
+case "${1-}" in
+    '') ;;
+    --strict) strict=1; shift ;;
+    *) echo 'usage: scripts/format [--strict]' >&2; exit 2 ;;
+esac
+[ "$#" -eq 0 ] || { echo 'usage: scripts/format [--strict]' >&2; exit 2; }
+failed=0
 
-yamark format --wrap sentence || :
+format() {
+    name=$1
+    shift
+    if "$@"; then
+        echo "$name: ok"
+    else
+        status=$?
+        echo "$name: failed ($status)"
+        failed=1
+    fi
+}
 
-cargo fmt --all || :
+format ruff ruff format
+format yamark yamark format --wrap sentence
+format rustfmt cargo fmt --all
+format air air format .
+format fixtures scripts/check-fixtures
 
-air format . || :
+if [ "$strict" -eq 1 ]; then
+    exit "$failed"
+fi
