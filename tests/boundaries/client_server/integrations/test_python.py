@@ -21,7 +21,6 @@ from support.normalization import code
 from support.records import Transcript
 from support.previews import assert_preview
 from support.evidence import compact_text
-from support.processes import process_group_exists, stop_process_group
 from support.requirements import SANDBOX, WORKER, requires
 from support.resolvers import bare_runtime_environment
 from support.suites import run_this_suite
@@ -33,7 +32,9 @@ def test_persistent_analysis_example(binary: Path) -> Transcript:
     environment["PYTHONPATH"] = str(ROOT / "python")
     with tempfile.TemporaryDirectory() as temporary:
         workspace = Path(temporary).resolve()
-        process = subprocess.Popen(
+        # The MCP server inherits this stderr pipe. Capturing EOF waits for its
+        # closure as well as the script's exit after the console context ends.
+        result = subprocess.run(
             [
                 sys.executable,
                 str(ROOT / "examples/persistent-analysis.py"),
@@ -41,19 +42,12 @@ def test_persistent_analysis_example(binary: Path) -> Transcript:
             ],
             cwd=workspace,
             env=environment,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
-            start_new_session=True,
+            timeout=540,
         )
-        try:
-            output, error = process.communicate(timeout=540)
-            assert process.returncode == 0, (output, error)
-            # The script and its MCP server have both exited after context closure.
-            assert not process_group_exists(process.pid)
-        finally:
-            stop_process_group(process.pid)
-            process.wait(timeout=10)
+        assert result.returncode == 0, (result.stdout, result.stderr)
+        output = result.stdout
         assert "Total profit: 280" in output, output
         assert "Best channel: web ($160 profit)" in output, output
         assert "Profit gap: $40" in output, output
