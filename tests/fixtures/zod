@@ -1173,8 +1173,12 @@ def main() -> None:
             continue
 
         if source == "wait for stdin close":
+            release = temporary / "zod-stdin-close-output-release"
+            os.mkfifo(release)
             publish_marker(temporary / "zod-waiting-for-stdin-close")
             assert os.read(0, 1) == b"", "Zod received input instead of stdin EOF"
+            with release.open("rb", buffering=0) as gate:
+                assert gate.read(1) == b"1"
             emit_large_output(1, b"zod stdin closed\n")
             send(writer, {"kind": "completed"})
             continue

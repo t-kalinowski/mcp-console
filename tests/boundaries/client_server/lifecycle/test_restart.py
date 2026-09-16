@@ -32,6 +32,7 @@ LARGE_OUTPUT_SIZE = 2 * 1024 * 1024
 
 from boundaries.client_server._harness import (
     ZodFixtureControl,
+    restart_with_retirement_output,
     wait_for_marker,
 )
 
@@ -52,13 +53,13 @@ def test_restart_closes_worker_stdin(binary: Path, execution: Execution) -> Tran
         client.initialize_and_list_tools()
         client.send(r="wait for stdin close", timeout_ms=0)
         assert last_tool_text(client) == "\n[running; poll with an empty send]"
-        wait_for_marker(
+        waiting = wait_for_marker(
             temporary_path,
             "zod-waiting-for-stdin-close",
             client,
         )
 
-        client.send(control="restart")
+        restart_with_retirement_output(client, waiting, call_id=1)
         output = last_tool_text(client)
         raw = cell_text(client, 1)
         assert raw == "", "output after the restart cut does not belong to the cell log"
