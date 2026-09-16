@@ -385,6 +385,60 @@ class TranscriptRunnerTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(expected, result.stderr)
 
+    def test_sbx_discovery_does_not_create_build_output(self) -> None:
+        scripts = self.root / "scripts"
+        scripts.mkdir()
+        shutil.copy2(ROOT / "scripts/test", scripts / "test")
+        shutil.copytree(
+            ROOT / "tests/support",
+            self.root / "tests/support",
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns("__pycache__"),
+        )
+        self.suite.write_text(
+            PUBLIC_SUITE
+            # fmt: python
+            + code("""
+                from support.docker_sandbox import DOCKER_SANDBOX
+                from support.requirements import requires
+
+                test_selected = requires(DOCKER_SANDBOX)(test_selected)
+                """)
+        )
+        commands = self.root / "commands"
+        commands.mkdir()
+        sbx = commands / "sbx"
+        sbx.write_text(
+            f"#!{sys.executable}\n"
+            # fmt: python
+            + code("""
+                import sys
+                from pathlib import Path
+
+                Path("sbx-probed").touch()
+                print("sbx version: v0.42.1 fixture" if sys.argv[1] == "version" else "[]")
+                """)
+        )
+        sbx.chmod(0o755)
+        shutil.rmtree(self.root / "target")
+        environment = os.environ | {
+            "PATH": f"{commands}{os.pathsep}{os.environ['PATH']}",
+            "MCP_CONSOLE_TEST_SBX_TEMPLATE": "fixture@sha256:example",
+            "MCP_CONSOLE_TEST_SBX_NETWORK": "0",
+            "MCP_CONSOLE_TEST_SBX_INNER_DOCKER": "0",
+        }
+        result = subprocess.run(
+            [scripts / "test", "--list"],
+            cwd=self.root,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.root / "sbx-probed").exists())
+        self.assertFalse((self.root / "target").exists())
+
     def test_runner_metadata_does_not_require_a_binary(self) -> None:
         (self.root / "target/release/mcp-console").unlink()
         for arguments in (("--list",), ("--locate", "client_server/server/test_tools")):
