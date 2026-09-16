@@ -1438,6 +1438,17 @@ class TranscriptRunnerTests(unittest.TestCase):
             },
         )
 
+    def test_failure_rerun_preserves_custom_timeout(self) -> None:
+        (self.snapshots / "selected.yaml").write_text("---\nrunner: mismatch\n...\n")
+        result = self.run_runner(
+            "--timeout", "1200.5", "client_server/server/test_tools::selected"
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "rerun: scripts/test --timeout 1200.5 client_server/server/test_tools::selected",
+            result.stderr,
+        )
+
     def test_parallel_failure_exits_and_reports_every_failure(self) -> None:
         self.suite.write_text(FAILING_SUITE, encoding="utf-8")
         for name in ("selected", "unselected"):
