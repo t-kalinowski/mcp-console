@@ -1,0 +1,68 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  python: |
+    import os
+    import sys
+
+    original_environment = dict(os.environ)
+    original_paths = list(sys.path)
+    original_prefixes = sys.prefix, sys.exec_prefix, sys.executable
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  requirements:
+    python:
+      - console-activation-fixture
+result:
+  content:
+    - type: text
+      text: KeyboardInterrupt
+  isError: true
+---
+send:
+  python: |
+    assert dict(os.environ) == original_environment
+    assert sys.path == original_paths
+    assert (sys.prefix, sys.exec_prefix, sys.executable) == original_prefixes
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  r: '"console-activation-fixture" %in% reticulate::py_require()$packages'
+result:
+  content:
+    - type: text
+      text: |
+        [1] FALSE
+  isError: false
+---
+send:
+  requirements:
+    python:
+      - console-activation-fixture
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+send:
+  python: |
+    import console_unloaded
+
+    console_unloaded.origin
+result:
+  content:
+    - type: text
+      text: |
+        'candidate'
+  isError: false

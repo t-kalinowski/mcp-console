@@ -249,12 +249,14 @@ The worker's native signal handler wakes blocked input and marks interrupts for 
 Python acknowledgment respects R's suspended-interrupt state and clears accepted interrupts so nested calls do not deliver them twice.
 Reticulate's event polling remains active.
 
-Reticulate is still required for ordinary Python startup: it owns interpreter selection and startup orchestration, the requirement manifest, environment activation, automatic-resolution callbacks, object conversion, and cross-language and module-load integration.
+Reticulate is still required for ordinary Python startup: it owns interpreter selection and startup orchestration, object conversion, and cross-language and module-load integration.
+Console owns the managed manifest, requirement transitions, candidate compatibility checks, automatic-resolution callbacks, and live activation.
+Managed reticulate requirement bindings delegate to that owner; their R metadata records API history without retaining a second authoritative manifest.
 Cell dispatch and runtime installation release the library-state lock before executing Python, and native console callbacks release the GIL while blocking on worker services.
 Python stream wrappers restrict those callbacks to the main worker thread; binary buffers, descriptors, background threads, and fork children use their underlying streams, including cached or redirected stream objects.
 The DB-API adapter continues to execute through the CPython API, while managed DuckDB remains in R.
 Before normal worker exit, it restores the main Python thread's saved attachment so extension-library exit destructors, including DuckDB's, can use Python safely.
-Its private Python runtime conditionally appends a last-chance import finder, while the R Python bridge owns the reticulate manifest and the callback into the existing managed-Python resolver.
+Its private Python runtime conditionally appends a last-chance import finder, with native environment callbacks into the existing managed-Python resolver.
 Bare sessions leave both resolution adapters disabled.
 Their user-visible behavior belongs in the [built-in runtime guide](BUILTIN_RUNTIME.md), while the sideband contract remains independent of the interpreter implementation.
 
@@ -394,24 +396,24 @@ The private finder runs only after Python's existing import finders have failed,
 It also yields without a callback for optional-dependency misses reached while the default NumPy or pandas package is initializing, so importing those available defaults does not change the managed environment.
 It derives one bare distribution from the top-level import through a curated mapping or a conservative same-name fallback; the server validates that name through the existing managed-Python requirement validator.
 
-The Python finder calls a process-lifetime R closure through reticulate.
-That closure adds the distribution to reticulate's additive manifest and materializes it through the same helper used by explicit live Python preparation.
+The Python finder calls the existing `_mcp_console_services` native boundary.
+The Console Python adapter adds the distribution through the same manifest owner used by explicit live preparation and managed reticulate declarations.
 The worker then uses the existing synchronous `ResolvePython` request; the relay only forwards that message and its reply.
 
 The server resolves a complete managed-Python candidate on the host and returns it provisionally.
-Reticulate checks compatibility with the live interpreter and activates the environment without replacing Python or the worker.
-Its active manifest binding reports `PythonActivated`, and the server commits only a matching candidate owned by the current generation.
-The worker emits that report before it invalidates import caches and resumes the original import through Python's current meta-path finders.
+Console checks compatibility with the live interpreter and loaded distributions, then activates the environment without replacing Python or the worker.
+Its native activation service reports `PythonActivated`, and the server commits only a matching candidate owned by the current generation.
+The worker emits that report before it resumes the original import through Python's current meta-path finders.
 An automatic request records a differently named import and distribution on its provisional candidate, and the server renders that mapping as a bounded bracketed notice only when it commits the matching activation.
 The cell is not replayed.
 
 A successful activation remains retained if the inferred distribution does not contain the requested module or later cell code fails.
-An ordinary pre-activation failure restores the earlier reticulate manifest and leaves the worker usable.
+An ordinary pre-activation failure preserves the earlier accepted manifest and leaves the worker usable.
 Restart, shutdown, and generation checks discard unactivated candidates owned by an old worker.
 
-The finder uses a reentrancy guard while the R callback runs.
+The finder uses a reentrancy guard while native preparation runs.
 It also records the worker PID and configuring Python thread; a missing import reached from a fork child or another thread fails without calling R, reticulate, the sideband, or a host resolver.
-These checks keep R callbacks on the embedded-R thread and prevent nested resolver waits.
+These checks keep native environment callbacks on the worker thread and prevent nested resolver waits.
 
 ### Interruption
 

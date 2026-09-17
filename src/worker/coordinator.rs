@@ -131,13 +131,8 @@ impl Runtime {
                 }
                 self.writer.send(&WorkerMessage::Completed)?;
             }
-            // Keep worker-owned preparation state transitions atomic. Any
-            // nested host resolver registers its own interrupt target.
             ServerMessage::PreparePython { packages } => {
-                let result = embedded_r::defer_interrupts(
-                    || self.python.prepare(packages),
-                    embedded_r::discard_interrupts,
-                );
+                let result = self.python.prepare(packages);
                 if core::is_shutting_down() {
                     return Ok(false);
                 }

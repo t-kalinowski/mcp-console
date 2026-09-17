@@ -1,11 +1,9 @@
 use libr::SEXP;
 
-use super::PreparationOutcome;
-
 const PYTHON_BRIDGE_SOURCE: &str = include_str!("bridge.R");
 const PYTHON_INITIALIZER_SOURCE: &str = include_str!("initialize.R");
 
-/// Interpreter startup and environment preparation remain hosted by reticulate.
+/// Reticulate retains initial interpreter selection and interoperability startup.
 pub(super) struct Runtime {
     bridge: crate::r_bridge::Bridge,
     initialized: bool,
@@ -33,17 +31,6 @@ impl Runtime {
             self.initialized = self.bridge.evaluate_completed("")?;
         }
         Ok(self.initialized)
-    }
-
-    pub(super) fn prepare(&self, packages: Vec<String>) -> Result<PreparationOutcome, String> {
-        let request = serde_json::to_string(&packages)
-            .map_err(|error| format!("failed to serialize Python preparation: {error}"))?;
-        let response = self
-            .bridge
-            .call1_string(c"prepare", &request)?
-            .ok_or_else(|| "Python preparation bridge returned no response".to_string())?;
-        serde_json::from_str(&response)
-            .map_err(|error| format!("invalid Python preparation response: {error}"))
     }
 }
 
@@ -103,6 +90,7 @@ pub extern "C-unwind" fn mcp_console_install_python_runtime(libpython: SEXP) -> 
     super::library::install_runtime(super::RUNTIME_SOURCE)
         .map_err(|error| harp::anyhow!("{error}"))?;
     crate::sql::install_python_runtime().map_err(|error| harp::anyhow!("{error}"))?;
+    super::environment::attach(&libpython).map_err(|error| harp::anyhow!("{error}"))?;
     unsafe { Ok(libr::R_NilValue) }
 }
 
@@ -127,12 +115,26 @@ pub extern "C-unwind" fn mcp_console_resolve_python(request: SEXP) -> harp::Resu
 
 #[allow(clippy::result_large_err)]
 #[harp::register]
-pub extern "C-unwind" fn mcp_console_python_activated(requirements: SEXP) -> harp::Result<SEXP> {
-    let requirements = String::try_from(harp::object::RObject::view(requirements))?;
-    let requirements =
-        serde_json::from_str(&requirements).map_err(|error| harp::anyhow!("{error}"))?;
-    crate::worker::publish_python_activation(requirements)
-        .map_err(|error| harp::anyhow!("{error}"))?;
+pub extern "C-unwind" fn mcp_console_python_bootstrap(request: SEXP) -> harp::Result<SEXP> {
+    let request = String::try_from(harp::object::RObject::view(request))?;
+    let versions = serde_json::from_str(&request).map_err(|error| harp::anyhow!("{error}"))?;
+    let python =
+        super::environment::bootstrap(versions).map_err(|error| harp::anyhow!("{error}"))?;
+    Ok(harp::object::RObject::from(python).sexp)
+}
+
+#[allow(clippy::result_large_err)]
+#[harp::register]
+pub extern "C-unwind" fn mcp_console_python_environment_state() -> harp::Result<SEXP> {
+    Ok(harp::object::RObject::from(super::environment::state().to_string()).sexp)
+}
+
+#[allow(clippy::result_large_err)]
+#[harp::register]
+pub extern "C-unwind" fn mcp_console_python_declare(request: SEXP) -> harp::Result<SEXP> {
+    let request = String::try_from(harp::object::RObject::view(request))?;
+    let request = serde_json::from_str(&request).map_err(|error| harp::anyhow!("{error}"))?;
+    super::environment::declare(request).map_err(|error| harp::anyhow!("{error}"))?;
     unsafe { Ok(libr::R_NilValue) }
 }
 

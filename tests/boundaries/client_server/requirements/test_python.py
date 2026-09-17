@@ -351,31 +351,31 @@ def test_restart_discards_pre_marker_python_activation(
                 (activation_ready, activation_release, activation_sent)
             )
 
-            # Pause the real managed worker after its new environment resolves,
-            # immediately before its active binding publishes python_activated.
-            # fmt: r
-            r = code(r"""
-                globals <- get(".globals", envir = asNamespace("reticulate"))
-                original <- activeBindingFunction("python_requirements", globals)
-                rm(list = "python_requirements", envir = globals)
-                makeActiveBinding("python_requirements", function(value) {
-                  if (missing(value)) {
-                    return(original())
-                  }
-                  ready <- fifo(activation_ready, open = "wb", blocking = TRUE)
-                  writeBin(charToRaw("1"), ready)
-                  close(ready)
-                  release <- fifo(activation_release, open = "rb", blocking = TRUE)
-                  stopifnot(identical(readBin(release, "raw", n = 1L), charToRaw("1")))
-                  close(release)
-                  original(value)
-                  sent <- fifo(activation_sent, open = "wb", blocking = TRUE)
-                  writeBin(charToRaw("1"), sent)
-                  close(sent)
-                }, globals)
-                reticulate::py_require("py-yaml12")
+            # Gate PythonActivated while the delegated reticulate call is live.
+            # fmt: python
+            python = code(r"""
+                import _mcp_console_services as services
+
+                original_publish = services.publish_python_activation
+
+
+                def gated_publish(activation):
+                    with open(r.activation_ready, "wb", buffering=0) as ready:
+                        ready.write(b"1")
+                    with open(r.activation_release, "rb", buffering=0) as release:
+                        assert release.read(1) == b"1"
+                    original_publish(activation)
+                    with open(r.activation_sent, "wb", buffering=0) as sent:
+                        sent.write(b"1")
+
+
+                services.publish_python_activation = gated_publish
                 """)
-            evaluation = client.start_send(r=r, timeout_ms=0)
+            client.send(python=python)
+            assert last_tool_text(client) == "[done]"
+            evaluation = client.start_send(
+                r='reticulate::py_require("py-yaml12")', timeout_ms=0
+            )
             activation_ready.wait("managed Python activation")
             client.receive(evaluation)
             evaluation_result = evaluation["result"]
@@ -513,19 +513,21 @@ def test_failed_live_python_requirements_do_not_run_cell(
     client.send(python="import os; live_sentinel = 42; live_worker_pid = os.getpid()")
     assert last_tool_text(client) == "[done]"
 
-    # fmt: r
-    r = code(r"""
-        reticulate_namespace <- asNamespace("reticulate")
-        original_py_require <- get("py_require", envir = reticulate_namespace)
-        unlockBinding("py_require", reticulate_namespace)
-        assign(
-          "py_require",
-          function(...) stop("synthetic live Python preparation failure"),
-          envir = reticulate_namespace
-        )
-        lockBinding("py_require", reticulate_namespace)
+    # Fail the candidate compatibility check through the real explicit path.
+    # fmt: python
+    python = code("""
+        import _mcp_console_environment as environment
+
+        original_check = environment._check_compatible
+
+
+        def fail_compatibility(candidate):
+            raise RuntimeError("synthetic live Python preparation failure")
+
+
+        environment._check_compatible = fail_compatibility
         """)
-    client.send(r=r)
+    client.send(python=python)
     assert last_tool_text(client) == "[done]"
 
     result = client.send(
@@ -537,17 +539,7 @@ def test_failed_live_python_requirements_do_not_run_cell(
         "synthetic live Python preparation failure"
     ), result
 
-    # fmt: r
-    r = code(r"""
-        unlockBinding("py_require", reticulate_namespace)
-        assign(
-          "py_require",
-          original_py_require,
-          envir = reticulate_namespace
-        )
-        lockBinding("py_require", reticulate_namespace)
-        """)
-    client.send(r=r)
+    client.send(python="environment._check_compatible = original_check")
     assert last_tool_text(client) == "[done]"
 
     # fmt: python
@@ -675,30 +667,41 @@ def test_does_not_retain_stale_python_materialization(
     client.send(r="invisible(reticulate::py_config())")
     assert last_tool_text(client) == "[done]"
 
-    # Make explicit preparation resolve the unchanged environment before its
-    # real activation. The first candidate is materialized but never activated.
+    # Resolve an unchanged candidate while explicit preparation has resolved
+    # its real addition. Only the exact activated manifest may be retained.
     # fmt: r
     r = code(r"""
-        namespace <- asNamespace("reticulate")
-        original_py_require <- get("py_require", envir = namespace)
-        injected <- FALSE
-        replacement <- function(...) {
-          if (!injected) {
-            injected <<- TRUE
-            requirements <- original_py_require()
-            invisible(get("uv_get_or_create_env", envir = namespace)(
-              requirements$packages,
-              requirements$python_version,
-              requirements$exclude_newer
-            ))
-          }
-          original_py_require(...)
+        resolve_unchanged <- function() {
+          current <- reticulate::py_require()
+          manifest <- list(
+            packages = I(current$packages),
+            python_version = I(if (is.null(current$python_version)) character() else current$python_version),
+            exclude_newer = current$exclude_newer
+          )
+          request <- jsonlite::toJSON(list(
+            requirements = manifest, retained_requirements = manifest
+          ), auto_unbox = TRUE, null = "null")
+          invisible(.Call("mcp_console_resolve_python", request))
         }
-        unlockBinding("py_require", namespace)
-        assign("py_require", replacement, envir = namespace)
-        lockBinding("py_require", namespace)
         """)
     client.send(r=r)
+    assert last_tool_text(client) == "[done]"
+    # fmt: python
+    python = code("""
+        import _mcp_console_environment as environment
+
+        original_check = environment._check_compatible
+
+
+        def check_after_materialization(candidate):
+            environment._check_compatible = original_check
+            r.resolve_unchanged()
+            original_check(candidate)
+
+
+        environment._check_compatible = check_after_materialization
+        """)
+    client.send(python=python)
     assert last_tool_text(client) == "[done]"
 
     client.send(
