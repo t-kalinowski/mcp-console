@@ -25,16 +25,26 @@ def main() -> None:
     options = parser.parse_args()
     tools = {}
     missing = []
+    errors: dict[str, str] = {}
+
+    def query(label: str, *command: str) -> str | None:
+        try:
+            return probe(*command)
+        except subprocess.CalledProcessError as error:
+            errors[label] = (error.stdout + error.stderr).strip()
+        except (OSError, subprocess.TimeoutExpired) as error:
+            errors[label] = str(error)
+        return None
+
     for name in ("git", "uv", "cargo", "rustup", "R", "Rscript"):
         path = shutil.which(name)
-        tools[name] = {"path": path, "version": None, "error": None}
-        if path:
-            try:
-                tools[name]["version"] = probe(path, "--version").splitlines()[0]
-            except subprocess.CalledProcessError as error:
-                tools[name]["error"] = (error.stdout + error.stderr).strip()
-            except (OSError, subprocess.TimeoutExpired) as error:
-                tools[name]["error"] = str(error)
+        label = f"{name}_version"
+        version = query(label, path, "--version") if path else None
+        tools[name] = {
+            "path": path,
+            "version": version.splitlines()[0] if version else None,
+            "error": errors.get(label),
+        }
         if tools[name]["version"] is None:
             missing.append(name)
     companion = json.loads(
@@ -76,7 +86,7 @@ def main() -> None:
     cache = Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache")))
     report = {
         "checkout": str(ROOT),
-        "revision": probe("git", "rev-parse", "HEAD")
+        "revision": query("revision", "git", "rev-parse", "HEAD")
         if tools["git"]["version"] and (ROOT / ".git").exists()
         else None,
         "executable": {
@@ -93,8 +103,8 @@ def main() -> None:
             "python_selection": os.environ.get("RETICULATE_PYTHON")
             or "managed at worker startup",
             "r_home": os.environ.get("R_HOME")
-            or (probe("R", "RHOME") if tools["R"]["version"] else None),
-            "console_toolchain": probe("rustup", "show", "active-toolchain")
+            or (query("r_home", "R", "RHOME") if tools["R"]["version"] else None),
+            "rustup_toolchain": query("rustup_toolchain", "rustup", "show", "active-toolchain")
             if tools["rustup"]["version"] and tools["cargo"]["version"]
             else None,
         },
@@ -110,10 +120,11 @@ def main() -> None:
             "runner_build": companion["build_directory"],
             "wheel_staging": companion["staging_directory"],
             "cargo_home": os.environ.get("CARGO_HOME", str(Path.home() / ".cargo")),
-            "uv": probe("uv", "cache", "dir") if tools["uv"]["version"] else None,
+            "uv": query("uv_cache", "uv", "cache", "dir") if tools["uv"]["version"] else None,
             "host_budget": str(cache / "mcp-console/checks"),
         },
         "required_missing": missing,
+        "probe_errors": errors,
     }
     if options.json:
         print(json.dumps(report, indent=2))
@@ -147,7 +158,9 @@ def main() -> None:
             )
         for name, path in report["caches"].items():
             print(f"Cache {name}: {path}")
-    raise SystemExit(bool(missing))
+        for label, error in errors.items():
+            print(f"Probe error ({label}): {error}")
+    raise SystemExit(bool(missing or errors))
 
 
 if __name__ == "__main__":

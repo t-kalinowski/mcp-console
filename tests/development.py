@@ -133,6 +133,9 @@ class DevelopmentTests(unittest.TestCase):
                         log.write(json.dumps([name, *arguments]) + "\n")
                     if arguments == ["--version"]:
                         print(name + " fixture version")
+                    elif os.environ.get("FAIL_PROBE") == name:
+                        print("fixture metadata probe failed", file=sys.stderr)
+                        raise SystemExit(9)
                     elif name == "uv" and arguments == ["cache", "dir"]:
                         print(os.environ["FIXTURE_CACHE"])
                     elif name == "R" and arguments == ["RHOME"]:
@@ -183,6 +186,24 @@ class DevelopmentTests(unittest.TestCase):
         )
         self.assertFalse((self.root / "target").exists())
         self.assertFalse((self.root / ".dev-workflow").exists())
+        for name, label in (
+            ("rustup", "rustup_toolchain"),
+            ("uv", "uv_cache"),
+            ("R", "r_home"),
+        ):
+            with self.subTest(failing_metadata=name):
+                result = self.command(
+                    "preflight",
+                    "--json",
+                    script_root=self.root,
+                    environment=environment | {"FAIL_PROBE": name},
+                )
+                self.assertEqual(result.returncode, 1, result.stderr)
+                report = json.loads(result.stdout)
+                self.assertEqual(
+                    report["probe_errors"][label], "fixture metadata probe failed"
+                )
+                self.assertEqual(report["required_missing"], [])
         pin = json.loads((self.root / "sandbox-runner.json").read_text())
         self.write(
             "target/sandbox-runner-build.json",
