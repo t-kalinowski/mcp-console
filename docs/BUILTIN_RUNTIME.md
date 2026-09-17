@@ -238,7 +238,8 @@ The final expression of a cell is displayed through Python's normal display hook
 An uncaught exception prints its traceback and completes as a language outcome.
 The Python session remains usable, including state established before the exception.
 Python 3.10 or later is required.
-R is initialized eagerly, and reticulate remains required for Python interpreter selection, startup, environment activation, and cross-language access.
+R is initialized eagerly, and reticulate remains required for Python interpreter selection, startup, and cross-language access.
+Console owns managed Python requirements and live environment activation; managed SQL remains R-backed.
 The built-in startup display width for NumPy and pandas is 200 columns, and evaluated code may change it.
 
 Console routes ordinary main-thread Python text and diagnostics directly through the ordered worker console channels.
@@ -281,8 +282,8 @@ Resolution starts only when execution reaches the missing import.
 Python source is not scanned, so imports in unreachable branches or uncalled functions do not invoke the resolver.
 Each reached missing import resolves in execution order, and the cell is never replayed.
 
-The finder calls the private R bridge, which adds the inferred distribution to reticulate's managed manifest and asks the existing host `uv` resolver for a compatible environment.
-After reticulate activates that environment, the worker reports the complete manifest to the server.
+The finder calls Console's native environment services, which prepare the complete managed manifest through the existing host `uv` resolver.
+After Console checks compatibility and activates that environment, the worker reports the complete manifest to the server.
 Only then does the original import resume against invalidated import caches.
 Preparation makes the distribution available; the original import still performs the import normally.
 The automatic resolver request carries a differently named import and distribution together, and the server adds the bounded notice when it commits the matching activation.
@@ -294,13 +295,13 @@ In a sandboxed macOS worker, the built-in Python runtime makes psutil enumerate 
 On Linux, the PID namespace limits native process enumeration to the sandbox.
 With `serve --no-sandbox`, psutil retains native process enumeration in the selected host or container namespace.
 The server retains a successfully activated environment for later cells and restart, even if the inferred distribution does not provide the requested module or later code in the cell fails.
-An ordinary resolution failure before activation restores the earlier reticulate manifest and leaves the worker usable.
+An ordinary resolution failure before activation preserves the earlier accepted manifest and leaves the worker usable.
 Errors include the inferred distribution, the host resolver diagnostic when available, and an explicit `requirements.python` recovery example.
 
 Use `requirements.python` when the correct distribution differs from the inferred name, a version, extra, or environment marker is needed, a namespace is ambiguous, or the package should be prepared before the cell starts.
 Explicit preparation accepts supported named PEP 508 registry requirements and does not import the package.
 
-Automatic resolution can call R and reticulate only from the main worker process and the Python thread that configured the runtime.
+Automatic resolution can call the native environment services only from the main worker process and the Python thread that configured the runtime.
 A missing import reached from a fork child or another Python thread reports that the distribution must be prepared before that child or thread starts; it does not invoke the host resolver.
 Imports already handled by ordinary Python finders remain available in those contexts.
 

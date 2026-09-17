@@ -13,6 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.assertions import wait_for_evaluation_output
 from support.client import McpClient, stop_client
 from support.processes import (
     capture_process_identity,
@@ -86,7 +87,14 @@ def descriptor_entry(
             try:
                 server = capture_process_identity(client.process.pid)
                 client.initialize_and_list_tools()
-                result = client.send(python=source)
+                wait_for_evaluation_output(
+                    client,
+                    "closed\n",
+                    f"descriptor check through {launch_path}",
+                    completion_timeout_seconds=client.response_timeout,
+                    python=source,
+                )
+                result = client.transcript[-1]["result"]
                 assert result == {
                     "content": [{"type": "text", "text": "closed\n"}],
                     "isError": False,

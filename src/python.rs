@@ -1,8 +1,10 @@
+mod environment;
+mod probe;
 mod reticulate;
 
 const RUNTIME_SOURCE: &str = include_str!("python/runtime.py");
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum PreparationOutcome {
     #[serde(deserialize_with = "crate::worker_protocol::deserialize_payload_free")]
@@ -36,6 +38,7 @@ pub(crate) fn configure_worker_environment(
 
 impl Runtime {
     pub(crate) fn initialize() -> Result<Self, String> {
+        environment::initialize()?;
         Ok(Self {
             startup: reticulate::Runtime::initialize()?,
             next_evaluation_id: 1,
@@ -52,7 +55,10 @@ impl Runtime {
     }
 
     pub(crate) fn prepare(&self, packages: Vec<String>) -> Result<PreparationOutcome, String> {
-        self.startup.prepare(packages)
+        environment::prepare(environment::Preparation {
+            packages,
+            import_resolution: None,
+        })
     }
 }
 

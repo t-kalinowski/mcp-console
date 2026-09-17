@@ -8,6 +8,14 @@ use super::core;
 
 static INTERRUPT_WAKEUP: OnceLock<io::PipeReader> = OnceLock::new();
 
+pub(crate) fn python_interrupt_wakeup() -> Result<io::PipeReader, String> {
+    INTERRUPT_WAKEUP
+        .get()
+        .expect("interrupt wakeup initialized")
+        .try_clone()
+        .map_err(|error| error.to_string())
+}
+
 pub(super) fn initialize_interrupt_wakeup() -> io::Result<c_int> {
     let (reader, writer) = io::pipe()?;
     for descriptor in [reader.as_raw_fd(), writer.as_raw_fd()] {

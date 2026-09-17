@@ -80,6 +80,7 @@ struct PythonApi {
     call_no_args: PyObjectCallNoArgs,
     call_function_obj_args: PyObjectCallFunctionObjArgs,
     unicode_from_string_and_size: PyUnicodeFromStringAndSize,
+    unicode_utf8: unsafe extern "C" fn(*mut PyObject, *mut isize) -> *const libc::c_char,
     long_as_long: PyLongAsLong,
     dec_ref: PyDecRef,
     err_fetch: PyErrFetch,
@@ -193,6 +194,44 @@ fn api() -> Result<PythonApi, String> {
 
 pub(super) fn install_services() -> Result<(), String> {
     api()?.with_gil(services::install)
+}
+
+pub(super) fn install_environment() -> Result<(), String> {
+    let source = CString::new(include_str!("environment.py")).unwrap();
+    api()?.with_gil(|api| unsafe { api.run_module(c"_mcp_console_environment", &source) })
+}
+
+pub(super) fn environment_call(name: &CStr, request: &str) -> Result<String, String> {
+    api()?.with_gil(|api| unsafe {
+        let function = api.function(c"_mcp_console_environment", name)?;
+        let argument =
+            (api.unicode_from_string_and_size)(request.as_ptr().cast(), request.len() as isize);
+        if argument.is_null() {
+            api.display_pending_exception();
+            return Err("failed to create Python environment request".to_string());
+        }
+        let result =
+            (api.call_function_obj_args)(function, argument, std::ptr::null_mut::<PyObject>());
+        (api.dec_ref)(argument);
+        if result.is_null() {
+            api.display_pending_exception();
+            return Err(python_function_error(c"_mcp_console_environment", name));
+        }
+        let mut length = 0;
+        let text = (api.unicode_utf8)(result, &mut length);
+        let response = if text.is_null() {
+            api.display_pending_exception();
+            Err("Python environment response is not text".to_string())
+        } else {
+            Ok(std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                text.cast(),
+                length as usize,
+            ))
+            .to_owned())
+        };
+        (api.dec_ref)(result);
+        response
+    })
 }
 
 pub(super) fn evaluate(source: &str, filename: &str) -> Result<(), String> {
@@ -662,6 +701,7 @@ impl PythonApi {
             unicode_from_string_and_size: unsafe {
                 load_symbol(library, path, b"PyUnicode_FromStringAndSize\0")?
             },
+            unicode_utf8: unsafe { load_symbol(library, path, b"PyUnicode_AsUTF8AndSize\0")? },
             long_as_long: unsafe { load_symbol(library, path, b"PyLong_AsLong\0")? },
             dec_ref: unsafe { load_symbol(library, path, b"Py_DecRef\0")? },
             err_fetch: unsafe { load_symbol(library, path, b"PyErr_Fetch\0")? },

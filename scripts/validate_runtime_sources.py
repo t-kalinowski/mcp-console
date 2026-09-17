@@ -18,6 +18,8 @@ SOURCE_ROOT = ROOT / "src"
 EXPECTED_SOURCES = {
     "src/python/bridge.R",
     "src/python/initialize.R",
+    "src/python/environment.py",
+    "src/python/probe.py",
     "src/python/runtime.py",
     "src/python/services.py",
     "src/r_environment/bridge.R",

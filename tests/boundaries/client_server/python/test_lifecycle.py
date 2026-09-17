@@ -560,7 +560,7 @@ def test_retries_python_runtime_initialization_after_interrupt(
                   tracer = quote({
                     if (
                       identical(name, "operation") &&
-                        identical(value, "configure_import_resolution")
+                        identical(value, "disable_matplotlib_show")
                     ) {
                       invisible(readline("python runtime configuring> "))
                     }

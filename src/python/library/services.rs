@@ -73,6 +73,11 @@ pub(super) fn install(api: &PythonApi) -> Result<(), String> {
             method(c"readline", readline, 8),
             method(c"publish_plot", publish_plot, 8),
             method(c"interrupt", interrupt, 1), // METH_VARARGS: signal number and frame
+            method(c"prepare_python", prepare_python, 8),
+            method(c"inspect_python", inspect_python, 8),
+            method(c"publish_python_activation", publish_python_activation, 8),
+            method(c"begin_python_commit", begin_python_commit, 4), // METH_NOARGS
+            method(c"finish_python_commit", finish_python_commit, 4),
             Method {
                 name: std::ptr::null(),
                 callback: None,
@@ -104,6 +109,11 @@ fn method(name: &'static CStr, callback: Callback, flags: c_int) -> Method {
 }
 
 impl Services {
+    fn string(&self, text: &str) -> *mut PyObject {
+        unsafe {
+            (self.api.unicode_from_string_and_size)(text.as_ptr().cast(), text.len() as isize)
+        }
+    }
     fn text(&self, object: *mut PyObject) -> Result<String, String> {
         let mut length = 0;
         let bytes = unsafe { (self.unicode_utf8)(object, &mut length) };
@@ -220,6 +230,55 @@ unsafe extern "C" fn interrupt(_: *mut PyObject, _: *mut PyObject) -> *mut PyObj
         } else {
             // R consumed it, or has suspended delivery. Its existing event
             // integration will recheck later; never re-arm from this handler.
+            Ok(services.none())
+        }
+    })
+}
+
+unsafe extern "C" fn prepare_python(_: *mut PyObject, request: *mut PyObject) -> *mut PyObject {
+    callback(|services| {
+        let request =
+            serde_json::from_str(&services.text(request)?).map_err(|error| error.to_string())?;
+        let result = services.without_gil(|| super::super::environment::prepare(request))?;
+        Ok(services.string(&serde_json::to_string(&result).map_err(|error| error.to_string())?))
+    })
+}
+
+unsafe extern "C" fn inspect_python(_: *mut PyObject, executable: *mut PyObject) -> *mut PyObject {
+    callback(|services| {
+        let executable = services.text(executable)?;
+        let result = services.without_gil(|| super::super::probe::inspect(&executable))?;
+        Ok(services.string(&result.to_string()))
+    })
+}
+
+unsafe extern "C" fn publish_python_activation(
+    _: *mut PyObject,
+    activation: *mut PyObject,
+) -> *mut PyObject {
+    callback(|services| {
+        let activation: super::super::environment::Activation =
+            serde_json::from_str(&services.text(activation)?).map_err(|error| error.to_string())?;
+        services.without_gil(|| {
+            super::super::environment::commit(activation.manifest, Some(activation.environment))
+        })?;
+        Ok(services.none())
+    })
+}
+
+unsafe extern "C" fn begin_python_commit(_: *mut PyObject, _: *mut PyObject) -> *mut PyObject {
+    callback(|services| {
+        worker::begin_python_commit();
+        Ok(services.none())
+    })
+}
+
+unsafe extern "C" fn finish_python_commit(_: *mut PyObject, _: *mut PyObject) -> *mut PyObject {
+    callback(|services| {
+        if worker::finish_python_commit() {
+            unsafe { (services.set_none)(services.keyboard_interrupt as *mut PyObject) };
+            Ok(std::ptr::null_mut())
+        } else {
             Ok(services.none())
         }
     })

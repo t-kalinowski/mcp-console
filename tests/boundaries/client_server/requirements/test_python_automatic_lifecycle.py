@@ -364,28 +364,26 @@ def test_restart_discards_unactivated_automatic_python_candidate(
             )
 
             # Pause after resolution and immediately before PythonActivated.
-            # fmt: r
-            r = code(r"""
-                globals <- get(".globals", envir = asNamespace("reticulate"))
-                original <- activeBindingFunction("python_requirements", globals)
-                rm(list = "python_requirements", envir = globals)
-                makeActiveBinding("python_requirements", function(value) {
-                  if (missing(value)) {
-                    return(original())
-                  }
-                  ready <- fifo(activation_ready, open = "wb", blocking = TRUE)
-                  writeBin(charToRaw("1"), ready)
-                  close(ready)
-                  release <- fifo(activation_release, open = "rb", blocking = TRUE)
-                  stopifnot(identical(readBin(release, "raw", n = 1L), charToRaw("1")))
-                  close(release)
-                  original(value)
-                  sent <- fifo(activation_sent, open = "wb", blocking = TRUE)
-                  writeBin(charToRaw("1"), sent)
-                  close(sent)
-                }, globals)
+            # fmt: python
+            python = code(r"""
+                import _mcp_console_services as services
+
+                original_publish = services.publish_python_activation
+
+
+                def gated_publish(activation):
+                    with open(r.activation_ready, "wb", buffering=0) as ready:
+                        ready.write(b"1")
+                    with open(r.activation_release, "rb", buffering=0) as release:
+                        assert release.read(1) == b"1"
+                    original_publish(activation)
+                    with open(r.activation_sent, "wb", buffering=0) as sent:
+                        sent.write(b"1")
+
+
+                services.publish_python_activation = gated_publish
                 """)
-            client.send(r=r)
+            client.send(python=python)
             assert last_result_text(client) == "[done]"
 
             evaluation = client.start_send(

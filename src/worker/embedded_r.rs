@@ -230,6 +230,29 @@ pub(crate) fn acknowledge_python_interrupt() -> bool {
     true
 }
 
+thread_local! {
+    static PYTHON_COMMITS: std::cell::RefCell<Vec<libr::Rboolean>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+pub(crate) fn begin_python_commit() {
+    let previous = unsafe { libr::get(libr::R_interrupts_suspended) };
+    PYTHON_COMMITS.with_borrow_mut(|stack| stack.push(previous));
+    unsafe { libr::set(libr::R_interrupts_suspended, libr::Rboolean_TRUE) };
+}
+
+pub(crate) fn finish_python_commit() -> bool {
+    let previous =
+        PYTHON_COMMITS.with_borrow_mut(|stack| stack.pop().expect("Python commit started"));
+    unsafe { libr::set(libr::R_interrupts_suspended, previous) };
+    // A Python signal callback during deferral did not consume this bit. If R
+    // suspended delivery first, leave it pending for R's existing integration.
+    acknowledge_python_interrupt()
+}
+
+pub(crate) fn python_interrupt_pending() -> bool {
+    console_interrupt_pending()
+}
+
 pub(crate) fn install_python_interrupt(
     set_interrupt: unsafe extern "C" fn(),
 ) -> Result<(), String> {
