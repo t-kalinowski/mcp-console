@@ -25,8 +25,8 @@ Use `# fmt: r` for R programs.
 Do not label a custom worker's command language as Python or R merely because it travels in that tool field.
 
 Run `scripts/check-fixtures [PATH ...]` to check marked multiline programs; with no paths it scans Python files under `tests/`.
-It parses constant programs with Python's AST parser or `Rscript --vanilla`, without evaluating them, and checks `code()` indentation.
-Multiline literals assigned to `r`/`python` or passed through those keyword arguments require a directive.
+It compiles constant Python programs and parses R with `Rscript --vanilla`, without evaluating either, and checks `code()` indentation.
+Multiline literals assigned to `r`/`python`, including annotated assignments, or passed through those keyword arguments require the matching directive.
 Other embedded programs are identified by their directive; the checker does not infer a language from arbitrary string contents or follow variable assignments.
 Single-line expressions split into adjacent literals remain single-line programs.
 

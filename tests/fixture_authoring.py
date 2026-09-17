@@ -90,6 +90,68 @@ class FixtureAuthoringTests(unittest.TestCase):
             "indent code() payload and closing delimiter by four spaces", result.stdout
         )
 
+    def test_rejects_context_invalid_python(self) -> None:
+        # fmt: python
+        template = code('''
+            # fmt: python
+            python = code("""
+                BODY
+                """)
+            ''')
+        for statement in ("return 1", "yield 1", "break", "await missing()"):
+            with self.subTest(statement=statement):
+                result = self.check(template.replace("BODY", statement))
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn("python syntax:", result.stdout)
+
+    def test_annotated_assignments_require_directives(self) -> None:
+        result = self.check(
+            # fmt: python
+            code('''
+                python: str = code("""
+                    print(42)
+                    """)
+                r: str = code("""
+                    print(42)
+                    """)
+                ''')
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("missing # fmt: python", result.stdout)
+        self.assertIn("missing # fmt: r", result.stdout)
+
+    def test_directive_matches_program_language(self) -> None:
+        result = self.check(
+            # fmt: python
+            code('''
+                # fmt: r
+                python = code("""
+                    print(42)
+                    """)
+                client.send(
+                    # fmt: python
+                    r=code("""
+                        print(42)
+                        """)
+                )
+                ''')
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("expected # fmt: python; found # fmt: r", result.stdout)
+        self.assertIn("expected # fmt: r; found # fmt: python", result.stdout)
+        result = self.check(
+            # fmt: python
+            code('''
+                r = client.send(
+                    # fmt: python
+                    python=code("""
+                        print(42)
+                        """)
+                )
+                ''')
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_documents_invalid_input_and_dynamic_templates(self) -> None:
         result = self.check(
             # fmt: python
