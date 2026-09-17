@@ -485,6 +485,8 @@ Its `ir` front matter declares the managed built-in R and Python requirements fo
 Bare sessions omit both managed defaults and rejected requirement payloads.
 It does not declare a Python version, so `ir render transcript.qmd` uses reticulate's default managed Python selection.
 The declarations are submitted inputs, not a lockfile or an exact record of successful retained and automatically inferred requirements.
+Before rendering a copy, add packages discovered automatically during the session to `ir.packages` (R) or `ir.python-packages` (Python) in its YAML front matter.
+For the README example, add `palmerpenguins` and `matplotlib`, respectively.
 For local sessions, rendering executes the captured client-authored cells in order in a fresh Quarto/knitr runtime outside the MCP Console worker sandbox and exports their new output.
 Rendering does not reconstruct session control, stdin, recorded results, or artifacts.
 SQL chunks require a DBI connection supplied by the document user.

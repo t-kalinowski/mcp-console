@@ -29,6 +29,16 @@ On Linux, preparing a managed environment can compile R packages, including the 
 On Debian and Ubuntu, install `build-essential`, `pkg-config`, and `libcurl4-openssl-dev` for that bootstrap.
 Additional R packages can require their own system libraries and development headers.
 
+## macOS source package builds
+
+Preparing a managed R environment on macOS can build `data.table` from source, which needs gettext's `libintl.h` header in R's build prefix.
+For CRAN R installations, including those installed by rig, use the [R for macOS library installer](https://mac.R-project.org/bin/):
+
+```sh
+sudo Rscript --vanilla -e \
+  'source("https://mac.R-project.org/bin/install.R"); install.libs("gettext")'
+```
+
 ## Retained environments
 
 MCP Console retains one environment configuration in server memory:
