@@ -129,10 +129,10 @@ def main() -> None:
                 if not skip:
                     errors.append(f"{location}: syntax skip requires a reason")
                 skipped += 1
-            elif isinstance(node, ast.JoinedStr):
+            elif any(isinstance(part, ast.FormattedValue) for part in parts):
                 dynamic += 1
             else:
-                program = node.value
+                program = "".join(part.value for part in parts)
                 if code_call is not None or wanted is None:
                     program = textwrap.dedent(program).removeprefix("\n")
                 if language == "r":

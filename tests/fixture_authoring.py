@@ -99,10 +99,14 @@ class FixtureAuthoringTests(unittest.TestCase):
                 """)
             ''')
         for statement in ("return 1", "yield 1", "break", "await missing()"):
-            with self.subTest(statement=statement):
-                result = self.check(template.replace("BODY", statement))
-                self.assertNotEqual(result.returncode, 0, result.stdout)
-                self.assertIn("python syntax:", result.stdout)
+            for prefix in ("", "f"):
+                with self.subTest(statement=statement, prefix=prefix):
+                    source = template.replace("BODY", statement).replace(
+                        'code("""', f'code({prefix}"""'
+                    )
+                    result = self.check(source)
+                    self.assertNotEqual(result.returncode, 0, result.stdout)
+                    self.assertIn("python syntax:", result.stdout)
 
     def test_direct_cells_preserve_literal_indentation(self) -> None:
         result = self.check(
