@@ -214,6 +214,44 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("complete phase output\n", Path(phase["log"]).read_text())
         self.assertIn("complete phase diagnostic\n", Path(phase["log"]).read_text())
 
+    def test_cancellation_during_diagnostic_replay_preserves_phase_record(self) -> None:
+        self.write_script(
+            "scripts/check-core",
+            # fmt: python
+            """
+            print("failure diagnostic " * 1_000_000)
+            raise SystemExit(7)
+            """,
+        )
+        process = subprocess.Popen(
+            ["scripts/check"],
+            cwd=self.root,
+            env=self.environment,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            assert process.stderr is not None
+            # The pipe cannot hold the entire log: receiving this prefix proves
+            # replay began, and withholding further reads keeps it incomplete.
+            prefix = process.stderr.read(4096)
+            self.assertIn("failure diagnostic", prefix)
+            process.terminate()
+            process.communicate(timeout=10)
+            self.assertEqual(process.returncode, 128 + signal.SIGTERM)
+            (record,) = self.records()
+            self.assertEqual(record["exit_status"], 128 + signal.SIGTERM)
+            self.assertEqual(record["phases"][-1]["name"], "core")
+            self.assertEqual(record["phases"][-1]["exit_status"], 7)
+            self.assertIn(
+                "failure diagnostic", Path(record["phases"][-1]["log"]).read_text()
+            )
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.communicate(timeout=10)
+
     def test_signalled_phase_preserves_shell_exit_status(self) -> None:
         self.write_script(
             "scripts/check-core",
@@ -401,6 +439,18 @@ class WorkflowTests(unittest.TestCase):
         self.environment["MCP_CONSOLE_CHECK_SLOTS"] = "2"
         result = self.run_command("scripts/check", root=other)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.finish_check(process)
+
+    def test_empty_xdg_cache_keeps_budget_shared_across_checkouts(self) -> None:
+        self.environment["HOME"] = str(self.directory / "home")
+        self.environment["XDG_CACHE_HOME"] = ""
+        other = self.directory / "other"
+        shutil.copytree(self.root, other)
+        process = self.start_check()
+        result = self.run_command("scripts/check", root=other)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("full-check budget is busy", result.stderr)
+        self.assertFalse((self.root / "mcp-console").exists())
         self.finish_check(process)
 
     def test_nested_check_reuses_later_slot_after_first_slot_is_released(self) -> None:

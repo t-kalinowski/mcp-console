@@ -77,7 +77,7 @@ def full_check_slot() -> Iterator[None]:
     slots = int(os.environ.get("MCP_CONSOLE_CHECK_SLOTS", "1"))
     if slots < 1:
         raise SystemExit("MCP_CONSOLE_CHECK_SLOTS must be at least 1")
-    cache = Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache")))
+    cache = Path(os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache"))
     paths = [
         cache.resolve() / "mcp-console/checks" / f"slot-{index}.lock"
         for index in range(slots)
@@ -221,22 +221,8 @@ class Run:
         finally:
             if process is not None:
                 status = process.returncode
-            failures = []
-            rerun_seen = False
-            with log_path.open(errors="replace") as log:
-                for line in log:
-                    if status:
-                        sys.stderr.write(line)
-                    if match := FAILURE.fullmatch(line.strip()):
-                        failures.append(match[1])
-                    elif line.startswith("rerun: scripts/test "):
-                        rerun_seen = True
-            if not rerun_seen:
-                for case in failures:
-                    print(f"rerun: scripts/test {case}", file=sys.stderr)
-            self.record["failing_selectors"] = sorted(
-                set(self.record["failing_selectors"] + failures)
-            )
+            # Persist the completed phase before scanning or replaying its log.
+            # Cancelling diagnostics must not erase the underlying result.
             self.record["phases"].append(
                 {
                     "name": name,
@@ -247,6 +233,25 @@ class Run:
                 }
             )
             self.save()
+            failures = []
+            rerun_seen = False
+            with log_path.open(errors="replace") as log:
+                for line in log:
+                    if match := FAILURE.fullmatch(line.strip()):
+                        failures.append(match[1])
+                    elif line.startswith("rerun: scripts/test "):
+                        rerun_seen = True
+            self.record["failing_selectors"] = sorted(
+                set(self.record["failing_selectors"] + failures)
+            )
+            self.save()
+            if status:
+                with log_path.open(errors="replace") as log:
+                    for line in log:
+                        sys.stderr.write(line)
+            if not rerun_seen:
+                for case in failures:
+                    print(f"rerun: scripts/test {case}", file=sys.stderr)
             print(
                 f"[{name}] exit {status}; log: {log_path}", file=sys.stderr, flush=True
             )
