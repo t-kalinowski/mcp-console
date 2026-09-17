@@ -17,6 +17,8 @@ from pathlib import Path
 from support.normalization import code
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+from checkout_workflow import checkout_owner
 
 
 @unittest.skipUnless(sys.platform in ("darwin", "linux"), "requires macOS or Linux")
@@ -29,7 +31,13 @@ class InstallationTests(unittest.TestCase):
             source = directory / "source"
             (source / "scripts").mkdir(parents=True)
             (source / "src").mkdir()
-            for name in ("pyproject.toml", "README.md", "LICENSE", "build.rs"):
+            for name in (
+                "pyproject.toml",
+                "README.md",
+                "LICENSE",
+                "build.rs",
+                "checkout_workflow.py",
+            ):
                 shutil.copyfile(ROOT / name, source / name)
             shutil.copytree(ROOT / "python", source / "python")
             shutil.copyfile(ROOT / "build_backend.py", source / "build_backend.py")
@@ -534,4 +542,5 @@ class InstallationTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    with checkout_owner(ROOT):
+        unittest.main()

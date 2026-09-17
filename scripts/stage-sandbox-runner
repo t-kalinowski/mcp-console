@@ -12,6 +12,9 @@ import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+from checkout_workflow import checkout_owner
+
 TARGETS = (
     "aarch64-apple-darwin",
     "x86_64-apple-darwin",
@@ -68,6 +71,11 @@ def main() -> None:
     if sys.platform not in {"darwin", "linux"}:
         fail(f"building private runner artifacts is unsupported on {sys.platform}")
 
+    with checkout_owner(ROOT):
+        stage(args, pin)
+
+
+def stage(args: argparse.Namespace, pin: dict) -> None:
     checkout = args.checkout
     if checkout is None:
         checkout = ROOT / "target/sandbox-runner-cache" / pin["commit"]

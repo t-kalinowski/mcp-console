@@ -2,7 +2,4 @@
 
 set -eu
 
-scripts/stage-sandbox-runner
-scripts/check-core
-scripts/test
-python3 tests/install.py
+exec python3 "$(dirname "$0")/../checkout_workflow.py" check "$@"
