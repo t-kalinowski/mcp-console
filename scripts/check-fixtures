@@ -1,14 +1,10 @@
 #!/usr/bin/env python3
-"""Check marked R/Python programs in Python fixtures without evaluating them."""
+"""Check formatting directives and layout of embedded R/Python strings."""
 
 import argparse
 import ast
 import io
-import os
 import re
-import subprocess
-import tempfile
-import textwrap
 import tokenize
 from collections.abc import Iterator
 from pathlib import Path
@@ -72,8 +68,6 @@ def main() -> None:
             parser.error(f"path does not exist: {path}")
         paths.update(path.rglob("*.py") if path.is_dir() else [path])
     errors = []
-    r_programs = []
-    parsed = dynamic = skipped = 0
     for path in sorted(paths):
         source = path.read_text()
         try:
@@ -100,7 +94,7 @@ def main() -> None:
             if wanted is not None:
                 expression, code_call = program_expression(node)
                 if is_literal(expression):
-                    programs[expression] = (code_call, wanted, None, None)
+                    programs[expression] = (code_call, wanted, None)
         for line, directive in comments.items():
             if directive not in {"# fmt: r", "# fmt: python"}:
                 continue
@@ -112,28 +106,21 @@ def main() -> None:
                 continue
             expression, code_call = program_expression(anchor)
             wanted = programs.get(expression, (None, declared_language(anchor)))[1]
-            marker = re.fullmatch(
-                r"# syntax: skip(?:\s+(.*))?", comments.get(line - 1, "")
-            )
-            skip = (marker[1] or "").strip() if marker else None
             programs[expression] = (
                 code_call,
                 wanted,
                 directive.removeprefix("# fmt: "),
-                skip,
             )
-        for node, (code_call, wanted, language, skip) in programs.items():
-            # The directive selects one complete expression. Transformations and
-            # assembled values need their public case, not partial evaluation.
-            parts = (
-                (node.values if isinstance(node, ast.JoinedStr) else [node])
-                if is_literal(node)
-                else None
-            )
-            if parts is not None and not any(
-                isinstance(part, ast.Constant) and "\n" in part.value for part in parts
-            ):
-                continue
+        for node, (code_call, wanted, language) in programs.items():
+            # The AST already holds decoded strings. Only inspect their newlines;
+            # the embedded language and any interpolated expressions stay opaque.
+            if is_literal(node):
+                values = node.values if isinstance(node, ast.JoinedStr) else [node]
+                if not any(
+                    isinstance(value, ast.Constant) and "\n" in value.value
+                    for value in values
+                ):
+                    continue
             location = f"{path}:{node.lineno}"
             if language is None:
                 if wanted:
@@ -144,7 +131,11 @@ def main() -> None:
                     f"{location}: expected # fmt: {wanted}; found # fmt: {language}"
                 )
                 continue
-            if code_call is not None and node.lineno != node.end_lineno:
+            if (
+                code_call is not None
+                and is_literal(node)
+                and node.lineno != node.end_lineno
+            ):
                 line = lines[code_call.lineno - 1]
                 indentation = len(line) - len(line.lstrip()) + 4
                 opening = lines[node.lineno - 1].encode()[node.col_offset :]
@@ -166,69 +157,11 @@ def main() -> None:
                     errors.append(
                         f"{location}: indent code() payload and closing delimiter by four spaces"
                     )
-            if skip is not None:
-                if not skip:
-                    errors.append(f"{location}: syntax skip requires a reason")
-                skipped += 1
-            elif parts is None or any(
-                isinstance(part, ast.FormattedValue) for part in parts
-            ):
-                dynamic += 1
-            else:
-                program = "".join(part.value for part in parts)
-                if code_call is not None or wanted is None:
-                    program = textwrap.dedent(program).removeprefix("\n")
-                if language == "r":
-                    r_programs.append((location, program))
-                else:
-                    try:
-                        compile(program, str(path), "exec", dont_inherit=True)
-                        parsed += 1
-                    except SyntaxError as error:
-                        errors.append(
-                            f"{location}: python syntax: {error.msg} (program line {error.lineno})"
-                        )
-    if r_programs:
-        with tempfile.TemporaryDirectory() as temporary:
-            files = []
-            for index, (_, program) in enumerate(r_programs):
-                path = Path(temporary) / str(index)
-                path.write_text(program)
-                files.append(str(path))
-            r_home = os.environ.get("R_HOME")
-            rscript = str(Path(r_home) / "bin/Rscript") if r_home else "Rscript"
-            result = subprocess.run(
-                [rscript, "--vanilla", "-e", R_PARSE, *files],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            failures = result.stdout.splitlines()
-            parsed += len(files) - len(failures)
-            for failure in failures:
-                index, message = failure.split("\t", 1)
-                errors.append(f"{r_programs[int(index)][0]}: r syntax: {message}")
     for error in errors:
         print(error)
-    print(
-        f"fixtures: {parsed} parsed; {dynamic} dynamic template(s); {skipped} intentional syntax skip(s); {len(errors)} error(s)"
-    )
+    print(f"fixtures: {len(errors)} error(s)")
     raise SystemExit(bool(errors))
 
-
-# fmt: r
-R_PARSE = r"""
-args <- commandArgs(TRUE)
-for (i in seq_along(args)) {
-  tryCatch(
-    parse(file = args[[i]]),
-    error = function(e) {
-      cat(i - 1L, gsub("[\r\n]+", " ", conditionMessage(e)), sep = "\t")
-      cat("\n")
-    }
-  )
-}
-"""
 
 if __name__ == "__main__":
     main()

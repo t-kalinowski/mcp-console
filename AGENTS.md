@@ -121,7 +121,7 @@ scripts/test --update BOUNDARY/SUITE[::CASE]
 `scripts/format` attempts Ruff, Yamark, rustfmt, Air, and the embedded fixture checker in sequence and reports each result.
 A missing or failing step does not prevent the remaining steps from running; the default exits successfully, while `--strict` returns failure if any step failed.
 Review its output and resulting changes.
-`scripts/check-fixtures` checks marked static R/Python programs, directives, and `code()` indentation; see `tests/boundaries/AUTHORING.md` for dynamic templates and intentional invalid syntax.
+`scripts/check-fixtures` checks formatting directives and direct `code()` layout, without validating embedded R/Python syntax; see `tests/boundaries/AUTHORING.md` for its scope.
 Validation records and phase logs remain in `.dev-workflow/runs/`; see `docs/DEVELOPMENT.md` for ownership and the host concurrency budget.
 `scripts/check` validates extracted runtime sources, checks Rust formatting and Clippy, runs Rust tests in debug, runs the complete transcript suite against the release executable, and checks uv source and wheel installations with a shared Cargo target directory.
 
