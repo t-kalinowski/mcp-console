@@ -25,7 +25,12 @@ A non-raw `"\n"` inside a Python string literal becomes an actual newline before
 Use `# fmt: r` for R programs.
 Do not label a custom worker's command language as Python or R merely because it travels in that tool field.
 
-Run `scripts/check-fixtures [PATH ...]` to check formatting directives and direct `code()` layout; with no paths it scans Python files under `tests/`.
+Run `scripts/format` first.
+It attempts Ruff, Yamark, rustfmt, and Air before running the fixture checker, and reports each result.
+Its default remains best effort; `scripts/format --strict` exits nonzero if any step fails or is missing, after attempting every step.
+Review both its summary and the resulting diff.
+
+Use `scripts/check-fixtures [PATH ...]` to check directives and direct `code()` layout without formatting; with no paths it scans Python files under `tests/`.
 It reads string values and source positions from the containing Python file's AST and requires only Python's standard library.
 Embedded R and Python contents are opaque: invalid or incomplete programs need no special annotation.
 Their public acceptance tests establish the intended behavior.
@@ -38,11 +43,9 @@ Other embedded programs are identified by their directive; the checker does not 
 Add directives for transformed or assembled programs manually.
 The checker does not inspect `code()` layout inside dynamic composition or infer unmarked dynamic expressions.
 Review their layout directly, or assign the marked payload separately so the checker can inspect it before transformation.
+Directive targets other than direct string literals or direct `code()` payloads require manual placement review; the checker does not determine whether arbitrary expressions or statements produce program text.
 
-`scripts/check-core` runs the checker and its command regressions.
-`scripts/format` attempts Ruff, Yamark, rustfmt, Air, then the fixture checker and reports each result.
-Its default remains best effort; `scripts/format --strict` exits nonzero if any step fails or is missing, after attempting every step.
-Review both its summary and the resulting diff.
+`scripts/check-core` also runs the checker and its command regressions.
 
 ## Execution modes
 
