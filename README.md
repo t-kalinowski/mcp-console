@@ -1,7 +1,7 @@
 # MCP Console
 
 MCP Console is an interactive, persistent computational workspace for agents.
-One MCP tool, `send`, provides R, Python, and SQL cells, interactive input, dependency preparation, polling, interruption, and restart.
+One MCP tool, `send`, provides R, Python, and SQL cells, plotting and image output, interactive input, dependency preparation, polling, interruption, and restart.
 Data, models, imports, and database state survive between calls, so an analysis can move between languages without starting over.
 
 R, Python, and DuckDB are embedded in a single worker process.
@@ -75,12 +75,11 @@ Check that your client exposes the console's `send` tool (`/mcp` in Codex), then
 > Fit a small logistic regression in R to predict penguin sex from body measurements.
 > Use SQL to summarize the live data by species, then use Python and Matplotlib to plot the data and the model's predictions.
 > Explain what you found, keeping the data and model in the console for follow-up questions.
-> Use `timeout_ms=10000` for cells and polls; wait for each cell to finish before continuing.
 
 Follow up in the same conversation:
 
 > Using the model and data already in the console, where does the model make the most mistakes?
-> Show me a plot and the path to the recorded transcript.
+> Show me a plot and the path to the recorded console session transcript.
 
 Records and plot artifacts are written under `.agents/console/sessions/<run-id>/` in the server's working directory.
 Your client uses its configured model; the exact calls and responses can vary.
