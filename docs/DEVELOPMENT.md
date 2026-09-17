@@ -68,7 +68,7 @@ For a stack, measure each layer against its intended parent rather than accumula
    Shared fixture changes also require the affected snapshots on other platforms; a local capability skip does not validate them.
 4. Run `scripts/format`, inspect every formatter's result, and review `git diff` and `git diff --check`.
    Check embedded program indentation after formatting.
-   `scripts/format --strict` reports failure after attempting every formatter and the fixture checker; the [authoring recipe](../tests/boundaries/AUTHORING.md) explains directives and supported layout checks.
+   `scripts/format --strict` reports failure after attempting every formatter; the [authoring recipe](../tests/boundaries/AUTHORING.md) explains embedded program conventions.
 5. Run `scripts/check` before opening the PR.
    Keep its completion record with the tested revision and log paths.
    Use a failed phase's focused command for diagnosis; repeat the full gate when changes or unresolved failures require it.
