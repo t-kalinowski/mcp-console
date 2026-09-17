@@ -20,15 +20,15 @@ ROOT = Path(__file__).resolve().parents[2]
 
 @contextmanager
 def runtime_lock():
-    directory = ROOT / "target/sbx-tests"
+    directory = ROOT / ".dev-workflow"
     directory.mkdir(parents=True, exist_ok=True)
     # Share this lock with capability discovery: concurrent ls/policy requests
     # during VM creation can otherwise disagree between discovery and execution.
     import fcntl
 
-    with (directory / "runtime.lock").open("w") as lock:
+    with (directory / "sbx.lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        yield directory
+        yield
 
 
 def sbx(*args: str, **kwargs) -> subprocess.CompletedProcess:

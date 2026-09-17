@@ -312,13 +312,174 @@ class TranscriptRunnerTests(unittest.TestCase):
         result = subprocess.run(
             [scripts / "test", "client_server/server/test_tools::selected"],
             cwd=self.root,
-            env={**os.environ, "PATH": f"{commands}{os.pathsep}{os.environ['PATH']}"},
+            env={
+                **os.environ,
+                "PATH": f"{commands}{os.pathsep}{os.environ['PATH']}",
+                # This miniature build uses fake Cargo and its own budget.
+                "XDG_CACHE_HOME": str(self.root / "cache"),
+            },
             capture_output=True,
             text=True,
             timeout=10,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((self.root / "selected.marker").exists())
+
+    def test_script_discovers_and_rejects_arguments_without_building(self) -> None:
+        scripts = self.root / "scripts"
+        scripts.mkdir()
+        shutil.copy2(ROOT / "scripts/test", scripts / "test")
+        shutil.copy2(ROOT / "checkout_workflow.py", self.root / "checkout_workflow.py")
+        commands = self.root / "commands"
+        commands.mkdir()
+        cargo = commands / "cargo"
+        cargo.write_text("#!/bin/sh\nexit 99\n")
+        cargo.chmod(0o755)
+        (self.root / "target/release/mcp-console").unlink()
+        suite = "client_server/server/test_tools"
+        for arguments, status, expected in (
+            (("--help",), 0, "usage: scripts/test"),
+            (("--list",), 0, f"{suite}::selected"),
+            (("--locate", f"{suite}::selected"), 0, "source: tests/boundaries/"),
+            (("--execution", "direct"), 2, "execution modes"),
+            (("--jobs", "0"), 2, "--jobs must be at least 1"),
+            (("--timeout", "nan"), 2, "--timeout must be a positive finite number"),
+            (("unknown/suite",), 2, "unknown transcript suite"),
+            ((f"{suite}::missing",), 2, "unknown transcript case"),
+            (("--locate", suite, "--update"), 2, "cannot be combined"),
+        ):
+            with self.subTest(arguments=arguments):
+                result = subprocess.run(
+                    [scripts / "test", *arguments],
+                    cwd=self.root,
+                    env=os.environ
+                    | {"PATH": f"{commands}{os.pathsep}{os.environ['PATH']}"},
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                self.assertEqual(
+                    result.returncode, status, result.stdout + result.stderr
+                )
+                self.assertIn(expected, result.stdout + result.stderr)
+                self.assertFalse((self.root / "target/release/mcp-console").exists())
+        self.assertFalse((self.root / ".dev-workflow").exists())
+
+    def test_execution_fixture_explains_conflicting_arguments(self) -> None:
+        for arguments, expected in (
+            (("--no-sandbox",), "execution.serve() selects --no-sandbox"),
+            (("--writable-root", "/workspace"), "use SANDBOXED.serve()"),
+            (("--writable-root=/workspace",), "use SANDBOXED.serve()"),
+        ):
+            with self.subTest(arguments=arguments):
+                self.suite.write_text(
+                    PUBLIC_SUITE
+                    # fmt: python
+                    + code("""
+                        from support.execution import DIRECT, executions
+
+
+                        @executions(DIRECT)
+                        def test_selected(binary, execution):
+                            execution.serve(*ARGUMENTS)
+                            return record(binary, "selected")
+                        """).replace("ARGUMENTS", repr(arguments))
+                )
+                result = self.run_runner("client_server/server/test_tools::selected")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected, result.stderr)
+
+    def test_sbx_discovery_does_not_create_build_output(self) -> None:
+        scripts = self.root / "scripts"
+        scripts.mkdir()
+        shutil.copy2(ROOT / "scripts/test", scripts / "test")
+        shutil.copytree(
+            ROOT / "tests/support",
+            self.root / "tests/support",
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns("__pycache__"),
+        )
+        self.suite.write_text(
+            PUBLIC_SUITE
+            # fmt: python
+            + code("""
+                from support.docker_sandbox import DOCKER_SANDBOX
+                from support.requirements import requires
+
+                test_selected = requires(DOCKER_SANDBOX)(test_selected)
+                """)
+        )
+        commands = self.root / "commands"
+        commands.mkdir()
+        sbx = commands / "sbx"
+        sbx.write_text(
+            f"#!{sys.executable}\n"
+            # fmt: python
+            + code("""
+                import sys
+                from pathlib import Path
+
+                Path("sbx-probed").touch()
+                print("sbx version: v0.42.1 fixture" if sys.argv[1] == "version" else "[]")
+                """)
+        )
+        sbx.chmod(0o755)
+        shutil.rmtree(self.root / "target")
+        environment = os.environ | {
+            "PATH": f"{commands}{os.pathsep}{os.environ['PATH']}",
+            "MCP_CONSOLE_TEST_SBX_TEMPLATE": "fixture@sha256:example",
+            "MCP_CONSOLE_TEST_SBX_NETWORK": "0",
+            "MCP_CONSOLE_TEST_SBX_INNER_DOCKER": "0",
+        }
+        result = subprocess.run(
+            [scripts / "test", "--list"],
+            cwd=self.root,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.root / "sbx-probed").exists())
+        self.assertFalse((self.root / "target").exists())
+
+    def test_runner_metadata_does_not_require_a_binary(self) -> None:
+        (self.root / "target/release/mcp-console").unlink()
+        for arguments in (("--list",), ("--locate", "client_server/server/test_tools")):
+            with self.subTest(arguments=arguments):
+                result = self.run_runner(*arguments)
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_help_and_syntax_errors_do_not_resolve_script_dependencies(self) -> None:
+        scripts = self.root / "scripts"
+        scripts.mkdir()
+        shutil.copy2(ROOT / "scripts/test", scripts / "test")
+        commands = self.root / "commands"
+        commands.mkdir()
+        uv = commands / "uv"
+        uv.write_text("#!/bin/sh\necho invoked > uv-receipt\nexit 97\n")
+        uv.chmod(0o755)
+        for arguments, status in (
+            (("--help",), 0),
+            (("--execution", "direct"), 2),
+            (("--jobs", "0"), 2),
+            (("--timeout", "nan"), 2),
+            (("--locate", "cli/example", "extra"), 2),
+        ):
+            with self.subTest(arguments=arguments):
+                result = subprocess.run(
+                    [scripts / "test", *arguments],
+                    cwd=self.root,
+                    env=os.environ
+                    | {"PATH": f"{commands}{os.pathsep}{os.environ['PATH']}"},
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                self.assertEqual(
+                    result.returncode, status, result.stdout + result.stderr
+                )
+                self.assertFalse((self.root / "uv-receipt").exists())
 
     def test_external_ssh_availability_gates_public_cases(self) -> None:
         shutil.copy2(
