@@ -6,18 +6,11 @@ base::local(
       invisible(.Call("mcp_console_finish_python_initialization"))
     }
 
-    configure_python_input <- function() {
-      if (!rust_owned || !interactive()) {
-        return(invisible())
-      }
-      # Reticulate remaps input only when its own C layer initialized CPython.
-      namespace <- asNamespace("reticulate")
-      builtins <- reticulate::import_builtins(convert = TRUE)
-      input <- function(prompt = "") readline(prompt)
-      globals <- get(".globals", envir = namespace)
-      globals$og_input_builtin <- builtins[["input"]]
-      builtins[["input"]] <- input
-      invisible()
+    install_console_services <- function() {
+      invisible(.Call(
+        "mcp_console_install_python_services",
+        reticulate::py_config()$libpython
+      ))
     }
 
     install_python_initializer <- function(...) {
@@ -51,10 +44,14 @@ base::local(
 
       original_inject_hooks <- get("py_inject_hooks", envir = namespace)
       inject_hooks <- function() {
-        configure_python_input()
         original_inject_hooks()
+        # Install after reticulate's input hook, including R-first startup.
+        install_console_services()
       }
       replace_binding("py_inject_hooks", inject_hooks)
+      # Reticulate reinstalls its interrupt handler after injecting hooks.
+      # Keep its event polling, but restore Console's delivery/acknowledgment.
+      replace_binding("install_interrupt_handlers", install_console_services)
 
       if (get("is_python_initialized", envir = namespace)()) {
         rust_owned <<- isTRUE(.Call(
@@ -63,8 +60,8 @@ base::local(
         ))
         if (rust_owned) {
           finish_python_initialization()
-          configure_python_input()
         }
+        install_console_services()
       }
       invisible()
     }

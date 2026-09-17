@@ -158,8 +158,10 @@ unsafe extern "C-unwind" {
     fn mcp_r_console_configure(
         read_console: ReadConsole,
         check_interrupt: CheckUserInterrupt,
-        interrupts_pending: *const c_int,
-    );
+        interrupts_pending: *mut c_int,
+        wakeup: c_int,
+    ) -> c_int;
+    fn mcp_r_install_python_interrupt(set_interrupt: unsafe extern "C" fn()) -> c_int;
     fn mcp_r_read_console(
         prompt: *const c_char,
         buffer: *mut c_uchar,
@@ -215,9 +217,29 @@ fn interrupt_pending() -> bool {
     unsafe { libr::get(libr::R_interrupts_pending) != 0 }
 }
 
-fn console_interrupt_pending() -> bool {
+pub(super) fn console_interrupt_pending() -> bool {
     interrupt_pending()
         && unsafe { libr::get(libr::R_interrupts_suspended) == libr::Rboolean_FALSE }
+}
+
+pub(crate) fn acknowledge_python_interrupt() -> bool {
+    if !console_interrupt_pending() {
+        return false;
+    }
+    discard_interrupts();
+    true
+}
+
+pub(crate) fn install_python_interrupt(
+    set_interrupt: unsafe extern "C" fn(),
+) -> Result<(), String> {
+    if unsafe { mcp_r_install_python_interrupt(set_interrupt) } != 0 {
+        return Err(format!(
+            "failed to install Python interrupt handler: {}",
+            io::Error::last_os_error()
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn resolve_r(
@@ -329,7 +351,18 @@ fn initialize_r_repl() -> Result<(), Box<dyn Error>> {
     R_CHECK_USER_INTERRUPT
         .set(check_interrupt)
         .map_err(|_| io::Error::other("R interrupt checker was already initialized"))?;
-    unsafe { mcp_r_console_configure(r_read_console, check_interrupt, libr::R_interrupts_pending) };
+    let wakeup = super::input::initialize_interrupt_wakeup()?;
+    if unsafe {
+        mcp_r_console_configure(
+            r_read_console,
+            check_interrupt,
+            libr::R_interrupts_pending,
+            wakeup,
+        )
+    } != 0
+    {
+        return Err(io::Error::last_os_error().into());
+    }
     Ok(())
 }
 
@@ -534,7 +567,7 @@ extern "C-unwind" fn r_read_console(
                 record_worker_failure(error);
                 return console_eof(buf);
             }
-            read
+            if read < 0 { -1 } else { c_int::from(read > 0) }
         }
         Err(error) => {
             record_worker_failure(error);

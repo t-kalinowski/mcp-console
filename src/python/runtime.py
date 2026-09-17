@@ -13,6 +13,7 @@ import sys as _sys
 import threading as _threading
 import traceback as _traceback
 import types as _types
+import _mcp_console_services as _services
 
 
 _MCP_CONSOLE_IMPORT_DISTRIBUTIONS = {
@@ -390,8 +391,6 @@ for _mcp_console_filter in _mcp_console_logger.filters:
 if not _mcp_console_filter_installed:
     _mcp_console_logger.addFilter(_McpConsoleMatplotlibLogFilter())
 
-_mcp_console_image_state = [()]
-
 
 def _mcp_console_disable_matplotlib_show(
     _setattr=_builtins.setattr,
@@ -448,7 +447,7 @@ def _mcp_console_eval_cell(
     _eval=_builtins.eval,
     _BaseException=_builtins.BaseException,
     _collect_plots=_mcp_console_collect_plots,
-    _image_state=_mcp_console_image_state,
+    _publish_plot=_services.publish_plot,
     _sys=_sys,
     _print_exc=_traceback.print_exc,
 ):
@@ -470,17 +469,11 @@ def _mcp_console_eval_cell(
     except _BaseException:
         _print_exc()
     try:
-        _image_state[0] = _collect_plots()
+        for image in _collect_plots():
+            _publish_plot(image)
     except _BaseException:
         _print_exc()
-        _image_state[0] = ()
     return None
-
-
-def _mcp_console_take_images(_image_state=_mcp_console_image_state):
-    images = _image_state[0]
-    _image_state[0] = ()
-    return images
 
 
 def _mcp_console_apply_psutil_process_group(
@@ -609,26 +602,7 @@ _mcp_console.disable_matplotlib_show = _mcp_console_disable_matplotlib_show
 _mcp_console.configure_import_resolution = _mcp_console_import_finder.configure
 _mcp_console.without_automatic_resolution = _mcp_console_without_automatic_resolution
 _mcp_console.eval_cell = _mcp_console_eval_cell
-_mcp_console.take_images = _mcp_console_take_images
 _mcp_console.dispatch = _mcp_console_dispatch
 _sys.modules[_mcp_console.__name__] = _mcp_console
 _builtins.__dict__["_mcp_console_dispatch"] = _mcp_console_dispatch
 _mcp_console_configure_psutil()
-
-
-def _mcp_console_detach_output_streams(
-    _streams=(_sys.stdout, _sys.stderr),
-    _OutputRemap=_sys.modules["rpytools.output"].OutputRemap,
-):
-    # Reticulate restores sys.stdout/stderr after fork. Detach the original
-    # console objects too: user code and logging handlers may still hold them.
-    # Only the child's copies change; writes must not call back into R.
-    for stream in _streams:
-        if isinstance(stream, _OutputRemap):
-            stream.handler = stream.target.write
-            stream.flush = stream.target.flush
-            # Do not probe a possibly closed target during detachment.
-            stream.isatty = stream.target.isatty
-
-
-_os.register_at_fork(after_in_child=_mcp_console_detach_output_streams)

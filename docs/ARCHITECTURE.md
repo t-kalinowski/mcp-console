@@ -232,7 +232,7 @@ The `worker::coordinator` owns the message loop, preparation and cell dispatch, 
 It retains R, Python, and SQL adapters as peers.
 The `worker::input` module owns interactive stdin buffering and preserves unfinished input across operations.
 The `worker::embedded_r` backend owns R initialization, native event handling, graphics, and R console callbacks, including suppression of R resolution during SQL callbacks.
-R initialization remains eager, and the existing Python and SQL adapters retain their runtime behavior.
+R initialization remains eager, and managed SQL remains R-backed.
 
 The built-in worker embeds R on its main thread.
 On Linux, it re-executes before R initialization with the selected `R_HOME/lib` first in `LD_LIBRARY_PATH`, preserving inherited library paths and its sideband endpoint.
@@ -242,7 +242,17 @@ The SQL router uses a DBI provider in embedded R or a DB-API provider in CPython
 The R provider owns a managed DuckDB connection by default and can retain a user-selected DBI connection; the Python provider retains a user-selected DB-API connection without converting it or its result rows through reticulate.
 Its private R environment bridge conditionally wraps `base::library` and runs R's unchanged `base::loadNamespace` body in a private lexical environment that intercepts its retry restart; it applies accepted managed libraries and reports activation outcomes.
 The Rust Python facade loads, retains, and initializes the selected file-backed `libpython`, or attaches its own handle if CPython was already initialized.
-It embeds and installs the private evaluator and DB-API adapter through that CPython API; reticulate attaches to the interpreter and continues to own object conversion, Python-cell evaluation dispatch, its manifest, event handling, and interrupts.
+After the retained reticulate adapter initializes and configures Python, Console calls the existing private cell evaluator directly through the CPython API.
+Console also installs native callbacks for Python input, text output, diagnostics, and plot publication.
+Managed Python input shares the worker's length-aware stdin buffer with R; R's console callback retains its boolean success contract.
+The worker's native signal handler wakes blocked input and marks interrupts for both runtimes.
+Python acknowledgment respects R's suspended-interrupt state and clears accepted interrupts so nested calls do not deliver them twice.
+Reticulate's event polling remains active.
+
+Reticulate is still required for ordinary Python startup: it owns interpreter selection and startup orchestration, the requirement manifest, environment activation, automatic-resolution callbacks, object conversion, and cross-language and module-load integration.
+Cell dispatch and runtime installation release the library-state lock before executing Python, and native console callbacks release the GIL while blocking on worker services.
+Python stream wrappers restrict those callbacks to the main worker thread; binary buffers, descriptors, background threads, and fork children use their underlying streams, including cached or redirected stream objects.
+The DB-API adapter continues to execute through the CPython API, while managed DuckDB remains in R.
 Before normal worker exit, it restores the main Python thread's saved attachment so extension-library exit destructors, including DuckDB's, can use Python safely.
 Its private Python runtime conditionally appends a last-chance import finder, while the R Python bridge owns the reticulate manifest and the callback into the existing managed-Python resolver.
 Bare sessions leave both resolution adapters disabled.
