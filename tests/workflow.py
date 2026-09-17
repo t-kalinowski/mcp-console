@@ -647,6 +647,57 @@ class WorkflowTests(unittest.TestCase):
                 process.kill()
             process.communicate(timeout=10)
 
+    def test_first_cancellation_during_normal_cleanup_finishes_retirement(self) -> None:
+        self.write_script(
+            "parent.py",
+            # fmt: python
+            """
+            import os
+            import signal
+            from pathlib import Path
+
+            reader, writer = os.pipe()
+            if os.fork() == 0:
+                os.close(reader)
+                signal.signal(signal.SIGTERM, signal.SIG_IGN)
+                os.write(writer, b"1")
+                os.close(writer)
+                signal.pause()
+            else:
+                os.close(writer)
+                assert os.read(reader, 1) == b"1"
+                os.close(reader)
+                Path("group").write_text(str(os.getpgrp()))
+            """,
+        )
+        process = subprocess.Popen(
+            ["scripts/with-checkout", sys.executable, "parent.py"],
+            cwd=self.root,
+            env=self.environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        try:
+            assert process.stdout is not None
+            self.assertEqual(
+                read_lines(process.stdout, 1, "normal descendant cleanup"),
+                ["[cleanup] waiting for phase descendants"],
+            )
+            process.terminate()
+            self.assertEqual(process.wait(timeout=10), 128 + signal.SIGTERM)
+            # EOF requires the descendant to retire as well as the wrapper.
+            process.communicate(timeout=10)
+        finally:
+            if (self.root / "group").exists():
+                try:
+                    os.killpg(int((self.root / "group").read_text()), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            if process.poll() is None:
+                process.kill()
+            process.communicate(timeout=10)
+
 
 if __name__ == "__main__":
     unittest.main()

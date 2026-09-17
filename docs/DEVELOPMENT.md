@@ -12,17 +12,21 @@ A conflicting command exits with the active owner's PID, command, and lock path.
 Retry after that owner finishes; do not delete a lock file to bypass ownership.
 Sequential nested commands inherit the same ownership, including packaging invoked through `uv`.
 Do not start concurrent children under an inherited owner.
-Cancellation sends `SIGTERM`, allows up to five seconds for the phase to exit, and then kills any remaining members of its process group before releasing ownership.
-Repeated cancellation signals do not interrupt that cleanup.
+Nested commands must wait for their children before returning; background mutators that outlive a nested command are outside this synchronous workflow contract.
+For `scripts/check`, `scripts/check-core`, `scripts/test`, and `scripts/with-checkout`, cancellation sends `SIGTERM`, allows up to five seconds for the phase to exit, and then kills any remaining members of its owned process group before releasing ownership.
+Cleanup defers cancellation signals until retirement finishes, including when cleanup follows a normal exit.
 Nested validation commands share that group so escalation also reaches their children.
 Commands that deliberately detach into a new session remain responsible for their own cleanup.
-Commands must wait for their children; any remaining group members receive the same bounded retirement after the command exits, before ownership is released.
+The outer group owner retires remaining members before releasing ownership.
+Direct staging, installation, and packaging entry points provide cooperative admission locks; their caller owns cancellation.
+Use `scripts/with-checkout` when invoking those commands with the wrapper's cancellation semantics.
 
 Use the same ownership for direct build commands:
 
 ```sh
 scripts/with-checkout cargo build --release --target-dir target
 scripts/with-checkout uv tool install --reinstall .
+scripts/with-checkout scripts/stage-sandbox-runner
 ```
 
 Direct Cargo and Maturin builds still require `scripts/stage-sandbox-runner` first.
