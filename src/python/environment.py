@@ -106,7 +106,7 @@ def _activate(candidate: dict, manifest: dict) -> None:
     committed = False
     try:
         sys.prefix, sys.exec_prefix = candidate["prefix"], candidate["exec_prefix"]
-        runtime.activate_process_environment(candidate["executable"])
+        sys.executable = candidate["executable"]
         old_bin = os.path.dirname(identity[2])
         bins = os.environ.get("PATH", "").split(os.pathsep)
         os.environ["PATH"] = os.pathsep.join(
@@ -125,6 +125,8 @@ def _activate(candidate: dict, manifest: dict) -> None:
             if path not in sys.path:
                 site.addsitedir(path)
         importlib.invalidate_caches()
+        # Optional process integration must probe the newly available packages.
+        runtime.activate_process_environment(candidate["executable"])
         added = (_site_paths - previous) | (set(sys.path) - retained)
         candidate["pythonpath"] = os.pathsep.join(path or "." for path in sys.path)
         # The native SIGINT callback consults this deferral and leaves R's
