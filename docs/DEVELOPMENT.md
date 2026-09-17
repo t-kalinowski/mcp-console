@@ -16,7 +16,7 @@ cp docs/templates/task-checkpoint.md .dev-workflow/task.md
 Use this copy command only when starting a new checkpoint.
 This file is ignored by Git; keep task progress there and durable recipes in the owning documentation.
 Update it after a meaningful validation or review result and before handing off work.
-When changing branches or stack layers, update the branch, intended base, and next action together.
+When changing branches or stack layers, update the branch, intended base, working revision and state, and next action together.
 
 Resume with a bounded sequence:
 
