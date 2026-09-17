@@ -48,6 +48,12 @@ def managed_environments(root: Path, *, interrupt_site: bool = False) -> dict[st
         if name == "initial":
             (extra / "console_retired.py").touch()
         else:
+            metadata = site / "console_activation_fixture-1.0.dist-info"
+            metadata.mkdir()
+            (metadata / "METADATA").write_text(
+                "Name: console-activation-fixture\nVersion: 1.0\n"
+            )
+            (metadata / "top_level.txt").write_text("console_unloaded\n")
             (site / "console-identity.pth").write_text("import console_identity\n")
             (site / "console_identity.py").write_text(
                 # fmt: python
@@ -99,7 +105,21 @@ def managed_environments(root: Path, *, interrupt_site: bool = False) -> dict[st
     environment = os.environ.copy()
     environment.pop("RETICULATE_PYTHON", None)
     environment["RETICULATE_UV"] = str(uv)
+    environment["RETICULATE_CHECK_REQUIRED_PACKAGES"] = "true"
     return environment
+
+
+def initialize_managed_client(client: McpClient) -> None:
+    client.initialize_and_list_tools()
+    # Match the manifest to these standard-library and fixture-module environments
+    # before startup; they do not provide the normal NumPy/pandas seed.
+    client.send(
+        # fmt: r
+        r=code("""
+            reticulate::py_require(character(), action = "set")
+            """)
+    )
+    assert last_result_text(client) == "[done]", last_result_text(client)
 
 
 @executions(DIRECT, SANDBOXED)
@@ -110,7 +130,7 @@ def test_removes_previous_environment_pth_paths(
         root = Path(temporary).resolve()
         environment = managed_environments(root)
         with McpClient(binary, execution.serve(), environment, root) as client:
-            client.initialize_and_list_tools()
+            initialize_managed_client(client)
             client.send(
                 # fmt: python
                 python=code("""
@@ -149,7 +169,7 @@ def test_site_hooks_observe_candidate_identity(
         root = Path(temporary).resolve()
         environment = managed_environments(root)
         with McpClient(binary, execution.serve(), environment, root) as client:
-            client.initialize_and_list_tools()
+            initialize_managed_client(client)
             client.send(
                 # fmt: python
                 python=code("""
@@ -182,7 +202,7 @@ def test_rolls_back_interrupted_python_site_activation(
         root = Path(temporary).resolve()
         environment = managed_environments(root, interrupt_site=True)
         with McpClient(binary, execution.serve(), environment, root) as client:
-            client.initialize_and_list_tools()
+            initialize_managed_client(client)
             client.send(
                 # fmt: python
                 python=code("""
@@ -237,7 +257,7 @@ def test_interrupts_publication_after_committing_python(
         root = Path(temporary).resolve()
         environment = managed_environments(root)
         with McpClient(binary, execution.serve(), environment, root) as client:
-            client.initialize_and_list_tools()
+            initialize_managed_client(client)
             client.send(
                 # fmt: python
                 python=code("""
@@ -288,7 +308,7 @@ def test_preserves_suspended_r_interrupt_during_publication(
         root = Path(temporary).resolve()
         environment = managed_environments(root)
         with McpClient(binary, execution.serve(), environment, root) as client:
-            client.initialize_and_list_tools()
+            initialize_managed_client(client)
             client.send(
                 # fmt: python
                 python=code("""
@@ -350,7 +370,7 @@ def test_rejects_replacement_of_loaded_distribution(
             (metadata / "top_level.txt").write_text("console_loaded\n")
             (extra / "console_loaded.py").write_text("value = object()\n")
         with McpClient(binary, execution.serve(), environment, root) as client:
-            client.initialize_and_list_tools()
+            initialize_managed_client(client)
             client.send(
                 # fmt: python
                 python=code("""
@@ -398,7 +418,7 @@ def cancelled_candidate_probe(binary: Path, execution: Execution, control: str) 
         checkpoints = []
         try:
             with McpClient(binary, execution.serve(), environment, root) as client:
-                client.initialize_and_list_tools()
+                initialize_managed_client(client)
                 client.send(
                     # fmt: r
                     r=code(r"""

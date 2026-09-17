@@ -3,6 +3,15 @@
 ---
 send:
   r: |
+    reticulate::py_require(character(), action = "set")
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  r: |
     cat(
       tempfile("probe-ready-"),
       tempfile("probe-release-"),
