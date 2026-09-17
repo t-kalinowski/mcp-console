@@ -76,6 +76,29 @@ class DevelopmentTests(unittest.TestCase):
         self.assertIn("snapshots", human.stdout)
         self.assertIn("1 untracked file(s) excluded", human.stdout)
 
+    def test_review_diff_excludes_parent_changes_after_the_layer_forks(self) -> None:
+        self.write("src/shared.rs", "shared\n")
+        fork = self.commit()
+        self.git("checkout", "-qb", "parent")
+        self.write("src/shared.rs", "shared\nparent addition\n")
+        self.write("src/parent.rs", "parent only\n")
+        parent = self.commit()
+        self.git("checkout", "-qb", "layer", fork)
+        self.write("src/layer.rs", "committed\n")
+        self.commit()
+        self.write("src/layer.rs", "committed\nstaged\n")
+        self.git("add", "src/layer.rs")
+        self.write("src/layer.rs", "committed\nstaged\nunstaged\n")
+
+        result = self.command("review-diff", "parent", "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertEqual(report["base"], parent)
+        self.assertEqual(
+            report["groups"]["production"],
+            {"files": 1, "added": 3, "deleted": 0, "binary_files": 0},
+        )
+
     def test_review_diff_requires_a_valid_explicit_base(self) -> None:
         self.write("README.md", "Fixture\n")
         self.commit()

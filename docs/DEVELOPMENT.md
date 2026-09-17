@@ -44,9 +44,11 @@ Inspect the actual diff against that base early, before regenerating unrelated s
 
 ```sh
 scripts/review-diff BASE
-git diff BASE -- src/ tests/boundaries/
+git diff --merge-base BASE -- src/ tests/boundaries/
 ```
 
+`BASE` names the intended parent; changes are measured from its merge base with `HEAD`.
+Parent-only commits made after this layer forked are excluded.
 The report includes tracked staged and unstaged changes; stage intended new files before measuring.
 It reports production, tooling, tests, documentation, and generated snapshots separately, with binary-file counts outside line totals.
 Production means `src/`, `python/mcp_console/`, `r/R/`, and `r/src/`; generated snapshots mean `tests/snapshots/`.
