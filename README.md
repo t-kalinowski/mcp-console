@@ -30,7 +30,7 @@ Prerequisites:
 - A working, signed-in Codex CLI for the agent walkthrough.
 - R on `PATH` (tested with R 4.6.1).
 - `uv`, Git, rustup, and Rust 1.95 or later; the commands select Python 3.12 (`uv` can download it).
-- Native build tools: Xcode Command Line Tools on macOS; a C compiler, `pkg-config`, libcap development files, and binutils on Linux.
+- Native build tools: Xcode Command Line Tools on macOS; a C compiler, `pkg-config`, libcap and libcurl development headers, and binutils on Linux.
 - On Linux, mounted `/proc` and permission for the native sandbox's namespace and policy operations; see [host requirements](docs/LINUX_COMPATIBILITY.md).
   Restricted containers or host security policy may prevent startup.
 
@@ -53,6 +53,7 @@ See [source installation](RELEASE.md#private-sandbox-executable), [managed depen
 In Codex, use `/mcp` to check that `console` exposes `send`, then ask:
 
 > Use MCP Console for this analysis.
+> Use `timeout_ms=10000` for cells and polls; wait for each cell to finish before continuing.
 > In R, create six orders: web revenues 120, 150, 180 with costs 80, 90, 120; store revenues 100, 140, 160 with costs 70, 100, 110.
 > Compute each order's profit and the total profit.
 > Query the live R data frame from SQL to aggregate profit by channel.

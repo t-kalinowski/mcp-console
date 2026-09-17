@@ -50,6 +50,7 @@ def test_persistent_analysis_example(binary: Path) -> Transcript:
             env=environment,
             capture_output=True,
             text=True,
+            # Leave time for assertions and cleanup within the runner's 600s limit.
             timeout=540,
         )
         assert result.returncode == 0, (result.stdout, result.stderr)
