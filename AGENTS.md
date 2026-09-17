@@ -239,6 +239,7 @@ Keep these invariants intact:
 - `tests/install.py`, `tests/sandbox_installation.py` — unstaged uv installation, relocated bundle acceptance, and private companion verification.
 - `scripts/test` — release binary build and selected transcript execution.
 - `scripts/validate_runtime_sources.py` — extracted R/Python inventory and syntax validation.
+- `scripts/review-diff`, `tests/development.py` — review-volume reports and their public command regressions.
 - `scripts/format`, `scripts/check-core`, `scripts/check` — formatting, core checks, and repository-wide checks.
 - `tests/format.py` — public formatter command regressions.
 - `checkout_workflow.py`, `scripts/with-checkout`, `tests/workflow.py` — shared checkout ownership, validation records, host concurrency, and public command regressions.
@@ -255,6 +256,7 @@ Keep these invariants intact:
   Prefer a larger coherent change over an artificial split.
 - Keep each behavior-changing PR to one observable behavior.
   Internal-only refactors may stand alone but must preserve observable behavior.
+  Choose its owning modules, public cases, expected snapshots, and intended base before cross-cutting implementation; use the planning template and `scripts/review-diff` in `docs/DEVELOPMENT.md`.
 - For a public behavior change, first add a public acceptance or regression test and confirm it fails.
   Verify an internal-only refactor with the existing public suite.
   Test public interfaces, not private helpers.
