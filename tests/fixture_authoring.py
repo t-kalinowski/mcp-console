@@ -152,6 +152,32 @@ class FixtureAuthoringTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertIn("missing # fmt: python", result.stdout)
 
+    def test_code_layout_uses_decoded_newlines(self) -> None:
+        for language in ("r", "python"):
+            with self.subTest(language=language):
+                result = self.check(
+                    # fmt: python
+                    code(rf"""
+                        # fmt: {language}
+                        {language} = code("print(1)\nprint(2)")
+                        """)
+                )
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn(
+                    "start code() payload after the opening line", result.stdout
+                )
+
+        result = self.check(
+            # fmt: python
+            code(r"""
+                # fmt: python
+                python = code(r'print("first\nsecond")')
+                # fmt: r
+                r = code(r'cat("first\nsecond")')
+                """)
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_annotated_assignments_require_directives(self) -> None:
         result = self.check(
             # fmt: python
