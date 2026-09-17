@@ -104,7 +104,7 @@ Install development checkouts with `uv tool install --reinstall .`; bare `cargo 
 Build reuse follows Cargo's tracked inputs; external tool changes through `PATH` can require cleaning the affected Cargo build directories, as described in `RELEASE.md`.
 Native Cargo bundles require the default shared build/target layout; a separate intermediate build directory is unsupported for running the Cargo output.
 The Python packaging backend holds a checkout-local lock from staging through wheel creation.
-Staging, packaging, and validation share checkout ownership outside `target`; conflicts fail with owner details.
+Staging, packaging, and validation share checkout ownership outside `target`; conflicts fail with the lock path and last recorded owner details.
 Wrap direct Cargo and Maturin commands in `scripts/with-checkout` to claim that ownership.
 See `RELEASE.md` for prerequisites, bundle layout, build caches, and the explicit source-checkout override.
 Run commands from the repository root:

@@ -41,6 +41,8 @@ def exclusive(paths: list[Path], label: str) -> Iterator[None]:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
                 lock.seek(0)
+                # flock decides admission. Its separately published diagnostic
+                # can be empty or stale while ownership changes hands.
                 owner = lock.read()
                 if (
                     str(path) in tokens
@@ -61,7 +63,8 @@ def exclusive(paths: list[Path], label: str) -> Iterator[None]:
                 os.environ[LOCKS_ENV] = inherited
             return
     raise SystemExit(
-        f"{label} is busy; retry after its owner finishes. Lock: {path}\nOwner: {owner}"
+        f"{label} is busy; retry after its owner finishes. Lock: {path}\n"
+        f"Last recorded owner (may be stale): {owner or 'not yet recorded'}"
     )
 
 
@@ -163,6 +166,20 @@ class Run:
         )
         self.path = self.directory / "result.json"
         self.started = time.monotonic()
+        self.record = {
+            "checkout": str(root),
+            "command": command,
+            "revision": None,
+            "worktree_status": None,
+            "parent_record": os.environ.get(RUN_ENV),
+            "phases": [],
+            "failing_selectors": [],
+            "exit_status": None,
+        }
+        self.save()
+
+    def capture_checkout(self) -> None:
+        root = Path(self.record["checkout"])
         top = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
             cwd=root,
@@ -182,16 +199,7 @@ class Run:
             )
             revision = head.stdout.strip() if head.returncode == 0 else None
             status = changes.stdout if changes.returncode == 0 else None
-        self.record = {
-            "checkout": str(root),
-            "command": command,
-            "revision": revision,
-            "worktree_status": status,
-            "parent_record": os.environ.get(RUN_ENV),
-            "phases": [],
-            "failing_selectors": [],
-            "exit_status": None,
-        }
+        self.record.update(revision=revision, worktree_status=status)
         self.save()
 
     def save(self) -> None:
@@ -331,16 +339,19 @@ def main() -> None:
         stack.enter_context(checkout_owner(root))
         if options.mode in {"check", "test"}:
             stack.enter_context(full_check_slot())
-        for number in CANCELLATION_SIGNALS:
-            previous = signal.signal(number, interrupted)
-            stack.callback(signal.signal, number, previous)
-        if options.mode == "run":
-            with command_process(options.arguments) as process:
-                status = process.wait()
-            raise SystemExit(128 - status if status < 0 else status)
-        run = Run(root, sys.argv[1:])
+        run = None if options.mode == "run" else Run(root, sys.argv[1:])
         status = 1
         try:
+            # Arm cancellation only inside the initial record's finalization
+            # scope. Git metadata collection can block or be interrupted.
+            for number in CANCELLATION_SIGNALS:
+                previous = signal.signal(number, interrupted)
+                stack.callback(signal.signal, number, previous)
+            if run is None:
+                with command_process(options.arguments) as process:
+                    status = process.wait()
+                raise SystemExit(128 - status if status < 0 else status)
+            run.capture_checkout()
             for name, command in plans[options.mode]:
                 status = 1
                 status = run.phase(name, command)
@@ -355,9 +366,10 @@ def main() -> None:
             status = 130
             raise
         finally:
-            run.record["exit_status"] = status
-            run.save()
-            print(f"Validation record: {run.path}", file=sys.stderr, flush=True)
+            if run is not None:
+                run.record["exit_status"] = status
+                run.save()
+                print(f"Validation record: {run.path}", file=sys.stderr, flush=True)
         raise SystemExit(status)
 
 
