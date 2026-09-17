@@ -217,16 +217,18 @@ class Run:
             if process is not None:
                 status = process.returncode
             failures = []
-            reruns = []
+            rerun_seen = False
             with log_path.open(errors="replace") as log:
                 for line in log:
+                    if status:
+                        sys.stderr.write(line)
                     if match := FAILURE.fullmatch(line.strip()):
                         failures.append(match[1])
-                        print(line.rstrip(), file=sys.stderr)
                     elif line.startswith("rerun: scripts/test "):
-                        reruns.append(line.rstrip())
-            for rerun in reruns or [f"rerun: scripts/test {case}" for case in failures]:
-                print(rerun, file=sys.stderr)
+                        rerun_seen = True
+            if not rerun_seen:
+                for case in failures:
+                    print(f"rerun: scripts/test {case}", file=sys.stderr)
             self.record["failing_selectors"] = sorted(
                 set(self.record["failing_selectors"] + failures)
             )
