@@ -3,7 +3,7 @@
 - Branch: `<branch>`
 - Intended PR base: `<ref> (<resolved revision>)`
 - Working revision and state: `<HEAD>; <clean or dirty>`
-- Validation: `<exact command>; <tested revision>; <clean or dirty at admission>; <passed, failed, or unfinished>`
+- Validation: `<exact command>; <tested revision>; <clean or dirty at admission, historical if dirty>; <passed, failed, or unfinished>`
 - Failing selector: `<exact selector(s), or none>`
 - Evidence: `<completion record path>; <relevant phase log path>`
 - Next action: `<one concrete action>`

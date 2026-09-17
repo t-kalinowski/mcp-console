@@ -6,20 +6,34 @@ Installation checks run last because they replace and hide the shared `target` d
 
 ## Resume from a small checkpoint
 
-For work that spans validation, review, or context changes, copy the [task checkpoint template](templates/task-checkpoint.md) to `.dev-workflow/task.md` and replace its placeholders.
+For work that spans validation, review, or context changes, initialize a [task checkpoint](templates/task-checkpoint.md) and replace its placeholders:
+
+```sh
+mkdir -p .dev-workflow
+cp docs/templates/task-checkpoint.md .dev-workflow/task.md
+```
+
+Use this copy command only when starting a new checkpoint.
 This file is ignored by Git; keep task progress there and durable recipes in the owning documentation.
 Update it after a meaningful validation or review result and before handing off work.
 When changing branches or stack layers, update the branch, intended base, and next action together.
 
 Resume with a bounded sequence:
 
-1. Read the checkpoint and `git status --short --branch`; verify its branch, base, and working revision before relying on it.
+1. Read the checkpoint and `git status --short --branch`.
+   Compare `git rev-parse HEAD` with the saved working revision, and resolve the saved base with `git rev-parse 'BASE^{commit}'` (replace `BASE` with the saved reference).
+   Verify the branch and both revisions before relying on the checkpoint.
 2. Read the relevant development route and owning contract, then use scoped `rg -n` searches or `scripts/test --locate SELECTOR` to find the implementation and public case.
-3. Read the relevant phase log around the failure and run the recorded focused command.
-   Expand the search or log range when that evidence requires it, rather than repeatedly dumping whole files or session histories.
+3. Follow the recorded next action.
+   After failed validation, read the relevant phase log around the failure before rerunning the focused command.
+   For an unfinished run, check its process and completion record before starting another command.
+   After passed validation or a review-only handoff, continue the recorded work without inventing a failed check to rerun.
+   Expand the search or log range when the evidence requires it.
 
 Copy validation facts from the completion record: command, revision, worktree status at admission, result, exact failing selectors, and log paths.
-A passing focused command does not establish a passing full gate, and a result for an earlier revision or dirty tree does not validate the current clean revision.
+A passing focused command does not establish a passing full gate.
+A result for an earlier revision or any dirty tree is historical evidence; rerun the required validation on the current clean revision before claiming it passed there.
+The recorded `clean` or `dirty` label and porcelain status do not identify the contents of uncommitted changes.
 A null completion status means unfinished; it does not prove the process is still running.
 Keep the checkpoint short by linking evidence instead of copying output.
 
