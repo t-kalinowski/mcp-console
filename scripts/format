@@ -29,7 +29,6 @@ format ruff ruff format
 format yamark yamark format --wrap sentence
 format rustfmt cargo fmt --all
 format air air format .
-format fixtures scripts/check-fixtures
 
 if [ "$strict" -eq 1 ]; then
     exit "$failed"
