@@ -31,7 +31,7 @@ You need [uv](https://docs.astral.sh/uv/getting-started/installation/) and R on 
 If you need R, install [rig](https://github.com/r-lib/rig#id-installation), then run `rig add release`.
 
 Installing the current source also needs Git, [rustup](https://rustup.rs/) with Rust 1.95 or later, and your platform's build tools.
-On macOS, install the Xcode Command Line Tools with `xcode-select --install`; R source packages may also need [gettext](docs/REQUIREMENTS.md#macos-source-package-builds).
+On macOS, install the Xcode Command Line Tools with `xcode-select --install`.
 On Ubuntu, install the build dependencies with:
 
 ```sh
@@ -87,8 +87,9 @@ Your client uses its configured model; the exact calls and responses can vary.
 ## Reproducible reports
 
 Each session produces a `transcript.md` with recorded calls and results, and a `transcript.qmd` containing the code as a Quarto document.
-Rendering with `ir` resolves declared R and Python dependencies and reruns the code in a fresh R session, capturing new results and plots in HTML or another Quarto output format.
-This gives you a starting point for a reproducible report: copy the document, declare any automatically discovered packages, refine the analysis, and add narrative.
+Console automatically keeps the QMD front matter up to date with declared R and Python dependencies, including packages resolved dynamically during the session.
+Rendering with `ir` prepares those dependencies and reruns the code in a fresh R session, capturing new results and plots in HTML or another Quarto output format.
+This gives you a starting point for a reproducible report: copy the document to refine the analysis and add narrative.
 See the [recording and rendering guide](docs/ARCHITECTURE.md#recording-cell-output-and-image-artifacts) for commands and setup for SQL or remote sessions.
 
 ## Architecture
