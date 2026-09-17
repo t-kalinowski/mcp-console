@@ -16,6 +16,9 @@ Cancellation sends `SIGTERM`, allows up to five seconds for the phase to exit, a
 Repeated cancellation signals do not interrupt that cleanup.
 Nested validation commands share that group so escalation also reaches their children.
 Commands that deliberately detach into a new session remain responsible for their own cleanup.
+After a phase leader exits, output draining has a one-second deadline; surviving members of an owned phase group receive the same bounded retirement before ownership is released.
+The phase log stops at that drain deadline; commands that need later output must wait for their producing children.
+The grace period also applies when a leader exits before its descendants finish cleanup.
 
 Use the same ownership for direct build commands:
 
