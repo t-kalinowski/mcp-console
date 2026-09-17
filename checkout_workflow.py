@@ -30,6 +30,8 @@ FAILURE = re.compile(
 @contextmanager
 def exclusive(paths: list[Path], label: str) -> Iterator[None]:
     """Refuse conflicting owners; sequential descendants inherit the active token."""
+    # Ownership and cleanup require this process to stay alive. The inherited
+    # token admits synchronous children; it is not recovery after owner death.
     inherited = os.environ.get(LOCKS_ENV, "{}")
     tokens = json.loads(inherited)
     owner = ""
@@ -81,6 +83,8 @@ def full_check_slot() -> Iterator[None]:
     if slots < 1:
         raise SystemExit("MCP_CONSOLE_CHECK_SLOTS must be at least 1")
     cache = Path(os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache"))
+    if not cache.is_absolute():
+        raise SystemExit("XDG_CACHE_HOME must be an absolute path")
     paths = [
         cache.resolve() / "mcp-console/checks" / f"slot-{index}.lock"
         for index in range(slots)
@@ -367,6 +371,10 @@ def main() -> None:
             raise
         finally:
             if run is not None:
+                # Work and retirement have ended. Freeze their status through
+                # publication and process exit; a late signal cannot contradict
+                # the completed record. Deliberately do not unblock before exit.
+                signal.pthread_sigmask(signal.SIG_BLOCK, CANCELLATION_SIGNALS)
                 run.record["exit_status"] = status
                 run.save()
                 print(f"Validation record: {run.path}", file=sys.stderr, flush=True)
