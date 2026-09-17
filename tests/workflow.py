@@ -269,6 +269,59 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(record["exit_status"], 128 + signal.SIGTERM)
         self.assertEqual(record["phases"][-1]["exit_status"], -signal.SIGTERM)
 
+    def test_final_record_and_announcement_keep_the_completed_status(self) -> None:
+        # Inject a signal at the standard file/stream boundary of the public
+        # command; no workflow helpers are imported or replaced.
+        self.write_script(
+            "sitecustomize.py",
+            # fmt: python
+            """
+            import json
+            import os
+            import signal
+            import sys
+            from pathlib import Path
+
+            write_text = Path.write_text
+
+
+            def signal_final_write(path, text, *args, **kwargs):
+                if (
+                    os.environ["CANCEL_FINAL"] == "save"
+                    and path.name == "result.tmp"
+                    and json.loads(text)["exit_status"] is not None
+                ):
+                    os.kill(os.getpid(), signal.SIGTERM)
+                return write_text(path, text, *args, **kwargs)
+
+
+            Path.write_text = signal_final_write
+            write_stderr = sys.stderr.write
+
+
+            def signal_announcement(text):
+                if os.environ["CANCEL_FINAL"] == "announcement" and text.startswith(
+                    "Validation record:"
+                ):
+                    os.kill(os.getpid(), signal.SIGTERM)
+                return write_stderr(text)
+
+
+            sys.stderr.write = signal_announcement
+            """,
+        )
+        self.environment["PYTHONPATH"] = str(self.root)
+        runs = self.root / ".dev-workflow/runs"
+        for boundary in ("save", "announcement"):
+            with self.subTest(boundary=boundary):
+                before = set(runs.glob("*/result.json"))
+                self.environment["CANCEL_FINAL"] = boundary
+                result = self.run_command("scripts/check")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                (path,) = set(runs.glob("*/result.json")) - before
+                self.assertEqual(json.loads(path.read_text())["exit_status"], 0)
+                self.assertIn(f"Validation record: {path.resolve()}", result.stderr)
+
     def test_source_archive_does_not_inherit_enclosing_git_metadata(self) -> None:
         archive = self.root / "archive"
         shutil.copytree(
@@ -499,6 +552,14 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("full-check budget is busy", result.stderr)
         self.assertFalse((self.root / "mcp-console").exists())
         self.finish_check(process)
+
+    def test_relative_xdg_cache_is_rejected_before_running_phases(self) -> None:
+        self.environment["XDG_CACHE_HOME"] = ".cache"
+        result = self.run_command("scripts/check")
+        self.assertNotEqual(result.returncode, 0, result.stderr)
+        self.assertIn("XDG_CACHE_HOME must be an absolute path", result.stderr)
+        self.assertFalse((self.root / ".cache").exists())
+        self.assertEqual(self.records(), [])
 
     def test_nested_check_reuses_later_slot_after_first_slot_is_released(self) -> None:
         second, third = (self.directory / name for name in ("second", "third"))
