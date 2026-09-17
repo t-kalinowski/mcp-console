@@ -8,7 +8,8 @@ Installation checks run last because they replace and hide the shared `target` d
 
 `scripts/check`, `scripts/check-core`, `scripts/test`, `scripts/stage-sandbox-runner`, `tests/install.py`, and the Python packaging backend share `.dev-workflow/checkout.lock`.
 The lock lives outside `target` and remains held until the owning command finishes.
-A conflicting command exits with the active owner's PID, command, and lock path.
+A conflicting command exits with the lock path and last recorded owner's PID and command.
+The file lock decides admission; the separately published diagnostic may be empty or stale during ownership handoff.
 Retry after that owner finishes; do not delete a lock file to bypass ownership.
 Sequential nested commands inherit the same ownership, including packaging invoked through `uv`.
 Do not start concurrent children under an inherited owner.
@@ -47,7 +48,7 @@ Changing the budget does not change case assertions, deadlines, or transcript wo
 
 `scripts/check`, `scripts/check-core`, and execution through `scripts/test` print the path to `.dev-workflow/runs/<run>/result.json` on completion, including failures.
 Each record contains the checkout, command, Git revision and worktree status at admission, exit status, elapsed time, failing transcript selectors, and a log and timing for each phase that ran.
-Revision and worktree status are null for a source tree without Git metadata.
+Revision and worktree status are null for a source tree without Git metadata or when cancellation interrupts metadata collection.
 A dirty worktree is recorded explicitly; its result is not evidence for an unchanged clean revision.
 The overall exit status uses the shell convention `128 + signal` for a phase killed by a signal; the phase retains its negative subprocess status.
 Nested runs reference their parent's record and retain their own phase details.
