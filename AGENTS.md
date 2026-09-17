@@ -3,6 +3,7 @@
 This file contains repository-wide instructions and a navigation map.
 Keep it synchronized with implemented code.
 Start with the [development routes and validation ladder](docs/DEVELOPMENT.md) to find a focused public test and the next validation command.
+For resumed work, read the ignored `.dev-workflow/task.md` checkpoint if present, verify it against Git status, and follow the [resume recipe](docs/DEVELOPMENT.md#resume-from-a-small-checkpoint).
 Detailed current behavior belongs in the documents indexed by `docs/README.md`, source, and public transcript tests.
 
 The documents under `design-sketches/` describe intended behavior, not the current implementation.

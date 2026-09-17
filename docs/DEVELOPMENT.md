@@ -4,6 +4,55 @@ Run development commands from the repository root.
 `scripts/check` runs companion staging, core checks, release transcript tests, and installation checks in that order.
 Installation checks run last because they replace and hide the shared `target` directory.
 
+## Resume from a small checkpoint
+
+For work that spans validation, review, or context changes, initialize a [task checkpoint](templates/task-checkpoint.md) and replace its placeholders:
+
+```sh
+mkdir -p .dev-workflow
+cp docs/templates/task-checkpoint.md .dev-workflow/task.md
+```
+
+Use this copy command only when starting a new checkpoint.
+This file is ignored by Git; keep task progress there and durable recipes in the owning documentation.
+Record the task objective and scope, or link to an issue or PR that supplies them.
+The checkpoint is a handoff note, not a saved worktree; use `not recorded` for facts that are unavailable.
+Update it after a meaningful validation or review result and before handing off work.
+When changing branches or stack layers, update the branch, intended base, working revision and state, and next action together.
+
+Resume with a bounded sequence:
+
+1. Read the checkpoint and `git status --short --branch`.
+   Compare `git rev-parse HEAD` with the saved working revision, and resolve the saved base with `git rev-parse 'BASE^{commit}'` (replace `BASE` with the saved reference).
+   If Git metadata is unavailable or the saved branch, revisions, or state differ, reconstruct the checkpoint from the task and current checkout before relying on it.
+   If either the saved or current worktree is dirty, inspect `git diff`, `git diff --cached`, and the untracked files listed by status, then refresh the checkpoint and next action from those edits.
+   Matching `dirty` labels do not establish that the edits are the same.
+2. Read the relevant development route and owning contract, then use scoped `rg -n` searches or `scripts/test --locate SELECTOR` to find the implementation and public case.
+3. Follow the recorded next action.
+   After failed validation, read the relevant phase log around the failure before rerunning the focused command.
+   For an unfinished run, read the latest completion record and return to its original terminal or task using the handle saved with the evidence.
+   The record has no process identity, and the lock diagnostic may be stale; neither identifies a live run.
+   If the run remains unfinished and its execution context is unavailable, record the blocker until its owner can establish that the run and its children have stopped.
+   After passed validation or a review-only handoff, continue the recorded work without inventing a failed check to rerun.
+   Expand the search or log range when the evidence requires it.
+
+Record the runnable repository command, including its arguments and relevant environment overrides.
+For `scripts/check`, `scripts/check-core`, and `scripts/test`, the completion record's `command` array starts with the workflow mode: prefix that first element with `scripts/` and preserve and shell-quote the remaining arguments.
+For example, `["test", "cli/test_config_overrides"]` means `scripts/test cli/test_config_overrides`.
+Copy the recorded revision, worktree status at admission, result, exact failing selectors, and log paths when a completion record exists.
+For commands without a record, such as `scripts/format` or `python3 tests/workflow.py`, capture the command, revision and worktree status before starting, then retain the observed result and a log or terminal reference manually.
+Keep missing metadata as `not recorded`, including null revision or worktree status in a completion record; do not fill it from the later checkout state.
+A passing focused command does not establish a passing full gate.
+A result for an earlier revision, any dirty tree, or an unidentified checkout is historical evidence; rerun the required validation on the current clean revision before claiming it passed there.
+The recorded `clean` or `dirty` label and porcelain status do not identify the contents of uncommitted changes.
+A null completion status means unfinished; it does not prove the process is still running.
+Keep the checkpoint short by linking evidence instead of copying output.
+
+Record the stopping condition from the user's request, such as review completion or handoff, local validation, push and PR publication, or hosted CI completion, including any requested review follow-up.
+Honor requests to push and return.
+Waiting for hosted CI is an explicit part of the task only when requested; do not start a watcher by default.
+Report the hosted state actually observed and distinguish it from local validation.
+
 ## Inspect local preparation
 
 Run `scripts/preflight` for a local inventory, or `scripts/preflight --json` to retain structured output.
