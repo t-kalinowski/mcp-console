@@ -275,8 +275,9 @@ class RunningCase:
 
 
 class ProgressReporter:
-    def __init__(self, *, update: bool, timeout: float) -> None:
+    def __init__(self, *, update: bool, full_update: bool, timeout: float) -> None:
         self.update = update
+        self.full_update = full_update
         self.rerun = ["scripts/test"]
         if update:
             self.rerun.append("--update")
@@ -326,9 +327,8 @@ class ProgressReporter:
         else:
             self._line(f"{running.selector}: failed", error=True)
         if not succeeded:
-            self._line(
-                f"rerun: {shlex.join([*self.rerun, running.selector])}", error=True
-            )
+            rerun = self.rerun if self.full_update else [*self.rerun, running.selector]
+            self._line(f"rerun: {shlex.join(rerun)}", error=True)
 
     def cancel(self, index: int, diagnostics: str) -> None:
         running = self.running.pop(index)
@@ -624,7 +624,9 @@ def main() -> None:
         initialization.append(selected.pop(index))
         break
 
-    reporter = ProgressReporter(update=options.update, timeout=options.timeout)
+    reporter = ProgressReporter(
+        update=options.update, full_update=full_update, timeout=options.timeout
+    )
     try:
         run_cases(
             initialization,

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import select
+import shlex
 import shutil
 import signal
 import subprocess
@@ -1502,6 +1503,28 @@ class TranscriptRunnerTests(unittest.TestCase):
             "rerun: scripts/test --update client_server/server/test_tools::selected",
             result.stderr,
         )
+
+    def test_failure_rerun_preserves_full_update_with_orphans(self) -> None:
+        self.suite.write_text(
+            PUBLIC_SUITE
+            # fmt: python
+            + code("""
+                def test_selected(binary):
+                    raise RuntimeError("fixture failed before snapshot update")
+                """)
+        )
+        orphan = self.snapshots / "deleted_case.yaml"
+        orphan.write_text("---\nrunner: orphan\n...\n")
+        result = self.run_runner("--update")
+        self.assertNotEqual(result.returncode, 0)
+        receipt = next(
+            line for line in result.stderr.splitlines() if line.startswith("rerun: ")
+        )
+        self.assertEqual(receipt, "rerun: scripts/test --update")
+        self.assertTrue(orphan.exists())
+        retried = self.run_runner(*shlex.split(receipt)[2:])
+        self.assertIn("fixture failed before snapshot update", retried.stderr)
+        self.assertNotIn("orphan snapshot:", retried.stderr)
 
     def test_parallel_failure_exits_and_reports_every_failure(self) -> None:
         self.suite.write_text(FAILING_SUITE, encoding="utf-8")
