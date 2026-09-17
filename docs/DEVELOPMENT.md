@@ -4,6 +4,29 @@ Run development commands from the repository root.
 `scripts/check` runs companion staging, core checks, release transcript tests, and installation checks in that order.
 Installation checks run last because they replace and hide the shared `target` directory.
 
+## Inspect local preparation
+
+Run `scripts/preflight` for a local inventory, or `scripts/preflight --json` to retain structured output.
+It reports the checkout and revision, the release executable used by transcript tests and any separate executable on `PATH`, the companion pin and staged revision, Python/R selections, both Rust toolchain selections, and cache paths.
+Required command probes report missing or failing tools separately from optional Docker, SBX, external SSH, and host-test capability skips.
+Optional skips do not fail the command; missing required tools or preparation steps give exit status 1.
+
+The report reuses `scripts/stage-sandbox-runner --describe` and the existing test capability probes.
+It does not clone, resolve dependencies, build, install, or provision services.
+Configured provider probes may contact their existing daemon or SSH host; SBX discovery uses its normal serialization lock.
+Artifact presence and a matching staging record are inventory facts, not a freshness or bundle-integrity check; staging, Cargo, runtime verification, and the public tests retain those responsibilities.
+
+For direct development, run the reported preparation commands in order:
+
+```sh
+scripts/stage-sandbox-runner
+scripts/with-checkout cargo build --release --target-dir target
+```
+
+For a source installation, use `scripts/with-checkout uv tool install --reinstall .`; its packaging backend stages and builds the companion and application.
+The companion's selected source checkout owns its Rust toolchain; Console uses the active toolchain in this checkout.
+Download caches can be reused, while each checkout keeps its own Cargo output and wheel staging as described under [checkout ownership](#checkout-ownership).
+
 ## Find the public test
 
 Use `scripts/test --list` to discover selectors and `scripts/test --locate SELECTOR` to find source lines and the primary snapshot before building.
