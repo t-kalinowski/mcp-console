@@ -81,12 +81,11 @@ fn run(executable: &str) -> Result<serde_json::Value, String> {
             return Ok(());
         }
     })();
-    if result.is_err() {
-        if let Err(error) = child.0.kill()
-            && error.raw_os_error() != Some(libc::ESRCH)
-        {
-            return Err(super::environment::infrastructure(error.to_string()));
-        }
+    if result.is_err()
+        && let Err(error) = child.0.kill()
+        && error.raw_os_error() != Some(libc::ESRCH)
+    {
+        return Err(super::environment::infrastructure(error.to_string()));
     }
     // Do not reap before the WNOWAIT observer has finished.
     if !waiter.wait(Duration::from_secs(60))? {
