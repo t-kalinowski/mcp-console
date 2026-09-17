@@ -602,7 +602,6 @@ def test_recovers_from_python_errors(binary: Path, execution: Execution) -> Tran
     assert "<mcp-console:python:" in output
     assert "in fail\n" in output
     assert output.endswith("ValueError: boom\n")
-    # syntax: skip deliberately tests a top-level await compile error
     # fmt: python
     python = code("""
         compile_partial = 9

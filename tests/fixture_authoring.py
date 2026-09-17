@@ -35,7 +35,9 @@ class FixtureAuthoringTests(unittest.TestCase):
             env=environment,
         )
 
-    def test_parses_both_languages_without_evaluating(self) -> None:
+    def test_checks_formatting_without_language_runtimes(self) -> None:
+        empty = self.root / "empty"
+        empty.mkdir()
         result = self.check(
             # fmt: python
             code('''
@@ -48,12 +50,13 @@ class FixtureAuthoringTests(unittest.TestCase):
                     stop("must not run")
                     """)
                 client.send(python=("this_is_a_single_line_expression"))
-                ''')
+                '''),
+            environment=os.environ | {"PATH": str(empty), "R_HOME": str(empty)},
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("2 parsed", result.stdout)
+        self.assertIn("fixtures: 0 error(s)", result.stdout)
 
-    def test_reports_syntax_errors_in_both_languages(self) -> None:
+    def test_accepts_invalid_and_incomplete_language_source(self) -> None:
         result = self.check(
             # fmt: python
             code('''
@@ -68,9 +71,7 @@ class FixtureAuthoringTests(unittest.TestCase):
                     """)
                 ''')
         )
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("fixture.py:2: python syntax:", result.stdout)
-        self.assertIn("fixture.py:7: r syntax:", result.stdout)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_requires_directives_and_code_indentation(self) -> None:
         result = self.check(
@@ -93,37 +94,6 @@ class FixtureAuthoringTests(unittest.TestCase):
             "indent code() payload and closing delimiter by four spaces", result.stdout
         )
 
-    def test_rejects_context_invalid_python(self) -> None:
-        # fmt: python
-        template = code('''
-            # fmt: python
-            python = code("""
-                BODY
-                """)
-            ''')
-        for statement in ("return 1", "yield 1", "break", "await missing()"):
-            for prefix in ("", "f"):
-                with self.subTest(statement=statement, prefix=prefix):
-                    source = template.replace("BODY", statement).replace(
-                        'code("""', f'code({prefix}"""'
-                    )
-                    result = self.check(source)
-                    self.assertNotEqual(result.returncode, 0, result.stdout)
-                    self.assertIn("python syntax:", result.stdout)
-
-    def test_direct_cells_preserve_literal_indentation(self) -> None:
-        result = self.check(
-            # fmt: python
-            code('''
-                # fmt: python
-                python = """
-                    print(42)
-                """
-                ''')
-        )
-        self.assertNotEqual(result.returncode, 0, result.stdout)
-        self.assertIn("unexpected indent", result.stdout)
-
     def test_program_expressions_exclude_interpolation_and_replacement_data(
         self,
     ) -> None:
@@ -145,22 +115,6 @@ class FixtureAuthoringTests(unittest.TestCase):
             with self.subTest(source=source):
                 result = self.check(source)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                self.assertIn("1 dynamic template", result.stdout)
-
-    def test_syntax_skip_requires_the_complete_marker(self) -> None:
-        # fmt: python
-        template = code('''
-            MARKER
-            # fmt: python
-            python = code("""
-                return 1
-                """)
-            ''')
-        for marker in ("# syntax: skipper typo", "# syntax: skipbecause"):
-            with self.subTest(marker=marker):
-                result = self.check(template.replace("MARKER", marker))
-                self.assertNotEqual(result.returncode, 0, result.stdout)
-                self.assertIn("python syntax:", result.stdout)
 
     def test_multiline_code_closes_on_its_own_indented_line(self) -> None:
         result = self.check(
@@ -187,66 +141,16 @@ class FixtureAuthoringTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertIn("start code() payload after the opening line", result.stdout)
 
-    def test_r_home_selects_the_parser_independently_of_path(self) -> None:
-        selected = self.root / "selected/bin/Rscript"
-        selected.parent.mkdir(parents=True)
-        selected.write_text(
-            f"#!{sys.executable}\n"
-            # fmt: python
-            + code("""
-                import os
-                from pathlib import Path
-
-                Path(os.environ["PARSER_RECEIPT"]).write_text("selected")
-                """)
-        )
-        selected.chmod(0o755)
-        commands = self.root / "commands"
-        commands.mkdir()
-        wrong = commands / "Rscript"
-        wrong.write_text(
-            f"#!{sys.executable}\n"
-            # fmt: python
-            + code("""
-                raise SystemExit(9)
-                """)
-        )
-        wrong.chmod(0o755)
-        empty = self.root / "empty"
-        empty.mkdir()
-        receipt = self.root / "parser-receipt"
-        for path in (commands, empty):
-            with self.subTest(path=path):
-                result = self.check(
-                    # fmt: python
-                    code('''
-                        # fmt: r
-                        r = code("""
-                            stop("must not run")
-                            """)
-                        '''),
-                    environment=os.environ
-                    | {
-                        "R_HOME": str(selected.parent.parent),
-                        "PATH": str(path),
-                        "PARSER_RECEIPT": str(receipt),
-                    },
-                )
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                self.assertEqual(receipt.read_text(), "selected")
-                receipt.unlink()
-
     def test_escaped_multiline_cells_are_checked(self) -> None:
         result = self.check(
             # fmt: python
             code(r"""
-                # fmt: python
                 python = "print(42)\nreturn 1"
                 messages = [message for message in ("a\n", "b\n")]
                 """)
         )
         self.assertNotEqual(result.returncode, 0, result.stdout)
-        self.assertIn("python syntax:", result.stdout)
+        self.assertIn("missing # fmt: python", result.stdout)
 
     def test_annotated_assignments_require_directives(self) -> None:
         result = self.check(
@@ -295,37 +199,6 @@ class FixtureAuthoringTests(unittest.TestCase):
                 ''')
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-
-    def test_documents_invalid_input_and_dynamic_templates(self) -> None:
-        result = self.check(
-            # fmt: python
-            code('''
-                # syntax: skip deliberately tests incomplete input
-                # fmt: r
-                r = code("""
-                    answer <- (
-                    """)
-                # fmt: python
-                python = code(f"""
-                    {expression}
-                    """)
-                ''')
-        )
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("1 intentional syntax skip", result.stdout)
-        self.assertIn("1 dynamic template", result.stdout)
-        result = self.check(
-            # fmt: python
-            code('''
-                # syntax: skip
-                # fmt: r
-                r = code("""
-                    answer <- (
-                    """)
-                ''')
-        )
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("syntax skip requires a reason", result.stdout)
 
     def test_format_reports_every_tool_and_strict_status(self) -> None:
         scripts = self.root / "scripts"

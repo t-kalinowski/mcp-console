@@ -37,7 +37,6 @@ def test_applies_complete_expressions_before_incomplete_source(
 ) -> Transcript:
     client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
-    # syntax: skip deliberately tests incomplete input after a complete expression
     # fmt: r
     r = code(r"""
         answer <- 42
@@ -45,7 +44,6 @@ def test_applies_complete_expressions_before_incomplete_source(
         """)
     client.send(r=r)
     client.send(r="answer")
-    # syntax: skip deliberately tests a parse error after a complete expression
     # fmt: r
     r = code(r"""
         answer <- 43
