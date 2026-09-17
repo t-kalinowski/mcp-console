@@ -19,6 +19,8 @@ Cleanup defers cancellation signals until retirement finishes, including when cl
 Nested validation commands share that group so escalation also reaches their children.
 Commands that deliberately detach into a new session remain responsible for their own cleanup.
 The outer group owner retires remaining members before releasing ownership.
+This requires the owner to remain alive: `SIGKILL`, an owner crash, or a system failure can release its locks while children survive.
+Recovery after abrupt owner death is outside this cooperative workflow contract; stop surviving commands before starting another mutator.
 Direct staging, installation, and packaging entry points provide cooperative admission locks; their caller owns cancellation.
 Use `scripts/with-checkout` when invoking those commands with the wrapper's cancellation semantics.
 
@@ -45,6 +47,7 @@ Set `MCP_CONSOLE_CHECK_SLOTS` to a positive integer to select another budget, us
 When every slot is occupied, the command exits with `full-check budget is busy` before running a phase.
 Nested commands reuse their parent's slot.
 Slot locks live in `${XDG_CACHE_HOME:-$HOME/.cache}/mcp-console/checks/`.
+An explicitly configured `XDG_CACHE_HOME` must be absolute; relative paths fail before phases run because they would make the budget checkout-local.
 Changing the budget does not change case assertions, deadlines, or transcript worker concurrency.
 
 ## Completion records
@@ -54,6 +57,8 @@ Each record contains the checkout, command, Git revision and worktree status at 
 Revision and worktree status are null for a source tree without Git metadata or when cancellation interrupts metadata collection.
 A dirty worktree is recorded explicitly; its result is not evidence for an unchanged clean revision.
 The overall exit status uses the shell convention `128 + signal` for a phase killed by a signal; the phase retains its negative subprocess status.
+Once work and retirement finish, finalization freezes that status and blocks further cancellation through record publication and process exit.
+A signal received during the final save or record-path announcement does not change the completed result.
 Nested runs reference their parent's record and retain their own phase details.
 Records are updated after each phase, so an unfinished run has a null exit status.
 Each validation phase writes stdout and stderr directly to its log, preserving complete errors and tracebacks.
