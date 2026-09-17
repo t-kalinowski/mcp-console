@@ -3,15 +3,13 @@
 ---
 send:
   r: |
-    invisible(DBI::dbExecute(
-      sql_connection(),
-      "SET VARIABLE sql_interrupt_marker = ?",
-      params = list(file.path(tempdir(), "sql-interrupt-started"))
-    ))
+    interrupt_started <- file.path(tempdir(), "sql-interrupt-started")
+    cat(interrupt_started, "\n", sep = "")
 result:
   content:
     - type: text
-      text: "[done]"
+      text: |
+        <SQL interrupt checkpoint>
   isError: false
 ---
 send:
@@ -25,9 +23,30 @@ result:
   isError: false
 ---
 send:
+  r: |
+    dyn.load(Sys.getenv("MCP_CONSOLE_SQL_INTERRUPT_LIBRARY"))
+    invisible(DBI::dbExecute(sql_connection(), "SET threads = 1"))
+    invisible(DBI::dbExecute(sql_connection(), "SET enable_progress_bar = true"))
+    invisible(DBI::dbExecute(sql_connection(), "SET progress_bar_time = 0"))
+    query_started <- FALSE
+    options(duckdb.progress_display = function(percentage) {
+      if (!query_started && percentage < 100) {
+        query_started <<- TRUE
+        invisible(.C(
+          "wait_for_sql_interrupt",
+          interrupt_started
+        ))
+      }
+    })
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
   sql: |
-    COPY (SELECT 1) TO (getvariable('sql_interrupt_marker'));
-    SELECT sleep_ms(60000) AS waited
+    SELECT sum(i) AS total FROM range(1000000000000) AS t(i)
   timeout_ms: 0
 result:
   content:
