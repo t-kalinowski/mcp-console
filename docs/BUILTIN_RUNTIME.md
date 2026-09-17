@@ -110,7 +110,9 @@ Enqueue order does not guarantee consumption by a particular runtime read.
 The built-in worker reports managed reads from:
 
 - R `readline()` and `browser()`; and
-- Python `input()`, `breakpoint()`, and `pdb` when they use reticulate's R console bridge.
+- Python `input()`, `breakpoint()`, and `pdb` on the main worker thread.
+
+Python managed input uses the shared worker input buffer directly and preserves Unicode, embedded NUL bytes, and lines longer than one internal buffer.
 
 A reported read adds a record such as `[input requested: "name> "]`.
 If the request is still outstanding when either its 10-millisecond exposure grace ends or the call reaches its deadline, the response ends in `[waiting for stdin]`.
@@ -236,10 +238,11 @@ The final expression of a cell is displayed through Python's normal display hook
 An uncaught exception prints its traceback and completes as a language outcome.
 The Python session remains usable, including state established before the exception.
 Python 3.10 or later is required.
+R is initialized eagerly, and reticulate remains required for Python interpreter selection, startup, environment activation, and cross-language access.
 The built-in startup display width for NumPy and pandas is 200 columns, and evaluated code may change it.
 
-Reticulate maps ordinary Python standard output and diagnostics into the R console channels.
-Writes to binary stream buffers, native fd 1 or 2, and descendant process streams use the captured standard streams instead.
+Console routes ordinary main-thread Python text and diagnostics directly through the ordered worker console channels.
+Binary buffers, native file descriptors, background threads, and fork children retain raw-stream behavior, including cached output streams and logging handlers.
 There is no guaranteed chronology between independent sideband, stdout, and stderr sources, although each source's order is preserved.
 
 After Python's `os.fork()`, cached console stream objects and logging handlers write to the child's standard streams without calling R or using the worker sideband.

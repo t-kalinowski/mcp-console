@@ -281,8 +281,7 @@ class TranscriptRunnerTests(unittest.TestCase):
         cargo.write_text(
             f"#!{sys.executable}\n"
             # fmt: python
-            + code(
-                """
+            + code("""
                 import sys
                 from pathlib import Path
 
@@ -290,8 +289,7 @@ class TranscriptRunnerTests(unittest.TestCase):
                 binary = Path("target") / profile / "mcp-console"
                 binary.parent.mkdir(parents=True, exist_ok=True)
                 binary.write_text(profile, encoding="utf-8")
-                """
-            ),
+                """),
             encoding="utf-8",
         )
         cargo.chmod(0o755)
@@ -302,13 +300,11 @@ class TranscriptRunnerTests(unittest.TestCase):
         self.suite.write_text(
             PUBLIC_SUITE
             # fmt: python
-            + code(
-                """
+            + code("""
                 def test_selected(binary: Path) -> list[dict[str, str]]:
                     assert binary.read_text(encoding="utf-8") == "release"
                     return record(binary, "selected")
-                """
-            ),
+                """),
             encoding="utf-8",
         )
         result = subprocess.run(
@@ -685,8 +681,7 @@ class TranscriptRunnerTests(unittest.TestCase):
         self.suite.write_text(
             PUBLIC_SUITE
             # fmt: python
-            + code(
-                """
+            + code("""
                 from support.requirements import Requirement, command, requires
 
                 available = Requirement("available fixture", True, "fixture is available")
@@ -695,8 +690,7 @@ class TranscriptRunnerTests(unittest.TestCase):
                 test_unselected = requires(
                     available, missing, command("mcp-console-deliberately-missing-test-command")
                 )(test_unselected)
-                """
-            ),
+                """),
             encoding="utf-8",
         )
         listed = self.run_runner("--list")
@@ -776,15 +770,13 @@ class TranscriptRunnerTests(unittest.TestCase):
         self.suite.write_text(
             PUBLIC_SUITE
             # fmt: python
-            + code(
-                """
+            + code("""
                 from support.requirements import Requirement, requires
 
                 test_unselected = requires(Requirement("unavailable", False, "deliberate skip"))(
                     test_unselected
                 )
-                """
-            ),
+                """),
             encoding="utf-8",
         )
         companion = self.snapshots / "unselected.md"
@@ -802,8 +794,7 @@ class TranscriptRunnerTests(unittest.TestCase):
         self.suite.write_text(
             PUBLIC_SUITE
             # fmt: python
-            + code(
-                """
+            + code("""
                 from support.execution import Execution, executions
                 from support.requirements import Requirement
 
@@ -816,8 +807,7 @@ class TranscriptRunnerTests(unittest.TestCase):
                 def test_selected(binary, execution):
                     record(binary, execution.name)
                     return [{"runner": "selected"}]
-                """
-            ),
+                """),
             encoding="utf-8",
         )
         result = self.run_runner("--update", "--jobs", "1")
@@ -853,15 +843,13 @@ class TranscriptRunnerTests(unittest.TestCase):
         self.suite.write_text(
             PUBLIC_SUITE
             # fmt: python
-            + code(
-                f"""
+            + code(f"""
                 def test_initializes_and_lists_tools(binary):
                     return {handshake!r}
 
                 def test_selected(binary):
                     return [{{"runner": "before"}}] + {handshake!r} + [{{"runner": "between"}}] + {handshake!r} + {changed!r} + {handshake[:-1]!r}
-                """
-            ),
+                """),
             encoding="utf-8",
         )
         result = self.run_runner("--update", "--jobs", "1")
@@ -876,8 +864,7 @@ class TranscriptRunnerTests(unittest.TestCase):
         self.suite.write_text(
             PUBLIC_SUITE
             # fmt: python
-            + code(
-                """
+            + code("""
                 from support.execution import Execution, executions
                 from support.records import TranscriptWithCompanions
 
@@ -907,8 +894,7 @@ class TranscriptRunnerTests(unittest.TestCase):
 
                 def test_unselected(binary):
                     return TranscriptWithCompanions(sandbox + direct, {"wire.yaml": direct})
-                """
-            ),
+                """),
             encoding="utf-8",
         )
         result = self.run_runner("--update", "--jobs", "1")
@@ -937,8 +923,7 @@ class TranscriptRunnerTests(unittest.TestCase):
         self.suite.write_text(
             PUBLIC_SUITE
             # fmt: python
-            + code(
-                """
+            + code("""
                 from yaml12 import read_yaml
 
 
@@ -954,8 +939,7 @@ class TranscriptRunnerTests(unittest.TestCase):
                         "can access the network subject to the launcher's proxy settings",
                     )
                     return [{"runner": "before"}] + handshake + [{"runner": "between"}] + handshake
-                """
-            ),
+                """),
             encoding="utf-8",
         )
         result = self.run_runner(
@@ -971,8 +955,7 @@ class TranscriptRunnerTests(unittest.TestCase):
         source = (
             PUBLIC_SUITE
             # fmt: python
-            + code(
-                """
+            + code("""
                 from support.execution import Execution, executions
                 from support.records import TranscriptWithCompanions
                 from support.requirements import Requirement
@@ -986,8 +969,7 @@ class TranscriptRunnerTests(unittest.TestCase):
                     return TranscriptWithCompanions(
                         [{"mode": execution.name}], {"bare.yaml": [{"bare": execution.name}]}
                     )
-                """
-            )
+                """)
         )
         self.suite.write_text(source.replace("AVAILABLE", "True"))
         result = self.run_runner("--update", "--jobs", "1")

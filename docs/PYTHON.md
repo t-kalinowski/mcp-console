@@ -1,17 +1,35 @@
 # Python integrations
 
-Install the extra for the interface you use, with Python 3.11 or newer:
+MCP Console provides synchronous and asynchronous Python clients and adapters for these interfaces:
 
-| Interface           | Install                                    |
-| ------------------- | ------------------------------------------ |
-| Python client       | `pip install "mcp-console[client]"`        |
-| chatlas             | `pip install "mcp-console[chatlas]"`       |
-| OpenAI Responses    | `pip install "mcp-console[openai]"`        |
-| OpenAI Agents       | `pip install "mcp-console[openai-agents]"` |
-| Anthropic           | `pip install "mcp-console[anthropic]"`     |
-| Official thread SDK | `pip install "mcp-console[codex]"`         |
+| Interface                                   | Package extra   |
+| ------------------------------------------- | --------------- |
+| [Python clients](#python-clients)           | `client`        |
+| [chatlas](#chatlas)                         | `chatlas`       |
+| [OpenAI Responses](#openai-responses)       | `openai`        |
+| [OpenAI Agents](#openai-agents)             | `openai-agents` |
+| [Anthropic](#anthropic)                     | `anthropic`     |
+| [Official thread SDK](#official-thread-sdk) | `codex`         |
+
+The clients require Python 3.11 or newer and are part of the current source checkout.
+The published PyPI 0.0.3 wheels do not include these clients or extras.
+From the repository root, run your program with the appropriate extra; for example:
+
+```sh
+uv tool run --python 3.12 --from ".[client]" python your_client.py
+```
+
+uv installs the checkout and the selected extra into an environment it manages.
+The first installation builds the complete bundle and may download interpreters, packages, and build dependencies; see the [source installation prerequisites](../RELEASE.md#private-sandbox-executable).
+For use with an MCP client, see the [quickstart](../README.md#quickstart).
 
 The base package installs the executable without framework dependencies.
+For command-only use, `uv tool install --reinstall .` installs the complete checkout as a persistent tool.
+(`cargo install` installs only the main binary and leaves out the required private sandbox companion.)
+The [release guide](../RELEASE.md#private-sandbox-executable) explains the relocatable bundle and build caches.
+
+`mcp-console serve` speaks MCP over standard input and output; it waits for a client instead of displaying an interactive terminal prompt.
+The Python clients below own that connection.
 The client uses MCP 2.2 or newer within the 2.x series.
 Each framework extra declares the minimum SDK release used by the integration tests.
 

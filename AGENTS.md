@@ -118,10 +118,9 @@ scripts/test --list
 scripts/test --update BOUNDARY/SUITE[::CASE]
 ```
 
-`scripts/format` attempts Ruff, Yamark, rustfmt, Air, and the embedded fixture checker in sequence and reports each result.
-A missing or failing step does not prevent the remaining steps from running; the default exits successfully, while `--strict` returns failure if any step failed.
+`scripts/format` attempts Ruff, Yamark, rustfmt, and Air in sequence and reports each result.
+A missing or failing formatter does not prevent the remaining formatters from running; the default exits successfully, while `--strict` returns failure if any formatter failed.
 Review its output and resulting changes.
-`scripts/check-fixtures` checks formatting directives and direct `code()` layout, without validating embedded R/Python syntax; see `tests/boundaries/AUTHORING.md` for its scope.
 Validation records and phase logs remain in `.dev-workflow/runs/`; see `docs/DEVELOPMENT.md` for ownership and the host concurrency budget.
 `scripts/check` validates extracted runtime sources, checks Rust formatting and Clippy, runs Rust tests in debug, runs the complete transcript suite against the release executable, and checks uv source and wheel installations with a shared Cargo target directory.
 
@@ -208,7 +207,9 @@ Keep these invariants intact:
 ### Language adapters
 
 - `src/r_bridge.rs` — shared Rust FFI for process-lifetime private R bridge environments.
-- `src/python.rs`, `src/python/library.rs`, `src/python/reticulate.rs`, `src/python/initialize.R`, `src/python/bridge.R`, `src/python/runtime.py` — Rust-owned Python runtime facade, CPython initialization, current reticulate backend, R bridges, and Python evaluator runtime.
+- `src/python.rs`, `src/python/library.rs`, `src/python/library/services.rs`, `src/python/services.py`, `src/python/runtime.py` — direct CPython cell dispatch, native console services, main-thread stream hooks, and the private Python evaluator.
+- `src/python/reticulate.rs`, `src/python/initialize.R`, `src/python/bridge.R` — retained reticulate startup and preparation adapter, interpreter selection, requirement manifest, activation, and automatic-resolution bridge.
+  R remains required and eagerly initialized.
 - `src/sql.rs`, `src/sql/r_dbi.rs`, `src/sql/py_dbapi.rs`, `src/sql/bridge.R`, `src/sql/dbapi.py` — worker-facing SQL router, R DBI and Python DB-API providers, and their runtime bridges.
 - `src/r_graphics.rs`, `src/r_graphics.c`, `src/r_graphics/bridge.R` — managed graphics orchestration, C callback boundary, and R bridge.
 - `src/r_environment.rs`, `src/r_environment/bridge.R` — live R-library bridge.
@@ -239,8 +240,9 @@ Keep these invariants intact:
 - `tests/install.py`, `tests/sandbox_installation.py` — unstaged uv installation, relocated bundle acceptance, and private companion verification.
 - `scripts/test` — release binary build and selected transcript execution.
 - `scripts/validate_runtime_sources.py` — extracted R/Python inventory and syntax validation.
-- `scripts/preflight`, `scripts/review-diff`, `scripts/check-fixtures` — local preparation inventory, review-volume reports, and embedded fixture checks; see `docs/DEVELOPMENT.md`.
+- `scripts/preflight`, `scripts/review-diff` — local preparation inventory and review-volume reports; see `docs/DEVELOPMENT.md`.
 - `scripts/format`, `scripts/check-core`, `scripts/check` — formatting, core checks, and repository-wide checks.
+- `tests/format.py` — public formatter command regressions.
 - `checkout_workflow.py`, `scripts/with-checkout`, `tests/workflow.py` — shared checkout ownership, validation records, host concurrency, and public command regressions.
 
 ## Working rules
@@ -267,6 +269,7 @@ Keep these invariants intact:
 - Keep embedded R, Python, SQL, and shell fixture programs as readable multiline strings.
   Use escapes such as `\n` only when the character is data.
 - Put `# fmt: r` or `# fmt: python` immediately before each embedded R or Python test program, including `code(...)` calls nested inside other calls.
+  Keep `code(` and the opening string delimiter on the same line, immediately below the directive.
   Indent the payload and closing delimiter one Python indentation level deeper than the line containing `code(`, preserving the embedded program's own indentation.
   Recheck this indentation after running `scripts/format` and in the committed source.
   When formatting a shared payload, refresh each platform's affected snapshots, including cases skipped on the current host.

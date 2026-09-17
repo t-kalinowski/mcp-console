@@ -157,7 +157,7 @@ result:
     - type: text
       text: |
         Traceback (most recent call last):
-          File "<string>", line 467, in _mcp_console_eval_cell
+          File "<string>", line 466, in _mcp_console_eval_cell
           File "<mcp-console:python:e2>", line 36, in <module>
         KeyboardInterrupt
   isError: false

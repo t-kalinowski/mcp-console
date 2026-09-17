@@ -18,7 +18,6 @@ base::local(
     python_module <- NULL
     pending_import_resolution <- NULL
     pending_requirements <- NULL
-    source <- NULL
     `%||%` <- function(x, y) if (is.null(x)) y else x
     managed_python_disabled_message <- if (
       !dynamic_resolution &&
@@ -467,27 +466,13 @@ base::local(
       )
     }
 
-    evaluate_impl <- function(id) {
+    evaluate_impl <- function() {
       if (!initialized) {
         initialize_python_runtime(strict = TRUE)
         dispatch_python("disable_matplotlib_show")
         initialized <<- TRUE
       }
 
-      filename <- paste0("<mcp-console:python:", id, ">")
-      on.exit(
-        {
-          images <- dispatch_python("take_images")
-          for (image in images) {
-            invisible(.Call("mcp_console_publish_python_plot", image))
-          }
-        },
-        add = TRUE
-      )
-      dispatch_python(
-        "eval_cell",
-        list(source, filename)
-      )
       invisible()
     }
 
@@ -497,7 +482,7 @@ base::local(
       interrupted <<- FALSE
       # Observe the condition without handling it; R_tryEval remains the boundary.
       withCallingHandlers(
-        evaluate_impl(id),
+        evaluate_impl(),
         interrupt = function(condition) interrupted <<- TRUE,
         error = function(condition) interrupted <<- FALSE
       )

@@ -2,7 +2,9 @@ use std::ffi::{CStr, CString};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-// A loaded handle is retained for the process lifetime. SQL calls copy its
+mod services;
+
+// A loaded handle is retained for the process lifetime. Runtime calls copy its
 // immutable function table under this lock, then release the guard before
 // invoking Python so Python-to-R callbacks can re-enter library access.
 static PYTHON_LIBRARY: Mutex<Option<LoadedLibrary>> = Mutex::new(None);
@@ -55,6 +57,7 @@ struct LoadedLibrary {
     interpreter: Interpreter,
     configuration: Option<Configuration>,
     sql_runtime_installed: bool,
+    runtime_installed: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -145,23 +148,84 @@ pub(super) fn initialize(
 }
 
 pub(super) fn install_runtime(source: &str) -> Result<(), String> {
-    let mut library_slot = PYTHON_LIBRARY
+    let api = {
+        let slot = PYTHON_LIBRARY.lock().unwrap();
+        let library = slot.as_ref().ok_or("Python shared library is not loaded")?;
+        if library.runtime_installed {
+            return Ok(());
+        }
+        library.api
+    };
+    let source = CString::new(source)
+        .map_err(|_| "embedded Python runtime source contains NUL".to_string())?;
+    api.with_gil(|api| unsafe { api.run_runtime(&source) })?;
+    PYTHON_LIBRARY
         .lock()
-        .map_err(|_| "Python shared library state is unavailable".to_string())?;
-    let library = library_slot
+        .unwrap()
         .as_mut()
-        .ok_or_else(|| "Python shared library is not loaded".to_string())?;
-    library.install_runtime(source)
+        .unwrap()
+        .runtime_installed = true;
+    Ok(())
 }
 
 pub(super) fn install_sql_runtime(source: &str) -> Result<(), String> {
-    let mut library_slot = PYTHON_LIBRARY
+    let api = api()?;
+    let source = CString::new(source)
+        .map_err(|_| "embedded Python SQL runtime source contains NUL".to_string())?;
+    api.with_gil(|api| unsafe { api.run_module(c"_mcp_console_sql", &source) })?;
+    PYTHON_LIBRARY
         .lock()
-        .map_err(|_| "Python shared library state is unavailable".to_string())?;
-    let library = library_slot
+        .unwrap()
         .as_mut()
-        .ok_or_else(|| "Python shared library is not loaded".to_string())?;
-    library.install_sql_runtime(source)
+        .unwrap()
+        .sql_runtime_installed = true;
+    Ok(())
+}
+
+fn api() -> Result<PythonApi, String> {
+    PYTHON_LIBRARY
+        .lock()
+        .map_err(|_| "Python shared library state is unavailable")?
+        .as_ref()
+        .map(|library| library.api)
+        .ok_or_else(|| "Python shared library is not loaded".to_string())
+}
+
+pub(super) fn install_services() -> Result<(), String> {
+    api()?.with_gil(services::install)
+}
+
+pub(super) fn evaluate(source: &str, filename: &str) -> Result<(), String> {
+    api()?.with_gil(|api| unsafe {
+        let function = api.function(c"_mcp_console", c"eval_cell")?;
+        let source =
+            (api.unicode_from_string_and_size)(source.as_ptr().cast(), source.len() as isize);
+        let filename =
+            (api.unicode_from_string_and_size)(filename.as_ptr().cast(), filename.len() as isize);
+        if source.is_null() || filename.is_null() {
+            for object in [source, filename] {
+                if !object.is_null() {
+                    (api.dec_ref)(object);
+                }
+            }
+            api.display_pending_exception();
+            return Err("failed to create Python cell arguments".to_string());
+        }
+        let result = (api.call_function_obj_args)(
+            function,
+            source,
+            filename,
+            std::ptr::null_mut::<PyObject>(),
+        );
+        (api.dec_ref)(source);
+        (api.dec_ref)(filename);
+        if result.is_null() {
+            api.display_pending_exception();
+        } else {
+            (api.dec_ref)(result);
+        }
+        Ok(())
+    })
 }
 
 pub(super) fn dispatch_sql(source: &str) -> Result<super::SqlProvider, String> {
@@ -251,6 +315,7 @@ impl LoadedLibrary {
             interpreter,
             configuration: None,
             sql_runtime_installed: false,
+            runtime_installed: false,
         })
     }
 
@@ -334,27 +399,6 @@ impl LoadedLibrary {
             return Ok(());
         }
         Err("Python interpreter is already initialized with different configuration".to_string())
-    }
-
-    fn install_runtime(&self, source: &str) -> Result<(), String> {
-        let source = CString::new(source)
-            .map_err(|_| "embedded Python runtime source contains NUL".to_string())?;
-        self.api.with_gil(|api| {
-            // SAFETY: The GIL is held and the source is a valid NUL-terminated
-            // buffer for the duration of the call.
-            unsafe { api.run_runtime(&source) }
-        })
-    }
-
-    fn install_sql_runtime(&mut self, source: &str) -> Result<(), String> {
-        let source = CString::new(source)
-            .map_err(|_| "embedded Python SQL runtime source contains NUL".to_string())?;
-        self.api.with_gil(|api| {
-            // SAFETY: The GIL is held and both strings are valid for the call.
-            unsafe { api.run_module(c"_mcp_console_sql", &source) }
-        })?;
-        self.sql_runtime_installed = true;
-        Ok(())
     }
 
     fn finish_initialization(&mut self) -> Result<(), String> {
