@@ -23,11 +23,14 @@ BINARY = Path(
 
 
 class Session:
-    def __init__(self, environment=None):
+    def __init__(self, environment=None, *, relay=None):
         self.directory = tempfile.TemporaryDirectory(prefix="console windows ")
         self.errors = tempfile.TemporaryFile()
+        command = [str(BINARY), "serve", "--no-sandbox"]
+        if relay is not None:
+            command.extend(["--worker", str(BINARY), "--relay", str(relay)])
         self.process = subprocess.Popen(
-            [str(BINARY), "serve", "--no-sandbox"],
+            command,
             cwd=self.directory.name,
             env=environment,
             stdin=subprocess.PIPE,
@@ -96,6 +99,54 @@ class Session:
 
 @unittest.skipUnless(os.name == "nt", "native Windows acceptance")
 class WindowsConsole(unittest.TestCase):
+    def relay_session(self, scenario):
+        directory = tempfile.TemporaryDirectory(prefix="console relay ")
+        self.addCleanup(directory.cleanup)
+        executable = Path(directory.name) / "relay.exe"
+        subprocess.run(
+            [
+                "rustc",
+                "--edition=2024",
+                str(ROOT / "tests/fixtures/windows_relay.rs"),
+                "-o",
+                str(executable),
+            ],
+            check=True,
+        )
+        session = Session(
+            dict(
+                os.environ,
+                TEST_RELAY_SCENARIO=scenario,
+                TEST_CONSOLE_BINARY=str(BINARY),
+            ),
+            relay=executable,
+        )
+        self.addCleanup(session.close)
+        session.timeout = 15
+        session.initialize()
+        return session
+
+    def test_restart_after_forced_relay_retirement(self):
+        session = self.relay_session("stall_shutdown")
+        self.assertIn("42", json.dumps(session.send(r="42")))
+        result = session.send(control="restart", r="42", timeout_ms=10000)
+        self.assertFalse(result.get("isError"), result)
+        self.assertIn("42", json.dumps(result))
+        self.assertIn("42", json.dumps(session.send(r="42")))
+
+    def test_relay_setup_error_reaches_mcp(self):
+        session = self.relay_session("block_sideband")
+        result = session.send(r="42")
+        self.assertTrue(result.get("isError"), result)
+        text = "\n".join(item.get("text", "") for item in result["content"])
+        self.assertIn(
+            text,
+            {
+                f"[failed to create worker sideband: {ctypes.FormatError(code).strip()} (os error {code})]"
+                for code in (5, 231)  # Access denied or all pipe instances busy.
+            },
+        )
+
     def test_startup_eof_cancels_resolver(self):
         with tempfile.TemporaryDirectory(prefix="console startup ") as directory:
             root = Path(directory)

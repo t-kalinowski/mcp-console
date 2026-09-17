@@ -1,7 +1,7 @@
 //! Windows direct-worker owner. Process and pipe events wake blocking waits.
 use std::ffi::OsString;
 use std::io::{self, BufRead, Read, Write};
-use std::os::windows::io::AsRawHandle;
+use std::os::windows::io::{AsRawHandle, OwnedHandle};
 use std::os::windows::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -31,52 +31,31 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
         let _ = failed.send(Control::Failed(message));
     })?;
     let stopping = Arc::new(AtomicBool::new(false));
-    let cancel = Event::new().map_err(|e| e.to_string())?;
-    let input_ready = Event::new().map_err(|e| e.to_string())?;
-    crate::windows::inherit(input_ready.as_raw_handle(), true).map_err(|e| e.to_string())?;
-    let interrupt = Event::new().map_err(|e| e.to_string())?;
-    crate::windows::inherit(interrupt.as_raw_handle(), true).map_err(|e| e.to_string())?;
-    let (mut sideband, sideband_writer, endpoints) =
-        crate::sideband::bind(cancel.clone()).map_err(|e| e.to_string())?;
-    let mut command = Command::new(program);
-    command
-        .args(arguments)
-        .creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW)
-        .env(
-            "MCP_CONSOLE_INTERRUPT_HANDLE",
-            (interrupt.as_raw_handle() as usize).to_string(),
-        )
-        .env(
-            "MCP_CONSOLE_INPUT_READY_HANDLE",
-            (input_ready.as_raw_handle() as usize).to_string(),
-        );
-    let (input, writer) = crate::windows::pipe(false, true).map_err(|e| e.to_string())?;
-    let (stdout, output) = crate::windows::pipe(true, false).map_err(|e| e.to_string())?;
-    let (stderr, diagnostic) = crate::windows::pipe(true, false).map_err(|e| e.to_string())?;
-    command
-        .stdin(Stdio::from(input))
-        .stdout(Stdio::from(output))
-        .stderr(Stdio::from(diagnostic));
-    endpoints.configure_process(&mut command);
-    let mut child = match command.spawn() {
-        Ok(child) => ChildOwner(child),
-        Err(error) => {
+    let StartedWorker {
+        mut child,
+        mut sideband,
+        sideband_writer,
+        stdin: writer,
+        stdout,
+        stderr,
+        cancel,
+        input_ready,
+        interrupt,
+        _exit,
+    } = match start_worker(program, arguments, controls.clone()) {
+        Ok(worker) => worker,
+        Err(message) => {
             event_writer.begin_retirement();
             events.send_supervisor(RelayEvent::Fatal {
-                message: format!("failed to launch worker: {error}"),
+                message: message.clone(),
             });
             events.finish();
-            return event_writer.join();
+            return match event_writer.join() {
+                Ok(()) => Err(message),
+                Err(error) => Err(format!("{message}; additionally {error}")),
+            };
         }
     };
-    drop(command);
-    drop(endpoints);
-    crate::windows::inherit(interrupt.as_raw_handle(), false).map_err(|e| e.to_string())?;
-    crate::windows::inherit(input_ready.as_raw_handle(), false).map_err(|e| e.to_string())?;
-    let exited = controls.clone();
-    let _exit = crate::process_exit::ChildExitWaiter::start_notifying(child.id(), move || {
-        let _ = exited.send(Control::Exited);
-    })?;
     let input_controls = controls.clone();
     // This sole inherited-stdin reader ends with the relay process if the worker
     // exits while its caller still owns stdin. It never outlives a generation.
@@ -315,6 +294,90 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
     });
     events.finish();
     event_writer.join()
+}
+
+struct StartedWorker {
+    child: ChildOwner,
+    sideband: crate::sideband::Reader,
+    sideband_writer: crate::sideband::Writer,
+    stdin: OwnedHandle,
+    stdout: OwnedHandle,
+    stderr: OwnedHandle,
+    cancel: Event,
+    input_ready: Event,
+    interrupt: Event,
+    _exit: crate::process_exit::ChildExitWaiter,
+}
+
+fn start_worker(
+    program: &OsString,
+    arguments: &[OsString],
+    controls: mpsc::Sender<Control>,
+) -> Result<StartedWorker, String> {
+    // Keep setup in one fallible scope. On failure, all partial resources and
+    // any spawned child retire before the caller publishes the Fatal frame.
+    let cancel =
+        Event::new().map_err(|e| format!("failed to create worker cancellation event: {e}"))?;
+    let input_ready =
+        Event::new().map_err(|e| format!("failed to create worker input event: {e}"))?;
+    crate::windows::inherit(input_ready.as_raw_handle(), true)
+        .map_err(|e| format!("failed to inherit worker input event: {e}"))?;
+    let interrupt =
+        Event::new().map_err(|e| format!("failed to create worker interrupt event: {e}"))?;
+    crate::windows::inherit(interrupt.as_raw_handle(), true)
+        .map_err(|e| format!("failed to inherit worker interrupt event: {e}"))?;
+    let (sideband, sideband_writer, endpoints) = crate::sideband::bind(cancel.clone())
+        .map_err(|e| format!("failed to create worker sideband: {e}"))?;
+    let mut command = Command::new(program);
+    command
+        .args(arguments)
+        .creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW)
+        .env(
+            "MCP_CONSOLE_INTERRUPT_HANDLE",
+            (interrupt.as_raw_handle() as usize).to_string(),
+        )
+        .env(
+            "MCP_CONSOLE_INPUT_READY_HANDLE",
+            (input_ready.as_raw_handle() as usize).to_string(),
+        );
+    let (input, stdin) = crate::windows::pipe(false, true)
+        .map_err(|e| format!("failed to create worker stdin pipe: {e}"))?;
+    let (stdout, output) = crate::windows::pipe(true, false)
+        .map_err(|e| format!("failed to create worker stdout pipe: {e}"))?;
+    let (stderr, diagnostic) = crate::windows::pipe(true, false)
+        .map_err(|e| format!("failed to create worker stderr pipe: {e}"))?;
+    command
+        .stdin(Stdio::from(input))
+        .stdout(Stdio::from(output))
+        .stderr(Stdio::from(diagnostic));
+    endpoints.configure_process(&mut command);
+    let child = ChildOwner(
+        command
+            .spawn()
+            .map_err(|e| format!("failed to launch worker: {e}"))?,
+    );
+    drop(command);
+    drop(endpoints);
+    crate::windows::inherit(interrupt.as_raw_handle(), false)
+        .map_err(|e| format!("failed to clear worker interrupt event inheritance: {e}"))?;
+    crate::windows::inherit(input_ready.as_raw_handle(), false)
+        .map_err(|e| format!("failed to clear worker input event inheritance: {e}"))?;
+    let exit = crate::process_exit::ChildExitWaiter::start_notifying(child.id(), move || {
+        let _ = controls.send(Control::Exited);
+    })
+    .map_err(|e| format!("failed to observe worker exit: {e}"))?;
+    Ok(StartedWorker {
+        child,
+        sideband,
+        sideband_writer,
+        stdin,
+        stdout,
+        stderr,
+        cancel,
+        input_ready,
+        interrupt,
+        _exit: exit,
+    })
 }
 
 // Any error after spawning must still retire the one directly owned worker.

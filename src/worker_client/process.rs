@@ -586,12 +586,13 @@ impl RelayProcess {
         // A direct relay's exit is redundant when its EOF established the
         // worker failure. The sandbox runner still owes cleanup; status 137
         // records a target SIGKILL already reported by that same relay failure.
-        // A direct relay also terminates normally under our own SIGTERM request.
+        // A direct relay also terminates normally under our own SIGTERM request
+        // or Windows process-handle termination, which has no signal status.
         if !self.ready_committed
             || status.success()
             || self.no_sandbox
                 && self.retirement_requested
-                && status.signal() == Some(libc::SIGTERM)
+                && (cfg!(windows) || status.signal() == Some(libc::SIGTERM))
             || self.relay_exit_recovery_expected
                 && (self.no_sandbox || status.code() == Some(128 + 9))
         {
