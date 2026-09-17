@@ -113,7 +113,8 @@ jobs:
           maturin-version: v1.15.0
           rust-toolchain: stable
           target: ${{ matrix.target }}
-          manylinux: off
+          # Use native runners while retaining PyPI-compatible Linux wheel tags.
+          container: off
           args: --release --locked --compatibility pypi --out dist
 
       - name: Smoke-test wheel
