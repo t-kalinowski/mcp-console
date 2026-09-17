@@ -6,23 +6,16 @@ use std::collections::VecDeque;
 
 #[derive(Default)]
 pub(super) struct OutputTapeState {
-    stdout: Decoder,
-    stderr: Decoder,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
     stream: Option<Stream>,
     terminal: terminal::Stream,
     current: ResponseBuilder,
     sealed: VecDeque<(u64, Response)>,
     next_cut: u64,
-    next_event: u64,
     cell_output: Option<crate::transcript::CellOutput>,
     raw_bytes: u64,
     recovered: Option<Response>,
-}
-
-#[derive(Default)]
-struct Decoder {
-    bytes: Vec<u8>,
-    origin: u64,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -234,19 +227,18 @@ impl DirectOutput {
             Stream::Stdout
         };
         state.flush_decoder(other);
-        state.next_event += 1;
-        let origin = state.next_event;
-        let decoder = state.decoder(stream);
-        if decoder.bytes.is_empty() {
-            decoder.origin = origin;
-        }
         // Only an incomplete UTF-8 scalar survives ingestion. Decode the incoming
         // publication before retaining any text, including after preview overflow.
-        let mut pending = std::mem::take(&mut decoder.bytes);
-        pending.extend_from_slice(bytes);
-        let complete = complete_utf8_prefix(&pending);
-        decoder.bytes.extend_from_slice(&pending[complete..]);
-        state.text(stream, &String::from_utf8_lossy(&pending[..complete]));
+        let mut pending = std::mem::take(state.decoder(stream));
+        let bytes = if pending.is_empty() {
+            bytes
+        } else {
+            pending.extend_from_slice(bytes);
+            &pending
+        };
+        let complete = complete_utf8_prefix(bytes);
+        state.decoder(stream).extend_from_slice(&bytes[complete..]);
+        state.text(stream, &String::from_utf8_lossy(&bytes[..complete]));
         state.recording_notice(notice);
     }
 
@@ -288,7 +280,7 @@ impl OutputTapeState {
         self.stream = None;
     }
 
-    fn decoder(&mut self, stream: Stream) -> &mut Decoder {
+    fn decoder(&mut self, stream: Stream) -> &mut Vec<u8> {
         match stream {
             Stream::Stdout => &mut self.stdout,
             Stream::Stderr => &mut self.stderr,
@@ -297,17 +289,14 @@ impl OutputTapeState {
     }
 
     fn flush_decoder(&mut self, stream: Stream) {
-        let bytes = std::mem::take(&mut self.decoder(stream).bytes);
+        let bytes = std::mem::take(self.decoder(stream));
         self.text(stream, &String::from_utf8_lossy(&bytes));
     }
 
     fn flush_decoders(&mut self) {
-        let streams = if self.stdout.origin <= self.stderr.origin {
-            [Stream::Stdout, Stream::Stderr]
-        } else {
-            [Stream::Stderr, Stream::Stdout]
-        };
-        for stream in streams {
+        // Each direct push flushes the other decoder first, so at most one
+        // stream has pending bytes, including across polls and stream closes.
+        for stream in [Stream::Stdout, Stream::Stderr] {
             self.flush_decoder(stream);
         }
     }

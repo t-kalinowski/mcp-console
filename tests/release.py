@@ -709,6 +709,9 @@ class ReleaseScriptTests(unittest.TestCase):
             (root / "scripts").mkdir()
             script = root / "scripts" / STAGE_SCRIPT.name
             shutil.copyfile(STAGE_SCRIPT, script)
+            shutil.copyfile(
+                ROOT / "checkout_workflow.py", root / "checkout_workflow.py"
+            )
             pin = {"repository": "fixture/runner", "commit": "a" * 40}
             (root / "sandbox-runner.json").write_text(json.dumps(pin))
             output = root / "github-output"
@@ -730,6 +733,9 @@ class ReleaseScriptTests(unittest.TestCase):
             scripts = root / "scripts"
             scripts.mkdir(parents=True)
             shutil.copyfile(STAGE_SCRIPT, scripts / STAGE_SCRIPT.name)
+            shutil.copyfile(
+                ROOT / "checkout_workflow.py", root / "checkout_workflow.py"
+            )
             placeholder = root / "wheel-data/data/.gitignore"
             placeholder.parent.mkdir(parents=True)
             placeholder.write_text("/*\n!/.gitignore\n")

@@ -1,0 +1,83 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.direct.yaml
+---
+send:
+  r: console_output
+result:
+  content:
+    - type: text
+      text:
+        text_bytes: 8059
+        concat:
+          - repeat: ab
+            count: 1952
+          - |
+
+            [output preview: omitted 8380818 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000001.log (Console server recording workspace; controller for remote targets); 8388626 raw bytes retained, 0 raw bytes not retained]
+          - repeat: ab
+            count: 1943
+          - |
+
+            final diagnostic
+  isError: false
+---
+input:
+  method: ping
+result: {}
+---
+send:
+  r: console_output
+result:
+  content:
+    - type: text
+      text:
+        text_bytes: 8059
+        concat:
+          - repeat: ab
+            count: 1952
+          - |
+
+            [output preview: omitted 8380818 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000002.log (Console server recording workspace; controller for remote targets); 8388626 raw bytes retained, 0 raw bytes not retained]
+          - repeat: ab
+            count: 1943
+          - |
+
+            final diagnostic
+  isError: false
+---
+input:
+  method: ping
+result: {}
+---
+send:
+  r: stdout
+result:
+  content:
+    - type: text
+      text:
+        text_bytes: 8059
+        concat:
+          - repeat: ab
+            count: 1952
+          - |
+
+            [output preview: omitted 8380818 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000003.log (Console server recording workspace; controller for remote targets); 8388626 raw bytes retained, 0 raw bytes not retained]
+          - repeat: ab
+            count: 1943
+          - |
+
+            final diagnostic
+  isError: false
+---
+input:
+  method: ping
+result: {}
+---
+send: {}
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false

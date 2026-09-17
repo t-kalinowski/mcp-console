@@ -129,6 +129,53 @@ def test_bounds_metadata_for_alternating_tiny_events(binary: Path) -> Transcript
 
 
 @executions(DIRECT, SANDBOXED)
+def test_edits_unicode_after_same_producer_overflow(
+    binary: Path, execution: Execution
+) -> Transcript:
+    worker = Path(__file__).resolve().parents[3] / "fixtures/zod"
+    with McpClient(binary, execution.serve("--worker", str(worker))) as client:
+        client.initialize_and_list_tools()
+        for call_id, (scenario, edits, projected) in enumerate(
+            (
+                (
+                    "preview unicode suffix",
+                    "\b🙂\b\r\n",
+                    ("a€🙂b" * 10000)[:-1] + "\r\n",
+                ),
+                (
+                    "preview unicode replacement",
+                    "\b" * 8192 + "\r\bfinal 🙂\bframe\r\n",
+                    "final frame\r\n",
+                ),
+            )
+        ):
+            result = client.send(r=scenario)
+            assert not result["isError"], result
+            assert len(result["content"]) == 1, result
+            text = result["content"][0]["text"]
+            projected = (
+                "preview head\n" + projected + "preview tail: final diagnostic\n"
+            )
+            if call_id == 0:
+                assert_preview(text, projected)
+            else:
+                assert text == projected, text
+            raw = (
+                "preview head\n"
+                + "a€🙂b" * 10000
+                + edits
+                + "preview tail: final diagnostic\n"
+            ).encode()
+            assert (
+                session_directory(client) / f"outputs/call-{1 + 2 * call_id:06}.log"
+            ).read_bytes() == raw
+            assert client.send()["content"] == [{"type": "text", "text": "\n[idle]"}]
+        normalize_preview_paths(client)
+        compact_previews(client, "a€🙂b")
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
 def test_compacts_redraws_before_preview_limits(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -262,6 +309,29 @@ def test_image_overflow_preserves_later_text_and_fitting_image(
         )
         assert len(list((session / "artifacts").iterdir())) == 1
         compact_previews(client, "x", "y", "z", "s", "p", "ab", "�")
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_validates_images_before_omitting_them(
+    binary: Path, execution: Execution
+) -> Transcript:
+    worker = Path(__file__).resolve().parents[3] / "fixtures/zod"
+    with McpClient(binary, execution.serve("--worker", str(worker))) as client:
+        client.initialize_and_list_tools()
+        result = client.send(r="preview invalid oversized image")
+        assert result["isError"], result
+        assert result["content"] == [
+            {
+                "type": "text",
+                "text": "before invalid image\n"
+                "[worker returned invalid base64 image data: Invalid symbol 63, offset 8388610.]\n"
+                "[worker terminated by signal 9]\n"
+                "[worker stopped: in-memory state lost]\n"
+                "[starting new worker]\n[idle]",
+            }
+        ], result
+        assert list((session_directory(client) / "artifacts").iterdir()) == []
         return client.finish()
 
 

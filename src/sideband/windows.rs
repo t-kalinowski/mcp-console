@@ -1,13 +1,16 @@
 use crate::windows::{Event, Pipe};
 use serde::{Serialize, de::DeserializeOwned};
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::sync::{Arc, Mutex};
 
 const READ_HANDLE: &str = "MCP_CONSOLE_SIDEBAND_READ_HANDLE";
 const WRITE_HANDLE: &str = "MCP_CONSOLE_SIDEBAND_WRITE_HANDLE";
 
-pub(crate) struct Reader(BufReader<Pipe>);
+pub(crate) struct Reader {
+    input: BufReader<Pipe>,
+    frame: Vec<u8>,
+}
 #[derive(Clone)]
 pub(crate) struct Writer(Arc<Mutex<Pipe>>);
 pub(crate) struct ChildEndpoints(OwnedHandle, OwnedHandle);
@@ -20,7 +23,7 @@ pub(crate) fn bind(cancel: Event) -> io::Result<(Reader, Writer, ChildEndpoints)
     let reader = Pipe::from(relay_reader).with_cancel(cancel.clone());
     let writer = Pipe::from(relay_writer).with_cancel(cancel);
     Ok((
-        Reader(BufReader::new(reader)),
+        Reader::new(reader),
         Writer(Arc::new(Mutex::new(writer))),
         ChildEndpoints(worker_reader, worker_writer),
     ))
@@ -44,27 +47,64 @@ pub(crate) fn connect_from_env() -> io::Result<(Reader, Writer)> {
         return Err(io::Error::other("sideband handles must be distinct"));
     }
     Ok((
-        Reader(BufReader::new(Pipe::from(adopt(READ_HANDLE)?))),
+        Reader::new(Pipe::from(adopt(READ_HANDLE)?)),
         Writer(Arc::new(Mutex::new(Pipe::from(adopt(WRITE_HANDLE)?)))),
     ))
 }
 
 impl Reader {
+    fn new(pipe: Pipe) -> Self {
+        Self {
+            input: BufReader::new(pipe),
+            frame: Vec::new(),
+        }
+    }
+
     pub(crate) fn receive<T: DeserializeOwned>(&mut self) -> io::Result<T> {
-        let mut bytes = Vec::new();
-        if self.0.read_until(b'\n', &mut bytes)? == 0 {
+        // Keep a partial frame if cancellation interrupts read_until. The
+        // retirement drain must append queued bytes to the same frame.
+        if self.input.read_until(b'\n', &mut self.frame)? == 0 && self.frame.is_empty() {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 "worker sideband closed",
             ));
         }
-        if bytes.last() != Some(&b'\n') {
+        if self.frame.last() != Some(&b'\n') {
             return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
+                io::ErrorKind::InvalidData,
                 "worker sideband closed midway through a frame",
             ));
         }
-        serde_json::from_slice(&bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+        let frame = std::mem::take(&mut self.frame);
+        serde_json::from_slice(&frame).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+    }
+
+    pub(crate) fn drain_available<T: DeserializeOwned>(
+        &mut self,
+        mut forward: impl FnMut(T) -> bool,
+    ) -> io::Result<()> {
+        let queued = match self.input.get_ref().available() {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == io::ErrorKind::BrokenPipe => 0,
+            Err(error) => return Err(error),
+        };
+        let remaining = self.input.buffer().len() + queued;
+        self.input.get_mut().clear_cancel();
+        // Snapshot the readable bytes so an inherited writer cannot extend
+        // retirement. Include BufReader's unread bytes and the partial frame.
+        let mut input = (&mut self.input).take(remaining as u64);
+        while input.read_until(b'\n', &mut self.frame)? != 0 {
+            if self.frame.last() != Some(&b'\n') {
+                break; // An incomplete retiring tail is deliberately abandoned.
+            }
+            let message = serde_json::from_slice(&self.frame)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+            self.frame.clear();
+            if !forward(message) {
+                break;
+            }
+        }
+        Ok(())
     }
 }
 impl Writer {

@@ -9,12 +9,18 @@ from typing import Any
 
 import maturin
 
-build_sdist = maturin.build_sdist
 get_requires_for_build_editable = maturin.get_requires_for_build_editable
 get_requires_for_build_sdist = maturin.get_requires_for_build_sdist
 get_requires_for_build_wheel = maturin.get_requires_for_build_wheel
 prepare_metadata_for_build_editable = maturin.prepare_metadata_for_build_editable
 prepare_metadata_for_build_wheel = maturin.prepare_metadata_for_build_wheel
+
+
+def build_sdist(
+    sdist_directory: str, config_settings: dict[str, Any] | None = None
+) -> str:
+    with _checkout_owner(Path(__file__).resolve().parent):
+        return maturin.build_sdist(sdist_directory, config_settings)
 
 
 def build_wheel(
@@ -72,15 +78,25 @@ def _lock_windows(descriptor: int) -> None:
 
 
 @contextmanager
+def _checkout_owner(root: Path) -> Iterator[None]:
+    if sys.platform == "win32":
+        directory = root / ".dev-workflow"
+        directory.mkdir(exist_ok=True)
+        with (directory / "checkout.lock").open("a") as lock:
+            _lock_windows(lock.fileno())
+            yield
+    else:
+        from checkout_workflow import checkout_owner
+
+        with checkout_owner(root):
+            yield
+
+
+@contextmanager
 def _staged_companion() -> Iterator[None]:
     root = Path(__file__).resolve().parent
-    target = root / "target"
-    target.mkdir(exist_ok=True)
-    # Staging and archiving share one owner. Hold the lock until Maturin has
-    # finished consuming wheel-data, including when Cargo reuses its output.
-    with (target / "wheel-build.lock").open("w") as lock:
+    with _checkout_owner(root):
         if sys.platform == "win32":
-            _lock_windows(lock.fileno())
             # Windows currently packages only the unsandboxed executable. Avoid
             # silently shipping a companion staged for another platform.
             if any(
@@ -91,9 +107,6 @@ def _staged_companion() -> Iterator[None]:
                     "Windows builds require a checkout without staged Unix companion files"
                 )
         else:
-            import fcntl
-
-            fcntl.flock(lock, fcntl.LOCK_EX)
             subprocess.run(
                 [sys.executable, str(root / "scripts/stage-sandbox-runner")], check=True
             )

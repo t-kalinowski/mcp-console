@@ -17,6 +17,8 @@ from threading import Thread
 from textwrap import dedent
 import unittest
 
+from windows_relay import WindowsRelay  # noqa: F401 -- include protocol acceptance
+
 
 ROOT = Path(__file__).resolve().parents[1]
 BINARY = Path(
@@ -161,6 +163,12 @@ class WindowsPackaging(unittest.TestCase):
             second.stdin.flush()
             self.assertEqual(second.wait(timeout=10), 0, second.stderr.read())
             self.assertEqual(second_lines.get(timeout=10), "fixture.whl")
+            archive, archive_lines = start("build_sdist")
+            self.assertEqual(archive_lines.get(timeout=10), "building")
+            archive.stdin.write("finish\n")
+            archive.stdin.flush()
+            self.assertEqual(archive.wait(timeout=10), 0, archive.stderr.read())
+            self.assertEqual(archive_lines.get(timeout=10), "fixture.whl")
 
 
 @unittest.skipUnless(os.name == "nt", "native Windows acceptance")

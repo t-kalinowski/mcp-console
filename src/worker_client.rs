@@ -1084,15 +1084,7 @@ impl Client {
             PreparedEvaluation::Failed(response) => return response,
         };
         let response = match evaluation.wait(wait_claim, timeout).await {
-            Ok(EvaluationWait::Running(output)) => SendResponse::Running(output),
-            Ok(EvaluationWait::InputRequested(output)) => SendResponse::InputRequested(output),
-            Ok(EvaluationWait::ReplacementStarting(output)) => {
-                SendResponse::ReplacementStarting(output)
-            }
-            Ok(EvaluationWait::ReplacementReady(output)) => SendResponse::ReplacementReady(output),
-            Ok(EvaluationWait::Completed(output)) => SendResponse::Completed(output),
-            Ok(EvaluationWait::Reclaimed(output)) => SendResponse::Restarted(output),
-            Ok(EvaluationWait::Restarted(output)) => SendResponse::Restarted(output),
+            Ok(wait) => send_response_from_wait(wait),
             Err(error) => return output::direct_failure(error),
         };
         output::render_response(response)
@@ -1208,17 +1200,9 @@ impl Client {
         drop(preparation);
         drop(operation);
 
-        match evaluation.wait(wait_claim, timeout).await? {
-            EvaluationWait::Running(output) => Ok(SendResponse::Running(output)),
-            EvaluationWait::InputRequested(output) => Ok(SendResponse::InputRequested(output)),
-            EvaluationWait::ReplacementStarting(output) => {
-                Ok(SendResponse::ReplacementStarting(output))
-            }
-            EvaluationWait::ReplacementReady(output) => Ok(SendResponse::ReplacementReady(output)),
-            EvaluationWait::Completed(output) => Ok(SendResponse::Completed(output)),
-            EvaluationWait::Reclaimed(output) => Ok(SendResponse::Restarted(output)),
-            EvaluationWait::Restarted(output) => Ok(SendResponse::Restarted(output)),
-        }
+        Ok(send_response_from_wait(
+            evaluation.wait(wait_claim, timeout).await?,
+        ))
     }
 
     fn start_evaluation(

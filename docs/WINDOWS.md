@@ -27,6 +27,8 @@ Configure clients with command `mcp-console` and arguments `["serve", "--no-sand
 There is no automatic fallback from sandboxed execution.
 Use `RETICULATE_PYTHON` to select an existing interpreter, or allow managed resolution to choose one.
 Keep embedded R sources checked out with LF line endings as specified by `.gitattributes`.
+R startup selects the first nonempty `R_USER` or `HOME`, then the Windows user profile directory.
+Dependency tools have their own home-directory requirements; DuckDB extension preparation currently also requires `USERPROFILE`.
 
 ## Lifecycle and platform differences
 
@@ -53,6 +55,9 @@ The built-in worker uses the C runtime's inherited stdin descriptor because R su
 
 The initial implementation was exercised on Windows x64 with R 4.6.1, explicit Python 3.14, and a managed Python environment.
 `tests/windows.py` covers the public MCP interface, startup path stability, dependency-process cleanup, startup cancellation, explicit unsandboxed launch, and serialization of concurrent Python packaging hooks.
+It also includes `tests/windows_relay.py`, which checks relay framing, fatal-error ordering, stdin failures, and final sideband delivery.
+The Unix checkout workflow scripts are not Windows validation targets; run the native commands below exclusively in a checkout.
+Windows source and wheel packaging serialize through a blocking native lock in `.dev-workflow/checkout.lock`.
 The full Unix transcript harness and sandbox suite are not Windows validation targets yet.
 
 ```powershell

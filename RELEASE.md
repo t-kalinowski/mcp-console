@@ -98,8 +98,10 @@ Each source build reconciles the generated `libexec` and `share` trees, includin
 Staging removes obsolete files and preserves timestamps when the intended contents and permissions are unchanged.
 `build.rs` verifies the prepared manifest and files and copies them beside native Cargo output; it neither builds the runner nor modifies wheel staging.
 Unchanged native companions and generated Rust retain their timestamps so subsequent Cargo invocations can reuse the executable.
-Direct staging, Cargo, and Maturin commands require exclusive use of their source checkout; release matrix jobs use separate checkouts.
-Source distributions include the packaging backend, staging script, source pin, and data-directory marker, and omit generated companions.
+Staging and packaging share checkout ownership with validation.
+Wrap direct Cargo or Maturin commands in `scripts/with-checkout` to claim the same lock; release matrix jobs use separate checkouts.
+See [development validation](docs/DEVELOPMENT.md) for conflict diagnostics and retained run records.
+Source distributions include the packaging backend, checkout ownership helper, staging script, source pin, and data-directory marker, and omit generated companions.
 
 CI separately caches completed staged runners, release wheels and native bundles, and Cargo build data for both workspaces.
 Runner build-cache keys include the toolchain file from the checked-out source.

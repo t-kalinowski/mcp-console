@@ -195,7 +195,11 @@ scripts/test --timeout 1800 client_server/requirements/test_r
 scripts/test --update client_server/server/test_tools::initializes_and_lists_tools
 ```
 
-`scripts/test` builds and uses `target/release/mcp-console`.
+`scripts/test` handles help, listing, location lookup, and invalid arguments before preparing the executable.
+Metadata commands do not claim build ownership or require an existing binary.
+Help and syntax-only validation run before `uv`, so they also work without a cached dependency environment.
+Listing, location lookup, and semantic selector validation may prepare that environment.
+Execution builds and uses `target/release/mcp-console`.
 The Python SDK integration dependencies retain the published lower bounds without exact version pins; `==2.*` also keeps MCP within the supported major.
 CI resolves current SDK releases when the weekly uv cache is empty and can reuse them for the rest of that UTC ISO week.
 Local runs reuse their uv environment until it needs updating; use `uv run --upgrade --script tests/boundaries/_run.py client_server/integrations/test_python` to refresh the SDKs explicitly after building the executable.
@@ -217,7 +221,8 @@ The case interpreter has no monitoring thread: fixtures can use `fork` and `pree
 Normal runs emit one flushed `.` for every passing case and end the progress line with a newline.
 A case that runs for one minute is named with its current status.
 The runner reports it again at two-minute elapsed intervals through ten minutes, then once every five minutes, and names it when it finishes.
-On failure, the runner prints the fully qualified selector before the error or diff.
+On failure, the runner prints the fully qualified selector and an exact `scripts/test` rerun command before the error or diff.
+Use the [development routes and validation ladder](../../docs/DEVELOPMENT.md) to choose a focused iteration loop.
 Snapshot updates retain their named `updated ...` and `removed ...` records instead of dots.
 This output belongs only to the test-runner user interface; it is not captured transcript data or part of the MCP or relay protocol.
 A `BOUNDARY/SUITE` selector runs every case in that file; a `BOUNDARY/SUITE::CASE` selector runs one named function.
@@ -230,6 +235,11 @@ A full `scripts/test --update` also removes snapshots for deleted suites and cas
 Skipped cases retain all their primary and companion snapshots during full updates, even when another case in the same suite runs.
 
 ## Requirements and execution modes
+
+Modes are declared by the suite with `@executions(DIRECT, SANDBOXED)`; the runner has no `--execution` option.
+Use `execution.serve()` to compose common arguments and let the fixture select `--no-sandbox`.
+Sandbox-only policy arguments belong in a sandbox fixture, for example `SANDBOXED.serve("--writable-root", str(path))`.
+The direct fixture rejects writable roots with that example in its error.
 
 Cases run by default.
 Declare only the capabilities a case needs, beside its definition, with `@requires(...)` from `support.requirements`.

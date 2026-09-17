@@ -13,12 +13,95 @@ from support.client import McpClient
 from support.execution import DIRECT
 from support.previews import (
     assert_preview,
+    cell_text,
     compact_previews,
     normalize_preview_paths,
 )
 from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, requires
 from support.suites import run_this_suite
+
+
+@requires(NATIVE_FIXTURES)
+def test_same_producer_tiny_events_keep_bounded_storage(binary: Path) -> Transcript:
+    worker = Path(__file__).resolve().parents[3] / "fixtures/zod"
+    with tempfile.TemporaryDirectory() as temporary:
+        with (
+            closing(AllocationProfile(Path(temporary))) as profile,
+            McpClient(
+                binary,
+                DIRECT.serve("--worker", str(worker)),
+                {**os.environ, **profile.environment},
+            ) as client,
+        ):
+            client.initialize_and_list_tools()
+            client.send(r="echo ready")
+            profile.start()
+            result = client.send(r="preview same producer")
+            client.request("ping")
+            _, largest = profile.stop()
+            assert largest <= 128 * 1024, largest
+            assert not result["isError"], result
+            assert len(result["content"]) == 1, result
+            emitted = (
+                "preview head\n" + "ab" * 100000 + "\npreview tail: final diagnostic\n"
+            )
+            assert_preview(result["content"][0]["text"], emitted)
+            assert cell_text(client, 2).encode() == emitted.encode()
+            assert client.send()["content"] == [{"type": "text", "text": "\n[idle]"}]
+            assert client.send(r="echo fresh")["content"] == [
+                {"type": "text", "text": "zod: fresh\n"}
+            ]
+            normalize_preview_paths(client)
+            compact_previews(client, "ab")
+            return client.finish()
+
+
+@requires(NATIVE_FIXTURES)
+def test_complete_direct_chunks_do_not_add_decoder_copies(binary: Path) -> Transcript:
+    fixtures = Path(__file__).resolve().parents[3] / "fixtures"
+    with tempfile.TemporaryDirectory() as temporary:
+        with (
+            closing(AllocationProfile(Path(temporary))) as profile,
+            McpClient(
+                binary,
+                DIRECT.serve(
+                    "--worker",
+                    str(fixtures / "zod"),
+                    "--relay",
+                    str(fixtures / "server_relay/scripted_relay.py"),
+                ),
+                {
+                    **os.environ,
+                    **profile.environment,
+                    "TMPDIR": temporary,
+                    "MCP_CONSOLE_TEST_RELAY_SCENARIO": "preview_direct_allocations",
+                },
+            ) as client,
+        ):
+            client.initialize_and_list_tools()
+            allocations = []
+            emitted = "ab" * (8192 * 512) + "\nfinal diagnostic\n"
+            for call_id, stream in enumerate(
+                ("console_output", "console_output", "stdout"), 1
+            ):
+                profile.start()
+                result = client.send(r=stream)
+                client.request("ping")
+                allocated, _ = profile.stop()
+                if call_id > 1:
+                    allocations.append(allocated)
+                assert not result["isError"], result
+                assert len(result["content"]) == 1, result
+                assert_preview(result["content"][0]["text"], emitted)
+                assert cell_text(client, call_id).encode() == emitted.encode()
+            # Both paths receive the same complete UTF-8 chunks. A direct
+            # decoder must not copy another 8 MiB while ingesting them.
+            assert allocations[1] < allocations[0] + 1024 * 1024, allocations
+            assert client.send()["content"] == [{"type": "text", "text": "\n[idle]"}]
+            normalize_preview_paths(client)
+            compact_previews(client, "ab")
+            return client.finish()
 
 
 @requires(NATIVE_FIXTURES)

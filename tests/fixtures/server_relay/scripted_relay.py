@@ -1266,6 +1266,54 @@ def run_preview_raw(relay: ScriptedRelay) -> None:
     relay.retire()
 
 
+def run_preview_direct_allocations(relay: ScriptedRelay) -> None:
+    relay.ready()
+    while True:
+        command = relay.receive()
+        if command["kind"] == "shutdown":
+            relay.retire(command)
+            return
+        assert command["kind"] == "evaluate", command
+        kind = command["source"]
+        assert kind in {"console_output", "stdout"}, command
+        for _ in range(512):
+            relay.send({"kind": kind, "data": "ab" * 8192})
+        relay.send({"kind": kind, "data": "\nfinal diagnostic\n"})
+        relay.complete()
+
+
+def run_partial_utf8_polls(relay: ScriptedRelay) -> None:
+    directory = Path(os.environ["MCP_CONSOLE_TEST_PREVIEW_DIRECTORY"])
+    release = directory / "partial-release"
+    processed = directory / "partial-processed"
+    relay.ready()
+    relay.expect(EVALUATION)
+    for stream, data in (
+        ("stdout", b"A\xe2"),
+        ("stdout", b"\x82\xacB\xe2"),
+        ("stderr", b"C\xf0\x9f"),
+        ("stdout", b" D\xe2"),
+    ):
+        with release.open("rb", buffering=0) as checkpoint:
+            assert checkpoint.read(1) == b"1"
+        relay.send(
+            {"kind": f"{stream}_bytes", "data": base64.b64encode(data).decode("ascii")}
+        )
+        relay.send(RESOLVE_PYTHON_VERSION)
+        relay.expect(PYTHON_VERSION_RESOLUTION_FAILED)
+        with processed.open("wb", buffering=0) as checkpoint:
+            assert checkpoint.write(b"1") == 1
+    with release.open("rb", buffering=0) as checkpoint:
+        assert checkpoint.read(1) == b"1"
+    relay.complete()
+    relay.expect(EVALUATION)
+    relay.send(
+        {"kind": "stdout_bytes", "data": base64.b64encode(b"\x82\xac").decode("ascii")}
+    )
+    relay.complete()
+    relay.retire()
+
+
 def run_partial_utf8_completion(relay: ScriptedRelay) -> None:
     relay.ready()
     for kind in ("stdout_bytes", "stderr_bytes"):
@@ -1281,6 +1329,8 @@ def main() -> None:
         "ready": run_ready,
         "startup_output": run_startup_output,
         "preview_raw": run_preview_raw,
+        "preview_direct_allocations": run_preview_direct_allocations,
+        "partial_utf8_polls": run_partial_utf8_polls,
         "preview_raw_prelude": run_preview_raw_prelude,
         "partial_utf8_completion": run_partial_utf8_completion,
         "evaluate": run_evaluate,

@@ -4,7 +4,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-venv pkg-config libcap-dev cmake clang && rm -rf /var/lib/apt/lists/*
 RUN python3 -m venv /opt/build && /opt/build/bin/pip install uv
 WORKDIR /source
-COPY sandbox-runner.json ./
+COPY sandbox-runner.json checkout_workflow.py ./
 COPY scripts/stage-sandbox-runner ./scripts/
 RUN python3 scripts/stage-sandbox-runner
 COPY . .

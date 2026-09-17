@@ -2,6 +2,7 @@
 
 This file contains repository-wide instructions and a navigation map.
 Keep it synchronized with implemented code.
+Start with the [development routes and validation ladder](docs/DEVELOPMENT.md) to find a focused public test and the next validation command.
 Detailed current behavior belongs in the documents indexed by `docs/README.md`, source, and public transcript tests.
 
 The documents under `design-sketches/` describe intended behavior, not the current implementation.
@@ -107,7 +108,9 @@ Install development checkouts with `uv tool install --reinstall .`; bare `cargo 
 Build reuse follows Cargo's tracked inputs; external tool changes through `PATH` can require cleaning the affected Cargo build directories, as described in `RELEASE.md`.
 Native Cargo bundles require the default shared build/target layout; a separate intermediate build directory is unsupported for running the Cargo output.
 The Python packaging backend holds a checkout-local lock from staging through wheel creation.
-Direct staging, Cargo, and Maturin commands require exclusive use of their source checkout.
+On macOS/Linux, staging, packaging, and validation share checkout ownership outside `target`; conflicts fail with the lock path and last recorded owner details.
+Wrap direct Cargo and Maturin commands in `scripts/with-checkout` to claim that ownership on those platforms.
+Windows packaging holds a blocking native lock outside `target`; run its native validation commands exclusively in the checkout.
 See `RELEASE.md` for prerequisites, bundle layout, build caches, and the explicit source-checkout override.
 Run commands from the repository root:
 
@@ -121,6 +124,7 @@ scripts/test --update BOUNDARY/SUITE[::CASE]
 
 `scripts/format` attempts Ruff, Yamark, rustfmt, and Air in sequence.
 A missing or failing formatter does not prevent the remaining formatters from running or make the script fail, so review its output and resulting changes.
+Validation records and phase logs remain in `.dev-workflow/runs/`; see `docs/DEVELOPMENT.md` for ownership and the host concurrency budget.
 `scripts/check` validates extracted runtime sources, checks Rust formatting and Clippy, runs Rust tests in debug, runs the complete transcript suite against the release executable, and checks uv source and wheel installations with a shared Cargo target directory.
 
 ### Boundary snapshots
@@ -235,11 +239,12 @@ Keep these invariants intact:
 - `tests/snapshots/` — generated YAML 1.2 snapshots, parallel to the boundary test hierarchy.
 - `r/tests/testthat/` — R package protocol and ellmer adapter tests.
 - `scripts/release.py`, `tests/release.py` — release validation and installed-wheel acceptance.
-- `tests/windows.py` — native Windows public MCP acceptance, startup cancellation, and resolver retirement checks.
+- `tests/windows.py`, `tests/windows_relay.py` — native Windows MCP and relay protocol acceptance, startup cancellation, packaging, and resolver retirement checks.
 - `tests/install.py`, `tests/sandbox_installation.py` — unstaged uv installation, relocated bundle acceptance, and private companion verification.
 - `scripts/test` — release binary build and selected transcript execution.
 - `scripts/validate_runtime_sources.py` — extracted R/Python inventory and syntax validation.
 - `scripts/format`, `scripts/check-core`, `scripts/check` — formatting, core checks, and repository-wide checks.
+- `checkout_workflow.py`, `scripts/with-checkout`, `tests/workflow.py` — shared checkout ownership, validation records, host concurrency, and public command regressions.
 
 ## Working rules
 

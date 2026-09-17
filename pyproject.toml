@@ -47,6 +47,7 @@ data = "wheel-data"
 include = [
     { path = "wheel-data/data/.gitignore", format = "sdist" },
     { path = "build_backend.py", format = "sdist" },
+    { path = "checkout_workflow.py", format = "sdist" },
     { path = "scripts/stage-sandbox-runner", format = "sdist" },
     { path = "sandbox-runner.json", format = "sdist" },
 ]

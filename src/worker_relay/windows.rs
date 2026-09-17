@@ -5,7 +5,7 @@ use std::os::windows::io::{AsRawHandle, OwnedHandle};
 use std::os::windows::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, OnceLock, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -21,11 +21,32 @@ enum Control {
     Failed(String),
 }
 
+#[derive(Clone)]
+struct Controls {
+    sender: mpsc::Sender<Control>,
+    failure: Arc<OnceLock<String>>,
+}
+
+impl Controls {
+    fn send(&self, control: Control) -> Result<(), mpsc::SendError<Control>> {
+        if let Control::Failed(message) = &control {
+            // Preserve the first error even when a reader reports it during
+            // retirement. Collecting it must not drain a live command queue.
+            let _ = self.failure.set(message.clone());
+        }
+        self.sender.send(control)
+    }
+}
+
 pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
     let (program, arguments) = command_line
         .split_first()
         .ok_or("worker relay command must include an executable")?;
-    let (controls, commands) = mpsc::channel();
+    let (sender, commands) = mpsc::channel();
+    let controls = Controls {
+        sender,
+        failure: Arc::new(OnceLock::new()),
+    };
     let failed = controls.clone();
     let (events, mut event_writer) = event_writer::start(move |message| {
         let _ = failed.send(Control::Failed(message));
@@ -60,9 +81,19 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
     // This sole inherited-stdin reader ends with the relay process if the worker
     // exits while its caller still owns stdin. It never outlives a generation.
     thread::spawn(move || {
-        for line in io::stdin().lock().split(b'\n') {
-            let message =
-                line.and_then(|line| serde_json::from_slice(&line).map_err(io::Error::other));
+        let mut input = io::stdin().lock();
+        let mut frame = Vec::new();
+        loop {
+            frame.clear();
+            let message = match input.read_until(b'\n', &mut frame) {
+                Ok(0) => break,
+                Ok(_) if frame.last() != Some(&b'\n') => Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "relay stdin closed midway through a frame",
+                )),
+                Ok(_) => serde_json::from_slice(&frame).map_err(io::Error::other),
+                Err(error) => Err(error),
+            };
             match message {
                 Ok(command) => {
                     if input_controls.send(Control::Command(command)).is_err() {
@@ -141,14 +172,17 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
                         break;
                     }
                 }
-                Err(error)
-                    if matches!(
-                        error.kind(),
-                        io::ErrorKind::UnexpectedEof | io::ErrorKind::ConnectionAborted
-                    ) =>
-                {
+                Err(error) if error.kind() == io::ErrorKind::ConnectionAborted => {
+                    if let Err(error) = sideband.drain_available::<WorkerMessage>(|message| {
+                        sideband_events.send(message.into())
+                    }) {
+                        let _ = sideband_controls.send(Control::Failed(format!(
+                            "worker sideband read failed: {error}"
+                        )));
+                    }
                     break;
                 }
+                Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => break,
                 Err(error) => {
                     let _ = sideband_controls.send(Control::Failed(format!(
                         "worker sideband read failed: {error}"
@@ -176,6 +210,8 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
     }));
     let (send_stdin, input) = mpsc::channel::<String>();
     let mut stdin = Pipe::from(writer).with_cancel(cancel.clone());
+    let stdin_controls = controls.clone();
+    let stdin_stopping = stopping.clone();
     tasks.push(thread::spawn(move || {
         'input: for bytes in input {
             // Wake both before a potentially blocking write and after bytes have
@@ -184,7 +220,12 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
                 input_ready.set();
                 let written = stdin.write_all(chunk);
                 input_ready.set();
-                if written.is_err() {
+                if let Err(error) = written {
+                    if !stdin_stopping.load(Ordering::SeqCst) {
+                        let _ = stdin_controls.send(Control::Failed(format!(
+                            "worker stdin write failed: {error}"
+                        )));
+                    }
                     break 'input;
                 }
             }
@@ -194,7 +235,6 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
     }));
     let mut send_stdin = Some(send_stdin);
     let mut deadline = None::<Instant>;
-    let mut failure = None;
     loop {
         let next = match deadline {
             Some(deadline) => {
@@ -210,8 +250,7 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
                 let _ = child.kill();
                 break;
             }
-            Ok(Control::Failed(message)) => {
-                failure = Some(message);
+            Ok(Control::Failed(_)) => {
                 let _ = child.kill();
                 break;
             }
@@ -277,6 +316,7 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
     }
     let status = child.wait().map_err(|e| e.to_string())?;
     event_writer.begin_retirement();
+    stopping.store(true, Ordering::SeqCst);
     cancel.set();
     drop(send_stdin);
     drop(send_sideband);
@@ -285,10 +325,12 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
     }
     events.send_supervisor(RelayEvent::StdoutClosed);
     events.send_supervisor(RelayEvent::StderrClosed);
-    events.send_supervisor(RelayEvent::WorkerSidebandClosed);
-    if let Some(message) = failure {
-        events.send_supervisor(RelayEvent::Fatal { message });
+    if let Some(message) = controls.failure.get() {
+        events.send_supervisor(RelayEvent::Fatal {
+            message: message.clone(),
+        });
     }
+    events.send_supervisor(RelayEvent::WorkerSidebandClosed);
     events.send_supervisor(RelayEvent::WorkerExited {
         code: status.code().unwrap_or(1),
     });
@@ -312,7 +354,7 @@ struct StartedWorker {
 fn start_worker(
     program: &OsString,
     arguments: &[OsString],
-    controls: mpsc::Sender<Control>,
+    controls: Controls,
 ) -> Result<StartedWorker, String> {
     // Keep setup in one fallible scope. On failure, all partial resources and
     // any spawned child retire before the caller publishes the Fatal frame.
