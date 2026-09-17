@@ -169,6 +169,8 @@ base::local(
         }
         invisible(.Call("mcp_console_python_declare", encode(request)))
       }
+      # Managed py_require() delegates declarations and live activation here;
+      # startup reads the same owner through the bootstrap below.
       replace_binding(
         "py_reqs_transition",
         function(current, request, initialized) {
@@ -178,16 +180,6 @@ base::local(
           list(manifest = result, config = NULL)
         }
       )
-      replace_binding("py_reqs_activate", function(manifest) {
-        declare(c(
-          manifest[c("packages", "python_version", "exclude_newer")],
-          list(
-            exclude_newer_supplied = !is.null(manifest$exclude_newer),
-            action = "add"
-          )
-        ))
-        globals$py_config
-      })
       replace_binding(
         "uv_get_or_create_env",
         function(

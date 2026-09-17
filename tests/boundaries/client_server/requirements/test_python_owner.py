@@ -135,6 +135,41 @@ def test_materializes_lazy_declarations_without_initializing_python(
 
 
 @executions(DIRECT, SANDBOXED)
+def test_initializes_with_lazy_exclusion_date(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with McpClient(binary, execution.serve()) as client:
+        client.initialize_and_list_tools()
+        client.send(
+            # fmt: r
+            r=code("""
+                reticulate::py_require(exclude_newer = "2026-09-01")
+                stopifnot(!reticulate::py_available(initialize = FALSE))
+                """)
+        )
+        assert last_result_text(client) == "[done]", last_result_text(client)
+        client.send(python="1 + 1")
+        assert last_result_text(client) == "2\n", last_result_text(client)
+        client.send(control="restart")
+        client.send(
+            # fmt: r
+            r=code("""
+                stopifnot(
+                  identical(reticulate::py_require()$exclude_newer, "2026-09-01"),
+                  !reticulate::py_available(initialize = FALSE)
+                )
+                invisible(reticulate::py_config())
+                stopifnot(
+                  reticulate::py_available(initialize = FALSE),
+                  identical(reticulate::py_require()$exclude_newer, "2026-09-01")
+                )
+                """)
+        )
+        assert last_result_text(client) == "[done]", last_result_text(client)
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
 def test_preserves_live_reticulate_requirement_rules(
     binary: Path, execution: Execution
 ) -> list:
