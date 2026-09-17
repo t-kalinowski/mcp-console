@@ -21,6 +21,7 @@ from typing import BinaryIO
 LOCKS_ENV = "MCP_CONSOLE_CHECKOUT_LOCKS"
 RUN_ENV = "MCP_CONSOLE_VALIDATION_RUN"
 GROUP_ENV = "MCP_CONSOLE_VALIDATION_GROUP"
+CANCELLATION_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT)
 FAILURE = re.compile(
     r"^((?:client_server|server_relay|relay_worker|cli)/\S+::\S+): failed(?: in .*)?$"
 )
@@ -144,9 +145,13 @@ def command_process(
         try:
             yield process
         finally:
-            # A synchronous command must wait for its children. Retire any that
-            # remain even when the leader exits normally, before releasing locks.
-            stop_phase(process, owns_group=owns_group)
+            # Cleanup is one critical section, including after normal exit.
+            # Deliver pending cancellation only after retirement has finished.
+            previous = signal.pthread_sigmask(signal.SIG_BLOCK, CANCELLATION_SIGNALS)
+            try:
+                stop_phase(process, owns_group=owns_group)
+            finally:
+                signal.pthread_sigmask(signal.SIG_SETMASK, previous)
 
 
 class Run:
@@ -321,7 +326,7 @@ def main() -> None:
         stack.enter_context(checkout_owner(root))
         if options.mode in {"check", "test"}:
             stack.enter_context(full_check_slot())
-        for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT):
+        for number in CANCELLATION_SIGNALS:
             previous = signal.signal(number, interrupted)
             stack.callback(signal.signal, number, previous)
         if options.mode == "run":
