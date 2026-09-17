@@ -9,9 +9,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import last_tool_text
-from support.checkpoints import wait_for_worker_file
+from support.checkpoints import FifoCheckpoint
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.native import build_interposer
 from support.normalization import (
     code,
     normalize_duckdb_progress,
@@ -678,6 +679,9 @@ def test_interrupts_running_sql_query(binary: Path, execution: Execution) -> Tra
         temporary_path = Path(temporary_directory)
         environment, _ = r_test_environment()
         environment["TMPDIR"] = temporary_directory
+        environment["MCP_CONSOLE_SQL_INTERRUPT_LIBRARY"] = str(
+            build_interposer(temporary_path, "sql_interrupt_checkpoint")
+        )
         client = McpClient(
             binary,
             execution.serve(),
@@ -685,20 +689,20 @@ def test_interrupts_running_sql_query(binary: Path, execution: Execution) -> Tra
             current_directory=temporary_path,
         )
         passed = False
+        started = None
         try:
             client.initialize_and_list_tools()
+            # Place the FIFO in the worker's writable temporary directory.
             # fmt: r
             r = code(r"""
-                invisible(DBI::dbExecute(
-                  sql_connection(),
-                  "SET VARIABLE sql_interrupt_marker = ?",
-                  params = list(file.path(tempdir(), "sql-interrupt-started"))
-                ))
+                interrupt_started <- file.path(tempdir(), "sql-interrupt-started")
+                cat(interrupt_started, "\n", sep = "")
                 """)
             client.send(r=r)
-            output = last_tool_text(client)
-            assert output == "[done]", repr(output)
-
+            started = FifoCheckpoint.create(Path(last_tool_text(client).strip()))
+            client.transcript[-1]["result"]["content"][0]["text"] = (
+                "<SQL interrupt checkpoint>\n"
+            )
             sql = code(r"""
                 CREATE TABLE interrupt_state AS
                 SELECT CAST(42 AS INTEGER) AS answer
@@ -706,17 +710,34 @@ def test_interrupts_running_sql_query(binary: Path, execution: Execution) -> Tra
             client.send(sql=sql)
             assert last_tool_text(client) == "[done]"
 
+            # fmt: r
+            r = code(r"""
+                dyn.load(Sys.getenv("MCP_CONSOLE_SQL_INTERRUPT_LIBRARY"))
+                invisible(DBI::dbExecute(sql_connection(), "SET threads = 1"))
+                invisible(DBI::dbExecute(sql_connection(), "SET enable_progress_bar = true"))
+                invisible(DBI::dbExecute(sql_connection(), "SET progress_bar_time = 0"))
+                query_started <- FALSE
+                options(duckdb.progress_display = function(percentage) {
+                  if (!query_started && percentage < 100) {
+                    query_started <<- TRUE
+                    invisible(.C(
+                      "wait_for_sql_interrupt",
+                      interrupt_started
+                    ))
+                  }
+                })
+                """)
+            client.send(r=r)
+            assert last_tool_text(client) == "[done]"
+
             sql = code(r"""
-                COPY (SELECT 1) TO (getvariable('sql_interrupt_marker'));
-                SELECT sleep_ms(60000) AS waited
+                SELECT sum(i) AS total FROM range(1000000000000) AS t(i)
                 """)
             client.send(sql=sql, timeout_ms=0)
             assert last_tool_text(client) == "\n[running; poll with an empty send]"
-            wait_for_worker_file(
-                temporary_path,
-                "sql-interrupt-started",
-                client,
-            )
+            # A marker in a preceding statement can race DuckDB's reset of its
+            # interrupt flag. Hold this query until its active handler has run.
+            started.wait("DuckDB query reached its progress callback")
             result = client.send(
                 control="interrupt",
                 timeout_ms=30_000,
@@ -735,6 +756,8 @@ def test_interrupts_running_sql_query(binary: Path, execution: Execution) -> Tra
         finally:
             if not passed:
                 stop_client(client)
+            if started is not None:
+                started.close()
 
 
 @executions(DIRECT, SANDBOXED)
