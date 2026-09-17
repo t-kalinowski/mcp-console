@@ -9,14 +9,17 @@ Installation checks run last because they replace and hide the shared `target` d
 Run `scripts/preflight` for a local inventory, or `scripts/preflight --json` to retain structured output.
 It reports the checkout and revision, the release executable used by transcript tests and any separate executable on `PATH`, the companion pin and staged revision, Python/R selections, both Rust toolchain selections, and cache paths.
 Required command probes report missing or failing tools separately from optional Docker, SBX, external SSH, and host-test capability skips.
-Optional skips do not fail the command; missing required tools or preparation steps give exit status 1.
+Optional skips do not fail the command; missing or failing required tools, including timed-out version probes, give exit status 1.
 
 The report reuses `scripts/stage-sandbox-runner --describe` and the existing test capability probes.
 It does not clone, resolve dependencies, build, install, or provision services.
 Configured provider probes may contact their existing daemon or SSH host; SBX discovery uses its normal serialization lock.
-Artifact presence and a matching staging record are inventory facts, not a freshness or bundle-integrity check; staging, Cargo, runtime verification, and the public tests retain those responsibilities.
+Artifact presence, the staged target, and the recorded revision are inventory facts.
+Exit status 0 means the required command probes succeeded; it does not certify build readiness.
+Staging and Cargo validate the target and build inputs, while runtime verification and public tests check the resulting bundle.
+Malformed existing staging records are errors; inspect the generated record before removing it and rerunning staging.
 
-For direct development, run the reported preparation commands in order:
+To prepare a checkout for direct development, run:
 
 ```sh
 scripts/stage-sandbox-runner

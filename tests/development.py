@@ -96,7 +96,7 @@ class DevelopmentTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertTrue(result.stderr)
 
-    def test_preflight_reports_preparation_and_optional_skips_without_building(
+    def test_preflight_inventories_artifacts_and_optional_skips_without_building(
         self,
     ) -> None:
         for name in (
@@ -164,11 +164,12 @@ class DevelopmentTests(unittest.TestCase):
         result = self.command(
             "preflight", "--json", script_root=self.root, environment=environment
         )
-        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(result.returncode, 0, result.stderr)
         report = json.loads(result.stdout)
         self.assertEqual(report["checkout"], str(self.root.resolve()))
         self.assertEqual(report["required_missing"], [])
-        self.assertTrue(report["preparation_needed"])
+        self.assertNotIn("preparation_needed", report)
+        self.assertFalse(any(report["artifacts"].values()))
         self.assertEqual(
             report["companion"]["source_toolchain"], "fixture-runner-toolchain"
         )
@@ -197,7 +198,9 @@ class DevelopmentTests(unittest.TestCase):
             "preflight", "--json", script_root=self.root, environment=environment
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(result.stdout)["preparation_needed"], [])
+        report = json.loads(result.stdout)
+        self.assertTrue(all(report["artifacts"].values()))
+        self.assertEqual(report["companion"]["staged_target"], "fixture-target")
         self.write(
             "target/sandbox-runner-build.json",
             json.dumps({"source_revision": "0" * 40, "target": "fixture-target"}),
@@ -205,8 +208,10 @@ class DevelopmentTests(unittest.TestCase):
         result = self.command(
             "preflight", "--json", script_root=self.root, environment=environment
         )
-        self.assertEqual(result.returncode, 1, result.stderr)
-        self.assertEqual(len(json.loads(result.stdout)["preparation_needed"]), 2)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            json.loads(result.stdout)["companion"]["staged_revision"], "0" * 40
+        )
         (commands / "cargo").write_text(
             "#!/bin/sh\necho no installed toolchain >&2\nexit 9\n"
         )
@@ -217,6 +222,23 @@ class DevelopmentTests(unittest.TestCase):
         report = json.loads(result.stdout)
         self.assertIn("cargo", report["required_missing"])
         self.assertIn("no installed toolchain", report["tools"]["cargo"]["error"])
+        self.write(
+            "commands/cargo",
+            f"#!{sys.executable}\n"
+            # fmt: python
+            + code("""
+                import signal
+
+                signal.pause()
+                """),
+        )
+        result = self.command(
+            "preflight", "--json", script_root=self.root, environment=environment
+        )
+        self.assertEqual(result.returncode, 1, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertIn("cargo", report["required_missing"])
+        self.assertIn("timed out", report["tools"]["cargo"]["error"])
         (commands / "cargo").unlink()
         result = self.command(
             "preflight", "--json", script_root=self.root, environment=environment

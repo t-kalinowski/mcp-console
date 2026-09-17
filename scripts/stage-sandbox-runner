@@ -73,6 +73,7 @@ def main() -> None:
         checkout = runner_checkout(args, pin)
         toolchain = checkout / "codex-rs/rust-toolchain.toml"
         record = ROOT / "target/sandbox-runner-build.json"
+        # Existing records must be valid staging output; corruption requires repair.
         staged = json.loads(record.read_text()) if record.is_file() else {}
         print(
             json.dumps(

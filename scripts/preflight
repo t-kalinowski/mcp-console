@@ -33,26 +33,22 @@ def main() -> None:
                 tools[name]["version"] = probe(path, "--version").splitlines()[0]
             except subprocess.CalledProcessError as error:
                 tools[name]["error"] = (error.stdout + error.stderr).strip()
+            except (OSError, subprocess.TimeoutExpired) as error:
+                tools[name]["error"] = str(error)
         if tools[name]["version"] is None:
             missing.append(name)
     companion = json.loads(
         probe(sys.executable, str(ROOT / "scripts/stage-sandbox-runner"), "--describe")
     )
     executable = ROOT / "target/release/mcp-console"
-    preparation = []
-    if (
-        companion["staged_revision"] != companion["pin"]["commit"]
-        or not (ROOT / "wheel-data/data/libexec/mcp-console-sandbox").is_file()
-    ):
-        preparation.append("scripts/stage-sandbox-runner")
-    if (
-        preparation
-        or not executable.is_file()
-        or not (ROOT / "target/libexec/mcp-console-sandbox").is_file()
-    ):
-        preparation.append(
-            "scripts/with-checkout cargo build --release --target-dir target"
+    artifacts = {
+        str(path): path.is_file()
+        for path in (
+            executable,
+            ROOT / "wheel-data/data/libexec/mcp-console-sandbox",
+            ROOT / "target/libexec/mcp-console-sandbox",
         )
+    }
 
     # Reuse public-test probes only; never call provider provisioning fixtures.
     sys.path.insert(0, str(ROOT / "tests"))
@@ -89,6 +85,7 @@ def main() -> None:
             "on_path": shutil.which("mcp-console"),
         },
         "companion": companion,
+        "artifacts": artifacts,
         "tools": tools,
         "runtime": {
             "command_python": sys.executable,
@@ -117,7 +114,6 @@ def main() -> None:
             "host_budget": str(cache / "mcp-console/checks"),
         },
         "required_missing": missing,
-        "preparation_needed": preparation,
     }
     if options.json:
         print(json.dumps(report, indent=2))
@@ -130,7 +126,10 @@ def main() -> None:
         print(
             f"Companion pin: {companion['pin']['commit']}\nStaged revision: {companion['staged_revision']}"
         )
+        print(f"Staged target: {companion['staged_target']}")
         print(f"Companion toolchain: {companion['source_toolchain']}")
+        for path, present in artifacts.items():
+            print(f"Artifact: {path} ({'present' if present else 'missing'})")
         for name, value in report["runtime"].items():
             print(f"{name}: {value}")
         for name, value in tools.items():
@@ -148,9 +147,7 @@ def main() -> None:
             )
         for name, path in report["caches"].items():
             print(f"Cache {name}: {path}")
-        for command in preparation:
-            print(f"Preparation needed: {command}")
-    raise SystemExit(bool(missing or preparation))
+    raise SystemExit(bool(missing))
 
 
 if __name__ == "__main__":
