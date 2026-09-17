@@ -7,6 +7,7 @@ Use the [validation ladder](../../docs/DEVELOPMENT.md#validation-ladder) to keep
 
 Use `support.normalization.code()` to dedent a readable program.
 Place its formatting directive immediately before the assignment or `code()` argument.
+Start the payload on the line after the opening quotes.
 Indent the payload and closing delimiter four spaces beyond the line containing `code(`, preserving the program's own indentation:
 
 ```python
@@ -30,6 +31,8 @@ When `R_HOME` is set, the parser is `$R_HOME/bin/Rscript`; otherwise it uses `Rs
 Each formatting directive selects the expression on the following line; put it immediately before the program argument when calling a helper.
 Multiline literals assigned to `r`/`python`, including annotated assignments, or passed through those keyword arguments require the matching directive.
 Other embedded programs are identified by their directive; the checker does not infer a language from arbitrary string contents or follow variable assignments.
+Missing-directive checks cover direct multiline literals and direct `code()` calls containing them.
+Add directives for transformed or assembled programs manually; unmarked dynamic expressions are not inferred or included in the checker's counts.
 Direct `r`/`python` literals are checked as written; `code()` supplies dedenting when used.
 Other marked helper payloads use the recipe's dedented syntax convention; their public case verifies the helper's actual normalization.
 Multiline values are checked even when authored on one line with escaped newlines.
