@@ -104,6 +104,8 @@ def main() -> None:
                     f"{path}:{line}: formatting directive must precede a program"
                 )
                 continue
+            # For code(), the directive precedes the shared call/literal opening
+            # line. Directives inside split calls are outside the authoring contract.
             expression, code_call = program_expression(anchor)
             wanted = programs.get(expression, (None, declared_language(anchor)))[1]
             programs[expression] = (

@@ -264,6 +264,7 @@ Keep these invariants intact:
 - Keep embedded R, Python, SQL, and shell fixture programs as readable multiline strings.
   Use escapes such as `\n` only when the character is data.
 - Put `# fmt: r` or `# fmt: python` immediately before each embedded R or Python test program, including `code(...)` calls nested inside other calls.
+  Keep `code(` and the opening string delimiter on the same line, immediately below the directive.
   Indent the payload and closing delimiter one Python indentation level deeper than the line containing `code(`, preserving the embedded program's own indentation.
   Recheck this indentation after running `scripts/format` and in the committed source.
   When formatting a shared payload, refresh each platform's affected snapshots, including cases skipped on the current host.

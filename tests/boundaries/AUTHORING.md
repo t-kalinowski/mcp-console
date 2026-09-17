@@ -6,7 +6,8 @@ Use the [validation ladder](../../docs/DEVELOPMENT.md#validation-ladder) to keep
 ## Embedded programs
 
 Use `support.normalization.code()` to dedent a readable program.
-Place its formatting directive immediately before the assignment or `code()` argument.
+Keep `code(` and the opening string delimiter on the same line.
+Place its formatting directive immediately above that line, including for nested calls.
 Start the payload on the line after the opening quotes.
 Indent the payload and closing delimiter four spaces beyond the line containing `code(`, preserving the program's own indentation:
 
@@ -32,6 +33,7 @@ Review both its summary and the resulting diff.
 
 Use `scripts/check-fixtures [PATH ...]` to check directives and direct `code()` layout without formatting; with no paths it scans Python files under `tests/`.
 It reads string values and source positions from the containing Python file's AST and requires only Python's standard library.
+Layout checking assumes the opening-line convention above; split `code(`/literal openings and directives inside the call are unsupported.
 Embedded R and Python contents are opaque: invalid or incomplete programs need no special annotation.
 Their public acceptance tests establish the intended behavior.
 
