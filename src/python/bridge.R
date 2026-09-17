@@ -179,12 +179,14 @@ base::local(
         !bindingIsActive("python_requirements", globals),
         !bindingIsLocked("python_requirements", globals)
       )
+      .Call("mcp_console_python_requirements_set", requirements)
+      rm(requirements)
       rm(list = "python_requirements", envir = globals)
       makeActiveBinding(
         "python_requirements",
         function(value) {
           if (missing(value)) {
-            return(requirements)
+            return(.Call("mcp_console_python_requirements_get"))
           }
           if (!is.null(pending_requirements)) {
             committed <- manifest(
@@ -194,7 +196,7 @@ base::local(
             )
             stopifnot(identical(committed, pending_requirements))
           }
-          requirements <<- value
+          .Call("mcp_console_python_requirements_set", value)
           if (!is.null(pending_requirements)) {
             pending_requirements <<- NULL
             report_activation(committed)

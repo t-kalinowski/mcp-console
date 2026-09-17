@@ -249,12 +249,14 @@ The worker's native signal handler wakes blocked input and marks interrupts for 
 Python acknowledgment respects R's suspended-interrupt state and clears accepted interrupts so nested calls do not deliver them twice.
 Reticulate's event polling remains active.
 
-Reticulate is still required for ordinary Python startup: it owns interpreter selection and startup orchestration, the requirement manifest, environment activation, automatic-resolution callbacks, object conversion, and cross-language and module-load integration.
+Reticulate is still required for ordinary Python startup: it owns interpreter selection and startup orchestration, requirement transitions, compatibility checks, environment activation, automatic-resolution callbacks, object conversion, and cross-language and module-load integration.
+Console's passive native requirement store holds the current worker manifest in its existing R representation, including metadata and history, behind the R active binding.
+The store neither resolves environments nor publishes activation; lazy declarations remain unretained until the existing materialization or activation boundary.
 Cell dispatch and runtime installation release the library-state lock before executing Python, and native console callbacks release the GIL while blocking on worker services.
 Python stream wrappers restrict those callbacks to the main worker thread; binary buffers, descriptors, background threads, and fork children use their underlying streams, including cached or redirected stream objects.
 The DB-API adapter continues to execute through the CPython API, while managed DuckDB remains in R.
 Before normal worker exit, it restores the main Python thread's saved attachment so extension-library exit destructors, including DuckDB's, can use Python safely.
-Its private Python runtime conditionally appends a last-chance import finder, while the R Python bridge owns the reticulate manifest and the callback into the existing managed-Python resolver.
+Its private Python runtime conditionally appends a last-chance import finder, while the R Python bridge connects reticulate to that store and supplies the callback into the existing managed-Python resolver.
 Bare sessions leave both resolution adapters disabled.
 Their user-visible behavior belongs in the [built-in runtime guide](BUILTIN_RUNTIME.md), while the sideband contract remains independent of the interpreter implementation.
 

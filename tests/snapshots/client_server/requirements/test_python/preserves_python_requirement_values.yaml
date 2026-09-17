@@ -1,0 +1,98 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  r: |
+    initial <- reticulate::py_require()
+    stopifnot(
+      identical(class(initial), "python_requirements"),
+      identical(names(initial), c("packages", "history")),
+      !reticulate::py_available(initialize = FALSE)
+    )
+    packages <- c(second = "py-yaml12", first = "numpy", repeated = "numpy")
+    result <- withVisible(reticulate::py_require(
+      packages,
+      python_version = c(">=3.10", "<4"),
+      exclude_newer = "2026-01-01",
+      action = "set"
+    ))
+    expected <- initial
+    expected$packages <- packages
+    expected$python_version <- c(">=3.10", "<4")
+    expected$exclude_newer <- "2026-01-01"
+    expected$history <- c(
+      initial$history,
+      list(list(
+        requested_from = "R_GlobalEnv",
+        env_is_package = FALSE,
+        packages = packages,
+        python_version = c(">=3.10", "<4"),
+        exclude_newer = "2026-01-01",
+        exclude_newer_supplied = TRUE,
+        action = "set"
+      ))
+    )
+    stopifnot(
+      identical(result, list(value = NULL, visible = FALSE)),
+      identical(reticulate::py_require(), expected)
+    )
+    detached <- reticulate::py_require()
+    detached$packages[1L] <- "changed"
+    detached$history[[1L]]$packages <- "changed"
+    invisible(gc())
+    stopifnot(identical(reticulate::py_require(), expected))
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  r: |
+    error <- tryCatch(
+      reticulate::py_require(exclude_newer = "2026-02-01"),
+      error = conditionMessage
+    )
+    stopifnot(
+      identical(
+        error,
+        paste0(
+          "`exclude_newer` is already set to '2026-01-01', ",
+          "use `action = 'set'` to override"
+        )
+      ),
+      identical(reticulate::py_require(), expected)
+    )
+    reticulate::py_require(
+      "numpy",
+      python_version = "<4",
+      exclude_newer = "2026-01-01",
+      action = "remove"
+    )
+    removed <- reticulate::py_require()
+    stopifnot(
+      identical(removed$packages, "py-yaml12"),
+      identical(removed$python_version, ">=3.10"),
+      identical(removed["exclude_newer"], list(exclude_newer = NULL)),
+      identical(names(removed), names(expected)),
+      identical(head(removed$history, -1L), expected$history)
+    )
+    reticulate::py_require(
+      character(),
+      python_version = character(),
+      action = "set"
+    )
+    empty <- reticulate::py_require()
+    stopifnot(
+      identical(empty$packages, character()),
+      identical(empty$python_version, character()),
+      identical(empty["exclude_newer"], list(exclude_newer = NULL)),
+      identical(names(empty), names(expected)),
+      identical(head(empty$history, -1L), removed$history),
+      !reticulate::py_available(initialize = FALSE)
+    )
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false

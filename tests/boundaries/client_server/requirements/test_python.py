@@ -95,6 +95,155 @@ def test_prepares_initial_python_requirements(
 
 
 @executions(DIRECT, SANDBOXED)
+def test_preserves_python_requirement_values(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = McpClient(binary, execution.serve())
+    client.initialize_and_list_tools()
+    # fmt: r
+    r = code(r"""
+        initial <- reticulate::py_require()
+        stopifnot(
+          identical(class(initial), "python_requirements"),
+          identical(names(initial), c("packages", "history")),
+          !reticulate::py_available(initialize = FALSE)
+        )
+        packages <- c(second = "py-yaml12", first = "numpy", repeated = "numpy")
+        result <- withVisible(reticulate::py_require(
+          packages,
+          python_version = c(">=3.10", "<4"),
+          exclude_newer = "2026-01-01",
+          action = "set"
+        ))
+        expected <- initial
+        expected$packages <- packages
+        expected$python_version <- c(">=3.10", "<4")
+        expected$exclude_newer <- "2026-01-01"
+        expected$history <- c(
+          initial$history,
+          list(list(
+            requested_from = "R_GlobalEnv",
+            env_is_package = FALSE,
+            packages = packages,
+            python_version = c(">=3.10", "<4"),
+            exclude_newer = "2026-01-01",
+            exclude_newer_supplied = TRUE,
+            action = "set"
+          ))
+        )
+        stopifnot(
+          identical(result, list(value = NULL, visible = FALSE)),
+          identical(reticulate::py_require(), expected)
+        )
+        detached <- reticulate::py_require()
+        detached$packages[1L] <- "changed"
+        detached$history[[1L]]$packages <- "changed"
+        invisible(gc())
+        stopifnot(identical(reticulate::py_require(), expected))
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "[done]"
+    # fmt: r
+    r = code(r"""
+        error <- tryCatch(
+          reticulate::py_require(exclude_newer = "2026-02-01"),
+          error = conditionMessage
+        )
+        stopifnot(
+          identical(
+            error,
+            paste0(
+              "`exclude_newer` is already set to '2026-01-01', ",
+              "use `action = 'set'` to override"
+            )
+          ),
+          identical(reticulate::py_require(), expected)
+        )
+        reticulate::py_require(
+          "numpy",
+          python_version = "<4",
+          exclude_newer = "2026-01-01",
+          action = "remove"
+        )
+        removed <- reticulate::py_require()
+        stopifnot(
+          identical(removed$packages, "py-yaml12"),
+          identical(removed$python_version, ">=3.10"),
+          identical(removed["exclude_newer"], list(exclude_newer = NULL)),
+          identical(names(removed), names(expected)),
+          identical(head(removed$history, -1L), expected$history)
+        )
+        reticulate::py_require(
+          character(),
+          python_version = character(),
+          action = "set"
+        )
+        empty <- reticulate::py_require()
+        stopifnot(
+          identical(empty$packages, character()),
+          identical(empty$python_version, character()),
+          identical(empty["exclude_newer"], list(exclude_newer = NULL)),
+          identical(names(empty), names(expected)),
+          identical(head(empty$history, -1L), removed$history),
+          !reticulate::py_available(initialize = FALSE)
+        )
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "[done]"
+    return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_materializes_lazy_python_requirements_without_initializing(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = McpClient(binary, execution.serve())
+    client.initialize_and_list_tools()
+    # fmt: r
+    r = code(r"""
+        worker_pid <- Sys.getpid()
+        reticulate::py_require("py-yaml12")
+        stopifnot(!reticulate::py_available(initialize = FALSE))
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "[done]"
+    client.send(requirements={"python": ["py-yaml12"]})
+    assert last_tool_text(client) == "[prepared]"
+    # fmt: r
+    r = code(r"""
+        stopifnot(
+          identical(Sys.getpid(), worker_pid),
+          !reticulate::py_available(initialize = FALSE),
+          "py-yaml12" %in% reticulate::py_require()$packages
+        )
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "[done]"
+    client.send(control="restart")
+    assert last_tool_text(client) == (
+        "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+    )
+    # fmt: r
+    r = code(r"""
+        stopifnot(
+          !reticulate::py_available(initialize = FALSE),
+          "py-yaml12" %in% reticulate::py_require()$packages
+        )
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "[done]"
+    # fmt: python
+    python = code("""
+        import yaml12
+
+        yaml12.__name__
+        """)
+    client.send(python=python)
+    assert last_tool_text(client) == "'yaml12'\n"
+    return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
 @requires(PROCESS_EVENTS)
 def test_retires_python_resolver_descendant_after_leader_exit(
     binary: Path,
