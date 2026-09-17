@@ -84,20 +84,12 @@ pub(super) fn declare(request: Declaration) -> Result<(), String> {
             let version = active["version"]
                 .as_str()
                 .ok_or("Python state omitted version")?;
+            let parsed = version
+                .parse::<pep508_rs::pep440_rs::Version>()
+                .map_err(|error| error.to_string())?;
             for clause in versions.iter().flat_map(|constraint| constraint.split(',')) {
-                use pep508_rs::pep440_rs::{Version, VersionSpecifier};
-                let clause = clause.trim();
-                let live = version
-                    .parse::<Version>()
-                    .map_err(|error| error.to_string())?;
-                let matches = if let Ok(required) = clause.parse::<Version>() {
-                    live.release().starts_with(required.release())
-                } else {
-                    clause
-                        .parse::<VersionSpecifier>()
-                        .map_err(|error| error.to_string())?
-                        .contains(&live)
-                };
+                let matches = crate::python_requirement::VersionConstraint::parse(clause.trim())
+                    .matches(&parsed, version);
                 if !matches {
                     return Err(format!(
                         "Python version requirements cannot be changed after Python has been initialized.\n* Python version request: '{}'\n* Python version initialized: '{version}'",
@@ -226,7 +218,8 @@ fn prepare_candidate(
             c"prepare",
             &json!({"environment": inspected, "manifest": candidate}).to_string(),
         )
-        .map_err(infrastructure)?;
+        .map_err(infrastructure)?
+        .ok_or("KeyboardInterrupt")?;
         match serde_json::from_str::<PreparationOutcome>(&response).map_err(|error| {
             infrastructure(format!("invalid Python preparation response: {error}"))
         })? {
@@ -286,29 +279,43 @@ pub(super) fn commit(
     Ok(())
 }
 
-pub(super) fn attach(libpython: &str) -> Result<(), String> {
+pub(super) fn attach(libpython: &str) -> Result<bool, String> {
     if STATE.with_borrow(|state| state.active.is_some()) {
-        return Ok(());
+        return Ok(true);
     }
     let managed = STATE.with_borrow(|state| state.accepted.is_some());
     if !managed {
-        return Ok(());
+        return Ok(true);
     }
     library::install_environment().map_err(infrastructure)?;
-    let response =
+    let Some(response) =
         library::environment_call(c"initialize", &json!({"libpython": libpython}).to_string())
-            .map_err(infrastructure)?;
+            .map_err(infrastructure)?
+    else {
+        // The server discards unactivated candidates when the evaluation ends.
+        STATE.with_borrow_mut(|state| state.provisional = None);
+        return Ok(false);
+    };
     let active: Value = serde_json::from_str(&response)
         .map_err(|error| infrastructure(format!("invalid Python startup state: {error}")))?;
     let manifest = current()?;
+    if STATE.with_borrow(|state| {
+        state.provisional.is_none() && state.accepted.as_ref() != Some(&manifest)
+    }) {
+        // Reticulate has already initialized Python and will not repeat its
+        // bootstrap on retry. Renew only the discarded requirement candidate.
+        let version = active["version"]
+            .as_str()
+            .ok_or("Python state omitted version")?;
+        let mut versions = manifest.python_version.clone();
+        versions.push(version.to_string());
+        resolve(manifest.clone(), versions, None)?;
+    }
     worker::begin_python_commit();
     let result = commit(manifest, Some(active));
     let interrupted = worker::finish_python_commit();
     result?;
-    if interrupted {
-        return Err("Python initialization interrupted after activation".to_string());
-    }
-    Ok(())
+    Ok(!interrupted)
 }
 
 pub(super) fn infrastructure(message: String) -> String {

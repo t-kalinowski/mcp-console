@@ -26,6 +26,7 @@ struct Services {
     set_none: unsafe extern "C" fn(*mut PyObject),
     set_string: unsafe extern "C" fn(*mut PyObject, *const c_char),
     set_interrupt: unsafe extern "C" fn(),
+    exception_matches: unsafe extern "C" fn(*mut PyObject) -> c_int,
     none: usize,
     runtime_error: usize,
     keyboard_interrupt: usize,
@@ -55,6 +56,7 @@ pub(super) fn install(api: &PythonApi) -> Result<(), String> {
             set_none: load_symbol(&library, path, b"PyErr_SetNone\0")?,
             set_string: load_symbol(&library, path, b"PyErr_SetString\0")?,
             set_interrupt: load_symbol(&library, path, b"PyErr_SetInterrupt\0")?,
+            exception_matches: load_symbol(&library, path, b"PyErr_ExceptionMatches\0")?,
             none: load_symbol::<*mut PyObject>(&library, path, b"_Py_NoneStruct\0")? as usize,
             runtime_error: exception(b"PyExc_RuntimeError\0")?,
             keyboard_interrupt: exception(b"PyExc_KeyboardInterrupt\0")?,
@@ -74,6 +76,11 @@ pub(super) fn install(api: &PythonApi) -> Result<(), String> {
             method(c"publish_plot", publish_plot, 8),
             method(c"interrupt", interrupt, 1), // METH_VARARGS: signal number and frame
             method(c"prepare_python", prepare_python, 8),
+            method(
+                c"initialize_python_environment",
+                initialize_python_environment,
+                8,
+            ),
             method(c"inspect_python", inspect_python, 8),
             method(c"publish_python_activation", publish_python_activation, 8),
             method(c"begin_python_commit", begin_python_commit, 4), // METH_NOARGS
@@ -247,8 +254,40 @@ unsafe extern "C" fn prepare_python(_: *mut PyObject, request: *mut PyObject) ->
 unsafe extern "C" fn inspect_python(_: *mut PyObject, executable: *mut PyObject) -> *mut PyObject {
     callback(|services| {
         let executable = services.text(executable)?;
-        let result = services.without_gil(|| super::super::probe::inspect(&executable))?;
+        let result = services.without_gil(|| super::super::probe::inspect(&executable));
+        if worker::acknowledge_python_interrupt() {
+            unsafe { (services.set_none)(services.keyboard_interrupt as *mut PyObject) };
+            return Ok(std::ptr::null_mut());
+        }
+        let result = result?;
         Ok(services.string(&result.to_string()))
+    })
+}
+
+// Called only with the GIL held at the environment-call boundary.
+pub(super) fn take_interrupt() -> bool {
+    let services = SERVICES.get().expect("Python services initialized");
+    unsafe {
+        if (services.exception_matches)(services.keyboard_interrupt as *mut PyObject) == 0 {
+            return false;
+        }
+        (services.api.err_clear)();
+    }
+    true
+}
+
+unsafe extern "C" fn initialize_python_environment(
+    _: *mut PyObject,
+    libpython: *mut PyObject,
+) -> *mut PyObject {
+    callback(|services| {
+        let libpython = services.text(libpython)?;
+        if services.without_gil(|| super::super::environment::attach(&libpython))? {
+            Ok(services.none())
+        } else {
+            unsafe { (services.set_none)(services.keyboard_interrupt as *mut PyObject) };
+            Ok(std::ptr::null_mut())
+        }
     })
 }
 

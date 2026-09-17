@@ -108,6 +108,9 @@ base::local(
         globals
       )
 
+      # Bind the stored configuration, so py_config(), py_exe(), and internal
+      # readers all see the owner. The public functions remain unchanged, and
+      # this getter never calls the initializer back through itself.
       config <- globals$py_config
       rm(list = "py_config", envir = globals)
       makeActiveBinding(
@@ -257,6 +260,12 @@ base::local(
         "mcp_console_install_python_runtime",
         python_config$libpython
       ))
+      # Run cancellable inspection after leaving harp's .Call interrupt mask.
+      # Reticulate retains startup and converts KeyboardInterrupt to an R interrupt.
+      invisible(reticulate::import(
+        "_mcp_console_services",
+        convert = FALSE
+      )$initialize_python_environment(python_config$libpython))
       python_module <<- reticulate::import("_mcp_console", convert = FALSE)
       configured <- FALSE
       on.exit(

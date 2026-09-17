@@ -34,9 +34,12 @@ result:
 send:
   python: |
     import console_identity
+    import os
 
     assert console_identity.identity != original_identity
     assert console_identity.identity == (sys.prefix, sys.exec_prefix, sys.executable)
+    assert os.environ["VIRTUAL_ENV_PROMPT"] == "candidate"
+    assert sys.real_prefix == original_identity[0]
 result:
   content:
     - type: text

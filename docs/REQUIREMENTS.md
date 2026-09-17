@@ -278,6 +278,8 @@ After initialization, preparation is additive; an interpreter constraint used to
 
 Console inspects a selected candidate before changing the live environment.
 It requires the running Python library and version and rejects replacement of a loaded distribution with a different version or an absent distribution.
+Live Python-version declarations use the host resolver's matching rules, including exact prerelease, epoch, and local-version identity.
+Console runs the candidate's `activate_this.py` hook inside its activation transaction.
 Successful activation replaces environment-owned site paths, including paths added by `.pth` files, while preserving user-added paths.
 It updates prefixes, the executable, and process-environment integration without replacing the interpreter or its objects.
 Reticulate's requirement and configuration getters reflect the active Console state.
@@ -287,6 +289,7 @@ Console defers interrupt delivery only while publishing activation and committin
 An interrupt during successful publication is delivered afterward, with the committed environment retained.
 Rollback covers Console's paths, prefixes, executable, process environment, and accepted manifest; it does not undo arbitrary side effects performed by site hooks.
 Initial path bookkeeping uses a probe of the selected interpreter and does not rerun `site.main()` in the live interpreter.
+Interrupting that probe leaves the worker's R and SQL state available; a later Python cell retries the unfinished environment handoff.
 
 The server retains an environment after the worker reports `PythonActivated` with its complete normalized logical manifest.
 A runtime import reports activation before the original import resumes.

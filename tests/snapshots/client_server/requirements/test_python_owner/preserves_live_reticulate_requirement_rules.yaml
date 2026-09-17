@@ -3,7 +3,8 @@
 ---
 send:
   r: |
-    initial <- reticulate::py_config()
+    config_reader <- reticulate::py_config
+    initial <- config_reader()
     current <- reticulate::py_require()
     replacement <- tryCatch(
       reticulate::py_require(c(current$packages, "py-yaml12"), action = "set"),
@@ -26,6 +27,9 @@ send:
     sys <- reticulate::import("sys")
     stopifnot(
       "py-yaml12" %in% reticulate::py_require()$packages,
+      identical(config_reader, reticulate::py_config),
+      identical(config_reader(), config),
+      identical(reticulate::py_exe(), sys$executable),
       identical(config$python, sys$executable),
       identical(config$executable, sys$executable),
       identical(config$prefix, sys$prefix),

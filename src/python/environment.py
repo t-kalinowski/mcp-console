@@ -5,7 +5,7 @@ import importlib.metadata
 import json
 import os
 import re
-import site
+import runpy
 import sys
 
 import _mcp_console as runtime
@@ -40,7 +40,7 @@ def initialize(request: str) -> str:
         exec_prefix=sys.exec_prefix,
         pythonpath=os.pathsep.join(path or "." for path in sys.path),
         libpython=os.path.realpath(configuration["libpython"]),
-        version=".".join(map(str, sys.version_info[:3])),
+        version=sys.version.split()[0],
     )
     # Embedded startup also contributes prefix-local standard-library entries
     # that a standalone venv probe does not use. Capture them now, before cells
@@ -101,19 +101,21 @@ def _activate(candidate: dict, manifest: dict) -> None:
     global _active, _site_paths
     _check_compatible(candidate)
     paths = list(sys.path)
-    identity = sys.prefix, sys.exec_prefix, sys.executable
-    environment = {name: os.environ.get(name) for name in ("PATH", "VIRTUAL_ENV")}
+    identity = {
+        name: getattr(sys, name, None)
+        for name in ("prefix", "exec_prefix", "executable", "real_prefix")
+    }
+    environment = {
+        name: os.environ.get(name)
+        for name in ("PATH", "VIRTUAL_ENV", "VIRTUAL_ENV_PROMPT")
+    }
     committed = False
     try:
         sys.prefix, sys.exec_prefix = candidate["prefix"], candidate["exec_prefix"]
         sys.executable = candidate["executable"]
-        old_bin = os.path.dirname(identity[2])
+        old_bin = os.path.dirname(identity["executable"])
         bins = os.environ.get("PATH", "").split(os.pathsep)
-        os.environ["PATH"] = os.pathsep.join(
-            [os.path.dirname(sys.executable)]
-            + [path for path in bins if path != old_bin]
-        )
-        os.environ["VIRTUAL_ENV"] = sys.prefix
+        os.environ["PATH"] = os.pathsep.join(path for path in bins if path != old_bin)
         previous = (
             _site_paths
             if candidate["site_packages"] != _active["site_packages"]
@@ -121,9 +123,12 @@ def _activate(candidate: dict, manifest: dict) -> None:
         )
         sys.path[:] = [path for path in sys.path if path not in previous]
         retained = set(sys.path)
-        for path in candidate["site_packages"]:
-            if path not in sys.path:
-                site.addsitedir(path)
+        # The managed environment supplies its activation hook. Set identity
+        # first so its .pth hooks observe the candidate, then track its additions.
+        runpy.run_path(
+            os.path.join(os.path.dirname(sys.executable), "activate_this.py")
+        )
+        sys.real_prefix = identity["prefix"]
         importlib.invalidate_caches()
         # Optional process integration must probe the newly available packages.
         runtime.activate_process_environment(candidate["executable"])
@@ -142,8 +147,12 @@ def _activate(candidate: dict, manifest: dict) -> None:
             if not committed:
                 try:
                     sys.path[:] = paths
-                    sys.prefix, sys.exec_prefix, executable = identity
-                    runtime.activate_process_environment(executable)
+                    for name, value in identity.items():
+                        if value is None:
+                            sys.__dict__.pop(name, None)
+                        else:
+                            setattr(sys, name, value)
+                    runtime.activate_process_environment(identity["executable"])
                     for name, value in environment.items():
                         if value is None:
                             os.environ.pop(name, None)

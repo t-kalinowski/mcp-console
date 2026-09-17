@@ -201,7 +201,7 @@ pub(super) fn install_environment() -> Result<(), String> {
     api()?.with_gil(|api| unsafe { api.run_module(c"_mcp_console_environment", &source) })
 }
 
-pub(super) fn environment_call(name: &CStr, request: &str) -> Result<String, String> {
+pub(super) fn environment_call(name: &CStr, request: &str) -> Result<Option<String>, String> {
     api()?.with_gil(|api| unsafe {
         let function = api.function(c"_mcp_console_environment", name)?;
         let argument =
@@ -214,6 +214,9 @@ pub(super) fn environment_call(name: &CStr, request: &str) -> Result<String, Str
             (api.call_function_obj_args)(function, argument, std::ptr::null_mut::<PyObject>());
         (api.dec_ref)(argument);
         if result.is_null() {
+            if services::take_interrupt() {
+                return Ok(None);
+            }
             api.display_pending_exception();
             return Err(python_function_error(c"_mcp_console_environment", name));
         }
@@ -223,11 +226,13 @@ pub(super) fn environment_call(name: &CStr, request: &str) -> Result<String, Str
             api.display_pending_exception();
             Err("Python environment response is not text".to_string())
         } else {
-            Ok(std::str::from_utf8_unchecked(std::slice::from_raw_parts(
-                text.cast(),
-                length as usize,
+            Ok(Some(
+                std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                    text.cast(),
+                    length as usize,
+                ))
+                .to_owned(),
             ))
-            .to_owned())
         };
         (api.dec_ref)(result);
         response

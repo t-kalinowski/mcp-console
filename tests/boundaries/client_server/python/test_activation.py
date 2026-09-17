@@ -22,7 +22,14 @@ def managed_environments(root: Path, *, interrupt_site: bool = False) -> dict[st
     for name in ("initial", "candidate"):
         environment = root / name
         subprocess.run(
-            [sys.executable, "-m", "venv", "--without-pip", str(environment)],
+            [
+                "uv",
+                "venv",
+                "--no-project",
+                "--python",
+                sys.executable,
+                str(environment),
+            ],
             check=True,
             capture_output=True,
         )
@@ -185,9 +192,12 @@ def test_site_hooks_observe_candidate_identity(
                 # fmt: python
                 python=code("""
                     import console_identity
+                    import os
 
                     assert console_identity.identity != original_identity
                     assert console_identity.identity == (sys.prefix, sys.exec_prefix, sys.executable)
+                    assert os.environ["VIRTUAL_ENV_PROMPT"] == "candidate"
+                    assert sys.real_prefix == original_identity[0]
                     """)
             )
             assert last_result_text(client) == "[done]", last_result_text(client)
@@ -212,6 +222,7 @@ def test_rolls_back_interrupted_python_site_activation(
                     original_environment = dict(os.environ)
                     original_paths = list(sys.path)
                     original_prefixes = sys.prefix, sys.exec_prefix, sys.executable
+                    original_real_prefix = getattr(sys, "real_prefix", None)
                     """)
             )
             assert last_result_text(client) == "[done]", last_result_text(client)
@@ -228,6 +239,7 @@ def test_rolls_back_interrupted_python_site_activation(
                     assert dict(os.environ) == original_environment
                     assert sys.path == original_paths
                     assert (sys.prefix, sys.exec_prefix, sys.executable) == original_prefixes
+                    assert getattr(sys, "real_prefix", None) == original_real_prefix
                     """)
             )
             assert last_result_text(client) == "[done]", last_result_text(client)
@@ -509,6 +521,92 @@ def test_cancels_candidate_probe_and_reaps_its_child(
 @executions(DIRECT, SANDBOXED)
 def test_restarts_during_candidate_probe(binary: Path, execution: Execution) -> list:
     return cancelled_candidate_probe(binary, execution, "restart")
+
+
+@executions(DIRECT, SANDBOXED)
+def test_retries_interrupted_startup_probe_with_live_r_and_sql(
+    binary: Path, execution: Execution
+) -> list:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        environment = managed_environments(root)
+        environment["TMPDIR"] = str(root)
+        checkpoints = []
+        try:
+            with McpClient(binary, execution.serve(), environment, root) as client:
+                initialize_managed_client(client)
+                client.send(
+                    # fmt: r
+                    r=code(r"""
+                        startup_worker_pid <- Sys.getpid()
+                        startup_r_state <- 42L
+                        stopifnot(!reticulate::py_available(initialize = FALSE))
+                        cat(tempfile("ready-"), tempfile("release-"), tempfile("pid-"), sep = "\n")
+                        """)
+                )
+                paths = last_result_text(client).splitlines()
+                assert len(paths) == 3, paths
+                ready, release = [
+                    FifoCheckpoint.create(Path(path)) for path in paths[:2]
+                ]
+                checkpoints.extend((ready, release))
+                pid_path = Path(paths[2])
+                client.transcript[-1]["result"]["content"][0]["text"] = (
+                    "<probe ready>\n<probe release>\n<probe pid>"
+                )
+                client.send(sql="CREATE TABLE startup_state AS SELECT 42 AS answer")
+                site = next((root / "initial/lib").glob("python*/site-packages"))
+                hook = site / "startup-probe.pth"
+                hook.write_text("import startup_probe\n")
+                (site / "startup_probe.py").write_text(
+                    # fmt: python
+                    code(f"""
+                        import os
+                        import sys
+                        from pathlib import Path
+
+                        if sys.flags.no_site:
+                            Path({str(pid_path)!r}).write_text(str(os.getpid()))
+                            with open({str(ready.path)!r}, "wb", buffering=0) as ready:
+                                ready.write(b"1")
+                            with open({str(release.path)!r}, "rb", buffering=0) as release:
+                                assert release.read(1) == b"1"
+                        """)
+                )
+                evaluation = client.start_send(
+                    python="print('initialized')", timeout_ms=0
+                )
+                ready.wait("initial environment probe")
+                child_pid = host_process_id(
+                    int(pid_path.read_text()), client.process.pid
+                )
+                client.receive(evaluation)
+                assert (
+                    last_result_text(client) == "\n[running; poll with an empty send]"
+                )
+                client.send(control="interrupt", timeout_ms=30_000)
+                assert not process_exists(child_pid), (child_pid, client.transcript[-1])
+                hook.unlink()
+                client.send(
+                    # fmt: r
+                    r=code("""
+                        stopifnot(
+                          identical(Sys.getpid(), startup_worker_pid),
+                          identical(startup_r_state, 42L)
+                        )
+                        """)
+                )
+                assert last_result_text(client) == "[done]", last_result_text(client)
+                client.send(sql="SELECT answer FROM startup_state")
+                assert last_result_text(client).splitlines()[-1].split() == ["1", "42"]
+                client.send(python="print('initialized')")
+                assert last_result_text(client) == "initialized\n", last_result_text(
+                    client
+                )
+                return client.finish()
+        finally:
+            for checkpoint in checkpoints:
+                checkpoint.close()
 
 
 if __name__ == "__main__":

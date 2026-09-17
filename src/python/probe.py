@@ -25,7 +25,7 @@ print(
         {
             "executable": sys.executable,
             "libpython": library,
-            "version": ".".join(map(str, sys.version_info[:3])),
+            "version": sys.version.split()[0],
             "prefix": sys.prefix,
             "exec_prefix": sys.exec_prefix,
             "site_packages": directories,

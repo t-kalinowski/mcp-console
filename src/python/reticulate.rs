@@ -90,7 +90,6 @@ pub extern "C-unwind" fn mcp_console_install_python_runtime(libpython: SEXP) -> 
     super::library::install_runtime(super::RUNTIME_SOURCE)
         .map_err(|error| harp::anyhow!("{error}"))?;
     crate::sql::install_python_runtime().map_err(|error| harp::anyhow!("{error}"))?;
-    super::environment::attach(&libpython).map_err(|error| harp::anyhow!("{error}"))?;
     unsafe { Ok(libr::R_NilValue) }
 }
 

@@ -178,7 +178,8 @@ def test_preserves_live_reticulate_requirement_rules(
         client.send(
             # fmt: r
             r=code("""
-                initial <- reticulate::py_config()
+                config_reader <- reticulate::py_config
+                initial <- config_reader()
                 current <- reticulate::py_require()
                 replacement <- tryCatch(
                   reticulate::py_require(c(current$packages, "py-yaml12"), action = "set"),
@@ -201,6 +202,9 @@ def test_preserves_live_reticulate_requirement_rules(
                 sys <- reticulate::import("sys")
                 stopifnot(
                   "py-yaml12" %in% reticulate::py_require()$packages,
+                  identical(config_reader, reticulate::py_config),
+                  identical(config_reader(), config),
+                  identical(reticulate::py_exe(), sys$executable),
                   identical(config$python, sys$executable),
                   identical(config$executable, sys$executable),
                   identical(config$prefix, sys$prefix),
@@ -211,6 +215,58 @@ def test_preserves_live_reticulate_requirement_rules(
                     identical(dirname(config$virtualenv_activate), dirname(sys$executable)),
                   identical(config$pythonhome, paste(sys$prefix, sys$exec_prefix, sep = ":"))
                 )
+                """)
+        )
+        assert last_result_text(client) == "[done]", last_result_text(client)
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_matches_live_python_version_constraints_like_the_resolver(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with McpClient(binary, execution.serve()) as client:
+        client.initialize_and_list_tools()
+        client.send(
+            # fmt: r
+            r=code("""
+                invisible(reticulate::py_config())
+                version <- as.character(reticulate::py_version(patch = TRUE))
+                minor <- as.character(reticulate::py_version())
+                current <- reticulate::py_require()
+                for (constraint in c(
+                  paste0(version, "rc1"),
+                  paste0("1!", version),
+                  paste0(version, "+console"),
+                  paste0(version, ".post1"),
+                  paste0(version, ".dev1"),
+                  paste0(">", minor)
+                )) {
+                  error <- tryCatch(
+                    reticulate::py_require(
+                      "humanize; python_version < '0'",
+                      python_version = constraint
+                    ),
+                    error = conditionMessage
+                  )
+                  stopifnot(
+                    is.character(error),
+                    grepl("Python version requirements cannot be changed", error, fixed = TRUE),
+                    identical(reticulate::py_require(), current)
+                  )
+                }
+                for (constraint in c(
+                  version,
+                  minor,
+                  paste0("==", minor),
+                  paste0("<=", minor)
+                )) {
+                  reticulate::py_require(python_version = constraint)
+                }
+                stopifnot(identical(
+                  reticulate::py_require()$python_version,
+                  current$python_version
+                ))
                 """)
         )
         assert last_result_text(client) == "[done]", last_result_text(client)
