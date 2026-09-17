@@ -174,6 +174,19 @@ class FixtureAuthoringTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertIn("indent code() payload and closing delimiter", result.stdout)
 
+    def test_multiline_code_starts_after_the_opening_delimiter(self) -> None:
+        result = self.check(
+            # fmt: python
+            code('''
+                # fmt: python
+                python = code("""if True:
+                    print(2)
+                    """)
+                ''')
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("start code() payload after the opening line", result.stdout)
+
     def test_r_home_selects_the_parser_independently_of_path(self) -> None:
         selected = self.root / "selected/bin/Rscript"
         selected.parent.mkdir(parents=True)
