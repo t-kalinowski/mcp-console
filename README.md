@@ -217,7 +217,7 @@ scripts/test --update BOUNDARY/SUITE[::CASE]
 The installation contains `bin/mcp-console`, a private runner under `libexec`, and its license notices under `share/licenses/mcp-console`.
 Linux installations also include `libexec/bwrap` and its license.
 Move the whole bundle to relocate it; copying only `mcp-console` leaves the runner behind.
-After `scripts/stage-sandbox-runner`, `cargo build` prepares a runnable development bundle under `target` when Cargo uses its default shared build/target layout.
+After `scripts/stage-sandbox-runner`, `scripts/with-checkout cargo build` prepares a runnable development bundle under `target` when Cargo uses its default shared build/target layout.
 For this native bundle, use `CARGO_TARGET_DIR` or `--target-dir` to change the build location; a separate intermediate directory (`CARGO_BUILD_BUILD_DIR` or `build.build-dir`) is unsupported.
 `cargo install` installs only the main binary and is not a complete installation.
 [RELEASE.md](RELEASE.md) describes the bundle and build caches.

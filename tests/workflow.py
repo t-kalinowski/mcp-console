@@ -55,7 +55,8 @@ class WorkflowTests(unittest.TestCase):
 
             if os.environ.get("HOLD_STAGE"):
                 Path("target").rename("hidden-target")
-                print("stage ready", flush=True)
+                with open(os.environ["STAGE_READY"], "wb", buffering=0) as receipt:
+                    receipt.write(b"1")
                 assert sys.stdin.buffer.read(1) == b"1"
             print("stage complete", flush=True)
             """,
@@ -122,21 +123,20 @@ class WorkflowTests(unittest.TestCase):
 
     def start_check(self, root: Path | None = None) -> subprocess.Popen[str]:
         root = root or self.root
+        ready = FifoCheckpoint.create(root / "stage-ready")
+        self.addCleanup(ready.close)
         process = subprocess.Popen(
             [root / "scripts/check"],
             cwd=root,
-            env=self.environment | {"HOLD_STAGE": "1"},
+            env=self.environment | {"HOLD_STAGE": "1", "STAGE_READY": str(ready.path)},
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
         )
         self.addCleanup(self.finish_check, process)
-        assert process.stdout is not None
-        for line in process.stdout:
-            if line.rstrip() == "stage ready":
-                return process
-        self.fail("check exited before the stage receipt")
+        ready.wait("stage owns checkout and has hidden target")
+        return process
 
     def finish_check(self, process: subprocess.Popen[str]) -> None:
         if process.poll() is None:
@@ -157,6 +157,7 @@ class WorkflowTests(unittest.TestCase):
             # fmt: python
             """
             print("client_server/output/test_previews::example: failed", flush=True)
+            print("rerun: scripts/test --timeout 45 client_server/output/test_previews::example")
             raise SystemExit(7)
             """,
         )
@@ -183,6 +184,31 @@ class WorkflowTests(unittest.TestCase):
             self.assertGreaterEqual(phase["elapsed_seconds"], 0)
             self.assertTrue(Path(phase["log"]).is_file())
         self.assertIn("result.json", result.stderr)
+        self.assertIn(
+            "rerun: scripts/test --timeout 45 client_server/output/test_previews::example",
+            result.stderr,
+        )
+
+    def test_validation_output_is_kept_in_advertised_phase_logs(self) -> None:
+        self.write_script(
+            "scripts/check-core",
+            # fmt: python
+            """
+            import sys
+
+            print("complete phase output")
+            print("complete phase diagnostic", file=sys.stderr)
+            """,
+        )
+        result = self.run_command("scripts/check")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "")
+        self.assertNotIn("complete phase output", result.stderr)
+        (record,) = self.records()
+        phase = record["phases"][1]
+        self.assertIn(phase["log"], result.stderr)
+        self.assertIn("complete phase output\n", Path(phase["log"]).read_text())
+        self.assertIn("complete phase diagnostic\n", Path(phase["log"]).read_text())
 
     def test_signalled_phase_preserves_shell_exit_status(self) -> None:
         self.write_script(
@@ -200,6 +226,18 @@ class WorkflowTests(unittest.TestCase):
         (record,) = self.records()
         self.assertEqual(record["exit_status"], 128 + signal.SIGTERM)
         self.assertEqual(record["phases"][-1]["exit_status"], -signal.SIGTERM)
+
+    def test_source_archive_does_not_inherit_enclosing_git_metadata(self) -> None:
+        archive = self.root / "archive"
+        shutil.copytree(
+            self.root, archive, ignore=shutil.ignore_patterns(".git", "archive")
+        )
+        result = self.run_command("scripts/check", root=archive)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        (path,) = (archive / ".dev-workflow/runs").glob("*/result.json")
+        record = json.loads(path.read_text())
+        self.assertIsNone(record["revision"])
+        self.assertIsNone(record["worktree_status"])
 
     def test_packaging_conflict_survives_target_rename(self) -> None:
         process = self.start_check()
@@ -286,25 +324,13 @@ class WorkflowTests(unittest.TestCase):
                 group = None
                 try:
                     assert process.stdout is not None
-                    receipt = read_lines(
-                        process.stdout, 3 if nested else 2, "stubborn phase setup"
-                    )
+                    receipt = read_lines(process.stdout, 1, "stubborn phase setup")
                     self.assertTrue(receipt[-1].startswith("stubborn ready "), receipt)
                     group = int(receipt[-1].rsplit(" ", 1)[1])
                     process.terminate()
                     self.assertEqual(process.wait(timeout=10), 128 + signal.SIGTERM)
                     # EOF also proves the stubborn writer has retired.
                     process.communicate(timeout=10)
-                    record = next(
-                        r
-                        for r in self.records()
-                        if r["command"] == ["run", *command[1:]]
-                    )
-                    self.assertEqual(record["exit_status"], 128 + signal.SIGTERM)
-                    if not nested:
-                        self.assertEqual(
-                            record["phases"][0]["exit_status"], -signal.SIGKILL
-                        )
                 finally:
                     if group is not None:
                         try:
@@ -318,6 +344,48 @@ class WorkflowTests(unittest.TestCase):
                     "scripts/with-checkout", sys.executable, "-c", "pass"
                 )
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_quit_retires_phase_before_releasing_ownership(self) -> None:
+        self.write_script(
+            "waiting.py",
+            # fmt: python
+            """
+            import os
+            import signal
+
+            print(f"waiting {os.getpgrp()}", flush=True)
+            signal.pause()
+            """,
+        )
+        process = subprocess.Popen(
+            ["scripts/with-checkout", sys.executable, "waiting.py"],
+            cwd=self.root,
+            env=self.environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            start_new_session=True,
+        )
+        group = None
+        try:
+            assert process.stdout is not None
+            receipt = read_lines(process.stdout, 1, "waiting phase setup")
+            self.assertTrue(receipt[-1].startswith("waiting "), receipt)
+            group = int(receipt[-1].split()[1])
+            process.send_signal(signal.SIGQUIT)
+            self.assertEqual(process.wait(timeout=10), 128 + signal.SIGQUIT)
+            process.communicate(timeout=10)
+        finally:
+            if group is not None:
+                try:
+                    os.killpg(group, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            if process.poll() is None:
+                process.kill()
+            process.communicate(timeout=10)
+        result = self.run_command("scripts/with-checkout", sys.executable, "-c", "pass")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_full_gate_budget_is_shared_across_checkouts(self) -> None:
         other = self.directory / "other"
@@ -395,12 +463,8 @@ class WorkflowTests(unittest.TestCase):
         result = self.run_command("scripts/with-checkout", sys.executable, "output.py")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, '{"answer": 42}\n')
-        self.assertIn("diagnostic\n", result.stderr)
-        self.assertIn("result.json", result.stderr)
-        (record,) = self.records()
-        output = Path(record["phases"][0]["log"]).read_text()
-        self.assertIn('{"answer": 42}\n', output)
-        self.assertIn("diagnostic\n", output)
+        self.assertEqual(result.stderr, "diagnostic\n")
+        self.assertEqual(self.records(), [])
 
     def test_repeated_cancellation_cannot_interrupt_escalation(self) -> None:
         self.write_script(
@@ -435,7 +499,7 @@ class WorkflowTests(unittest.TestCase):
         group = None
         try:
             assert process.stdout is not None
-            output = read_lines(process.stdout, 2, "stubborn phase setup")
+            output = read_lines(process.stdout, 1, "stubborn phase setup")
             group = int(output[-1].rsplit(" ", 1)[1])
             process.terminate()
             receipt.wait("cancellation reached the phase")
@@ -483,8 +547,6 @@ class WorkflowTests(unittest.TestCase):
                 "scripts/with-checkout", sys.executable, "parent.py"
             )
             self.assertEqual(result.returncode, 7, result.stdout + result.stderr)
-            (record,) = self.records()
-            self.assertEqual(record["exit_status"], 7)
             result = self.run_command(
                 "scripts/with-checkout", sys.executable, "-c", "pass"
             )
@@ -557,7 +619,7 @@ class WorkflowTests(unittest.TestCase):
         parent = None
         try:
             assert process.stdout is not None
-            output = read_lines(process.stdout, 2, "parent and child setup")
+            output = read_lines(process.stdout, 1, "parent and child setup")
             parent = int(output[-1].rsplit(" ", 1)[1])
             with Events() as events:
                 events.watch_process(parent)
