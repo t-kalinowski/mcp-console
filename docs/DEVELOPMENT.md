@@ -4,6 +4,30 @@ Run development commands from the repository root.
 `scripts/check` runs companion staging, core checks, release transcript tests, and installation checks in that order.
 Installation checks run last because they replace and hide the shared `target` directory.
 
+## Resume from a small checkpoint
+
+For work that spans validation, review, or context changes, copy the [task checkpoint template](templates/task-checkpoint.md) to `.dev-workflow/task.md` and replace its placeholders.
+This file is ignored by Git; keep task progress there and durable recipes in the owning documentation.
+Update it after a meaningful validation or review result and before handing off work.
+When changing branches or stack layers, update the branch, intended base, and next action together.
+
+Resume with a bounded sequence:
+
+1. Read the checkpoint and `git status --short --branch`; verify its branch, base, and working revision before relying on it.
+2. Read the relevant development route and owning contract, then use scoped `rg -n` searches or `scripts/test --locate SELECTOR` to find the implementation and public case.
+3. Read the relevant phase log around the failure and run the recorded focused command.
+   Expand the search or log range when that evidence requires it, rather than repeatedly dumping whole files or session histories.
+
+Copy validation facts from the completion record: command, revision, worktree status at admission, result, exact failing selectors, and log paths.
+A passing focused command does not establish a passing full gate, and a result for an earlier revision or dirty tree does not validate the current clean revision.
+A null completion status means unfinished; it does not prove the process is still running.
+Keep the checkpoint short by linking evidence instead of copying output.
+
+Record the stopping condition from the user's request: local validation, push and PR publication, or hosted CI completion, including any requested review follow-up.
+Honor requests to push and return.
+Waiting for hosted CI is an explicit part of the task only when requested; do not start a watcher by default.
+Report the hosted state actually observed and distinguish it from local validation.
+
 ## Inspect local preparation
 
 Run `scripts/preflight` for a local inventory, or `scripts/preflight --json` to retain structured output.
