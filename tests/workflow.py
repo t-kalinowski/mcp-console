@@ -292,6 +292,7 @@ class WorkflowTests(unittest.TestCase):
                 )
                 self.assertNotEqual(result.returncode, 0, result.stdout)
                 self.assertIn("checkout is busy", result.stdout + result.stderr)
+                self.assertIn("Last recorded owner (may be stale)", result.stderr)
         self.finish_check(process)
         result = self.run_command(
             sys.executable, "-c", "import build_backend; build_backend.build_wheel('.')"
@@ -333,6 +334,52 @@ class WorkflowTests(unittest.TestCase):
             sys.executable, "-c", "import build_backend; build_backend.build_wheel('.')"
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_cancellation_during_git_metadata_finalizes_record(self) -> None:
+        ready = FifoCheckpoint.create(self.directory / "git-ready")
+        self.addCleanup(ready.close)
+        self.write_script(
+            "git",
+            # fmt: python
+            """
+            import os
+            import signal
+            import sys
+
+            if sys.argv[1:] == ["status", "--porcelain"]:
+                with open(os.environ["GIT_READY"], "wb", buffering=0) as receipt:
+                    receipt.write(b"1")
+                signal.pause()
+            else:
+                os.execv(os.environ["REAL_GIT"], ["git", *sys.argv[1:]])
+            """,
+        )
+        process = subprocess.Popen(
+            ["scripts/check"],
+            cwd=self.root,
+            env=self.environment
+            | {
+                "PATH": str(self.root) + os.pathsep + os.environ["PATH"],
+                "REAL_GIT": shutil.which("git"),
+                "GIT_READY": str(ready.path),
+            },
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            ready.wait("git status is collecting checkout metadata")
+            process.terminate()
+            _, stderr = process.communicate(timeout=10)
+            self.assertEqual(process.returncode, 128 + signal.SIGTERM)
+            (record,) = self.records()
+            self.assertEqual(record["exit_status"], 128 + signal.SIGTERM)
+            self.assertEqual(record["phases"], [])
+            self.assertIn("Validation record:", stderr)
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.communicate(timeout=10)
 
     def test_cancellation_escalates_for_direct_and_nested_stubborn_phases(self) -> None:
         self.write_script(
