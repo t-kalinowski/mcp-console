@@ -477,7 +477,14 @@ def resolve_managed_python(binary: Path, execution: Execution, directory: Path) 
         current_directory=workspace,
     ) as client:
         client.initialize_and_list_tools()
-        client.send(python='import sys\nprint(f"managed-python={sys.executable}")')
+        client.send(
+            # fmt: python
+            python=code("""
+                import sys
+
+                print(f"managed-python={sys.executable}")
+                """),
+        )
         output = last_result_text(client)
         client.finish()
     executable = Path(

@@ -1,5 +1,7 @@
 # Boundary tests
 
+For embedded programs, execution modes, and lifecycle receipts, start with the [authoring recipe](AUTHORING.md).
+
 Docker cases use the shared Linux daemon capability in `tests/support/docker.py` and the reproducible `examples/docker/Dockerfile`.
 Build the fixture before running tests and set `MCP_CONSOLE_TEST_DOCKER_IMAGE` to its tag or ID; see `docs/DOCKER.md` for commands.
 Missing Docker access or an unselected fixture skips integration cases; it is not Docker validation.

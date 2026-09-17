@@ -47,11 +47,11 @@ def test_custom_worker_skips_managed_python_preflight(
         environment,
     )
     client.initialize_and_list_tools()
-    # fmt: python
-    python = code(r"""
+    # The custom worker accepts its own command language in this field.
+    payload = code(r"""
         echo echo
         """).removesuffix("\n")
-    client.send(python=python)
+    client.send(python=payload)
     result = client.send(requirements={"python": ["py-yaml12"]})
     assert result["isError"] is True, result
     assert result["content"][0]["text"] == (

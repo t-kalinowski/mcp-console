@@ -664,7 +664,7 @@ def test_uses_reticulate_managed_uv_for_python_resolution(
         write_python_executable(
             path_uv,
             # fmt: python
-            code("""
+            code(r"""
                 #!/usr/bin/env python3
                 import os
                 from pathlib import Path

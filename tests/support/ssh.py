@@ -189,9 +189,9 @@ def client_environment(
     if remote_path is not None:
         # Keep the real SSH connection and remote shell, but give command
         # discovery a controlled PATH independent of account startup files.
-        # fmt: python
         launcher.write_text(
             f"#!{sys.executable}\n"
+            # fmt: python
             + code("""
                 import os
                 import shlex
@@ -199,10 +199,15 @@ def client_environment(
 
                 command, remote_path = CONFIGURATION
                 arguments = sys.argv[1:]
-                arguments[-1] = shlex.join([
-                    "/usr/bin/env", "PATH=" + remote_path,
-                    "/bin/sh", "-c", arguments[-1],
-                ])
+                arguments[-1] = shlex.join(
+                    [
+                        "/usr/bin/env",
+                        "PATH=" + remote_path,
+                        "/bin/sh",
+                        "-c",
+                        arguments[-1],
+                    ]
+                )
                 os.execv(command[0], [*command, *arguments])
                 """).replace("CONFIGURATION", repr((command, str(remote_path))))
         )

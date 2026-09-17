@@ -291,6 +291,7 @@ def main() -> None:
         ("release-tests", ["tests/release.py"]),
         ("runner-tests", ["tests/transcript_runner.py"]),
         ("workflow-tests", ["python3", "tests/workflow.py"]),
+        ("format-tests", ["python3", "tests/format.py"]),
         ("client-tests", ["tests/mcp_client.py"]),
         ("architecture", ["tests/architecture.py"]),
         ("rust-format", ["cargo", "fmt", "--all", "--check"]),
