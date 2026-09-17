@@ -12,6 +12,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
 from collections.abc import Iterator
@@ -95,13 +96,27 @@ def stop_phase(process: subprocess.Popen, *, owns_group: bool) -> None:
         except ProcessLookupError:
             pass
 
+    deadline = time.monotonic() + 5
     deliver(signal.SIGTERM)
     try:
         process.wait(timeout=5)
     except subprocess.TimeoutExpired:
         pass
-    # An exited leader can still have descendants holding the output pipe.
-    if owns_group or process.poll() is None:
+    if owns_group:
+        try:
+            os.killpg(process.pid, 0)
+        except ProcessLookupError:
+            return
+        # Group membership has no portable wait primitive once the leader exits.
+        # Give remaining members the rest of the grace period without polling.
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            print(
+                "[cleanup] waiting for phase descendants", file=sys.stderr, flush=True
+            )
+            time.sleep(remaining)
+        deliver(signal.SIGKILL)
+    elif process.poll() is None:
         deliver(signal.SIGKILL)
     process.wait()
 
@@ -161,16 +176,41 @@ class Run:
                     start_new_session=owns_group,
                 ) as process,
             ):
+                exited, wake = os.pipe()
+
+                def wait_for_exit() -> None:
+                    process.wait()
+                    os.write(wake, b"1")
+                    os.close(wake)
+
+                waiter = threading.Thread(target=wait_for_exit)
+                waiter.start()
                 try:
                     with selectors.DefaultSelector() as streams:
+                        streams.register(exited, selectors.EVENT_READ)
                         streams.register(
                             process.stdout, selectors.EVENT_READ, sys.stdout.buffer
                         )
                         streams.register(
                             process.stderr, selectors.EVENT_READ, sys.stderr.buffer
                         )
+                        drain_deadline = None
                         while streams.get_map():
-                            for key, _ in streams.select():
+                            timeout = (
+                                None
+                                if drain_deadline is None
+                                else max(0, drain_deadline - time.monotonic())
+                            )
+                            if timeout == 0:
+                                break
+                            ready = streams.select(timeout)
+                            if not ready:
+                                break
+                            for key, _ in ready:
+                                if key.data is None:
+                                    streams.unregister(exited)
+                                    drain_deadline = time.monotonic() + 1
+                                    continue
                                 chunk = os.read(key.fd, 65536)
                                 if not chunk:
                                     streams.unregister(key.fileobj)
@@ -178,11 +218,16 @@ class Run:
                                 log.write(chunk)
                                 key.data.write(chunk)
                                 key.data.flush()
+                        inherited_writers = bool(streams.get_map())
+                    if inherited_writers:
+                        stop_phase(process, owns_group=owns_group)
                     status = process.wait()
                 except BaseException:
                     stop_phase(process, owns_group=owns_group)
                     raise
                 finally:
+                    waiter.join()
+                    os.close(exited)
                     status = process.returncode
         finally:
             failures = []

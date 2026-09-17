@@ -197,6 +197,8 @@ scripts/test --update client_server/server/test_tools::initializes_and_lists_too
 
 `scripts/test` handles help, listing, location lookup, and invalid arguments before preparing the executable.
 Metadata commands do not claim build ownership or require an existing binary.
+Help and syntax-only validation run before `uv`, so they also work without a cached dependency environment.
+Listing, location lookup, and semantic selector validation may prepare that environment.
 Execution builds and uses `target/release/mcp-console`.
 The Python SDK integration dependencies retain the published lower bounds without exact version pins; `==2.*` also keeps MCP within the supported major.
 CI resolves current SDK releases when the weekly uv cache is empty and can reuse them for the rest of that UTC ISO week.

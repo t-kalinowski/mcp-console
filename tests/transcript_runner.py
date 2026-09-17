@@ -313,7 +313,12 @@ class TranscriptRunnerTests(unittest.TestCase):
         result = subprocess.run(
             [scripts / "test", "client_server/server/test_tools::selected"],
             cwd=self.root,
-            env={**os.environ, "PATH": f"{commands}{os.pathsep}{os.environ['PATH']}"},
+            env={
+                **os.environ,
+                "PATH": f"{commands}{os.pathsep}{os.environ['PATH']}",
+                # This miniature build uses fake Cargo and its own budget.
+                "XDG_CACHE_HOME": str(self.root / "cache"),
+            },
             capture_output=True,
             text=True,
             timeout=10,
@@ -445,6 +450,37 @@ class TranscriptRunnerTests(unittest.TestCase):
             with self.subTest(arguments=arguments):
                 result = self.run_runner(*arguments)
                 self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_help_and_syntax_errors_do_not_resolve_script_dependencies(self) -> None:
+        scripts = self.root / "scripts"
+        scripts.mkdir()
+        shutil.copy2(ROOT / "scripts/test", scripts / "test")
+        commands = self.root / "commands"
+        commands.mkdir()
+        uv = commands / "uv"
+        uv.write_text("#!/bin/sh\necho invoked > uv-receipt\nexit 97\n")
+        uv.chmod(0o755)
+        for arguments, status in (
+            (("--help",), 0),
+            (("--execution", "direct"), 2),
+            (("--jobs", "0"), 2),
+            (("--timeout", "nan"), 2),
+            (("--locate", "cli/example", "extra"), 2),
+        ):
+            with self.subTest(arguments=arguments):
+                result = subprocess.run(
+                    [scripts / "test", *arguments],
+                    cwd=self.root,
+                    env=os.environ
+                    | {"PATH": f"{commands}{os.pathsep}{os.environ['PATH']}"},
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                self.assertEqual(
+                    result.returncode, status, result.stdout + result.stderr
+                )
+                self.assertFalse((self.root / "uv-receipt").exists())
 
     def test_external_ssh_availability_gates_public_cases(self) -> None:
         shutil.copy2(

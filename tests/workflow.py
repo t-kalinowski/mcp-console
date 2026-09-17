@@ -15,7 +15,9 @@ from pathlib import Path
 
 from support.capture import read_lines
 from support.checkpoints import FifoCheckpoint
+from support.events import Events
 from support.normalization import code
+from support.requirements import PROCESS_EVENTS
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -443,6 +445,136 @@ class WorkflowTests(unittest.TestCase):
             if group is not None:
                 try:
                     os.killpg(group, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            if process.poll() is None:
+                process.kill()
+            process.communicate(timeout=10)
+
+    def test_phase_exit_does_not_wait_for_inherited_descendant_streams(self) -> None:
+        self.write_script(
+            "child.py",
+            # fmt: python
+            """
+            import signal
+
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            print("ready", flush=True)
+            signal.pause()
+            """,
+        )
+        self.write_script(
+            "parent.py",
+            # fmt: python
+            """
+            import os
+            import subprocess
+            import sys
+            from pathlib import Path
+
+            child = subprocess.Popen([sys.executable, "child.py"], stdout=subprocess.PIPE)
+            assert child.stdout.readline() == b"ready\\n"
+            Path("group").write_text(str(os.getpgrp()))
+            raise SystemExit(7)
+            """,
+        )
+        try:
+            result = self.run_command(
+                "scripts/with-checkout", sys.executable, "parent.py"
+            )
+            self.assertEqual(result.returncode, 7, result.stdout + result.stderr)
+            (record,) = self.records()
+            self.assertEqual(record["exit_status"], 7)
+            result = self.run_command(
+                "scripts/with-checkout", sys.executable, "-c", "pass"
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+        finally:
+            if (self.root / "group").exists():
+                try:
+                    os.killpg(int((self.root / "group").read_text()), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
+    @unittest.skipUnless(PROCESS_EVENTS.available, PROCESS_EVENTS.reason)
+    def test_descendant_can_finish_cleanup_after_its_leader_exits(self) -> None:
+        terminating = FifoCheckpoint.create(self.directory / "terminating")
+        release = FifoCheckpoint.create(self.directory / "release")
+        finished = FifoCheckpoint.create(self.directory / "finished")
+        for checkpoint in (terminating, release, finished):
+            self.addCleanup(checkpoint.close)
+        self.write_script(
+            "child.py",
+            # fmt: python
+            """
+            import os
+            import signal
+
+
+            def terminate(*_):
+                with open(os.environ["TERMINATING"], "wb", buffering=0) as receipt:
+                    receipt.write(b"1")
+                with open(os.environ["RELEASE"], "rb", buffering=0) as gate:
+                    assert gate.read(1) == b"1"
+                with open(os.environ["FINISHED"], "wb", buffering=0) as receipt:
+                    receipt.write(b"1")
+                raise SystemExit(0)
+
+
+            signal.signal(signal.SIGTERM, terminate)
+            print("ready", flush=True)
+            signal.pause()
+            """,
+        )
+        self.write_script(
+            "parent.py",
+            # fmt: python
+            """
+            import os
+            import signal
+            import subprocess
+            import sys
+
+            child = subprocess.Popen([sys.executable, "child.py"], stdout=subprocess.PIPE)
+            assert child.stdout.readline() == b"ready\\n"
+            print(f"parent ready {os.getpid()}", flush=True)
+            signal.pause()
+            """,
+        )
+        process = subprocess.Popen(
+            ["scripts/with-checkout", sys.executable, "parent.py"],
+            cwd=self.root,
+            env=self.environment
+            | {
+                "TERMINATING": str(terminating.path),
+                "RELEASE": str(release.path),
+                "FINISHED": str(finished.path),
+            },
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        parent = None
+        try:
+            assert process.stdout is not None
+            output = read_lines(process.stdout, 2, "parent and child setup")
+            parent = int(output[-1].rsplit(" ", 1)[1])
+            with Events() as events:
+                events.watch_process(parent)
+                process.terminate()
+                terminating.wait("child started cleanup")
+                self.assertIn(parent, events.wait(3))
+                self.assertEqual(
+                    read_lines(process.stdout, 1, "descendant cleanup grace"),
+                    ["[cleanup] waiting for phase descendants"],
+                )
+                release.release()
+                finished.wait("child completed cleanup after leader exit", timeout=3)
+            self.assertEqual(process.wait(timeout=10), 128 + signal.SIGTERM)
+        finally:
+            if parent is not None:
+                try:
+                    os.killpg(parent, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
             if process.poll() is None:
