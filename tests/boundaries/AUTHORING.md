@@ -25,7 +25,9 @@ Use `# fmt: r` for R programs.
 Do not label a custom worker's command language as Python or R merely because it travels in that tool field.
 
 Run `scripts/check-fixtures [PATH ...]` to check marked multiline programs; with no paths it scans Python files under `tests/`.
-It compiles constant Python programs and parses R with `Rscript --vanilla`, without evaluating either, and checks `code()` indentation.
+It compiles constant Python programs and parses R with `Rscript --vanilla`, without evaluating either, and checks direct `code()` payload indentation.
+When `R_HOME` is set, the parser is `$R_HOME/bin/Rscript`; otherwise it uses `Rscript` on `PATH`.
+Each formatting directive selects the expression on the following line; put it immediately before the program argument when calling a helper.
 Multiline literals assigned to `r`/`python`, including annotated assignments, or passed through those keyword arguments require the matching directive.
 Other embedded programs are identified by their directive; the checker does not infer a language from arbitrary string contents or follow variable assignments.
 Direct `r`/`python` literals are checked as written; `code()` supplies dedenting when used.
@@ -33,7 +35,8 @@ Other marked helper payloads use the recipe's dedented syntax convention; their 
 Multiline values are checked even when authored on one line with escaped newlines.
 Single-line expressions split into adjacent literals remain single-line programs.
 
-F-string templates are counted separately because their completed source depends on runtime values.
+Interpolated strings, transformations such as `.replace()`, and assembled expressions are counted separately because their completed source depends on runtime values.
+The checker does not compile strings nested inside interpolation expressions or transformation arguments as separate programs.
 Fragments appended through `+=` are not inferred as complete programs; they may only become valid after assembly.
 Their public acceptance case must exercise the assembled program.
 For a test that deliberately submits invalid syntax, document the reason immediately above the formatting directive:
@@ -47,6 +50,7 @@ r = code(r"""
 ```
 
 The skip exempts syntax parsing only; directive and indentation checks still apply.
+Use the complete `# syntax: skip` marker followed by whitespace and a reason.
 `scripts/check-core` runs the checker and its command regressions.
 `scripts/format` attempts Ruff, Yamark, rustfmt, Air, then the fixture checker and reports each result.
 Its default remains best effort; `scripts/format --strict` exits nonzero if any step fails or is missing, after attempting every step.

@@ -4,13 +4,60 @@
 import argparse
 import ast
 import io
+import os
+import re
 import subprocess
 import tempfile
 import textwrap
 import tokenize
+from collections.abc import Iterator
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def program_nodes(node: ast.AST) -> Iterator[ast.AST]:
+    yield node
+    # Interpolation expressions belong to the template, not separate programs.
+    if not isinstance(node, ast.JoinedStr):
+        for child in ast.iter_child_nodes(node):
+            yield from program_nodes(child)
+
+
+def program_expression(node: ast.AST) -> tuple[ast.AST, ast.Call | None]:
+    if isinstance(node, (ast.Assign, ast.AnnAssign, ast.keyword, ast.Expr)):
+        node = node.value
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "code"
+        and len(node.args) == 1
+        and not node.keywords
+    ):
+        return node.args[0], node
+    return node, None
+
+
+def declared_language(node: ast.AST) -> str | None:
+    if isinstance(node, ast.keyword):
+        return node.arg if node.arg in {"r", "python"} else None
+    if isinstance(node, (ast.Assign, ast.AnnAssign)):
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        return next(
+            (
+                target.id
+                for target in targets
+                if isinstance(target, ast.Name) and target.id in {"r", "python"}
+            ),
+            None,
+        )
+    return None
+
+
+def is_literal(node: ast.AST) -> bool:
+    return isinstance(node, ast.JoinedStr) or (
+        isinstance(node, ast.Constant) and isinstance(node.value, str)
+    )
 
 
 def main() -> None:
@@ -38,66 +85,53 @@ def main() -> None:
             for token in tokenize.generate_tokens(io.StringIO(source).readline)
             if token.type == tokenize.COMMENT
         }
-        parents = {
-            child: parent
-            for parent in ast.walk(tree)
-            for child in ast.iter_child_nodes(parent)
-        }
-        for node in ast.walk(tree):
-            if not (
-                isinstance(node, ast.JoinedStr)
-                or isinstance(node, ast.Constant)
-                and isinstance(node.value, str)
+        nodes = list(program_nodes(tree))
+        anchors = {}
+        programs = {}
+        for node in nodes:
+            line = getattr(node, "lineno", None)
+            if line is not None and (
+                line not in anchors or node.col_offset < anchors[line].col_offset
             ):
+                anchors[line] = node
+            wanted = declared_language(node)
+            if wanted is not None:
+                expression, code_call = program_expression(node)
+                if is_literal(expression):
+                    programs[expression] = (code_call, wanted, None, None)
+        for line, directive in comments.items():
+            if directive not in {"# fmt: r", "# fmt: python"}:
                 continue
-            if isinstance(parents.get(node), ast.JoinedStr):
+            anchor = anchors.get(line + 1)
+            if anchor is None:
+                errors.append(
+                    f"{path}:{line}: formatting directive must precede a program"
+                )
                 continue
-            parts = node.values if isinstance(node, ast.JoinedStr) else [node]
-            if not any(
+            expression, code_call = program_expression(anchor)
+            wanted = programs.get(expression, (None, declared_language(anchor)))[1]
+            marker = re.fullmatch(
+                r"# syntax: skip(?:\s+(.*))?", comments.get(line - 1, "")
+            )
+            skip = (marker[1] or "").strip() if marker else None
+            programs[expression] = (
+                code_call,
+                wanted,
+                directive.removeprefix("# fmt: "),
+                skip,
+            )
+        for node, (code_call, wanted, language, skip) in programs.items():
+            # The directive selects one complete expression. Transformations and
+            # assembled values need their public case, not partial evaluation.
+            parts = (
+                (node.values if isinstance(node, ast.JoinedStr) else [node])
+                if is_literal(node)
+                else None
+            )
+            if parts is not None and not any(
                 isinstance(part, ast.Constant) and "\n" in part.value for part in parts
             ):
                 continue
-            ancestors = [node]
-            while ancestors[-1] in parents and not isinstance(ancestors[-1], ast.stmt):
-                ancestors.append(parents[ancestors[-1]])
-            language = wanted = skip = None
-            code_call = None
-            for ancestor in ancestors:
-                if isinstance(ancestor, ast.keyword) and ancestor.arg in {
-                    "r",
-                    "python",
-                }:
-                    wanted = ancestor.arg
-                # Direct complete bindings only; += fragments need assembly
-                # before their syntax can be validated by a public case.
-                if wanted is None and isinstance(ancestor, (ast.Assign, ast.AnnAssign)):
-                    targets = (
-                        ancestor.targets
-                        if isinstance(ancestor, ast.Assign)
-                        else [ancestor.target]
-                    )
-                    wanted = next(
-                        (
-                            t.id
-                            for t in targets
-                            if isinstance(t, ast.Name) and t.id in {"r", "python"}
-                        ),
-                        wanted,
-                    )
-                if (
-                    isinstance(ancestor, ast.Call)
-                    and isinstance(ancestor.func, ast.Name)
-                    and ancestor.func.id == "code"
-                ):
-                    code_call = ancestor
-                line = getattr(ancestor, "lineno", None)
-                if language is None and line is not None:
-                    directive = comments.get(line - 1, "")
-                    if directive in {"# fmt: r", "# fmt: python"}:
-                        language = directive.removeprefix("# fmt: ")
-                        marker = comments.get(line - 2, "")
-                        if marker.startswith("# syntax: skip"):
-                            skip = marker.removeprefix("# syntax: skip").strip()
             location = f"{path}:{node.lineno}"
             if language is None:
                 if wanted:
@@ -116,12 +150,12 @@ def main() -> None:
                     for line in lines[node.lineno : node.end_lineno - 1]
                     if line.strip()
                 ]
-                closing = lines[node.end_lineno - 1]
+                closing = lines[node.end_lineno - 1].encode()[: node.end_col_offset - 3]
                 if (
                     payload
                     and min(len(line) - len(line.lstrip()) for line in payload)
                     != indentation
-                ) or len(closing) - len(closing.lstrip()) != indentation:
+                ) or closing != b" " * indentation:
                     errors.append(
                         f"{location}: indent code() payload and closing delimiter by four spaces"
                     )
@@ -129,7 +163,9 @@ def main() -> None:
                 if not skip:
                     errors.append(f"{location}: syntax skip requires a reason")
                 skipped += 1
-            elif any(isinstance(part, ast.FormattedValue) for part in parts):
+            elif parts is None or any(
+                isinstance(part, ast.FormattedValue) for part in parts
+            ):
                 dynamic += 1
             else:
                 program = "".join(part.value for part in parts)
@@ -152,8 +188,10 @@ def main() -> None:
                 path = Path(temporary) / str(index)
                 path.write_text(program)
                 files.append(str(path))
+            r_home = os.environ.get("R_HOME")
+            rscript = str(Path(r_home) / "bin/Rscript") if r_home else "Rscript"
             result = subprocess.run(
-                ["Rscript", "--vanilla", "-e", R_PARSE, *files],
+                [rscript, "--vanilla", "-e", R_PARSE, *files],
                 capture_output=True,
                 text=True,
                 check=True,

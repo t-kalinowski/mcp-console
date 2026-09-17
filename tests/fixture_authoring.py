@@ -22,7 +22,9 @@ class FixtureAuthoringTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
-    def check(self, source: str) -> subprocess.CompletedProcess[str]:
+    def check(
+        self, source: str, *, environment: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess[str]:
         path = self.root / "fixture.py"
         path.write_text(source)
         return subprocess.run(
@@ -30,6 +32,7 @@ class FixtureAuthoringTests(unittest.TestCase):
             capture_output=True,
             text=True,
             timeout=30,
+            env=environment,
         )
 
     def test_parses_both_languages_without_evaluating(self) -> None:
@@ -120,6 +123,105 @@ class FixtureAuthoringTests(unittest.TestCase):
         )
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertIn("unexpected indent", result.stdout)
+
+    def test_program_expressions_exclude_interpolation_and_replacement_data(
+        self,
+    ) -> None:
+        # fmt: python
+        interpolated = code('''
+            # fmt: python
+            python = code(f"""
+                {render(DATA)}
+                """)
+            ''').replace("DATA", "'''human readable\n    label'''")
+        # fmt: python
+        transformed = code(r'''
+            # fmt: python
+            python = code("""
+                print(42)
+                """).replace("not Python prose!\n", "")
+            ''')
+        for source in (interpolated, transformed):
+            with self.subTest(source=source):
+                result = self.check(source)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("1 dynamic template", result.stdout)
+
+    def test_syntax_skip_requires_the_complete_marker(self) -> None:
+        # fmt: python
+        template = code('''
+            MARKER
+            # fmt: python
+            python = code("""
+                return 1
+                """)
+            ''')
+        for marker in ("# syntax: skipper typo", "# syntax: skipbecause"):
+            with self.subTest(marker=marker):
+                result = self.check(template.replace("MARKER", marker))
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn("python syntax:", result.stdout)
+
+    def test_multiline_code_closes_on_its_own_indented_line(self) -> None:
+        result = self.check(
+            # fmt: python
+            code('''
+                # fmt: python
+                python = code("""
+                    print(42)""")
+                ''')
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("indent code() payload and closing delimiter", result.stdout)
+
+    def test_r_home_selects_the_parser_independently_of_path(self) -> None:
+        selected = self.root / "selected/bin/Rscript"
+        selected.parent.mkdir(parents=True)
+        selected.write_text(
+            f"#!{sys.executable}\n"
+            # fmt: python
+            + code("""
+                import os
+                from pathlib import Path
+
+                Path(os.environ["PARSER_RECEIPT"]).write_text("selected")
+                """)
+        )
+        selected.chmod(0o755)
+        commands = self.root / "commands"
+        commands.mkdir()
+        wrong = commands / "Rscript"
+        wrong.write_text(
+            f"#!{sys.executable}\n"
+            # fmt: python
+            + code("""
+                raise SystemExit(9)
+                """)
+        )
+        wrong.chmod(0o755)
+        empty = self.root / "empty"
+        empty.mkdir()
+        receipt = self.root / "parser-receipt"
+        for path in (commands, empty):
+            with self.subTest(path=path):
+                result = self.check(
+                    # fmt: python
+                    code('''
+                        # fmt: r
+                        r = code("""
+                            stop("must not run")
+                            """)
+                        '''),
+                    environment=os.environ
+                    | {
+                        "R_HOME": str(selected.parent.parent),
+                        "PATH": str(path),
+                        "PARSER_RECEIPT": str(receipt),
+                    },
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(receipt.read_text(), "selected")
+                receipt.unlink()
 
     def test_escaped_multiline_cells_are_checked(self) -> None:
         result = self.check(

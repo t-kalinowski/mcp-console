@@ -278,9 +278,9 @@ class TranscriptRunnerTests(unittest.TestCase):
         commands = self.root / "commands"
         commands.mkdir()
         cargo = commands / "cargo"
-        # fmt: python
         cargo.write_text(
             f"#!{sys.executable}\n"
+            # fmt: python
             + code(
                 """
                 import sys
