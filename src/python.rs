@@ -14,10 +14,12 @@ pub(crate) enum PreparationOutcome {
 
 /// Rust-owned Python runtime boundary.
 ///
-/// Rust owns the selected interpreter library, initialization, and private
-/// evaluator source, while the current backend delegates object conversion and
-/// evaluation dispatch to reticulate.
-pub(crate) struct Runtime(reticulate::Runtime);
+/// Reticulate selects and configures Python; cells enter the private evaluator
+/// directly through the retained CPython library.
+pub(crate) struct Runtime {
+    startup: reticulate::Runtime,
+    next_evaluation_id: u64,
+}
 
 pub(crate) enum SqlProvider {
     R,
@@ -34,15 +36,23 @@ pub(crate) fn configure_worker_environment(
 
 impl Runtime {
     pub(crate) fn initialize() -> Result<Self, String> {
-        reticulate::Runtime::initialize().map(Self)
+        Ok(Self {
+            startup: reticulate::Runtime::initialize()?,
+            next_evaluation_id: 1,
+        })
     }
 
     pub(crate) fn evaluate(&mut self, source: &str) -> Result<(), String> {
-        self.0.evaluate(source)
+        let filename = format!("<mcp-console:python:e{}>", self.next_evaluation_id);
+        self.next_evaluation_id += 1;
+        if !self.startup.ensure_initialized()? {
+            return Ok(());
+        }
+        library::evaluate(source, &filename)
     }
 
     pub(crate) fn prepare(&self, packages: Vec<String>) -> Result<PreparationOutcome, String> {
-        self.0.prepare(packages)
+        self.startup.prepare(packages)
     }
 }
 

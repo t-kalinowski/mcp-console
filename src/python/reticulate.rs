@@ -5,11 +5,14 @@ use super::PreparationOutcome;
 const PYTHON_BRIDGE_SOURCE: &str = include_str!("bridge.R");
 const PYTHON_INITIALIZER_SOURCE: &str = include_str!("initialize.R");
 
-/// The current Python backend, hosted by reticulate inside embedded R.
-pub(super) struct Runtime(crate::r_bridge::Bridge);
+/// Interpreter startup and environment preparation remain hosted by reticulate.
+pub(super) struct Runtime {
+    bridge: crate::r_bridge::Bridge,
+    initialized: bool,
+}
 
 pub(super) fn configure_worker_environment() -> std::io::Result<()> {
-    super::platform::set_environment(c"RETICULATE_REMAP_OUTPUT_STREAMS", c"1", true)
+    super::platform::set_environment(c"RETICULATE_REMAP_OUTPUT_STREAMS", c"0", true)
 }
 
 impl Runtime {
@@ -17,18 +20,26 @@ impl Runtime {
         let source = format!(
             "base::local(\n  {{\n    state <- ({PYTHON_BRIDGE_SOURCE})\n{PYTHON_INITIALIZER_SOURCE}\n    state\n  }},\n  envir = base::new.env(parent = base::baseenv())\n)"
         );
-        crate::r_bridge::Bridge::initialize(&source, "Python").map(Self)
+        Ok(Self {
+            bridge: crate::r_bridge::Bridge::initialize(&source, "Python")?,
+            initialized: false,
+        })
     }
 
-    pub(super) fn evaluate(&mut self, source: &str) -> Result<(), String> {
-        self.0.evaluate(source)
+    pub(super) fn ensure_initialized(&mut self) -> Result<bool, String> {
+        if !self.initialized {
+            // Keep the existing R error/interrupt boundary for startup only.
+            // An interrupted initialization is retried by the next cell.
+            self.initialized = self.bridge.evaluate_completed("")?;
+        }
+        Ok(self.initialized)
     }
 
     pub(super) fn prepare(&self, packages: Vec<String>) -> Result<PreparationOutcome, String> {
         let request = serde_json::to_string(&packages)
             .map_err(|error| format!("failed to serialize Python preparation: {error}"))?;
         let response = self
-            .0
+            .bridge
             .call1_string(c"prepare", &request)?
             .ok_or_else(|| "Python preparation bridge returned no response".to_string())?;
         serde_json::from_str(&response)
@@ -67,6 +78,19 @@ pub extern "C-unwind" fn mcp_console_load_python_library(path: SEXP) -> harp::Re
     Ok(harp::object::RObject::from(rust_owned).sexp)
 }
 
+// Reticulate's initialization lifecycle installs Console's native services.
+#[allow(clippy::result_large_err)]
+#[harp::register]
+pub extern "C-unwind" fn mcp_console_install_python_services(
+    libpython: SEXP,
+) -> harp::Result<SEXP> {
+    let libpython = String::try_from(harp::object::RObject::view(libpython))?;
+    super::library::load(std::path::Path::new(&libpython))
+        .and_then(|_| super::library::install_services())
+        .map_err(|error| harp::anyhow!("{error}"))?;
+    unsafe { Ok(libr::R_NilValue) }
+}
+
 // Install the private evaluator through the Rust-owned CPython API while
 // retaining reticulate's existing post-initialization lifecycle point.
 #[allow(clippy::result_large_err)]
@@ -88,14 +112,6 @@ pub extern "C-unwind" fn mcp_console_install_python_runtime(libpython: SEXP) -> 
 #[harp::register]
 pub extern "C-unwind" fn mcp_console_finish_python_initialization() -> harp::Result<SEXP> {
     super::library::finish_initialization().map_err(|error| harp::anyhow!("{error}"))?;
-    unsafe { Ok(libr::R_NilValue) }
-}
-
-#[allow(clippy::result_large_err)]
-#[harp::register]
-pub extern "C-unwind" fn mcp_console_publish_python_plot(data: SEXP) -> harp::Result<SEXP> {
-    let data = String::try_from(harp::object::RObject::view(data))?;
-    crate::worker::publish_plot(Ok(data));
     unsafe { Ok(libr::R_NilValue) }
 }
 

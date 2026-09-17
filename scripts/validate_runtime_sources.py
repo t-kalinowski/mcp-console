@@ -19,6 +19,7 @@ EXPECTED_SOURCES = {
     "src/python/bridge.R",
     "src/python/initialize.R",
     "src/python/runtime.py",
+    "src/python/services.py",
     "src/r_environment/bridge.R",
     "src/r_graphics/bridge.R",
     "src/resolver/programs/duckdb_extensions.R",

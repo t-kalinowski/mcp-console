@@ -70,6 +70,10 @@ impl Bridge {
     }
 
     pub(crate) fn evaluate(&mut self, source: &str) -> Result<(), String> {
+        self.evaluate_completed(source).map(|_| ())
+    }
+
+    pub(crate) fn evaluate_completed(&mut self, source: &str) -> Result<bool, String> {
         let source_length = c_int::try_from(source.len())
             .map_err(|_| format!("{} source exceeds R's maximum string size", self.language))?;
         let evaluation_id = format!("e{}", self.next_evaluation_id);
@@ -103,14 +107,14 @@ impl Bridge {
             .map_err(|error| format!("failed to call the {} bridge: {error}", self.language))?;
         if evaluation_error != 0 {
             if interrupted {
-                return Ok(());
+                return Ok(false);
             }
             return Err(format!(
                 "{} bridge failed during R evaluation",
                 self.language
             ));
         }
-        Ok(())
+        Ok(true)
     }
 
     pub(crate) fn call0_integer(&self, function: &CStr) -> Result<c_int, String> {
