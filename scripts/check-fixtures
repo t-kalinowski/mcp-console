@@ -147,6 +147,11 @@ def main() -> None:
             if code_call is not None and node.lineno != node.end_lineno:
                 line = lines[code_call.lineno - 1]
                 indentation = len(line) - len(line.lstrip()) + 4
+                opening = lines[node.lineno - 1].encode()[node.col_offset :]
+                if not re.fullmatch(rb"[rRuUfF]*(?:\"{3}|'{3})", opening):
+                    errors.append(
+                        f"{location}: start code() payload after the opening line"
+                    )
                 payload = [
                     line
                     for line in lines[node.lineno : node.end_lineno - 1]
