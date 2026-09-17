@@ -37,6 +37,8 @@ Single-line expressions split into adjacent literals remain single-line programs
 
 Interpolated strings, transformations such as `.replace()`, and assembled expressions are counted separately because their completed source depends on runtime values.
 The checker does not compile strings nested inside interpolation expressions or transformation arguments as separate programs.
+It also does not inspect `code()` layout inside transformed or assembled expressions.
+The authoring layout still applies; review it directly, or assign the marked `code()` payload separately so the checker can inspect it before transformation.
 Fragments appended through `+=` are not inferred as complete programs; they may only become valid after assembly.
 Their public acceptance case must exercise the assembled program.
 For a test that deliberately submits invalid syntax, document the reason immediately above the formatting directive:

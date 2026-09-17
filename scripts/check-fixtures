@@ -25,6 +25,8 @@ def program_nodes(node: ast.AST) -> Iterator[ast.AST]:
 
 
 def program_expression(node: ast.AST) -> tuple[ast.AST, ast.Call | None]:
+    # Only direct code() payloads have statically checked layout. Do not descend
+    # into arbitrary dynamic composition to infer more program boundaries.
     if isinstance(node, (ast.Assign, ast.AnnAssign, ast.keyword, ast.Expr)):
         node = node.value
     if (
