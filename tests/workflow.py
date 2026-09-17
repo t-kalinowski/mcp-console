@@ -156,6 +156,9 @@ class WorkflowTests(unittest.TestCase):
             "scripts/check-core",
             # fmt: python
             """
+            import sys
+
+            print("complete failure diagnostic", file=sys.stderr)
             print("client_server/output/test_previews::example: failed", flush=True)
             print("rerun: scripts/test --timeout 45 client_server/output/test_previews::example")
             raise SystemExit(7)
@@ -184,6 +187,7 @@ class WorkflowTests(unittest.TestCase):
             self.assertGreaterEqual(phase["elapsed_seconds"], 0)
             self.assertTrue(Path(phase["log"]).is_file())
         self.assertIn("result.json", result.stderr)
+        self.assertIn("complete failure diagnostic", result.stderr)
         self.assertIn(
             "rerun: scripts/test --timeout 45 client_server/output/test_previews::example",
             result.stderr,

@@ -99,8 +99,9 @@ A dirty worktree is recorded explicitly; its result is not evidence for an uncha
 The overall exit status uses the shell convention `128 + signal` for a phase killed by a signal; the phase retains its negative subprocess status.
 Nested runs reference their parent's record and retain their own phase details.
 Records are updated after each phase, so an unfinished run has a null exit status.
-Each validation phase writes stdout and stderr directly to its log, preserving complete errors and tracebacks without forwarding pipes or duplicating nested output.
+Each validation phase writes stdout and stderr directly to its log, preserving complete errors and tracebacks.
 The terminal reports the phase, log path, completion status, failing selectors, and rerun commands on stderr.
+After a failed phase exits, its full log is also printed so CI logs retain the diagnostics.
 Read or tail the advertised log for detailed progress; nested phases advertise their own logs in the enclosing phase's log.
 `scripts/with-checkout` only adds ownership and command lifetime management: it inherits stdin, stdout, and stderr and creates no validation record.
 A forcibly killed owner may leave an unfinished record; a record is complete only when its exit status is present.
