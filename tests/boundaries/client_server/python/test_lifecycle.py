@@ -291,6 +291,57 @@ def test_interrupts_running_python_evaluation(
 
 
 @executions(DIRECT, SANDBOXED)
+def test_interrupts_raw_python_stdin(binary: Path, execution: Execution) -> Transcript:
+    with McpClient(binary, execution.serve()) as client:
+        client.initialize_and_list_tools()
+        # Complete startup before observing the blocking syscall.
+        # fmt: r
+        r = code("""
+            raw_event_wait <- function() Sys.sleep(0.001)
+            """)
+        client.send(r=r)
+        assert last_result_text(client) == "[done]"
+        # fmt: python
+        python = code("""
+            raw_state = object()
+            original_raw_state = raw_state
+            """)
+        client.send(python=python)
+        assert last_result_text(client) == "[done]"
+        # fmt: python
+        python = code("""
+            import os
+
+            # Exercise R's temporary SIGINT handler inside the same Python cell.
+            r.raw_event_wait()
+            print("reading raw stdin", flush=True)
+            try:
+                os.read(0, 1)
+            except KeyboardInterrupt:
+                print("raw read interrupted")
+            else:
+                raise AssertionError("raw read completed without an interrupt")
+            """)
+        wait_for_evaluation_output(
+            client,
+            "reading raw stdin\n\n[running; poll with an empty send]",
+            "Python raw stdin read",
+            python=python,
+            timeout_ms=0,
+        )
+        wait_for_evaluation_output(
+            client,
+            "raw read interrupted\n",
+            "Python raw stdin interrupt",
+            control="interrupt",
+            timeout_ms=0,
+        )
+        client.send(python="raw_state is original_raw_state")
+        assert last_result_text(client) == "True\n"
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
 def test_interrupts_nested_language_calls_once(
     binary: Path, execution: Execution
 ) -> Transcript:

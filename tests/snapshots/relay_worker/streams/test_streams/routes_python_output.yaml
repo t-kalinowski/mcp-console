@@ -29,7 +29,11 @@ relay:
 
     sys.setprofile(reject_r_console)
     print("Python stdout")
-    sys.stderr.write("Python stderr\n")
+    assert sys.stdout.write("") == 0
+    assert sys.stderr.write("Python stderr\n") == 14
+    assert sys.stderr.write("") == 0
+    assert sys.stdout.write("🐍\n") == 2
+    assert sys.stderr.write("🐍\n") == 2
     sys.setprofile(None)
     raise ValueError("boom")
 ---
@@ -47,6 +51,16 @@ worker:
     Python stderr
 ---
 worker:
+  kind: console_output
+  data: |
+    🐍
+---
+worker:
+  kind: console_diagnostic
+  data: |
+    🐍
+---
+worker:
   kind: console_diagnostic
   data: |
     Traceback (most recent call last):
@@ -59,7 +73,7 @@ worker:
 worker:
   kind: console_diagnostic
   data: |2
-      File "<mcp-console:python:e1>", line 15, in <module>
+      File "<mcp-console:python:e1>", line 19, in <module>
 ---
 worker:
   kind: console_diagnostic

@@ -23,10 +23,11 @@ class _Output:
         self.target = target
         self.publish = publish
 
-    def write(self, text: str) -> int | None:
+    def write(self, text: str) -> int:
         if not _managed():
             return self.target.write(text)
-        return self.publish(text)
+        self.publish(text)
+        return len(text)
 
     def flush(self) -> None:
         if not _managed():

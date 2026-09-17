@@ -39,12 +39,16 @@ def test_routes_python_output(binary: Path, execution: Execution) -> Transcript:
 
         sys.setprofile(reject_r_console)
         print("Python stdout")
-        sys.stderr.write("Python stderr\n")
+        assert sys.stdout.write("") == 0
+        assert sys.stderr.write("Python stderr\n") == 14
+        assert sys.stderr.write("") == 0
+        assert sys.stdout.write("🐍\n") == 2
+        assert sys.stderr.write("🐍\n") == 2
         sys.setprofile(None)
         raise ValueError("boom")
         """)
     output = _tool_text(client.send(python=python))
-    assert output.startswith("Python stdout\nPython stderr\nTraceback"), output
+    assert output.startswith("Python stdout\nPython stderr\n🐍\n🐍\nTraceback"), output
     assert output.endswith("ValueError: boom\n"), output
 
     # fmt: python

@@ -61,14 +61,25 @@ static void handle_interrupt(int signum) {
 static int install_interrupt_handler(void) {
     struct sigaction action = {0};
     action.sa_handler = handle_interrupt;
-    action.sa_flags = SA_RESTART;
+    /* Python must leave blocking syscalls to check its pending interrupt. */
+    action.sa_flags = atomic_load_explicit(&python_interrupt, memory_order_relaxed)
+        == NULL ? SA_RESTART : 0;
     sigemptyset(&action.sa_mask);
     return sigaction(SIGINT, &action, NULL);
 }
 
 int mcp_r_install_python_interrupt(void (*set_interrupt)(void)) {
     atomic_store_explicit(&python_interrupt, set_interrupt, memory_order_relaxed);
-    return install_interrupt_handler();
+    if (install_interrupt_handler() != 0) return -1;
+    /*
+     * R_SelectEx restores its temporary SIGINT handler with signal(). libc's
+     * siginterrupt bookkeeping keeps those later restores non-restarting too;
+     * clearing SA_RESTART with sigaction alone does not preserve that policy.
+     */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+    return siginterrupt(SIGINT, 1);
+#pragma GCC diagnostic pop
 }
 
 int mcp_r_console_configure(

@@ -784,8 +784,12 @@ def test_reads_unicode_nul_and_long_python_input(
             assert third == "queued"
             print(len(first), len(second), third)
             """)
+        # Observe managed input after startup before timing input completion.
+        client.send(python=python)
+        assert last_result_text(client) == (
+            '[input requested: "unicode> "]\n[waiting for stdin]'
+        )
         expected = (
-            '[input requested: "unicode> "]\n'
             '[input requested: "long> "]\n'
             '[input requested: "queued> "]\n'
             "12 4102 queued\n"
@@ -794,7 +798,6 @@ def test_reads_unicode_nul_and_long_python_input(
             client,
             expected,
             "Unicode, NUL, long and queued Python input",
-            python=python,
             stdin="Zażółć 🐍\0fin\n" + "🐍" * 4097 + "\0tail\nqueued\n",
         )
         # fmt: python
@@ -857,6 +860,7 @@ def test_python_input_eof_retires_worker(
 
                 gate_path = r.eof_gate
                 eof_marker = object()
+                input("ready for EOF> ")
                 reader, writer = os.pipe()
                 os.close(writer)
                 os.dup2(reader, 0)
@@ -868,12 +872,16 @@ def test_python_input_eof_retires_worker(
                 with open(gate_path, "rb", buffering=0) as gate:
                     assert gate.read(1) == b"1"
                 """)
+            client.send(python=python)
+            assert last_result_text(client) == (
+                '[input requested: "ready for EOF> "]\n[waiting for stdin]'
+            )
             wait_for_evaluation_output(
                 client,
                 '[input requested: "EOF> "]\n'
                 "Python input reached EOF\n\n[running; poll with an empty send]",
                 "Python EOF completes managed input before retirement",
-                python=python,
+                stdin="\n",
                 timeout_ms=0,
             )
             gate.release()

@@ -17,6 +17,7 @@ send:
 
     gate_path = r.eof_gate
     eof_marker = object()
+    input("ready for EOF> ")
     reader, writer = os.pipe()
     os.close(writer)
     os.dup2(reader, 0)
@@ -27,6 +28,16 @@ send:
         print("Python input reached EOF")
     with open(gate_path, "rb", buffering=0) as gate:
         assert gate.read(1) == b"1"
+result:
+  content:
+    - type: text
+      text: |-
+        [input requested: "ready for EOF> "]
+        [waiting for stdin]
+  isError: false
+---
+send:
+  stdin: "\n"
   timeout_ms: 0
 result:
   content:
