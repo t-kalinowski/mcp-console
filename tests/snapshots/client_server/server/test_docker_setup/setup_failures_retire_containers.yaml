@@ -37,7 +37,7 @@ stderr: |
 rejected_before_readiness: compatibility
 container_absent: true
 stderr: >
-  incompatible Docker bootstrap: expected protocol 3, Console 0.0.3;
+  incompatible Docker bootstrap: expected protocol 3, Console 0.0.4;
   received protocol 999, Console incompatible
 ---
 rejected_before_readiness: native_environment
