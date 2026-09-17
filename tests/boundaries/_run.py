@@ -17,6 +17,7 @@ import math
 import os
 import pickle
 import runpy
+import shlex
 import signal
 import sys
 import time
@@ -274,8 +275,18 @@ class RunningCase:
 
 
 class ProgressReporter:
-    def __init__(self, *, update: bool) -> None:
+    def __init__(
+        self, *, update: bool, full_update: bool, jobs: int, timeout: float
+    ) -> None:
         self.update = update
+        self.full_update = full_update
+        self.rerun = ["scripts/test"]
+        if update:
+            self.rerun.append("--update")
+        if full_update and jobs != parser.get_default("jobs"):
+            self.rerun += ["--jobs", str(jobs)]
+        if timeout != parser.get_default("timeout"):
+            self.rerun += ["--timeout", str(timeout)]
         self.running: dict[int, RunningCase] = {}
         self.progress_line_open = False
 
@@ -319,6 +330,9 @@ class ProgressReporter:
             )
         else:
             self._line(f"{running.selector}: failed", error=True)
+        if not succeeded:
+            rerun = self.rerun if self.full_update else [*self.rerun, running.selector]
+            self._line(f"rerun: {shlex.join(rerun)}", error=True)
 
     def cancel(self, index: int, diagnostics: str) -> None:
         running = self.running.pop(index)
@@ -614,7 +628,12 @@ def main() -> None:
         initialization.append(selected.pop(index))
         break
 
-    reporter = ProgressReporter(update=options.update)
+    reporter = ProgressReporter(
+        update=options.update,
+        full_update=full_update,
+        jobs=options.jobs,
+        timeout=options.timeout,
+    )
     try:
         run_cases(
             initialization,

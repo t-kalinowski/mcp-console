@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import select
+import shlex
 import shutil
 import signal
 import subprocess
@@ -19,6 +20,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from pathlib import Path
 
+from support.capture import read_lines
 from support.events import Events
 from support.native import SHARED_LIBRARY_FLAG
 from support.normalization import code
@@ -1473,6 +1475,57 @@ class TranscriptRunnerTests(unittest.TestCase):
             },
         )
 
+    def test_failure_rerun_preserves_custom_timeout(self) -> None:
+        (self.snapshots / "selected.yaml").write_text("---\nrunner: mismatch\n...\n")
+        result = self.run_runner(
+            "--timeout", "1200.5", "client_server/server/test_tools::selected"
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "rerun: scripts/test --timeout 1200.5 client_server/server/test_tools::selected",
+            result.stderr,
+        )
+
+    def test_failure_rerun_preserves_snapshot_update(self) -> None:
+        self.suite.write_text(
+            PUBLIC_SUITE
+            # fmt: python
+            + code("""
+                def test_selected(binary):
+                    raise RuntimeError("fixture failed before snapshot update")
+                """)
+        )
+        result = self.run_runner(
+            "--update", "client_server/server/test_tools::selected"
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "rerun: scripts/test --update client_server/server/test_tools::selected",
+            result.stderr,
+        )
+
+    def test_failure_rerun_preserves_full_update_with_orphans(self) -> None:
+        self.suite.write_text(
+            PUBLIC_SUITE
+            # fmt: python
+            + code("""
+                def test_selected(binary):
+                    raise RuntimeError("fixture failed before snapshot update")
+                """)
+        )
+        orphan = self.snapshots / "deleted_case.yaml"
+        orphan.write_text("---\nrunner: orphan\n...\n")
+        result = self.run_runner("--update", "--jobs", "1")
+        self.assertNotEqual(result.returncode, 0)
+        receipt = next(
+            line for line in result.stderr.splitlines() if line.startswith("rerun: ")
+        )
+        self.assertEqual(receipt, "rerun: scripts/test --update --jobs 1")
+        self.assertTrue(orphan.exists())
+        retried = self.run_runner(*shlex.split(receipt)[2:])
+        self.assertIn("fixture failed before snapshot update", retried.stderr)
+        self.assertNotIn("orphan snapshot:", retried.stderr)
+
     def test_parallel_failure_exits_and_reports_every_failure(self) -> None:
         self.suite.write_text(FAILING_SUITE, encoding="utf-8")
         for name in ("selected", "unselected"):
@@ -1497,17 +1550,16 @@ class TranscriptRunnerTests(unittest.TestCase):
                 acknowledgements += os.read(started, 2 - len(acknowledgements))
             self.assertEqual(os.write(release_first, b"1"), 1)
             assert process.stderr is not None
-            expected_failure = "client_server/server/test_tools::first_failure: failed"
-            observed_stderr = ""
-            deadline = time.monotonic() + 10
-            while expected_failure not in observed_stderr:
-                remaining = deadline - time.monotonic()
-                self.assertGreater(remaining, 0, "first failure was not reported")
-                ready, _, _ = select.select([process.stderr], [], [], remaining)
-                self.assertTrue(ready, "first failure was not reported")
-                line = process.stderr.readline()
-                self.assertNotEqual(line, "", "runner exited before reporting failure")
-                observed_stderr += line
+            # Descriptor reads avoid buffering part of the receipt above the pipe.
+            receipt = read_lines(process.stderr, 2, "first failure receipt")
+            self.assertEqual(
+                receipt,
+                [
+                    "client_server/server/test_tools::first_failure: failed",
+                    "rerun: scripts/test client_server/server/test_tools::first_failure",
+                ],
+            )
+            observed_stderr = "\n".join(receipt) + "\n"
             self.assertEqual(os.write(release_second, b"2"), 1)
             stdout, remaining_stderr = process.communicate(timeout=10)
             stderr = observed_stderr + remaining_stderr
@@ -1528,6 +1580,11 @@ class TranscriptRunnerTests(unittest.TestCase):
         self.assertNotEqual(process.returncode, 0)
         self.assertIn("client_server/server/test_tools::first_failure: failed", stderr)
         self.assertIn("client_server/server/test_tools::second_failure: failed", stderr)
+        for name in ("first_failure", "second_failure"):
+            self.assertIn(
+                f"rerun: scripts/test client_server/server/test_tools::{name}",
+                stderr,
+            )
         self.assertIn("runner: first actual", stderr)
         self.assertIn("runner: second actual", stderr)
         self.assertIn("multiple transcript cases failed (2 sub-exceptions)", stderr)

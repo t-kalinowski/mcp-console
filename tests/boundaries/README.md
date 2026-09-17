@@ -221,7 +221,8 @@ The case interpreter has no monitoring thread: fixtures can use `fork` and `pree
 Normal runs emit one flushed `.` for every passing case and end the progress line with a newline.
 A case that runs for one minute is named with its current status.
 The runner reports it again at two-minute elapsed intervals through ten minutes, then once every five minutes, and names it when it finishes.
-On failure, the runner prints the fully qualified selector before the error or diff.
+On failure, the runner prints the fully qualified selector and an exact `scripts/test` rerun command before the error or diff.
+Use the [development routes and validation ladder](../../docs/DEVELOPMENT.md) to choose a focused iteration loop.
 Snapshot updates retain their named `updated ...` and `removed ...` records instead of dots.
 This output belongs only to the test-runner user interface; it is not captured transcript data or part of the MCP or relay protocol.
 A `BOUNDARY/SUITE` selector runs every case in that file; a `BOUNDARY/SUITE::CASE` selector runs one named function.

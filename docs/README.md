@@ -29,7 +29,7 @@ Source and public acceptance tests remain the final authority when prose disagre
 
 ## Test contributors
 
-- [Development validation](DEVELOPMENT.md) describes checkout ownership, retained run records, and host concurrency.
+- [Development workflow](DEVELOPMENT.md) maps common tasks to public tests and describes the validation ladder, checkout ownership, retained run records, and host concurrency.
 - The [boundary test guide](../tests/boundaries/README.md) is the source of truth for process boundaries, selectors, normalization, and snapshot updates.
 - [`AGENTS.md`](../AGENTS.md) contains repository-wide maintenance rules and the source and test navigation map.
 
