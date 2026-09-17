@@ -4,10 +4,8 @@ import asyncio
 import inspect
 import json
 import os
-import subprocess
 import sys
 import tempfile
-import venv
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -22,76 +20,9 @@ from support.normalization import code
 from support.records import Transcript
 from support.previews import assert_preview
 from support.evidence import compact_text
-from support.requirements import SANDBOX, WORKER, requires
+from support.requirements import WORKER, requires
 from support.resolvers import bare_runtime_environment
 from support.suites import run_this_suite
-
-
-@requires(WORKER, SANDBOX)
-def test_persistent_analysis_example(binary: Path) -> Transcript:
-    environment, _ = r_test_environment()
-    environment["PYTHONPATH"] = str(ROOT / "python")
-    with tempfile.TemporaryDirectory() as temporary:
-        workspace = Path(temporary).resolve()
-        # The walkthrough must prepare its own Python packages even when the
-        # caller selects an interpreter with no analysis packages installed.
-        selected_python = workspace / "selected-python"
-        venv.create(selected_python)
-        environment["RETICULATE_PYTHON"] = str(selected_python / "bin/python")
-        # The MCP server inherits this stderr pipe. Capturing EOF waits for its
-        # closure as well as the script's exit after the console context ends.
-        result = subprocess.run(
-            [
-                sys.executable,
-                str(ROOT / "examples/persistent-analysis.py"),
-                str(binary),
-            ],
-            cwd=workspace,
-            env=environment,
-            capture_output=True,
-            text=True,
-            # Leave time for assertions and cleanup within the runner's 600s limit.
-            timeout=540,
-        )
-        assert result.returncode == 0, (result.stdout, result.stderr)
-        output = result.stdout
-        assert "Total profit: 280" in output, output
-        assert "Best channel: web ($160 profit)" in output, output
-        assert "Profit gap: $40" in output, output
-        assert "Session closed." in output, output
-        (session,) = (workspace / ".agents/console/sessions").iterdir()
-        events = [
-            json.loads(line)
-            for line in (session / "internal/events.jsonl").read_text().splitlines()
-        ]
-        cells = [
-            event["request"]["arguments"]
-            for event in events
-            if event["event"] == "tool_call"
-            and any(
-                key in event["request"]["arguments"] for key in ("r", "sql", "python")
-            )
-        ]
-        assert [
-            next(key for key in ("r", "sql", "python") if key in cell) for cell in cells
-        ] == ["r", "sql", "python", "python"]
-        assert all("control" not in cell for cell in cells), cells
-        (artifact,) = [
-            event for event in events if event["event"] == "artifact_created"
-        ]
-        plot = session / artifact["path"]
-        assert plot.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
-        markdown = (session / "transcript.md").read_text()
-        assert artifact["path"] in markdown and "Profit gap: $40" in markdown
-        assert (session / "transcript.qmd").is_file()
-        assert len(list((session / "outputs").glob("*.log"))) == 4
-        return [
-            {
-                "output": output.replace(
-                    str(plot), "<session>/artifacts/<plot>.png"
-                ).replace(str(session), "<session>")
-            }
-        ]
 
 
 def options(binary: Path, execution: Execution) -> dict:

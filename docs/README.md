@@ -7,7 +7,7 @@ Source and public acceptance tests remain the final authority when prose disagre
 
 ## Start here
 
-1. Start with the [Codex quickstart](../README.md#quickstart) and [analysis prompts](../README.md#try-it-with-codex), or run the [scripted installation check](PYTHON.md#scripted-installation-check) without a model.
+1. Start with the [quickstart](../README.md#quickstart) and [analysis prompts](../README.md#try-an-analysis), or choose a [Python integration](PYTHON.md).
 2. Follow the [process diagram](ARCHITECTURE.md#process-layout) into the server, relay, worker, and runner ownership sections.
 3. Read the [runtime limitations](BUILTIN_RUNTIME.md#current-limitations), [sandbox lifetime limits](SANDBOX.md#supported-hosts-and-lifetime-limits), and [dependency trust boundary](REQUIREMENTS.md#host-resolution-and-trust).
 4. Inspect the [recording formats and rendering behavior](ARCHITECTURE.md#recording-cell-output-and-image-artifacts) before sharing or executing recorded source.

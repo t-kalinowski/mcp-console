@@ -1,43 +1,27 @@
 # Python integrations
 
-The clients below are part of the current source checkout and require Python 3.11 or newer.
+MCP Console provides synchronous and asynchronous Python clients and adapters for these interfaces:
+
+| Interface                                   | Package extra   |
+| ------------------------------------------- | --------------- |
+| [Python clients](#python-clients)           | `client`        |
+| [chatlas](#chatlas)                         | `chatlas`       |
+| [OpenAI Responses](#openai-responses)       | `openai`        |
+| [OpenAI Agents](#openai-agents)             | `openai-agents` |
+| [Anthropic](#anthropic)                     | `anthropic`     |
+| [Official thread SDK](#official-thread-sdk) | `codex`         |
+
+The clients require Python 3.11 or newer and are part of the current source checkout.
 The published PyPI 0.0.3 wheels do not include these clients or extras.
-For the agent workflow, start with the [Codex quickstart](../README.md#quickstart).
-
-## Scripted installation check
-
-The [persistent analysis example](../examples/persistent-analysis.py) runs R, SQL, and Python cells through one live connection without a model API key.
-From the repository root, run:
+From the repository root, run your program with the appropriate extra; for example:
 
 ```sh
-uv tool run --python 3.12 --from ".[client]" python examples/persistent-analysis.py
+uv tool run --python 3.12 --from ".[client]" python your_client.py
 ```
 
-uv installs the checkout and the `client` extra into an environment it manages, then runs the script with that environment's Python.
-It builds the complete package and its private sandbox runner, using R, Git, rustup, and the [native build prerequisites](../RELEASE.md#private-sandbox-executable).
-The first run may download interpreters, packages, and build dependencies.
-The example uses managed Python, ignoring inherited `RETICULATE_PYTHON`, and needs no external dataset.
-
-Success includes `Total profit: 280`, SQL totals of 120 for store and 160 for web, `Best channel: web ($160 profit)`, and `Profit gap: $40`.
-It then prints `Session closed.` and paths to `transcript.md` and a PNG under `.agents/console/sessions/<run-id>/` in the working directory.
-The simple client prints `[image/png output]`; open the PNG to inspect the actual plot.
-
-The script has a ten-minute deadline and closes its connection on completion or error.
-Each `send` timeout limits waiting, not execution; the script polls unfinished work before submitting the next cell.
-The [public-boundary test](../tests/boundaries/client_server/integrations/test_python.py) runs this example and checks retained state, the expected results, recording, plot, and shutdown.
-
-## Run your own client
-
-From the repository root, run a client program with the appropriate extra:
-
-| Interface           | Run a client program                                                        |
-| ------------------- | --------------------------------------------------------------------------- |
-| Python client       | `uv tool run --python 3.12 --from ".[client]" python your_client.py`        |
-| chatlas             | `uv tool run --python 3.12 --from ".[chatlas]" python your_client.py`       |
-| OpenAI Responses    | `uv tool run --python 3.12 --from ".[openai]" python your_client.py`        |
-| OpenAI Agents       | `uv tool run --python 3.12 --from ".[openai-agents]" python your_client.py` |
-| Anthropic           | `uv tool run --python 3.12 --from ".[anthropic]" python your_client.py`     |
-| Official thread SDK | `uv tool run --python 3.12 --from ".[codex]" python your_client.py`         |
+uv installs the checkout and the selected extra into an environment it manages.
+The first installation builds the complete bundle and may download interpreters, packages, and build dependencies; see the [source installation prerequisites](../RELEASE.md#private-sandbox-executable).
+For use with an MCP client, see the [quickstart](../README.md#quickstart).
 
 The base package installs the executable without framework dependencies.
 For command-only use, `uv tool install --reinstall .` installs the complete checkout as a persistent tool.

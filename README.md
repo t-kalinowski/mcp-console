@@ -4,6 +4,11 @@ MCP Console is an interactive, persistent computational workspace for agents.
 One MCP tool, `send`, provides R, Python, and SQL cells, interactive input, dependency preparation, polling, interruption, and restart.
 Data, models, imports, and database state survive between calls, so an analysis can move between languages without starting over.
 
+R, Python, and DuckDB are embedded in a single worker process.
+Python can access R variables through `r.name`, R can access Python objects through `py$name`, and SQL can query live R data frames.
+Data passes through in-process object bridges and conversions; NumPy can view R numeric arrays directly in memory.
+An agent can choose the language and libraries that fit each step without managing data transfers between separate runtime sessions.
+
 Model-visible text is bounded to 8 KiB per response, with separate image limits.
 The server keeps recordings, plot artifacts, and raw cell output outside the model context; raw text retention is capped at 1 GiB per cell.
 A separate runtime process executes cells, with native sandboxing enabled by default and explicit ownership of startup, interruption, and cleanup.
@@ -11,46 +16,53 @@ A separate runtime process executes cells, with native sandboxing enabled by def
 ## Status
 
 This is a **development preview** with changing interfaces.
-The scripted installation check exercises the current checkout and default sandbox on Apple Silicon macOS.
-That check does not establish readiness for arbitrary workloads.
 MCP Console supports macOS and Linux; Windows is unsupported.
 See the [runtime limitations](docs/BUILTIN_RUNTIME.md#current-limitations) and [sandbox lifetime limits](docs/SANDBOX.md#supported-hosts-and-lifetime-limits).
 
 The built-in worker requires **R even for Python and SQL**.
 It embeds R, uses reticulate for Python interoperability, and provides a persistent DuckDB connection for SQL.
-Python-only execution is not implemented.
+Python-only execution is not yet implemented.
 
 ## Quickstart
 
-Connect MCP Console to Codex and try an analysis that keeps its state across R, SQL, and Python.
-These commands install **the current source checkout**, including its private sandbox runner.
+Use an MCP client of your choice, such as [Codex](https://developers.openai.com/codex/mcp), [Claude Code](https://code.claude.com/docs/en/mcp), or [OpenCode](https://opencode.ai/docs/mcp-servers/).
+The example below uses Codex.
 
-Prerequisites:
+You need [uv](https://docs.astral.sh/uv/getting-started/installation/) and R on `PATH`.
+If you need R, install [rig](https://github.com/r-lib/rig#id-installation), then run `rig add release`.
 
-- A working, signed-in Codex CLI for the agent walkthrough.
-- R on `PATH` (tested with R 4.6.1).
-- `uv`, Git, rustup, and Rust 1.95 or later; the commands select Python 3.12 (`uv` can download it).
-- Native build tools: Xcode Command Line Tools on macOS; a C compiler, `pkg-config`, libcap and libcurl development headers, and binutils on Linux.
-- On Linux, mounted `/proc` and permission for the native sandbox's namespace and policy operations; see [host requirements](docs/LINUX_COMPATIBILITY.md).
-  Restricted containers or host security policy may prevent startup.
+Installing the current source also needs Git, [rustup](https://rustup.rs/) with Rust 1.95 or later, and your platform's build tools.
+On macOS, install the Xcode Command Line Tools with `xcode-select --install`.
+On Ubuntu, install the build dependencies with:
 
-Install the checkout and register it with Codex:
+```sh
+sudo apt-get update
+sudo apt-get install -y build-essential git pkg-config libcap-dev libcurl4-openssl-dev binutils
+```
+
+Install the current checkout, including its private sandbox runner:
 
 ```sh
 git clone --depth 1 https://github.com/t-kalinowski/mcp-console.git
 cd mcp-console
 uv tool install --python 3.12 --reinstall .
+```
+
+Configure your client to launch `uvx mcp-console serve` as a stdio server.
+For example, with Codex:
+
+```sh
 codex mcp add console -- uvx mcp-console serve
 codex
 ```
 
-The first installation builds the pinned runner with its own Rust toolchain; the first analysis prepares R and Python packages and DuckDB extensions.
+uv supplies Python 3.12, the first installation builds the pinned runner with its own Rust toolchain, and the first analysis prepares R and Python packages and DuckDB extensions.
 These steps can download interpreters, packages, and build dependencies and take several minutes.
-See [source installation](RELEASE.md#private-sandbox-executable), [managed dependencies](docs/REQUIREMENTS.md#retained-environments), and [Codex MCP configuration](https://developers.openai.com/codex/mcp) for details.
+See [source installation](RELEASE.md#private-sandbox-executable) and [managed dependencies](docs/REQUIREMENTS.md#retained-environments) for details.
 
-## Try it with Codex
+## Try an analysis
 
-In Codex, use `/mcp` to check that `console` exposes `send`, then ask:
+Check that your client exposes the console's `send` tool (`/mcp` in Codex), then ask:
 
 > Use MCP Console for this analysis.
 > Use `timeout_ms=10000` for cells and polls; wait for each cell to finish before continuing.
@@ -66,21 +78,8 @@ Follow up in the same conversation:
 
 The expected total profit is 280: store contributes 120 and web contributes 160, a gap of 40.
 No external dataset is needed.
-Records and plot artifacts are written under `.agents/console/sessions/<run-id>/` in the directory where you start Codex.
-This is a model-driven workflow using your Codex account; the exact calls and responses can vary.
-
-### Scripted installation check
-
-To run the same analysis without a model, quit Codex and run this from the repository root:
-
-```sh
-uv tool run --python 3.12 --from ".[client]" python examples/persistent-analysis.py
-```
-
-The [complete example](examples/persistent-analysis.py) uses one connection for four cells, polls unfinished work, and closes the session on completion or error.
-It prints the results above, `Session closed.`, and paths to the transcript and PNG; the simple Python client represents the image as `[image/png output]`.
-See the [scripted check and Python integrations](docs/PYTHON.md#scripted-installation-check) for installation details and other clients.
-The published PyPI 0.0.3 wheels predate this Python client; the check uses the current checkout.
+Records and plot artifacts are written under `.agents/console/sessions/<run-id>/` in the server's working directory.
+Your client uses its configured model; the exact calls and responses can vary.
 
 ## Architecture
 
@@ -105,6 +104,8 @@ Submitted code has shell-class capability.
 The default local native sandbox permits host-file reads, restricts direct networking, and denies regular-file writes outside private temporary storage.
 It does not protect sensitive files that the worker can read.
 Trusted [project configuration](docs/SANDBOX_CONFIGURATION.md#project-configuration) can change this policy; there is no automatic unsandboxed fallback.
+Linux requires mounted `/proc` and permission for the native sandbox's namespace and policy operations; see [host requirements](docs/LINUX_COMPATIBILITY.md).
+Restricted containers or host security policy may prevent startup.
 
 Dependency preparation runs **outside the worker sandbox** and may execute trusted installation, build, or initialization code with host permissions.
 Use only trusted requirements and resolver configuration.
