@@ -28,9 +28,13 @@ Run `scripts/check-fixtures [PATH ...]` to check marked multiline programs; with
 It compiles constant Python programs and parses R with `Rscript --vanilla`, without evaluating either, and checks `code()` indentation.
 Multiline literals assigned to `r`/`python`, including annotated assignments, or passed through those keyword arguments require the matching directive.
 Other embedded programs are identified by their directive; the checker does not infer a language from arbitrary string contents or follow variable assignments.
+Direct `r`/`python` literals are checked as written; `code()` supplies dedenting when used.
+Other marked helper payloads use the recipe's dedented syntax convention; their public case verifies the helper's actual normalization.
+Multiline values are checked even when authored on one line with escaped newlines.
 Single-line expressions split into adjacent literals remain single-line programs.
 
 F-string templates are counted separately because their completed source depends on runtime values.
+Fragments appended through `+=` are not inferred as complete programs; they may only become valid after assembly.
 Their public acceptance case must exercise the assembled program.
 For a test that deliberately submits invalid syntax, document the reason immediately above the formatting directive:
 

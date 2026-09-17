@@ -50,10 +50,7 @@ def main() -> None:
                 and isinstance(node.value, str)
             ):
                 continue
-            if (
-                isinstance(parents.get(node), ast.JoinedStr)
-                or node.lineno == node.end_lineno
-            ):
+            if isinstance(parents.get(node), ast.JoinedStr):
                 continue
             parts = node.values if isinstance(node, ast.JoinedStr) else [node]
             if not any(
@@ -71,6 +68,8 @@ def main() -> None:
                     "python",
                 }:
                     wanted = ancestor.arg
+                # Direct complete bindings only; += fragments need assembly
+                # before their syntax can be validated by a public case.
                 if wanted is None and isinstance(ancestor, (ast.Assign, ast.AnnAssign)):
                     targets = (
                         ancestor.targets
@@ -91,11 +90,12 @@ def main() -> None:
                     and ancestor.func.id == "code"
                 ):
                     code_call = ancestor
-                if language is None:
-                    directive = comments.get(ancestor.lineno - 1, "")
+                line = getattr(ancestor, "lineno", None)
+                if language is None and line is not None:
+                    directive = comments.get(line - 1, "")
                     if directive in {"# fmt: r", "# fmt: python"}:
                         language = directive.removeprefix("# fmt: ")
-                        marker = comments.get(ancestor.lineno - 2, "")
+                        marker = comments.get(line - 2, "")
                         if marker.startswith("# syntax: skip"):
                             skip = marker.removeprefix("# syntax: skip").strip()
             location = f"{path}:{node.lineno}"
@@ -108,7 +108,7 @@ def main() -> None:
                     f"{location}: expected # fmt: {wanted}; found # fmt: {language}"
                 )
                 continue
-            if code_call is not None:
+            if code_call is not None and node.lineno != node.end_lineno:
                 line = lines[code_call.lineno - 1]
                 indentation = len(line) - len(line.lstrip()) + 4
                 payload = [
@@ -132,7 +132,9 @@ def main() -> None:
             elif isinstance(node, ast.JoinedStr):
                 dynamic += 1
             else:
-                program = textwrap.dedent(node.value).removeprefix("\n")
+                program = node.value
+                if code_call is not None or wanted is None:
+                    program = textwrap.dedent(program).removeprefix("\n")
                 if language == "r":
                     r_programs.append((location, program))
                 else:

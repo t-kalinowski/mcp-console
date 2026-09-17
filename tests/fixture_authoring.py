@@ -104,6 +104,31 @@ class FixtureAuthoringTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0, result.stdout)
                 self.assertIn("python syntax:", result.stdout)
 
+    def test_direct_cells_preserve_literal_indentation(self) -> None:
+        result = self.check(
+            # fmt: python
+            code('''
+                # fmt: python
+                python = """
+                    print(42)
+                """
+                ''')
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("unexpected indent", result.stdout)
+
+    def test_escaped_multiline_cells_are_checked(self) -> None:
+        result = self.check(
+            # fmt: python
+            code(r"""
+                # fmt: python
+                python = "print(42)\nreturn 1"
+                messages = [message for message in ("a\n", "b\n")]
+                """)
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("python syntax:", result.stdout)
+
     def test_annotated_assignments_require_directives(self) -> None:
         result = self.check(
             # fmt: python
