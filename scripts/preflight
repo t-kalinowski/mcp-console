@@ -83,7 +83,7 @@ def main() -> None:
             "external_ssh": EXTERNAL_SSH,
         }.items()
     }
-    cache = Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache")))
+    cache = Path(os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache"))
     report = {
         "checkout": str(ROOT),
         "revision": query("revision", "git", "rev-parse", "HEAD")

@@ -149,6 +149,8 @@ class DevelopmentTests(unittest.TestCase):
             (commands / name).chmod(0o755)
         environment = os.environ | {
             "PATH": str(commands),
+            "HOME": str(self.root / "home"),
+            "XDG_CACHE_HOME": "",
             "FIXTURE_CACHE": str(self.root / "shared-cache"),
             "FIXTURE_R_HOME": str(self.root / "R-home"),
             "R_HOME": "",
@@ -181,6 +183,10 @@ class DevelopmentTests(unittest.TestCase):
         )
         self.assertEqual(report["runtime"]["r_home"], str(self.root / "R-home"))
         self.assertEqual(report["caches"]["uv"], str(self.root / "shared-cache"))
+        self.assertEqual(
+            report["caches"]["host_budget"],
+            str(self.root / "home/.cache/mcp-console/checks"),
+        )
         self.assertTrue(
             all(item["status"] == "skip" for item in report["providers"].values())
         )
