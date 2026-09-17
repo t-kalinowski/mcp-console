@@ -72,9 +72,11 @@ int mcp_r_install_python_interrupt(void (*set_interrupt)(void)) {
     atomic_store_explicit(&python_interrupt, set_interrupt, memory_order_relaxed);
     if (install_interrupt_handler() != 0) return -1;
     /*
-     * R_SelectEx restores its temporary SIGINT handler with signal(). libc's
-     * siginterrupt bookkeeping keeps those later restores non-restarting too;
-     * clearing SA_RESTART with sigaction alone does not preserve that policy.
+     * R_SelectEx restores the previous SIGINT handler with signal(), which can
+     * re-enable SA_RESTART after sigaction cleared it. siginterrupt also updates
+     * libc's policy for later signal() calls, keeping blocking Python reads
+     * interruptible. Suppress its deprecation warning only for this call: the
+     * recommended replacement, sigaction, does not preserve that policy.
      */
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
