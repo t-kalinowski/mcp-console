@@ -1,3 +1,4 @@
+#![cfg_attr(not(unix), allow(dead_code))]
 //! Versioned target bootstrap and envelope around unchanged relay JSONL.
 use crate::ssh::preparation;
 use serde::{Deserialize, Serialize};
@@ -15,6 +16,11 @@ pub(crate) mod process;
 pub(crate) mod runtime;
 #[cfg(unix)]
 pub(crate) mod transfer;
+
+#[cfg(not(unix))]
+mod unsupported;
+#[cfg(not(unix))]
+pub(crate) use unsupported::{owner, process};
 
 pub(crate) const VERSION: u32 = 3;
 pub(crate) const MAX_BOOTSTRAP: usize = 1024 * 1024;
@@ -44,7 +50,10 @@ pub(crate) fn run(
     #[cfg(unix)]
     return launch::run(protocol, probe, compute);
     #[cfg(not(unix))]
-    Err("target execution requires macOS or Linux".into())
+    {
+        let _ = (protocol, probe, compute);
+        Err("target execution requires macOS or Linux".into())
+    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -297,4 +306,11 @@ pub(crate) fn write_frame(writer: &mut impl Write, tag: u8, bytes: &[u8]) -> io:
     writer.write_all(&(bytes.len() as u32).to_be_bytes())?;
     writer.write_all(bytes)?;
     writer.flush()
+}
+
+pub(crate) fn runtime_probe() -> Result<(), String> {
+    #[cfg(unix)]
+    return runtime::runtime_probe();
+    #[cfg(not(unix))]
+    Err("image runtime probes require macOS or Linux".into())
 }

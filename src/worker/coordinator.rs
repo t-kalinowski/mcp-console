@@ -15,6 +15,8 @@ struct Runtime {
 }
 
 pub(crate) fn run() -> Result<(), Box<dyn Error>> {
+    #[cfg(windows)]
+    crate::windows::configure_worker_stdio()?;
     let (reader, writer) = crate::sideband::connect_from_env()?;
     let r_home = harp::command::r_home_setup()?;
     #[cfg(target_os = "linux")]
@@ -74,6 +76,7 @@ impl Runtime {
         }
     }
 
+    #[cfg(unix)]
     fn wait_for_message(&self) -> Result<ServerMessage, String> {
         loop {
             if core::is_shutting_down() {
@@ -96,6 +99,14 @@ impl Runtime {
                 return Err(message);
             }
         }
+    }
+
+    #[cfg(windows)]
+    fn wait_for_message(&self) -> Result<ServerMessage, String> {
+        if let Some(message) = take_pending_server_message()? {
+            return Ok(message);
+        }
+        core::receive_server_message()
     }
 
     fn handle(&mut self, message: ServerMessage) -> Result<bool, Box<dyn Error>> {

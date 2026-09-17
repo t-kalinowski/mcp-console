@@ -2,6 +2,13 @@ use sha2::{Digest as _, Sha256};
 use std::path::PathBuf;
 
 fn main() {
+    if std::env::var_os("CARGO_CFG_WINDOWS").is_some() {
+        println!("cargo:rerun-if-changed=src/windows/console.manifest");
+        println!("cargo:rerun-if-changed=src/windows/console.rc");
+        embed_resource::compile_for_everything("src/windows/console.rc", embed_resource::NONE)
+            .manifest_required()
+            .expect("failed to embed Windows UTF-8 manifest");
+    }
     println!("cargo:rerun-if-changed=src/r_graphics.c");
     println!("cargo:rerun-if-changed=src/r_repl.c");
 
@@ -11,7 +18,9 @@ fn main() {
     ) {
         bind_private_runner();
     }
-    if std::env::var_os("CARGO_CFG_UNIX").is_some() {
+    if std::env::var_os("CARGO_CFG_UNIX").is_some()
+        || std::env::var_os("CARGO_CFG_WINDOWS").is_some()
+    {
         cc::Build::new()
             .file("src/r_graphics.c")
             .file("src/r_repl.c")

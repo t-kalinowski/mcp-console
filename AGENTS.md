@@ -22,6 +22,7 @@ Reconcile the relevant contracts, tests, and current documentation when implemen
 - `docs/DOCKER.md` defines container targets, image setup, preinstalled environments, owned retirement, and controller records.
 - `docs/DOCKER_SANDBOX.md` defines the standalone SBX provider, prepared templates, shared paths, inherited policy, owned microVM retirement, and controller records.
 - `docs/SSH.md` defines remote target configuration, runtime prerequisites, managed preparation, launch framing, retirement confirmation, and local recording semantics.
+- `docs/WINDOWS.md` describes native local unsandboxed execution, build prerequisites, lifecycle differences, and Windows acceptance checks.
 - `docs/LINUX_COMPATIBILITY.md` records capability requirements, security comparisons, native backend differences, and tested Linux baselines.
 - `docs/SANDBOX_RUNNER_INTEGRATION.md` records the migration baseline, fixture changes, supported-host validation, and changed guarantees.
 - `docs/PYTHON.md` describes the synchronous and asynchronous Python clients and framework integrations.
@@ -77,10 +78,13 @@ The worker relay, built-in worker, and managed resolvers support macOS and Linux
 The default sandbox and standalone sandbox command support both platforms.
 Default Linux sandbox execution requires procfs, permitted native namespace operations, and the selected policy enforcement capabilities; see `docs/LINUX_COMPATIBILITY.md` for tested baselines, explicit enforcement modes, and constrained-host behavior.
 Do not infer support from a kernel version alone.
-Windows is not supported.
+Windows x64 supports experimental local `serve --no-sandbox` execution; see `docs/WINDOWS.md`.
+Windows sandboxing and Windows SSH/Docker/SBX controllers remain unsupported.
+Windows resolvers use suspended launch into kill-on-close Job Objects and require confirmed empty Jobs before committing results.
 Other Unix operating systems are not supported build or runtime targets; shared `cfg(unix)` modules do not imply support for them.
 Retain platform conditionals for modules that use OS-specific APIs and for selecting different implementations or unsupported-platform stubs; avoid redundant gates on shared code.
 CI runs core checks and all capability-applicable transcript modes on macOS and Linux.
+A separate Windows job runs native Rust checks, Windows MCP acceptance, and local wheel installation checks.
 External SSH tests automatically use a reachable optional host, with selection and availability confined to `tests/support/ssh_external.py`; absent hosts skip those cases while localhost SSH coverage remains available.
 Keep Python SDK integration test dependencies free of exact version pins, retain the published dependency lower bounds, and constrain MCP to the supported major using `==2.*`.
 Keep one CI job per platform.
@@ -104,8 +108,9 @@ Install development checkouts with `uv tool install --reinstall .`; bare `cargo 
 Build reuse follows Cargo's tracked inputs; external tool changes through `PATH` can require cleaning the affected Cargo build directories, as described in `RELEASE.md`.
 Native Cargo bundles require the default shared build/target layout; a separate intermediate build directory is unsupported for running the Cargo output.
 The Python packaging backend holds a checkout-local lock from staging through wheel creation.
-Staging, packaging, and validation share checkout ownership outside `target`; conflicts fail with the lock path and last recorded owner details.
-Wrap direct Cargo and Maturin commands in `scripts/with-checkout` to claim that ownership.
+On macOS/Linux, staging, packaging, and validation share checkout ownership outside `target`; conflicts fail with the lock path and last recorded owner details.
+Wrap direct Cargo and Maturin commands in `scripts/with-checkout` to claim that ownership on those platforms.
+Windows packaging holds a blocking native lock outside `target`; run its native validation commands exclusively in the checkout.
 See `RELEASE.md` for prerequisites, bundle layout, build caches, and the explicit source-checkout override.
 Run commands from the repository root:
 
@@ -195,7 +200,8 @@ Keep these invariants intact:
 - `src/relay_protocol.rs` — server-relay JSONL message and framing contract.
 - `src/worker_relay.rs`, `src/worker_relay/event_writer.rs` — worker launch, I/O forwarding, ordered event output, direct-worker signaling, termination, and reaping.
 - `src/worker_client/output.rs`, `src/worker_client/output/{tape,preview,terminal}.rs` — canonical response composition, streaming output cuts, bounded 8 KiB text previews, independent image admission, raw-file receipts, and progress projection.
-- `src/worker_client.rs`, `src/worker_client/` — session coordination and send planning, server-owned environment, evaluation, lifecycle, ordinary launcher child ownership, ordered event dispatch, output tape, shared Unix relay transport, and platform-specific startup observation.
+- `src/worker_client.rs`, `src/worker_client/` — session coordination and send planning, server-owned environment, evaluation, lifecycle, ordinary launcher child ownership, ordered event dispatch, output tape, shared relay transport with platform-specific pipe and process primitives, and platform-specific startup observation.
+- `src/windows.rs`, `src/windows/` — Windows events, overlapped pipes, resolver Job ownership, and UTF-8 executable manifest.
 - `src/process_exit.rs` — ordinary direct-child exit observation without reaping, used by server launcher ownership.
 - `src/process_output.rs` — output draining bounded by an owned child exit, including a surviving inherited writer; used for local launchers, the SSH child, and the remote helper's launcher without equating their cleanup guarantees.
 - `src/sandbox.rs`, `src/sandbox/{installation,runner,unsupported}.rs` — thin sandbox frontend, verified runner selection, application policy, and unsupported-platform errors.
@@ -233,6 +239,7 @@ Keep these invariants intact:
 - `tests/snapshots/` — generated YAML 1.2 snapshots, parallel to the boundary test hierarchy.
 - `r/tests/testthat/` — R package protocol and ellmer adapter tests.
 - `scripts/release.py`, `tests/release.py` — release validation and installed-wheel acceptance.
+- `tests/windows.py`, `tests/windows_relay.py` — native Windows MCP and relay protocol acceptance, startup cancellation, packaging, and resolver retirement checks.
 - `tests/install.py`, `tests/sandbox_installation.py` — unstaged uv installation, relocated bundle acceptance, and private companion verification.
 - `scripts/test` — release binary build and selected transcript execution.
 - `scripts/validate_runtime_sources.py` — extracted R/Python inventory and syntax validation.

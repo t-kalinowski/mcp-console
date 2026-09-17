@@ -19,8 +19,8 @@ Emitted cell text is retained separately in raw session logs, up to 1 GiB per ce
 
 ## Install
 
-MCP Console runs on macOS and Linux.
-Both platforms sandbox evaluated code by default; Windows is not supported.
+MCP Console runs on macOS and Linux with sandboxing enabled by default.
+Experimental native Windows x64 support is available from source for local `serve --no-sandbox`; see [Windows setup and limitations](docs/WINDOWS.md).
 Package installation requires Python 3.11 or later.
 The release workflow builds native wheels for Apple Silicon and Intel macOS and for ARM64 and x86-64 Linux.
 Linux wheels require glibc 2.39 or later; building from source uses the host glibc.
@@ -58,7 +58,7 @@ There is no automatic unsandboxed fallback.
 Use `mcp-console serve --no-sandbox` to skip the inner native sandbox at the selected target.
 Local and SSH host execution then use the target account's permissions without native descendant cleanup; Docker retains its outer container boundary and Docker Sandboxes retains its microVM and provider policy.
 
-Install the current source checkout with its private sandbox companions:
+Install the current source checkout (including private sandbox companions on macOS and Linux):
 
 ```sh
 uv tool install --reinstall .

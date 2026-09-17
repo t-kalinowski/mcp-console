@@ -5,6 +5,7 @@ The release workflow publishes native Apple Silicon and Intel macOS wheels and A
 Linux wheels are built on Ubuntu 24.04 and require glibc 2.39 or later.
 Wheel builds require Maturin 1.15 or later.
 It does not publish a source distribution, Windows wheels, or GitHub release archives.
+Local Windows source and wheel builds are supported experimentally without the sandbox companion; see [Windows setup](docs/WINDOWS.md).
 
 `Cargo.toml` is the package-version source of truth.
 Keep the root `mcp-console` entry in `Cargo.lock` synchronized with it.

@@ -10,6 +10,7 @@ Source and public acceptance tests remain the final authority when prose disagre
 - The [project README](../README.md) is the short product overview and current project-status page.
 - The [ellmer R package](../r/README.md) explains how to install and register MCP Console as an ellmer tool.
 - [Configuration layering](CONFIGURATION.md) defines project-file discovery, dotted CLI overrides, inline values, and merge semantics.
+- [Windows local execution](WINDOWS.md) covers experimental native unsandboxed execution, build prerequisites, and validation.
 - [Python integrations](PYTHON.md) covers synchronous and asynchronous clients, framework adapters, optional dependencies, and connection ownership.
 - [`send` operation order](SEND_OPERATIONS.md) owns request validation, preparation and control ordering, stdin generation, failure effects, and wait-timeout semantics.
 - [Built-in runtime](BUILTIN_RUNTIME.md) is the source of truth for user-visible R, Python, DuckDB SQL, input, output, graphics, and interoperability behavior.

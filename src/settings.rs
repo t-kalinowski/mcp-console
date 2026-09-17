@@ -6,7 +6,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 mod target;
-pub(crate) use target::{Access, Compute, DockerSandbox, Pull, Target};
+#[cfg(unix)]
+pub(crate) use target::Access;
+pub(crate) use target::{Compute, DockerSandbox, Pull, Target};
 
 /// Selected enforcement, independently of direct versus inner-runner launch.
 #[derive(Clone, Copy, Default, PartialEq, Deserialize, Serialize)]

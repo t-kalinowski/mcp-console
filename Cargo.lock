@@ -786,6 +786,7 @@ dependencies = [
  "chrono",
  "clap",
  "ctor",
+ "embed-resource",
  "harp",
  "libc",
  "libloading",
@@ -800,6 +801,7 @@ dependencies = [
  "serde_path_to_error",
  "sha2",
  "tokio",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

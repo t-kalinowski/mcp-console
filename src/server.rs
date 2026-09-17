@@ -317,6 +317,13 @@ impl ConsoleServer {
             .get_mut("control")
             .and_then(serde_json::Value::as_object_mut)
             .expect("send control schema must be an object");
+        #[cfg(windows)]
+        if let Some(serde_json::Value::String(description)) = control.get_mut("description") {
+            *description = description.replace(
+                "SIGINT from the active host resolver or live worker",
+                "cooperative interruption of the live worker, or termination of the active resolver Job",
+            );
+        }
         control.insert(
             "type".to_string(),
             serde_json::Value::String("string".to_string()),
@@ -575,11 +582,15 @@ pub async fn run(
     sandbox_settings: crate::settings::SandboxSettings,
     target: Option<(crate::settings::Target, Vec<PathBuf>)>,
 ) -> Result<(), Box<dyn Error>> {
+    #[cfg(windows)]
+    let input = crate::worker_client::StartupInput::new()?;
+    #[cfg(not(windows))]
+    let input = tokio::io::stdin();
     let server = ConsoleServer::new(worker, relay, no_sandbox, sandbox_settings, target)
         .map_err(std::io::Error::other)?;
     let worker = server.worker.clone();
     let (input_closed, wait_for_input_close) = oneshot::channel();
-    let input = ShutdownReader::new(tokio::io::stdin(), input_closed);
+    let input = ShutdownReader::new(input, input_closed);
     let transport = crate::server_transport::ServerTransport::new(
         input,
         tokio::io::stdout(),

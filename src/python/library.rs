@@ -7,11 +7,29 @@ use std::sync::Mutex;
 // invoking Python so Python-to-R callbacks can re-enter library access.
 static PYTHON_LIBRARY: Mutex<Option<LoadedLibrary>> = Mutex::new(None);
 
+#[cfg(windows)]
+type PySetInterrupt = unsafe extern "C" fn();
+#[cfg(windows)]
+static INTERRUPT_API: std::sync::OnceLock<(PyIsInitialized, PySetInterrupt)> =
+    std::sync::OnceLock::new();
+
+#[cfg(windows)]
+pub(crate) fn interrupt_windows() {
+    if let Some((initialized, interrupt)) = INTERRUPT_API.get() {
+        unsafe {
+            if initialized() != 0 {
+                interrupt();
+            }
+        }
+    }
+}
+
 type PyIsInitialized = unsafe extern "C" fn() -> libc::c_int;
 type PySetProgramName = unsafe extern "C" fn(*const libc::wchar_t);
 type PySetPythonHome = unsafe extern "C" fn(*const libc::wchar_t);
 type PyInitializeEx = unsafe extern "C" fn(libc::c_int);
 type PySysSetArgv = unsafe extern "C" fn(libc::c_int, *mut *mut libc::wchar_t);
+#[cfg(unix)]
 type PyOsSetSignal = unsafe extern "C" fn(libc::c_int, libc::sighandler_t) -> libc::sighandler_t;
 type PyEvalSaveThread = unsafe extern "C" fn() -> *mut libc::c_void;
 type PyEvalRestoreThread = unsafe extern "C" fn(*mut libc::c_void);
@@ -50,7 +68,7 @@ const SQL_PROVIDER_HANDLED: libc::c_long = 2;
 
 struct LoadedLibrary {
     path: PathBuf,
-    _library: libloading::os::unix::Library,
+    _library: libloading::Library,
     api: PythonApi,
     interpreter: Interpreter,
     configuration: Option<Configuration>,
@@ -64,6 +82,7 @@ struct PythonApi {
     set_python_home: PySetPythonHome,
     initialize_ex: PyInitializeEx,
     set_argv: PySysSetArgv,
+    #[cfg(unix)]
     set_signal: PyOsSetSignal,
     save_thread: PyEvalSaveThread,
     restore_thread: PyEvalRestoreThread,
@@ -226,14 +245,22 @@ impl LoadedLibrary {
         // SAFETY: The selected path comes from reticulate's interpreter
         // discovery. Global, eager loading exposes the CPython API before
         // either runtime initializes the interpreter.
-        let flags = libc::RTLD_NOW | libc::RTLD_GLOBAL;
-        let library = unsafe { libloading::os::unix::Library::open(Some(path.as_os_str()), flags) }
-            .map_err(|error| {
-                format!(
-                    "failed to load Python shared library `{}`: {error}",
-                    path.display()
-                )
-            })?;
+        #[cfg(unix)]
+        let opened = unsafe {
+            libloading::os::unix::Library::open(
+                Some(path.as_os_str()),
+                libc::RTLD_NOW | libc::RTLD_GLOBAL,
+            )
+        }
+        .map(libloading::Library::from);
+        #[cfg(windows)]
+        let opened = unsafe { libloading::Library::new(&path) };
+        let library = opened.map_err(|error| {
+            format!(
+                "failed to load Python shared library `{}`: {error}",
+                path.display()
+            )
+        })?;
         // SAFETY: Each requested symbol is a process-lifetime CPython API
         // function. The owning library handle is retained beside the copied
         // function pointers.
@@ -318,11 +345,18 @@ impl LoadedLibrary {
             // Py_InitializeEx(0) does not install Python's signal handlers,
             // including its normal SIGPIPE disposition. Preserve the prior
             // reticulate-hosted behavior for the worker process lifetime.
+            #[cfg(unix)]
             (self.api.set_signal)(libc::SIGPIPE, libc::SIG_IGN);
         }
 
         self.configuration = Some(configuration);
         self.interpreter = Interpreter::RustOwned { saved_thread: None };
+        #[cfg(windows)]
+        {
+            let interrupt =
+                unsafe { load_symbol(&self._library, &self.path, b"PyErr_SetInterrupt\0")? };
+            let _ = INTERRUPT_API.set((self.api.is_initialized, interrupt));
+        }
         Ok(true)
     }
 
@@ -593,7 +627,7 @@ impl PythonApi {
         Ok(function)
     }
 
-    unsafe fn load(library: &libloading::os::unix::Library, path: &Path) -> Result<Self, String> {
+    unsafe fn load(library: &libloading::Library, path: &Path) -> Result<Self, String> {
         Ok(Self {
             // SAFETY: Symbol types match the documented CPython C API.
             is_initialized: unsafe { load_symbol(library, path, b"Py_IsInitialized\0")? },
@@ -601,6 +635,7 @@ impl PythonApi {
             set_python_home: unsafe { load_symbol(library, path, b"Py_SetPythonHome\0")? },
             initialize_ex: unsafe { load_symbol(library, path, b"Py_InitializeEx\0")? },
             set_argv: unsafe { load_symbol(library, path, b"PySys_SetArgv\0")? },
+            #[cfg(unix)]
             set_signal: unsafe { load_symbol(library, path, b"PyOS_setsig\0")? },
             save_thread: unsafe { load_symbol(library, path, b"PyEval_SaveThread\0")? },
             restore_thread: unsafe { load_symbol(library, path, b"PyEval_RestoreThread\0")? },
@@ -640,7 +675,7 @@ fn python_function_error(module: &CStr, name: &CStr) -> String {
 }
 
 unsafe fn load_symbol<T: Copy>(
-    library: &libloading::os::unix::Library,
+    library: &libloading::Library,
     path: &Path,
     name: &'static [u8],
 ) -> Result<T, String> {
@@ -673,6 +708,9 @@ fn wide_string(value: &str, label: &str) -> Result<Vec<libc::wchar_t>, String> {
     if value.contains('\0') {
         return Err(format!("Python {label} contains NUL"));
     }
+    #[cfg(windows)]
+    let mut wide = value.encode_utf16().collect::<Vec<_>>();
+    #[cfg(unix)]
     let mut wide = value
         .chars()
         .map(|character| character as libc::wchar_t)

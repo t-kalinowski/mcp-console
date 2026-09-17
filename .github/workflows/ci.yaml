@@ -25,6 +25,103 @@ env:
   UV_VERSION: 0.12.4
 
 jobs:
+  windows:
+    name: Windows local execution
+    runs-on: windows-latest
+    env:
+      LC_ALL: C
+      UV_CACHE_DIR: ${{ runner.temp }}/console-windows-cache/uv
+      IR_CACHE_DIR: ${{ runner.temp }}/console-windows-cache/ir
+      RENV_PATHS_CACHE: ${{ runner.temp }}/console-windows-cache/renv
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - uses: r-lib/actions/setup-r@v2
+        id: r
+        with:
+          use-public-rspm: always
+      - uses: dtolnay/rust-toolchain@stable
+        id: rust
+        with:
+          components: clippy, rustfmt
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: false
+      - name: Select weekly cache identity
+        id: epoch
+        shell: pwsh
+        run: |
+          $now = [DateTime]::UtcNow
+          $year = [Globalization.ISOWeek]::GetYear($now)
+          $week = [Globalization.ISOWeek]::GetWeekOfYear($now)
+          "week=$year-$week" >> $env:GITHUB_OUTPUT
+          "image=$env:ImageOS" >> $env:GITHUB_OUTPUT
+          Write-Output "Runner image: $env:ImageOS-$env:ImageVersion"
+      - name: Restore Windows build and dependency caches
+        uses: actions/cache/restore@v6
+        id: cache
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/debug
+            target/release
+            ${{ runner.temp }}/console-windows-cache
+          key: windows-v1-recipe-${{ env.CI_BUILD_CACHE_VERSION }}-${{ steps.epoch.outputs.week }}-${{ steps.epoch.outputs.image }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.r.outputs.installed-r-version }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/**') }}
+          restore-keys: |
+            windows-v1-recipe-${{ env.CI_BUILD_CACHE_VERSION }}-${{ steps.epoch.outputs.week }}-${{ steps.epoch.outputs.image }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.r.outputs.installed-r-version }}-
+      - name: Install resolver
+        run: |
+          uv tool install r-lib-ir
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          uv tool dir --bin >> $env:GITHUB_PATH
+      - name: Check native Windows code
+        run: |
+          python scripts/validate_runtime_sources.py
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python tests/architecture.py
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cargo fmt --all --check
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cargo clippy --all-targets --all-features -- -D warnings
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cargo test --all-targets --all-features
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cargo build
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python tests/windows.py -v
+      - name: Build and exercise installed Windows wheel
+        run: |
+          uv build --wheel --out-dir target/windows-wheels
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          uv venv target/windows-install
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $wheel = (Get-ChildItem target/windows-wheels/*.whl).FullName
+          uv pip install --python target/windows-install/Scripts/python.exe $wheel
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $env:MCP_CONSOLE_TEST_BINARY = "$pwd/target/windows-install/Scripts/mcp-console.exe"
+          python tests/windows.py -v
+      - name: Check Windows source installation
+        run: |
+          uv pip install --reinstall --python target/windows-install/Scripts/python.exe .
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $env:MCP_CONSOLE_TEST_BINARY = "$pwd/target/windows-install/Scripts/mcp-console.exe"
+          python tests/windows.py WindowsConsole.test_python_sql_and_errors -v
+      - name: Save Windows caches
+        if: github.ref == 'refs/heads/main' && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/debug
+            target/release
+            ${{ runner.temp }}/console-windows-cache
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+
   check:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}

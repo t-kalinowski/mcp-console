@@ -46,6 +46,9 @@ base::local(
           on.exit(finish_python_initialization(), add = TRUE)
         }
         original_initialize(python, libpython, pythonhome, ...)
+        if (rust_owned && .Platform$OS.type == "windows") {
+          get("install_interrupt_handlers", envir = namespace)()
+        }
       }
       replace_binding("py_initialize", initialize)
 

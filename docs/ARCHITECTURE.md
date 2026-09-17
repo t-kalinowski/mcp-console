@@ -535,4 +535,7 @@ CI runs core checks and the applicable transcript cases on both platforms.
 Linux sandboxing requires procfs, permitted native namespace operations, and the selected policy enforcement capabilities.
 The runner uses native namespace lifetime and its direct child wait; host subreapers, process-tree enumeration, and namespace-PID discovery are unnecessary.
 Fresh procfs and pidfds are optional; [Linux compatibility](LINUX_COMPATIBILITY.md) records the tested capabilities and failure boundaries.
-Windows has no working execution stack.
+Windows x64 has an experimental local unsandboxed execution stack using overlapped pipes, process handles, and event notifications.
+Resolvers launch suspended into Job Objects and retire all Job members before confirming cleanup.
+The server uses one bounded stdin reader across startup and MCP transport.
+Windows wheels omit the sandbox companion; see [Windows architecture limits and validation](WINDOWS.md).
