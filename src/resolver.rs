@@ -10,17 +10,17 @@ pub(crate) enum ResolverControlOutcome {
 
 pub(crate) mod execution;
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod managed_duckdb;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod managed_python;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod managed_r;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod process;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod python_version;
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 mod unsupported;
 
 #[derive(Clone)]
@@ -172,20 +172,23 @@ fn is_uv_environment_variable(name: &OsStr) -> bool {
     name.as_encoded_bytes().starts_with(b"UV_")
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) use managed_duckdb::resolve_duckdb_extensions;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) use managed_python::{ManagedPython, resolve_python_manifest, resolve_python_version};
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) use managed_r::{
-    ManagedR, ManagedRBootstrap, ManagedRResolverConfiguration, detect_r_bootstrap, discover,
-    resolve_r, resolve_r_with,
+    ManagedR, ManagedRBootstrap, ManagedRResolverConfiguration, detect_r_bootstrap, resolve_r,
+    resolve_r_with,
 };
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) use process::{ResolverControl, ResolverStopHandle};
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 pub(crate) use unsupported::{
     ManagedPython, ManagedR, ManagedRBootstrap, ManagedRResolverConfiguration, ResolverStopHandle,
     resolve_duckdb_extensions, resolve_python, resolve_python_manifest, resolve_python_version,
     resolve_r, resolve_r_with,
 };
+
+#[cfg(unix)]
+pub(crate) use managed_r::discover;

@@ -1,9 +1,23 @@
+#[cfg(windows)]
+use crate::windows::ExitStatusExt as _;
+#[cfg(windows)]
+use crate::windows::{
+    Event as PipeReader, Notify as PipeWriter, Pipe as ChildStdin, Pipe as ChildStdout,
+};
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io::{BufReader, Read, Write};
+#[cfg(unix)]
+use std::io::{PipeReader, PipeWriter};
+#[cfg(unix)]
 use std::os::fd::{AsFd as _, AsRawFd as _, OwnedFd};
+#[cfg(unix)]
 use std::os::unix::process::ExitStatusExt as _;
-use std::process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
+#[cfg(windows)]
+use std::os::windows::io::{AsRawHandle as _, OwnedHandle as OwnedFd};
+use std::process::{Child, Command, ExitStatus, Stdio};
+#[cfg(unix)]
+use std::process::{ChildStdin, ChildStdout};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -207,16 +221,26 @@ impl WorkerRuntime {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit());
+        #[cfg(unix)]
         crate::process_descriptors::close_unlisted_from_multithreaded_parent(&mut command)?;
 
         let (worker_events, worker_event_receiver) = mpsc::channel();
+        #[cfg(unix)]
         let (output_exit, notify_output_exit) = std::io::pipe()
             .map_err(|error| format!("failed to create launcher exit notification: {error}"))?;
 
+        #[cfg(windows)]
+        let (output_exit, notify_output_exit) =
+            crate::windows::notification().map_err(|e| e.to_string())?;
+        #[cfg(windows)]
+        let (relay_stdin, relay_stdout) =
+            crate::windows::command_pipes(&mut command, output_exit.clone())
+                .map_err(|e| e.to_string())?;
         let child = command
             .spawn()
             .map_err(|error| format!("failed to launch worker relay: {error}"))?;
-        let mut child = RelayProcess::new(
+        drop(command);
+        let child = RelayProcess::new(
             child,
             no_sandbox,
             target.is_some_and(crate::target_session::Session::is_ssh),
@@ -227,16 +251,23 @@ impl WorkerRuntime {
             notify_output_exit,
         )
         .map_err(|error| format!("failed to monitor worker relay: {error}"))?;
+        #[cfg(unix)]
+        let mut child = child;
+        #[cfg(unix)]
         let relay_stdin = child
             .take_stdin()
             .expect("piped worker relay stdin should be available");
+        #[cfg(unix)]
         let relay_stdout = child
             .take_stdout()
             .expect("piped worker relay stdout should be available");
+        #[cfg(unix)]
         let relay_stdout_observer = relay_stdout
             .as_fd()
             .try_clone_to_owned()
             .map_err(|error| format!("failed to monitor worker relay stdout: {error}"))?;
+        #[cfg(windows)]
+        let relay_stdout_observer = relay_stdout.duplicate().map_err(|e| e.to_string())?;
         let child = Arc::new(Mutex::new(child));
 
         let operation = WorkerOperationState::new();
@@ -362,7 +393,7 @@ impl RelayProcess {
         no_sandbox: bool,
         ssh: bool,
         retirement_grace: Duration,
-        notify_output_exit: std::io::PipeWriter,
+        notify_output_exit: PipeWriter,
     ) -> Result<Self, String> {
         let exit =
             match super::child_exit::ChildExitWaiter::start_notifying(child.id(), move || {
@@ -388,10 +419,12 @@ impl RelayProcess {
         })
     }
 
+    #[cfg(unix)]
     fn take_stdin(&mut self) -> Option<ChildStdin> {
         self.child.stdin.take()
     }
 
+    #[cfg(unix)]
     fn take_stdout(&mut self) -> Option<ChildStdout> {
         self.child.stdout.take()
     }
@@ -413,8 +446,7 @@ impl RelayProcess {
         }
         // SAFETY: the direct child remains unreaped here, so its PID cannot be
         // reused before `kill` returns.
-        if unsafe { libc::kill(self.child.id() as libc::pid_t, libc::SIGTERM) } != 0 {
-            let error = std::io::Error::last_os_error();
+        if let Err(error) = request_child_retirement(&mut self.child) {
             if error.raw_os_error() != Some(libc::ESRCH) {
                 errors.push(format!(
                     "failed to request worker launcher retirement: {error}"
@@ -561,7 +593,7 @@ impl RelayProcess {
                 && self.retirement_requested
                 && status.signal() == Some(libc::SIGTERM)
             || self.relay_exit_recovery_expected
-                && (self.no_sandbox || status.code() == Some(128 + libc::SIGKILL))
+                && (self.no_sandbox || status.code() == Some(128 + 9))
         {
             Ok(())
         } else if let Some(code) = status.code() {
@@ -607,13 +639,12 @@ fn retire_after_exit_observer_failure(mut child: Child, error: String) -> String
     let mut errors = vec![error];
     // SAFETY: the direct child remains unreaped, so its PID cannot be reused
     // before the signal is delivered.
-    if unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) } != 0 {
-        let signal_error = std::io::Error::last_os_error();
-        if signal_error.raw_os_error() != Some(libc::ESRCH) {
-            errors.push(format!(
-                "failed to request worker launcher retirement: {signal_error}"
-            ));
-        }
+    if let Err(signal_error) = request_child_retirement(&mut child)
+        && signal_error.raw_os_error() != Some(libc::ESRCH)
+    {
+        errors.push(format!(
+            "failed to request worker launcher retirement: {signal_error}"
+        ));
     }
 
     let mut reaped =
@@ -856,7 +887,7 @@ fn receive_operation(
 }
 
 fn start_relay_command_writer(
-    mut relay_stdin: std::process::ChildStdin,
+    mut relay_stdin: ChildStdin,
     events: mpsc::Sender<WorkerEvent>,
     bootstrap: Option<(crate::target_launch::Protocol, Vec<u8>)>,
 ) -> (RelayCommandSender, RelayCommandThread) {
@@ -909,8 +940,8 @@ fn start_relay_command_writer(
 }
 
 fn start_relay_event_reader(
-    relay_stdout: std::process::ChildStdout,
-    output_exit: std::io::PipeReader,
+    relay_stdout: ChildStdout,
+    output_exit: PipeReader,
     events: mpsc::Sender<WorkerEvent>,
     target: Option<crate::target_session::Generation>,
     recording: Option<crate::transcript::Transcript>,
@@ -1380,6 +1411,7 @@ impl RelayConnection {
     }
 }
 
+#[cfg(unix)]
 fn relay_stdout_closed(descriptor: &OwnedFd) -> Result<bool, String> {
     let mut event = libc::pollfd {
         fd: descriptor.as_raw_fd(),
@@ -1428,4 +1460,29 @@ fn join_worker_thread(thread: thread::JoinHandle<()>, name: &str) -> Result<(), 
     thread
         .join()
         .map_err(|_| format!("worker {name} task failed"))
+}
+
+#[cfg(unix)]
+fn request_child_retirement(child: &mut Child) -> std::io::Result<()> {
+    if unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+#[cfg(windows)]
+fn request_child_retirement(child: &mut Child) -> std::io::Result<()> {
+    child.kill()
+}
+#[cfg(windows)]
+fn relay_stdout_closed(handle: &OwnedFd) -> Result<bool, String> {
+    match crate::windows::available(handle.as_raw_handle()) {
+        Ok(_) => Ok(false),
+        Err(e)
+            if e.raw_os_error()
+                == Some(windows_sys::Win32::Foundation::ERROR_BROKEN_PIPE as i32) =>
+        {
+            Ok(true)
+        }
+        Err(e) => Err(e.to_string()),
+    }
 }

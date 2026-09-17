@@ -443,7 +443,7 @@ fn run_resolver_command<F>(
 where
     F: FnOnce(ResolverStopHandle) -> Result<(), String>,
 {
-    let mut child = command.spawn().map_err(|error| {
+    let mut child = super::process::spawn_resolver(&mut command).map_err(|error| {
         format!(
             "failed to run {kind} resolver with `{}`: {error}",
             program.display()

@@ -1,6 +1,5 @@
 """Prepare the private companion before Maturin builds a wheel."""
 
-import fcntl
 import subprocess
 import sys
 from collections.abc import Iterator
@@ -46,8 +45,25 @@ def _staged_companion() -> Iterator[None]:
     # Staging and archiving share one owner. Hold the lock until Maturin has
     # finished consuming wheel-data, including when Cargo reuses its output.
     with (target / "wheel-build.lock").open("w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        subprocess.run(
-            [sys.executable, str(root / "scripts/stage-sandbox-runner")], check=True
-        )
+        if sys.platform == "win32":
+            import msvcrt
+
+            # Lock one byte across wheel creation. Closing the file releases it.
+            msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
+            # Windows currently packages only the unsandboxed executable. Avoid
+            # silently shipping a companion staged for another platform.
+            if any(
+                (root / "wheel-data/data" / name).exists()
+                for name in ("libexec", "share")
+            ):
+                raise RuntimeError(
+                    "Windows builds require a checkout without staged Unix companion files"
+                )
+        else:
+            import fcntl
+
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            subprocess.run(
+                [sys.executable, str(root / "scripts/stage-sandbox-runner")], check=True
+            )
         yield

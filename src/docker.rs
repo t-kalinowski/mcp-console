@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
 mod owner;
 use crate::target_launch::process;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
@@ -21,6 +22,7 @@ pub(crate) const PROFILE: crate::target_session::ComputeProfile =
         retirement_grace: Duration::from_secs(6),
     };
 
+#[cfg(unix)]
 const LABEL: &str = "org.mcp-console.owner";
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -247,5 +249,8 @@ impl Captured {
 }
 
 pub(crate) fn run_owner() -> Result<(), String> {
-    owner::run()
+    #[cfg(unix)]
+    return owner::run();
+    #[cfg(not(unix))]
+    Err("Windows currently supports local execution only".into())
 }

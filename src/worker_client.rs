@@ -8,18 +8,21 @@ mod evaluation;
 mod lifecycle;
 mod output;
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod child_exit;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod events;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
+#[cfg_attr(windows, path = "worker_client/startup_windows.rs")]
 mod startup;
+#[cfg(windows)]
+pub(crate) use startup::Input as StartupInput;
 
-#[cfg(unix)]
-#[path = "worker_client/unix.rs"]
+#[cfg(any(unix, windows))]
+#[path = "worker_client/process.rs"]
 mod platform;
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 #[path = "worker_client/unsupported.rs"]
 mod platform;
 
@@ -369,11 +372,11 @@ impl Client {
         no_sandbox: bool,
         sandbox_settings: crate::settings::SandboxSettings,
     ) -> Result<Self, String> {
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         return startup::with_input_owner(|on_started| {
             Self::builtin_with(no_sandbox, sandbox_settings, on_started)
         });
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         Self::builtin_with(no_sandbox, sandbox_settings, &|_| Ok(()))
     }
 
@@ -386,7 +389,7 @@ impl Client {
         let configured_python = std::env::var_os("RETICULATE_PYTHON");
         let program = std::env::current_exe()
             .map_err(|error| format!("failed to locate the R worker executable: {error}"))?;
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         let (r, duckdb_extensions, python, r_resolver) = {
             match crate::resolver::detect_r_bootstrap(&mut python_resolver, on_started)? {
                 Some(bootstrap) => (
@@ -409,7 +412,7 @@ impl Client {
                 ),
             }
         };
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         let (r, duckdb_extensions, python, r_resolver) = (
             Option::<crate::resolver::ManagedR>::None,
             Default::default(),
@@ -520,9 +523,9 @@ impl Client {
         no_sandbox: bool,
         policy: crate::settings::SandboxSettings,
     ) -> Result<Self, String> {
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         let discovery = startup::with_input_owner(|started| session.discover(&policy, started))?;
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         let discovery = session.discover(&policy, &|_| Ok(()))?;
         let preparation = session
             .preparation

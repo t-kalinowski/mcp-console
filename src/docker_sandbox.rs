@@ -1,5 +1,7 @@
 //! Docker Sandboxes' local sbx adapter. Docker owns policy and microVM lifetime.
-use crate::settings::{Access, Compute, DockerSandbox, SandboxSettings, Target};
+#[cfg(unix)]
+use crate::settings::Access;
+use crate::settings::{Compute, DockerSandbox, SandboxSettings, Target};
 use crate::target_launch::{self, Protocol, process};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -7,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
 mod owner;
 pub(crate) const PROTOCOL: Protocol = Protocol("Docker Sandbox");
 pub(crate) const PROFILE: crate::target_session::ComputeProfile =
@@ -128,5 +131,8 @@ impl Captured {
 }
 
 pub(crate) fn run_owner() -> Result<(), String> {
-    owner::run()
+    #[cfg(unix)]
+    return owner::run();
+    #[cfg(not(unix))]
+    Err("Windows currently supports local execution only".into())
 }

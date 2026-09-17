@@ -57,7 +57,8 @@ R, Python, and SQL cells remain available, with ordinary R missing-package error
 Before starting the MCP transport, the server locates R and detects resolver capability without installing packages or invoking `ir`.
 When ambient reticulate supplies the bootstrap, this probe loads its namespace and checks that its `uv_binary` function exists; it does not call that function.
 These probes have no deadline.
-Closing a pipe or socket used for MCP standard input cancels an active probe and retires its resolver process group without consuming buffered MCP input.
+On Unix, closing a pipe or socket used for MCP standard input cancels an active probe and retires its resolver process group without consuming buffered MCP input.
+Windows shares a bounded stdin reader with the MCP transport, cancels probes on observed EOF, and confirms resolver Job Object retirement; see [Windows lifecycle differences](WINDOWS.md).
 
 `initialize`, `tools/list`, empty polls, and control-only interrupts do not prepare the defaults.
 An ordinary first cell prepares them after evaluation admission, so `timeout_ms` can return a running response while installation continues.
@@ -67,7 +68,7 @@ The MCP transport remains available during this preparation: interrupt targets t
 A failed or cancelled preparation leaves the initial environment pending for a later attempt; resolver cache effects may remain.
 
 Host resolution for changed requirements submitted through `send` also has no deadline.
-The call remains pending until the resolver exits; while MCP input is open, `send(control = "interrupt")` sends `SIGINT` to the active resolver, and closing MCP input cancels it during server shutdown.
+The call remains pending until the resolver exits; while MCP input is open, `send(control = "interrupt")` sends `SIGINT` to the active Unix resolver or terminates the active Windows resolver Job, and closing MCP input cancels it during server shutdown.
 
 Packages supplied by these environments are available but are not attached or imported automatically.
 The default DuckDB extensions are installed in DuckDB's native cache but are loaded only when DuckDB needs them inside the worker.

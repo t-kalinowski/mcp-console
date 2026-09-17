@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::io;
+#[cfg(unix)]
 use std::os::fd::{AsRawFd, RawFd};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -24,6 +25,7 @@ pub(crate) fn initialize(
         .map_err(|_| io::Error::other("R worker sideband was already initialized"))
 }
 
+#[cfg(unix)]
 pub(crate) fn sideband_activity() -> Result<(bool, RawFd), String> {
     let reader = worker_reader()?;
     Ok((reader.has_buffered_data(), reader.as_raw_fd()))
@@ -50,6 +52,7 @@ pub(crate) fn mark_shutting_down() {
     WORKER_SHUTDOWN.store(true, Ordering::SeqCst);
 }
 
+#[cfg(unix)]
 pub(crate) fn observe_stdin_shutdown() -> Result<(), String> {
     let mut event = libc::pollfd {
         fd: libc::STDIN_FILENO,
@@ -320,4 +323,16 @@ fn send_image(data: String) -> Result<(), String> {
             mime_type: "image/png".to_string(),
         })
         .map_err(|error| format!("R worker failed to send a plot image: {error}"))
+}
+
+#[cfg(windows)]
+pub(crate) fn observe_stdin_shutdown() -> Result<(), String> {
+    if let Err(error) = crate::windows::available(unsafe { libc::get_osfhandle(0) } as _) {
+        if error.raw_os_error() == Some(windows_sys::Win32::Foundation::ERROR_BROKEN_PIPE as i32) {
+            mark_shutting_down();
+        } else {
+            return Err(error.to_string());
+        }
+    }
+    Ok(())
 }

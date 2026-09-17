@@ -32,11 +32,12 @@ Worker fd 1 and fd 2 carry independent raw output streams.
 They are not sideband messages.
 
 The sideband has no protocol negotiation, capability exchange, session name, request ID, general structured error, poll command, output acknowledgment, or interrupt command.
-Interrupt delivery is a process signal managed by the relay.
+Interrupt delivery is managed by the relay: a process signal on Unix or an inherited event on Windows.
 Response cuts, output budgets, and MCP response assembly are server state and never appear on this boundary.
 
 The sideband transport, worker relay, and built-in worker support macOS and Linux.
 Both platforms support the default sandbox launcher and explicit `serve --no-sandbox`.
+Windows x64 supports the local unsandboxed stack with the alternate inherited-handle contract below.
 
 ## Launch contract
 
@@ -47,7 +48,7 @@ Local and SSH host workers use the target account's permissions without native d
 The built-in command is `mcp-console worker`.
 The hidden `serve --worker PATH` option uses `PATH` as one executable name or path, without arguments or shell parsing.
 
-Before spawning the worker, the relay creates two anonymous pipes and places the worker endpoint numbers in its environment:
+On Unix, before spawning the worker, the relay creates two anonymous pipes and places the worker endpoint numbers in its environment:
 
 ```yaml
 MCP_CONSOLE_SIDEBAND_READ_FD: <worker reads relay messages here>
@@ -66,6 +67,22 @@ Before executing descendants or evaluated code, a worker must:
 Keeping a sideband endpoint open in a descendant can prevent the relay from observing closure and is outside the contract.
 Descendants may retain fd 1 or fd 2; their bytes remain part of the worker generation's captured standard streams.
 
+### Windows inherited handles
+
+Windows uses two overlapped named pipes whose worker endpoints are inherited as decimal handle values in `MCP_CONSOLE_SIDEBAND_READ_HANDLE` and `MCP_CONSOLE_SIDEBAND_WRITE_HANDLE`.
+Adopt those handles, clear their inheritance flags, and remove the environment entries before launching children.
+The same newline-delimited UTF-8 JSON frames apply.
+Standard streams remain ordinary byte streams and must not carry sideband frames.
+
+`MCP_CONSOLE_INTERRUPT_HANDLE` identifies a manual-reset event set by the relay for an interrupt request.
+The built-in worker waits for it on a dedicated notification thread, resets it, sets R/Python interrupt flags, and invokes the C runtime's current SIGINT handler (including DuckDB's active-query handler) without evaluating submitted code on that thread.
+A custom Windows worker must implement its own interrupt behavior using that event; setting it acknowledges delivery, not completion.
+`MCP_CONSOLE_INPUT_READY_HANDLE` identifies a manual-reset wakeup event set around stdin writes and after stdin closure.
+Managed input resets the event before inspecting the pipe, then waits for input or interruption.
+Raw fd-0 readers can ignore the wakeup event.
+All inherited private event handles must also be made noninheritable and their environment entries removed.
+See [Windows](WINDOWS.md) for the current execution and cleanup limits.
+
 ## Transport
 
 ### Sideband framing
@@ -78,11 +95,12 @@ relay reader  <──  worker writer
 ```
 
 Reads and writes proceed independently.
-The built-in endpoints use nonblocking descriptor I/O and readiness polling, while message sends and receives wait for progress.
+On Unix, the built-in endpoints use nonblocking descriptor I/O and readiness polling, while message sends and receives wait for progress.
 Relay reader and writer waits also poll explicit cancellation pipes, so full pipes or descendants retaining endpoints cannot prevent their threads from joining.
 Cancellation does not close a descriptor being used by another thread.
 Pipe writes suppress their own `SIGPIPE` using a temporary thread-local signal mask, preserve a previously pending signal, and restore the caller's mask.
 They report `EPIPE` without changing the process-wide signal disposition installed by R or Python.
+Windows endpoints use overlapped pipe I/O, event waits, and cancellation followed by confirmed I/O completion before releasing buffers.
 
 Each frame is one UTF-8 JSON object followed by line feed (`\n`).
 A sender flushes every frame.
@@ -461,7 +479,7 @@ A conforming custom worker:
 - may opt into runtime managed-R resolution and activation messages using the exact candidate-confirmation contract above;
 - does not use managed-Python activation messages;
 - exits without replying to `shutdown`; and
-- defines its own behavior for the process `SIGINT` sent by the relay.
+- defines its own behavior for the process `SIGINT` sent by the Unix relay or the interrupt event set by the Windows relay.
 
 The executable fixture under `tests/fixtures/zod` exercises successful evaluation, exact text and image frames, stdin, R preparation, interruption, protocol violations, standard streams, and bounded shutdown.
 Its individual commands are fixture behavior, not additions to this protocol.

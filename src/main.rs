@@ -2,6 +2,9 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
+#[cfg(windows)]
+mod windows;
+
 mod cell;
 mod cli;
 mod config;
@@ -11,18 +14,20 @@ mod docker_sandbox;
 mod input_watch;
 #[cfg(unix)]
 mod process_descriptors;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
+#[cfg_attr(windows, path = "process_exit/windows.rs")]
 mod process_exit;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
+#[cfg_attr(windows, path = "process_output/windows.rs")]
 mod process_output;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod python;
 mod python_requirement;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod r_bridge;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod r_environment;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod r_graphics;
 mod r_package_name;
 #[cfg(unix)]
@@ -33,9 +38,10 @@ mod sandbox;
 mod server;
 mod server_transport;
 mod settings;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
+#[cfg_attr(windows, path = "sideband/windows.rs")]
 mod sideband;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod sql;
 mod ssh;
 mod target_launch;
@@ -99,7 +105,7 @@ fn main() -> ExitCode {
                 Err(error) => exit_with_error(error),
             }
         }
-        cli::Command::ImageRuntimeProbe => match target_launch::runtime::runtime_probe() {
+        cli::Command::ImageRuntimeProbe => match target_launch::runtime_probe() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
@@ -154,6 +160,15 @@ fn run_server(
     } = settings::discover(overrides)?;
     if provider == settings::Provider::Compute {
         docker_sandbox::validate_policy(&policy, false, &writable_roots)?;
+    }
+    #[cfg(windows)]
+    {
+        if target.is_some() {
+            return Err("Windows currently supports local execution only".into());
+        }
+        if !no_sandbox {
+            return Err("Windows execution currently requires `serve --no-sandbox`".into());
+        }
     }
     let target = target.map(|target| (target, writable_roots.clone()));
     if target.is_some() && (worker.is_some() || relay.is_some()) {

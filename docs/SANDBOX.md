@@ -101,7 +101,8 @@ Standalone callers may explicitly select `linux_backend: "landlock"` for native 
 This mode has no process isolation or descendant cleanup and rejects supervised-lifetime and proxy options.
 The default server never selects it.
 See [configuration](SANDBOX_CONFIGURATION.md).
-Windows and other operating systems remain unsupported.
+Windows and other operating systems remain unsupported by the native sandbox.
+Windows x64 supports [experimental local unsandboxed execution](WINDOWS.md).
 
 Configured caller death must retire the workload while the runner lives.
 When neither stdin nor stdout is a terminal, a runner with a configured caller enters its own process group before native setup.

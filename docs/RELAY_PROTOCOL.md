@@ -1,6 +1,7 @@
 # Server-relay protocol
 
-This document defines the private protocol between `mcp-console serve` and the per-generation worker relay on macOS and Linux.
+This document defines the private protocol between `mcp-console serve` and the per-generation worker relay on macOS, Linux, and experimental local unsandboxed Windows hosts.
+Windows uses the same JSONL messages with native pipe and event handles; [Windows local execution](WINDOWS.md) records its platform limits.
 It is an exact current interface, but it is neither public nor versioned.
 The message definitions and framing in `src/relay_protocol.rs`, the relay implementation in `src/worker_relay.rs`, and the server-side transport in `src/worker_client/unix.rs` are the source of truth.
 Transcript-runner progress lines are test user-interface output and never enter this protocol.
@@ -40,19 +41,20 @@ Runtime failures are also represented by a `fatal` event when relay stdout remai
 The framed event is authoritative; stderr diagnostics are best effort because the server's outer fail-safe can terminate a failed relay before its final diagnostic is written.
 The sandbox launcher never writes to standard output because it carries relay JSONL.
 The relay must be the only writer to that protocol stream.
-For pipes, FIFOs, and sockets, it uses nonblocking output and restores the original descriptor status flags when its writer finishes.
+On Unix, for pipes, FIFOs, and sockets, it uses nonblocking output and restores the original descriptor status flags when its writer finishes.
 Inherited and duplicated descriptors share those flags; duplicating standard output does not isolate `O_NONBLOCK`.
 The bounded output retirement contract applies to pipes, FIFOs, and sockets.
-Regular-file redirection has no relay output deadline and retains the file system's usual blocking behavior.
+Unix regular-file redirection has no relay output deadline and retains the file system's usual blocking behavior.
+The Windows relay uses synchronous stdout writes with a bounded retirement join; a blocked writer ends with relay process exit after worker retirement.
 If sandbox setup fails before relay readiness, the detailed infrastructure error goes to inherited standard error and the closed relay transport produces a stable generic startup failure in the server.
 
-The server closes unrelated inherited descriptors before executing the launcher or direct relay.
+On Unix, the server closes unrelated inherited descriptors before executing the launcher or direct relay.
 The private runner enforces the target descriptor boundary and owns native setup, startup cancellation, descendant retirement, and private storage.
 Console supplies immutable launch-time policy and lifecycle configuration; see [sandbox integration](SANDBOX.md).
 Any future sandbox-specific control plane must terminate at the sandbox process; its bootstrap and transport do not belong in the relay protocol.
 
-The relay creates two anonymous sideband pipes and the worker's standard-input, standard-output, and standard-error pipes.
-It passes the worker's sideband endpoints through `MCP_CONSOLE_SIDEBAND_READ_FD` and `MCP_CONSOLE_SIDEBAND_WRITE_FD` together with the fd-0/1/2 contract documented in [the worker protocol](WORKER_PROTOCOL.md).
+The relay creates two sideband pipes and the worker's standard-input, standard-output, and standard-error pipes.
+Unix passes anonymous sideband endpoints through `MCP_CONSOLE_SIDEBAND_READ_FD` and `MCP_CONSOLE_SIDEBAND_WRITE_FD`; Windows passes private named-pipe and event handles through the alternate contract documented in [the worker protocol](WORKER_PROTOCOL.md).
 It owns the direct worker, local transports, sideband translation, direct-worker signals, bounded termination, and direct-worker reaping.
 In sandboxed mode, successful managed launcher exit is the server's sandbox-cleanup barrier.
 In direct mode, the server waits for and reaps the relay; its exit supplies no descendant-cleanup guarantee.
@@ -155,7 +157,7 @@ The server can send these flat frames:
 - `{"kind":"python_version_resolved","version":"3.12.11"}` returns one host Python-version result.
 - `{"kind":"python_version_resolution_failed","message":"..."}` returns one host Python-version failure.
 - `{"kind":"stdin","data":"..."}` encodes the JSON string as UTF-8 and appends the exact bytes to worker fd 0.
-- `{"kind":"interrupt","request_id":1}` attempts `SIGINT` delivery to the live worker and correlates the result with the same request ID.
+- `{"kind":"interrupt","request_id":1}` attempts interrupt delivery to the live worker and correlates the result with the same request ID.
 - `{"kind":"shutdown","grace_millis":1000}` closes worker stdin, sends the unchanged worker `shutdown` message, and stops the worker within the supplied grace period.
 
 The relay translates semantic commands to the unchanged worker-sideband messages where applicable.
@@ -208,8 +210,8 @@ The relay can emit these flat frames:
 - `{"kind":"stdout_closed"}` marks the worker stdout reader's retirement boundary.
 - `{"kind":"stderr_closed"}` marks the worker stderr reader's retirement boundary.
 - `{"kind":"worker_sideband_closed"}` marks the worker-to-relay sideband's retirement boundary.
-- `{"kind":"interrupt_result","request_id":1}` reports successful `kill(SIGINT)` delivery.
-- `{"kind":"interrupt_result","request_id":1,"error":"..."}` reports failed `kill(SIGINT)` delivery.
+- `{"kind":"interrupt_result","request_id":1}` reports successful interrupt delivery.
+- `{"kind":"interrupt_result","request_id":1,"error":"..."}` reports failed interrupt delivery.
 - `{"kind":"shutdown_started"}` reports acceptance of the server's registered shutdown request.
 - `{"kind":"worker_exited","code":33}` reports ordinary direct-worker exit with this status; it does not report completion of host-side sandbox cleanup.
 - `{"kind":"worker_signaled","signal":9}` reports direct-worker signal termination; it does not report completion of host-side sandbox cleanup.
@@ -244,8 +246,8 @@ Those are server concerns described conceptually in [Implemented architecture](A
 
 ## Interruption and shutdown
 
-When the server sends an `interrupt` command, the relay calls `kill(worker_pid, SIGINT)` and returns `interrupt_result`; the request ID matches that result to the caller.
-Success means that the operating system accepted signal delivery, not that the worker has already handled the signal or stopped its current operation.
+When the server sends an `interrupt` command, the Unix relay calls `kill(worker_pid, SIGINT)` or the Windows relay sets the inherited interrupt event, then returns `interrupt_result`; the request ID matches that result to the caller.
+Success means that the operating system accepted delivery, not that the worker has already handled the interrupt or stopped its current operation.
 Host-resolver interruption requests do not cross this boundary as relay `interrupt` commands.
 The server can still classify the resulting runtime R reply as `r_resolution_failed` with `failure` set to `interrupted`.
 The server then performs the `send`-owned stdin enqueue and 100-millisecond grace before it observes the earlier evaluation or considers a new cell.
@@ -270,7 +272,7 @@ The failure retirement marker and physical relay wait share one absolute two-sec
 This keeps the relay reader alive for drained raw output, stream closures, and the final process outcome before the outer fail-safe runs.
 
 The relay closes worker stdin and sends the unchanged worker-sideband `shutdown` message without waiting for one path before attempting the other.
-If the worker remains live at its deadline, the relay sends `SIGKILL` to that direct child.
+If the worker remains live at its deadline, the relay sends `SIGKILL` to that direct child on Unix or terminates it using its process handle on Windows.
 After direct-worker exit or force-stop, the relay reaps the direct child and retires its local transports.
 In sandboxed mode, the sandbox launcher owns cleanup of remaining descendants, including those retaining worker descriptors.
 The resulting `worker_exited` or `worker_signaled` event describes only that direct child; it is not a sandbox-lifetime retirement acknowledgment.
@@ -293,7 +295,8 @@ After runner loss there is no independent supervisor to guarantee descendant cle
 
 For local host execution with `--no-sandbox`, the server retains the relay itself as its waitable child and applies the same worker and relay deadlines.
 SSH, Docker, and SBX adapters retain their ordinary transport child and require their own retirement receipts.
-If the relay has not exited by the applicable deadline, the server sends `SIGTERM` directly to it, allows six seconds before `SIGKILL`, and then allows one second to observe exit.
+If the relay has not exited by the applicable deadline, the Unix server sends `SIGTERM` directly to it, allows six seconds before `SIGKILL`, and then allows one second to observe exit.
+On Windows, the first fallback terminates the relay using its process handle; it does not send a Unix signal.
 The server reaps the relay before admitting a replacement.
 When relay EOF itself established the generation failure, the direct relay's exit status is redundant; otherwise, a nonzero exit after readiness fails retirement.
 Normal relay shutdown reaps its direct worker, but no sandbox runner retires remaining descendants or recovers the worker after forced relay termination.

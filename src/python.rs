@@ -84,7 +84,7 @@ mod platform {
     use std::ffi::{CStr, CString};
     use std::fs;
     use std::io;
-    use std::os::unix::ffi::OsStrExt as _;
+    #[cfg(unix)]
     use std::os::unix::fs::symlink;
     use std::path::{Path, PathBuf};
     use std::sync::OnceLock;
@@ -99,7 +99,7 @@ mod platform {
         // Preserve the selected host configuration before redirecting all
         // Matplotlib writes to the worker's private directory.
         if let Some(config) = inherited_matplotlibrc(matplotlib_config_directory.as_deref()) {
-            let config = CString::new(config.as_os_str().as_bytes())
+            let config = path_cstring(&config)
                 .expect("Matplotlib configuration path should not contain NUL");
             set_environment(c"MATPLOTLIBRC", &config, true)?;
         }
@@ -124,8 +124,8 @@ mod platform {
             (c"MPLCONFIGDIR", matplotlib_directory),
             (c"XDG_CACHE_HOME", temporary_directory.join("cache")),
         ] {
-            let directory = CString::new(directory.as_os_str().as_bytes())
-                .expect("temporary directory should not contain NUL");
+            let directory =
+                path_cstring(&directory).expect("temporary directory should not contain NUL");
             set_environment(name, &directory, true)?;
         }
         Ok(())
@@ -157,7 +157,10 @@ mod platform {
             }
             let link = directory.join(name);
             if fs::symlink_metadata(&link).is_err() {
+                #[cfg(unix)]
                 let _ = symlink(cache.path(), link);
+                #[cfg(windows)]
+                let _ = fs::copy(cache.path(), link);
             }
         }
     }
@@ -206,12 +209,45 @@ mod platform {
         path.is_file().then_some(path)
     }
 
+    fn path_cstring(path: &Path) -> Result<CString, std::ffi::NulError> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            CString::new(path.as_os_str().as_bytes())
+        }
+        #[cfg(windows)]
+        {
+            CString::new(path.to_string_lossy().as_bytes())
+        }
+    }
+
+    #[cfg(unix)]
     pub(super) fn set_environment(name: &CStr, value: &CStr, overwrite: bool) -> io::Result<()> {
         if unsafe { libc::setenv(name.as_ptr(), value.as_ptr(), overwrite.into()) } != 0 {
             return Err(io::Error::last_os_error());
         }
         Ok(())
     }
+    #[cfg(windows)]
+    pub(super) fn set_environment(name: &CStr, value: &CStr, overwrite: bool) -> io::Result<()> {
+        let name = name.to_str().map_err(io::Error::other)?;
+        if overwrite || std::env::var_os(name).is_none() {
+            let value = value.to_str().map_err(io::Error::other)?;
+            let assignment = CString::new(format!("{name}={value}")).map_err(io::Error::other)?;
+            // Keep both the Win32 environment and the UCRT getenv view used by
+            // embedded R/Python synchronized. _putenv copies its argument.
+            unsafe {
+                std::env::set_var(name, value);
+                if libc::putenv(assignment.as_ptr()) != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 pub(crate) use platform::link_matplotlib_caches;
+
+#[cfg(windows)]
+pub(crate) use library::interrupt_windows;

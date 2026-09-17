@@ -23,15 +23,17 @@ pub(crate) fn resolve_duckdb_extensions(
 
     let rscript = managed_r.rscript();
     let mut command = resolver_command(rscript);
+    let source =
+        super::process::r_expression(&mut command, MANAGED_DUCKDB_EXTENSION_RESOLVER_SOURCE);
     command
-        .args(["--vanilla", "-e", MANAGED_DUCKDB_EXTENSION_RESOLVER_SOURCE])
+        .args(["--vanilla", "-e", source])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     managed_r.configure_worker(&mut command)?;
     // DuckDB performs its normal extension installation outside the sandbox.
     // Names are JSON input, never R or SQL source.
-    let mut child = command.spawn().map_err(|error| {
+    let mut child = super::process::spawn_resolver(&mut command).map_err(|error| {
         format!(
             "failed to run DuckDB extension resolver with `{}`: {error}",
             rscript.display()

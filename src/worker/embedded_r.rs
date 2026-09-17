@@ -14,6 +14,7 @@ use crate::cell::Language;
 use crate::worker_protocol::ConsoleChannel;
 
 static R_MAIN_ARGS: OnceLock<Vec<CString>> = OnceLock::new();
+#[cfg(unix)]
 static R_EVENTS: OnceLock<REvents> = OnceLock::new();
 static R_CHECK_USER_INTERRUPT: OnceLock<CheckUserInterrupt> = OnceLock::new();
 static CELL_SOURCE: Mutex<Option<CellSource>> = Mutex::new(None);
@@ -25,7 +26,9 @@ type TopLevelExec = unsafe extern "C-unwind" fn(
     Option<unsafe extern "C-unwind" fn(*mut c_void)>,
     *mut c_void,
 ) -> c_int;
+#[cfg(unix)]
 type CheckActivity = unsafe extern "C-unwind" fn(c_int, c_int) -> *mut c_void;
+#[cfg(unix)]
 type RunHandlers = unsafe extern "C-unwind" fn(*mut c_void, *mut c_void);
 type ReadConsole = unsafe extern "C-unwind" fn(
     prompt: *const c_char,
@@ -54,12 +57,14 @@ struct ReplApi {
     stack: *mut *mut *mut c_void,
     nil: libr::SEXP,
 }
+#[cfg(unix)]
 type AddInputHandler = unsafe extern "C-unwind" fn(
     *mut c_void,
     c_int,
     Option<unsafe extern "C-unwind" fn(*mut c_void)>,
     c_int,
 ) -> *mut c_void;
+#[cfg(unix)]
 type RemoveInputHandler = unsafe extern "C-unwind" fn(*mut *mut c_void, *mut c_void) -> c_int;
 
 struct CellSource {
@@ -67,6 +72,7 @@ struct CellSource {
     offset: usize,
 }
 
+#[cfg(unix)]
 struct REvents {
     top_level_exec: TopLevelExec,
     check_activity: CheckActivity,
@@ -135,12 +141,14 @@ impl Runtime {
 }
 
 unsafe extern "C" {
+    #[cfg(unix)]
     fn mcp_r_run_ready_handlers(
         top_level_exec: TopLevelExec,
         check_activity: CheckActivity,
         run_handlers: RunHandlers,
         input_handlers: *mut c_void,
     );
+    #[cfg(unix)]
     fn mcp_r_wait_for_activity(
         top_level_exec: TopLevelExec,
         add_input_handler: AddInputHandler,
@@ -168,6 +176,7 @@ unsafe extern "C-unwind" {
     ) -> c_int;
 }
 
+#[cfg(unix)]
 pub(super) fn normalize_interrupt_signal() -> io::Result<()> {
     if unsafe { libc::signal(libc::SIGINT, libc::SIG_DFL) } == libc::SIG_ERR {
         return Err(io::Error::last_os_error());
@@ -209,10 +218,28 @@ pub(super) fn defer_interrupts<T>(
 
 pub(super) fn discard_interrupts() {
     unsafe { libr::set(libr::R_interrupts_pending, 0) };
+    #[cfg(windows)]
+    unsafe {
+        libr::set(libr::UserBreak, libr::Rboolean_FALSE)
+    };
+    #[cfg(windows)]
+    if let Some(pending) = WINDOWS_INTERRUPT.get() {
+        pending.reset();
+    }
 }
 
 fn interrupt_pending() -> bool {
-    unsafe { libr::get(libr::R_interrupts_pending) != 0 }
+    #[cfg(windows)]
+    windows_events();
+    #[cfg(unix)]
+    unsafe {
+        libr::get(libr::R_interrupts_pending) != 0
+    }
+    #[cfg(windows)]
+    unsafe {
+        libr::get(libr::UserBreak) != libr::Rboolean_FALSE
+            || libr::get(libr::R_interrupts_pending) != 0
+    }
 }
 
 fn console_interrupt_pending() -> bool {
@@ -264,6 +291,7 @@ pub(super) fn initialize_r(r_home: &std::path::Path) -> Result<(), Box<dyn Error
         .map(|argument| argument.as_ptr() as *mut c_char)
         .collect::<Vec<_>>();
 
+    #[cfg(unix)]
     unsafe {
         libr::Rf_initialize_R(
             argument_pointers.len() as c_int,
@@ -280,6 +308,11 @@ pub(super) fn initialize_r(r_home: &std::path::Path) -> Result<(), Box<dyn Error
         libr::setup_Rmainloop();
     }
 
+    #[cfg(windows)]
+    unsafe {
+        initialize_windows_r(r_home, &mut argument_pointers)?;
+    }
+
     libraries.initialize_post_setup_r();
     unsafe {
         harp::CONSOLE_THREAD_ID = Some(thread::current().id());
@@ -288,20 +321,64 @@ pub(super) fn initialize_r(r_home: &std::path::Path) -> Result<(), Box<dyn Error
     harp::initialize();
     harp::parse_eval_base("base::options(width = 200L)")?;
     initialize_r_repl()?;
+    #[cfg(windows)]
+    if let Ok(handle) = std::env::var("MCP_CONSOLE_INTERRUPT_HANDLE") {
+        let handle = handle.parse::<usize>()? as *mut c_void;
+        let requests = unsafe { crate::windows::Event::from_inherited(handle)? };
+        let pending = crate::windows::Event::new()?;
+        super::input::initialize_windows_stdin(pending.clone())?;
+        WINDOWS_INTERRUPT
+            .set(pending.clone())
+            .map_err(|_| io::Error::other("interrupt event already initialized"))?;
+        // Windows R's console control handler uses UserBreak from a separate
+        // thread too. Reticulate also consults R_interrupts_pending when its
+        // Python signal handler runs. No R evaluation or allocation runs on this notification
+        // thread. CPython's signal API is explicitly safe without the GIL.
+        thread::Builder::new()
+            .name("worker-interrupt".into())
+            .spawn(move || {
+                while requests.wait(None).is_ok() {
+                    requests.reset();
+                    unsafe {
+                        libr::set(libr::UserBreak, libr::Rboolean_TRUE);
+                        libr::set(libr::R_interrupts_pending, 1);
+                    }
+                    crate::python::interrupt_windows();
+                    // Native libraries such as DuckDB install a CRT SIGINT
+                    // handler around their query loop. Invoke that handler as
+                    // well as setting R/Python's cooperative interrupt flags.
+                    unsafe {
+                        libc::raise(libc::SIGINT);
+                    }
+                    pending.set();
+                }
+            })?;
+        unsafe {
+            std::env::remove_var("MCP_CONSOLE_INTERRUPT_HANDLE");
+        }
+    }
     Ok(())
 }
 
 fn initialize_r_repl() -> Result<(), Box<dyn Error>> {
+    #[cfg(unix)]
     let library = libloading::os::unix::Library::this();
+    #[cfg(windows)]
+    let library = libloading::os::windows::Library::open_already_loaded("R.dll")?;
     let init = unsafe { *library.get::<ReplInit>(b"R_ReplDLLinit\0")? };
     let do_one = unsafe { *library.get::<ReplDoOne>(b"R_ReplDLLdo1\0")? };
     let top_level_exec = unsafe { *library.get::<TopLevelExec>(b"R_ToplevelExec\0")? };
+    #[cfg(unix)]
     let check_activity = unsafe { *library.get::<CheckActivity>(b"R_checkActivity\0")? };
+    #[cfg(unix)]
     let run_handlers = unsafe { *library.get::<RunHandlers>(b"R_runHandlers\0")? };
     let check_interrupt = unsafe { *library.get::<CheckUserInterrupt>(b"R_CheckUserInterrupt\0")? };
+    #[cfg(unix)]
     let add_input_handler = unsafe { *library.get::<AddInputHandler>(b"addInputHandler\0")? };
+    #[cfg(unix)]
     let remove_input_handler =
         unsafe { *library.get::<RemoveInputHandler>(b"removeInputHandler\0")? };
+    #[cfg(unix)]
     let rg_wait_usec = unsafe { *library.get::<*mut c_int>(b"Rg_wait_usec\0")? as usize };
     unsafe {
         mcp_r_repl_configure(&ReplApi {
@@ -316,6 +393,7 @@ fn initialize_r_repl() -> Result<(), Box<dyn Error>> {
             nil: libr::R_NilValue,
         });
     }
+    #[cfg(unix)]
     R_EVENTS
         .set(REvents {
             top_level_exec,
@@ -336,16 +414,19 @@ fn initialize_r_repl() -> Result<(), Box<dyn Error>> {
 fn run_ready_handlers(graphics: &crate::r_graphics::Bridge) -> Result<(), String> {
     defer_interrupts(|| graphics.begin(), check_interrupts)?;
     EVALUATION_STARTED.store(true, Ordering::SeqCst);
-    let events = R_EVENTS
-        .get()
-        .expect("R event handlers should be initialized");
-    unsafe {
-        mcp_r_run_ready_handlers(
-            events.top_level_exec,
-            events.check_activity,
-            events.run_handlers,
-            r_input_handlers(),
-        );
+    #[cfg(unix)]
+    {
+        let events = R_EVENTS
+            .get()
+            .expect("R event handlers should be initialized");
+        unsafe {
+            mcp_r_run_ready_handlers(
+                events.top_level_exec,
+                events.check_activity,
+                events.run_handlers,
+                r_input_handlers(),
+            );
+        }
     }
     EVALUATION_STARTED.store(false, Ordering::SeqCst);
     finish_console_stdin_operation()?;
@@ -353,6 +434,7 @@ fn run_ready_handlers(graphics: &crate::r_graphics::Bridge) -> Result<(), String
     observe_stdin_shutdown()
 }
 
+#[cfg(unix)]
 pub(super) fn wait_for_activity(sideband_fd: c_int) -> Result<bool, String> {
     let events = R_EVENTS
         .get()
@@ -380,6 +462,7 @@ pub(super) fn wait_for_activity(sideband_fd: c_int) -> Result<bool, String> {
     }
 }
 
+#[cfg(unix)]
 fn r_input_handlers() -> *mut c_void {
     unsafe { libr::get(libr::R_InputHandlers).cast_mut() }
 }
@@ -541,4 +624,80 @@ extern "C-unwind" fn r_read_console(
             console_eof(buf)
         }
     }
+}
+
+#[cfg(windows)]
+static WINDOWS_INTERRUPT: OnceLock<crate::windows::Event> = OnceLock::new();
+
+#[cfg(windows)]
+pub(super) fn normalize_interrupt_signal() -> io::Result<()> {
+    if unsafe {
+        libc::signal(
+            libc::SIGINT,
+            windows_interrupt_signal as *const () as libc::sighandler_t,
+        )
+    } == libc::SIG_ERR as libc::sighandler_t
+    {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+extern "C" fn windows_interrupt_signal(_: c_int) {
+    // CRT signal handlers reset on delivery. Keep the default worker handler
+    // non-terminating; the notification thread owns the actual pending flags.
+    unsafe {
+        libc::signal(
+            libc::SIGINT,
+            windows_interrupt_signal as *const () as libc::sighandler_t,
+        );
+    }
+}
+
+#[cfg(windows)]
+extern "C-unwind" fn windows_events() {
+    if WINDOWS_INTERRUPT
+        .get()
+        .is_some_and(|event| event.wait(Some(std::time::Duration::ZERO)).unwrap_or(false))
+    {
+        WINDOWS_INTERRUPT.get().unwrap().reset();
+    }
+}
+
+#[cfg(windows)]
+unsafe fn initialize_windows_r(
+    r_home: &std::path::Path,
+    arguments: &mut [*mut c_char],
+) -> Result<(), Box<dyn Error>> {
+    use std::mem::MaybeUninit;
+    let r_home = CString::new(r_home.to_string_lossy().as_bytes())?;
+    let user_home =
+        CString::new(std::env::var("R_USER").or_else(|_| std::env::var("USERPROFILE"))?)?;
+    unsafe {
+        libr::set(libr::R_SignalHandlers, 0);
+        libr::cmdlineoptions(1, arguments.as_mut_ptr());
+        let mut params = MaybeUninit::<libr::structRstart>::uninit();
+        libr::R_DefParamsEx(params.as_mut_ptr(), 0);
+        let mut params = params.assume_init();
+        let mut count = arguments.len() as c_int;
+        libr::R_common_command_line(&mut count, arguments.as_mut_ptr(), &mut params);
+        params.R_Interactive = 1;
+        params.CharacterMode = libr::UImode_RGui;
+        params.LoadInitFile = libr::Rboolean_FALSE;
+        params.LoadSiteFile = libr::Rboolean_FALSE;
+        params.rhome = r_home.as_ptr().cast_mut();
+        params.home = user_home.as_ptr().cast_mut();
+        params.WriteConsole = None;
+        params.WriteConsoleEx = Some(r_write_console);
+        params.ReadConsole = Some(mcp_r_read_console);
+        params.ShowMessage = Some(r_show_message);
+        params.Busy = Some(r_busy);
+        params.CallBack = Some(windows_events);
+        libr::R_SetParams(&mut params);
+        libr::graphapp::GA_initapp(0, std::ptr::null_mut());
+        libr::readconsolecfg();
+        libr::setup_Rmainloop();
+    }
+    Ok(())
 }

@@ -148,7 +148,8 @@ The response contains available output and current state through the normal `sen
 
 R, Python, and DuckDB observe interruption through their normal console/runtime mechanisms.
 Managed console reads are cancelled when the active runtime accepts the interrupt.
-User code can catch, delay, replace, or block `SIGINT`, so interruption is cooperative rather than a termination guarantee.
+User code can catch, delay, replace, or block interruption, so it is cooperative rather than a termination guarantee.
+Unix workers receive `SIGINT`; Windows workers use an inherited event to request R, Python, and DuckDB interruption.
 Use `control = "restart"` when the worker must be replaced.
 
 ## Explicit restart
@@ -180,7 +181,8 @@ Global bindings and `.Last.value` remain available to later calls.
 R parse, evaluation, and print errors are console output followed by normal completion; the worker stays reusable.
 Because R consumes top-level expressions as a console does, earlier complete expressions may take effect before a later expression in the same cell fails or remains incomplete.
 
-Between cells, the worker continues servicing R event handlers such as `later` callbacks, which can mutate persistent R state and produce output.
+On macOS and Linux, the worker continues servicing R event handlers such as `later` callbacks between cells, which can mutate persistent R state and produce output.
+The experimental Windows worker does not yet service that idle event loop.
 Output produced while idle remains pending until a later response drains it; when that response belongs to a new cell and both regions contain output, `[output produced while idle]` separates them.
 
 Ordinary R console output and diagnostics remain distinct worker channels but both appear as MCP text.
@@ -542,7 +544,7 @@ The [implemented architecture](ARCHITECTURE.md) describes the session record and
 - With `serve --no-sandbox`, local and SSH host workers use the target account's permissions without native descendant cleanup; normal relay shutdown still reaps the direct worker.
   Docker retains its outer container boundary and retirement.
 - Linux sandboxing requires procfs, permitted namespace setup, and the requested policy capabilities; see [tested Linux host compatibility](LINUX_COMPATIBILITY.md).
-- Windows is not supported.
+- Windows x64 supports experimental local unsandboxed execution; see [Windows differences and validation](WINDOWS.md).
 
 The [architecture](ARCHITECTURE.md) explains lifecycle and process ownership.
 The [worker protocol](WORKER_PROTOCOL.md) defines exact message and closure rules.

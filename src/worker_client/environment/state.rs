@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 use std::ffi::OsString;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use std::process::Command;
 
 use super::requirements::push_duckdb_r_target;
@@ -33,7 +33,7 @@ impl PythonEnvironment {
         !configured.is_some_and(|configured| !configured.is_empty() && configured != "managed")
     }
 
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     pub(in crate::worker_client) fn builtin(
         configured: Option<OsString>,
         resolver: crate::resolver::ManagedPythonResolverConfiguration,
@@ -101,7 +101,7 @@ impl PythonEnvironment {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub(in crate::worker_client) fn configure_worker(&self, command: &mut Command) {
         match self {
             Self::Managed { selected, .. } => selected.configure_worker(command),

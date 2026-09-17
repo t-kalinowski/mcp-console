@@ -1,7 +1,9 @@
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{self, Write};
+#[cfg(unix)]
 use std::os::fd::{AsFd, AsRawFd};
+#[cfg(unix)]
 use std::os::unix::fs::FileTypeExt;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::thread;
@@ -150,6 +152,8 @@ pub(super) struct EventWriter {
     bounded_output: bool,
     wake: Option<io::PipeWriter>,
     thread: thread::JoinHandle<Result<(), String>>,
+    #[cfg(windows)]
+    completion: std::sync::mpsc::Receiver<()>,
 }
 
 pub(super) fn start(
@@ -171,11 +175,15 @@ pub(super) fn start(
         .map_err(|error| format!("failed to configure relay stdout: {error}"))?;
     let bounded_output = output.original_flags.is_some();
     let writer_queue = queue.clone();
+    #[cfg(windows)]
+    let (completed, completion) = std::sync::mpsc::sync_channel(1);
     let thread = thread::spawn(move || {
         let result = writer_queue.write(output);
         if let Err(error) = &result {
             on_error(error.clone());
         }
+        #[cfg(windows)]
+        let _ = completed.send(());
         result
     });
     Ok((
@@ -185,6 +193,8 @@ pub(super) fn start(
             bounded_output,
             wake: Some(wake),
             thread,
+            #[cfg(windows)]
+            completion,
         },
     ))
 }
@@ -265,12 +275,17 @@ impl EventWriter {
     }
 
     pub(super) fn join(self) -> Result<(), String> {
+        #[cfg(windows)]
+        self.completion
+            .recv_timeout(RETIREMENT_FLUSH_TIMEOUT)
+            .map_err(|_| EXPIRED.to_string())?;
         self.thread
             .join()
             .map_err(|_| "relay event writer task failed".to_string())?
     }
 }
 
+#[cfg(unix)]
 struct EventOutput {
     file: File,
     original_flags: Option<libc::c_int>,
@@ -278,6 +293,7 @@ struct EventOutput {
     queue: Arc<EventQueue>,
 }
 
+#[cfg(unix)]
 impl EventOutput {
     fn new(wake: io::PipeReader, queue: Arc<EventQueue>) -> io::Result<Self> {
         let file = File::from(io::stdout().as_fd().try_clone_to_owned()?);
@@ -371,6 +387,7 @@ impl EventOutput {
     }
 }
 
+#[cfg(unix)]
 impl Write for EventOutput {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         loop {
@@ -390,11 +407,37 @@ impl Write for EventOutput {
     }
 }
 
+#[cfg(unix)]
 impl Drop for EventOutput {
     fn drop(&mut self) {
         if let Some(flags) = self.original_flags {
             // SAFETY: the owned descriptor is still open during Drop.
             let _ = unsafe { libc::fcntl(self.file.as_raw_fd(), libc::F_SETFL, flags) };
         }
+    }
+}
+
+#[cfg(windows)]
+struct EventOutput {
+    file: File,
+    original_flags: Option<i32>,
+}
+#[cfg(windows)]
+impl EventOutput {
+    fn new(_wake: io::PipeReader, _queue: Arc<EventQueue>) -> io::Result<Self> {
+        use std::os::windows::io::AsHandle;
+        Ok(Self {
+            file: File::from(io::stdout().as_handle().try_clone_to_owned()?),
+            original_flags: Some(0),
+        })
+    }
+}
+#[cfg(windows)]
+impl Write for EventOutput {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.file.write(bytes)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
     }
 }
