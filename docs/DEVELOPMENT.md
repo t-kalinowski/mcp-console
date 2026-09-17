@@ -4,6 +4,37 @@ Run development commands from the repository root.
 `scripts/check` runs companion staging, core checks, release transcript tests, and installation checks in that order.
 Installation checks run last because they replace and hide the shared `target` directory.
 
+## Inspect local preparation
+
+Run `scripts/preflight` for a local inventory, or `scripts/preflight --json` to retain structured output.
+It uses the project's required Python 3.11 or later.
+It reports the checkout and revision, the release executable used by transcript tests and any separate executable on `PATH`, the companion pin and staged revision, Python/R selections, Cargo and Rustup metadata, the companion toolchain, and cache paths.
+Required command probes report missing or failing tools separately from optional Docker, SBX, external SSH, and host-test capability skips.
+Optional skips do not fail the command; missing or failing required tools, including timed-out version probes, give exit status 1.
+Metadata command failures, such as a missing active Rustup toolchain or invalid uv configuration, are retained in `probe_errors` and also give exit status 1 while preserving the remaining inventory.
+An independently installed Cargo need not use Rustup's active toolchain.
+
+The report reuses `scripts/stage-sandbox-runner --describe` and the existing test capability probes.
+It does not clone, resolve dependencies, build, install, or provision services.
+Configured provider probes may contact their existing daemon or SSH host; SBX discovery uses its normal serialization lock.
+These probes retain the test harness's behavior: negative availability is a skip, while exceptional probe failures remain errors.
+Artifact presence, the staged target, and the recorded revision are inventory facts.
+Exit status 0 means the required command probes succeeded; it does not certify build readiness.
+Staging and Cargo validate the target and build inputs, while runtime verification and public tests check the resulting bundle.
+Malformed existing staging records are errors; inspect the generated record before removing it and rerunning staging.
+The command inventory covers Git, uv, Cargo, Rustup, R, and Rscript; operating-system build dependencies and SDK setup remain in [RELEASE.md](../RELEASE.md).
+
+To prepare a checkout for direct development, run:
+
+```sh
+scripts/stage-sandbox-runner
+scripts/with-checkout cargo build --release --target-dir target
+```
+
+For a source installation, use `scripts/with-checkout uv tool install --reinstall .`; its packaging backend stages and builds the companion and application.
+The companion's selected source checkout owns its Rust toolchain; Console uses the active toolchain in this checkout.
+Download caches can be reused, while each checkout keeps its own Cargo output and wheel staging as described under [checkout ownership](#checkout-ownership).
+
 ## Find the public test
 
 Use `scripts/test --list` to discover selectors and `scripts/test --locate SELECTOR` to find source lines and the primary snapshot before building.

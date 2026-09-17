@@ -2,11 +2,15 @@
 """Public command tests for local development reports."""
 
 import json
+import os
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+from support.normalization import code
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -35,10 +39,17 @@ class DevelopmentTests(unittest.TestCase):
         self.git("commit", "-qm", "Fixture")
         return self.git("rev-parse", "HEAD")
 
-    def command(self, name: str, *arguments: str) -> subprocess.CompletedProcess[str]:
+    def command(
+        self,
+        name: str,
+        *arguments: str,
+        script_root: Path = ROOT,
+        environment: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            [sys.executable, ROOT / "scripts" / name, *arguments],
+            [sys.executable, script_root / "scripts" / name, *arguments],
             cwd=self.root,
+            env=environment,
             capture_output=True,
             text=True,
             timeout=15,
@@ -107,6 +118,183 @@ class DevelopmentTests(unittest.TestCase):
                 result = self.command("review-diff", *arguments)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertTrue(result.stderr)
+
+    def test_preflight_inventories_artifacts_and_optional_skips_without_building(
+        self,
+    ) -> None:
+        for name in (
+            "scripts/preflight",
+            "scripts/stage-sandbox-runner",
+            "checkout_workflow.py",
+            "sandbox-runner.json",
+        ):
+            target = self.root / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ROOT / name, target)
+        shutil.copytree(
+            ROOT / "tests/support",
+            self.root / "tests/support",
+            ignore=shutil.ignore_patterns("__pycache__"),
+        )
+        commands = self.root / "commands"
+        commands.mkdir()
+        (commands / "git").symlink_to(shutil.which("git"))
+        for name in ("uv", "cargo", "rustup", "R", "Rscript"):
+            self.write(
+                f"commands/{name}",
+                f"#!{sys.executable}\n"
+                # fmt: python
+                + code(r"""
+                    import json
+                    import os
+                    import sys
+                    from pathlib import Path
+
+                    name = Path(sys.argv[0]).name
+                    arguments = sys.argv[1:]
+                    with open("probes.jsonl", "a") as log:
+                        log.write(json.dumps([name, *arguments]) + "\n")
+                    if arguments == ["--version"]:
+                        print(name + " fixture version")
+                    elif os.environ.get("FAIL_PROBE") == name:
+                        print("fixture metadata probe failed", file=sys.stderr)
+                        raise SystemExit(9)
+                    elif name == "uv" and arguments == ["cache", "dir"]:
+                        print(os.environ["FIXTURE_CACHE"])
+                    elif name == "R" and arguments == ["RHOME"]:
+                        print(os.environ["FIXTURE_R_HOME"])
+                    elif name == "rustup" and arguments == ["show", "active-toolchain"]:
+                        print("fixture-console-toolchain (default)")
+                    else:
+                        raise AssertionError((name, arguments))
+                    """),
+            )
+            (commands / name).chmod(0o755)
+        environment = os.environ | {
+            "PATH": str(commands),
+            "HOME": str(self.root / "home"),
+            "XDG_CACHE_HOME": "",
+            "FIXTURE_CACHE": str(self.root / "shared-cache"),
+            "FIXTURE_R_HOME": str(self.root / "R-home"),
+            "R_HOME": "",
+            "RETICULATE_PYTHON": "/explicit/workload/python",
+            "MCP_CONSOLE_SANDBOX_SOURCE": str(self.root / "runner-source"),
+            "MCP_CONSOLE_TEST_DOCKER_IMAGE": "",
+            "MCP_CONSOLE_TEST_SBX_TEMPLATE": "",
+            "MCP_CONSOLE_TEST_SSH_EXTERNAL": "",
+            "MCP_CONSOLE_TEST_SSH_HOST": "",
+        }
+        self.write(
+            "runner-source/codex-rs/rust-toolchain.toml",
+            '[toolchain]\nchannel = "fixture-runner-toolchain"\n',
+        )
+        self.commit()
+        result = self.command(
+            "preflight", "--json", script_root=self.root, environment=environment
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertEqual(report["checkout"], str(self.root.resolve()))
+        self.assertEqual(report["required_missing"], [])
+        self.assertNotIn("preparation_needed", report)
+        self.assertFalse(any(report["artifacts"].values()))
+        self.assertEqual(
+            report["companion"]["source_toolchain"], "fixture-runner-toolchain"
+        )
+        self.assertEqual(
+            report["runtime"]["python_selection"], "/explicit/workload/python"
+        )
+        self.assertEqual(report["runtime"]["r_home"], str(self.root / "R-home"))
+        self.assertEqual(report["caches"]["uv"], str(self.root / "shared-cache"))
+        self.assertEqual(
+            report["caches"]["host_budget"],
+            str(self.root / "home/.cache/mcp-console/checks"),
+        )
+        self.assertTrue(
+            all(item["status"] == "skip" for item in report["providers"].values())
+        )
+        self.assertFalse((self.root / "target").exists())
+        self.assertFalse((self.root / ".dev-workflow").exists())
+        for name, label in (
+            ("rustup", "rustup_toolchain"),
+            ("uv", "uv_cache"),
+            ("R", "r_home"),
+        ):
+            with self.subTest(failing_metadata=name):
+                result = self.command(
+                    "preflight",
+                    "--json",
+                    script_root=self.root,
+                    environment=environment | {"FAIL_PROBE": name},
+                )
+                self.assertEqual(result.returncode, 1, result.stderr)
+                report = json.loads(result.stdout)
+                self.assertEqual(
+                    report["probe_errors"][label], "fixture metadata probe failed"
+                )
+                self.assertEqual(report["required_missing"], [])
+        pin = json.loads((self.root / "sandbox-runner.json").read_text())
+        self.write(
+            "target/sandbox-runner-build.json",
+            json.dumps({"source_revision": pin["commit"], "target": "fixture-target"}),
+        )
+        for path in (
+            "target/release/mcp-console",
+            "target/libexec/mcp-console-sandbox",
+            "wheel-data/data/libexec/mcp-console-sandbox",
+        ):
+            self.write(path, "fixture\n")
+        result = self.command(
+            "preflight", "--json", script_root=self.root, environment=environment
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertTrue(all(report["artifacts"].values()))
+        self.assertEqual(report["companion"]["staged_target"], "fixture-target")
+        self.write(
+            "target/sandbox-runner-build.json",
+            json.dumps({"source_revision": "0" * 40, "target": "fixture-target"}),
+        )
+        result = self.command(
+            "preflight", "--json", script_root=self.root, environment=environment
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            json.loads(result.stdout)["companion"]["staged_revision"], "0" * 40
+        )
+        (commands / "cargo").write_text(
+            "#!/bin/sh\necho no installed toolchain >&2\nexit 9\n"
+        )
+        result = self.command(
+            "preflight", "--json", script_root=self.root, environment=environment
+        )
+        self.assertEqual(result.returncode, 1, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertIn("cargo", report["required_missing"])
+        self.assertIn("no installed toolchain", report["tools"]["cargo"]["error"])
+        self.write(
+            "commands/cargo",
+            f"#!{sys.executable}\n"
+            # fmt: python
+            + code("""
+                import signal
+
+                signal.pause()
+                """),
+        )
+        result = self.command(
+            "preflight", "--json", script_root=self.root, environment=environment
+        )
+        self.assertEqual(result.returncode, 1, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertIn("cargo", report["required_missing"])
+        self.assertIn("timed out", report["tools"]["cargo"]["error"])
+        (commands / "cargo").unlink()
+        result = self.command(
+            "preflight", "--json", script_root=self.root, environment=environment
+        )
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("cargo", json.loads(result.stdout)["required_missing"])
 
 
 if __name__ == "__main__":

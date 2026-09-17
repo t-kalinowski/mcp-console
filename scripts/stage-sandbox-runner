@@ -58,11 +58,43 @@ def main() -> None:
         default=os.environ.get("MCP_CONSOLE_SANDBOX_SOURCE"),
     )
     parser.add_argument("--target", choices=TARGETS)
-    parser.add_argument("--github-output", type=Path)
+    metadata = parser.add_mutually_exclusive_group()
+    metadata.add_argument("--github-output", type=Path)
+    metadata.add_argument(
+        "--describe",
+        action="store_true",
+        help="report source, toolchain, and staging paths without preparing them",
+    )
     args = parser.parse_args()
     pin = json.loads((ROOT / "sandbox-runner.json").read_text(encoding="utf-8"))
     if not re.fullmatch(r"[0-9a-f]{40}", pin["commit"]):
         fail("sandbox-runner.json must pin a full source commit")
+    if args.describe:
+        checkout = runner_checkout(args, pin)
+        toolchain = checkout / "codex-rs/rust-toolchain.toml"
+        record = ROOT / "target/sandbox-runner-build.json"
+        # Existing records must be valid staging output; corruption requires repair.
+        staged = json.loads(record.read_text()) if record.is_file() else {}
+        print(
+            json.dumps(
+                {
+                    "pin": pin,
+                    "source_checkout": str(checkout),
+                    "source_toolchain": tomllib.loads(toolchain.read_text())[
+                        "toolchain"
+                    ]["channel"]
+                    if toolchain.is_file()
+                    else None,
+                    "build_directory": str(checkout / "codex-rs/target"),
+                    "staging_directory": str(ROOT / "wheel-data/data"),
+                    "build_record": str(record),
+                    "staged_revision": staged.get("source_revision"),
+                    "staged_target": staged.get("target"),
+                },
+                indent=2,
+            )
+        )
+        return
     if args.github_output is not None:
         with args.github_output.open("a", encoding="utf-8") as output:
             for key in ("repository", "commit"):
@@ -75,10 +107,15 @@ def main() -> None:
         stage(args, pin)
 
 
+def runner_checkout(args: argparse.Namespace, pin: dict) -> Path:
+    return (
+        args.checkout or ROOT / "target/sandbox-runner-cache" / pin["commit"]
+    ).resolve()
+
+
 def stage(args: argparse.Namespace, pin: dict) -> None:
-    checkout = args.checkout
-    if checkout is None:
-        checkout = ROOT / "target/sandbox-runner-cache" / pin["commit"]
+    checkout = runner_checkout(args, pin)
+    if args.checkout is None:
         checkout.mkdir(parents=True, exist_ok=True)
         if not (checkout / ".git").exists():
             git_output(checkout, "init")
@@ -92,7 +129,6 @@ def stage(args: argparse.Namespace, pin: dict) -> None:
                 pin["commit"],
             )
             git_output(checkout, "checkout", "--detach", pin["commit"])
-    checkout = checkout.resolve()
     workspace = checkout / "codex-rs"
     if not (workspace / "mcp-console-sandbox/Cargo.toml").is_file():
         fail(f"not a sandbox-runner source checkout: {checkout}")
