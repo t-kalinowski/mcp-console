@@ -26,7 +26,6 @@ Python-only execution is not yet implemented.
 ## Quickstart
 
 Use an MCP client of your choice, such as [Codex](https://developers.openai.com/codex/mcp), [Claude Code](https://code.claude.com/docs/en/mcp), or [OpenCode](https://opencode.ai/docs/mcp-servers/).
-The example below uses Codex.
 
 You need [uv](https://docs.astral.sh/uv/getting-started/installation/) and R on `PATH`.
 If you need R, install [rig](https://github.com/r-lib/rig#id-installation), then run `rig add release`.
@@ -56,6 +55,13 @@ codex mcp add console -- uvx mcp-console serve
 codex
 ```
 
+Or with Claude Code:
+
+```sh
+claude mcp add --transport stdio console -- uvx mcp-console serve
+claude
+```
+
 uv supplies Python 3.12, the first installation builds the pinned runner with its own Rust toolchain, and the first analysis prepares R and Python packages and DuckDB extensions.
 These steps can download interpreters, packages, and build dependencies and take several minutes.
 See [source installation](RELEASE.md#private-sandbox-executable) and [managed dependencies](docs/REQUIREMENTS.md#retained-environments) for details.
@@ -64,22 +70,27 @@ See [source installation](RELEASE.md#private-sandbox-executable) and [managed de
 
 Check that your client exposes the console's `send` tool (`/mcp` in Codex), then ask:
 
-> Use MCP Console for this analysis.
+> Use MCP Console to tell me something interesting about the Palmer Penguins dataset.
+> Load the data from the R package `palmerpenguins`, letting the console prepare any missing packages.
+> Fit a small logistic regression in R to predict penguin sex from body measurements.
+> Use SQL to summarize the live data by species, then use Python and Matplotlib to plot the data and the model's predictions.
+> Explain what you found, keeping the data and model in the console for follow-up questions.
 > Use `timeout_ms=10000` for cells and polls; wait for each cell to finish before continuing.
-> In R, create six orders: web revenues 120, 150, 180 with costs 80, 90, 120; store revenues 100, 140, 160 with costs 70, 100, 110.
-> Compute each order's profit and the total profit.
-> Query the live R data frame from SQL to aggregate profit by channel.
-> Then access that data from Python, retain the channel totals, and plot them.
 
 Follow up in the same conversation:
 
-> Using the channel totals already in the console, calculate the profit gap in another Python call.
-> Show the plot and the path to the recorded transcript.
+> Using the model and data already in the console, where does the model make the most mistakes?
+> Show me a plot and the path to the recorded transcript.
 
-The expected total profit is 280: store contributes 120 and web contributes 160, a gap of 40.
-No external dataset is needed.
 Records and plot artifacts are written under `.agents/console/sessions/<run-id>/` in the server's working directory.
 Your client uses its configured model; the exact calls and responses can vary.
+
+## Reproducible reports
+
+Each session produces a `transcript.md` with recorded calls and results, and a `transcript.qmd` containing the code as a Quarto document.
+Rendering with `ir` resolves R and Python dependencies and reruns the code in a fresh R session, capturing new results and plots in HTML or another Quarto output format.
+This gives you a starting point for a reproducible report: copy the document to refine the analysis and add narrative.
+See the [recording and rendering guide](docs/ARCHITECTURE.md#recording-cell-output-and-image-artifacts) for commands and setup for SQL or remote sessions.
 
 ## Architecture
 
@@ -116,10 +127,8 @@ Restart, worker replacement, and server exit discard live state.
 Recordings contain source, stdin, requirements, outputs, and artifacts without redaction, and have no aggregate retention quota or automatic cleanup.
 Retrieving omitted output requires filesystem access to the server's recording directory.
 
-`transcript.md` shows recorded calls and results.
-`transcript.qmd` is a source projection that can include failed or rejected submissions; it is neither an exact replay nor a checkpoint.
-Rendering a local projection executes code outside the worker sandbox and does not reconstruct session control, input, or the original artifacts.
-See [recording and rendering](docs/ARCHITECTURE.md#recording-cell-output-and-image-artifacts) before rendering it.
+The generated Quarto document can include failed or rejected submissions.
+Review a copy before rendering; it executes code outside the worker sandbox.
 
 ## Further reading
 

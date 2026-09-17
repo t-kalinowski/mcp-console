@@ -25,7 +25,7 @@ For use with an MCP client, see the [quickstart](../README.md#quickstart).
 
 The base package installs the executable without framework dependencies.
 For command-only use, `uv tool install --reinstall .` installs the complete checkout as a persistent tool.
-`cargo install` installs only the main binary and leaves out the required private companion.
+(`cargo install` installs only the main binary and leaves out the required private sandbox companion.)
 The [release guide](../RELEASE.md#private-sandbox-executable) explains the relocatable bundle and build caches.
 
 `mcp-console serve` speaks MCP over standard input and output; it waits for a client instead of displaying an interactive terminal prompt.
