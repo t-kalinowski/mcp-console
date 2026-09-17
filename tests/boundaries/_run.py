@@ -283,9 +283,10 @@ class ProgressReporter:
         self.rerun = ["scripts/test"]
         if update:
             self.rerun.append("--update")
-        for name, value in (("jobs", jobs), ("timeout", timeout)):
-            if value != parser.get_default(name):
-                self.rerun += [f"--{name}", str(value)]
+        if full_update and jobs != parser.get_default("jobs"):
+            self.rerun += ["--jobs", str(jobs)]
+        if timeout != parser.get_default("timeout"):
+            self.rerun += ["--timeout", str(timeout)]
         self.running: dict[int, RunningCase] = {}
         self.progress_line_open = False
 
