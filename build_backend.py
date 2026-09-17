@@ -37,6 +37,40 @@ def build_editable(
         )
 
 
+def _lock_windows(descriptor: int) -> None:
+    import ctypes
+    from ctypes import wintypes
+    import msvcrt
+
+    class Overlapped(ctypes.Structure):
+        _fields_ = [
+            ("Internal", ctypes.c_size_t),
+            ("InternalHigh", ctypes.c_size_t),
+            ("Offset", wintypes.DWORD),
+            ("OffsetHigh", wintypes.DWORD),
+            ("hEvent", wintypes.HANDLE),
+        ]
+
+    lock_file = ctypes.WinDLL("kernel32", use_last_error=True).LockFileEx
+    lock_file.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.POINTER(Overlapped),
+    ]
+    lock_file.restype = wintypes.BOOL
+    overlapped = Overlapped()
+    # The file handle is synchronous. An exclusive lock without
+    # LOCKFILE_FAIL_IMMEDIATELY blocks until available, unlike LK_LOCK's retries.
+    # Closing the file releases the one-byte lock after the complete build.
+    if not lock_file(
+        msvcrt.get_osfhandle(descriptor), 2, 0, 1, 0, ctypes.byref(overlapped)
+    ):
+        raise ctypes.WinError(ctypes.get_last_error())
+
+
 @contextmanager
 def _staged_companion() -> Iterator[None]:
     root = Path(__file__).resolve().parent
@@ -46,10 +80,7 @@ def _staged_companion() -> Iterator[None]:
     # finished consuming wheel-data, including when Cargo reuses its output.
     with (target / "wheel-build.lock").open("w") as lock:
         if sys.platform == "win32":
-            import msvcrt
-
-            # Lock one byte across wheel creation. Closing the file releases it.
-            msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
+            _lock_windows(lock.fileno())
             # Windows currently packages only the unsandboxed executable. Avoid
             # silently shipping a companion staged for another platform.
             if any(

@@ -1,15 +1,17 @@
-"""Native Windows acceptance tests through the public MCP stdio interface.
+"""Native Windows acceptance tests for MCP stdio and Python packaging.
 
 Run with `uv run --no-project tests/windows.py` after `cargo build`.
 """
 
 import ctypes
+from contextlib import ExitStack
 import json
 import os
 from pathlib import Path
 from queue import Queue
 import socket
 import subprocess
+import sys
 import tempfile
 from threading import Thread
 from textwrap import dedent
@@ -95,6 +97,70 @@ class Session:
             self.process.stdout.close()
             self.errors.close()
             self.directory.cleanup()
+
+
+@unittest.skipUnless(os.name == "nt", "native Windows packaging")
+class WindowsPackaging(unittest.TestCase):
+    def test_concurrent_build_waits_and_recovers_after_failure(self):
+        with ExitStack() as cleanup:
+            root = Path(
+                cleanup.enter_context(
+                    tempfile.TemporaryDirectory(prefix="console packaging ")
+                )
+            )
+            for source in ("build_backend.py", "tests/fixtures/windows_build.py"):
+                (root / Path(source).name).write_bytes((ROOT / source).read_bytes())
+
+            def start(hook):
+                process = subprocess.Popen(
+                    [sys.executable, str(root / "windows_build.py"), hook],
+                    cwd=root,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                cleanup.callback(stop, process)
+                lines = Queue()
+
+                def read():
+                    for line in process.stdout:
+                        lines.put(line.strip())
+                    lines.put(None)
+
+                Thread(target=read, daemon=True).start()
+                self.assertEqual(lines.get(timeout=10), "ready")
+                return process, lines
+
+            def stop(process):
+                if process.poll() is None:
+                    process.kill()
+                process.wait(timeout=10)
+                process.stdin.close()
+                process.stdout.close()
+                process.stderr.close()
+
+            first, first_lines = start("build_wheel")
+            self.assertEqual(first_lines.get(timeout=10), "building")
+            second, second_lines = start("build_editable")
+            # The old CRT lock gives up after about ten seconds. A queued
+            # build must remain blocked for the full duration of its owner.
+            try:
+                second.wait(timeout=12)
+            except subprocess.TimeoutExpired:
+                pass
+            else:
+                self.fail(f"queued build exited early: {second.stderr.read()}")
+            self.assertTrue(second_lines.empty(), "concurrent Maturin builds")
+            first.stdin.write("fail\n")
+            first.stdin.flush()
+            self.assertNotEqual(first.wait(timeout=10), 0)
+            self.assertIn("fixture build failed", first.stderr.read())
+            self.assertEqual(second_lines.get(timeout=10), "building")
+            second.stdin.write("finish\n")
+            second.stdin.flush()
+            self.assertEqual(second.wait(timeout=10), 0, second.stderr.read())
+            self.assertEqual(second_lines.get(timeout=10), "fixture.whl")
 
 
 @unittest.skipUnless(os.name == "nt", "native Windows acceptance")
@@ -275,6 +341,30 @@ class WindowsConsole(unittest.TestCase):
         result = session.send(r="exists('windows_value')")
         self.assertIn("FALSE", json.dumps(result))
 
+    def test_r_startup_paths_survive_later_cells_and_restart(self):
+        with tempfile.TemporaryDirectory(prefix="console user home ") as user_home:
+            session = Session(dict(os.environ, R_USER=user_home))
+            self.addCleanup(session.close)
+            session.initialize()
+            for generation in range(2):
+                if generation:
+                    session.send(control="restart")
+                session.send(r="invisible(gc())")
+                result = session.send(
+                    # fmt: r
+                    r=dedent("""
+                        stopifnot(
+                          identical(normalizePath(R.home()), normalizePath(Sys.getenv("R_HOME"))),
+                          identical(normalizePath(path.expand("~")), normalizePath(Sys.getenv("R_USER")))
+                        )
+                        loadNamespace("splines")
+                        stopifnot(file.exists(system.file("DESCRIPTION", package = "splines")))
+                        cat("startup paths intact")
+                        """).strip()
+                )
+                self.assertFalse(result.get("isError"), result)
+                self.assertIn("startup paths intact", json.dumps(result))
+
     def test_python_sql_and_errors(self):
         session = self.session()
         result = session.send(
@@ -303,9 +393,7 @@ class WindowsConsole(unittest.TestCase):
         self.assertIn("waiting for stdin", json.dumps(result))
         result = session.send(control="interrupt", timeout_ms=1000)
         self.assertNotIn("waiting for stdin", json.dumps(result))
-        result = session.send(
-            python="answer = input('Python: '); answer", timeout_ms=3000
-        )
+        result = session.send(python="answer = input('Python: '); answer")
         self.assertIn("waiting for stdin", json.dumps(result))
         result = session.send(stdin="hello\n")
         self.assertIn("hello", json.dumps(result))

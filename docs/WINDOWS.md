@@ -52,7 +52,7 @@ The built-in worker uses the C runtime's inherited stdin descriptor because R su
 ## Validation
 
 The initial implementation was exercised on Windows x64 with R 4.6.1, explicit Python 3.14, and a managed Python environment.
-`tests/windows.py` covers the public MCP interface, dependency-process cleanup, startup cancellation, and explicit unsandboxed launch.
+`tests/windows.py` covers the public MCP interface, startup path stability, dependency-process cleanup, startup cancellation, explicit unsandboxed launch, and serialization of concurrent Python packaging hooks.
 The full Unix transcript harness and sandbox suite are not Windows validation targets yet.
 
 ```powershell

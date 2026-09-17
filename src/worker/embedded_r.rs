@@ -671,9 +671,17 @@ unsafe fn initialize_windows_r(
     arguments: &mut [*mut c_char],
 ) -> Result<(), Box<dyn Error>> {
     use std::mem::MaybeUninit;
+    static STARTUP_PATHS: OnceLock<(CString, CString)> = OnceLock::new();
+
     let r_home = CString::new(r_home.to_string_lossy().as_bytes())?;
     let user_home =
         CString::new(std::env::var("R_USER").or_else(|_| std::env::var("USERPROFILE"))?)?;
+    // Older Windows R versions retain startup path pointers in R_SetParams.
+    // R lives until worker exit, so its backing strings must do the same.
+    STARTUP_PATHS
+        .set((r_home, user_home))
+        .map_err(|_| io::Error::other("R startup paths were already initialized"))?;
+    let (r_home, user_home) = STARTUP_PATHS.get().expect("R startup paths initialized");
     unsafe {
         libr::set(libr::R_SignalHandlers, 0);
         libr::cmdlineoptions(1, arguments.as_mut_ptr());
