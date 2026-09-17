@@ -7,17 +7,16 @@ import fcntl
 import json
 import os
 import re
-import selectors
 import signal
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import uuid
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
+from typing import BinaryIO
 
 LOCKS_ENV = "MCP_CONSOLE_CHECKOUT_LOCKS"
 RUN_ENV = "MCP_CONSOLE_VALIDATION_RUN"
@@ -121,6 +120,35 @@ def stop_phase(process: subprocess.Popen, *, owns_group: bool) -> None:
     process.wait()
 
 
+@contextmanager
+def command_process(
+    command: list[str],
+    *,
+    log: BinaryIO | None = None,
+    environment: dict[str, str] | None = None,
+) -> Iterator[subprocess.Popen]:
+    """Own command lifetime without intercepting its standard streams."""
+    owns_group = os.environ.get(GROUP_ENV) != str(os.getpgrp())
+    launch = (
+        [sys.executable, str(Path(__file__).resolve()), "phase", *command]
+        if owns_group
+        else command
+    )
+    with subprocess.Popen(
+        launch,
+        stdout=log,
+        stderr=None if log is None else subprocess.STDOUT,
+        env=environment,
+        start_new_session=owns_group,
+    ) as process:
+        try:
+            yield process
+        finally:
+            # A synchronous command must wait for its children. Retire any that
+            # remain even when the leader exits normally, before releasing locks.
+            stop_phase(process, owns_group=owns_group)
+
+
 class Run:
     def __init__(self, root: Path, command: list[str]) -> None:
         runs = root / ".dev-workflow/runs"
@@ -130,17 +158,30 @@ class Run:
         )
         self.path = self.directory / "result.json"
         self.started = time.monotonic()
-        revision = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True
+        top = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=root,
+            capture_output=True,
+            text=True,
         )
-        status = subprocess.run(
-            ["git", "status", "--porcelain"], cwd=root, capture_output=True, text=True
-        )
+        revision = status = None
+        if top.returncode == 0 and Path(top.stdout.strip()).resolve() == root.resolve():
+            head = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True
+            )
+            changes = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=root,
+                capture_output=True,
+                text=True,
+            )
+            revision = head.stdout.strip() if head.returncode == 0 else None
+            status = changes.stdout if changes.returncode == 0 else None
         self.record = {
             "checkout": str(root),
             "command": command,
-            "revision": revision.stdout.strip() if revision.returncode == 0 else None,
-            "worktree_status": status.stdout if status.returncode == 0 else None,
+            "revision": revision,
+            "worktree_status": status,
             "parent_record": os.environ.get(RUN_ENV),
             "phases": [],
             "failing_selectors": [],
@@ -158,83 +199,34 @@ class Run:
         log_path = self.directory / f"{len(self.record['phases']) + 1:02}-{name}.log"
         started = time.monotonic()
         status = 1
-        owns_group = os.environ.get(GROUP_ENV) != str(os.getpgrp())
-        launch = (
-            [sys.executable, str(Path(__file__).resolve()), "phase", *command]
-            if owns_group
-            else command
+        process = None
+        print(
+            f"[{name}] {' '.join(command)}\nLog: {log_path}",
+            file=sys.stderr,
+            flush=True,
         )
-        print(f"[{name}] {' '.join(command)}", file=sys.stderr, flush=True)
         try:
             with (
                 log_path.open("wb") as log,
-                subprocess.Popen(
-                    launch,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    env=os.environ | {RUN_ENV: str(self.path)},
-                    start_new_session=owns_group,
+                command_process(
+                    command, log=log, environment=os.environ | {RUN_ENV: str(self.path)}
                 ) as process,
             ):
-                exited, wake = os.pipe()
-
-                def wait_for_exit() -> None:
-                    process.wait()
-                    os.write(wake, b"1")
-                    os.close(wake)
-
-                waiter = threading.Thread(target=wait_for_exit)
-                waiter.start()
-                try:
-                    with selectors.DefaultSelector() as streams:
-                        streams.register(exited, selectors.EVENT_READ)
-                        streams.register(
-                            process.stdout, selectors.EVENT_READ, sys.stdout.buffer
-                        )
-                        streams.register(
-                            process.stderr, selectors.EVENT_READ, sys.stderr.buffer
-                        )
-                        drain_deadline = None
-                        while streams.get_map():
-                            timeout = (
-                                None
-                                if drain_deadline is None
-                                else max(0, drain_deadline - time.monotonic())
-                            )
-                            if timeout == 0:
-                                break
-                            ready = streams.select(timeout)
-                            if not ready:
-                                break
-                            for key, _ in ready:
-                                if key.data is None:
-                                    streams.unregister(exited)
-                                    drain_deadline = time.monotonic() + 1
-                                    continue
-                                chunk = os.read(key.fd, 65536)
-                                if not chunk:
-                                    streams.unregister(key.fileobj)
-                                    continue
-                                log.write(chunk)
-                                key.data.write(chunk)
-                                key.data.flush()
-                        inherited_writers = bool(streams.get_map())
-                    if inherited_writers:
-                        stop_phase(process, owns_group=owns_group)
-                    status = process.wait()
-                except BaseException:
-                    stop_phase(process, owns_group=owns_group)
-                    raise
-                finally:
-                    waiter.join()
-                    os.close(exited)
-                    status = process.returncode
+                status = process.wait()
         finally:
+            if process is not None:
+                status = process.returncode
             failures = []
+            reruns = []
             with log_path.open(errors="replace") as log:
                 for line in log:
                     if match := FAILURE.fullmatch(line.strip()):
                         failures.append(match[1])
+                        print(line.rstrip(), file=sys.stderr)
+                    elif line.startswith("rerun: scripts/test "):
+                        reruns.append(line.rstrip())
+            for rerun in reruns or [f"rerun: scripts/test {case}" for case in failures]:
+                print(rerun, file=sys.stderr)
             self.record["failing_selectors"] = sorted(
                 set(self.record["failing_selectors"] + failures)
             )
@@ -248,6 +240,9 @@ class Run:
                 }
             )
             self.save()
+            print(
+                f"[{name}] exit {status}; log: {log_path}", file=sys.stderr, flush=True
+            )
         return status
 
 
@@ -289,7 +284,7 @@ def main() -> None:
         ),
         ("rust-tests", ["cargo", "test", "--all-targets", "--all-features"]),
     ]
-    phases = {
+    plans = {
         "check": [
             ("stage", ["scripts/stage-sandbox-runner"]),
             ("core", ["scripts/check-core"]),
@@ -310,8 +305,7 @@ def main() -> None:
                 ],
             ),
         ],
-        "run": [("command", options.arguments)],
-    }[options.mode]
+    }
 
     cancelling = False
 
@@ -325,13 +319,17 @@ def main() -> None:
         stack.enter_context(checkout_owner(root))
         if options.mode in {"check", "test"}:
             stack.enter_context(full_check_slot())
-        for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT):
             previous = signal.signal(number, interrupted)
             stack.callback(signal.signal, number, previous)
+        if options.mode == "run":
+            with command_process(options.arguments) as process:
+                status = process.wait()
+            raise SystemExit(128 - status if status < 0 else status)
         run = Run(root, sys.argv[1:])
         status = 1
         try:
-            for name, command in phases:
+            for name, command in plans[options.mode]:
                 status = 1
                 status = run.phase(name, command)
                 if status < 0:

@@ -16,9 +16,7 @@ Cancellation sends `SIGTERM`, allows up to five seconds for the phase to exit, a
 Repeated cancellation signals do not interrupt that cleanup.
 Nested validation commands share that group so escalation also reaches their children.
 Commands that deliberately detach into a new session remain responsible for their own cleanup.
-After a phase leader exits, output draining has a one-second deadline; surviving members of an owned phase group receive the same bounded retirement before ownership is released.
-The phase log stops at that drain deadline; commands that need later output must wait for their producing children.
-The grace period also applies when a leader exits before its descendants finish cleanup.
+Commands must wait for their children; any remaining group members receive the same bounded retirement after the command exits, before ownership is released.
 
 Use the same ownership for direct build commands:
 
@@ -46,16 +44,17 @@ Changing the budget does not change case assertions, deadlines, or transcript wo
 
 ## Completion records
 
-Validation commands print the path to `.dev-workflow/runs/<run>/result.json` on completion, including failures.
+`scripts/check`, `scripts/check-core`, and execution through `scripts/test` print the path to `.dev-workflow/runs/<run>/result.json` on completion, including failures.
 Each record contains the checkout, command, Git revision and worktree status at admission, exit status, elapsed time, failing transcript selectors, and a log and timing for each phase that ran.
 Revision and worktree status are null for a source tree without Git metadata.
 A dirty worktree is recorded explicitly; its result is not evidence for an unchanged clean revision.
 The overall exit status uses the shell convention `128 + signal` for a phase killed by a signal; the phase retains its negative subprocess status.
 Nested runs reference their parent's record and retain their own phase details.
 Records are updated after each phase, so an unfinished run has a null exit status.
-Logs preserve command output, including errors and tracebacks.
-The command's stdout and stderr stay separate at the terminal; phase logs retain both streams in observed read order.
-Workflow banners and completion-record paths go to stderr.
+Each validation phase writes stdout and stderr directly to its log, preserving complete errors and tracebacks without forwarding pipes or duplicating nested output.
+The terminal reports the phase, log path, completion status, failing selectors, and rerun commands on stderr.
+Read or tail the advertised log for detailed progress; nested phases advertise their own logs in the enclosing phase's log.
+`scripts/with-checkout` only adds ownership and command lifetime management: it inherits stdin, stdout, and stderr and creates no validation record.
 A forcibly killed owner may leave an unfinished record; a record is complete only when its exit status is present.
 
 These files are ignored by Git and survive installation checks that rename `target`.
