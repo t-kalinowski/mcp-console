@@ -88,6 +88,10 @@ class WorkflowTests(unittest.TestCase):
             """,
         )
         subprocess.run(["git", "init", "-q", self.root], check=True)
+        # Fixture copies must not race Git's detached maintenance process.
+        subprocess.run(
+            ["git", "config", "maintenance.auto", "false"], cwd=self.root, check=True
+        )
         subprocess.run(["git", "add", "."], cwd=self.root, check=True)
         subprocess.run(
             [
