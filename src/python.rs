@@ -1,3 +1,4 @@
+mod requirements;
 mod reticulate;
 
 const RUNTIME_SOURCE: &str = include_str!("python/runtime.py");
