@@ -275,14 +275,17 @@ class RunningCase:
 
 
 class ProgressReporter:
-    def __init__(self, *, update: bool, full_update: bool, timeout: float) -> None:
+    def __init__(
+        self, *, update: bool, full_update: bool, jobs: int, timeout: float
+    ) -> None:
         self.update = update
         self.full_update = full_update
         self.rerun = ["scripts/test"]
         if update:
             self.rerun.append("--update")
-        if timeout != parser.get_default("timeout"):
-            self.rerun += ["--timeout", str(timeout)]
+        for name, value in (("jobs", jobs), ("timeout", timeout)):
+            if value != parser.get_default(name):
+                self.rerun += [f"--{name}", str(value)]
         self.running: dict[int, RunningCase] = {}
         self.progress_line_open = False
 
@@ -625,7 +628,10 @@ def main() -> None:
         break
 
     reporter = ProgressReporter(
-        update=options.update, full_update=full_update, timeout=options.timeout
+        update=options.update,
+        full_update=full_update,
+        jobs=options.jobs,
+        timeout=options.timeout,
     )
     try:
         run_cases(

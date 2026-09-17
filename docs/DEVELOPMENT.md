@@ -30,6 +30,7 @@ scripts/test cli/test_config_overrides::layers_project_then_cli_in_order
    For an internal refactor, establish the existing public suite's baseline.
 2. Implement the change and rerun the focused case or suite until it passes.
    Failures print an exact rerun command; completion records retain the selector and full log.
+   Reruns retain nondefault concurrency and timeout settings.
    A failed full snapshot update retains full-update scope so orphan cleanup remains available; other failures narrow the rerun to the failed case.
 3. Regenerate only the snapshots affected by an intentional behavior change with `scripts/test --update SELECTOR`, then rerun that selection without `--update`.
    A broader interface change may require a full update; inspect every resulting difference.

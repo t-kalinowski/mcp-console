@@ -1515,12 +1515,12 @@ class TranscriptRunnerTests(unittest.TestCase):
         )
         orphan = self.snapshots / "deleted_case.yaml"
         orphan.write_text("---\nrunner: orphan\n...\n")
-        result = self.run_runner("--update")
+        result = self.run_runner("--update", "--jobs", "1")
         self.assertNotEqual(result.returncode, 0)
         receipt = next(
             line for line in result.stderr.splitlines() if line.startswith("rerun: ")
         )
-        self.assertEqual(receipt, "rerun: scripts/test --update")
+        self.assertEqual(receipt, "rerun: scripts/test --update --jobs 1")
         self.assertTrue(orphan.exists())
         retried = self.run_runner(*shlex.split(receipt)[2:])
         self.assertIn("fixture failed before snapshot update", retried.stderr)
@@ -1556,7 +1556,7 @@ class TranscriptRunnerTests(unittest.TestCase):
                 receipt,
                 [
                     "client_server/server/test_tools::first_failure: failed",
-                    "rerun: scripts/test client_server/server/test_tools::first_failure",
+                    "rerun: scripts/test --jobs 2 client_server/server/test_tools::first_failure",
                 ],
             )
             observed_stderr = "\n".join(receipt) + "\n"
@@ -1582,7 +1582,8 @@ class TranscriptRunnerTests(unittest.TestCase):
         self.assertIn("client_server/server/test_tools::second_failure: failed", stderr)
         for name in ("first_failure", "second_failure"):
             self.assertIn(
-                f"rerun: scripts/test client_server/server/test_tools::{name}", stderr
+                f"rerun: scripts/test --jobs 2 client_server/server/test_tools::{name}",
+                stderr,
             )
         self.assertIn("runner: first actual", stderr)
         self.assertIn("runner: second actual", stderr)
