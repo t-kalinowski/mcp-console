@@ -261,8 +261,12 @@ Python acknowledgment respects R's suspended-interrupt state and clears accepted
 Reticulate's event polling remains active.
 
 Reticulate is still required for ordinary Python startup: it owns interpreter selection and startup orchestration, requirement transitions, compatibility checks, environment activation, automatic-resolution callbacks, object conversion, and cross-language and module-load integration.
-Console's passive native requirement store holds the current worker manifest in its existing R representation, including metadata and history, behind the R active binding.
-The store neither resolves environments nor publishes activation; lazy declarations remain unretained until the existing materialization or activation boundary.
+Console's native requirement store holds the current worker manifest in its existing R representation, including metadata and history, behind the R active binding.
+It also owns the transient pending-activation key, matches the subsequent requirement write, and publishes `PythonActivated` after committing that write.
+The R adapter records the pending key only after reticulate activation and process-environment setup succeed; it supplies the existing normalized R projection for matching without mirroring the current requirement object.
+The successful initial reticulate initialization hook reports through the same native owner at its separate lifecycle point, without a pending-activation transaction.
+The store remains R-dependent and does not resolve or activate environments; lazy declarations and snapshot restoration do not report activation.
+Requirement objects and their protection stay on the R thread, and native state borrows end before R allocation, comparison, protection release, or notification publication.
 Cell dispatch and runtime installation release the library-state lock before executing Python, and native console callbacks release the GIL while blocking on worker services.
 Python stream wrappers restrict those callbacks to the main worker thread; binary buffers, descriptors, background threads, and fork children use their underlying streams, including cached or redirected stream objects.
 The DB-API adapter continues to execute through the CPython API, while managed DuckDB remains in R.
@@ -413,7 +417,8 @@ The worker then uses the existing synchronous `ResolvePython` request; the relay
 
 The server resolves a complete managed-Python candidate on the host and returns it provisionally.
 Reticulate checks compatibility with the live interpreter and activates the environment without replacing Python or the worker.
-Its active manifest binding reports `PythonActivated`, and the server commits only a matching candidate owned by the current generation.
+Its active manifest binding submits the requirement write to Console's native owner, which matches and commits the pending activation before reporting `PythonActivated`.
+The server commits only a matching candidate owned by the current generation.
 The worker emits that report before it invalidates import caches and resumes the original import through Python's current meta-path finders.
 An automatic request records a differently named import and distribution on its provisional candidate, and the server renders that mapping as a bounded bracketed notice only when it commits the matching activation.
 The cell is not replayed.

@@ -17,7 +17,6 @@ base::local(
       "(lambda: None).__builtins__['_mcp_console_dispatch']()"
     python_module <- NULL
     pending_import_resolution <- NULL
-    pending_requirements <- NULL
     `%||%` <- function(x, y) if (is.null(x)) y else x
     managed_python_disabled_message <- if (
       !dynamic_resolution &&
@@ -89,22 +88,12 @@ base::local(
       )
     }
 
-    activation_json <- function(requirements) {
-      jsonlite::toJSON(
-        manifest(
-          requirements$packages,
-          requirements$python_version,
-          requirements$exclude_newer
-        ),
-        auto_unbox = TRUE,
-        null = "null",
-        na = "null"
+    activation_manifest <- function(requirements) {
+      manifest(
+        requirements$packages,
+        requirements$python_version,
+        requirements$exclude_newer
       )
-    }
-
-    report_activation <- function(requirements) {
-      .Call("mcp_console_python_activated", activation_json(requirements))
-      invisible()
     }
 
     install_managed_python <- function(...) {
@@ -179,7 +168,7 @@ base::local(
         !bindingIsActive("python_requirements", globals),
         !bindingIsLocked("python_requirements", globals)
       )
-      .Call("mcp_console_python_requirements_set", requirements)
+      .Call("mcp_console_python_requirements_set", requirements, NULL)
       rm(requirements)
       rm(list = "python_requirements", envir = globals)
       makeActiveBinding(
@@ -188,19 +177,12 @@ base::local(
           if (missing(value)) {
             return(.Call("mcp_console_python_requirements_get"))
           }
-          if (!is.null(pending_requirements)) {
-            committed <- manifest(
-              value$packages,
-              value$python_version,
-              value$exclude_newer
-            )
-            stopifnot(identical(committed, pending_requirements))
+          activation <- if (.Call("mcp_console_python_activation_pending")) {
+            activation_manifest(value)
+          } else {
+            NULL
           }
-          .Call("mcp_console_python_requirements_set", value)
-          if (!is.null(pending_requirements)) {
-            pending_requirements <<- NULL
-            report_activation(committed)
-          }
+          .Call("mcp_console_python_requirements_set", value, activation)
           invisible(value)
         },
         globals
@@ -220,7 +202,7 @@ base::local(
       }
       original_activate <- get("py_reqs_activate", envir = namespace)
       activate <- function(requirements) {
-        stopifnot(is.null(pending_requirements))
+        .Call("mcp_console_python_activation_check")
         config <- original_activate(requirements)
         if (is.null(python_module)) {
           reticulate::py_set_attr(
@@ -234,10 +216,9 @@ base::local(
             list(config$executable)
           ))
         }
-        pending_requirements <<- manifest(
-          requirements$packages,
-          requirements$python_version,
-          requirements$exclude_newer
+        .Call(
+          "mcp_console_python_activation_record",
+          activation_manifest(requirements)
         )
         config
       }
@@ -247,7 +228,10 @@ base::local(
       setHook(
         "reticulate.onPyInit",
         function() {
-          report_activation(current_requirements())
+          invisible(.Call(
+            "mcp_console_python_initialized",
+            activation_manifest(current_requirements())
+          ))
         },
         action = "append"
       )
