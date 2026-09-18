@@ -188,10 +188,10 @@ def managed_session(
             assert shutil.which("uv", path=environment["PATH"]) == str(
                 remote_bin / "uv"
             )
-        # Distinct host pathnames can share already downloaded artifacts in this
-        # localhost harness. The controller process is forbidden to use either.
-        # Always use a symlink, including without inherited cache configuration,
-        # to exercise the resolver's canonical library paths on every host.
+        # Share downloaded artifacts through distinct host pathnames in this
+        # localhost harness. The controller is forbidden to use either cache.
+        # Keep the aliases for worker path assertions, but give ir the stable
+        # root: its shared resolution records must outlive this session's alias.
         for tool, variable in (("ir", "IR_CACHE_DIR"), ("uv", "UV_CACHE_DIR")):
             cache = Path(
                 (environment.get(variable) or root / "ir-cache")
@@ -201,7 +201,9 @@ def managed_session(
             remote_cache = remote / f"{tool}-cache"
             cache.mkdir(parents=True, exist_ok=True)
             remote_cache.symlink_to(cache, target_is_directory=True)
-            environment[variable] = str(remote_cache)
+            environment[variable] = str(
+                remote_cache.resolve() if tool == "ir" else remote_cache
+            )
         if not bootstrap_uv:
             environment["UV_OFFLINE"] = "1"
             environment["UV_NO_CACHE"] = "1"
