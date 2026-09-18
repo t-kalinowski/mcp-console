@@ -1,0 +1,61 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  r: |
+    reticulate::py_run_string(r"---(
+    import sys
+    import types
+
+    class InterruptingPyplot(types.ModuleType):
+        interrupted = False
+
+        def __setattr__(self, name, value):
+            if name == "show" and not self.interrupted:
+                self.interrupted = True
+                input("Matplotlib setup> ")
+            super().__setattr__(name, value)
+
+        def get_fignums(self):
+            return []
+
+        def close(self, *args):
+            pass
+
+    sys.modules["matplotlib.pyplot"] = InterruptingPyplot("matplotlib.pyplot")
+    )---")
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  python: |
+    raise AssertionError("interrupted setup ran the cell")
+result:
+  content:
+    - type: text
+      text: |-
+        [input requested: "Matplotlib setup> "]
+        [waiting for stdin]
+  isError: false
+---
+send:
+  control: interrupt
+result:
+  content:
+    - type: text
+      text: "\n"
+  isError: false
+---
+send:
+  python: |
+    sys.modules["matplotlib.pyplot"].show()
+    42
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false

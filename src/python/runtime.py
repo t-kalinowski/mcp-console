@@ -602,7 +602,13 @@ _mcp_console.disable_matplotlib_show = _mcp_console_disable_matplotlib_show
 _mcp_console.configure_import_resolution = _mcp_console_import_finder.configure
 _mcp_console.without_automatic_resolution = _mcp_console_without_automatic_resolution
 _mcp_console.eval_cell = _mcp_console_eval_cell
-_mcp_console.dispatch = _mcp_console_dispatch
 _sys.modules[_mcp_console.__name__] = _mcp_console
 _builtins.__dict__["_mcp_console_dispatch"] = _mcp_console_dispatch
 _mcp_console_configure_psutil()
+
+
+def _mcp_console_raise_setup_error(_state=_builtins.__dict__):
+    raise _state.pop("_mcp_console_setup_error")
+
+
+_builtins.__dict__["_mcp_console_raise_setup_error"] = _mcp_console_raise_setup_error
