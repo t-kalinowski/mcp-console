@@ -254,6 +254,9 @@ The R provider owns a managed DuckDB connection by default and can retain a user
 Its private R environment bridge conditionally wraps `base::library` and runs R's unchanged `base::loadNamespace` body in a private lexical environment that intercepts its retry restart; it applies accepted managed libraries and reports activation outcomes.
 The Rust Python facade loads, retains, and initializes the selected file-backed `libpython`, or attaches its own handle if CPython was already initialized.
 After the retained reticulate adapter initializes and configures Python, Console calls the existing private cell evaluator directly through the CPython API.
+The R adapter also calls Console's Python process-environment and Matplotlib setup helpers through narrow native entry points using that retained library.
+Their implementations remain in Python, at the existing post-activation, module-load, and first-cell lifecycle points.
+Failed setup retains the original Python exception and traceback for reticulate's existing R condition and interrupt conversion, without native error printing.
 Console also installs native callbacks for Python input, text output, diagnostics, and plot publication.
 Managed Python input shares the worker's length-aware stdin buffer with R; R's console callback retains its boolean success contract.
 The worker's native signal handler wakes blocked input and marks interrupts for both runtimes.

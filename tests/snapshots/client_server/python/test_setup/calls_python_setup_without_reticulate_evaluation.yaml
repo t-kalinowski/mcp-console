@@ -1,0 +1,46 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  r: |
+    invisible(reticulate::py_config())
+    invisible(suppressMessages(base::trace(
+      "py_eval",
+      tracer = quote(stop("R-mediated Python setup")),
+      print = FALSE,
+      where = asNamespace("reticulate")
+    )))
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  python: "42"
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false
+---
+send:
+  r: |
+    reticulate::py_require(c("matplotlib", "py-yaml12"))
+    plt <- reticulate::import("matplotlib.pyplot")
+    invisible(plt$show())
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  python: import matplotlib.pyplot as plt; plt.show(); 42
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false

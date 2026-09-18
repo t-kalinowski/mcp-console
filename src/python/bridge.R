@@ -11,8 +11,8 @@ base::local(
     )
     # Python 3.9 and older are intentionally outside the bridge contract.
     minimum_python <- base::numeric_version("3.10")
-    # Reticulate callable proxies convert results through an interruptible wrapper.
-    # Keep helpers in one module, then use py_eval's direct conversion path.
+    # Import-resolver registration still converts its R callback through
+    # reticulate without adding dispatcher names to the user's globals.
     python_dispatch <-
       "(lambda: None).__builtins__['_mcp_console_dispatch']()"
     python_module <- NULL
@@ -211,9 +211,9 @@ base::local(
             config$executable
           )
         } else {
-          invisible(dispatch_python(
-            "activate_process_environment",
-            list(config$executable)
+          check_python_setup(.Call(
+            "mcp_console_activate_process_environment",
+            config$executable
           ))
         }
         .Call(
@@ -317,18 +317,16 @@ base::local(
       )
     }
 
-    dispatch_python <- function(operation, arguments = list()) {
-      reticulate::py_set_attr(
-        python_module,
-        "operation",
-        operation
-      )
-      reticulate::py_set_attr(
-        python_module,
-        "arguments",
-        arguments
-      )
-      reticulate::py_eval(python_dispatch, convert = TRUE)
+    check_python_setup <- function(completed) {
+      if (!completed) {
+        # Native setup retains the exception without printing it. Preserve
+        # reticulate's R condition classes, last error, and interrupt handling.
+        reticulate::py_eval(
+          "(lambda: None).__builtins__['_mcp_console_raise_setup_error']()",
+          convert = TRUE
+        )
+      }
+      invisible()
     }
 
     initialize_python_runtime <- function(strict = FALSE) {
@@ -390,7 +388,7 @@ base::local(
 
     disable_matplotlib_show <- function(...) {
       if (initialize_python_runtime(strict = FALSE)) {
-        invisible(dispatch_python("disable_matplotlib_show"))
+        check_python_setup(.Call("mcp_console_disable_matplotlib_show"))
       }
     }
     base::setHook(
@@ -455,7 +453,7 @@ base::local(
     evaluate_impl <- function() {
       if (!initialized) {
         initialize_python_runtime(strict = TRUE)
-        dispatch_python("disable_matplotlib_show")
+        check_python_setup(.Call("mcp_console_disable_matplotlib_show"))
         initialized <<- TRUE
       }
 

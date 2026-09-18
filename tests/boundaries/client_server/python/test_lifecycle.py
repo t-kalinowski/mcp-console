@@ -151,8 +151,11 @@ def test_interrupts_running_python_evaluation(
                 )
                 # Complete Python initialization before arming the dispatch checkpoint.
                 invisible(reticulate::py_config())
+                setup_environment <- environment(
+                  getHook("reticulate::matplotlib.pyplot::load")[[1L]]
+                )
                 invisible(suppressMessages(base::trace(
-                  "py_eval",
+                  "check_python_setup",
                   tracer = quote({
                     invisible(file.create(file.path(
                       tempdir(),
@@ -163,7 +166,7 @@ def test_interrupts_running_python_evaluation(
                     }
                   }),
                   print = FALSE,
-                  where = asNamespace("reticulate")
+                  where = setup_environment
                 )))
                 cat(python_interrupt_started, python_interrupt_release, sep = "\n")
                 """)
@@ -192,8 +195,8 @@ def test_interrupts_running_python_evaluation(
             # fmt: r
             r = code(r"""
                 invisible(suppressMessages(base::untrace(
-                  "py_eval",
-                  where = asNamespace("reticulate")
+                  "check_python_setup",
+                  where = setup_environment
                 )))
                 # Poison reticulate's cached result wrapper after MCP Console
                 # initializes its private Python evaluator. Cell results must

@@ -26,6 +26,8 @@ type PyModuleGetDict = unsafe extern "C" fn(*mut PyObject) -> *mut PyObject;
 type PyDictNew = unsafe extern "C" fn() -> *mut PyObject;
 type PyDictGetItemString =
     unsafe extern "C" fn(*mut PyObject, *const libc::c_char) -> *mut PyObject;
+type PyDictSetItemString =
+    unsafe extern "C" fn(*mut PyObject, *const libc::c_char, *mut PyObject) -> libc::c_int;
 type PyRunStringFlags = unsafe extern "C" fn(
     *const libc::c_char,
     libc::c_int,
@@ -44,6 +46,7 @@ type PyErrNormalizeException =
 type PyErrDisplay = unsafe extern "C" fn(*mut PyObject, *mut PyObject, *mut PyObject);
 type PyErrClear = unsafe extern "C" fn();
 type PyErrPrint = unsafe extern "C" fn();
+type PyExceptionSetTraceback = unsafe extern "C" fn(*mut PyObject, *mut PyObject) -> libc::c_int;
 
 const PY_FILE_INPUT: libc::c_int = 257;
 const SQL_PROVIDER_R: libc::c_long = 0;
@@ -76,6 +79,7 @@ struct PythonApi {
     module_get_dict: PyModuleGetDict,
     dict_new: PyDictNew,
     dict_get_item_string: PyDictGetItemString,
+    dict_set_item_string: PyDictSetItemString,
     run_string_flags: PyRunStringFlags,
     call_no_args: PyObjectCallNoArgs,
     call_function_obj_args: PyObjectCallFunctionObjArgs,
@@ -87,6 +91,7 @@ struct PythonApi {
     err_display: PyErrDisplay,
     err_clear: PyErrClear,
     err_print: PyErrPrint,
+    exception_set_traceback: PyExceptionSetTraceback,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -193,6 +198,30 @@ fn api() -> Result<PythonApi, String> {
 
 pub(super) fn install_services() -> Result<(), String> {
     api()?.with_gil(services::install)
+}
+
+pub(super) fn activate_process_environment(executable: &str) -> Result<bool, String> {
+    api()?.with_gil(|api| unsafe {
+        let function = api.function(c"_mcp_console", c"activate_process_environment")?;
+        let executable = (api.unicode_from_string_and_size)(
+            executable.as_ptr().cast(),
+            executable.len() as isize,
+        );
+        if executable.is_null() {
+            return api.finish_setup(std::ptr::null_mut());
+        }
+        let result =
+            (api.call_function_obj_args)(function, executable, std::ptr::null_mut::<PyObject>());
+        (api.dec_ref)(executable);
+        api.finish_setup(result)
+    })
+}
+
+pub(super) fn disable_matplotlib_show() -> Result<bool, String> {
+    api()?.with_gil(|api| unsafe {
+        let function = api.function(c"_mcp_console", c"disable_matplotlib_show")?;
+        api.finish_setup((api.call_no_args)(function))
+    })
 }
 
 pub(super) fn evaluate(source: &str, filename: &str) -> Result<(), String> {
@@ -433,6 +462,53 @@ impl LoadedLibrary {
 }
 
 impl PythonApi {
+    unsafe fn finish_setup(&self, result: *mut PyObject) -> Result<bool, String> {
+        // Keep the original exception and traceback for the R adapter to
+        // rethrow through reticulate's existing condition/interrupt boundary.
+        // Do not display it here or turn a failed setup into activation success.
+        unsafe {
+            if !result.is_null() {
+                (self.dec_ref)(result);
+                return Ok(true);
+            }
+            let mut exception_type = std::ptr::null_mut();
+            let mut exception_value = std::ptr::null_mut();
+            let mut traceback = std::ptr::null_mut();
+            (self.err_fetch)(&mut exception_type, &mut exception_value, &mut traceback);
+            (self.err_normalize_exception)(
+                &mut exception_type,
+                &mut exception_value,
+                &mut traceback,
+            );
+            let builtins = (self.import_add_module)(c"builtins".as_ptr());
+            let namespace = if builtins.is_null() {
+                std::ptr::null_mut()
+            } else {
+                (self.module_get_dict)(builtins)
+            };
+            let retained = !exception_value.is_null()
+                && !namespace.is_null()
+                && (traceback.is_null()
+                    || (self.exception_set_traceback)(exception_value, traceback) == 0)
+                && (self.dict_set_item_string)(
+                    namespace,
+                    c"_mcp_console_setup_error".as_ptr(),
+                    exception_value,
+                ) == 0;
+            for object in [exception_type, exception_value, traceback] {
+                if !object.is_null() {
+                    (self.dec_ref)(object);
+                }
+            }
+            if retained {
+                Ok(false)
+            } else {
+                (self.err_clear)();
+                Err("failed to retain Python setup exception".to_string())
+            }
+        }
+    }
+
     fn with_gil<T>(
         &self,
         operation: impl FnOnce(&PythonApi) -> Result<T, String>,
@@ -654,6 +730,7 @@ impl PythonApi {
             module_get_dict: unsafe { load_symbol(library, path, b"PyModule_GetDict\0")? },
             dict_new: unsafe { load_symbol(library, path, b"PyDict_New\0")? },
             dict_get_item_string: unsafe { load_symbol(library, path, b"PyDict_GetItemString\0")? },
+            dict_set_item_string: unsafe { load_symbol(library, path, b"PyDict_SetItemString\0")? },
             run_string_flags: unsafe { load_symbol(library, path, b"PyRun_StringFlags\0")? },
             call_no_args: unsafe { load_symbol(library, path, b"PyObject_CallNoArgs\0")? },
             call_function_obj_args: unsafe {
@@ -671,6 +748,9 @@ impl PythonApi {
             err_display: unsafe { load_symbol(library, path, b"PyErr_Display\0")? },
             err_clear: unsafe { load_symbol(library, path, b"PyErr_Clear\0")? },
             err_print: unsafe { load_symbol(library, path, b"PyErr_Print\0")? },
+            exception_set_traceback: unsafe {
+                load_symbol(library, path, b"PyException_SetTraceback\0")?
+            },
         })
     }
 }

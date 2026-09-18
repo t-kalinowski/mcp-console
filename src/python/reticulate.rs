@@ -117,6 +117,25 @@ pub extern "C-unwind" fn mcp_console_finish_python_initialization() -> harp::Res
 
 #[allow(clippy::result_large_err)]
 #[harp::register]
+pub extern "C-unwind" fn mcp_console_activate_process_environment(
+    executable: SEXP,
+) -> harp::Result<SEXP> {
+    let executable = String::try_from(harp::object::RObject::view(executable))?;
+    let completed = super::library::activate_process_environment(&executable)
+        .map_err(|error| harp::anyhow!("{error}"))?;
+    Ok(harp::object::RObject::from(completed).sexp)
+}
+
+#[allow(clippy::result_large_err)]
+#[harp::register]
+pub extern "C-unwind" fn mcp_console_disable_matplotlib_show() -> harp::Result<SEXP> {
+    let completed =
+        super::library::disable_matplotlib_show().map_err(|error| harp::anyhow!("{error}"))?;
+    Ok(harp::object::RObject::from(completed).sexp)
+}
+
+#[allow(clippy::result_large_err)]
+#[harp::register]
 pub extern "C-unwind" fn mcp_console_resolve_python(request: SEXP) -> harp::Result<SEXP> {
     let request = String::try_from(harp::object::RObject::view(request))?;
     let request = serde_json::from_str(&request).map_err(|error| harp::anyhow!("{error}"))?;
