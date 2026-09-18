@@ -1125,8 +1125,11 @@ class ReleaseScriptTests(unittest.TestCase):
             root = Path(temporary)
             (root / "src").mkdir()
             (root / "src/main.rs").write_text("fn main() {}\n")
-            for name in ("r_graphics.c", "r_repl.c"):
-                (root / "src" / name).touch()
+            # Exercise the build script with empty native sources at their real paths.
+            for native_source in (ROOT / "src").rglob("*.c"):
+                destination = root / native_source.relative_to(ROOT)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.touch()
             shutil.copyfile(ROOT / "build.rs", root / "build.rs")
             dependencies = tomllib.loads((ROOT / "Cargo.toml").read_text())[
                 "build-dependencies"

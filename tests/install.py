@@ -73,8 +73,11 @@ class InstallationTests(unittest.TestCase):
                     }
                     """)
             )
-            for name in ("r_graphics.c", "r_repl.c"):
-                (source / "src" / name).touch()
+            # Exercise the build script with empty native sources at their real paths.
+            for native_source in (ROOT / "src").rglob("*.c"):
+                destination = source / native_source.relative_to(ROOT)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.touch()
             runner_source = directory / "runner"
             workspace = runner_source / "codex-rs"
             workspace.mkdir(parents=True)
