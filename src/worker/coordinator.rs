@@ -1,9 +1,9 @@
 use std::error::Error;
 use std::io;
 
-use super::core::{emit_output, take_pending_server_message, take_worker_failure};
+use super::core::{CommandReadiness, emit_output, take_worker_failure};
 use super::input::finish_console_stdin_operation;
-use super::{core, embedded_r};
+use super::{core, embedded_r, interrupt};
 use crate::cell::{Cell, Language};
 use crate::worker_protocol::{ConsoleChannel, ServerMessage, WorkerMessage};
 
@@ -19,9 +19,10 @@ pub(crate) fn run() -> Result<(), Box<dyn Error>> {
     let r_home = harp::command::r_home_setup()?;
     #[cfg(target_os = "linux")]
     reexec_with_r_library_path(&r_home, &reader, &writer)?;
-    embedded_r::normalize_interrupt_signal()?;
-    embedded_r::initialize_r(&r_home)?;
-    crate::python::configure_worker_environment(&embedded_r::Runtime::temporary_directory()?)?;
+    interrupt::normalize_signal()?;
+    // Startup supplies R's existing session directory; R retains its ownership.
+    let temporary_directory = embedded_r::initialize_r(&r_home)?;
+    crate::python::configure_worker_environment(&temporary_directory)?;
     core::initialize(reader, writer.clone())?;
     let r = embedded_r::Runtime::initialize()?;
     let python = crate::python::Runtime::initialize()?;
@@ -76,17 +77,12 @@ impl Runtime {
 
     fn wait_for_message(&self) -> Result<ServerMessage, String> {
         loop {
-            if core::is_shutting_down() {
-                return Ok(ServerMessage::Shutdown);
-            }
-            if let Some(message) = take_pending_server_message()? {
-                return Ok(message);
-            }
-
-            let (buffered, sideband_fd) = core::sideband_activity()?;
-            if buffered {
-                return core::receive_server_message();
-            }
+            let sideband_fd = match core::next_command()? {
+                CommandReadiness::Ready(message) => return Ok(message),
+                CommandReadiness::Waiting(descriptor) => descriptor,
+            };
+            // R owns this event-aware wait and its native unwind boundary.
+            // A wakeup for R activity must service callbacks before waiting again.
             if embedded_r::wait_for_activity(sideband_fd)? {
                 return core::receive_server_message();
             }
@@ -211,13 +207,21 @@ fn evaluate_cell(
         emit_output(ConsoleChannel::Diagnostic, message.as_bytes());
         Ok(())
     } else {
-        r.begin_cell(cell.language)?;
+        // Python can enter R and create plots too. SQL retains its exclusion.
+        let graphics = !matches!(cell.language, Language::Sql);
+        if graphics {
+            r.begin_graphics()?;
+        }
+        core::begin_cell(cell.language);
         let result = match cell.language {
             Language::R => r.evaluate(cell.source),
             Language::Python => python.evaluate(&cell.source),
             Language::Sql => sql.evaluate(&cell.source),
         };
-        r.finish_cell(cell.language)?;
+        core::finish_cell();
+        if graphics {
+            r.finish_graphics()?;
+        }
         result
     };
     finish_console_stdin_operation()?;
