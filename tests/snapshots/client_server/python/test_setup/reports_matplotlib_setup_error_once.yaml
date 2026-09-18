@@ -21,7 +21,8 @@ result:
   isError: false
 ---
 send:
-  python: raise AssertionError('failed setup ran the cell')
+  python: |
+    raise AssertionError("failed setup ran the cell")
 result:
   content:
     - type: text

@@ -5,7 +5,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.assertions import assert_exact_interleaving, last_result_text
+from support.assertions import (
+    assert_exact_interleaving,
+    last_result_text,
+    wait_for_evaluation_output,
+)
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
@@ -20,7 +24,12 @@ def test_preserves_setup_after_r_initialization(
 ) -> Transcript:
     with McpClient(binary, execution.serve()) as client:
         client.initialize_and_list_tools()
-        client.send(r="invisible(reticulate::py_config())")
+        client.send(
+            # fmt: r
+            r=code("""
+                invisible(reticulate::py_config())
+                """)
+        )
         assert last_result_text(client) == "[done]", client.transcript[-1]
         # Load multiprocessing before activation so a spawned child must use
         # the updated interpreter after the new requirements are available.
@@ -72,8 +81,8 @@ def test_retries_matplotlib_setup_after_interrupt(
 ) -> Transcript:
     with McpClient(binary, execution.serve()) as client:
         client.initialize_and_list_tools()
-        # A module attribute setter interrupts the first-cell setup itself,
-        # after R has initialized the private runtime.
+        # A module attribute setter blocks first-cell setup on managed input.
+        # Its public input request is the checkpoint for a real interrupt.
         # fmt: r
         r = code(r"""
             reticulate::py_run_string(r"---(
@@ -86,7 +95,7 @@ def test_retries_matplotlib_setup_after_interrupt(
                 def __setattr__(self, name, value):
                     if name == "show" and not self.interrupted:
                         self.interrupted = True
-                        raise KeyboardInterrupt()
+                        input("Matplotlib setup> ")
                     super().__setattr__(name, value)
 
                 def get_fignums(self):
@@ -100,10 +109,28 @@ def test_retries_matplotlib_setup_after_interrupt(
             """)
         client.send(r=r)
         assert last_result_text(client) == "[done]"
-        client.send(python="raise AssertionError('interrupted setup ran the cell')")
-        assert last_result_text(client) == "\n"
-        assert client.transcript[-1]["result"]["isError"] is False
-        client.send(python="sys.modules['matplotlib.pyplot'].show(); 42")
+        client.send(
+            # fmt: python
+            python=code("""
+                raise AssertionError("interrupted setup ran the cell")
+                """)
+        )
+        assert last_result_text(client) == (
+            '[input requested: "Matplotlib setup> "]\n[waiting for stdin]'
+        )
+        wait_for_evaluation_output(
+            client,
+            "\n",
+            "Matplotlib setup interruption",
+            control="interrupt",
+        )
+        client.send(
+            # fmt: python
+            python=code("""
+                sys.modules["matplotlib.pyplot"].show()
+                42
+                """)
+        )
         assert last_result_text(client) == "42\n"
         return client.finish()
 
@@ -130,7 +157,12 @@ def test_reports_matplotlib_setup_error_once(
             """)
         client.send(r=r)
         assert last_result_text(client) == "[done]"
-        client.send(python="raise AssertionError('failed setup ran the cell')")
+        client.send(
+            # fmt: python
+            python=code("""
+                raise AssertionError("failed setup ran the cell")
+                """)
+        )
         result = client.transcript[-1]["result"]
         output = last_result_text(client)
         assert result["isError"] is True, result

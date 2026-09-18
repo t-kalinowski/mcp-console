@@ -256,6 +256,7 @@ The Rust Python facade loads, retains, and initializes the selected file-backed 
 After the retained reticulate adapter initializes and configures Python, Console calls the existing private cell evaluator directly through the CPython API.
 The R adapter also calls Console's Python process-environment and Matplotlib setup helpers through narrow native entry points using that retained library.
 Their implementations remain in Python, at the existing post-activation, module-load, and first-cell lifecycle points.
+The native entry points suspend R interrupts only for argument and result conversion, preserving the caller's interrupt state while Python runs.
 Failed setup retains the original Python exception and traceback for reticulate's existing R condition and interrupt conversion, without native error printing.
 Console also installs native callbacks for Python input, text output, diagnostics, and plot publication.
 Managed Python input shares the worker's length-aware stdin buffer with R; R's console callback retains its boolean success contract.

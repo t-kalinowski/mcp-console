@@ -13,7 +13,7 @@ send:
         def __setattr__(self, name, value):
             if name == "show" and not self.interrupted:
                 self.interrupted = True
-                raise KeyboardInterrupt()
+                input("Matplotlib setup> ")
             super().__setattr__(name, value)
 
         def get_fignums(self):
@@ -31,7 +31,18 @@ result:
   isError: false
 ---
 send:
-  python: raise AssertionError('interrupted setup ran the cell')
+  python: |
+    raise AssertionError("interrupted setup ran the cell")
+result:
+  content:
+    - type: text
+      text: |-
+        [input requested: "Matplotlib setup> "]
+        [waiting for stdin]
+  isError: false
+---
+send:
+  control: interrupt
 result:
   content:
     - type: text
@@ -39,7 +50,9 @@ result:
   isError: false
 ---
 send:
-  python: sys.modules['matplotlib.pyplot'].show(); 42
+  python: |
+    sys.modules["matplotlib.pyplot"].show()
+    42
 result:
   content:
     - type: text
