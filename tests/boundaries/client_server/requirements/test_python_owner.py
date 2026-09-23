@@ -222,6 +222,44 @@ def test_preserves_live_reticulate_requirement_rules(
 
 
 @executions(DIRECT, SANDBOXED)
+def test_refreshes_numpy_configuration_after_live_preparation(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with McpClient(binary, execution.serve()) as client:
+        client.initialize_and_list_tools()
+        client.send(
+            # fmt: r
+            r=code("""
+                reticulate::py_require(character(), action = "set")
+                stopifnot(is.null(reticulate::py_config()$numpy))
+                reticulate::py_require("numpy")
+                numpy <- reticulate::import("numpy", convert = FALSE)
+                config <- reticulate::py_config()
+                stopifnot(
+                  !is.null(config$numpy),
+                  identical(
+                    config$numpy$version,
+                    numeric_version(reticulate::py_to_r(numpy$`__version__`))
+                  ),
+                  identical(
+                    normalizePath(config$numpy$path),
+                    normalizePath(reticulate::py_to_r(numpy$`__path__`)[[1L]])
+                  )
+                )
+                reticulate::py_require("py-yaml12")
+                active <- reticulate::py_config()
+                stopifnot(
+                  !identical(active$numpy$path, config$numpy$path),
+                  startsWith(active$numpy$path, active$prefix),
+                  identical(active$numpy$version, config$numpy$version)
+                )
+                """)
+        )
+        assert last_result_text(client) == "[done]", last_result_text(client)
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
 def test_matches_live_python_version_constraints_like_the_resolver(
     binary: Path, execution: Execution
 ) -> Transcript:

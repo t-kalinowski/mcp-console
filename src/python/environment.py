@@ -42,9 +42,9 @@ def initialize(request: str) -> str:
         libpython=os.path.realpath(configuration["libpython"]),
         version=sys.version.split()[0],
     )
-    # Embedded startup also contributes prefix-local standard-library entries
-    # that a standalone venv probe does not use. Capture them now, before cells
-    # can add their own paths, together with the probe's .pth path ledger.
+    # Capture embedded prefix-local entries and reproducible .pth additions
+    # before cells add paths. Startup hooks that add different paths in the
+    # probe and embedded process are outside the path-cleanup contract.
     _site_paths = {
         path
         for path in sys.path

@@ -136,6 +136,11 @@ base::local(
             result$prefix <- active$prefix
             result$exec_prefix <- active$exec_prefix
             result$pythonpath <- active$pythonpath
+            numpy <- active$numpy
+            if (!is.null(numpy)) {
+              numpy$version <- numeric_version(numpy$version)
+            }
+            result["numpy"] <- list(numpy)
             result$pythonhome <- paste(
               active$prefix,
               active$exec_prefix,

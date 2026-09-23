@@ -19,6 +19,14 @@ directory = sysconfig.get_config_var(
 library = os.path.realpath(
     os.path.join(directory, sysconfig.get_config_var("INSTSONAME"))
 )
+# Match reticulate's optional NumPy metadata without importing it in the worker.
+numpy = None
+try:
+    import numpy as np
+except Exception:
+    pass
+else:
+    numpy = {"path": os.path.realpath(np.__path__[0]), "version": np.__version__}
 print(
     "\x1eMCP_CONSOLE_ENVIRONMENT\x1e"
     + json.dumps(
@@ -30,6 +38,7 @@ print(
             "exec_prefix": sys.exec_prefix,
             "site_packages": directories,
             "site_paths": sorted(owned),
+            "numpy": numpy,
             "distributions": {
                 d.metadata["Name"]: d.version
                 for d in importlib.metadata.distributions()

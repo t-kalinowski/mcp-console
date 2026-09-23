@@ -290,6 +290,8 @@ Console defers interrupt delivery only while publishing activation and committin
 An interrupt during successful publication is delivered afterward, with the committed environment retained.
 Rollback covers Console's paths, prefixes, executable, process environment, and accepted manifest; it does not undo arbitrary side effects performed by site hooks.
 Initial path bookkeeping uses a probe of the selected interpreter and does not rerun `site.main()` in the live interpreter.
+Startup `.pth` hooks must contribute the same paths in that probe and the embedded interpreter for those paths to be removed during later activation.
+Cleanup of paths added only in one process context is unsupported; live candidate activation tracks its actual path additions.
 Interrupting that probe leaves the worker's R and SQL state available; a later Python cell retries the unfinished environment handoff.
 
 The server retains an environment after the worker reports `PythonActivated` with its complete normalized logical manifest.
