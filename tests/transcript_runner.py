@@ -314,7 +314,10 @@ class TranscriptRunnerTests(unittest.TestCase):
             env={
                 **os.environ,
                 "PATH": f"{commands}{os.pathsep}{os.environ['PATH']}",
-                # This miniature build uses fake Cargo and its own budget.
+                # Isolate the fake build's budget while reusing uv dependencies.
+                "UV_CACHE_DIR": subprocess.check_output(
+                    ["uv", "cache", "dir"], text=True
+                ).strip(),
                 "XDG_CACHE_HOME": str(self.root / "cache"),
             },
             capture_output=True,
