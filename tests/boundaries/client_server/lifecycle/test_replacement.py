@@ -5,6 +5,7 @@ import select
 import sys
 import tempfile
 import threading
+from contextlib import closing
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -15,6 +16,7 @@ from support.checkpoints import (
 )
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.native import LOADER_VARIABLE, build_interposer
 from support.processes import (
     host_process_id,
     process_exists,
@@ -23,7 +25,7 @@ from support.processes import (
 from support.r import r_test_environment
 from support.previews import compact_previews, assert_preview, normalize_preview_paths
 from support.records import Transcript
-from support.requirements import PROCESS_EVENTS, requires
+from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, requires
 from support.resolvers import record_resolved_r_library
 from support.suites import run_this_suite
 
@@ -78,9 +80,12 @@ def test_reports_replacement_startup_failure_and_retry(
         environment["TMPDIR"] = temporary_directory
         environment["ZOD_STARTUP_CONTROL"] = str(startup_control)
         record_resolved_r_library(environment, Path(temporary_directory))
+        writable_root = (
+            ("--writable-root", temporary_directory) if execution == SANDBOXED else ()
+        )
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod)),
+            execution.serve("--worker", str(zod), *writable_root),
             environment,
         )
         client.initialize_and_list_tools()
@@ -89,7 +94,7 @@ def test_reports_replacement_startup_failure_and_retry(
         assert last_tool_text(client) == "[done]"
         startup_control.write_text("fail with stderr", encoding="utf-8")
         failed = client.start_send(r="exit unexpectedly")
-        wait_for_marker(
+        failure_marker = wait_for_marker(
             Path(temporary_directory),
             "zod-replacement-startup-failing",
             client,
@@ -110,6 +115,7 @@ def test_reports_replacement_startup_failure_and_retry(
             response_returned.set()
             watchdog.join()
         assert not forced_stop.is_set(), "replacement startup retried automatically"
+        assert failure_marker.is_file(), "startup checkpoint was lost during retirement"
         result = failed["result"]
         assert result == {
             "content": [
@@ -252,18 +258,28 @@ def test_polls_replacement_startup_after_send_timeout(
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(PROCESS_EVENTS)
+@requires(PROCESS_EVENTS, NATIVE_FIXTURES)
 def test_orders_explicit_restart_output(
     binary: Path, execution: Execution
 ) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
-    with tempfile.TemporaryDirectory() as temporary_directory:
+    with (
+        tempfile.TemporaryDirectory() as temporary_directory,
+        closing(
+            FifoCheckpoint.create(Path(temporary_directory) / "cell-output-closed")
+        ) as output_closed,
+    ):
         temporary_path = Path(temporary_directory)
         startup_control = temporary_path / "zod-startup-control"
         startup_control.write_text("ready", encoding="utf-8")
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
         environment["ZOD_STARTUP_CONTROL"] = str(startup_control)
+        environment[LOADER_VARIABLE] = str(
+            build_interposer(temporary_path, "cell_output_close_interposer")
+        )
+        environment["MCP_CONSOLE_TEST_CELL_OUTPUT_CLOSED"] = str(output_closed.path)
+        environment["ZOD_STDIN_CLOSE_RELEASE"] = str(output_closed.path)
         client = McpClient(
             binary,
             execution.serve("--worker", str(zod)),
@@ -395,9 +411,12 @@ def test_controlled_interrupt_preserves_idle_worker_startup_failure(
         environment["MCP_CONSOLE_TEST_IR_RELEASE"] = str(resolver_release.path)
         environment["MCP_CONSOLE_TEST_IR_INTERRUPTED"] = str(resolver_interrupted.path)
 
+        writable_root = (
+            ("--writable-root", temporary_directory) if execution == SANDBOXED else ()
+        )
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod)),
+            execution.serve("--worker", str(zod), *writable_root),
             environment,
         )
         finished = False
