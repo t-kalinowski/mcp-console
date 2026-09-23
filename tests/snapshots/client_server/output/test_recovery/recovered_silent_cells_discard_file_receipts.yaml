@@ -11,7 +11,7 @@ result:
   isError: false
 ---
 send:
-  control: restart
+  control: interrupt
   r: complete silently
 transcript_normalization:
   target: repeated cancellation setup exchanges
@@ -34,18 +34,13 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 6700
+        text_bytes: 3583
         concat:
-          - |-
-            [control preview: omitted 1243 earlier notices (28213 rendered UTF-8 bytes); not retained]
-            [done]
-            [done]
+          - "[done]"
           - repeat: |-
 
-              [worker stopped: in-memory state lost]
-              [starting new worker]
               [done]
-            count: 97
+            count: 511
   isError: false
 ---
 input:
