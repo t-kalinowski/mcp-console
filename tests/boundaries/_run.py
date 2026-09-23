@@ -13,6 +13,7 @@
 # ///
 
 import argparse
+import json
 import math
 import os
 import pickle
@@ -52,6 +53,11 @@ actions.add_argument("--list", action="store_true", dest="list_tests")
 actions.add_argument("--locate", metavar="SELECTOR")
 parser.add_argument("--update", action="store_true")
 parser.add_argument(
+    "--quick",
+    action="store_true",
+    help="skip extended stress and external SSH, Docker, and SBX integration tests",
+)
+parser.add_argument(
     "--timeout",
     type=float,
     default=600.0,
@@ -90,6 +96,19 @@ if "--bootstrap" in sys.argv[1:]:
     arguments = sys.argv[1:]
     arguments.remove("--bootstrap")
     os.execvp("uv", ["uv", "run", "--script", __file__, *arguments])
+
+
+if "--quick" in sys.argv[1:]:
+    # Apply the profile before importing suites and their capability probes.
+    # Case subprocesses inherit it, including when a provider was configured.
+    os.environ["MCP_CONSOLE_TEST_QUICK"] = "1"
+    for variable in (
+        "MCP_CONSOLE_TEST_SSH_HOST",
+        "MCP_CONSOLE_TEST_SSH_EXTERNAL",
+        "MCP_CONSOLE_TEST_DOCKER_IMAGE",
+        "MCP_CONSOLE_TEST_SBX_TEMPLATE",
+    ):
+        os.environ[variable] = ""
 
 
 from support.cases import (
@@ -222,6 +241,8 @@ def record_case(suite_path: Path, case_name: str, *, update: bool) -> set[Path]:
         initialization_case,
     )
     for index, execution in enumerate(modes):
+        started = time.monotonic()
+        status = "failed"
         try:
             recorded = case(binary) if execution is None else case(binary, execution)
             mode_snapshots = check_recording(
@@ -235,10 +256,22 @@ def record_case(suite_path: Path, case_name: str, *, update: bool) -> set[Path]:
                 "execution modes produced different companion snapshots"
             )
             checked.update(mode_snapshots)
+            status = "passed"
         except BaseException as error:
             if execution is not None:
                 error.add_note(f"execution mode: {execution.name}")
             raise
+        finally:
+            if timing_path := os.environ.get("MCP_CONSOLE_TEST_TIMINGS"):
+                timing = {
+                    "selector": f"{suite_name}::{case_name}",
+                    "execution": execution.name if execution is not None else None,
+                    "status": status,
+                    "elapsed_seconds": time.monotonic() - started,
+                }
+                # One append write per record; parallel cases share the file.
+                with open(timing_path, "ab", buffering=0) as output:
+                    output.write((json.dumps(timing) + "\n").encode())
 
     return checked
 
@@ -603,6 +636,10 @@ def main() -> None:
         for suite_name, suite_path in suites.items():
             cases = load_suite(suite_path)
             for case_name in cases:
+                if options.quick and not available_executions(
+                    cases[case_name], f"{suite_name}::{case_name}", report=False
+                ):
+                    continue
                 print(f"{suite_name}::{case_name}")
         return
     if options.locate is not None:

@@ -116,6 +116,7 @@ Run commands from the repository root:
 ```text
 scripts/preflight
 scripts/format
+scripts/check --quick
 scripts/check
 scripts/test [BOUNDARY/SUITE[::CASE]]
 scripts/test --list
@@ -127,6 +128,10 @@ A missing or failing formatter does not prevent the remaining formatters from ru
 Review its output and resulting changes.
 Validation records and phase logs remain in `.dev-workflow/runs/`; see `docs/DEVELOPMENT.md` for ownership and the host concurrency budget.
 `scripts/check` validates extracted runtime sources, checks Rust formatting and Clippy, runs Rust tests in debug, runs the complete transcript suite against the release executable, and checks uv source and wheel installations with a shared Cargo target directory.
+During iteration, prefer a focused `scripts/test SELECTOR`, followed by `scripts/check --quick` for broader feedback.
+The quick gate retains core and ordinary transcript checks but skips packaging, `@requires(EXTENDED)` stress cases, and real external SSH/Docker/SBX integrations.
+It does not replace the full pre-PR gate or full CI.
+Per-execution transcript timings are recorded beside validation results in `case-timings.jsonl`.
 
 ### Boundary snapshots
 

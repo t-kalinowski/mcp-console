@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import os
+import json
 import select
 import shlex
 import shutil
@@ -711,6 +712,77 @@ class TranscriptRunnerTests(unittest.TestCase):
         selected_skip = self.run_runner("client_server/server/test_tools::unselected")
         self.assertEqual(selected_skip.returncode, 0, selected_skip.stderr)
         self.assertIn("fixture deliberately unavailable", selected_skip.stdout)
+
+    def test_quick_profile_skips_stress_and_disables_external_providers(self) -> None:
+        self.suite.write_text(
+            PUBLIC_SUITE
+            # fmt: python
+            + code("""
+                import os
+                from support.requirements import EXTENDED, requires
+
+                test_unselected = requires(EXTENDED)(test_unselected)
+                if os.environ.get("MCP_CONSOLE_TEST_QUICK") == "1":
+                    for variable in (
+                        "MCP_CONSOLE_TEST_SSH_HOST",
+                        "MCP_CONSOLE_TEST_SSH_EXTERNAL",
+                        "MCP_CONSOLE_TEST_DOCKER_IMAGE",
+                        "MCP_CONSOLE_TEST_SBX_TEMPLATE",
+                    ):
+                        assert os.environ[variable] == "", variable
+                """),
+        )
+        result = self.run_runner("--quick")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.root / "selected.marker").exists())
+        self.assertFalse((self.root / "unselected.marker").exists())
+        self.assertIn("::unselected: skipped; extended stress coverage", result.stdout)
+        listed = self.run_runner("--quick", "--list")
+        self.assertEqual(listed.returncode, 0, listed.stderr)
+        self.assertIn("::selected", listed.stdout)
+        self.assertNotIn("::unselected", listed.stdout)
+        result = self.run_runner()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.root / "unselected.marker").exists())
+
+    def test_records_timings_for_each_execution_and_snapshot_failure(self) -> None:
+        self.suite.write_text(
+            PUBLIC_SUITE
+            # fmt: python
+            + code("""
+                from support.execution import Execution, executions
+
+
+                @executions(Execution("first"), Execution("second"))
+                def test_selected(binary, execution):
+                    return record(binary, "selected")
+                """),
+        )
+        timing = self.root / "timings.jsonl"
+        selector = "client_server/server/test_tools::selected"
+        for failed in (False, True):
+            if failed:
+                (self.snapshots / "selected.yaml").write_text(
+                    "---\nrunner: different\n...\n"
+                )
+            result = subprocess.run(
+                [sys.executable, self.boundaries / "_run.py", selector],
+                env=os.environ | {"MCP_CONSOLE_TEST_TIMINGS": str(timing)},
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            self.assertEqual(result.returncode == 0, not failed, result.stderr)
+        rows = [json.loads(line) for line in timing.read_text().splitlines()]
+        self.assertEqual(
+            [(r["selector"], r["execution"], r["status"]) for r in rows],
+            [
+                (selector, "first", "passed"),
+                (selector, "second", "passed"),
+                (selector, "first", "failed"),
+            ],
+        )
+        self.assertTrue(all(r["elapsed_seconds"] > 0 for r in rows))
 
     def test_repository_cases_skip_missing_resolver_and_formatter_commands(
         self,
