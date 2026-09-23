@@ -49,7 +49,7 @@ pub(super) fn initialize(state: State) -> io::Result<()> {
     Ok(())
 }
 
-pub(super) fn pending() -> bool {
+pub(crate) fn pending() -> bool {
     (STATE.get().expect("interrupt state initialized").pending)()
 }
 

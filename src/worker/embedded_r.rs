@@ -186,6 +186,25 @@ fn console_interrupt_pending() -> bool {
         && unsafe { libr::get(libr::R_interrupts_suspended) == libr::Rboolean_FALSE }
 }
 
+thread_local! {
+    static PYTHON_COMMITS: std::cell::RefCell<Vec<libr::Rboolean>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+pub(crate) fn begin_python_commit() {
+    let previous = unsafe { libr::get(libr::R_interrupts_suspended) };
+    PYTHON_COMMITS.with_borrow_mut(|stack| stack.push(previous));
+    unsafe { libr::set(libr::R_interrupts_suspended, libr::Rboolean_TRUE) };
+}
+
+pub(crate) fn finish_python_commit() -> bool {
+    let previous =
+        PYTHON_COMMITS.with_borrow_mut(|stack| stack.pop().expect("Python commit started"));
+    unsafe { libr::set(libr::R_interrupts_suspended, previous) };
+    // A Python signal callback during deferral did not consume this bit. If R
+    // suspended delivery first, leave it pending for R's existing integration.
+    super::interrupt::acknowledge_python_interrupt()
+}
+
 fn evaluate_r_cell(r: String) -> Result<(), String> {
     set_cell_source(r);
     let status = run_repl_cell();

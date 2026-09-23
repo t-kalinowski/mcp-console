@@ -477,15 +477,16 @@ def resolve_managed_python(binary: Path, execution: Execution, directory: Path) 
         current_directory=workspace,
     ) as client:
         client.initialize_and_list_tools()
-        client.send(
+        output = send_and_collect_runtime_python_resolution(
+            client,
             # fmt: python
             python=code("""
                 import sys
 
                 print(f"managed-python={sys.executable}")
                 """),
+            timeout_ms=0,
         )
-        output = last_result_text(client)
         client.finish()
     executable = Path(
         next(

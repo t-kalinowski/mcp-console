@@ -503,12 +503,9 @@ def test_retries_python_runtime_initialization_after_interrupt(
             # fmt: r
             r = code(r"""
                 invisible(suppressMessages(base::trace(
-                  "py_set_attr",
+                  "import",
                   tracer = quote({
-                    if (
-                      identical(name, "operation") &&
-                        identical(value, "configure_import_resolution")
-                    ) {
+                    if (identical(module, "_mcp_console_services")) {
                       invisible(readline("python runtime configuring> "))
                     }
                   }),
@@ -537,7 +534,7 @@ def test_retries_python_runtime_initialization_after_interrupt(
             # fmt: r
             r = code(r"""
                 invisible(suppressMessages(base::untrace(
-                  "py_set_attr",
+                  "import",
                   where = asNamespace("reticulate")
                 )))
                 length(getHook("reticulate::matplotlib.pyplot::load"))

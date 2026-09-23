@@ -10,35 +10,25 @@ result:
   isError: false
 ---
 send:
-  r: |
-    reticulate_namespace <- asNamespace("reticulate")
-    original_py_require <- get("py_require", envir = reticulate_namespace)
-    automatic_nested_calls <- 0L
-    automatic_nested_error <- NULL
-    automatic_nested_triggered <- FALSE
-    unlockBinding("py_require", reticulate_namespace)
-    assign(
-      "py_require",
-      function(...) {
-        if (!automatic_nested_triggered) {
-          automatic_nested_triggered <<- TRUE
-          automatic_nested_calls <<- automatic_nested_calls + 1L
-          automatic_nested_error <<- tryCatch(
-            {
-              reticulate::py_run_string(
-                "import mcp_console_nested_resolution_missing",
-                local = TRUE
-              )
-              NA_character_
-            },
-            error = conditionMessage
-          )
-        }
-        original_py_require(...)
-      },
-      envir = reticulate_namespace
-    )
-    lockBinding("py_require", reticulate_namespace)
+  python: |
+    import _mcp_console_services as services
+
+    original_prepare = services.prepare_python
+    automatic_nested_calls = 0
+    automatic_nested_error = None
+
+
+    def prepare_with_nested_import(request):
+        global automatic_nested_calls, automatic_nested_error
+        automatic_nested_calls += 1
+        try:
+            import mcp_console_nested_resolution_missing
+        except ModuleNotFoundError as error:
+            automatic_nested_error = str(error)
+        return original_prepare(request)
+
+
+    services.prepare_python = prepare_with_nested_import
 result:
   content:
     - type: text
@@ -56,11 +46,9 @@ result:
   isError: false
 ---
 send:
-  r: |
-    cat(
-      automatic_nested_calls,
-      grepl("mcp_console_nested_resolution_missing", automatic_nested_error, fixed = TRUE),
-      sep = "\n"
+  python: |
+    print(
+        automatic_nested_calls, str("mcp_console_nested_resolution_missing" in automatic_nested_error).upper(), sep="\n"
     )
 result:
   content:

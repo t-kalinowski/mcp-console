@@ -1,11 +1,9 @@
 use libr::SEXP;
 
-use super::PreparationOutcome;
-
 const PYTHON_BRIDGE_SOURCE: &str = include_str!("bridge.R");
 const PYTHON_INITIALIZER_SOURCE: &str = include_str!("initialize.R");
 
-/// Interpreter startup and environment preparation remain hosted by reticulate.
+/// Reticulate retains initial interpreter selection and interoperability startup.
 pub(super) struct Runtime {
     bridge: crate::r_bridge::Bridge,
     initialized: bool,
@@ -33,17 +31,6 @@ impl Runtime {
             self.initialized = self.bridge.evaluate_completed("")?;
         }
         Ok(self.initialized)
-    }
-
-    pub(super) fn prepare(&self, packages: Vec<String>) -> Result<PreparationOutcome, String> {
-        let request = serde_json::to_string(&packages)
-            .map_err(|error| format!("failed to serialize Python preparation: {error}"))?;
-        let response = self
-            .bridge
-            .call1_string(c"prepare", &request)?
-            .ok_or_else(|| "Python preparation bridge returned no response".to_string())?;
-        serde_json::from_str(&response)
-            .map_err(|error| format!("invalid Python preparation response: {error}"))
     }
 }
 
@@ -115,7 +102,7 @@ pub extern "C-unwind" fn mcp_console_finish_python_initialization() -> harp::Res
     unsafe { Ok(libr::R_NilValue) }
 }
 
-// Register these two callbacks explicitly: harp::register suspends interrupts
+// Register this callback explicitly: harp::register suspends interrupts
 // throughout the call. Protect R conversions, but leave the Python helpers in
 // the caller's interrupt context, as they were under reticulate dispatch.
 #[ctor::ctor(unsafe)]
@@ -125,13 +112,6 @@ fn register_python_setup() {
     // worker's R thread. The names have static storage.
     unsafe {
         harp::routines::add(libr::R_CallMethodDef {
-            name: c"mcp_console_activate_process_environment".as_ptr(),
-            fun: Some(std::mem::transmute::<*const (), CallMethod>(
-                mcp_console_activate_process_environment as *const (),
-            )),
-            numArgs: 1,
-        });
-        harp::routines::add(libr::R_CallMethodDef {
             name: c"mcp_console_disable_matplotlib_show".as_ptr(),
             fun: Some(std::mem::transmute::<*const (), CallMethod>(
                 mcp_console_disable_matplotlib_show as *const (),
@@ -139,17 +119,6 @@ fn register_python_setup() {
             numArgs: 0,
         });
     }
-}
-
-#[allow(clippy::result_large_err)]
-extern "C-unwind" fn mcp_console_activate_process_environment(executable: SEXP) -> SEXP {
-    harp::exec::r_unwrap(|| -> harp::Result<SEXP> {
-        let executable =
-            harp::exec::r_sandbox(|| String::try_from(harp::object::RObject::view(executable)))??;
-        let completed = super::library::activate_process_environment(&executable)
-            .map_err(|error| harp::anyhow!("{error}"))?;
-        harp::exec::r_sandbox(|| harp::object::RObject::from(completed).sexp)
-    })
 }
 
 #[allow(clippy::result_large_err)]
@@ -169,6 +138,31 @@ pub extern "C-unwind" fn mcp_console_resolve_python(request: SEXP) -> harp::Resu
     let python =
         crate::worker::resolve_python(request).map_err(|error| harp::anyhow!("{error}"))?;
     Ok(harp::object::RObject::from(python).sexp)
+}
+
+#[allow(clippy::result_large_err)]
+#[harp::register]
+pub extern "C-unwind" fn mcp_console_python_bootstrap(request: SEXP) -> harp::Result<SEXP> {
+    let request = String::try_from(harp::object::RObject::view(request))?;
+    let versions = serde_json::from_str(&request).map_err(|error| harp::anyhow!("{error}"))?;
+    let python =
+        super::environment::bootstrap(versions).map_err(|error| harp::anyhow!("{error}"))?;
+    Ok(harp::object::RObject::from(python).sexp)
+}
+
+#[allow(clippy::result_large_err)]
+#[harp::register]
+pub extern "C-unwind" fn mcp_console_python_environment_state() -> harp::Result<SEXP> {
+    Ok(harp::object::RObject::from(super::environment::state().to_string()).sexp)
+}
+
+#[allow(clippy::result_large_err)]
+#[harp::register]
+pub extern "C-unwind" fn mcp_console_python_declare(request: SEXP) -> harp::Result<SEXP> {
+    let request = String::try_from(harp::object::RObject::view(request))?;
+    let request = serde_json::from_str(&request).map_err(|error| harp::anyhow!("{error}"))?;
+    super::environment::declare(request).map_err(|error| harp::anyhow!("{error}"))?;
+    unsafe { Ok(libr::R_NilValue) }
 }
 
 #[allow(clippy::result_large_err)]

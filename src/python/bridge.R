@@ -11,12 +11,11 @@ base::local(
     )
     # Python 3.9 and older are intentionally outside the bridge contract.
     minimum_python <- base::numeric_version("3.10")
-    # Import-resolver registration still converts its R callback through
-    # reticulate without adding dispatcher names to the user's globals.
+    # Bare-session finder configuration uses reticulate without adding
+    # dispatcher names to the user's globals.
     python_dispatch <-
       "(lambda: None).__builtins__['_mcp_console_dispatch']()"
     python_module <- NULL
-    pending_import_resolution <- NULL
     `%||%` <- function(x, y) if (is.null(x)) y else x
     managed_python_disabled_message <- if (
       !dynamic_resolution &&
@@ -49,191 +48,193 @@ base::local(
       )
     }
 
-    manifest <- function(packages, python_version, exclude_newer) {
-      list(
-        packages = I(sort(unique(packages %||% character()))),
-        python_version = I(sort(unique(python_version %||% character()))),
-        exclude_newer = exclude_newer
-      )
-    }
-
-    request_json <- function(
-      requirements,
-      retained_requirements,
-      import_resolution = NULL
-    ) {
-      request <- list(
-        requirements = requirements,
-        retained_requirements = retained_requirements
-      )
-      if (!is.null(import_resolution)) {
-        request$import_resolution <- import_resolution
-      }
-      jsonlite::toJSON(
-        request,
-        auto_unbox = TRUE,
-        null = "null",
-        na = "null"
-      )
-    }
-
-    version_request_json <- function(constraints) {
-      jsonlite::toJSON(
-        list(
-          constraints = I(as.character(constraints %||% character()))
-        ),
-        auto_unbox = TRUE,
-        null = "null",
-        na = "null"
-      )
-    }
-
-    activation_manifest <- function(requirements) {
-      manifest(
-        requirements$packages,
-        requirements$python_version,
-        requirements$exclude_newer
-      )
+    owner_state <- function() {
+      jsonlite::fromJSON(.Call("mcp_console_python_environment_state"))
     }
 
     install_managed_python <- function(...) {
       namespace <- asNamespace("reticulate")
-      current_requirements <- function() {
-        get("py_reqs_get", envir = namespace)()
-      }
-      resolve <- function(
-        packages = current_requirements()$packages,
-        python_version = get("py_reqs_python_version", envir = namespace)(),
-        exclude_newer = current_requirements()$exclude_newer
-      ) {
-        current <- current_requirements()
-        requirements <- manifest(packages, python_version, exclude_newer)
-        retained_requirements <- manifest(
-          packages,
-          current$python_version,
-          exclude_newer
-        )
-        .Call(
-          "mcp_console_resolve_python",
-          request_json(
-            requirements,
-            retained_requirements,
-            pending_import_resolution
-          )
-        )
-      }
-      resolve_version <- function(constraints = NULL, uv = NULL) {
-        # The host resolver owns its executable and environment; worker code
-        # supplies only version constraints.
-        .Call(
-          "mcp_console_resolve_python_version",
-          version_request_json(constraints)
-        )
-      }
-      seed <- jsonlite::fromJSON(managed)
-      packages <- unlist(seed$packages, use.names = FALSE)
-      python_version <- unlist(seed$python_version, use.names = FALSE)
-      if (!length(python_version)) {
-        python_version <- NULL
-      }
       globals <- get(".globals", envir = namespace)
       requirements <- get("py_reqs_get", envir = namespace)()
-      changed <- !identical(
-        manifest(
-          requirements$packages,
-          requirements$python_version,
-          requirements$exclude_newer
-        ),
-        manifest(packages, python_version, seed$exclude_newer)
+      seed <- owner_state()$manifest
+      requirements$packages <- unlist(seed$packages, use.names = FALSE) %||%
+        character()
+      requirements$python_version <- unlist(
+        seed$python_version,
+        use.names = FALSE
       )
-      if (changed) {
-        requirements$packages <- packages
-        requirements$python_version <- python_version
-        requirements$exclude_newer <- seed$exclude_newer
-        requirements$history <- c(
-          requirements$history,
-          list(list(
-            requested_from = "mcp-console",
-            env_is_package = FALSE,
-            packages = packages,
-            python_version = python_version,
-            exclude_newer = seed$exclude_newer,
-            exclude_newer_supplied = !is.null(seed$exclude_newer),
-            action = "set"
-          ))
-        )
-        globals$python_requirements <- requirements
-      }
-      stopifnot(
-        !bindingIsActive("python_requirements", globals),
-        !bindingIsLocked("python_requirements", globals)
+      requirements$exclude_newer <- seed$exclude_newer
+      requirements$history <- c(
+        requirements$history,
+        list(list(
+          requested_from = "mcp-console",
+          env_is_package = FALSE,
+          packages = requirements$packages,
+          python_version = requirements$python_version,
+          exclude_newer = requirements$exclude_newer,
+          exclude_newer_supplied = !is.null(requirements$exclude_newer),
+          action = "set"
+        ))
       )
-      .Call("mcp_console_python_requirements_set", requirements, NULL)
+      .Call("mcp_console_python_requirements_set", requirements)
       rm(requirements)
+      current_requirements <- function() {
+        # Preserve field presence, order, duplicates, and attributes for the R
+        # API. Resolution and activation always use the native logical manifest.
+        value <- .Call("mcp_console_python_requirements_get")
+        manifest <- owner_state()$manifest
+        for (name in c("packages", "python_version", "exclude_newer")) {
+          selected <- unlist(manifest[[name]], use.names = FALSE)
+          if (!setequal(value[[name]], selected)) {
+            value[name] <- list(selected)
+          }
+        }
+        value
+      }
       rm(list = "python_requirements", envir = globals)
       makeActiveBinding(
         "python_requirements",
         function(value) {
           if (missing(value)) {
-            return(.Call("mcp_console_python_requirements_get"))
+            return(current_requirements())
           }
-          activation <- if (.Call("mcp_console_python_activation_pending")) {
-            activation_manifest(value)
-          } else {
-            NULL
-          }
-          .Call("mcp_console_python_requirements_set", value, activation)
+          manifest <- owner_state()$manifest
+          stopifnot(all(vapply(
+            c("packages", "python_version", "exclude_newer"),
+            function(name) {
+              setequal(
+                value[[name]],
+                unlist(manifest[[name]], use.names = FALSE)
+              )
+            },
+            logical(1)
+          )))
+          # Store only the public representation of an already accepted change.
+          .Call("mcp_console_python_requirements_set", value)
           invisible(value)
         },
         globals
       )
 
+      # Bind the stored configuration, so py_config(), py_exe(), and internal
+      # readers all see the owner. The public functions remain unchanged, and
+      # this getter never calls the initializer back through itself.
+      config <- globals$py_config
+      rm(list = "py_config", envir = globals)
+      makeActiveBinding(
+        "py_config",
+        function(value) {
+          if (!missing(value)) {
+            config <<- value
+            return(invisible(value))
+          }
+          active <- owner_state()$active
+          result <- config
+          if (!is.null(result) && !is.null(active)) {
+            result$python <- result$executable <- active$executable
+            result$libpython <- active$libpython
+            result$prefix <- active$prefix
+            result$exec_prefix <- active$exec_prefix
+            result$pythonpath <- active$pythonpath
+            numpy <- active$numpy
+            if (!is.null(numpy)) {
+              numpy$version <- numeric_version(numpy$version)
+            }
+            result["numpy"] <- list(numpy)
+            result$pythonhome <- paste(
+              active$prefix,
+              active$exec_prefix,
+              sep = ":"
+            )
+            result$virtualenv <- active$prefix
+            activate_this <- file.path(
+              dirname(active$executable),
+              "activate_this.py"
+            )
+            result$virtualenv_activate <- if (file.exists(activate_this)) {
+              activate_this
+            } else {
+              ""
+            }
+          }
+          result
+        },
+        globals
+      )
       replace_binding <- function(name, value) {
         was_locked <- bindingIsLocked(name, namespace)
         if (was_locked) {
           unlockBinding(name, namespace)
         }
-        on.exit(
-          if (was_locked) lockBinding(name, namespace),
-          add = TRUE
-        )
         assign(name, value, envir = namespace)
-        invisible()
+        if (was_locked) lockBinding(name, namespace)
       }
-      original_activate <- get("py_reqs_activate", envir = namespace)
-      activate <- function(requirements) {
-        .Call("mcp_console_python_activation_check")
-        config <- original_activate(requirements)
-        if (is.null(python_module)) {
-          reticulate::py_set_attr(
-            reticulate::import("sys", convert = FALSE),
-            "executable",
-            config$executable
-          )
+      encode <- function(value) {
+        jsonlite::toJSON(value, auto_unbox = TRUE, null = "null", na = "null")
+      }
+      declare <- function(request) {
+        request$packages <- if (is.null(request$packages)) {
+          NULL
         } else {
-          check_python_setup(.Call(
-            "mcp_console_activate_process_environment",
-            config$executable
-          ))
+          I(request$packages)
         }
-        .Call(
-          "mcp_console_python_activation_record",
-          activation_manifest(requirements)
-        )
-        config
+        request$python_version <- if (is.null(request$python_version)) {
+          NULL
+        } else {
+          I(request$python_version)
+        }
+        invisible(.Call("mcp_console_python_declare", encode(request)))
       }
-      replace_binding("uv_get_or_create_env", resolve)
-      replace_binding("resolve_python_version", resolve_version)
-      replace_binding("py_reqs_activate", activate)
-      setHook(
-        "reticulate.onPyInit",
-        function() {
-          invisible(.Call(
-            "mcp_console_python_initialized",
-            activation_manifest(current_requirements())
-          ))
-        },
-        action = "append"
+      # Managed py_require() delegates declarations and live activation here;
+      # startup reads the same owner through the bootstrap below.
+      replace_binding(
+        "py_reqs_transition",
+        function(current, request, initialized) {
+          active <- !is.null(owner_state()$active)
+          declare(request)
+          result <- current
+          fields <- c("packages", if (!active) "python_version")
+          for (name in fields) {
+            if (!is.null(request[[name]])) {
+              result[[name]] <- get("py_reqs_action", envir = namespace)(
+                request$action,
+                request[[name]],
+                current[[name]]
+              )
+            }
+          }
+          if (!active && request$exclude_newer_supplied) {
+            result["exclude_newer"] <- list(
+              owner_state()$manifest$exclude_newer
+            )
+          }
+          result$history <- c(current$history, list(request))
+          list(manifest = result, config = NULL)
+        }
+      )
+      replace_binding(
+        "uv_get_or_create_env",
+        function(
+          packages = current_requirements()$packages,
+          python_version = get("py_reqs_python_version", envir = namespace)(),
+          exclude_newer = current_requirements()$exclude_newer
+        ) {
+          .Call(
+            "mcp_console_python_bootstrap",
+            encode(I(python_version %||% character()))
+          )
+        }
+      )
+      replace_binding(
+        "resolve_python_version",
+        function(constraints = NULL, uv = NULL) {
+          .Call(
+            "mcp_console_resolve_python_version",
+            encode(list(
+              constraints = I(as.character(constraints %||% character()))
+            ))
+          )
+        }
       )
       invisible()
     }
@@ -245,76 +246,7 @@ base::local(
         install_managed_python,
         action = "append"
       )
-      if ("reticulate" %in% loadedNamespaces()) {
-        install_managed_python()
-      }
-    }
-
-    materialize_manifest <- function() {
-      if (is.na(managed) || !"reticulate" %in% loadedNamespaces()) {
-        return(NULL)
-      }
-      namespace <- asNamespace("reticulate")
-      requirements <- reticulate::py_require()
-      initialized <- get("is_python_initialized", envir = namespace)()
-      if (!initialized) {
-        invisible(get("uv_get_or_create_env", envir = namespace)(
-          requirements$packages,
-          requirements$python_version,
-          requirements$exclude_newer
-        ))
-      }
-      manifest(
-        requirements$packages,
-        requirements$python_version,
-        requirements$exclude_newer
-      )
-    }
-
-    prepare_packages <- function(packages) {
-      if (is.na(managed)) {
-        return(list(
-          kind = "disabled",
-          message = managed_python_disabled_message
-        ))
-      }
-
-      namespace <- asNamespace("reticulate")
-      globals <- get(".globals", envir = namespace)
-      snapshot <- get("py_reqs_get", envir = namespace)()
-      tryCatch(
-        {
-          reticulate::py_require(packages, action = "add")
-          requirements <- materialize_manifest()
-          if (is.null(requirements)) {
-            stop("Python preparation did not produce a managed manifest")
-          }
-          list(kind = "ready")
-        },
-        error = function(error) {
-          globals$python_requirements <- snapshot
-          list(kind = "failed", message = conditionMessage(error))
-        }
-      )
-    }
-
-    resolve_import_distribution <- function(module, distribution) {
-      module <- reticulate::py_to_r(module)
-      distribution <- reticulate::py_to_r(distribution)
-      stopifnot(is.null(pending_import_resolution))
-      if (!identical(module, distribution)) {
-        pending_import_resolution <<- list(
-          module = module,
-          distribution = distribution
-        )
-      }
-      on.exit(pending_import_resolution <<- NULL)
-      jsonlite::toJSON(
-        prepare_packages(distribution),
-        auto_unbox = TRUE,
-        null = "null",
-        na = "null"
-      )
+      if ("reticulate" %in% loadedNamespaces()) install_managed_python()
     }
 
     check_python_setup <- function(completed) {
@@ -355,33 +287,35 @@ base::local(
         "mcp_console_install_python_runtime",
         python_config$libpython
       ))
+      # Run cancellable inspection after leaving harp's .Call interrupt mask.
+      # Reticulate retains startup and converts KeyboardInterrupt to an R interrupt.
+      invisible(reticulate::import(
+        "_mcp_console_services",
+        convert = FALSE
+      )$initialize_python_environment(python_config$libpython))
       python_module <<- reticulate::import("_mcp_console", convert = FALSE)
       configured <- FALSE
       on.exit(
         if (!configured) python_module <<- NULL,
         add = TRUE
       )
-      disabled_reason <- if (is.na(managed)) {
-        managed_python_disabled_message
-      } else {
-        NULL
+      if (is.na(managed)) {
+        reticulate::py_set_attr(
+          python_module,
+          "operation",
+          "configure_import_resolution"
+        )
+        reticulate::py_set_attr(
+          python_module,
+          "arguments",
+          list(NULL, managed_python_disabled_message)
+        )
+        invisible(reticulate::py_run_string(
+          python_dispatch,
+          local = TRUE,
+          convert = FALSE
+        ))
       }
-      callback <- if (is.na(managed)) NULL else resolve_import_distribution
-      reticulate::py_set_attr(
-        python_module,
-        "operation",
-        "configure_import_resolution"
-      )
-      reticulate::py_set_attr(
-        python_module,
-        "arguments",
-        list(callback, disabled_reason)
-      )
-      invisible(reticulate::py_run_string(
-        python_dispatch,
-        local = TRUE,
-        convert = FALSE
-      ))
       configured <- TRUE
       invisible(TRUE)
     }
@@ -431,23 +365,6 @@ base::local(
     )
     if ("reticulate" %in% loadedNamespaces()) {
       install_python_hooks()
-    }
-
-    prepare <- function(request) {
-      if (is.na(managed)) {
-        stop("Python preparation requires a server-managed interpreter")
-      }
-      packages <- unlist(jsonlite::fromJSON(request), use.names = FALSE)
-      result <- prepare_packages(packages)
-      if (identical(result$kind, "ready")) {
-        result$kind <- "prepared"
-      }
-      jsonlite::toJSON(
-        result,
-        auto_unbox = TRUE,
-        null = "null",
-        na = "null"
-      )
     }
 
     evaluate_impl <- function() {
