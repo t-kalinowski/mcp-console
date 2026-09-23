@@ -13,7 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from checkout_workflow import checkout_owner
+from checkout_workflow import cache_directory, checkout_owner, exclusive
 
 TARGETS = (
     "aarch64-apple-darwin",
@@ -103,13 +103,18 @@ def main() -> None:
     if sys.platform not in {"darwin", "linux"}:
         fail(f"building private runner artifacts is unsupported on {sys.platform}")
 
-    with checkout_owner(ROOT):
+    checkout = runner_checkout(args, pin)
+    # Keep ownership beside the source, outside Git and Cargo's mutable output.
+    # Explicit source overrides and automatic selection share this same lock.
+    source_lock = checkout.with_name(f"{checkout.name}.stage.lock")
+    with checkout_owner(ROOT), exclusive([source_lock], "sandbox source"):
         stage(args, pin)
 
 
 def runner_checkout(args: argparse.Namespace, pin: dict) -> Path:
     return (
-        args.checkout or ROOT / "target/sandbox-runner-cache" / pin["commit"]
+        args.checkout
+        or cache_directory() / "mcp-console/sandbox" / pin["repository"] / pin["commit"] / "source"
     ).resolve()
 
 

@@ -82,7 +82,10 @@ scripts/with-checkout cargo build --release --target-dir target
 
 For a source installation, use `scripts/with-checkout uv tool install --reinstall .`; its packaging backend stages and builds the companion and application.
 The companion's selected source checkout owns its Rust toolchain; Console uses the active toolchain in this checkout.
-Download caches can be reused, while each checkout keeps its own Cargo output and wheel staging as described under [checkout ownership](#checkout-ownership).
+The pinned companion source and Cargo output are shared across worktrees under `${XDG_CACHE_HOME:-$HOME/.cache}/mcp-console/sandbox/<repository>/<commit>/source`.
+Staging still invokes Cargo to check build inputs, including changed compiler flags.
+Use `MCP_CONSOLE_SANDBOX_SOURCE` for an explicit clean checkout at the pin.
+Each Console checkout keeps its own application Cargo output and wheel staging as described under [checkout ownership](#checkout-ownership).
 
 ## Find the public test
 
@@ -157,16 +160,16 @@ For a stack, measure each layer against its intended parent rather than accumula
 
 ## Which commands mutate build state?
 
-| Command                                     | State it can change                                                            |
-| ------------------------------------------- | ------------------------------------------------------------------------------ |
-| `scripts/test --help`, `--list`, `--locate` | No compilation or bundle changes; uv may prepare the script environment        |
-| `scripts/stage-sandbox-runner`              | Companion source/build cache under `target`, staged manifest, and `wheel-data` |
-| `scripts/check-core`                        | Cargo debug build data and test fixture state                                  |
-| `scripts/test SELECTOR`                     | Cargo release build data and test fixture state                                |
-| `scripts/test --update SELECTOR`            | The preceding state plus selected snapshots                                    |
-| `scripts/format`                            | Source and documentation formatting, including snapshot formatting             |
-| `scripts/check`, `python3 tests/install.py` | Build and package state; installation checks temporarily rename `target`       |
-| `uv run` or source installation             | May build the local package and change its environment and bundle              |
+| Command                                     | State it can change                                                                   |
+| ------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `scripts/test --help`, `--list`, `--locate` | No compilation or bundle changes; uv may prepare the script environment               |
+| `scripts/stage-sandbox-runner`              | Shared companion source/build cache, checkout-local staged manifest, and `wheel-data` |
+| `scripts/check-core`                        | Cargo debug build data and test fixture state                                         |
+| `scripts/test SELECTOR`                     | Cargo release build data and test fixture state                                       |
+| `scripts/test --update SELECTOR`            | The preceding state plus selected snapshots                                           |
+| `scripts/format`                            | Source and documentation formatting, including snapshot formatting                    |
+| `scripts/check`, `python3 tests/install.py` | Build and package state; installation checks temporarily rename `target`              |
+| `uv run` or source installation             | May build the local package and change its environment and bundle                     |
 
 ## Checkout ownership
 
@@ -199,7 +202,11 @@ scripts/with-checkout scripts/stage-sandbox-runner
 Direct Cargo and Maturin builds still require `scripts/stage-sandbox-runner` first.
 The Python packaging backend performs staging for source installations.
 Commands invoked outside these entry points cannot be serialized by the wrapper.
-Keep separate checkouts' mutable build outputs separate; sharing download caches does not authorize sharing `target` or wheel staging.
+Keep separate Console checkouts' mutable build outputs separate; sharing download caches does not authorize sharing application `target` or wheel staging.
+The companion has separate source ownership at `<source-checkout>.stage.lock`, outside its Git checkout and Cargo output.
+That ownership covers fetch, build, and artifact copying, including when `MCP_CONSOLE_SANDBOX_SOURCE` selects the same source from different Console worktrees.
+A conflicting stage exits with `sandbox source is busy`; retry after its owner finishes.
+The same cooperative owner-lifetime limits apply to source ownership.
 
 ## Host concurrency
 

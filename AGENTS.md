@@ -98,7 +98,10 @@ Bump `CI_BUILD_CACHE_VERSION` in `.github/workflows/ci.yaml` when build inputs o
 Source installation checks run after the other checks because they replace and hide the shared Cargo target directory.
 Python package builds and installations require Python 3.11 or later.
 
-macOS and Linux uv source installations prepare the pinned sandbox companion before invoking the application's Cargo build, using a dedicated checkout under `target`.
+macOS and Linux uv source installations prepare the pinned sandbox companion before invoking the application's Cargo build, using a shared dedicated checkout under `${XDG_CACHE_HOME:-$HOME/.cache}/mcp-console/sandbox/<repository>/<commit>/source`.
+Keep its Cargo build data with that source, and hold the adjacent `<source-checkout>.stage.lock` through preparation, build, and artifact copying.
+Explicit source overrides use the same source ownership.
+Keep application `target` and wheel staging local to each Console checkout.
 The pinned checkout's `codex-rs/rust-toolchain.toml` owns the runner's compiler configuration; Console's toolchain selection is independent.
 Direct Cargo or Maturin builds require `scripts/stage-sandbox-runner` first; `scripts/check` performs this preparation.
 Install development checkouts with `uv tool install --reinstall .`; bare `cargo install` does not install the companion bundle.
@@ -241,6 +244,7 @@ Keep these invariants intact:
 - `r/tests/testthat/` — R package protocol and ellmer adapter tests.
 - `scripts/release.py`, `tests/release.py` — release validation and installed-wheel acceptance.
 - `tests/install.py`, `tests/sandbox_installation.py` — unstaged uv installation, relocated bundle acceptance, and private companion verification.
+- `tests/staging.py` — public staging command regressions for shared source/build reuse, pin changes, and cross-checkout ownership.
 - `scripts/test` — release binary build and selected transcript execution.
 - `scripts/validate_runtime_sources.py` — extracted R/Python inventory and syntax validation.
 - `scripts/preflight`, `scripts/review-diff`, `tests/development.py` — local preparation inventory, review-volume reports, and their public command regressions; see `docs/DEVELOPMENT.md`.

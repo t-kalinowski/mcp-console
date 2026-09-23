@@ -82,15 +82,19 @@ def full_check_slot() -> Iterator[None]:
     slots = int(os.environ.get("MCP_CONSOLE_CHECK_SLOTS", "1"))
     if slots < 1:
         raise SystemExit("MCP_CONSOLE_CHECK_SLOTS must be at least 1")
-    cache = Path(os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache"))
-    if not cache.is_absolute():
-        raise SystemExit("XDG_CACHE_HOME must be an absolute path")
     paths = [
-        cache.resolve() / "mcp-console/checks" / f"slot-{index}.lock"
+        cache_directory() / "mcp-console/checks" / f"slot-{index}.lock"
         for index in range(slots)
     ]
     with exclusive(paths, "full-check budget"):
         yield
+
+
+def cache_directory() -> Path:
+    cache = Path(os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache"))
+    if not cache.is_absolute():
+        raise SystemExit("XDG_CACHE_HOME must be an absolute path")
+    return cache.resolve()
 
 
 def stop_phase(process: subprocess.Popen, *, owns_group: bool) -> None:
@@ -289,6 +293,7 @@ def main() -> None:
     core = [
         ("runtime-sources", ["scripts/validate_runtime_sources.py"]),
         ("release-tests", ["tests/release.py"]),
+        ("staging-tests", ["python3", "tests/staging.py"]),
         ("runner-tests", ["tests/transcript_runner.py"]),
         ("workflow-tests", ["python3", "tests/workflow.py"]),
         ("format-tests", ["python3", "tests/format.py"]),
