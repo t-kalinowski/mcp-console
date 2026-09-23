@@ -304,7 +304,8 @@ def configure_startup(
     if mode == "fail":
         os._exit(86)
     if mode == "fail with stderr":
-        publish_marker(root / "zod-replacement-startup-failing")
+        # Keep the checkpoint after the failed worker's sandbox is retired.
+        publish_marker(control.with_name("zod-replacement-startup-failing"))
         write_all(2, b"zod replacement startup failed\n")
         os._exit(86)
     if mode == "block with detached sideband writer":
@@ -1179,6 +1180,10 @@ def main() -> None:
         if source == "wait for stdin close":
             publish_marker(temporary / "zod-waiting-for-stdin-close")
             assert os.read(0, 1) == b"", "Zod received input instead of stdin EOF"
+            # Stdin closure and cell-log retirement travel through independent
+            # transports. Emit only after both, so this is all unretained output.
+            with Path(os.environ["ZOD_STDIN_CLOSE_RELEASE"]).open("rb") as release:
+                assert release.read(1) == b"1"
             emit_large_output(1, b"zod stdin closed\n")
             send(writer, {"kind": "completed"})
             continue

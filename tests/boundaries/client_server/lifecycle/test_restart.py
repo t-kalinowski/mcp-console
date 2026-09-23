@@ -5,6 +5,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from contextlib import closing
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -17,7 +18,9 @@ from support.previews import (
     normalize_preview_paths,
 )
 from support.client import McpClient
+from support.checkpoints import FifoCheckpoint
 from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.native import LOADER_VARIABLE, build_interposer
 from support.processes import (
     host_process_id,
     process_exists,
@@ -25,7 +28,7 @@ from support.processes import (
     stop_process_id,
 )
 from support.records import Transcript
-from support.requirements import PROCESS_EVENTS, requires
+from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, requires
 from support.suites import run_this_suite
 
 LARGE_OUTPUT_SIZE = 2 * 1024 * 1024
@@ -37,13 +40,23 @@ from boundaries.client_server._harness import (
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(PROCESS_EVENTS)
+@requires(PROCESS_EVENTS, NATIVE_FIXTURES)
 def test_restart_closes_worker_stdin(binary: Path, execution: Execution) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
-    with tempfile.TemporaryDirectory() as temporary_directory:
+    with (
+        tempfile.TemporaryDirectory() as temporary_directory,
+        closing(
+            FifoCheckpoint.create(Path(temporary_directory) / "cell-output-closed")
+        ) as output_closed,
+    ):
         temporary_path = Path(temporary_directory)
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
+        environment[LOADER_VARIABLE] = str(
+            build_interposer(temporary_path, "cell_output_close_interposer")
+        )
+        environment["MCP_CONSOLE_TEST_CELL_OUTPUT_CLOSED"] = str(output_closed.path)
+        environment["ZOD_STDIN_CLOSE_RELEASE"] = str(output_closed.path)
         client = McpClient(
             binary,
             execution.serve("--worker", str(zod)),
