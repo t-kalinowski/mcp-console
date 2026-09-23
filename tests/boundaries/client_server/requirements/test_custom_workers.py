@@ -389,6 +389,8 @@ def test_custom_worker_reports_idle_input_before_preparation_failure(
             environment,
         )
         client.initialize_and_list_tools()
+        client.send(r="echo worker ready")
+        assert last_tool_text(client) == "zod: worker ready\n"
         expose_idle_input_request(client, temporary_path)
 
         result = client.send(requirements={"r": ["praise"]})
