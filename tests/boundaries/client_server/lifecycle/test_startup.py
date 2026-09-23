@@ -16,7 +16,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.assertions import collect_running_output, last_tool_text
+from support.assertions import (
+    collect_running_output,
+    last_tool_text,
+    wait_for_evaluation_output,
+)
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
@@ -232,8 +236,14 @@ def test_first_cell_prepares_defaults_after_running_response(
 
             print("Python defaults ready")
             """)
-        client.send(python=python)
-        assert last_tool_text(client) == "Python defaults ready\n"
+        wait_for_evaluation_output(
+            client,
+            "Python defaults ready\n",
+            "first Python cell",
+            completion_timeout_seconds=client.response_timeout,
+            python=python,
+            timeout_ms=0,
+        )
         sql = code("""
             SELECT extension_name
             FROM duckdb_extensions()
