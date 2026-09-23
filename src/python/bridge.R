@@ -11,8 +11,8 @@ base::local(
     )
     # Python 3.9 and older are intentionally outside the bridge contract.
     minimum_python <- base::numeric_version("3.10")
-    # Reticulate callable proxies convert results through an interruptible wrapper.
-    # Keep helpers in one module, then use py_eval's direct conversion path.
+    # Bare-session finder configuration uses reticulate without adding
+    # dispatcher names to the user's globals.
     python_dispatch <-
       "(lambda: None).__builtins__['_mcp_console_dispatch']()"
     python_module <- NULL
@@ -55,38 +55,42 @@ base::local(
     install_managed_python <- function(...) {
       namespace <- asNamespace("reticulate")
       globals <- get(".globals", envir = namespace)
-      original <- get("py_reqs_get", envir = namespace)()
-      history <- original$history
-      current_requirements <- function() {
-        value <- owner_state()$manifest
-        structure(
-          list(
-            python_version = if (length(value$python_version)) {
-              value$python_version
-            } else {
-              NULL
-            },
-            packages = unlist(value$packages, use.names = FALSE) %||%
-              character(),
-            exclude_newer = value$exclude_newer,
-            history = history
-          ),
-          class = "python_requirements"
-        )
-      }
-      seed <- current_requirements()
-      history <- c(
-        history,
+      requirements <- get("py_reqs_get", envir = namespace)()
+      seed <- owner_state()$manifest
+      requirements$packages <- unlist(seed$packages, use.names = FALSE) %||%
+        character()
+      requirements$python_version <- unlist(
+        seed$python_version,
+        use.names = FALSE
+      )
+      requirements$exclude_newer <- seed$exclude_newer
+      requirements$history <- c(
+        requirements$history,
         list(list(
           requested_from = "mcp-console",
           env_is_package = FALSE,
-          packages = seed$packages,
-          python_version = seed$python_version,
-          exclude_newer = seed$exclude_newer,
-          exclude_newer_supplied = !is.null(seed$exclude_newer),
+          packages = requirements$packages,
+          python_version = requirements$python_version,
+          exclude_newer = requirements$exclude_newer,
+          exclude_newer_supplied = !is.null(requirements$exclude_newer),
           action = "set"
         ))
       )
+      .Call("mcp_console_python_requirements_set", requirements)
+      rm(requirements)
+      current_requirements <- function() {
+        # Preserve field presence, order, duplicates, and attributes for the R
+        # API. Resolution and activation always use the native logical manifest.
+        value <- .Call("mcp_console_python_requirements_get")
+        manifest <- owner_state()$manifest
+        for (name in c("packages", "python_version", "exclude_newer")) {
+          selected <- unlist(manifest[[name]], use.names = FALSE)
+          if (!setequal(value[[name]], selected)) {
+            value[name] <- list(selected)
+          }
+        }
+        value
+      }
       rm(list = "python_requirements", envir = globals)
       makeActiveBinding(
         "python_requirements",
@@ -94,15 +98,19 @@ base::local(
           if (missing(value)) {
             return(current_requirements())
           }
-          current <- current_requirements()
-          stopifnot(
-            identical(value$packages, current$packages),
-            identical(value$python_version, current$python_version),
-            identical(value$exclude_newer, current$exclude_newer)
-          )
-          # Only API provenance lives in R; the native owner already committed
-          # the transition before reticulate assigns its returned metadata.
-          history <<- value$history
+          manifest <- owner_state()$manifest
+          stopifnot(all(vapply(
+            c("packages", "python_version", "exclude_newer"),
+            function(name) {
+              setequal(
+                value[[name]],
+                unlist(manifest[[name]], use.names = FALSE)
+              )
+            },
+            logical(1)
+          )))
+          # Store only the public representation of an already accepted change.
+          .Call("mcp_console_python_requirements_set", value)
           invisible(value)
         },
         globals
@@ -177,8 +185,24 @@ base::local(
       replace_binding(
         "py_reqs_transition",
         function(current, request, initialized) {
+          active <- !is.null(owner_state()$active)
           declare(request)
-          result <- current_requirements()
+          result <- current
+          fields <- c("packages", if (!active) "python_version")
+          for (name in fields) {
+            if (!is.null(request[[name]])) {
+              result[[name]] <- get("py_reqs_action", envir = namespace)(
+                request$action,
+                request[[name]],
+                current[[name]]
+              )
+            }
+          }
+          if (!active && request$exclude_newer_supplied) {
+            result["exclude_newer"] <- list(
+              owner_state()$manifest$exclude_newer
+            )
+          }
           result$history <- c(current$history, list(request))
           list(manifest = result, config = NULL)
         }
@@ -220,18 +244,16 @@ base::local(
       if ("reticulate" %in% loadedNamespaces()) install_managed_python()
     }
 
-    dispatch_python <- function(operation, arguments = list()) {
-      reticulate::py_set_attr(
-        python_module,
-        "operation",
-        operation
-      )
-      reticulate::py_set_attr(
-        python_module,
-        "arguments",
-        arguments
-      )
-      reticulate::py_eval(python_dispatch, convert = TRUE)
+    check_python_setup <- function(completed) {
+      if (!completed) {
+        # Native setup retains the exception without printing it. Preserve
+        # reticulate's R condition classes, last error, and interrupt handling.
+        reticulate::py_eval(
+          "(lambda: None).__builtins__['_mcp_console_raise_setup_error']()",
+          convert = TRUE
+        )
+      }
+      invisible()
     }
 
     initialize_python_runtime <- function(strict = FALSE) {
@@ -273,12 +295,20 @@ base::local(
         add = TRUE
       )
       if (is.na(managed)) {
-        invisible(dispatch_python(
-          "configure_import_resolution",
-          list(
-            NULL,
-            managed_python_disabled_message
-          )
+        reticulate::py_set_attr(
+          python_module,
+          "operation",
+          "configure_import_resolution"
+        )
+        reticulate::py_set_attr(
+          python_module,
+          "arguments",
+          list(NULL, managed_python_disabled_message)
+        )
+        invisible(reticulate::py_run_string(
+          python_dispatch,
+          local = TRUE,
+          convert = FALSE
         ))
       }
       configured <- TRUE
@@ -287,7 +317,7 @@ base::local(
 
     disable_matplotlib_show <- function(...) {
       if (initialize_python_runtime(strict = FALSE)) {
-        invisible(dispatch_python("disable_matplotlib_show"))
+        check_python_setup(.Call("mcp_console_disable_matplotlib_show"))
       }
     }
     base::setHook(
@@ -335,7 +365,7 @@ base::local(
     evaluate_impl <- function() {
       if (!initialized) {
         initialize_python_runtime(strict = TRUE)
-        dispatch_python("disable_matplotlib_show")
+        check_python_setup(.Call("mcp_console_disable_matplotlib_show"))
         initialized <<- TRUE
       }
 

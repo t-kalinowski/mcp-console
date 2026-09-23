@@ -202,13 +202,15 @@ Keep these invariants intact:
 - `src/process_exit.rs` — ordinary direct-child exit observation without reaping, used by server launcher ownership.
 - `src/process_output.rs` — output draining bounded by an owned child exit, including a surviving inherited writer; used for local launchers, the SSH child, and the remote helper's launcher without equating their cleanup guarantees.
 - `src/sandbox.rs`, `src/sandbox/{installation,runner,unsupported}.rs` — thin sandbox frontend, verified runner selection, application policy, and unsupported-platform errors.
-- `src/worker.rs`, `src/worker/{coordinator,core,input}.rs` — worker facade, language coordination, shared sideband services, and interactive stdin buffering.
-- `src/worker/embedded_r.rs`, `src/r_repl.c` — R runtime, native events, graphics, console callbacks, and the C-owned DLL-REPL boundary.
+- `src/worker.rs`, `src/worker/{coordinator,core,input}.rs` — worker facade, language coordination, shared command readiness and cell bookkeeping, sideband services, and interactive stdin buffering.
+- `src/worker/interrupt.{rs,c}` — native signal distribution, managed-input wakeups, and Python acknowledgment through startup-supplied interrupt-state callbacks.
+- `src/worker/embedded_r.rs`, `src/r_repl.c` — R runtime, interrupt state and deferral, native event-aware waiting, graphics, console source routing, and the C-owned DLL-REPL boundary.
 
 ### Language adapters
 
 - `src/r_bridge.rs` — shared Rust FFI for process-lifetime private R bridge environments.
 - `src/python.rs`, `src/python/library.rs`, `src/python/library/services.rs`, `src/python/services.py`, `src/python/runtime.py` — direct CPython cell dispatch, native console services, main-thread stream hooks, and the private Python evaluator.
+- `src/python/requirements.rs` — protected R-facing requirement representation, preserving field presence, vector attributes, ordering, duplicates, and history without owning resolution or activation.
 - `src/python/reticulate.rs`, `src/python/initialize.R`, `src/python/bridge.R` — retained reticulate startup adapter, initial interpreter selection, managed-binding delegation, and interoperability integration.
   R remains required and eagerly initialized.
 - `src/python/environment.rs`, `src/python/environment.py`, `src/python/probe.rs`, `src/python/probe.py` — Console-owned managed manifest and lazy declarations, native environment services, candidate inspection, and live activation.

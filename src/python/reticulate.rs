@@ -102,6 +102,34 @@ pub extern "C-unwind" fn mcp_console_finish_python_initialization() -> harp::Res
     unsafe { Ok(libr::R_NilValue) }
 }
 
+// Register this callback explicitly: harp::register suspends interrupts
+// throughout the call. Protect R conversions, but leave the Python helpers in
+// the caller's interrupt context, as they were under reticulate dispatch.
+#[ctor::ctor(unsafe)]
+fn register_python_setup() {
+    type CallMethod = unsafe extern "C-unwind" fn() -> *mut libc::c_void;
+    // SAFETY: R invokes each fixed callback with its registered arity on the
+    // worker's R thread. The names have static storage.
+    unsafe {
+        harp::routines::add(libr::R_CallMethodDef {
+            name: c"mcp_console_disable_matplotlib_show".as_ptr(),
+            fun: Some(std::mem::transmute::<*const (), CallMethod>(
+                mcp_console_disable_matplotlib_show as *const (),
+            )),
+            numArgs: 0,
+        });
+    }
+}
+
+#[allow(clippy::result_large_err)]
+extern "C-unwind" fn mcp_console_disable_matplotlib_show() -> SEXP {
+    harp::exec::r_unwrap(|| -> harp::Result<SEXP> {
+        let completed =
+            super::library::disable_matplotlib_show().map_err(|error| harp::anyhow!("{error}"))?;
+        harp::exec::r_sandbox(|| harp::object::RObject::from(completed).sexp)
+    })
+}
+
 #[allow(clippy::result_large_err)]
 #[harp::register]
 pub extern "C-unwind" fn mcp_console_resolve_python(request: SEXP) -> harp::Result<SEXP> {

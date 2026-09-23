@@ -168,8 +168,10 @@ long syscall(long number, ...) {
     long command = number == SYS_futex ? slots[1] & FUTEX_CMD_MASK : -1;
     if (command == FUTEX_WAIT || command == FUTEX_WAIT_BITSET) {
         // Tokio's idle blocking-pool wait has a timeout; mutex waits do not.
+        // A condition-variable notification counter can also equal 2, so it
+        // must not claim the worker-mutex checkpoint while the pool is idle.
         if (slots[3] != 0) before_park();
-        if (slots[2] == 2) observe_contention((uintptr_t)slots[0]);
+        else if (slots[2] == 2) observe_contention((uintptr_t)slots[0]);
     }
     long result = native_syscall(number, slots[0], slots[1], slots[2], slots[3], slots[4], slots[5]);
     if (command == FUTEX_WAIT || command == FUTEX_WAIT_BITSET) {

@@ -13,7 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import last_result_text, wait_for_evaluation_output
-from support.checkpoints import FifoCheckpoint, wait_for_worker_file
+from support.checkpoints import FifoCheckpoint
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
@@ -149,22 +149,8 @@ def test_interrupts_running_python_evaluation(
                   MCP_CONSOLE_PYTHON_INTERRUPT_STARTED = python_interrupt_started,
                   MCP_CONSOLE_PYTHON_INTERRUPT_RELEASE = python_interrupt_release
                 )
-                # Complete Python initialization before arming the dispatch checkpoint.
+                # Initialize from R before the Python evaluation checkpoint.
                 invisible(reticulate::py_config())
-                invisible(suppressMessages(base::trace(
-                  "py_eval",
-                  tracer = quote({
-                    invisible(file.create(file.path(
-                      tempdir(),
-                      "python-r-interrupt-started"
-                    )))
-                    repeat {
-                      Sys.sleep(60)
-                    }
-                  }),
-                  print = FALSE,
-                  where = asNamespace("reticulate")
-                )))
                 cat(python_interrupt_started, python_interrupt_release, sep = "\n")
                 """)
             client.send(r=r)
@@ -175,52 +161,8 @@ def test_interrupts_running_python_evaluation(
             started, release = [FifoCheckpoint.create(Path(path)) for path in paths]
             checkpoints.extend((started, release))
 
-            client.send(python="42", timeout_ms=0)
-            assert last_result_text(client) == "\n[running; poll with an empty send]"
-            wait_for_worker_file(
-                temporary_path,
-                "python-r-interrupt-started",
-                client,
-            )
-
-            client.send(control="interrupt", timeout_ms=0)
-            result = client.transcript[-1]["result"]
-            assert result["isError"] is False, result
-            output = last_result_text(client)
-            assert output == "\n", repr(output)
-
-            # fmt: r
-            r = code(r"""
-                invisible(suppressMessages(base::untrace(
-                  "py_eval",
-                  where = asNamespace("reticulate")
-                )))
-                # Poison reticulate's cached result wrapper after MCP Console
-                # initializes its private Python evaluator. Cell results must
-                # still return through direct conversion instead of that wrapper.
-                invisible(reticulate::py_eval(
-                  r"---(
-                exec(
-                    "import inspect\n"
-                    "inspect._mcp_original_getmro_code = inspect.getmro.__code__\n"
-                    "def _mcp_interrupting_getmro(cls):\n"
-                    "    getmro.__code__ = _mcp_original_getmro_code\n"
-                    "    raise KeyboardInterrupt\n"
-                    "inspect.getmro.__code__ = _mcp_interrupting_getmro.__code__\n"
-                )
-                )---",
-                  convert = TRUE
-                ))
-                """)
-            client.send(r=r)
-            assert last_result_text(client) == "[done]"
-
             # fmt: python
             python = code("""
-                import inspect
-
-                inspect.getmro.__code__ = inspect._mcp_original_getmro_code
-
                 import ctypes
                 import os
                 import signal
@@ -276,7 +218,12 @@ def test_interrupts_running_python_evaluation(
             client.send()
             assert "KeyboardInterrupt" in last_result_text(client)
 
-            client.send(python="python_interrupt_state + 1")
+            client.send(
+                # fmt: python
+                python=code("""
+                    python_interrupt_state + 1
+                    """)
+            )
             assert last_result_text(client) == "42\n"
             transcript = client.finish()
             passed = True
@@ -556,12 +503,9 @@ def test_retries_python_runtime_initialization_after_interrupt(
             # fmt: r
             r = code(r"""
                 invisible(suppressMessages(base::trace(
-                  "py_set_attr",
+                  "import",
                   tracer = quote({
-                    if (
-                      identical(name, "operation") &&
-                        identical(value, "disable_matplotlib_show")
-                    ) {
+                    if (identical(module, "_mcp_console_services")) {
                       invisible(readline("python runtime configuring> "))
                     }
                   }),
@@ -590,7 +534,7 @@ def test_retries_python_runtime_initialization_after_interrupt(
             # fmt: r
             r = code(r"""
                 invisible(suppressMessages(base::untrace(
-                  "py_set_attr",
+                  "import",
                   where = asNamespace("reticulate")
                 )))
                 length(getHook("reticulate::matplotlib.pyplot::load"))

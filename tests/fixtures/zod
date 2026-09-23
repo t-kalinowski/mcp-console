@@ -854,10 +854,14 @@ def main() -> None:
                 signal.pause()
 
         if source == "emit stdout":
+            release = temporary / "zod-release-stdout-completion"
+            os.mkfifo(release)
             write_all(1, b"zod stdout ")
             for part in ("👩", "🏽", "\u200d", "💻", "\n"):
                 write_all(1, part.encode())
             emit_large_output(1, b"")
+            with release.open("rb", buffering=0) as checkpoint:
+                assert checkpoint.read(1) == b"1"
             send(writer, {"kind": "completed"})
             continue
 

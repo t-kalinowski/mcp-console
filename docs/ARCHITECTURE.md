@@ -227,12 +227,23 @@ Any future sandbox-specific control plane ends at that launcher, without reachin
 The worker owns language-runtime state and implements the worker protocol.
 It reports readiness, accepts complete cells and supported preparation operations, consumes interactive stdin, publishes console events and images, and reports completion or failure through the sideband.
 
-The built-in worker's `worker::core` owns shared sideband state, deferred operation messages, resolver exchanges, output publication, and shutdown and failure state.
+The built-in worker's `worker::core` owns shared sideband state, command readiness, deferred operation messages, active cell language, resolver exchanges, output publication, and shutdown and failure state.
+Its cell state also suppresses R resolution during SQL callbacks.
 The `worker::coordinator` owns the message loop, preparation and cell dispatch, and completion reporting.
 It retains R, Python, and SQL adapters as peers.
 The `worker::input` module owns interactive stdin buffering and preserves unfinished input across operations.
-The `worker::embedded_r` backend owns R initialization, native event handling, graphics, and R console callbacks, including suppression of R resolution during SQL callbacks.
+The `worker::interrupt` service owns native signal distribution, input wakeup setup, and Python interrupt acknowledgment through startup-supplied state callbacks that do not enter an interpreter.
+These shared services neither access R globals directly nor evaluate R code.
+The `worker::embedded_r` adapter supplies the mixed runtime's interrupt-state callbacks and owns R initialization, interrupt checks and deferral, native error boundaries, event handling, graphics, and R console callbacks.
+Its REPL latch distinguishes submitted R source from interactive input; shared cell state identifies the enclosing language.
 R initialization remains eager, and managed SQL remains R-backed.
+
+Command readiness is separate from waiting: when no command is ready, the coordinator uses R's event-aware wait and services its idle callbacks before waiting again.
+R retains the native unwind boundaries for both operations.
+Cell dispatch starts graphics before marking the cell active, clears the active cell after evaluation, finalizes graphics even after an evaluation error, then finishes managed input before the final idle turn and completion.
+Both R and Python cells use those R graphics hooks because Python can call R and create plots; SQL retains its existing exclusion.
+Idle event processing retains its own graphics and input cleanup ordering in the R adapter.
+Startup supplies the existing R session temporary directory to Python cache setup without changing its location or cleanup ownership.
 
 The built-in worker embeds R on its main thread.
 On Linux, it re-executes before R initialization with the selected `R_HOME/lib` first in `LD_LIBRARY_PATH`, preserving inherited library paths and its sideband endpoint.
@@ -243,6 +254,10 @@ The R provider owns a managed DuckDB connection by default and can retain a user
 Its private R environment bridge conditionally wraps `base::library` and runs R's unchanged `base::loadNamespace` body in a private lexical environment that intercepts its retry restart; it applies accepted managed libraries and reports activation outcomes.
 The Rust Python facade loads, retains, and initializes the selected file-backed `libpython`, or attaches its own handle if CPython was already initialized.
 After the retained reticulate adapter initializes and configures Python, Console calls the existing private cell evaluator directly through the CPython API.
+The Python environment adapter refreshes process integration during activation; the R adapter calls the Matplotlib setup helper through a narrow native entry point using that retained library.
+Their implementations remain in Python, at the post-activation, module-load, and first-cell lifecycle points.
+The native setup entry point suspends R interrupts only for result conversion, preserving the caller's interrupt state while Python runs.
+Failed setup retains the original Python exception and traceback for reticulate's existing R condition and interrupt conversion, without native error printing.
 Console also installs native callbacks for Python input, text output, diagnostics, and plot publication.
 Managed Python input shares the worker's length-aware stdin buffer with R; R's console callback retains its boolean success contract.
 The worker's native signal handler wakes blocked input and marks interrupts for both runtimes.
@@ -251,7 +266,9 @@ Reticulate's event polling remains active.
 
 Reticulate is still required for ordinary Python startup: it owns interpreter selection and startup orchestration, object conversion, and cross-language and module-load integration.
 Console owns the managed manifest, requirement transitions, candidate compatibility checks, automatic-resolution callbacks, and live activation.
-Managed reticulate requirement bindings delegate to that owner; their R metadata records API history without retaining a second authoritative manifest.
+Managed reticulate requirement bindings delegate to that owner.
+The protected R-facing projection preserves field presence, vector attributes, ordering, duplicates, and API history; it is never used to select or activate an environment.
+Its getters reflect the owner's logical manifest, and writes must describe an already accepted declaration.
 Cell dispatch and runtime installation release the library-state lock before executing Python, and native console callbacks release the GIL while blocking on worker services.
 Python stream wrappers restrict those callbacks to the main worker thread; binary buffers, descriptors, background threads, and fork children use their underlying streams, including cached or redirected stream objects.
 The DB-API adapter continues to execute through the CPython API, while managed DuckDB remains in R.

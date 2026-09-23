@@ -283,6 +283,7 @@ Console runs the candidate's `activate_this.py` hook inside its activation trans
 Successful activation replaces environment-owned site paths, including paths added by `.pth` files, while preserving user-added paths.
 It updates prefixes, the executable, and process-environment integration without replacing the interpreter or its objects.
 Reticulate's requirement and configuration getters reflect the active Console state.
+The requirement getter preserves R field presence, vector attributes, ordering, duplicates, and request history independently of the normalized manifest used for resolution.
 
 Candidate site processing remains interruptible.
 Console defers interrupt delivery only while publishing activation and committing local state, or restoring its previous state after failure.

@@ -6,6 +6,8 @@ mod core;
 mod embedded_r;
 #[cfg(unix)]
 mod input;
+#[cfg(unix)]
+mod interrupt;
 
 // Keep the rest of the crate dependent on the worker facade. The core owns
 // runtime-neutral sideband state and host callbacks. The coordinator owns
@@ -16,14 +18,16 @@ pub(crate) use coordinator::run;
 pub(crate) use core::{
     emit_output, mark_shutting_down, publish_plot, publish_python_activation, publish_r_activation,
     publish_r_activation_failure, record_worker_failure, resolve_python, resolve_python_version,
+    resolve_r,
 };
 #[cfg(unix)]
-pub(crate) use embedded_r::{
-    acknowledge_python_interrupt, begin_python_commit, finish_python_commit,
-    install_python_interrupt, python_interrupt_pending, resolve_r,
-};
+pub(crate) use embedded_r::{begin_python_commit, finish_python_commit};
 #[cfg(unix)]
 pub(crate) use input::{PythonInput, python_interrupt_wakeup, read_python_input};
+#[cfg(unix)]
+pub(crate) use interrupt::{
+    acknowledge_python_interrupt, install_python_interrupt, pending as python_interrupt_pending,
+};
 
 #[cfg(not(unix))]
 pub(crate) fn run() -> Result<(), Box<dyn std::error::Error>> {

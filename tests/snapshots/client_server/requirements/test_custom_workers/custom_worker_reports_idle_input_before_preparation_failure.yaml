@@ -2,6 +2,15 @@
 !same-as MCP initialization for this execution mode
 ---
 send:
+  r: echo worker ready
+result:
+  content:
+    - type: text
+      text: |
+        zod: worker ready
+  isError: false
+---
+send:
   r: request input while idle
 result:
   content:

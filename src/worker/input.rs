@@ -250,7 +250,7 @@ pub(crate) fn read_python_input(prompt: &str) -> Result<PythonInput, String> {
             let length = read_console_stdin(
                 buffer.as_mut_ptr(),
                 buffer.len() as c_int,
-                super::embedded_r::console_interrupt_pending,
+                super::interrupt::pending,
             )?;
             if length < 0 {
                 core::send_input_cancelled()?;

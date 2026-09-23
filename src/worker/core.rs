@@ -4,6 +4,7 @@ use std::os::fd::{AsRawFd, RawFd};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
+use crate::cell::Language;
 use crate::worker_protocol::{ConsoleChannel, ServerMessage, WorkerMessage};
 
 static WORKER_READER: OnceLock<Mutex<crate::sideband::Reader>> = OnceLock::new();
@@ -11,6 +12,19 @@ static WORKER_WRITER: OnceLock<crate::sideband::Writer> = OnceLock::new();
 static PENDING_SERVER_MESSAGES: Mutex<VecDeque<ServerMessage>> = Mutex::new(VecDeque::new());
 static WORKER_FAILURE: Mutex<Option<String>> = Mutex::new(None);
 static WORKER_SHUTDOWN: AtomicBool = AtomicBool::new(false);
+static CELL_LANGUAGE: Mutex<Option<Language>> = Mutex::new(None);
+
+pub(super) fn begin_cell(language: Language) {
+    *CELL_LANGUAGE.lock().expect("cell language lock poisoned") = Some(language);
+}
+
+pub(super) fn finish_cell() {
+    *CELL_LANGUAGE.lock().expect("cell language lock poisoned") = None;
+}
+
+pub(super) fn cell_language() -> Option<Language> {
+    *CELL_LANGUAGE.lock().expect("cell language lock poisoned")
+}
 
 pub(crate) fn initialize(
     reader: crate::sideband::Reader,
@@ -24,9 +38,29 @@ pub(crate) fn initialize(
         .map_err(|_| io::Error::other("R worker sideband was already initialized"))
 }
 
-pub(crate) fn sideband_activity() -> Result<(bool, RawFd), String> {
-    let reader = worker_reader()?;
-    Ok((reader.has_buffered_data(), reader.as_raw_fd()))
+pub(super) enum CommandReadiness {
+    Ready(ServerMessage),
+    Waiting(RawFd),
+}
+
+// Decide whether a command can be received without waiting for activity.
+// The coordinator chooses the runtime's wait and idle processing separately.
+pub(super) fn next_command() -> Result<CommandReadiness, String> {
+    if is_shutting_down() {
+        return Ok(CommandReadiness::Ready(ServerMessage::Shutdown));
+    }
+    if let Some(message) = take_pending_server_message()? {
+        return Ok(CommandReadiness::Ready(message));
+    }
+    let (buffered, descriptor) = {
+        let reader = worker_reader()?;
+        (reader.has_buffered_data(), reader.as_raw_fd())
+    };
+    if buffered {
+        receive_server_message().map(CommandReadiness::Ready)
+    } else {
+        Ok(CommandReadiness::Waiting(descriptor))
+    }
 }
 
 pub(crate) fn receive_server_message() -> Result<ServerMessage, String> {
@@ -35,7 +69,7 @@ pub(crate) fn receive_server_message() -> Result<ServerMessage, String> {
         .map_err(|error| format!("worker sideband read failed: {error}"))
 }
 
-pub(crate) fn take_pending_server_message() -> Result<Option<ServerMessage>, String> {
+fn take_pending_server_message() -> Result<Option<ServerMessage>, String> {
     PENDING_SERVER_MESSAGES
         .lock()
         .map_err(|_| "pending server message lock poisoned".to_string())
@@ -172,6 +206,10 @@ pub(crate) fn resolve_r(
     use crate::r_environment::{ResolutionFailureKind, ResolutionOutcome};
     use crate::worker_protocol::RResolutionFailureKind;
 
+    // SQL callbacks can reenter R, but SQL evaluation does not resolve packages.
+    if matches!(cell_language(), Some(Language::Sql)) {
+        return Ok(ResolutionOutcome::Unavailable);
+    }
     send_worker_message(&WorkerMessage::ResolveR { packages })?;
     match receive_resolver_message().map_err(infrastructure_failure)? {
         ServerMessage::RResolved { library } => Ok(ResolutionOutcome::Resolved { library }),
