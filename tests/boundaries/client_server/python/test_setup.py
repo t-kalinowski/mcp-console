@@ -41,6 +41,23 @@ def test_python_first_initializes_before_reticulate_attaches(
             r = code(f"""
                 startup_probe <- dyn.load({json.dumps(str(probe))})
                 startup_calls <- 0L
+                callback_calls <- 0L
+                Sys.unsetenv("RETICULATE_PYTHON")
+                expected_python <- normalizePath(Sys.which("python3"))
+                options(reticulate.python.beforeInitialized = function() {{
+                  callback_calls <<- callback_calls + 1L
+                  initialized <- .C(
+                    getNativeSymbolInfo(
+                      "mcp_console_probe_python_initialized",
+                      PACKAGE = .GlobalEnv$startup_probe
+                    ),
+                    value = 0L
+                  )$value
+                  if (initialized == 1L) {{
+                    stop(sprintf("callback %d ran after CPython initialization", callback_calls))
+                  }}
+                  reticulate::use_python(expected_python, required = TRUE)
+                }})
                 invisible(suppressMessages(base::trace(
                   "py_initialize",
                   tracer = quote({{
@@ -81,6 +98,11 @@ def test_python_first_initializes_before_reticulate_attaches(
                 # fmt: r
                 r=code("""
                     stopifnot(startup_calls == 1L)
+                    stopifnot(callback_calls == 1L)
+                    stopifnot(identical(
+                      normalizePath(reticulate::py_config()$python),
+                      expected_python
+                    ))
                     reticulate::py_to_r(reticulate::py$startup_value) + 1L
                     """)
             )
@@ -145,6 +167,33 @@ def test_r_first_initializes_before_reticulate_attaches(
 
 
 @executions(DIRECT, SANDBOXED)
+def test_r_first_runs_selection_callback_once(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with McpClient(binary, execution.serve()) as client:
+        client.initialize_and_list_tools()
+        # fmt: r
+        r = code("""
+            Sys.unsetenv("RETICULATE_PYTHON")
+            expected_python <- normalizePath(Sys.which("python3"))
+            callback_calls <- 0L
+            options(reticulate.python.beforeInitialized = function() {
+              callback_calls <<- callback_calls + 1L
+              reticulate::use_python(expected_python, required = TRUE)
+            })
+            config <- reticulate::py_config()
+            stopifnot(callback_calls == 1L)
+            stopifnot(identical(normalizePath(config$python), expected_python))
+            42L
+            """)
+        client.send(r=r)
+        assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
+        client.send(python="41 + 1")
+        assert last_result_text(client) == "42\n", client.transcript[-1]
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
 @requires(NATIVE_FIXTURES)
 def test_retries_attachment_without_reinitializing_python(
     binary: Path, execution: Execution
@@ -162,6 +211,15 @@ def test_retries_attachment_without_reinitializing_python(
             # fmt: r
             r = code(f"""
                 startup_probe <- dyn.load({json.dumps(str(probe))})
+                Sys.setenv(PATH = paste(tempdir(), Sys.getenv("PATH"), sep = .Platform$path.sep))
+                original_path <- Sys.getenv("PATH")
+                Sys.setenv(R_SESSION_INITIALIZED = "before-attach")
+                invisible(suppressMessages(base::trace(
+                  "python_munge_path",
+                  exit = quote(assign("munged_path", Sys.getenv("PATH"), envir = .GlobalEnv)),
+                  print = FALSE,
+                  where = asNamespace("reticulate")
+                )))
                 invisible(suppressMessages(base::trace(
                   "py_initialize",
                   tracer = quote({{
@@ -178,6 +236,9 @@ def test_retries_attachment_without_reinitializing_python(
                   error = function(condition) conditionMessage(condition)
                 )
                 stopifnot(grepl("synthetic reticulate attach failure", failure, fixed = TRUE))
+                stopifnot(!identical(munged_path, original_path))
+                stopifnot(identical(Sys.getenv("PATH"), original_path))
+                stopifnot(identical(Sys.getenv("R_SESSION_INITIALIZED"), "before-attach"))
                 stopifnot(identical(
                   .C(
                     getNativeSymbolInfo(
@@ -193,6 +254,13 @@ def test_retries_attachment_without_reinitializing_python(
                 )))
                 invisible(reticulate::py_config())
                 reticulate::py_run_string("startup_value = 41")
+                stopifnot(identical(
+                  strsplit(Sys.getenv("PATH"), .Platform$path.sep, fixed = TRUE)[[1L]][1L],
+                  strsplit(munged_path, .Platform$path.sep, fixed = TRUE)[[1L]][1L]
+                ))
+                stopifnot(grepl(
+                  'NAME="reticulate"', Sys.getenv("R_SESSION_INITIALIZED"), fixed = TRUE
+                ))
                 reticulate::py_to_r(reticulate::py$startup_value) + 1L
                 """)
             client.send(r=r)

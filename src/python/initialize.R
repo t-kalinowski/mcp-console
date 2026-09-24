@@ -6,6 +6,8 @@ base::local(
     old_path <- NULL
     old_session <- NULL
     old_python_path <- NULL
+    selected_path <- NULL
+    selected_python_path <- NULL
     python_embedded <- FALSE
 
     replace_binding <- function(name, value) {
@@ -17,16 +19,31 @@ base::local(
       if (was_locked) lockBinding(name, namespace)
     }
 
-    select_python <- function(required_module = NULL, use_environment = NULL) {
+    select_python <- function(
+      required_module = NULL,
+      use_environment = NULL,
+      run_before_initialized = FALSE
+    ) {
       if (is.null(namespace)) {
         asNamespace("reticulate")
       }
       if (!is.null(selected)) {
+        # The cached configuration survives failure, but its environment may
+        # have been restored before the next native initialization attempt.
+        if (is.null(old_path) && !is.null(selected_path)) {
+          reapply_selection_environment()
+        }
         return(selected)
       }
       if (get("is_python_initialized", envir = namespace)()) {
         selected <<- globals$py_config
         return(selected)
+      }
+      if (run_before_initialized) {
+        # R-first calls arrive through reticulate::ensure_python_initialized(),
+        # which has already invoked this callback.
+        callback <- getOption("reticulate.python.beforeInitialized")
+        if (is.function(callback)) callback()
       }
 
       # Keep reticulate's discovery and its R-side selection hints in one place.
@@ -72,6 +89,8 @@ base::local(
       old_path <<- NULL
       old_session <<- NULL
       old_python_path <<- NULL
+      selected_path <<- NULL
+      selected_python_path <<- NULL
       on.exit(if (is.null(selected)) cancel_selection(), add = TRUE)
       if (nzchar(config$virtualenv)) {
         Sys.setenv(VIRTUAL_ENV = config$virtualenv)
@@ -90,6 +109,7 @@ base::local(
       }
       old_path <<- Sys.getenv("PATH")
       get("python_munge_path", namespace)(config$python)
+      selected_path <<- Sys.getenv("PATH")
       get("prefix_python_lib_to_ld_library_path", namespace)(config$python)
       if (get("is_osx", namespace)()) {
         symlink <- Sys.getenv("RSTUDIO_FALLBACK_LIBRARY_PATH", unset = NA)
@@ -99,7 +119,7 @@ base::local(
         }
       }
       old_python_path <<- Sys.getenv("PYTHONPATH")
-      python_path <- Sys.getenv(
+      selected_python_path <<- Sys.getenv(
         "RETICULATE_PYTHONPATH",
         unset = paste(
           config$pythonpath,
@@ -107,7 +127,7 @@ base::local(
           sep = .Platform$path.sep
         )
       )
-      Sys.setenv(PYTHONPATH = python_path)
+      Sys.setenv(PYTHONPATH = selected_python_path)
       selected <<- config
       config
     }
@@ -126,11 +146,33 @@ base::local(
       if (!is.null(old_python_path)) {
         Sys.setenv(PYTHONPATH = old_python_path)
       }
+      old_path <<- NULL
+      old_session <<- NULL
+      old_python_path <<- NULL
+      invisible()
+    }
+
+    reapply_selection_environment <- function() {
+      stopifnot(!is.null(selected_path), !is.null(selected_python_path))
+      old_path <<- Sys.getenv("PATH")
+      old_session <<- Sys.getenv("R_SESSION_INITIALIZED", unset = NA)
+      old_python_path <<- Sys.getenv("PYTHONPATH")
+      applied <- FALSE
+      on.exit(if (!applied) cancel_selection(), add = TRUE)
+      Sys.setenv(
+        PATH = selected_path,
+        R_SESSION_INITIALIZED = sprintf(
+          'PID=%s:NAME="reticulate"',
+          Sys.getpid()
+        ),
+        PYTHONPATH = selected_python_path
+      )
+      applied <- TRUE
       invisible()
     }
 
     state$selected_python <- function() {
-      config <- select_python()
+      config <- select_python(run_before_initialized = TRUE)
       jsonlite::toJSON(
         list(
           python = config$python,

@@ -369,7 +369,13 @@ base::local(
     }
 
     initialize_python_runtime <- function(strict = FALSE) {
-      python_config <- reticulate::py_config()
+      python_config <- local({
+        # Python-first selection already delivered this callback before
+        # discovery. Reticulate's attachment must not deliver it again.
+        previous_options <- options(reticulate.python.beforeInitialized = NULL)
+        on.exit(options(previous_options), add = TRUE)
+        reticulate::py_config()
+      })
       if (python_config$version < minimum_python) {
         if (!strict) {
           return(invisible(FALSE))
