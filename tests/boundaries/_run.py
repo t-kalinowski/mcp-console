@@ -103,8 +103,6 @@ if "--quick" in sys.argv[1:]:
     # Case subprocesses inherit it, including when a provider was configured.
     os.environ["MCP_CONSOLE_TEST_QUICK"] = "1"
     for variable in (
-        "MCP_CONSOLE_TEST_SSH_HOST",
-        "MCP_CONSOLE_TEST_SSH_EXTERNAL",
         "MCP_CONSOLE_TEST_DOCKER_IMAGE",
         "MCP_CONSOLE_TEST_SBX_TEMPLATE",
     ):
@@ -309,11 +307,13 @@ class RunningCase:
 
 class ProgressReporter:
     def __init__(
-        self, *, update: bool, full_update: bool, jobs: int, timeout: float
+        self, *, quick: bool, update: bool, full_update: bool, jobs: int, timeout: float
     ) -> None:
         self.update = update
         self.full_update = full_update
         self.rerun = ["scripts/test"]
+        if quick:
+            self.rerun.append("--quick")
         if update:
             self.rerun.append("--update")
         if full_update and jobs != parser.get_default("jobs"):
@@ -666,6 +666,7 @@ def main() -> None:
         break
 
     reporter = ProgressReporter(
+        quick=options.quick,
         update=options.update,
         full_update=full_update,
         jobs=options.jobs,

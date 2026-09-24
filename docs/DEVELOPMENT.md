@@ -152,7 +152,7 @@ For a stack, measure each layer against its intended parent rather than accumula
    For an internal refactor, establish the existing public suite's baseline.
 2. Implement the change and rerun the focused case or suite until it passes.
    Failures print an exact rerun command; completion records retain the selector and full log.
-   Full-update reruns retain nondefault concurrency; every rerun retains a nondefault timeout.
+   Full-update reruns retain nondefault concurrency; every rerun retains the quick profile and a nondefault timeout.
    A failed full snapshot update retains full-update scope so orphan cleanup remains available; other failures narrow the rerun to the failed case.
 3. Regenerate only the snapshots affected by an intentional behavior change with `scripts/test --update SELECTOR`, then rerun that selection without `--update`.
    A broader interface change may require a full update; inspect every resulting difference.

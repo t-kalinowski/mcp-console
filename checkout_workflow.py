@@ -222,6 +222,7 @@ class Run:
         timings = None
         if self.record["command"][0] == "test" and name == "transcripts":
             timings = self.directory / "case-timings.jsonl"
+            timings.touch()
             environment["MCP_CONSOLE_TEST_TIMINGS"] = str(timings)
         started = time.monotonic()
         status = 1
