@@ -18,7 +18,9 @@ impl Runtime {
 
     pub(super) fn ensure_initialized(&mut self) -> Result<bool, String> {
         if !self.completed {
-            let selected = self.adapter.select()?;
+            let Some(selected) = self.adapter.select()? else {
+                return Ok(false);
+            };
             if let Err(error) = super::library::initialize(
                 std::path::Path::new(&selected.libpython),
                 &selected.python,

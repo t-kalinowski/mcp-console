@@ -206,6 +206,52 @@ def test_retries_attachment_without_reinitializing_python(
 
 
 @executions(DIRECT, SANDBOXED)
+def test_retries_selection_after_interrupt(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with McpClient(binary, execution.serve()) as client:
+        client.initialize_and_list_tools()
+        # fmt: r
+        r = code(r"""
+            r_marker <- 41L
+            invisible(suppressMessages(base::trace(
+              "py_discover_config",
+              tracer = quote({
+                if (
+                  !exists(
+                    "selection_interrupted",
+                    envir = .GlobalEnv,
+                    inherits = FALSE
+                  )
+                ) {
+                  assign("selection_interrupted", TRUE, envir = .GlobalEnv)
+                  stop(base::structure(
+                    base::list(message = "synthetic selection interrupt", call = NULL),
+                    class = c("interrupt", "condition")
+                  ))
+                }
+              }),
+              print = FALSE,
+              where = asNamespace("reticulate")
+            )))
+            """)
+        client.send(r=r)
+        assert last_result_text(client) == "[done]", client.transcript[-1]
+        client.send(
+            # fmt: python
+            python=code("""
+                raise AssertionError("interrupted selection ran the cell")
+                """)
+        )
+        assert client.transcript[-1]["result"]["isError"] is False, client.transcript[
+            -1
+        ]
+        client.send(python="r.r_marker + 1")
+        assert last_result_text(client) == "42\n", client.transcript[-1]
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
 def test_activates_without_reticulate_virtualenv_helper(
     binary: Path, execution: Execution
 ) -> Transcript:
