@@ -252,6 +252,50 @@ def test_retries_selection_after_interrupt(
 
 
 @executions(DIRECT, SANDBOXED)
+def test_serializes_selected_python_once_inside_interrupt_boundary(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with McpClient(binary, execution.serve()) as client:
+        client.initialize_and_list_tools()
+        # fmt: r
+        r = code(r"""
+            selection_serializations <- 0L
+            invisible(suppressMessages(base::trace(
+              "toJSON",
+              tracer = quote({
+                if (
+                  is.list(x) &&
+                    identical(
+                      names(x),
+                      c("python", "libpython", "python_home")
+                    )
+                ) {
+                  selection_serializations <<- selection_serializations + 1L
+                  if (selection_serializations == 2L) {
+                    stop(base::structure(
+                      base::list(
+                        message = "synthetic serialization interrupt",
+                        call = NULL
+                      ),
+                      class = c("interrupt", "condition")
+                    ))
+                  }
+                }
+              }),
+              print = FALSE,
+              where = asNamespace("jsonlite")
+            )))
+            """)
+        client.send(r=r)
+        assert last_result_text(client) == "[done]", client.transcript[-1]
+        client.send(python="41 + 1")
+        assert last_result_text(client) == "42\n", client.transcript[-1]
+        client.send(r="stopifnot(selection_serializations == 1L); 42L")
+        assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
 def test_activates_without_reticulate_virtualenv_helper(
     binary: Path, execution: Execution
 ) -> Transcript:

@@ -482,8 +482,7 @@ base::local(
 
     evaluate_impl <- function() {
       if (identical(source, "select")) {
-        selected_python()
-        return(invisible())
+        return(selected_python())
       }
       initialize_python_runtime(strict = TRUE)
       check_python_setup(.Call("mcp_console_disable_matplotlib_show"))

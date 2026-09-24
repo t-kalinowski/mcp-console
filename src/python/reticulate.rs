@@ -32,17 +32,14 @@ impl Adapter {
     }
 
     pub(super) fn select(&mut self) -> Result<Option<SelectedPython>, String> {
-        // Run discovery inside the existing R error and interrupt boundary.
-        if !self.bridge.evaluate_completed("select")? {
-            return Ok(None);
-        }
-        let selected = self
-            .bridge
-            .call0_string(c"selected_python")?
-            .ok_or_else(|| "Python selection returned no configuration".to_string())?;
-        serde_json::from_str(&selected)
-            .map(Some)
-            .map_err(|error| format!("invalid selected Python configuration: {error}"))
+        // Discovery and serialization share the existing R interrupt boundary.
+        self.bridge
+            .evaluate_completed_string("select")?
+            .map(|selected| {
+                serde_json::from_str(&selected)
+                    .map_err(|error| format!("invalid selected Python configuration: {error}"))
+            })
+            .transpose()
     }
 
     pub(super) fn cancel_selection(&self) -> Result<(), String> {

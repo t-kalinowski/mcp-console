@@ -189,6 +189,8 @@ base::local(
       if (!is.null(old_python_path)) {
         Sys.setenv(PYTHONPATH = old_python_path)
       }
+      # Reticulate keeps the munged PATH after successful attachment and
+      # restores it only when initialization fails.
 
       # Reticulate owns conversion, cross-language calls, and event integration.
       reg.finalizer(
