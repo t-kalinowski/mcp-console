@@ -8,6 +8,8 @@ mod embedded_r;
 mod input;
 #[cfg(unix)]
 mod interrupt;
+#[cfg(unix)]
+mod r_integration;
 
 // Keep the rest of the crate dependent on the worker facade. The core owns
 // runtime-neutral sideband state and host callbacks. The coordinator owns

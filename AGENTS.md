@@ -210,8 +210,8 @@ Keep these invariants intact:
 - `src/process_exit.rs` — ordinary direct-child exit observation without reaping, used by server launcher ownership.
 - `src/process_output.rs` — output draining bounded by an owned child exit, including a surviving inherited writer; used for local launchers, the SSH child, and the remote helper's launcher without equating their cleanup guarantees.
 - `src/sandbox.rs`, `src/sandbox/{installation,runner,unsupported}.rs` — thin sandbox frontend, verified runner selection, application policy, and unsupported-platform errors.
-- `src/worker.rs`, `src/worker/{coordinator,core,input}.rs` — worker facade, language coordination, shared command readiness and cell bookkeeping, sideband services, and interactive stdin buffering.
-- `src/worker/interrupt.{rs,c}` — native signal distribution, managed-input wakeups, and Python acknowledgment through startup-supplied interrupt-state callbacks.
+- `src/worker.rs`, `src/worker/{coordinator,core,input,r_integration}.rs` — worker facade, language coordination, shared command readiness and cell bookkeeping, interactive stdin buffering, and optional R event, graphics, and interrupt hooks.
+- `src/worker/interrupt.{rs,c}` — native signal distribution, blocking R-free waiting, managed-input wakeups, and Python acknowledgment through startup-supplied interrupt-state callbacks.
 - `src/worker/embedded_r.rs`, `src/r_repl.c` — R runtime, interrupt state and deferral, native event-aware waiting, graphics, console source routing, and the C-owned DLL-REPL boundary.
 
 ### Language adapters
