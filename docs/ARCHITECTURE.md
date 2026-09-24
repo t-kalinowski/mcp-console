@@ -313,9 +313,11 @@ The server reports the failed operation and does not replay its cell or stdin ag
 ### Server and worker startup
 
 For a local host target, the built-in server first captures a stable host resolver configuration and detects its capability without installing an environment.
-It prefers `ir` on `PATH`, otherwise selects `uv` on `PATH` or an explicit `uv` path, and can obtain `uv` from reticulate when only `ir` or an ambient R installation is available.
+The Python configuration captures an explicit `RETICULATE_UV` selection or `uv` on `PATH` independently of R discovery.
+R bootstrap prefers `ir` on `PATH`, otherwise selects `uv` on `PATH` or an explicit `uv` path, and can obtain `uv` from reticulate when only `ir` or an ambient R installation is available.
 It retains the selected bootstrap as pending setup and accepts MCP input before invoking it or resolving the default R, DuckDB, and managed Python environments.
 An operation that first needs an environment resolves the defaults through the normal generation-owned resolver lifecycle and commits the complete candidate only after all preparation succeeds.
+With directly available `uv`, local Python preparation runs before R library preparation and does not require a managed R library; reticulate bootstrap remains the R-backed fallback when direct `uv` is unavailable.
 For an ordinary cell, this happens after evaluation admission, so the client can poll or interrupt preparation.
 Explicit requirements remain preconditions of evaluation and combine their additions with the pending defaults.
 If no resolver bootstrap is available, it accepts MCP input with an empty retained environment and a fixed bare capability that disables later dynamic resolution.

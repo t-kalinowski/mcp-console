@@ -50,6 +50,9 @@ impl PythonConfiguration {
             Self::Ssh(_) => true,
         }
     }
+    pub(crate) fn has_direct_local_uv(&self) -> bool {
+        matches!(self, Self::Local(configuration) if configuration.has_uv())
+    }
     pub(crate) fn set_resolved_uv(&mut self, uv: std::ffi::OsString) {
         let Self::Local(configuration) = self else {
             unreachable!("remote uv stays remote")
@@ -94,7 +97,7 @@ pub(crate) fn resolve_python_manifest(
 ) -> Result<ManagedPython, String> {
     match configuration {
         PythonConfiguration::Local(configuration) => {
-            super::resolve_python_manifest(requirements, configuration, managed_r, on_started)
+            super::resolve_python_manifest(requirements, configuration, on_started)
         }
         PythonConfiguration::Ssh(remote) => remote.call(
             Operation::Python {
@@ -109,17 +112,21 @@ pub(crate) fn resolve_python_manifest(
 pub(crate) fn resolve_python_version(
     constraints: Vec<String>,
     configuration: &PythonConfiguration,
-    managed_r: &ManagedR,
+    managed_r: Option<&ManagedR>,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<String, String> {
     match configuration {
         PythonConfiguration::Local(configuration) => {
-            super::resolve_python_version(constraints, configuration, managed_r, on_started)
+            super::resolve_python_version(constraints, configuration, on_started)
         }
         PythonConfiguration::Ssh(remote) => remote.call(
             Operation::PythonVersion {
                 constraints,
-                r: managed_r.clone(),
+                r: managed_r
+                    .ok_or_else(|| {
+                        "remote Python version resolution requires managed R".to_string()
+                    })?
+                    .clone(),
             },
             on_started,
         ),

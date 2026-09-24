@@ -1,7 +1,3 @@
-use std::collections::BTreeMap;
-use std::ffi::{OsStr, OsString};
-use std::sync::Arc;
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub(crate) enum ResolverControlOutcome {
     Interrupted,
@@ -18,164 +14,36 @@ mod managed_python;
 mod managed_r;
 #[cfg(unix)]
 mod process;
+mod python_configuration;
 #[cfg(unix)]
 mod python_version;
 #[cfg(not(unix))]
 mod unsupported;
 
-#[derive(Clone)]
-pub(crate) struct ManagedPythonResolverConfiguration {
-    environment: Arc<BTreeMap<OsString, OsString>>,
-    reticulate_uv: Option<OsString>,
-    uv: Option<OsString>,
-}
-
-impl ManagedPythonResolverConfiguration {
-    pub(crate) fn capture() -> Self {
-        let mut environment = std::env::vars_os()
-            .filter(|(name, _)| is_uv_environment_variable(name) && name != "UV_OFFLINE")
-            .collect::<BTreeMap<_, _>>();
-        normalize_python_preference(&mut environment);
-        let reticulate_uv = std::env::var_os("RETICULATE_UV");
-        let uv = reticulate_uv
-            .as_ref()
-            .filter(|uv| uv.as_os_str() != OsStr::new("managed"))
-            .cloned();
-        Self {
-            environment: Arc::new(environment),
-            reticulate_uv,
-            uv,
-        }
-    }
-
-    fn explicit_uv(&self) -> Option<&OsStr> {
-        self.reticulate_uv.as_deref()
-    }
-
-    fn uv(&self) -> Result<&OsStr, String> {
-        self.uv
-            .as_deref()
-            .ok_or_else(|| "managed Python resolver has no `uv` executable".to_string())
-    }
-
-    fn reticulate_uv(&self) -> Result<&OsStr, String> {
-        self.reticulate_uv
-            .as_deref()
-            .or(self.uv.as_deref())
-            .ok_or_else(|| "managed Python resolver has no reticulate `uv` selection".to_string())
-    }
-
-    fn python_preference(&self) -> Option<&OsStr> {
-        self.environment.iter().find_map(|(name, value)| {
-            (name.as_os_str() == OsStr::new("UV_PYTHON_PREFERENCE")).then_some(value.as_os_str())
+fn find_path_entry(program: &str) -> Option<std::path::PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    // A broken symlink or non-executable entry is a broken installation, not
+    // permission to select a different resolver.
+    std::env::split_paths(&path)
+        .map(|directory| {
+            if directory.as_os_str().is_empty() {
+                std::path::PathBuf::from(".").join(program)
+            } else {
+                directory.join(program)
+            }
         })
-    }
-
-    pub(crate) fn has_uv(&self) -> bool {
-        self.uv.is_some()
-    }
-
-    pub(crate) fn set_default_uv(&mut self, uv: impl Into<OsString>) {
-        let uv = uv.into();
-        if self.reticulate_uv.is_none() {
-            self.reticulate_uv = Some(uv.clone());
-            self.uv = Some(uv);
-        }
-    }
-
-    pub(crate) fn set_resolved_uv(&mut self, uv: impl Into<OsString>) {
-        let uv = uv.into();
-        if self.uv.is_none() {
-            self.uv = Some(uv.clone());
-        }
-        if self.reticulate_uv.is_none() {
-            self.reticulate_uv = Some(uv);
-        }
-    }
-
-    fn configure_uv(&self, command: &mut std::process::Command, uv: &OsStr) {
-        for (name, _) in std::env::vars_os().filter(|(name, _)| is_uv_environment_variable(name)) {
-            command.env_remove(name);
-        }
-        command
-            .envs(self.environment.iter())
-            .env("RETICULATE_UV", uv)
-            .env_remove("UV_OFFLINE");
-    }
-
-    fn configure_uv_bootstrap(&self, command: &mut std::process::Command) {
-        self.configure_uv(command, OsStr::new("managed"));
-    }
-
-    fn configure_direct(&self, command: &mut std::process::Command) -> Result<(), String> {
-        let uv = self.reticulate_uv()?;
-        self.configure_uv(command, uv);
-        if uv == OsStr::new("managed") {
-            let executable = std::path::Path::new(self.uv()?);
-            let root = executable
-                .parent()
-                .and_then(std::path::Path::parent)
-                .ok_or_else(|| {
-                    format!(
-                        "reticulate managed `uv` executable has no cache root: `{}`",
-                        executable.display()
-                    )
-                })?;
-            command
-                .env("UV_CACHE_DIR", root.join("cache"))
-                .env("UV_PYTHON_INSTALL_DIR", root.join("python"));
-        }
-        Ok(())
-    }
+        .find(|candidate| std::fs::symlink_metadata(candidate).is_ok())
 }
 
-fn normalize_python_preference(environment: &mut BTreeMap<OsString, OsString>) {
-    let managed_name = OsStr::new("UV_MANAGED_PYTHON");
-    let system_name = OsStr::new("UV_NO_MANAGED_PYTHON");
-    let managed = uv_flag_value(environment, managed_name);
-    let system = uv_flag_value(environment, system_name);
-    if managed == Some(false) {
-        environment.remove(managed_name);
-    }
-    if system == Some(false) {
-        environment.remove(system_name);
-    }
-    if environment.contains_key(OsStr::new("UV_PYTHON_PREFERENCE")) {
-        return;
-    }
-    let (name, preference) = if managed == Some(true) && !environment.contains_key(system_name) {
-        (managed_name, "only-managed")
-    } else if system == Some(true) && !environment.contains_key(managed_name) {
-        (system_name, "only-system")
-    } else {
-        return;
-    };
-    environment.remove(name);
-    environment.insert(
-        OsString::from("UV_PYTHON_PREFERENCE"),
-        OsString::from(preference),
-    );
-}
-
-fn uv_flag_value(environment: &BTreeMap<OsString, OsString>, name: &OsStr) -> Option<bool> {
-    environment
-        .get(name)
-        .and_then(|value| value.to_str())
-        .and_then(|value| match value.to_ascii_lowercase().as_str() {
-            "1" | "true" | "t" | "yes" | "y" | "on" => Some(true),
-            "0" | "false" | "f" | "no" | "n" | "off" => Some(false),
-            _ => None,
-        })
-}
-
-fn is_uv_environment_variable(name: &OsStr) -> bool {
-    name.as_encoded_bytes().starts_with(b"UV_")
-}
+pub(crate) use python_configuration::ManagedPythonResolverConfiguration;
 
 #[cfg(unix)]
 pub(crate) use managed_duckdb::resolve_duckdb_extensions;
 #[cfg(unix)]
-pub(crate) use managed_python::{ManagedPython, resolve_python_manifest, resolve_python_version};
+pub(crate) use managed_python::{
+    ManagedPython, resolve_python_manifest, resolve_python_manifest_for_remote,
+    resolve_python_version, resolve_python_version_for_remote,
+};
 #[cfg(unix)]
 pub(crate) use managed_r::{
     ManagedR, ManagedRBootstrap, ManagedRResolverConfiguration, detect_r_bootstrap, discover,
@@ -189,3 +57,130 @@ pub(crate) use unsupported::{
     resolve_duckdb_extensions, resolve_python, resolve_python_manifest, resolve_python_version,
     resolve_r, resolve_r_with,
 };
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::Path;
+    use std::process::Command;
+
+    use super::{
+        ManagedPythonResolverConfiguration, resolve_python_manifest, resolve_python_version,
+    };
+    use crate::worker_protocol::PythonRequirementManifest;
+
+    #[test]
+    fn local_python_resolution_without_r() {
+        let Some(mode) = std::env::var_os("MCP_CONSOLE_TEST_LOCAL_PYTHON_MODE") else {
+            let directory = std::env::temp_dir().join(format!(
+                "mcp-console-local-python-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            fs::create_dir(&directory).unwrap();
+            let uv = directory.join("uv");
+            fs::write(
+                &uv,
+                r#"#!/bin/sh
+printf '%s\n' "$0 $*" >> "$MCP_CONSOLE_TEST_LOCAL_PYTHON_RECORD"
+case "$1 $2" in
+  'python list') printf '%s\n' '[{"version":"3.12.7","version_parts":{"major":3,"minor":12,"patch":7},"symlink":null,"variant":"default","implementation":"cpython"}]' ;;
+  'tool run') for last in "$@"; do :; done; printf '/usr/bin/true' > "$last" ;;
+  *) exit 90 ;;
+esac
+"#,
+            )
+            .unwrap();
+            fs::set_permissions(&uv, fs::Permissions::from_mode(0o755)).unwrap();
+            let explicit_uv = directory.join("explicit-uv");
+            fs::copy(&uv, &explicit_uv).unwrap();
+            let empty_path = directory.join("empty");
+            fs::create_dir(&empty_path).unwrap();
+            let record = directory.join("uv.log");
+            for mode in ["path", "explicit", "missing", "invalid", "managed"] {
+                fs::write(&record, "").unwrap();
+                let mut command = Command::new(std::env::current_exe().unwrap());
+                command
+                    .args([
+                        "--exact",
+                        "resolver::tests::local_python_resolution_without_r",
+                    ])
+                    .env("MCP_CONSOLE_TEST_LOCAL_PYTHON_MODE", mode)
+                    .env("MCP_CONSOLE_TEST_LOCAL_PYTHON_RECORD", &record)
+                    .env(
+                        "PATH",
+                        if mode == "missing" {
+                            &empty_path
+                        } else {
+                            &directory
+                        },
+                    )
+                    .env_remove("R_HOME")
+                    .env_remove("R_LIBS")
+                    .env_remove("RETICULATE_UV");
+                if mode == "explicit" {
+                    command.env("RETICULATE_UV", &explicit_uv);
+                } else if mode == "invalid" {
+                    command.env("RETICULATE_UV", directory.join("missing-uv"));
+                } else if mode == "managed" {
+                    command.env("RETICULATE_UV", "managed");
+                }
+                let output = command.output().unwrap();
+                assert!(
+                    output.status.success(),
+                    "{mode}: {}{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                let invocations = fs::read_to_string(&record).unwrap();
+                assert_eq!(
+                    invocations.is_empty(),
+                    matches!(mode, "missing" | "invalid" | "managed")
+                );
+                if mode == "explicit" {
+                    assert!(invocations.starts_with(explicit_uv.to_str().unwrap()));
+                } else if mode == "path" {
+                    assert!(invocations.starts_with(uv.to_str().unwrap()));
+                }
+                if matches!(mode, "path" | "explicit") {
+                    assert!(invocations.contains("python list --all-versions"));
+                    assert!(invocations.contains("tool run --isolated --python 3.12.7 --exclude-newer 2026-01-01 --with six>=1"));
+                }
+            }
+            fs::remove_dir_all(directory).unwrap();
+            return;
+        };
+
+        assert!(std::env::var_os("R_LIBS").is_none());
+        for executable in ["R", "Rscript", "ir"] {
+            assert!(super::find_path_entry(executable).is_none());
+        }
+        let configuration = ManagedPythonResolverConfiguration::capture();
+        if matches!(mode.to_str(), Some("missing" | "managed")) {
+            assert!(!configuration.has_uv());
+            assert!(resolve_python_version(vec![], &configuration, |_| Ok(())).is_err());
+            return;
+        }
+        if mode == "invalid" {
+            let error = resolve_python_version(vec![], &configuration, |_| Ok(())).unwrap_err();
+            assert!(error.contains("missing-uv"), "{error}");
+            return;
+        }
+        assert!(configuration.has_uv());
+        let version =
+            resolve_python_version(vec![">=3.12".into()], &configuration, |_| Ok(())).unwrap();
+        assert_eq!(version, "3.12.7");
+        let manifest = PythonRequirementManifest {
+            packages: vec!["six>=1".into()],
+            python_version: vec![">=3.12".into()],
+            exclude_newer: Some("2026-01-01".into()),
+        };
+        let resolved = resolve_python_manifest(manifest, &configuration, |_| Ok(())).unwrap();
+        assert_eq!(resolved.python(), Path::new("/usr/bin/true"));
+        assert_eq!(resolved.requirements().packages, ["six>=1"]);
+    }
+}

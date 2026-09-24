@@ -348,9 +348,11 @@ The built-in server uses `$R_HOME/bin/Rscript` when `R_HOME` is set.
 Otherwise it runs `R RHOME` using `R` from `PATH` and uses the reported home's `bin/Rscript`.
 It passes that exact `Rscript` to `ir` and uses it for DuckDB resolution.
 When Python is server-managed, the server-selected `uv` executable creates and updates the environment directly.
-The current managed R library is supplied through `R_LIBS` when one is available.
 Python version inventory and selection run directly through the same `uv` executable.
-The server prepends the resolved managed library to inherited `R_LIBS`, preserving its nonempty path entries after the managed library.
+For local host resolution, Python preparation does not inspect or validate a managed R library and does not invoke `R`, `Rscript`, or `ir`.
+When direct `uv` is available, the server prepares the Python candidate before the R library candidate; it still commits the complete prestart environment only after all candidates succeed.
+SSH preparation continues to supply its selected managed R library through `R_LIBS`.
+The R resolver prepends the resolved managed library to inherited `R_LIBS`, preserving its nonempty path entries after the managed library.
 
 The server prefers `ir` from `PATH`.
 If `ir` is absent and `uv` is present, it runs `uv tool run --from r-lib-ir ir`.
@@ -473,6 +475,7 @@ Host resolution and managed-environment startup may run accepted distributions' 
 
 An explicit `RETICULATE_UV` startup value is retained.
 Otherwise the server selects `uv` from `PATH`, from the managed R library's reticulate installation, or from ambient reticulate.
+An invalid explicit executable fails when invoked; the server does not replace it with a `PATH` executable.
 Direct Python version inventory and managed-environment creation receive that stable selection.
 When `RETICULATE_UV=managed`, the server resolves reticulate's managed executable and uses that same executable, cache directory, and Python installation directory for direct version inventory.
 The reticulate bootstrap invocation receives `RETICULATE_UV=managed`, so reticulate validates or installs its managed `uv` rather than recursively selecting an absent `PATH` command.
@@ -485,7 +488,8 @@ It does not add reticulate's separately registered virtualenv directories to `PA
 Enabled `UV_MANAGED_PYTHON` and `UV_NO_MANAGED_PYTHON` settings are normalized to their equivalent `UV_PYTHON_PREFERENCE` values before direct calls, and recognized disabled aliases are removed.
 This avoids conflicting command-line and environment selectors while preserving the requested source policy.
 Conflicting or invalid source settings remain unchanged so `uv` reports them normally.
-Managed-environment creation passes each validated requirement as its own argument, inherits the current managed R library through `R_LIBS` when available, and removes its server-created interpreter-path output file after the resolver call.
+Managed-environment creation passes each validated requirement as its own argument and removes its server-created interpreter-path output file after the resolver call.
+Local Python resolution uses the captured `uv` configuration without a managed R library; SSH preparation retains its existing `R_LIBS` behavior.
 It removes `UV_NO_CACHE` after restoring the trusted startup snapshot because `uv tool run` deletes a no-cache tool environment when that command exits; Python version inventory and the other resolver calls retain the setting.
 Ordinary Matplotlib cache-warm failures remain best effort, but an interrupt during cache warming fails the preparation before its candidate environment can be committed.
 

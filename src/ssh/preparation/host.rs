@@ -20,8 +20,8 @@ impl Context {
     fn discover(
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, Discovery), String> {
-        let mut python = resolver::ManagedPythonResolverConfiguration::capture();
-        let (bootstrap, rscript) = resolver::discover(&mut python, on_started)?;
+        let python = resolver::ManagedPythonResolverConfiguration::capture();
+        let (bootstrap, rscript) = resolver::discover(&python, on_started)?;
         let configured_python = std::env::var("RETICULATE_PYTHON").ok();
         let managed_python = !configured_python
             .as_ref()
@@ -80,7 +80,7 @@ impl Context {
             Operation::Python { requirements, r } => {
                 let r = r.map(|r| r.on_host(&self.rscript));
                 self.prepare_uv(r.as_ref(), on_started)?;
-                let python = resolver::resolve_python_manifest(
+                let python = resolver::resolve_python_manifest_for_remote(
                     requirements,
                     &self.python,
                     r.as_ref(),
@@ -91,8 +91,13 @@ impl Context {
             Operation::PythonVersion { constraints, r } => {
                 let r = r.on_host(&self.rscript);
                 self.prepare_uv(Some(&r), on_started)?;
-                resolver::resolve_python_version(constraints, &self.python, &r, on_started)
-                    .map(serde_json::Value::String)
+                resolver::resolve_python_version_for_remote(
+                    constraints,
+                    &self.python,
+                    &r,
+                    on_started,
+                )
+                .map(serde_json::Value::String)
             }
             Operation::Duckdb { r, extensions } => {
                 let r = r.on_host(&self.rscript);

@@ -382,13 +382,13 @@ impl Client {
         sandbox_settings: crate::settings::SandboxSettings,
         on_started: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
     ) -> Result<Self, String> {
-        let mut python_resolver = crate::resolver::ManagedPythonResolverConfiguration::capture();
+        let python_resolver = crate::resolver::ManagedPythonResolverConfiguration::capture();
         let configured_python = std::env::var_os("RETICULATE_PYTHON");
         let program = std::env::current_exe()
             .map_err(|error| format!("failed to locate the R worker executable: {error}"))?;
         #[cfg(unix)]
         let (r, duckdb_extensions, python, r_resolver) = {
-            match crate::resolver::detect_r_bootstrap(&mut python_resolver, on_started)? {
+            match crate::resolver::detect_r_bootstrap(&python_resolver, on_started)? {
                 Some(bootstrap) => (
                     None,
                     Default::default(),

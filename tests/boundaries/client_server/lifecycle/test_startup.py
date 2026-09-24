@@ -179,6 +179,39 @@ def test_initializes_before_uv_bootstrap_installation(
 
 @executions(DIRECT, SANDBOXED)
 @requires(PROCESS_EVENTS, command("ir"), command("uv"))
+def test_prepares_python_before_r_bootstrap_validation(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with startup_fixture(binary, execution, phase="discovery") as fixture:
+        client = fixture.client
+        client.initialize_and_list_tools()
+        # fmt: r
+        r = code(r"""
+            cat("ready\n")
+            """)
+        client.send(r=r, timeout_ms=0)
+        assert last_tool_text(client) == RUNNING
+        fixture.wait_for_resolver()
+        assert fixture.invocations()[-1] == {
+            "program": "ir",
+            "arguments": ["--version"],
+        }
+        assert any(
+            invocation["program"] == "uv"
+            and invocation["arguments"][:2] == ["tool", "run"]
+            for invocation in fixture.invocations()
+        ), "Python preparation waited for R bootstrap validation"
+        fixture.release.release()
+        client.response_timeout = 600
+        assert collect_running_output(client, "first cell", timeouts_ms=(600_000,)) == (
+            "ready\n",
+        )
+        fixture.wait_for_resolver_exit()
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS, command("ir"), command("uv"))
 def test_first_cell_prepares_defaults_after_running_response(
     binary: Path,
     execution: Execution,
@@ -204,6 +237,11 @@ def test_first_cell_prepares_defaults_after_running_response(
         assert last_tool_text(client) == RUNNING
         fixture.wait_for_resolver()
         assert not list(fixture.root.glob("sandbox-*"))
+        assert any(
+            invocation["program"] == "uv"
+            and invocation["arguments"][:2] == ["tool", "run"]
+            for invocation in fixture.invocations()
+        ), "Python defaults waited for the managed R library"
         preparation = fixture.invocations()[-1]["arguments"]
         assert isinstance(preparation, list)
         assert {

@@ -60,6 +60,19 @@ impl Client {
             r_changed,
         } = delta;
         let mut environment = environment.clone();
+        let early_resolver = match &environment.r_resolver {
+            RResolver::Pending(setup) => Some(&setup.python_resolver),
+            _ => match environment.python.as_ref() {
+                Some(PythonEnvironment::Managed { resolver, .. }) => Some(resolver),
+                _ => None,
+            },
+        };
+        let early_python = match (&python_candidate, early_resolver) {
+            (Some(candidate), Some(resolver)) if resolver.has_direct_local_uv() => Some(
+                self.resolve_managed_python_host(generation, candidate.clone(), resolver, None)?,
+            ),
+            _ => None,
+        };
         let pending_python = if let RResolver::Pending(setup) = &environment.r_resolver {
             let mut python = setup.python_resolver.clone();
             let mut stop_handle = None;
@@ -116,35 +129,40 @@ impl Client {
                     .1
                     .clone(),
             };
-            if !resolver.has_uv() {
-                self.ensure_startup(generation)
-                    .map_err(EnvironmentResolutionFailure::Operation)?;
-                let RResolver::Configured(r_resolver) = &environment.r_resolver else {
-                    unreachable!("managed Python bootstrap requires a configured R resolver");
-                };
-                let managed_r = environment
-                    .r
-                    .as_ref()
-                    .expect("managed Python bootstrap has resolved R");
-                let mut stop_handle = None;
-                let result = r_resolver.resolve_uv(
-                    managed_r,
+            let selected = if let Some(selected) = early_python {
+                selected
+            } else {
+                if !resolver.has_uv() {
+                    self.ensure_startup(generation)
+                        .map_err(EnvironmentResolutionFailure::Operation)?;
+                    let RResolver::Configured(r_resolver) = &environment.r_resolver else {
+                        unreachable!("managed Python bootstrap requires a configured R resolver");
+                    };
+                    let managed_r = environment
+                        .r
+                        .as_ref()
+                        .expect("managed Python bootstrap has resolved R");
+                    let mut stop_handle = None;
+                    let result = r_resolver.resolve_uv(
+                        managed_r,
+                        &resolver,
+                        |handle: crate::resolver::ResolverStopHandle| {
+                            stop_handle = Some(handle.clone());
+                            self.register_resolver_stop_handle(generation, handle)
+                        },
+                    );
+                    self.clear_resolver_stop_handle(generation)
+                        .map_err(EnvironmentResolutionFailure::Operation)?;
+                    resolver
+                        .set_resolved_uv(classify_resolver_result(result, stop_handle.as_ref())?);
+                }
+                self.resolve_managed_python_host(
+                    generation,
+                    candidate,
                     &resolver,
-                    |handle: crate::resolver::ResolverStopHandle| {
-                        stop_handle = Some(handle.clone());
-                        self.register_resolver_stop_handle(generation, handle)
-                    },
-                );
-                self.clear_resolver_stop_handle(generation)
-                    .map_err(EnvironmentResolutionFailure::Operation)?;
-                resolver.set_resolved_uv(classify_resolver_result(result, stop_handle.as_ref())?);
-            }
-            let selected = self.resolve_managed_python_host(
-                generation,
-                candidate,
-                &resolver,
-                environment.r.as_ref(),
-            )?;
+                    environment.r.as_ref(),
+                )?
+            };
             environment.python = Some(PythonEnvironment::Managed { selected, resolver });
         }
         self.ensure_startup(generation)
@@ -215,6 +233,8 @@ impl Client {
             },
         );
         self.clear_resolver_stop_handle(generation)
+            .map_err(EnvironmentResolutionFailure::Operation)?;
+        self.ensure_startup(generation)
             .map_err(EnvironmentResolutionFailure::Operation)?;
         classify_resolver_result(result, stop_handle.as_ref())
     }

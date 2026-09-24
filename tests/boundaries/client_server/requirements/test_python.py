@@ -279,6 +279,7 @@ def test_retires_python_resolver_descendant_after_leader_exit(
 
                 requirement = os.environ["MCP_CONSOLE_TEST_REQUIREMENT"]
                 if requirement in sys.argv[1:]:
+                    assert os.environ.get("R_LIBS") is None
                     child = os.fork()
                     if child == 0:
                         identity = os.environ["MCP_CONSOLE_TEST_DESCENDANT_IDENTITY"]
@@ -300,6 +301,7 @@ def test_retires_python_resolver_descendant_after_leader_exit(
 
         environment = os.environ.copy()
         environment.pop("RETICULATE_PYTHON", None)
+        environment.pop("R_LIBS", None)
         environment["RETICULATE_UV"] = str(wrapper)
         environment["MCP_CONSOLE_TEST_REAL_UV"] = real_uv
         environment["MCP_CONSOLE_TEST_REQUIREMENT"] = "py-yaml12"
