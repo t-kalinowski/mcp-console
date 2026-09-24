@@ -265,8 +265,9 @@ An R transport, protocol, or bridge-infrastructure failure is different: the ser
 
 ### Live Python preparation
 
-Explicit Python preparation and automatic imports use the same reticulate additive requirement helper.
-The helper snapshots the current manifest before calling `reticulate::py_require(..., action = "add")`.
+Explicit Python preparation and automatic imports use the native requirement owner to orchestrate additive preparation.
+It snapshots the current manifest before calling `reticulate::py_require(..., action = "add")`; managed declarations use the same native transition decisions.
+The R adapter preserves declaration conversion and history, live compatibility checks, and actual activation of the chosen candidate.
 Before Python initializes, the worker materializes the complete manifest.
 After initialization, reticulate checks that the candidate uses the live `libpython` and activates a compatible environment without replacing the interpreter or its objects.
 

@@ -218,8 +218,8 @@ Keep these invariants intact:
 
 - `src/r_bridge.rs` — shared Rust FFI for process-lifetime private R bridge environments.
 - `src/python.rs`, `src/python/library.rs`, `src/python/library/services.rs`, `src/python/services.py`, `src/python/runtime.py` — direct CPython cell dispatch, native console services, main-thread stream hooks, and the private Python evaluator.
-- `src/python/requirements.rs`, `src/python/requirements/r.rs` — native requirement values and pending activation key, with R field layout, attributes, history, identity comparison, and notification conversion confined to the active-binding adapter.
-- `src/python/reticulate.rs`, `src/python/initialize.R`, `src/python/bridge.R` — retained reticulate startup and preparation adapter, interpreter selection, requirement transitions, activation, and automatic-resolution bridge.
+- `src/python/requirements.rs`, `src/python/requirements/r.rs` — native requirement values, declaration transitions, preparation orchestration, and pending activation key, with R field layout, attributes, encodings, history, identity comparison, and notification conversion confined to the active-binding adapter.
+- `src/python/reticulate.rs`, `src/python/initialize.R`, `src/python/bridge.R` — retained reticulate startup adapter, interpreter selection, live compatibility checks, activation of the chosen candidate, and automatic-resolution forwarding.
   R remains required and eagerly initialized.
 - `src/sql.rs`, `src/sql/r_dbi.rs`, `src/sql/py_dbapi.rs`, `src/sql/bridge.R`, `src/sql/dbapi.py` — worker-facing SQL router, R DBI and Python DB-API providers, and their runtime bridges.
 - `src/r_graphics.rs`, `src/r_graphics.c`, `src/r_graphics/bridge.R` — managed graphics orchestration, C callback boundary, and R bridge.

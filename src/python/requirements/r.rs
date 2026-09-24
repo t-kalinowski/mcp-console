@@ -131,13 +131,6 @@ pub extern "C-unwind" fn mcp_console_python_activation_pending() -> harp::Result
 
 #[allow(clippy::result_large_err)]
 #[harp::register]
-pub extern "C-unwind" fn mcp_console_python_activation_check() -> harp::Result<SEXP> {
-    check_activation()?;
-    unsafe { Ok(libr::R_NilValue) }
-}
-
-#[allow(clippy::result_large_err)]
-#[harp::register]
 pub extern "C-unwind" fn mcp_console_python_activation_record(
     activation: SEXP,
 ) -> harp::Result<SEXP> {
@@ -164,7 +157,7 @@ pub extern "C-unwind" fn mcp_console_python_initialized(activation: SEXP) -> har
 }
 
 #[allow(clippy::result_large_err)]
-fn check_activation() -> harp::Result<()> {
+pub(super) fn check_activation() -> harp::Result<()> {
     STATE
         .with(|state| state.borrow().requirements.check_activation())
         .map_err(|error| harp::anyhow!("{error}"))
@@ -329,4 +322,292 @@ fn get_char_encoding() -> harp::Result<GetCharEncoding> {
             .map_err(|error| harp::anyhow!("failed to load Rf_getCharCE: {error}"))?
     };
     Ok(*GET_CHAR_ENCODING.get_or_init(|| function))
+}
+
+// These are call-local projections, never retained beside the native store.
+// Use R's vector operations for character equality/encoding and attribute
+// behavior (including named and classed vectors), without delegating policy.
+pub(super) struct Value(RObject);
+
+pub(super) enum Error {
+    Message(String),
+    Interrupt(Value),
+}
+
+impl From<String> for Error {
+    fn from(message: String) -> Self {
+        Self::Message(message)
+    }
+}
+
+impl From<&str> for Error {
+    fn from(message: &str) -> Self {
+        Self::Message(message.into())
+    }
+}
+
+pub(super) struct Record(Value);
+
+pub(super) struct Declaration {
+    pub record: Record,
+    pub packages: Value,
+    pub python_version: Value,
+    pub exclude_newer: Value,
+    pub exclude_newer_supplied: bool,
+    pub action: super::Action,
+}
+
+pub(super) struct Adapter(SEXP);
+
+impl Value {
+    pub(super) fn null() -> Self {
+        Self(RObject::null())
+    }
+
+    pub(super) fn is_null(&self) -> bool {
+        self.0.is_null()
+    }
+
+    pub(super) fn is_empty(&self) -> bool {
+        self.0.length() == 0
+    }
+
+    pub(super) fn copy(&self) -> super::Result<Self> {
+        harp::exec::r_sandbox(|| Self(self.0.clone())).map_err(from_r_error)
+    }
+
+    pub(super) fn identical(&self, other: &Self) -> super::Result<bool> {
+        harp::exec::r_sandbox(|| is_identical(self.0.sexp, other.0.sexp)).map_err(from_r_error)
+    }
+
+    pub(super) fn text(&self) -> super::Result<String> {
+        harp::exec::r_sandbox(|| String::try_from(&self.0))
+            .map_err(from_r_error)?
+            .map_err(from_r_error)
+    }
+
+    pub(super) fn boolean(&self) -> super::Result<bool> {
+        harp::exec::r_sandbox(|| bool::try_from(self.0.clone()))
+            .map_err(from_r_error)?
+            .map_err(from_r_error)
+    }
+
+    pub(super) fn union(&self, other: &Self) -> super::Result<Self> {
+        let combined = base_call("c", &[self, other])?;
+        base_call("unique", &[&combined])
+    }
+
+    pub(super) fn difference(&self, other: &Self) -> super::Result<Self> {
+        base_call("setdiff", &[self, other])
+    }
+
+    pub(super) fn disjoint(&self, other: &Self) -> super::Result<bool> {
+        let matches = base_call("%in%", &[self, other])?;
+        Ok(!base_call("any", &[&matches])?.boolean()?)
+    }
+
+    pub(super) fn set_equal(&self, other: &Self) -> super::Result<bool> {
+        base_call("setequal", &[self, other])?.boolean()
+    }
+}
+
+impl Record {
+    pub(super) fn new(value: Value) -> super::Result<Self> {
+        if value.is_null() {
+            return Err("Python preparation did not produce a managed manifest".into());
+        }
+        Ok(Self(value))
+    }
+
+    pub(super) fn value(&self) -> &Value {
+        &self.0
+    }
+
+    pub(super) fn get(&self, field: &str) -> super::Result<Value> {
+        let field = harp::exec::r_sandbox(|| Value(RObject::from(field))).map_err(from_r_error)?;
+        base_call("[[", &[&self.0, &field])
+    }
+
+    pub(super) fn set(&mut self, field: &str, value: Value) -> super::Result<()> {
+        let field = harp::exec::r_sandbox(|| Value(RObject::from(field))).map_err(from_r_error)?;
+        let value = base_call("list", &[&value])?;
+        // Single-bracket assignment retains an explicitly NULL field and the
+        // original list order/class, appending only previously absent fields.
+        self.0 = base_call("[<-", &[&self.0, &field, &value])?;
+        Ok(())
+    }
+
+    pub(super) fn append_history(&mut self, request: &Self) -> super::Result<()> {
+        let event = base_call("list", &[request.value()])?;
+        let history = base_call("c", &[&self.get("history")?, &event])?;
+        self.set("history", history)
+    }
+}
+
+impl Declaration {
+    fn from_r(request: SEXP) -> super::Result<Self> {
+        let record = Record(Value(RObject::view(request)));
+        let action = match record.get("action")?.text()?.as_str() {
+            "add" => super::Action::Add,
+            "remove" => super::Action::Remove,
+            "set" => super::Action::Set,
+            _ => return Err("invalid Python requirement action".into()),
+        };
+        Ok(Self {
+            packages: record.get("packages")?,
+            python_version: record.get("python_version")?,
+            exclude_newer: record.get("exclude_newer")?,
+            exclude_newer_supplied: record.get("exclude_newer_supplied")?.boolean()?,
+            record,
+            action,
+        })
+    }
+}
+
+impl Adapter {
+    pub(super) fn call(&self, function: &str, arguments: &[&Value]) -> super::Result<Value> {
+        call(self.0, function, arguments)
+    }
+
+    pub(super) fn resolve(&self, candidate: &Record, version: &Value) -> super::Result<Value> {
+        self.call(
+            "resolve",
+            &[
+                &candidate.get("packages")?,
+                version,
+                &candidate.get("exclude_newer")?,
+            ],
+        )
+    }
+}
+
+fn base_call(function: &str, arguments: &[&Value]) -> super::Result<Value> {
+    call(unsafe { libr::R_BaseEnv }, function, arguments)
+}
+
+fn call(environment: SEXP, function: &str, arguments: &[&Value]) -> super::Result<Value> {
+    use harp::exec::{RFunction, RFunctionExt};
+    let call = harp::exec::r_sandbox(|| {
+        let mut call = RFunction::new("", function);
+        for argument in arguments {
+            call.add(argument.0.clone());
+        }
+        let value = RFunction::new("base", "list")
+            .param("value", call.call.build())
+            .call
+            .build();
+        // Catch an interrupt before harp's top-level boundary turns its
+        // longjump into an error. Keep the original condition until Rust has
+        // unwound, then let the R-facing wrapper signal it to its caller.
+        let identity = unsafe {
+            RObject::view(libr::Rf_findVarInFrame(
+                libr::R_BaseEnv,
+                libr::Rf_install(c"identity".as_ptr()),
+            ))
+        };
+        RFunction::new("base", "tryCatch")
+            .add(value)
+            .param("interrupt", identity)
+            .call
+            .build()
+    })
+    .map_err(from_r_error)?;
+    // Protect allocation separately: R/Python execution and resolver callbacks
+    // run in the caller's interrupt context, without a native state borrow.
+    let result = harp::exec::try_eval(call.sexp, environment).map_err(from_r_error)?;
+    harp::exec::r_sandbox(|| {
+        if unsafe { libr::Rf_inherits(result.sexp, c"interrupt".as_ptr()) } != 0 {
+            Err(Error::Interrupt(Value(result)))
+        } else {
+            result.vector_elt(0).map(Value).map_err(from_r_error)
+        }
+    })
+    .map_err(from_r_error)?
+}
+
+pub(super) fn from_r_error(error: harp::Error) -> Error {
+    Error::Message(match error {
+        harp::Error::TryCatchError(error) => error.message,
+        other => other.to_string(),
+    })
+}
+
+// Unlike harp::register, these entry points do not suspend interrupts across
+// environment preparation or activation. R conversions protect themselves.
+#[ctor::ctor(unsafe)]
+fn register_transitions() {
+    type CallMethod = unsafe extern "C-unwind" fn() -> *mut libc::c_void;
+    for (name, function, arity) in [
+        (
+            c"mcp_console_python_transition",
+            python_transition as *const (),
+            4,
+        ),
+        (
+            c"mcp_console_python_prepare",
+            python_prepare as *const (),
+            2,
+        ),
+    ] {
+        // SAFETY: R calls each function on its thread with the registered arity.
+        unsafe {
+            harp::routines::add(libr::R_CallMethodDef {
+                name: name.as_ptr(),
+                fun: Some(std::mem::transmute::<*const (), CallMethod>(function)),
+                numArgs: arity,
+            });
+        }
+    }
+}
+
+extern "C-unwind" fn python_transition(
+    current: SEXP,
+    request: SEXP,
+    initialized: SEXP,
+    adapter: SEXP,
+) -> SEXP {
+    complete(|| {
+        let request = Declaration::from_r(request)?;
+        let current = Record(Value(RObject::view(current)));
+        let initialized = Value(RObject::view(initialized)).boolean()?;
+        let (manifest, config) =
+            Requirements::transition(&Adapter(adapter), current, request, initialized)?;
+        named_list(&[("manifest", manifest.value()), ("config", &config)])
+    })
+}
+
+extern "C-unwind" fn python_prepare(packages: SEXP, adapter: SEXP) -> SEXP {
+    complete(|| {
+        let failure = Requirements::prepare(&Adapter(adapter), Value(RObject::view(packages)))?;
+        harp::exec::r_sandbox(|| match failure {
+            None => named_list(&[("kind", &Value(RObject::from("ready")))]),
+            Some(message) => named_list(&[
+                ("kind", &Value(RObject::from("failed"))),
+                ("message", &Value(RObject::from(message))),
+            ]),
+        })
+        .map_err(from_r_error)?
+    })
+}
+
+fn named_list(fields: &[(&str, &Value)]) -> super::Result<Value> {
+    use harp::exec::{RFunction, RFunctionExt};
+    harp::exec::r_sandbox(|| {
+        let mut call = RFunction::new("base", "list");
+        for (name, value) in fields {
+            call.param(name, value.0.clone());
+        }
+        call.call().map(Value)
+    })
+    .map_err(from_r_error)?
+    .map_err(from_r_error)
+}
+
+// Return interrupts as conditions only at these two private R boundaries;
+// ordinary errors keep the existing message-only py_require()/prepare contract.
+fn complete(operation: impl FnOnce() -> super::Result<Value>) -> SEXP {
+    harp::exec::r_unwrap(|| match operation() {
+        Ok(value) | Err(Error::Interrupt(value)) => Ok(value.0.sexp),
+        Err(Error::Message(message)) => Err(message),
+    })
 }
