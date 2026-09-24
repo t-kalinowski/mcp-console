@@ -186,6 +186,14 @@ fn console_interrupt_pending() -> bool {
         && unsafe { libr::get(libr::R_interrupts_suspended) == libr::Rboolean_FALSE }
 }
 
+fn acknowledge_console_interrupt() -> bool {
+    if !console_interrupt_pending() {
+        return false;
+    }
+    discard_interrupts();
+    true
+}
+
 fn evaluate_r_cell(r: String) -> Result<(), String> {
     set_cell_source(r);
     let status = run_repl_cell();
@@ -291,7 +299,7 @@ fn initialize_r_repl() -> Result<(), Box<dyn Error>> {
     super::interrupt::initialize(super::interrupt::State {
         signal: mcp_r_record_interrupt,
         pending: console_interrupt_pending,
-        clear: discard_interrupts,
+        acknowledge: acknowledge_console_interrupt,
     })?;
     Ok(())
 }

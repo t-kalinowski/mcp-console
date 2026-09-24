@@ -3,13 +3,14 @@ use std::io;
 
 use super::core::{CommandReadiness, emit_output, take_worker_failure};
 use super::input::finish_console_stdin_operation;
+use super::r_integration::Integration;
 use super::{core, embedded_r, interrupt};
 use crate::cell::{Cell, Language};
 use crate::worker_protocol::{ConsoleChannel, ServerMessage, WorkerMessage};
 
-struct Runtime {
+struct Coordinator {
     writer: crate::sideband::Writer,
-    r: embedded_r::Runtime,
+    r: Integration,
     python: crate::python::Runtime,
     sql: crate::sql::Bridge,
 }
@@ -29,13 +30,13 @@ pub(crate) fn run() -> Result<(), Box<dyn Error>> {
     let sql = crate::sql::Bridge::initialize()?;
     writer.send(&WorkerMessage::Ready)?;
 
-    let mut runtime = Runtime {
+    let mut coordinator = Coordinator {
         writer,
-        r,
+        r: Integration::new(Some(r))?,
         python,
         sql,
     };
-    let result = runtime.run();
+    let result = coordinator.run();
     crate::python::prepare_process_exit()?;
     result
 }
@@ -66,30 +67,11 @@ fn reexec_with_r_library_path(
     Err(command.exec().into())
 }
 
-impl Runtime {
+impl Coordinator {
     fn run(&mut self) -> Result<(), Box<dyn Error>> {
         loop {
-            if !self.handle(self.wait_for_message()?)? {
+            if !self.handle(Self::wait_for_message(&self.r)?)? {
                 return Ok(());
-            }
-        }
-    }
-
-    fn wait_for_message(&self) -> Result<ServerMessage, String> {
-        loop {
-            let sideband_fd = match core::next_command()? {
-                CommandReadiness::Ready(message) => return Ok(message),
-                CommandReadiness::Waiting(descriptor) => descriptor,
-            };
-            // R owns this event-aware wait and its native unwind boundary.
-            // A wakeup for R activity must service callbacks before waiting again.
-            if embedded_r::wait_for_activity(sideband_fd)? {
-                return core::receive_server_message();
-            }
-
-            self.r.idle()?;
-            if let Some(message) = take_worker_failure() {
-                return Err(message);
             }
         }
     }
@@ -110,14 +92,14 @@ impl Runtime {
 
         match message {
             ServerMessage::Evaluate { language, source } => {
-                embedded_r::check_interrupts();
+                self.r.check_interrupts();
                 let result = evaluate_cell(
                     Cell { language, source },
                     &self.r,
                     &mut self.python,
                     &mut self.sql,
                 );
-                embedded_r::check_interrupts();
+                self.r.check_interrupts();
 
                 if core::is_shutting_down() {
                     return Ok(false);
@@ -130,10 +112,7 @@ impl Runtime {
             // Keep worker-owned preparation state transitions atomic. Any
             // nested host resolver registers its own interrupt target.
             ServerMessage::PreparePython { packages } => {
-                let result = embedded_r::defer_interrupts(
-                    || self.python.prepare(packages),
-                    embedded_r::discard_interrupts,
-                );
+                let result = self.r.prepare_python(|| self.python.prepare(packages));
                 if core::is_shutting_down() {
                     return Ok(false);
                 }
@@ -152,7 +131,7 @@ impl Runtime {
                 }
             }
             ServerMessage::PrepareR { library } => {
-                let result = self.r.prepare(&library);
+                let result = self.r.prepare_r(&library);
                 if core::is_shutting_down() {
                     return Ok(false);
                 }
@@ -183,11 +162,30 @@ impl Runtime {
         }
         Ok(true)
     }
+
+    fn wait_for_message(r: &Integration) -> Result<ServerMessage, String> {
+        loop {
+            let sideband_fd = match core::next_command()? {
+                CommandReadiness::Ready(message) => return Ok(message),
+                CommandReadiness::Waiting(descriptor) => descriptor,
+            };
+            // R activity must service callbacks before the next wait. The
+            // native wait also wakes for interrupts and input shutdown.
+            if r.wait_for_activity(sideband_fd)? {
+                return core::receive_server_message();
+            }
+
+            r.idle()?;
+            if let Some(message) = take_worker_failure() {
+                return Err(message);
+            }
+        }
+    }
 }
 
 fn evaluate_cell(
     cell: Cell,
-    r: &embedded_r::Runtime,
+    r: &Integration,
     python: &mut crate::python::Runtime,
     sql: &mut crate::sql::Bridge,
 ) -> Result<(), String> {
@@ -214,7 +212,7 @@ fn evaluate_cell(
         }
         core::begin_cell(cell.language);
         let result = match cell.language {
-            Language::R => r.evaluate(cell.source),
+            Language::R => r.evaluate_r(cell.source),
             Language::Python => python.evaluate(&cell.source),
             Language::Sql => sql.evaluate(&cell.source),
         };
@@ -233,3 +231,7 @@ fn evaluate_cell(
     }
     result
 }
+
+#[cfg(test)]
+#[path = "../../tests/fixtures/native_worker.rs"]
+mod tests;

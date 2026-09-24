@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::ffi::{c_int, c_uchar};
 use std::io;
-use std::os::fd::{AsRawFd, IntoRawFd};
+use std::os::fd::{AsRawFd, IntoRawFd, RawFd};
 use std::sync::{Mutex, OnceLock};
 
 use super::core;
@@ -20,6 +20,13 @@ pub(super) fn initialize_interrupt_wakeup() -> io::Result<c_int> {
         .map_err(|_| io::Error::other("interrupt wakeup already initialized"))?;
     // The signal handler retains this descriptor for the worker lifetime.
     Ok(writer.into_raw_fd())
+}
+
+pub(super) fn interrupt_wakeup_fd() -> RawFd {
+    INTERRUPT_WAKEUP
+        .get()
+        .expect("interrupt wakeup initialized")
+        .as_raw_fd()
 }
 
 static CONSOLE_STDIN: Mutex<ConsoleStdin> = Mutex::new(ConsoleStdin {

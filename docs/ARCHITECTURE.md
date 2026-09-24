@@ -229,17 +229,19 @@ It reports readiness, accepts complete cells and supported preparation operation
 
 The built-in worker's `worker::core` owns shared sideband state, command readiness, deferred operation messages, active cell language, resolver exchanges, output publication, and shutdown and failure state.
 Its cell state also suppresses R resolution during SQL callbacks.
-The `worker::coordinator` owns the message loop, preparation and cell dispatch, and completion reporting.
-It retains R, Python, and SQL adapters as peers.
+The `worker::coordinator` owns one message loop, preparation and cell dispatch, and completion reporting.
+It retains Python and SQL adapters alongside an optional `worker::r_integration` boundary for R event waiting, idle callbacks, graphics, and interrupt handling.
 The `worker::input` module owns interactive stdin buffering and preserves unfinished input across operations.
-The `worker::interrupt` service owns native signal distribution, input wakeup setup, and Python interrupt acknowledgment through startup-supplied state callbacks that do not enter an interpreter.
+The `worker::interrupt` service owns native signal distribution, input wakeup setup, blocking native command waiting, and Python interrupt acknowledgment through startup-supplied state callbacks that do not enter an interpreter.
+Its native interrupt state and wait can run without initializing R; the ordinary startup installs R's pending and suspended state instead.
 These shared services neither access R globals directly nor evaluate R code.
 The `worker::embedded_r` adapter supplies the mixed runtime's interrupt-state callbacks and owns R initialization, interrupt checks and deferral, native error boundaries, event handling, graphics, and R console callbacks.
 Its REPL latch distinguishes submitted R source from interactive input; shared cell state identifies the enclosing language.
 R initialization remains eager, and managed SQL remains R-backed.
 
 Command readiness is separate from waiting: when no command is ready, the coordinator uses R's event-aware wait and services its idle callbacks before waiting again.
-R retains the native unwind boundaries for both operations.
+Without R integration, it uses the native sideband, interrupt, and stdin-closure wait.
+R retains the native unwind boundaries for its event and interpreter operations.
 Cell dispatch starts graphics before marking the cell active, clears the active cell after evaluation, finalizes graphics even after an evaluation error, then finishes managed input before the final idle turn and completion.
 Both R and Python cells use those R graphics hooks because Python can call R and create plots; SQL retains its existing exclusion.
 Idle event processing retains its own graphics and input cleanup ordering in the R adapter.
