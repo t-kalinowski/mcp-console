@@ -252,6 +252,70 @@ def test_retries_selection_after_interrupt(
 
 
 @executions(DIRECT, SANDBOXED)
+def test_restores_selection_environment_after_interrupt(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with McpClient(binary, execution.serve()) as client:
+        client.initialize_and_list_tools()
+        # fmt: r
+        r = code(r"""
+            original_path <- Sys.getenv("PATH")
+            original_session <- Sys.getenv("R_SESSION_INITIALIZED", unset = NA)
+            Sys.setenv(PYTHONPATH = "selection-original")
+            original_python_path <- Sys.getenv("PYTHONPATH")
+            selection_env_interrupted <- FALSE
+            invisible(suppressMessages(base::trace(
+              "Sys.setenv",
+              exit = quote({
+                if ("PYTHONPATH" %in% names(list(...)) && !selection_env_interrupted) {
+                  selection_env_interrupted <<- TRUE
+                  stop(base::structure(
+                    base::list(
+                      message = "synthetic selection environment interrupt",
+                      call = NULL
+                    ),
+                    class = c("interrupt", "condition")
+                  ))
+                }
+              }),
+              print = FALSE,
+              where = baseenv()
+            )))
+            """)
+        client.send(r=r)
+        assert last_result_text(client) == "[done]", client.transcript[-1]
+        client.send(
+            # fmt: python
+            python=code("""
+                raise AssertionError("interrupted selection ran the cell")
+                """)
+        )
+        assert client.transcript[-1]["result"]["isError"] is False, client.transcript[
+            -1
+        ]
+        # fmt: r
+        r = code("""
+            stopifnot(selection_env_interrupted)
+            stopifnot(identical(Sys.getenv("PATH"), original_path))
+            stopifnot(identical(
+              Sys.getenv("R_SESSION_INITIALIZED", unset = NA),
+              original_session
+            ))
+            stopifnot(identical(Sys.getenv("PYTHONPATH"), original_python_path))
+            42L
+            """)
+        client.send(r=r)
+        assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
+        client.send(python="41 + 1")
+        assert last_result_text(client) == "42\n", client.transcript[-1]
+        client.send(
+            r='stopifnot(identical(Sys.getenv("PYTHONPATH"), original_python_path)); 42L'
+        )
+        assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
 def test_serializes_selected_python_once_inside_interrupt_boundary(
     binary: Path, execution: Execution
 ) -> Transcript:

@@ -69,6 +69,10 @@ base::local(
 
       # These are reticulate's environment inputs to CPython. Set them before
       # the native owner initializes the selected interpreter.
+      old_path <<- NULL
+      old_session <<- NULL
+      old_python_path <<- NULL
+      on.exit(if (is.null(selected)) cancel_selection(), add = TRUE)
       if (nzchar(config$virtualenv)) {
         Sys.setenv(VIRTUAL_ENV = config$virtualenv)
       }
@@ -84,7 +88,8 @@ base::local(
           Sys.setenv(PYTHONIOENCODING = "utf-8")
         }
       }
-      old_path <<- get("python_munge_path", namespace)(config$python)
+      old_path <<- Sys.getenv("PATH")
+      get("python_munge_path", namespace)(config$python)
       get("prefix_python_lib_to_ld_library_path", namespace)(config$python)
       if (get("is_osx", namespace)()) {
         symlink <- Sys.getenv("RSTUDIO_FALLBACK_LIBRARY_PATH", unset = NA)
