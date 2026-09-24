@@ -1288,6 +1288,20 @@ def main() -> None:
             send(writer, {"kind": "completed"})
             continue
 
+        if source == "shutdown output checkpoints":
+            emit_test_event(0, "evaluation_started")
+            wait_for_test_control(0, "emit_output")
+            send_output(writer, "before shutdown\n")
+            send(writer, {"kind": "image", "data": PNG_1X1, "mime_type": "image/png"})
+            send_output(writer, "after image\n")
+            wait_for_server_to_process_sideband(reader, writer)
+            emit_test_event(0, "output_processed")
+            wait_for_test_control(0, "complete")
+            send(writer, {"kind": "completed"})
+            wait_for_server_to_process_sideband(reader, writer)
+            emit_test_event(0, "completion_processed")
+            continue
+
         if source == "complete before restart checkpoint":
             send(writer, {"kind": "completed"})
             wait_for_server_to_process_sideband(reader, writer)

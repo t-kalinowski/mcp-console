@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use rmcp::RoleServer;
 use rmcp::model::{ClientNotification, ClientRequest, JsonRpcMessage, RequestId};
@@ -45,7 +46,7 @@ pub(crate) enum ResponseDeliveryAdmissionError {
 #[derive(Default)]
 struct ResponseDeliveryState {
     active: HashMap<RequestId, ResponseDeliveryCall>,
-    /// Only node-backed reservations enter this map, so the node cap also bounds it.
+    /// Every accepted reservation remains here until admission or cancellation.
     pending: HashMap<RequestId, u64>,
     next_admission_token: u64,
     /// Console response-write futures registered before they run on the service task.
@@ -58,7 +59,7 @@ struct ResponseDeliveryState {
 struct ResponseDeliveryAdmissionState {
     deliveries: ResponseDeliveries,
     request_id: RequestId,
-    token: Option<u64>,
+    token: u64,
     node: Mutex<Option<Arc<ResponseDeliveryAdmissionNode>>>,
 }
 
@@ -134,14 +135,11 @@ impl ResponseDeliveries {
                 state.admission_tail = Some(Arc::clone(&node));
                 Some(node)
             };
-            let token = node.as_ref().map(|_| {
-                let token = state.next_admission_token;
-                state.next_admission_token = token
-                    .checked_add(1)
-                    .expect("response admission token space exhausted");
-                state.pending.insert(request_id.clone(), token);
-                token
-            });
+            let token = state.next_admission_token;
+            state.next_admission_token = token
+                .checked_add(1)
+                .expect("response admission token space exhausted");
+            state.pending.insert(request_id.clone(), token);
             (token, node)
         };
         let admission = ResponseDeliveryAdmission(Arc::new(ResponseDeliveryAdmissionState {
@@ -277,6 +275,30 @@ impl ResponseDeliveries {
         }
     }
 
+    /// Let responses accepted before input EOF reach stdout, with a bound for
+    /// clients that stop reading their output pipe.
+    pub(crate) async fn settle_before_close(&self, deadline: Instant) {
+        let settled = async {
+            loop {
+                let changed = self.gate_changed.notified();
+                tokio::pin!(changed);
+                changed.as_mut().enable();
+                {
+                    let state = self.lock();
+                    if state.active.is_empty()
+                        && state.pending.is_empty()
+                        && state.pending_writes == 0
+                    {
+                        return;
+                    }
+                }
+                changed.await;
+            }
+        };
+        let _ = tokio::time::timeout_at(deadline.into(), settled).await;
+        self.close();
+    }
+
     fn take_write_delivery(
         &self,
         request_id: &RequestId,
@@ -337,12 +359,10 @@ impl ResponseDeliveries {
         state: &ResponseDeliveryState,
         admission: &ResponseDeliveryAdmissionState,
     ) -> bool {
-        admission.token.is_none_or(|expected| {
-            state
-                .pending
-                .get(&admission.request_id)
-                .is_some_and(|token| *token == expected)
-        })
+        state
+            .pending
+            .get(&admission.request_id)
+            .is_some_and(|token| *token == admission.token)
     }
 
     fn unregister_pending(&self, request_id: &RequestId, token: u64) {
@@ -404,9 +424,7 @@ impl ResponseDeliveryAdmission {
                     return Err(ResponseDeliveryAdmissionError::Cancelled);
                 }
                 if !queued || !ResponseDeliveries::response_gate_active(&state) {
-                    if self.0.token.is_some() {
-                        state.pending.remove(&self.0.request_id);
-                    }
+                    state.pending.remove(&self.0.request_id);
                     let node = node.as_ref().map(|_| {
                         self.0
                             .take_node()
@@ -468,9 +486,8 @@ impl Drop for ResponseDeliveryAdmissionState {
         {
             node.skip();
         }
-        if let Some(token) = self.token {
-            self.deliveries.unregister_pending(&self.request_id, token);
-        }
+        self.deliveries
+            .unregister_pending(&self.request_id, self.token);
     }
 }
 
@@ -808,9 +825,7 @@ where
                 }
             }
             Some(JsonRpcMessage::Response(_) | JsonRpcMessage::Error(_)) => {}
-            None => {
-                self.deliveries.close();
-            }
+            None => {}
         }
         message
     }
@@ -828,6 +843,7 @@ mod tests {
     use tokio::io::AsyncWriteExt;
 
     const PING_REQUEST: &[u8] = b"{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"id\":1}\n";
+    const SEND_REQUEST: &[u8] = b"{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"name\":\"send\",\"arguments\":{}},\"id\":1}\n";
     const CANCEL_REQUEST_9: &[u8] = b"{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":9}}\n";
 
     fn request_id(value: i64) -> RequestId {
@@ -1097,7 +1113,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn eof_cancels_pending_response_write() {
+    async fn eof_preserves_pending_response_write_until_transport_closes() {
         let deliveries = ResponseDeliveries::default();
         let response_id = request_id(1);
         let admission = deliveries.reserve(response_id.clone()).unwrap();
@@ -1125,11 +1141,14 @@ mod tests {
 
         drop(input);
         assert!(transport.receive().await.is_none());
+        assert_eq!(deliveries.lock().pending_writes, 1);
+        assert!(current_call(&deliveries, &response_id).is_some());
+        deliveries.close();
         let error = tokio::time::timeout(std::time::Duration::from_secs(1), send)
             .await
             .expect("response write should be cancelled")
             .expect("response write task should finish")
-            .expect_err("EOF should cancel the pending response write");
+            .expect_err("closing the transport should cancel the pending response write");
 
         assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe);
         assert_eq!(deliveries.lock().pending_writes, 0);
@@ -1139,6 +1158,45 @@ mod tests {
             successor.admit().await,
             Err(ResponseDeliveryAdmissionError::Closed)
         ));
+    }
+
+    #[tokio::test]
+    async fn eof_waits_for_an_accepted_unadmitted_send() {
+        let deliveries = ResponseDeliveries::default();
+        let (mut input, read) = tokio::io::duplex(1024);
+        input.write_all(SEND_REQUEST).await.unwrap();
+        drop(input);
+        let mut transport = ServerTransport::new(read, tokio::io::sink(), deliveries.clone());
+        let Some(JsonRpcMessage::Request(mut request)) = transport.receive().await else {
+            panic!("the send request should be accepted before EOF");
+        };
+        let ClientRequest::CallToolRequest(ref mut call) = request.request else {
+            panic!("the request should call send");
+        };
+        let admission = call
+            .extensions
+            .remove::<ResponseDeliveryAdmission>()
+            .expect("send must carry a delivery reservation");
+        assert!(transport.receive().await.is_none());
+
+        let mut settle = Box::pin(
+            deliveries.settle_before_close(Instant::now() + std::time::Duration::from_secs(30)),
+        );
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        assert!(std::future::Future::poll(settle.as_mut(), &mut context).is_pending());
+
+        let (_call, operation) = match admission.admit().await {
+            Ok(admitted) => admitted,
+            Err(_) => panic!("accepted call must be admitted"),
+        };
+        operation.complete();
+        let response = JsonRpcMessage::response(ServerResult::empty(()), request.id);
+        transport
+            .send(response)
+            .await
+            .expect("response should reach stdout");
+        settle.await;
+        assert!(deliveries.lock().closed);
     }
 
     #[test]
