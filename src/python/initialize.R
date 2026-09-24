@@ -137,8 +137,13 @@ base::local(
     }
 
     state$selected_python <- function() {
+      # Extend a fresh selection's cleanup through serialization. A cached
+      # selection may already belong to a running interpreter.
+      pending <- is.null(selected) &&
+        !reticulate::py_available(initialize = FALSE)
+      on.exit(if (pending && !is.null(selected)) cancel_selection(), add = TRUE)
       config <- select_python(run_before_initialized = TRUE)
-      jsonlite::toJSON(
+      result <- jsonlite::toJSON(
         list(
           python = config$python,
           libpython = config$libpython,
@@ -146,6 +151,8 @@ base::local(
         ),
         auto_unbox = TRUE
       )
+      pending <- FALSE
+      result
     }
     state$cancel_python_selection <- function() {
       cancel_selection()
@@ -273,6 +280,8 @@ base::local(
         config$libpython,
         config$pythonhome
       ))
+      # Reticulate publishes .globals$py_config only after this returns, so
+      # unfinished attachment remains eligible for its existing retry path.
       attach_python(config)
     }
 

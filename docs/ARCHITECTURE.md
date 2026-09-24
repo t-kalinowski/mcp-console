@@ -268,7 +268,7 @@ Reticulate's event polling remains active.
 Reticulate remains required for interpreter discovery and selection, automatic-resolution callbacks, object conversion, and cross-language and module-load integration.
 Console owns initialization of the selected interpreter and tracks completion of its private runtime setup in the retained library state.
 Both a first Python cell and Python use from R reach that native owner before reticulate attaches.
-If applying the selected environment fails or is interrupted, the adapter restores the captured inputs.
+If applying or serializing a fresh selection fails or is interrupted, the adapter restores the captured environment inputs.
 Once CPython is running, attachment errors propagate with its selected environment retained; only reticulate's temporary `PYTHONPATH` is restored, without rolling back and rebuilding the environment.
 Console's native requirement store owns declaration transitions and preparation orchestration for explicit Python requirements, automatic imports, and managed `reticulate::py_require()` calls.
 It holds the operative character values behind the existing R active binding; `src/python/requirements/r.rs` preserves field presence and ordering, attributes, encodings, history, and copy isolation.

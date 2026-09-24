@@ -212,36 +212,47 @@ def test_retries_attachment_without_reinitializing_python(
             r = code(f"""
                 startup_probe <- dyn.load({json.dumps(str(probe))})
                 invisible(suppressMessages(base::trace(
-                  "py_initialize",
+                  "py_run_string_impl",
                   tracer = quote({{
-                    startup_environment <<- Sys.getenv(c("VIRTUAL_ENV", "PATH", "R_SESSION_INITIALIZED"))
-                    stop("synthetic reticulate attach failure")
+                    if (grepl("sys.executable  =", code, fixed = TRUE)) {{
+                      startup_environment <<- Sys.getenv(c("VIRTUAL_ENV", "PATH", "R_SESSION_INITIALIZED"))
+                      stop(structure(
+                        list(message = "synthetic reticulate attach failure", call = NULL),
+                        class = c(attachment_failure, "condition")
+                      ))
+                    }}
                   }}),
                   print = FALSE,
                   where = asNamespace("reticulate")
                 )))
-                failure <- tryCatch(
-                  reticulate::py_config(),
-                  error = function(condition) conditionMessage(condition)
-                )
-                stopifnot(grepl("synthetic reticulate attach failure", failure, fixed = TRUE))
-                stopifnot(identical(
-                  Sys.getenv(names(startup_environment)), startup_environment
-                ))
-                stopifnot(identical(
-                  .C(
-                    getNativeSymbolInfo(
-                      "mcp_console_probe_python_initialized",
-                      PACKAGE = startup_probe
-                    ),
-                    value = 0L
-                  )$value,
-                  1L
-                ))
+                for (attachment_failure in c("error", "interrupt")) {{
+                  failure <- tryCatch(
+                    reticulate::py_config(),
+                    error = conditionMessage,
+                    interrupt = conditionMessage
+                  )
+                  stopifnot(!reticulate::py_available(initialize = FALSE))
+                  stopifnot(grepl("synthetic reticulate attach failure", failure, fixed = TRUE))
+                  stopifnot(identical(
+                    Sys.getenv(names(startup_environment)), startup_environment
+                  ))
+                  stopifnot(identical(
+                    .C(
+                      getNativeSymbolInfo(
+                        "mcp_console_probe_python_initialized",
+                        PACKAGE = startup_probe
+                      ),
+                      value = 0L
+                    )$value,
+                    1L
+                  ))
+                }}
                 invisible(suppressMessages(base::untrace(
-                  "py_initialize", where = asNamespace("reticulate")
+                  "py_run_string_impl", where = asNamespace("reticulate")
                 )))
-                invisible(reticulate::py_config())
+                config <- reticulate::py_config()
+                sys <- reticulate::import("sys", convert = FALSE)
+                stopifnot(identical(config$executable, reticulate::py_to_r(sys$executable)))
                 reticulate::py_run_string("startup_value = 41")
                 reticulate::py_to_r(reticulate::py$startup_value) + 1L
                 """)
@@ -464,6 +475,17 @@ def test_serializes_selected_python_once_inside_interrupt_boundary(
         client.initialize_and_list_tools()
         # fmt: r
         r = code(r"""
+            original_environment <- Sys.getenv(
+              c(
+                "VIRTUAL_ENV",
+                "R_SESSION_INITIALIZED",
+                "PYTHONIOENCODING",
+                "PATH",
+                "LD_LIBRARY_PATH",
+                "PYTHONPATH"
+              ),
+              unset = NA_character_
+            )
             selection_serializations <- 0L
             invisible(suppressMessages(base::trace(
               "toJSON",
@@ -476,8 +498,8 @@ def test_serializes_selected_python_once_inside_interrupt_boundary(
                     )
                 ) {
                   selection_serializations <<- selection_serializations + 1L
-                  if (selection_serializations == 2L) {
-                    stop(base::structure(
+                  if (selection_serializations == 1L) {
+                    base::stop(base::structure(
                       base::list(
                         message = "synthetic serialization interrupt",
                         call = NULL
@@ -493,9 +515,31 @@ def test_serializes_selected_python_once_inside_interrupt_boundary(
             """)
         client.send(r=r)
         assert last_result_text(client) == "[done]", client.transcript[-1]
-        client.send(python="41 + 1")
+        client.send(python="raise AssertionError('interrupted selection ran the cell')")
+        assert client.transcript[-1]["result"]["isError"] is False, client.transcript[
+            -1
+        ]
+        # fmt: r
+        r = code("""
+            stopifnot(!reticulate::py_available(initialize = FALSE))
+            stopifnot(identical(
+              Sys.getenv(names(original_environment), unset = NA_character_),
+              original_environment
+            ))
+            42L
+            """)
+        client.send(r=r)
+        assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
+        # fmt: python
+        python = code("""
+            import importlib.util
+
+            assert importlib.util.find_spec("yaml12") is not None
+            42
+            """)
+        client.send(python=python, requirements={"python": ["py-yaml12"]})
         assert last_result_text(client) == "42\n", client.transcript[-1]
-        client.send(r="stopifnot(selection_serializations == 1L); 42L")
+        client.send(r="stopifnot(selection_serializations == 2L); 42L")
         assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
         return client.finish()
 
