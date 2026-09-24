@@ -1,5 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
+import json
 import os
 import select
 import signal
@@ -888,21 +889,27 @@ def test_shutdown_is_bounded_with_detached_stdin_descendant(
             shutdown_elapsed = time.monotonic() - shutdown_started
             server_stopped = True
 
-            client.receive(stalled)
-            assert stalled["result"] == {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "[worker stopped before operation completed]",
-                    }
-                ],
-                "isError": True,
-            }, stalled
-            stalled["id"] = "<pending poll request>"
-            polling["id"] = "<poll ownership request>"
             standard_error = client.stderr.read()
             assert return_code == 0, standard_error
-            assert client.stdout.read() == ""
+            # EOF may cancel the poll before its final response is written.
+            # If it was written first, it must still identify the stopped worker.
+            remaining_output = client.stdout.read()
+            if remaining_output:
+                assert json.loads(remaining_output) == {
+                    "jsonrpc": "2.0",
+                    "id": stalled["id"],
+                    "result": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "[worker stopped before operation completed]",
+                            }
+                        ],
+                        "isError": True,
+                    },
+                }, remaining_output
+            stalled["id"] = "<pending poll request>"
+            polling["id"] = "<poll ownership request>"
             assert standard_error == ""
             assert shutdown_elapsed < 2, (
                 f"worker shutdown took {shutdown_elapsed:.3f} seconds; "

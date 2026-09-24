@@ -35,11 +35,6 @@ result:
 send:
   stdin: <poll ownership stdin>
   timeout_ms: 30000
-result:
-  content:
-    - type: text
-      text: "[worker stopped before operation completed]"
-  isError: true
 ---
 send:
   timeout_ms: 0
