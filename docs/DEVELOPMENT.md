@@ -1,6 +1,12 @@
 # Development workflow
 
 Run development commands from the repository root.
+Use `scripts/test SELECTOR` for the red/green loop and `scripts/check --quick` for broader local feedback.
+The quick gate stages the companion, runs core checks, and runs ordinary transcript cases in all applicable execution modes.
+It skips installation checks, the three extended recovery allocation stress cases, and real external SSH, Docker, and SBX integrations.
+Localhost SSH and fake-provider coverage remain included.
+Use `scripts/test --quick --list` to inspect the cases available to the quick transcript profile.
+Omitted cases are reported as skips; a quick pass does not establish full validation.
 `scripts/check` runs companion staging, core checks, release transcript tests, and installation checks in that order.
 Installation checks run last because they replace and hide the shared `target` directory.
 
@@ -82,7 +88,10 @@ scripts/with-checkout cargo build --release --target-dir target
 
 For a source installation, use `scripts/with-checkout uv tool install --reinstall .`; its packaging backend stages and builds the companion and application.
 The companion's selected source checkout owns its Rust toolchain; Console uses the active toolchain in this checkout.
-Download caches can be reused, while each checkout keeps its own Cargo output and wheel staging as described under [checkout ownership](#checkout-ownership).
+The pinned companion source and Cargo output are shared across worktrees under `${XDG_CACHE_HOME:-$HOME/.cache}/mcp-console/sandbox/<repository>/<commit>/source`.
+Staging still invokes Cargo to check build inputs, including changed compiler flags.
+Use `MCP_CONSOLE_SANDBOX_SOURCE` for an explicit clean checkout at the pin.
+Each Console checkout keeps its own application Cargo output and wheel staging as described under [checkout ownership](#checkout-ownership).
 
 ## Find the public test
 
@@ -143,7 +152,7 @@ For a stack, measure each layer against its intended parent rather than accumula
    For an internal refactor, establish the existing public suite's baseline.
 2. Implement the change and rerun the focused case or suite until it passes.
    Failures print an exact rerun command; completion records retain the selector and full log.
-   Full-update reruns retain nondefault concurrency; every rerun retains a nondefault timeout.
+   Full-update reruns retain nondefault concurrency; every rerun retains the quick profile and a nondefault timeout.
    A failed full snapshot update retains full-update scope so orphan cleanup remains available; other failures narrow the rerun to the failed case.
 3. Regenerate only the snapshots affected by an intentional behavior change with `scripts/test --update SELECTOR`, then rerun that selection without `--update`.
    A broader interface change may require a full update; inspect every resulting difference.
@@ -151,22 +160,23 @@ For a stack, measure each layer against its intended parent rather than accumula
 4. Run `scripts/format`, inspect every formatter's result, and review `git diff` and `git diff --check`.
    Check embedded program indentation after formatting.
    `scripts/format --strict` reports failure after attempting every formatter; the [authoring recipe](../tests/boundaries/AUTHORING.md) explains embedded program conventions.
+   Use `scripts/check --quick` while iterating; run the full gate when the change is ready instead of repeating packaging and extended stress checks after each edit.
 5. Run `scripts/check` before opening the PR.
    Keep its completion record with the tested revision and log paths.
    Use a failed phase's focused command for diagnosis; repeat the full gate when changes or unresolved failures require it.
 
 ## Which commands mutate build state?
 
-| Command                                     | State it can change                                                            |
-| ------------------------------------------- | ------------------------------------------------------------------------------ |
-| `scripts/test --help`, `--list`, `--locate` | No compilation or bundle changes; uv may prepare the script environment        |
-| `scripts/stage-sandbox-runner`              | Companion source/build cache under `target`, staged manifest, and `wheel-data` |
-| `scripts/check-core`                        | Cargo debug build data and test fixture state                                  |
-| `scripts/test SELECTOR`                     | Cargo release build data and test fixture state                                |
-| `scripts/test --update SELECTOR`            | The preceding state plus selected snapshots                                    |
-| `scripts/format`                            | Source and documentation formatting, including snapshot formatting             |
-| `scripts/check`, `python3 tests/install.py` | Build and package state; installation checks temporarily rename `target`       |
-| `uv run` or source installation             | May build the local package and change its environment and bundle              |
+| Command                                     | State it can change                                                                   |
+| ------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `scripts/test --help`, `--list`, `--locate` | No compilation or bundle changes; uv may prepare the script environment               |
+| `scripts/stage-sandbox-runner`              | Shared companion source/build cache, checkout-local staged manifest, and `wheel-data` |
+| `scripts/check-core`                        | Cargo debug build data and test fixture state                                         |
+| `scripts/test SELECTOR`                     | Cargo release build data and test fixture state                                       |
+| `scripts/test --update SELECTOR`            | The preceding state plus selected snapshots                                           |
+| `scripts/format`                            | Source and documentation formatting, including snapshot formatting                    |
+| `scripts/check`, `python3 tests/install.py` | Build and package state; installation checks temporarily rename `target`              |
+| `uv run` or source installation             | May build the local package and change its environment and bundle                     |
 
 ## Checkout ownership
 
@@ -199,7 +209,11 @@ scripts/with-checkout scripts/stage-sandbox-runner
 Direct Cargo and Maturin builds still require `scripts/stage-sandbox-runner` first.
 The Python packaging backend performs staging for source installations.
 Commands invoked outside these entry points cannot be serialized by the wrapper.
-Keep separate checkouts' mutable build outputs separate; sharing download caches does not authorize sharing `target` or wheel staging.
+Keep separate Console checkouts' mutable build outputs separate; sharing download caches does not authorize sharing application `target` or wheel staging.
+The companion has separate source ownership at `<source-checkout>.stage.lock`, outside its Git checkout and Cargo output.
+That ownership covers fetch, build, and artifact copying, including when `MCP_CONSOLE_SANDBOX_SOURCE` selects the same source from different Console worktrees.
+A conflicting stage exits with `sandbox source is busy`; retry after its owner finishes.
+The same cooperative owner-lifetime limits apply to source ownership.
 
 ## Host concurrency
 
@@ -218,6 +232,11 @@ Changing the budget does not change case assertions, deadlines, or transcript wo
 
 `scripts/check`, `scripts/check-core`, and execution through `scripts/test` print the path to `.dev-workflow/runs/<run>/result.json` on completion, including failures.
 Each record contains the checkout, command, Git revision and worktree status at admission, exit status, elapsed time, failing transcript selectors, and a log and timing for each phase that ran.
+Transcript phases also link `case_timings` to a `case-timings.jsonl` file beside the record.
+Each completed execution appends its selector, execution mode, status, and elapsed seconds, including snapshot comparison.
+These durations overlap across parallel cases and exclude case-process startup; do not sum them as wall time.
+An execution killed before its `finally` block can run has no timing record; the phase log and exit status remain authoritative for failures and cancellation.
+Direct runner calls can select an existing output directory with `MCP_CONSOLE_TEST_TIMINGS=/absolute/path/cases.jsonl`; records append to that file.
 Revision and worktree status are null for a source tree without Git metadata or when cancellation interrupts metadata collection.
 A dirty worktree is recorded explicitly; its result is not evidence for an unchanged clean revision.
 The overall exit status uses the shell convention `128 + signal` for a phase killed by a signal; the phase retains its negative subprocess status.

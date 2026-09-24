@@ -82,15 +82,19 @@ def full_check_slot() -> Iterator[None]:
     slots = int(os.environ.get("MCP_CONSOLE_CHECK_SLOTS", "1"))
     if slots < 1:
         raise SystemExit("MCP_CONSOLE_CHECK_SLOTS must be at least 1")
-    cache = Path(os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache"))
-    if not cache.is_absolute():
-        raise SystemExit("XDG_CACHE_HOME must be an absolute path")
     paths = [
-        cache.resolve() / "mcp-console/checks" / f"slot-{index}.lock"
+        cache_directory() / "mcp-console/checks" / f"slot-{index}.lock"
         for index in range(slots)
     ]
     with exclusive(paths, "full-check budget"):
         yield
+
+
+def cache_directory() -> Path:
+    cache = Path(os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache"))
+    if not cache.is_absolute():
+        raise SystemExit("XDG_CACHE_HOME must be an absolute path")
+    return cache.resolve()
 
 
 def stop_phase(process: subprocess.Popen, *, owns_group: bool) -> None:
@@ -214,6 +218,12 @@ class Run:
 
     def phase(self, name: str, command: list[str]) -> int:
         log_path = self.directory / f"{len(self.record['phases']) + 1:02}-{name}.log"
+        environment = os.environ | {RUN_ENV: str(self.path)}
+        timings = None
+        if self.record["command"][0] == "test" and name == "transcripts":
+            timings = self.directory / "case-timings.jsonl"
+            timings.touch()
+            environment["MCP_CONSOLE_TEST_TIMINGS"] = str(timings)
         started = time.monotonic()
         status = 1
         process = None
@@ -225,9 +235,7 @@ class Run:
         try:
             with (
                 log_path.open("wb") as log,
-                command_process(
-                    command, log=log, environment=os.environ | {RUN_ENV: str(self.path)}
-                ) as process,
+                command_process(command, log=log, environment=environment) as process,
             ):
                 status = process.wait()
         finally:
@@ -242,6 +250,7 @@ class Run:
                     "log": str(log_path),
                     "elapsed_seconds": time.monotonic() - started,
                     "exit_status": status,
+                    **({"case_timings": str(timings)} if timings else {}),
                 }
             )
             self.save()
@@ -275,8 +284,11 @@ def main() -> None:
     parser.add_argument("mode", choices=("check", "check-core", "test", "run", "phase"))
     parser.add_argument("arguments", nargs=argparse.REMAINDER)
     options = parser.parse_args()
-    if options.mode in {"check", "check-core"} and options.arguments:
-        parser.error(f"{options.mode} does not accept arguments")
+    if options.mode == "check" and options.arguments not in ([], ["--quick"]):
+        parser.error("check accepts only --quick (omit it for the full gate)")
+    if options.mode == "check-core" and options.arguments:
+        parser.error("check-core does not accept arguments")
+    quick = options.mode == "check" and options.arguments == ["--quick"]
     if options.mode in {"run", "phase"} and not options.arguments:
         parser.error("run requires a command")
     root = Path(__file__).resolve().parent
@@ -289,6 +301,7 @@ def main() -> None:
     core = [
         ("runtime-sources", ["scripts/validate_runtime_sources.py"]),
         ("release-tests", ["tests/release.py"]),
+        ("staging-tests", ["python3", "tests/staging.py"]),
         ("runner-tests", ["tests/transcript_runner.py"]),
         ("workflow-tests", ["python3", "tests/workflow.py"]),
         ("format-tests", ["python3", "tests/format.py"]),
@@ -314,8 +327,8 @@ def main() -> None:
         "check": [
             ("stage", ["scripts/stage-sandbox-runner"]),
             ("core", ["scripts/check-core"]),
-            ("transcripts", ["scripts/test"]),
-            ("installation", ["python3", "tests/install.py"]),
+            ("transcripts", ["scripts/test", *(["--quick"] if quick else [])]),
+            *([] if quick else [("installation", ["python3", "tests/install.py"])]),
         ],
         "check-core": core,
         "test": [

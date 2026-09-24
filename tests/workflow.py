@@ -197,6 +197,36 @@ class WorkflowTests(unittest.TestCase):
             result.stderr,
         )
 
+    def test_quick_check_records_its_scope_and_keeps_the_full_gate_available(
+        self,
+    ) -> None:
+        self.write_script(
+            "scripts/test",
+            # fmt: python
+            """
+            import sys
+
+            print(repr(sys.argv[1:]))
+            """,
+        )
+        for arguments, phases, test_arguments in (
+            (("--quick",), ["stage", "core", "transcripts"], "['--quick']"),
+            ((), ["stage", "core", "transcripts", "installation"], "[]"),
+        ):
+            with self.subTest(arguments=arguments):
+                result = self.run_command("scripts/check", *arguments)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                record = next(
+                    r for r in self.records() if r["command"] == ["check", *arguments]
+                )
+                self.assertEqual([p["name"] for p in record["phases"]], phases)
+                transcript_phase = next(
+                    p for p in record["phases"] if p["name"] == "transcripts"
+                )
+                self.assertEqual(
+                    Path(transcript_phase["log"]).read_text().strip(), test_arguments
+                )
+
     def test_validation_output_is_kept_in_advertised_phase_logs(self) -> None:
         self.write_script(
             "scripts/check-core",

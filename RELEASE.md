@@ -17,8 +17,10 @@ The pinned checkout's `codex-rs/rust-toolchain.toml` owns the runner's Rust tool
 `uv tool install --reinstall .` prepares the native companion automatically before Maturin compiles MCP Console and assembles the wheel.
 Editable source installations (`uv tool install --reinstall --editable .`) use the same preparation and packaging lock.
 Source builds require Python 3.11 or later, Git, and rustup; rustup installs the pinned toolchain if needed.
-The packaging backend calls `scripts/stage-sandbox-runner`, which fetches the exact revision into `target/sandbox-runner-cache/<commit>` within the source checkout.
-The default build does not inspect or change other working checkouts.
+The packaging backend calls `scripts/stage-sandbox-runner`, which fetches the exact revision into `${XDG_CACHE_HOME:-$HOME/.cache}/mcp-console/sandbox/<repository>/<commit>/source`.
+Source installations and separate Console worktrees reuse this dedicated source checkout and its Cargo build data.
+An explicitly configured `XDG_CACHE_HOME` must be absolute.
+The default build does not inspect or change other development checkouts.
 To use a dedicated clean checkout at the pin, explicitly set `MCP_CONSOLE_SANDBOX_SOURCE`; CI and releases use a checkout within their own workspace.
 
 Every source installation invokes the runner's Cargo build with its pinned toolchain and lockfile.
@@ -26,13 +28,17 @@ Staging reads `[toolchain].channel` from that file with Python's standard-librar
 This selection takes precedence over the caller's `RUSTUP_TOOLCHAIN` for runner commands.
 Console's build retains the caller's toolchain selection.
 Cargo reuses its build intermediates under the runner checkout's `codex-rs/target` and checks inputs tracked by Cargo and dependency build scripts.
+Staging holds `<source-checkout>.stage.lock` beside the selected checkout through source preparation, both Linux build steps, and copying the verified artifacts into the Console checkout.
+Automatic selection and explicit source overrides share this ownership; a conflicting stage fails with the lock path and owner diagnostic.
+Keep Console's application Cargo output and wheel staging separate between worktrees.
 Source builds use the caller's normal Cargo configuration and download cache.
 There is no separate local cache of finished runners that bypasses Cargo's freshness checks.
 The runner build finishes before the application's Cargo build starts.
 
 Build reuse has the same limits as an ordinary Cargo build: Cargo may not detect a different compiler or linker selected through `PATH`, changes to the tools themselves, or changes to an SDK or system library.
 After changing those external build inputs, clean the affected Cargo build directories, including the runner checkout's `codex-rs/target`, before reinstalling.
-For the default source checkout, that directory is `target/sandbox-runner-cache/<commit>/codex-rs/target`.
+Use `scripts/stage-sandbox-runner --describe` to locate the selected source checkout and its build directory.
+Existing checkout-local runner caches are not migrated automatically and can be removed when no build is using them.
 Automatic detection of those environment changes is outside the source installer's contract.
 
 For direct Cargo builds or direct Maturin wheel builds, first run `scripts/stage-sandbox-runner`.

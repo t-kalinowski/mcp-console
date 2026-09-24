@@ -2,6 +2,13 @@
 
 For embedded programs, execution modes, and lifecycle receipts, start with the [authoring recipe](AUTHORING.md).
 
+`scripts/test --quick` runs ordinary cases while skipping `@requires(EXTENDED)` stress cases and real external SSH, Docker, and SBX integrations, even when their fixtures are configured.
+It retains direct and sandbox execution, localhost SSH, and fake-provider cases.
+Plain `scripts/test` includes all capability-applicable cases; CI uses this full profile.
+Use `scripts/test --quick --list` to inspect the quick selection.
+Mark only deliberate extended stress workloads with `EXTENDED` from `tests/support/requirements.py`; do not hide ordinary slow or failing regressions behind that requirement.
+The development wrapper records completed per-mode durations in `case-timings.jsonl` beside its completion record, including cases too fast for the progress reporter's slow-case messages.
+
 Docker cases use the shared Linux daemon capability in `tests/support/docker.py` and the reproducible `examples/docker/Dockerfile`.
 Build the fixture before running tests and set `MCP_CONSOLE_TEST_DOCKER_IMAGE` to its tag or ID; see `docs/DOCKER.md` for commands.
 Missing Docker access or an unselected fixture skips integration cases; it is not Docker validation.

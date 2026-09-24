@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import os
+import json
 import select
 import shlex
 import shutil
@@ -270,7 +271,7 @@ class TranscriptRunnerTests(unittest.TestCase):
             arguments, process.returncode, stdout, stderr
         )
 
-    def test_script_builds_and_uses_release_with_a_stale_debug_binary(self) -> None:
+    def prepare_script(self) -> dict[str, str]:
         scripts = self.root / "scripts"
         scripts.mkdir()
         shutil.copy2(ROOT / "scripts" / "test", scripts / "test")
@@ -293,6 +294,17 @@ class TranscriptRunnerTests(unittest.TestCase):
             encoding="utf-8",
         )
         cargo.chmod(0o755)
+        return os.environ | {
+            "PATH": f"{commands}{os.pathsep}{os.environ['PATH']}",
+            # Isolate the fake build's budget while reusing uv dependencies.
+            "UV_CACHE_DIR": subprocess.check_output(
+                ["uv", "cache", "dir"], text=True
+            ).strip(),
+            "XDG_CACHE_HOME": str(self.root / "cache"),
+        }
+
+    def test_script_builds_and_uses_release_with_a_stale_debug_binary(self) -> None:
+        environment = self.prepare_script()
         debug = self.root / "target" / "debug" / "mcp-console"
         debug.parent.mkdir()
         debug.write_text("stale debug", encoding="utf-8")
@@ -308,20 +320,42 @@ class TranscriptRunnerTests(unittest.TestCase):
             encoding="utf-8",
         )
         result = subprocess.run(
-            [scripts / "test", "client_server/server/test_tools::selected"],
+            ["scripts/test", "client_server/server/test_tools::selected"],
             cwd=self.root,
-            env={
-                **os.environ,
-                "PATH": f"{commands}{os.pathsep}{os.environ['PATH']}",
-                # This miniature build uses fake Cargo and its own budget.
-                "XDG_CACHE_HOME": str(self.root / "cache"),
-            },
+            env=environment,
             capture_output=True,
             text=True,
             timeout=10,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((self.root / "selected.marker").exists())
+
+    def test_script_creates_empty_timings_when_selected_case_is_skipped(self) -> None:
+        environment = self.prepare_script()
+        self.suite.write_text(
+            PUBLIC_SUITE
+            # fmt: python
+            + code("""
+                from support.requirements import EXTENDED, requires
+
+                test_selected = requires(EXTENDED)(test_selected)
+                """),
+        )
+        result = subprocess.run(
+            ["scripts/test", "--quick", "client_server/server/test_tools::selected"],
+            cwd=self.root,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.root / "selected.marker").exists())
+        (record_path,) = (self.root / ".dev-workflow/runs").glob("*/result.json")
+        record = json.loads(record_path.read_text())
+        (phase,) = (p for p in record["phases"] if p["name"] == "transcripts")
+        self.assertEqual(phase["exit_status"], 0)
+        self.assertEqual(Path(phase["case_timings"]).read_text(), "")
 
     def test_script_discovers_and_rejects_arguments_without_building(self) -> None:
         scripts = self.root / "scripts"
@@ -711,6 +745,166 @@ class TranscriptRunnerTests(unittest.TestCase):
         selected_skip = self.run_runner("client_server/server/test_tools::unselected")
         self.assertEqual(selected_skip.returncode, 0, selected_skip.stderr)
         self.assertIn("fixture deliberately unavailable", selected_skip.stdout)
+
+    def test_quick_profile_skips_stress_and_disables_external_providers(self) -> None:
+        self.suite.write_text(
+            PUBLIC_SUITE
+            # fmt: python
+            + code("""
+                import os
+                from support.requirements import EXTENDED, requires
+
+                test_unselected = requires(EXTENDED)(test_unselected)
+                if os.environ.get("MCP_CONSOLE_TEST_QUICK") == "1":
+                    for variable in (
+                        "MCP_CONSOLE_TEST_DOCKER_IMAGE",
+                        "MCP_CONSOLE_TEST_SBX_TEMPLATE",
+                    ):
+                        assert os.environ[variable] == "", variable
+                """),
+        )
+        result = self.run_runner("--quick")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.root / "selected.marker").exists())
+        self.assertFalse((self.root / "unselected.marker").exists())
+        self.assertIn("::unselected: skipped; extended stress coverage", result.stdout)
+        listed = self.run_runner("--quick", "--list")
+        self.assertEqual(listed.returncode, 0, listed.stderr)
+        self.assertIn("::selected", listed.stdout)
+        self.assertNotIn("::unselected", listed.stdout)
+        result = self.run_runner()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.root / "unselected.marker").exists())
+
+    def test_quick_profile_skips_external_ssh_without_changing_host_selection(
+        self,
+    ) -> None:
+        shutil.copy2(
+            ROOT / "tests/support/ssh_external.py",
+            self.root / "tests/support/ssh_external.py",
+        )
+        self.suite.write_text(
+            PUBLIC_SUITE
+            # fmt: python
+            + code("""
+                import os
+                from support.requirements import requires
+                from support.ssh_external import EXTERNAL_SSH
+
+                assert os.environ["MCP_CONSOLE_TEST_SSH_HOST"] == "fixture-host"
+                assert os.environ["MCP_CONSOLE_TEST_SSH_EXTERNAL"] == os.environ["FIXTURE_SSH_EXTERNAL"]
+                test_selected = requires(EXTERNAL_SSH)(test_selected)
+                """),
+        )
+        commands = self.root / "commands"
+        commands.mkdir()
+        ssh = commands / "ssh"
+        ssh.write_text(
+            f"#!{sys.executable}\n"
+            # fmt: python
+            + code("""
+                import json
+                import sys
+                from pathlib import Path
+
+                with (Path(__file__).parent / "probes.jsonl").open("a") as output:
+                    print(json.dumps(sys.argv[1:]), file=output)
+                """),
+        )
+        ssh.chmod(0o755)
+        probes = commands / "probes.jsonl"
+        configured = {
+            "target": {"transport": {"host": "configured-host"}},
+            "ssh_config": "fixture-ssh-config",
+        }
+        for external in ("", json.dumps(configured)):
+            with self.subTest(external=external):
+                environment = os.environ | {
+                    "PATH": f"{commands}{os.pathsep}{os.environ['PATH']}",
+                    "MCP_CONSOLE_TEST_SSH_HOST": "fixture-host",
+                    "MCP_CONSOLE_TEST_SSH_EXTERNAL": external,
+                    "FIXTURE_SSH_EXTERNAL": external,
+                }
+                for quick in (True, False):
+                    result = subprocess.run(
+                        [
+                            sys.executable,
+                            self.boundaries / "_run.py",
+                            *(["--quick"] if quick else []),
+                            "client_server/server/test_tools::selected",
+                        ],
+                        cwd=self.root,
+                        env=environment,
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    if quick:
+                        self.assertFalse(probes.exists())
+                        self.assertFalse((self.root / "selected.marker").exists())
+                        self.assertIn(
+                            "external SSH target: omitted by --quick",
+                            result.stdout,
+                        )
+                    else:
+                        self.assertTrue((self.root / "selected.marker").exists())
+                        expected = [
+                            "-T",
+                            "-a",
+                            "-o",
+                            "BatchMode=yes",
+                            "-o",
+                            "ConnectTimeout=3",
+                            *(["-F", "fixture-ssh-config"] if external else []),
+                            "--",
+                            "configured-host" if external else "fixture-host",
+                            "true",
+                        ]
+                        self.assertTrue(probes.read_text())
+                        for line in probes.read_text().splitlines():
+                            self.assertEqual(json.loads(line), expected)
+                        probes.unlink()
+                        (self.root / "selected.marker").unlink()
+
+    def test_records_timings_for_each_execution_and_snapshot_failure(self) -> None:
+        self.suite.write_text(
+            PUBLIC_SUITE
+            # fmt: python
+            + code("""
+                from support.execution import Execution, executions
+
+
+                @executions(Execution("first"), Execution("second"))
+                def test_selected(binary, execution):
+                    return record(binary, "selected")
+                """),
+        )
+        timing = self.root / "timings.jsonl"
+        selector = "client_server/server/test_tools::selected"
+        for failed in (False, True):
+            if failed:
+                (self.snapshots / "selected.yaml").write_text(
+                    "---\nrunner: different\n...\n"
+                )
+            result = subprocess.run(
+                [sys.executable, self.boundaries / "_run.py", selector],
+                env=os.environ | {"MCP_CONSOLE_TEST_TIMINGS": str(timing)},
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            self.assertEqual(result.returncode == 0, not failed, result.stderr)
+        rows = [json.loads(line) for line in timing.read_text().splitlines()]
+        self.assertEqual(
+            [(r["selector"], r["execution"], r["status"]) for r in rows],
+            [
+                (selector, "first", "passed"),
+                (selector, "second", "passed"),
+                (selector, "first", "failed"),
+            ],
+        )
+        self.assertTrue(all(r["elapsed_seconds"] > 0 for r in rows))
 
     def test_repository_cases_skip_missing_resolver_and_formatter_commands(
         self,
@@ -1459,14 +1653,19 @@ class TranscriptRunnerTests(unittest.TestCase):
 
     def test_failure_rerun_preserves_custom_timeout(self) -> None:
         (self.snapshots / "selected.yaml").write_text("---\nrunner: mismatch\n...\n")
-        result = self.run_runner(
-            "--timeout", "1200.5", "client_server/server/test_tools::selected"
-        )
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn(
-            "rerun: scripts/test --timeout 1200.5 client_server/server/test_tools::selected",
-            result.stderr,
-        )
+        for profile in ([], ["--quick"]):
+            with self.subTest(profile=profile):
+                arguments = [
+                    *profile,
+                    "--timeout",
+                    "1200.5",
+                    "client_server/server/test_tools::selected",
+                ]
+                result = self.run_runner(*arguments)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(
+                    f"rerun: scripts/test {shlex.join(arguments)}", result.stderr
+                )
 
     def test_failure_rerun_preserves_snapshot_update(self) -> None:
         self.suite.write_text(
@@ -1497,16 +1696,23 @@ class TranscriptRunnerTests(unittest.TestCase):
         )
         orphan = self.snapshots / "deleted_case.yaml"
         orphan.write_text("---\nrunner: orphan\n...\n")
-        result = self.run_runner("--update", "--jobs", "1")
-        self.assertNotEqual(result.returncode, 0)
-        receipt = next(
-            line for line in result.stderr.splitlines() if line.startswith("rerun: ")
-        )
-        self.assertEqual(receipt, "rerun: scripts/test --update --jobs 1")
-        self.assertTrue(orphan.exists())
-        retried = self.run_runner(*shlex.split(receipt)[2:])
-        self.assertIn("fixture failed before snapshot update", retried.stderr)
-        self.assertNotIn("orphan snapshot:", retried.stderr)
+        for profile in ([], ["--quick"]):
+            with self.subTest(profile=profile):
+                arguments = [*profile, "--update", "--jobs", "1"]
+                result = self.run_runner(*arguments)
+                self.assertNotEqual(result.returncode, 0)
+                receipt = next(
+                    line
+                    for line in result.stderr.splitlines()
+                    if line.startswith("rerun: ")
+                )
+                self.assertEqual(
+                    receipt, f"rerun: scripts/test {shlex.join(arguments)}"
+                )
+                self.assertTrue(orphan.exists())
+                retried = self.run_runner(*shlex.split(receipt)[2:])
+                self.assertIn("fixture failed before snapshot update", retried.stderr)
+                self.assertNotIn("orphan snapshot:", retried.stderr)
 
     def test_parallel_failure_exits_and_reports_every_failure(self) -> None:
         self.suite.write_text(FAILING_SUITE, encoding="utf-8")
