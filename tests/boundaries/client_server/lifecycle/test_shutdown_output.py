@@ -85,5 +85,32 @@ def test_eof_preserves_output_after_cell_completion(
     return _shutdown_with_collected_output(binary, execution, completed=True)
 
 
+@executions(DIRECT, SANDBOXED)
+def test_eof_preserves_first_send_response(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = McpClient(binary, execution.serve())
+    try:
+        client.initialize_and_list_tools()
+        waiting = client.start_send(r="1", python="1")
+        client.stdin.close()
+        assert client.process.wait(timeout=3) == 0, client.stderr.read()
+        client.receive(waiting)
+        assert waiting["result"] == {
+            "content": [
+                {
+                    "type": "text",
+                    "text": "only one of `r`, `python`, or `sql` may be supplied",
+                }
+            ],
+            "isError": True,
+        }, waiting
+        assert client.stdout.read() == ""
+        assert client.stderr.read() == ""
+        return client.transcript
+    finally:
+        stop_client(client)
+
+
 if __name__ == "__main__":
     run_this_suite(__file__)
