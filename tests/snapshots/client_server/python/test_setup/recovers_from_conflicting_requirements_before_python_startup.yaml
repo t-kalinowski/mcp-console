@@ -1,0 +1,60 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  r: startup_marker <- 41L
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  python: raise AssertionError('failed preparation ran the cell')
+  requirements:
+    python:
+      - numpy<1
+      - numpy>=2
+result:
+  content:
+    - type: text
+      text: |-
+        managed Python resolution failed:
+        resolver input:
+        {
+          "python": "3.12.x (reticulate default)",
+          "packages": [
+            "numpy",
+            "pandas",
+            "numpy<1",
+            "numpy>=2"
+          ]
+        }
+        uv output:
+        × No solution found when resolving tool dependencies:
+          ╰─▶ Because you require numpy<1 and numpy>=2, we can conclude that your
+              requirements are unsatisfiable.
+  isError: true
+---
+send:
+  r: |
+    stopifnot(!reticulate::py_available(initialize = FALSE))
+    startup_marker + 1L
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false
+---
+send:
+  python: r.startup_marker + 1
+  requirements:
+    python:
+      - numpy
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false

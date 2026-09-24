@@ -3,10 +3,18 @@
 ---
 send:
   r: |
-    original_path <- Sys.getenv("PATH")
-    original_session <- Sys.getenv("R_SESSION_INITIALIZED", unset = NA)
     Sys.setenv(PYTHONPATH = "selection-original")
-    original_python_path <- Sys.getenv("PYTHONPATH")
+    original_environment <- Sys.getenv(
+      c(
+        "VIRTUAL_ENV",
+        "R_SESSION_INITIALIZED",
+        "PYTHONIOENCODING",
+        "PATH",
+        "LD_LIBRARY_PATH",
+        "PYTHONPATH"
+      ),
+      unset = NA_character_
+    )
     selection_env_interrupted <- FALSE
     invisible(suppressMessages(base::trace(
       "Sys.setenv",
@@ -44,12 +52,10 @@ result:
 send:
   r: |
     stopifnot(selection_env_interrupted)
-    stopifnot(identical(Sys.getenv("PATH"), original_path))
     stopifnot(identical(
-      Sys.getenv("R_SESSION_INITIALIZED", unset = NA),
-      original_session
+      Sys.getenv(names(original_environment), unset = NA_character_),
+      original_environment
     ))
-    stopifnot(identical(Sys.getenv("PYTHONPATH"), original_python_path))
     42L
 result:
   content:
@@ -68,8 +74,11 @@ result:
   isError: false
 ---
 send:
-  r: >-
-    stopifnot(identical(Sys.getenv("PYTHONPATH"), original_python_path));
+  r: |
+    stopifnot(identical(
+      Sys.getenv("PYTHONPATH"),
+      original_environment[["PYTHONPATH"]]
+    ))
     42L
 result:
   content:

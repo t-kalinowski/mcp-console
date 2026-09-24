@@ -4,22 +4,11 @@
 send:
   r: |
     startup_probe <- dyn.load("<test python probe>")
-    Sys.setenv(PATH = paste(tempdir(), Sys.getenv("PATH"), sep = .Platform$path.sep))
-    original_path <- Sys.getenv("PATH")
-    Sys.setenv(R_SESSION_INITIALIZED = "before-attach")
-    invisible(suppressMessages(base::trace(
-      "python_munge_path",
-      exit = quote(assign("munged_path", Sys.getenv("PATH"), envir = .GlobalEnv)),
-      print = FALSE,
-      where = asNamespace("reticulate")
-    )))
     invisible(suppressMessages(base::trace(
       "py_initialize",
       tracer = quote({
-        if (!exists("attach_failed", envir = .GlobalEnv, inherits = FALSE)) {
-          assign("attach_failed", TRUE, envir = .GlobalEnv)
-          stop("synthetic reticulate attach failure")
-        }
+        startup_environment <<- Sys.getenv(c("VIRTUAL_ENV", "PATH", "R_SESSION_INITIALIZED"))
+        stop("synthetic reticulate attach failure")
       }),
       print = FALSE,
       where = asNamespace("reticulate")
@@ -29,9 +18,9 @@ send:
       error = function(condition) conditionMessage(condition)
     )
     stopifnot(grepl("synthetic reticulate attach failure", failure, fixed = TRUE))
-    stopifnot(!identical(munged_path, original_path))
-    stopifnot(identical(Sys.getenv("PATH"), original_path))
-    stopifnot(identical(Sys.getenv("R_SESSION_INITIALIZED"), "before-attach"))
+    stopifnot(identical(
+      Sys.getenv(names(startup_environment)), startup_environment
+    ))
     stopifnot(identical(
       .C(
         getNativeSymbolInfo(
@@ -47,13 +36,6 @@ send:
     )))
     invisible(reticulate::py_config())
     reticulate::py_run_string("startup_value = 41")
-    stopifnot(identical(
-      strsplit(Sys.getenv("PATH"), .Platform$path.sep, fixed = TRUE)[[1L]][1L],
-      strsplit(munged_path, .Platform$path.sep, fixed = TRUE)[[1L]][1L]
-    ))
-    stopifnot(grepl(
-      'NAME="reticulate"', Sys.getenv("R_SESSION_INITIALIZED"), fixed = TRUE
-    ))
     reticulate::py_to_r(reticulate::py$startup_value) + 1L
 result:
   content:

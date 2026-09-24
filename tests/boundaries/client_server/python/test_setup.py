@@ -14,7 +14,7 @@ from support.assertions import (
 )
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
-from support.normalization import code
+from support.normalization import code, normalize_python_resolution_error
 from support.native import build_interposer
 from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, requires
@@ -211,22 +211,11 @@ def test_retries_attachment_without_reinitializing_python(
             # fmt: r
             r = code(f"""
                 startup_probe <- dyn.load({json.dumps(str(probe))})
-                Sys.setenv(PATH = paste(tempdir(), Sys.getenv("PATH"), sep = .Platform$path.sep))
-                original_path <- Sys.getenv("PATH")
-                Sys.setenv(R_SESSION_INITIALIZED = "before-attach")
-                invisible(suppressMessages(base::trace(
-                  "python_munge_path",
-                  exit = quote(assign("munged_path", Sys.getenv("PATH"), envir = .GlobalEnv)),
-                  print = FALSE,
-                  where = asNamespace("reticulate")
-                )))
                 invisible(suppressMessages(base::trace(
                   "py_initialize",
                   tracer = quote({{
-                    if (!exists("attach_failed", envir = .GlobalEnv, inherits = FALSE)) {{
-                      assign("attach_failed", TRUE, envir = .GlobalEnv)
-                      stop("synthetic reticulate attach failure")
-                    }}
+                    startup_environment <<- Sys.getenv(c("VIRTUAL_ENV", "PATH", "R_SESSION_INITIALIZED"))
+                    stop("synthetic reticulate attach failure")
                   }}),
                   print = FALSE,
                   where = asNamespace("reticulate")
@@ -236,9 +225,9 @@ def test_retries_attachment_without_reinitializing_python(
                   error = function(condition) conditionMessage(condition)
                 )
                 stopifnot(grepl("synthetic reticulate attach failure", failure, fixed = TRUE))
-                stopifnot(!identical(munged_path, original_path))
-                stopifnot(identical(Sys.getenv("PATH"), original_path))
-                stopifnot(identical(Sys.getenv("R_SESSION_INITIALIZED"), "before-attach"))
+                stopifnot(identical(
+                  Sys.getenv(names(startup_environment)), startup_environment
+                ))
                 stopifnot(identical(
                   .C(
                     getNativeSymbolInfo(
@@ -254,13 +243,6 @@ def test_retries_attachment_without_reinitializing_python(
                 )))
                 invisible(reticulate::py_config())
                 reticulate::py_run_string("startup_value = 41")
-                stopifnot(identical(
-                  strsplit(Sys.getenv("PATH"), .Platform$path.sep, fixed = TRUE)[[1L]][1L],
-                  strsplit(munged_path, .Platform$path.sep, fixed = TRUE)[[1L]][1L]
-                ))
-                stopifnot(grepl(
-                  'NAME="reticulate"', Sys.getenv("R_SESSION_INITIALIZED"), fixed = TRUE
-                ))
                 reticulate::py_to_r(reticulate::py$startup_value) + 1L
                 """)
             client.send(r=r)
@@ -327,10 +309,18 @@ def test_restores_selection_environment_after_interrupt(
         client.initialize_and_list_tools()
         # fmt: r
         r = code(r"""
-            original_path <- Sys.getenv("PATH")
-            original_session <- Sys.getenv("R_SESSION_INITIALIZED", unset = NA)
             Sys.setenv(PYTHONPATH = "selection-original")
-            original_python_path <- Sys.getenv("PYTHONPATH")
+            original_environment <- Sys.getenv(
+              c(
+                "VIRTUAL_ENV",
+                "R_SESSION_INITIALIZED",
+                "PYTHONIOENCODING",
+                "PATH",
+                "LD_LIBRARY_PATH",
+                "PYTHONPATH"
+              ),
+              unset = NA_character_
+            )
             selection_env_interrupted <- FALSE
             invisible(suppressMessages(base::trace(
               "Sys.setenv",
@@ -364,12 +354,10 @@ def test_restores_selection_environment_after_interrupt(
         # fmt: r
         r = code("""
             stopifnot(selection_env_interrupted)
-            stopifnot(identical(Sys.getenv("PATH"), original_path))
             stopifnot(identical(
-              Sys.getenv("R_SESSION_INITIALIZED", unset = NA),
-              original_session
+              Sys.getenv(names(original_environment), unset = NA_character_),
+              original_environment
             ))
-            stopifnot(identical(Sys.getenv("PYTHONPATH"), original_python_path))
             42L
             """)
         client.send(r=r)
@@ -377,9 +365,94 @@ def test_restores_selection_environment_after_interrupt(
         client.send(python="41 + 1")
         assert last_result_text(client) == "42\n", client.transcript[-1]
         client.send(
-            r='stopifnot(identical(Sys.getenv("PYTHONPATH"), original_python_path)); 42L'
+            # fmt: r
+            r=code("""
+                stopifnot(identical(
+                  Sys.getenv("PYTHONPATH"),
+                  original_environment[["PYTHONPATH"]]
+                ))
+                42L
+                """)
         )
         assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_restores_virtualenv_after_selection_interrupt(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with McpClient(binary, execution.serve()) as client:
+        client.initialize_and_list_tools()
+        # fmt: r
+        r = code("""
+            interrupted <- TRUE
+            invisible(suppressMessages(base::trace(
+              "Sys.setenv",
+              exit = quote({
+                if ("VIRTUAL_ENV" %in% names(list(...)) && !interrupted) {
+                  interrupted <<- TRUE
+                  stop(structure(
+                    list(message = "selection interrupted", call = NULL),
+                    class = c("interrupt", "condition")
+                  ))
+                }
+              }),
+              print = FALSE,
+              where = baseenv()
+            )))
+            for (previous in c(NA_character_, "before-selection")) {
+              if (is.na(previous)) {
+                Sys.unsetenv("VIRTUAL_ENV")
+              } else {
+                Sys.setenv(VIRTUAL_ENV = previous)
+              }
+              interrupted <- FALSE
+              failure <- tryCatch(reticulate::py_config(), interrupt = conditionMessage)
+              stopifnot(
+                identical(failure, "selection interrupted"),
+                identical(Sys.getenv("VIRTUAL_ENV", unset = NA_character_), previous),
+                !reticulate::py_available(initialize = FALSE)
+              )
+            }
+            invisible(suppressMessages(base::untrace("Sys.setenv", where = baseenv())))
+            42L
+            """)
+        client.send(r=r)
+        assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
+        client.send(python="41 + 1")
+        assert last_result_text(client) == "42\n", client.transcript[-1]
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_recovers_from_conflicting_requirements_before_python_startup(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with McpClient(binary, execution.serve()) as client:
+        client.initialize_and_list_tools()
+        client.send(r="startup_marker <- 41L")
+        assert last_result_text(client) == "[done]", client.transcript[-1]
+        result = client.send(
+            python="raise AssertionError('failed preparation ran the cell')",
+            requirements={"python": ["numpy<1", "numpy>=2"]},
+        )
+        assert result["isError"] is True, result
+        output = last_result_text(client)
+        assert "No solution found" in output, client.transcript[-1]
+        client.transcript[-1]["result"]["content"][0]["text"] = (
+            normalize_python_resolution_error(output)
+        )
+        client.send(
+            # fmt: r
+            r=code("""
+                stopifnot(!reticulate::py_available(initialize = FALSE))
+                startup_marker + 1L
+                """)
+        )
+        assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
+        client.send(python="r.startup_marker + 1", requirements={"python": ["numpy"]})
+        assert last_result_text(client) == "42\n", client.transcript[-1]
         return client.finish()
 
 

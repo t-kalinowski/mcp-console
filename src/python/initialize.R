@@ -3,11 +3,7 @@ base::local(
     namespace <- NULL
     globals <- NULL
     selected <- NULL
-    old_path <- NULL
-    old_session <- NULL
-    old_python_path <- NULL
-    selected_path <- NULL
-    selected_python_path <- NULL
+    selection_environment <- NULL
     python_embedded <- FALSE
 
     replace_binding <- function(name, value) {
@@ -28,11 +24,6 @@ base::local(
         asNamespace("reticulate")
       }
       if (!is.null(selected)) {
-        # The cached configuration survives failure, but its environment may
-        # have been restored before the next native initialization attempt.
-        if (is.null(old_path) && !is.null(selected_path)) {
-          reapply_selection_environment()
-        }
         return(selected)
       }
       if (get("is_python_initialized", envir = namespace)()) {
@@ -86,16 +77,21 @@ base::local(
 
       # These are reticulate's environment inputs to CPython. Set them before
       # the native owner initializes the selected interpreter.
-      old_path <<- NULL
-      old_session <<- NULL
-      old_python_path <<- NULL
-      selected_path <<- NULL
-      selected_python_path <<- NULL
+      selection_environment <<- Sys.getenv(
+        c(
+          "VIRTUAL_ENV",
+          "R_SESSION_INITIALIZED",
+          "PYTHONIOENCODING",
+          "PATH",
+          "LD_LIBRARY_PATH",
+          "PYTHONPATH"
+        ),
+        unset = NA_character_
+      )
       on.exit(if (is.null(selected)) cancel_selection(), add = TRUE)
       if (nzchar(config$virtualenv)) {
         Sys.setenv(VIRTUAL_ENV = config$virtualenv)
       }
-      old_session <<- Sys.getenv("R_SESSION_INITIALIZED", unset = NA)
       Sys.setenv(
         R_SESSION_INITIALIZED = sprintf(
           'PID=%s:NAME="reticulate"',
@@ -107,9 +103,7 @@ base::local(
           Sys.setenv(PYTHONIOENCODING = "utf-8")
         }
       }
-      old_path <<- Sys.getenv("PATH")
       get("python_munge_path", namespace)(config$python)
-      selected_path <<- Sys.getenv("PATH")
       get("prefix_python_lib_to_ld_library_path", namespace)(config$python)
       if (get("is_osx", namespace)()) {
         symlink <- Sys.getenv("RSTUDIO_FALLBACK_LIBRARY_PATH", unset = NA)
@@ -118,8 +112,7 @@ base::local(
           file.symlink(dirname(config$libpython), symlink)
         }
       }
-      old_python_path <<- Sys.getenv("PYTHONPATH")
-      selected_python_path <<- Sys.getenv(
+      python_path <- Sys.getenv(
         "RETICULATE_PYTHONPATH",
         unset = paste(
           config$pythonpath,
@@ -127,47 +120,19 @@ base::local(
           sep = .Platform$path.sep
         )
       )
-      Sys.setenv(PYTHONPATH = selected_python_path)
+      Sys.setenv(PYTHONPATH = python_path)
       selected <<- config
       config
     }
 
     cancel_selection <- function() {
-      if (!is.null(old_path)) {
-        Sys.setenv(PATH = old_path)
-      }
-      if (!is.null(old_session)) {
-        if (is.na(old_session)) {
-          Sys.unsetenv("R_SESSION_INITIALIZED")
-        } else {
-          Sys.setenv(R_SESSION_INITIALIZED = old_session)
-        }
-      }
-      if (!is.null(old_python_path)) {
-        Sys.setenv(PYTHONPATH = old_python_path)
-      }
-      old_path <<- NULL
-      old_session <<- NULL
-      old_python_path <<- NULL
-      invisible()
-    }
-
-    reapply_selection_environment <- function() {
-      stopifnot(!is.null(selected_path), !is.null(selected_python_path))
-      old_path <<- Sys.getenv("PATH")
-      old_session <<- Sys.getenv("R_SESSION_INITIALIZED", unset = NA)
-      old_python_path <<- Sys.getenv("PYTHONPATH")
-      applied <- FALSE
-      on.exit(if (!applied) cancel_selection(), add = TRUE)
-      Sys.setenv(
-        PATH = selected_path,
-        R_SESSION_INITIALIZED = sprintf(
-          'PID=%s:NAME="reticulate"',
-          Sys.getpid()
-        ),
-        PYTHONPATH = selected_python_path
-      )
-      applied <- TRUE
+      # Only called before CPython starts. Reticulate's loader filesystem
+      # adjustments retain their existing behavior.
+      present <- !is.na(selection_environment)
+      do.call(Sys.setenv, as.list(selection_environment[present]))
+      Sys.unsetenv(names(selection_environment)[!present])
+      selection_environment <<- NULL
+      selected <<- NULL
       invisible()
     }
 
@@ -184,7 +149,7 @@ base::local(
     }
     state$cancel_python_selection <- function() {
       cancel_selection()
-      "cancelled"
+      0L
     }
 
     finish_python_initialization <- function() {
@@ -209,35 +174,32 @@ base::local(
         },
         error = function(error) "<unknown>"
       )
-      attached <- FALSE
-      on.exit(
-        {
-          if (!attached) {
-            cancel_selection()
-          }
-          if (!is.null(old_python_path)) {
-            Sys.setenv(PYTHONPATH = old_python_path)
-          }
-          finish_python_initialization()
-        },
-        add = TRUE
-      )
-      get("py_initialize", namespace)(
-        config$python,
-        config$libpython,
-        config$pythonhome,
-        config$virtualenv_activate,
-        config$version$major,
-        config$version$minor,
-        interactive(),
-        numpy_load_error
-      )
-      attached <- TRUE
-      if (!is.null(old_python_path)) {
-        Sys.setenv(PYTHONPATH = old_python_path)
-      }
-      # Reticulate keeps the munged PATH after successful attachment and
-      # restores it only when initialization fails.
+      # CPython is already running with the selected environment. Attachment
+      # errors propagate without rolling it back; only PYTHONPATH is temporary.
+      local({
+        on.exit(
+          {
+            python_path <- selection_environment[["PYTHONPATH"]]
+            if (is.na(python_path)) {
+              Sys.unsetenv("PYTHONPATH")
+            } else {
+              Sys.setenv(PYTHONPATH = python_path)
+            }
+            finish_python_initialization()
+          },
+          add = TRUE
+        )
+        get("py_initialize", namespace)(
+          config$python,
+          config$libpython,
+          config$pythonhome,
+          config$virtualenv_activate,
+          config$version$major,
+          config$version$minor,
+          interactive(),
+          numpy_load_error
+        )
+      })
 
       # Reticulate owns conversion, cross-language calls, and event integration.
       reg.finalizer(
