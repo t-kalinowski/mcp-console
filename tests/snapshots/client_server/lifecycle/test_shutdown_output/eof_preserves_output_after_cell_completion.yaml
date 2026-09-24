@@ -13,6 +13,7 @@ result:
   isError: false
 ---
 send:
+  stdin: p
   timeout_ms: 40000
 result:
   content:

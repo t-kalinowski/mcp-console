@@ -38,8 +38,6 @@ def _shutdown_with_collected_output(
             control.wait_for(0, "output_processed")
 
             waiting = client.start_send(stdin="p", timeout_ms=40_000)
-            # The fixture consumes this ownership probe; keep the public snapshot unchanged.
-            waiting["send"].pop("stdin")
             control.send_control(0, "observe_poll_ownership", request=waiting["id"])
             ownership = control.wait_for(waiting["id"], "poll_ownership_observed")
             assert ownership["target_operation"] == 0, ownership
