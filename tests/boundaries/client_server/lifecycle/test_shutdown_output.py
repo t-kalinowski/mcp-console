@@ -37,7 +37,10 @@ def _shutdown_with_collected_output(
             control.send_control(0, "emit_output")
             control.wait_for(0, "output_processed")
 
-            waiting = client.start_send(timeout_ms=40_000)
+            waiting = client.start_send(stdin="p", timeout_ms=40_000)
+            control.send_control(0, "observe_poll_ownership", request=waiting["id"])
+            ownership = control.wait_for(waiting["id"], "poll_ownership_observed")
+            assert ownership["target_operation"] == 0, ownership
             client.send(timeout_ms=0)
             assert client.transcript[-1]["result"] == {
                 "content": [

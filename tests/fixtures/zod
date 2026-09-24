@@ -1296,6 +1296,12 @@ def main() -> None:
             send_output(writer, "after image\n")
             wait_for_server_to_process_sideband(reader, writer)
             emit_test_event(0, "output_processed")
+            ownership = wait_for_test_control(0, "observe_poll_ownership")
+            request = ownership["request"]
+            assert isinstance(request, int), ownership
+            # Poll stdin reaches Zod only after the server claims the evaluation wait.
+            assert os.read(0, 1) == b"p"
+            emit_test_event(request, "poll_ownership_observed", target_operation=0)
             wait_for_test_control(0, "complete")
             send(writer, {"kind": "completed"})
             wait_for_server_to_process_sideband(reader, writer)
