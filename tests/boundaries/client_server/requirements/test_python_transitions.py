@@ -205,6 +205,85 @@ def test_preserves_preparation_restoration_and_live_noops(
 
 
 @executions(DIRECT, SANDBOXED)
+def test_rejects_incompatible_live_libpython_before_activation(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with McpClient(binary, execution.serve()) as client:
+        client.initialize_and_list_tools()
+        client.send(python="import sys; initial_prefix = sys.prefix")
+        assert last_tool_text(client) == "[done]", last_tool_text(client)
+        # fmt: r
+        r = code(r"""
+            before <- reticulate::py_require()
+            namespace <- asNamespace("reticulate")
+            original <- get("python_config", namespace)
+            replacement <- function(...) {
+              config <- original(...)
+              config$libpython <- "incompatible-libpython"
+              config
+            }
+            unlockBinding("python_config", namespace)
+            assign("python_config", replacement, envir = namespace)
+            lockBinding("python_config", namespace)
+            outcome <- tryCatch(
+              reticulate::py_require("py-yaml12"),
+              error = conditionMessage
+            )
+            stopifnot(
+              grepl(
+                "New environment does not use the same Python binary",
+                outcome,
+                fixed = TRUE
+              ),
+              grepl("new libpython: incompatible-libpython", outcome, fixed = TRUE),
+              identical(reticulate::py_require(), before)
+            )
+            unlockBinding("python_config", namespace)
+            assign("python_config", original, envir = namespace)
+            lockBinding("python_config", namespace)
+            """)
+        client.send(r=r)
+        assert last_tool_text(client) == "[done]", last_tool_text(client)
+        client.send(python="sys.prefix == initial_prefix")
+        assert last_tool_text(client) == "True\n", last_tool_text(client)
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_reports_activation_python_failure_once_and_restores_requirements(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with McpClient(binary, execution.serve()) as client:
+        client.initialize_and_list_tools()
+        client.send(python="import runpy; original_run_path = runpy.run_path")
+        assert last_tool_text(client) == "[done]", last_tool_text(client)
+        client.send(r="before <- reticulate::py_require()")
+        assert last_tool_text(client) == "[done]", last_tool_text(client)
+        # fmt: python
+        python = code("""
+            def fail_activation_hook(_path):
+                raise ValueError("activation hook failed")
+
+
+            runpy.run_path = fail_activation_hook
+            """)
+        client.send(python=python)
+        assert last_tool_text(client) == "[done]", last_tool_text(client)
+        client.send(r='reticulate::py_require("py-yaml12")')
+        output = last_tool_text(client)
+        assert output.count("ValueError: activation hook failed") == 1, output
+        client.send(r="stopifnot(identical(reticulate::py_require(), before))")
+        assert last_tool_text(client) == "[done]", last_tool_text(client)
+        client.send(python="runpy.run_path = original_run_path")
+        assert last_tool_text(client) == "[done]", last_tool_text(client)
+        client.send(r='reticulate::py_require("py-yaml12")')
+        assert last_tool_text(client) == "[done]", last_tool_text(client)
+        client.send(python="import yaml12; yaml12.__name__")
+        assert last_tool_text(client) == "'yaml12'\n", last_tool_text(client)
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
 def test_preserves_activation_interrupt_conditions(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -212,14 +291,14 @@ def test_preserves_activation_interrupt_conditions(
         client.initialize_and_list_tools()
         client.send(python="None")
         assert last_tool_text(client) == "[done]", last_tool_text(client)
-        # An R interrupt must still reach the caller's interrupt handler rather
-        # than becoming an ordinary preparation error at the native boundary.
+        # An R interrupt during candidate configuration must still reach the
+        # caller's handler rather than becoming an ordinary preparation error.
         # fmt: r
         r = code(r"""
             before <- reticulate::py_require()
             namespace <- asNamespace("reticulate")
             invisible(suppressMessages(base::trace(
-              "py_activate_virtualenv",
+              "python_config",
               tracer = quote(stop(structure(
                 list(message = "activation interrupted", call = NULL),
                 class = c("interrupt", "condition")

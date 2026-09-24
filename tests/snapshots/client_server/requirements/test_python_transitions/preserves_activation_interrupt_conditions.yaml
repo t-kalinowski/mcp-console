@@ -14,7 +14,7 @@ send:
     before <- reticulate::py_require()
     namespace <- asNamespace("reticulate")
     invisible(suppressMessages(base::trace(
-      "py_activate_virtualenv",
+      "python_config",
       tracer = quote(stop(structure(
         list(message = "activation interrupted", call = NULL),
         class = c("interrupt", "condition")

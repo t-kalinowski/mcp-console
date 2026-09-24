@@ -254,9 +254,9 @@ The R provider owns a managed DuckDB connection by default and can retain a user
 Its private R environment bridge conditionally wraps `base::library` and runs R's unchanged `base::loadNamespace` body in a private lexical environment that intercepts its retry restart; it applies accepted managed libraries and reports activation outcomes.
 The Rust Python facade loads, retains, and initializes the selected file-backed `libpython`, or attaches its own handle if CPython was already initialized.
 After the retained reticulate adapter initializes and configures Python, Console calls the existing private cell evaluator directly through the CPython API.
-The R adapter also calls Console's Python process-environment and Matplotlib setup helpers through narrow native entry points using that retained library.
-Their implementations remain in Python, at the existing post-activation, module-load, and first-cell lifecycle points.
-The native entry points suspend R interrupts only for argument and result conversion, preserving the caller's interrupt state while Python runs.
+The native requirement owner calls Console's Python activation helper through that retained library; the helper runs the selected environment's activation script and completes process-environment setup.
+The R adapter still calls the Matplotlib setup helper through a narrow native entry point at the existing module-load and first-cell lifecycle points.
+The native calls preserve the caller's R interrupt state while Python runs.
 Failed setup retains the original Python exception and traceback for reticulate's existing R condition and interrupt conversion, without native error printing.
 Console also installs native callbacks for Python input, text output, diagnostics, and plot publication.
 Managed Python input shares the worker's length-aware stdin buffer with R; R's console callback retains its boolean success contract.
@@ -264,16 +264,17 @@ The worker's native signal handler wakes blocked input and marks interrupts for 
 Python acknowledgment respects R's suspended-interrupt state and clears accepted interrupts so nested calls do not deliver them twice.
 Reticulate's event polling remains active.
 
-Reticulate is still required for ordinary Python startup: it owns interpreter selection and startup orchestration, live compatibility checks, environment activation, automatic-resolution callbacks, object conversion, and cross-language and module-load integration.
+Reticulate is still required for ordinary Python startup: it owns interpreter selection and startup orchestration, automatic-resolution callbacks, object conversion, and cross-language and module-load integration.
 Console's native requirement store owns declaration transitions and preparation orchestration for explicit Python requirements, automatic imports, and managed `reticulate::py_require()` calls.
 It holds the operative character values behind the existing R active binding; `src/python/requirements/r.rs` preserves field presence and ordering, attributes, encodings, history, and copy isolation.
 Call-local candidates use that representation without introducing another retained manifest.
-Reticulate converts declaration arguments and reports package warnings, checks live version and package compatibility, and activates the native owner's chosen executable without replanning the transition.
+Reticulate converts declaration arguments and reports package warnings, while its existing helpers check live version and package compatibility and configure the native owner's chosen candidate.
+The native owner compares that candidate's `libpython` with reticulate's live configuration and activates the selected environment through the retained CPython library.
 The live interpreter pin is resolver input, separate from retained user version declarations.
 The native store also owns the transient pending-activation key, matches the subsequent requirement write, and publishes `PythonActivated` after committing that write.
-The R adapter records the pending key only after reticulate activation and process-environment setup succeed; it supplies the existing normalized R projection for matching without mirroring the current requirement object.
+The R adapter supplies the existing normalized R projection when the native owner records the pending key after activation and process-environment setup succeed, without mirroring the current requirement object.
 The successful initial reticulate initialization hook reports through the same native owner at its separate lifecycle point, without a pending-activation transaction.
-The store remains R-dependent; it requests resolution through the existing host-resolver callback and delegates environment mutation to the reticulate adapter.
+The store remains R-dependent for candidate lookup, reticulate configuration, and the existing host-resolver callback.
 Lazy declarations and snapshot restoration do not report activation; explicit preparation can materialize a lazy manifest without initializing Python.
 Requirement objects and their protection stay on the R thread, and native state borrows end before R allocation, comparison, protection release, resolver callbacks, interpreter execution, or notification publication.
 Cell dispatch and runtime installation release the library-state lock before executing Python, and native console callbacks release the GIL while blocking on worker services.

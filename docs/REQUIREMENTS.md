@@ -178,7 +178,7 @@ Both forms report the full missing-submodule name.
 When inference succeeds, the Python finder calls a private R closure supplied by the reticulate bridge.
 That closure snapshots reticulate's current requirement state, adds the inferred distribution through `reticulate::py_require(..., action = "add")`, and materializes the complete manifest through the existing managed-Python callback.
 The server returns a provisional environment in a `PythonResolved` reply to the existing `ResolvePython` request.
-After reticulate activates a compatible environment, the worker reports `PythonActivated` with the complete normalized logical manifest.
+After Console activates a compatible environment, the worker reports `PythonActivated` with the complete normalized logical manifest.
 The worker emits that report before the original Python import resumes.
 The server matches and commits the candidate when it processes the report; sideband order places it before any later evaluation outcome.
 
@@ -267,9 +267,11 @@ An R transport, protocol, or bridge-infrastructure failure is different: the ser
 
 Explicit Python preparation and automatic imports use the native requirement owner to orchestrate additive preparation.
 It snapshots the current manifest before calling `reticulate::py_require(..., action = "add")`; managed declarations use the same native transition decisions.
-The R adapter preserves declaration conversion and history, live compatibility checks, and actual activation of the chosen candidate.
+The R adapter preserves declaration conversion and history, live version and package checks, and candidate configuration lookup.
 Before Python initializes, the worker materializes the complete manifest.
-After initialization, reticulate checks that the candidate uses the live `libpython` and activates a compatible environment without replacing the interpreter or its objects.
+After initialization, Console checks the candidate's `libpython` against reticulate's live configuration and activates the compatible environment without replacing the interpreter or its objects.
+It runs the selected activation hook, updates Python's executable and any loaded multiprocessing module, and completes process-environment setup before recording pending activation.
+Reticulate then accepts the returned configuration and writes the requirement binding that publishes `PythonActivated`.
 
 The server retains a Python environment when the worker reports that reticulate accepted its complete normalized manifest.
 A runtime import reports that activation before the original import continues.
