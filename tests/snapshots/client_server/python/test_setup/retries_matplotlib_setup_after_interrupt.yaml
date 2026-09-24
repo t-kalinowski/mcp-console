@@ -23,6 +23,13 @@ send:
             pass
 
     sys.modules["matplotlib.pyplot"] = InterruptingPyplot("matplotlib.pyplot")
+
+    import _mcp_console
+
+    def configure_again(*args):
+        raise AssertionError("Python runtime configured twice")
+
+    _mcp_console.configure_import_resolution = configure_again
     )---")
 result:
   content:

@@ -252,8 +252,9 @@ Its language adapters provide persistent Python and SQL within that worker proce
 The SQL router uses a DBI provider in embedded R or a DB-API provider in CPython.
 The R provider owns a managed DuckDB connection by default and can retain a user-selected DBI connection; the Python provider retains a user-selected DB-API connection without converting it or its result rows through reticulate.
 Its private R environment bridge conditionally wraps `base::library` and runs R's unchanged `base::loadNamespace` body in a private lexical environment that intercepts its retry restart; it applies accepted managed libraries and reports activation outcomes.
-The Rust Python facade loads, retains, and initializes the selected file-backed `libpython`, or attaches its own handle if CPython was already initialized.
-After the retained reticulate adapter initializes and configures Python, Console calls the existing private cell evaluator directly through the CPython API.
+The reticulate selection adapter supplies one interpreter configuration before Python initializes.
+The Rust Python facade loads and retains that file-backed `libpython`, initializes CPython without holding its library-state lock through interpreter code, or attaches its handle if CPython was already initialized.
+Reticulate then attaches its conversion and event runtime to the running interpreter; Console calls the existing private cell evaluator directly through the CPython API.
 The native requirement owner calls Console's Python activation helper through that retained library; the helper runs the selected environment's activation script and completes process-environment setup.
 The R adapter still calls the Matplotlib setup helper through a narrow native entry point at the existing module-load and first-cell lifecycle points.
 The native calls preserve the caller's R interrupt state while Python runs.
@@ -264,7 +265,9 @@ The worker's native signal handler wakes blocked input and marks interrupts for 
 Python acknowledgment respects R's suspended-interrupt state and clears accepted interrupts so nested calls do not deliver them twice.
 Reticulate's event polling remains active.
 
-Reticulate is still required for ordinary Python startup: it owns interpreter selection and startup orchestration, automatic-resolution callbacks, object conversion, and cross-language and module-load integration.
+Reticulate remains required for interpreter discovery and selection, automatic-resolution callbacks, object conversion, and cross-language and module-load integration.
+Console owns initialization of the selected interpreter and tracks completion of its private runtime setup in the retained library state.
+Both a first Python cell and Python use from R reach that native owner before reticulate attaches.
 Console's native requirement store owns declaration transitions and preparation orchestration for explicit Python requirements, automatic imports, and managed `reticulate::py_require()` calls.
 It holds the operative character values behind the existing R active binding; `src/python/requirements/r.rs` preserves field presence and ordering, attributes, encodings, history, and copy isolation.
 Call-local candidates use that representation without introducing another retained manifest.

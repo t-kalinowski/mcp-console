@@ -1,6 +1,8 @@
 #!/usr/bin/env -S uv run --script
 
+import json
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -13,9 +15,194 @@ from support.assertions import (
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
+from support.native import build_interposer
 from support.records import Transcript
+from support.requirements import NATIVE_FIXTURES, requires
 from support.resolvers import send_and_collect_runtime_python_resolution
 from support.suites import run_this_suite
+
+
+@executions(DIRECT, SANDBOXED)
+@requires(NATIVE_FIXTURES)
+def test_python_first_initializes_before_reticulate_attaches(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        probe = build_interposer(temporary, "python_initialized")
+        serve = (
+            execution.serve("--writable-root", temporary_directory)
+            if execution == SANDBOXED
+            else execution.serve()
+        )
+        with McpClient(binary, serve) as client:
+            client.initialize_and_list_tools()
+            # fmt: r
+            r = code(f"""
+                startup_probe <- dyn.load({json.dumps(str(probe))})
+                startup_calls <- 0L
+                invisible(suppressMessages(base::trace(
+                  "py_initialize",
+                  tracer = quote({{
+                    assign(
+                      "startup_calls",
+                      get("startup_calls", envir = .GlobalEnv) + 1L,
+                      envir = .GlobalEnv
+                    )
+                    stopifnot(identical(
+                      .C(
+                        getNativeSymbolInfo(
+                          "mcp_console_probe_python_initialized",
+                          PACKAGE = .GlobalEnv$startup_probe
+                        ),
+                        value = 0L
+                      )$value,
+                      1L
+                    ))
+                  }}),
+                  print = FALSE,
+                  where = asNamespace("reticulate")
+                )))
+                """)
+            client.send(r=r)
+            assert last_result_text(client) == "[done]", client.transcript[-1]
+            client.transcript[-1]["send"]["r"] = r.replace(
+                str(probe), "<test python probe>"
+            )
+            client.send(
+                # fmt: python
+                python=code("""
+                    startup_value = 41
+                    startup_value + 1
+                    """)
+            )
+            assert last_result_text(client) == "42\n", client.transcript[-1]
+            client.send(
+                # fmt: r
+                r=code("""
+                    stopifnot(startup_calls == 1L)
+                    reticulate::py_to_r(reticulate::py$startup_value) + 1L
+                    """)
+            )
+            assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
+            return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+@requires(NATIVE_FIXTURES)
+def test_r_first_initializes_before_reticulate_attaches(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        probe = build_interposer(temporary, "python_initialized")
+        serve = (
+            execution.serve("--writable-root", temporary_directory)
+            if execution == SANDBOXED
+            else execution.serve()
+        )
+        with McpClient(binary, serve) as client:
+            client.initialize_and_list_tools()
+            # fmt: r
+            r = code(f"""
+                startup_probe <- dyn.load({json.dumps(str(probe))})
+                startup_calls <- 0L
+                invisible(suppressMessages(base::trace(
+                  "py_initialize",
+                  tracer = quote({{
+                    assign(
+                      "startup_calls",
+                      get("startup_calls", envir = .GlobalEnv) + 1L,
+                      envir = .GlobalEnv
+                    )
+                    stopifnot(identical(
+                      .C(
+                        getNativeSymbolInfo(
+                          "mcp_console_probe_python_initialized",
+                          PACKAGE = .GlobalEnv$startup_probe
+                        ),
+                        value = 0L
+                      )$value,
+                      1L
+                    ))
+                  }}),
+                  print = FALSE,
+                  where = asNamespace("reticulate")
+                )))
+                invisible(reticulate::py_config())
+                reticulate::py_run_string("startup_value = 41")
+                stopifnot(startup_calls == 1L)
+                reticulate::py_to_r(reticulate::py$startup_value) + 1L
+                """)
+            client.send(r=r)
+            assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
+            client.transcript[-1]["send"]["r"] = r.replace(
+                str(probe), "<test python probe>"
+            )
+            client.send(python="startup_value + 1")
+            assert last_result_text(client) == "42\n", client.transcript[-1]
+            return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+@requires(NATIVE_FIXTURES)
+def test_retries_attachment_without_reinitializing_python(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        probe = build_interposer(temporary, "python_initialized")
+        serve = (
+            execution.serve("--writable-root", temporary_directory)
+            if execution == SANDBOXED
+            else execution.serve()
+        )
+        with McpClient(binary, serve) as client:
+            client.initialize_and_list_tools()
+            # fmt: r
+            r = code(f"""
+                startup_probe <- dyn.load({json.dumps(str(probe))})
+                invisible(suppressMessages(base::trace(
+                  "py_initialize",
+                  tracer = quote({{
+                    if (!exists("attach_failed", envir = .GlobalEnv, inherits = FALSE)) {{
+                      assign("attach_failed", TRUE, envir = .GlobalEnv)
+                      stop("synthetic reticulate attach failure")
+                    }}
+                  }}),
+                  print = FALSE,
+                  where = asNamespace("reticulate")
+                )))
+                failure <- tryCatch(
+                  reticulate::py_config(),
+                  error = function(condition) conditionMessage(condition)
+                )
+                stopifnot(grepl("synthetic reticulate attach failure", failure, fixed = TRUE))
+                stopifnot(identical(
+                  .C(
+                    getNativeSymbolInfo(
+                      "mcp_console_probe_python_initialized",
+                      PACKAGE = startup_probe
+                    ),
+                    value = 0L
+                  )$value,
+                  1L
+                ))
+                invisible(suppressMessages(base::untrace(
+                  "py_initialize", where = asNamespace("reticulate")
+                )))
+                invisible(reticulate::py_config())
+                reticulate::py_run_string("startup_value = 41")
+                reticulate::py_to_r(reticulate::py$startup_value) + 1L
+                """)
+            client.send(r=r)
+            assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
+            client.transcript[-1]["send"]["r"] = r.replace(
+                str(probe), "<test python probe>"
+            )
+            client.send(python="startup_value + 1")
+            assert last_result_text(client) == "42\n", client.transcript[-1]
+            return client.finish()
 
 
 @executions(DIRECT, SANDBOXED)
@@ -175,6 +362,13 @@ def test_retries_matplotlib_setup_after_interrupt(
                     pass
 
             sys.modules["matplotlib.pyplot"] = InterruptingPyplot("matplotlib.pyplot")
+
+            import _mcp_console
+
+            def configure_again(*args):
+                raise AssertionError("Python runtime configured twice")
+
+            _mcp_console.configure_import_resolution = configure_again
             )---")
             """)
         client.send(r=r)

@@ -1,5 +1,6 @@
 mod requirements;
 mod reticulate;
+mod startup;
 
 const RUNTIME_SOURCE: &str = include_str!("python/runtime.py");
 
@@ -18,7 +19,7 @@ pub(crate) enum PreparationOutcome {
 /// Reticulate selects and configures Python; cells enter the private evaluator
 /// directly through the retained CPython library.
 pub(crate) struct Runtime {
-    startup: reticulate::Runtime,
+    startup: startup::Runtime,
     next_evaluation_id: u64,
 }
 
@@ -38,7 +39,7 @@ pub(crate) fn configure_worker_environment(
 impl Runtime {
     pub(crate) fn initialize() -> Result<Self, String> {
         Ok(Self {
-            startup: reticulate::Runtime::initialize()?,
+            startup: startup::Runtime::initialize()?,
             next_evaluation_id: 1,
         })
     }

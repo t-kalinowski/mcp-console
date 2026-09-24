@@ -238,7 +238,8 @@ The final expression of a cell is displayed through Python's normal display hook
 An uncaught exception prints its traceback and completes as a language outcome.
 The Python session remains usable, including state established before the exception.
 Python 3.10 or later is required.
-R is initialized eagerly, and reticulate remains required for Python interpreter selection, startup, candidate configuration, and cross-language access.
+R is initialized eagerly, and reticulate remains required for Python interpreter selection, candidate configuration, and cross-language access.
+Console initializes the selected interpreter before reticulate attaches for conversion, cross-language calls, and event integration.
 Console activates live managed environments through its retained CPython library.
 The built-in startup display width for NumPy and pandas is 200 columns, and evaluated code may change it.
 

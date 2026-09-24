@@ -5,34 +5,48 @@ use super::PreparationOutcome;
 const PYTHON_BRIDGE_SOURCE: &str = include_str!("bridge.R");
 const PYTHON_INITIALIZER_SOURCE: &str = include_str!("initialize.R");
 
-/// Interpreter startup and candidate configuration remain hosted by reticulate.
-pub(super) struct Runtime {
+/// Reticulate supplies the selected configuration and attaches to the native interpreter.
+pub(super) struct Adapter {
     bridge: crate::r_bridge::Bridge,
-    initialized: bool,
+}
+
+#[derive(serde::Deserialize)]
+pub(super) struct SelectedPython {
+    pub(super) python: String,
+    pub(super) libpython: String,
+    pub(super) python_home: String,
 }
 
 pub(super) fn configure_worker_environment() -> std::io::Result<()> {
     super::platform::set_environment(c"RETICULATE_REMAP_OUTPUT_STREAMS", c"0", true)
 }
 
-impl Runtime {
+impl Adapter {
     pub(super) fn initialize() -> Result<Self, String> {
         let source = format!(
             "base::local(\n  {{\n    state <- ({PYTHON_BRIDGE_SOURCE})\n{PYTHON_INITIALIZER_SOURCE}\n    state\n  }},\n  envir = base::new.env(parent = base::baseenv())\n)"
         );
         Ok(Self {
             bridge: crate::r_bridge::Bridge::initialize(&source, "Python")?,
-            initialized: false,
         })
     }
 
-    pub(super) fn ensure_initialized(&mut self) -> Result<bool, String> {
-        if !self.initialized {
-            // Keep the existing R error/interrupt boundary for startup only.
-            // An interrupted initialization is retried by the next cell.
-            self.initialized = self.bridge.evaluate_completed("")?;
-        }
-        Ok(self.initialized)
+    pub(super) fn select(&self) -> Result<SelectedPython, String> {
+        let selected = self
+            .bridge
+            .call0_string(c"selected_python")?
+            .ok_or_else(|| "Python selection returned no configuration".to_string())?;
+        serde_json::from_str(&selected)
+            .map_err(|error| format!("invalid selected Python configuration: {error}"))
+    }
+
+    pub(super) fn cancel_selection(&self) -> Result<(), String> {
+        self.bridge.call0_string(c"cancel_python_selection")?;
+        Ok(())
+    }
+
+    pub(super) fn attach_and_setup(&mut self) -> Result<bool, String> {
+        self.bridge.evaluate_completed("")
     }
 
     pub(super) fn prepare(&self, packages: Vec<String>) -> Result<PreparationOutcome, String> {
@@ -45,101 +59,6 @@ impl Runtime {
         serde_json::from_str(&response)
             .map_err(|error| format!("invalid Python preparation response: {error}"))
     }
-}
-
-// Rust initializes the exact interpreter selected by reticulate. Reticulate
-// then observes the running interpreter and attaches its conversion runtime.
-#[allow(clippy::result_large_err)]
-#[harp::register]
-pub extern "C-unwind" fn mcp_console_initialize_python(
-    python: SEXP,
-    libpython: SEXP,
-    python_home: SEXP,
-) -> harp::Result<SEXP> {
-    let python = String::try_from(harp::object::RObject::view(python))?;
-    let libpython = Option::<String>::try_from(harp::object::RObject::view(libpython))?
-        .ok_or_else(|| harp::anyhow!("Python-hosted R is not supported"))?;
-    let python_home = String::try_from(harp::object::RObject::view(python_home))?;
-    let rust_owned =
-        super::library::initialize(std::path::Path::new(&libpython), &python, &python_home)
-            .map_err(|error| harp::anyhow!("{error}"))?;
-    Ok(harp::object::RObject::from(rust_owned).sexp)
-}
-
-// If Python was initialized before the direct initializer was installed,
-// attach the Rust-owned process-lifetime handle to that interpreter.
-#[allow(clippy::result_large_err)]
-#[harp::register]
-pub extern "C-unwind" fn mcp_console_load_python_library(path: SEXP) -> harp::Result<SEXP> {
-    let path = Option::<String>::try_from(harp::object::RObject::view(path))?
-        .ok_or_else(|| harp::anyhow!("Python-hosted R is not supported"))?;
-    let rust_owned = super::library::load(std::path::Path::new(&path))
-        .map_err(|error| harp::anyhow!("{error}"))?;
-    Ok(harp::object::RObject::from(rust_owned).sexp)
-}
-
-// Reticulate's initialization lifecycle installs Console's native services.
-#[allow(clippy::result_large_err)]
-#[harp::register]
-pub extern "C-unwind" fn mcp_console_install_python_services(
-    libpython: SEXP,
-) -> harp::Result<SEXP> {
-    let libpython = String::try_from(harp::object::RObject::view(libpython))?;
-    super::library::load(std::path::Path::new(&libpython))
-        .and_then(|_| super::library::install_services())
-        .map_err(|error| harp::anyhow!("{error}"))?;
-    unsafe { Ok(libr::R_NilValue) }
-}
-
-// Install the private evaluator through the Rust-owned CPython API while
-// retaining reticulate's existing post-initialization lifecycle point.
-#[allow(clippy::result_large_err)]
-#[harp::register]
-pub extern "C-unwind" fn mcp_console_install_python_runtime(libpython: SEXP) -> harp::Result<SEXP> {
-    let libpython = Option::<String>::try_from(harp::object::RObject::view(libpython))?
-        .ok_or_else(|| harp::anyhow!("Python-hosted R is not supported"))?;
-    super::library::load(std::path::Path::new(&libpython))
-        .map_err(|error| harp::anyhow!("{error}"))?;
-    super::library::install_runtime(super::RUNTIME_SOURCE)
-        .map_err(|error| harp::anyhow!("{error}"))?;
-    crate::sql::install_python_runtime().map_err(|error| harp::anyhow!("{error}"))?;
-    unsafe { Ok(libr::R_NilValue) }
-}
-
-// Release the initial GIL when control leaves reticulate's C initializer,
-// including its error paths. Later reticulate calls acquire the GIL normally.
-#[allow(clippy::result_large_err)]
-#[harp::register]
-pub extern "C-unwind" fn mcp_console_finish_python_initialization() -> harp::Result<SEXP> {
-    super::library::finish_initialization().map_err(|error| harp::anyhow!("{error}"))?;
-    unsafe { Ok(libr::R_NilValue) }
-}
-
-// Register this callback explicitly: harp::register suspends interrupts
-// throughout the call. Leave Python setup in the caller's interrupt context.
-#[ctor::ctor(unsafe)]
-fn register_python_setup() {
-    type CallMethod = unsafe extern "C-unwind" fn() -> *mut libc::c_void;
-    // SAFETY: R invokes each fixed callback with its registered arity on the
-    // worker's R thread. The names have static storage.
-    unsafe {
-        harp::routines::add(libr::R_CallMethodDef {
-            name: c"mcp_console_disable_matplotlib_show".as_ptr(),
-            fun: Some(std::mem::transmute::<*const (), CallMethod>(
-                mcp_console_disable_matplotlib_show as *const (),
-            )),
-            numArgs: 0,
-        });
-    }
-}
-
-#[allow(clippy::result_large_err)]
-extern "C-unwind" fn mcp_console_disable_matplotlib_show() -> SEXP {
-    harp::exec::r_unwrap(|| -> harp::Result<SEXP> {
-        let completed =
-            super::library::disable_matplotlib_show().map_err(|error| harp::anyhow!("{error}"))?;
-        harp::exec::r_sandbox(|| harp::object::RObject::from(completed).sexp)
-    })
 }
 
 #[allow(clippy::result_large_err)]
