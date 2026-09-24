@@ -97,6 +97,8 @@ impl ResolverProcess {
         })
     }
 
+    // Mark the spawned child active before publishing its stop handle. An
+    // interrupt in that gap must wait for the child's actual signal result.
     pub(super) fn watch_exit(&self, pid: u32) {
         self.cleanup.store(false, Ordering::SeqCst);
         *self.waiting.lock().expect("resolver phase lock") = true;
