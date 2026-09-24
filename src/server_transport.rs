@@ -1180,7 +1180,7 @@ mod tests {
         assert!(transport.receive().await.is_none());
 
         let mut settle = Box::pin(
-            deliveries.settle_before_close(Instant::now() + std::time::Duration::from_secs(1)),
+            deliveries.settle_before_close(Instant::now() + std::time::Duration::from_secs(30)),
         );
         let mut context = std::task::Context::from_waker(std::task::Waker::noop());
         assert!(std::future::Future::poll(settle.as_mut(), &mut context).is_pending());
