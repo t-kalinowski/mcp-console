@@ -200,18 +200,30 @@ pub(super) fn install_services() -> Result<(), String> {
     api()?.with_gil(services::install)
 }
 
-pub(super) fn activate_process_environment(executable: &str) -> Result<bool, String> {
+pub(super) fn activate_environment(script: &str, executable: &str) -> Result<bool, String> {
     api()?.with_gil(|api| unsafe {
-        let function = api.function(c"_mcp_console", c"activate_process_environment")?;
+        let function = api.function(c"_mcp_console", c"activate_environment")?;
+        let script =
+            (api.unicode_from_string_and_size)(script.as_ptr().cast(), script.len() as isize);
         let executable = (api.unicode_from_string_and_size)(
             executable.as_ptr().cast(),
             executable.len() as isize,
         );
-        if executable.is_null() {
+        if script.is_null() || executable.is_null() {
+            for object in [script, executable] {
+                if !object.is_null() {
+                    (api.dec_ref)(object);
+                }
+            }
             return api.finish_setup(std::ptr::null_mut());
         }
-        let result =
-            (api.call_function_obj_args)(function, executable, std::ptr::null_mut::<PyObject>());
+        let result = (api.call_function_obj_args)(
+            function,
+            script,
+            executable,
+            std::ptr::null_mut::<PyObject>(),
+        );
+        (api.dec_ref)(script);
         (api.dec_ref)(executable);
         api.finish_setup(result)
     })

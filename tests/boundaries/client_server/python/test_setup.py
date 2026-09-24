@@ -19,6 +19,76 @@ from support.suites import run_this_suite
 
 
 @executions(DIRECT, SANDBOXED)
+def test_activates_without_reticulate_virtualenv_helper(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with McpClient(binary, execution.serve()) as client:
+        client.initialize_and_list_tools()
+        # fmt: r
+        r = code(r"""
+            invisible(reticulate::py_config())
+            namespace <- asNamespace("reticulate")
+            invisible(suppressMessages(base::trace(
+              "py_activate_virtualenv",
+              tracer = quote(stop("reticulate activation helper was called")),
+              print = FALSE,
+              where = namespace
+            )))
+            """)
+        client.send(r=r)
+        assert last_result_text(client) == "[done]", client.transcript[-1]
+        # fmt: python
+        python = code("""
+            import multiprocessing.spawn
+            import sys
+
+            initial_executable = sys.executable
+            initial_prefix = sys.prefix
+            live_object = object()
+            live_object_id = id(live_object)
+            42
+            """)
+        client.send(python=python)
+        assert last_result_text(client) == "42\n", client.transcript[-1]
+        # fmt: r
+        r = code(r"""
+            reticulate::py_require("py-yaml12")
+            config <- reticulate::py_config()
+            sys <- reticulate::import("sys", convert = FALSE)
+            stopifnot(
+              identical(config$executable, reticulate::py_to_r(sys$executable)),
+              identical(config$prefix, reticulate::py_to_r(sys$prefix)),
+              isTRUE(config$available),
+              isTRUE(config$ephemeral)
+            )
+            42L
+            """)
+        output = send_and_collect_runtime_python_resolution(client, r=r, timeout_ms=0)
+        assert output == "[1] 42\n", client.transcript[-1]
+        # fmt: python
+        python = code("""
+            import subprocess
+            import yaml12
+
+            assert id(live_object) == live_object_id
+            assert sys.executable != initial_executable
+            assert sys.prefix != initial_prefix
+            child_executable = subprocess.check_output(
+                [sys.executable, "-c", "import sys, yaml12; print(sys.executable)"],
+                text=True,
+            ).strip()
+            assert child_executable == sys.executable
+            with multiprocessing.get_context("spawn").Pool(1) as pool:
+                child_executable = pool.apply(eval, ("__import__('sys').executable",))
+            assert child_executable == sys.executable
+            42
+            """)
+        client.send(python=python)
+        assert last_result_text(client) == "42\n", client.transcript[-1]
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
 def test_preserves_setup_after_r_initialization(
     binary: Path, execution: Execution
 ) -> Transcript:

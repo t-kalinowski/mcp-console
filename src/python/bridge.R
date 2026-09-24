@@ -201,8 +201,8 @@ base::local(
         assign(name, value, envir = namespace)
         invisible()
       }
-      # Keep reticulate's live checks and activation mechanics. The native
-      # owner supplies the candidate and resolved executable, not another plan.
+      # Keep reticulate's declaration checks and candidate configuration
+      # lookup. The native owner activates the selected environment.
       live_python_version <- function() {
         as.character(get("py_version", namespace)(patch = TRUE))
       }
@@ -249,46 +249,22 @@ base::local(
         }
         invisible()
       }
-      activate <- function(python, requirements) {
+      candidate_config <- function(python) {
         config <- get("python_config", namespace)(python)
         config$ephemeral <- TRUE
-        if (!identical(config$libpython, globals$py_config$libpython)) {
-          stop(
-            "New environment does not use the same Python binary\n",
-            "new libpython: ",
-            config$libpython,
-            "\n",
-            "old libpython: ",
-            globals$py_config$libpython
-          )
-        }
-        get("py_activate_virtualenv", namespace)(
-          file.path(dirname(python), "activate_this.py")
-        )
-        sys <- reticulate::import("sys", convert = FALSE)
-        sys$executable <- config$executable
-        multiprocessing <- sys$modules[["multiprocessing"]]
-        if (!get("py_is_none", namespace)(multiprocessing)) {
-          multiprocessing$set_executable(config$executable)
-        }
+        config
+      }
+      live_libpython <- function() globals$py_config$libpython
+      available_config <- function(config) {
         config$available <- TRUE
-        if (is.null(python_module)) {
-          reticulate::py_set_attr(
-            reticulate::import("sys", convert = FALSE),
-            "executable",
-            config$executable
-          )
-        } else {
-          check_python_setup(.Call(
-            "mcp_console_activate_process_environment",
-            config$executable
-          ))
-        }
+        config
+      }
+      raise_python_setup_error <- function() check_python_setup(FALSE)
+      record_activation <- function(requirements) {
         .Call(
           "mcp_console_python_activation_record",
           activation_manifest(requirements)
         )
-        config
       }
       replace_binding("uv_get_or_create_env", resolve)
       replace_binding("resolve_python_version", resolve_version)

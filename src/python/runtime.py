@@ -612,3 +612,18 @@ def _mcp_console_raise_setup_error(_state=_builtins.__dict__):
 
 
 _builtins.__dict__["_mcp_console_raise_setup_error"] = _mcp_console_raise_setup_error
+
+
+def _mcp_console_activate_environment(
+    script,
+    executable,
+    _configure_process=_mcp_console_activate_process_environment,
+):
+    import runpy
+
+    runpy.run_path(script)
+    _configure_process(executable)
+    return None
+
+
+_mcp_console.activate_environment = _mcp_console_activate_environment

@@ -135,7 +135,7 @@ pub extern "C-unwind" fn mcp_console_python_activation_record(
     activation: SEXP,
 ) -> harp::Result<SEXP> {
     check_activation()?;
-    // Called only after reticulate activation and process-environment setup
+    // Called only after native activation and process-environment setup
     // succeed. An earlier failure leaves ordinary snapshot restoration inert.
     let (activation, metadata) = Metadata::from_r(activation)?;
     let previous = STATE.with(|state| {
@@ -415,6 +415,13 @@ impl Record {
     pub(super) fn new(value: Value) -> super::Result<Self> {
         if value.is_null() {
             return Err("Python preparation did not produce a managed manifest".into());
+        }
+        Ok(Self(value))
+    }
+
+    pub(super) fn config(value: Value) -> super::Result<Self> {
+        if value.is_null() {
+            return Err("Python activation did not produce candidate configuration".into());
         }
         Ok(Self(value))
     }

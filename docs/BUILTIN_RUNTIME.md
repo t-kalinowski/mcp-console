@@ -238,7 +238,8 @@ The final expression of a cell is displayed through Python's normal display hook
 An uncaught exception prints its traceback and completes as a language outcome.
 The Python session remains usable, including state established before the exception.
 Python 3.10 or later is required.
-R is initialized eagerly, and reticulate remains required for Python interpreter selection, startup, environment activation, and cross-language access.
+R is initialized eagerly, and reticulate remains required for Python interpreter selection, startup, candidate configuration, and cross-language access.
+Console activates live managed environments through its retained CPython library.
 The built-in startup display width for NumPy and pandas is 200 columns, and evaluated code may change it.
 
 Console routes ordinary main-thread Python text and diagnostics directly through the ordered worker console channels.
@@ -282,7 +283,7 @@ Python source is not scanned, so imports in unreachable branches or uncalled fun
 Each reached missing import resolves in execution order, and the cell is never replayed.
 
 The finder calls the private R bridge, which adds the inferred distribution to reticulate's managed manifest and asks the existing host `uv` resolver for a compatible environment.
-After reticulate activates that environment, the worker reports the complete manifest to the server.
+After Console activates that environment, the worker reports the complete manifest to the server.
 Only then does the original import resume against invalidated import caches.
 Preparation makes the distribution available; the original import still performs the import normally.
 The automatic resolver request carries a differently named import and distribution together, and the server adds the bounded notice when it commits the matching activation.

@@ -5,7 +5,7 @@ use super::PreparationOutcome;
 const PYTHON_BRIDGE_SOURCE: &str = include_str!("bridge.R");
 const PYTHON_INITIALIZER_SOURCE: &str = include_str!("initialize.R");
 
-/// Interpreter startup and environment preparation remain hosted by reticulate.
+/// Interpreter startup and candidate configuration remain hosted by reticulate.
 pub(super) struct Runtime {
     bridge: crate::r_bridge::Bridge,
     initialized: bool,
@@ -115,22 +115,14 @@ pub extern "C-unwind" fn mcp_console_finish_python_initialization() -> harp::Res
     unsafe { Ok(libr::R_NilValue) }
 }
 
-// Register these two callbacks explicitly: harp::register suspends interrupts
-// throughout the call. Protect R conversions, but leave the Python helpers in
-// the caller's interrupt context, as they were under reticulate dispatch.
+// Register this callback explicitly: harp::register suspends interrupts
+// throughout the call. Leave Python setup in the caller's interrupt context.
 #[ctor::ctor(unsafe)]
 fn register_python_setup() {
     type CallMethod = unsafe extern "C-unwind" fn() -> *mut libc::c_void;
     // SAFETY: R invokes each fixed callback with its registered arity on the
     // worker's R thread. The names have static storage.
     unsafe {
-        harp::routines::add(libr::R_CallMethodDef {
-            name: c"mcp_console_activate_process_environment".as_ptr(),
-            fun: Some(std::mem::transmute::<*const (), CallMethod>(
-                mcp_console_activate_process_environment as *const (),
-            )),
-            numArgs: 1,
-        });
         harp::routines::add(libr::R_CallMethodDef {
             name: c"mcp_console_disable_matplotlib_show".as_ptr(),
             fun: Some(std::mem::transmute::<*const (), CallMethod>(
@@ -139,17 +131,6 @@ fn register_python_setup() {
             numArgs: 0,
         });
     }
-}
-
-#[allow(clippy::result_large_err)]
-extern "C-unwind" fn mcp_console_activate_process_environment(executable: SEXP) -> SEXP {
-    harp::exec::r_unwrap(|| -> harp::Result<SEXP> {
-        let executable =
-            harp::exec::r_sandbox(|| String::try_from(harp::object::RObject::view(executable)))??;
-        let completed = super::library::activate_process_environment(&executable)
-            .map_err(|error| harp::anyhow!("{error}"))?;
-        harp::exec::r_sandbox(|| harp::object::RObject::from(completed).sexp)
-    })
 }
 
 #[allow(clippy::result_large_err)]

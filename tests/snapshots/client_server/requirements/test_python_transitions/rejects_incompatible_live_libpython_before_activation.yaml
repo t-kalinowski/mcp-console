@@ -1,0 +1,54 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  python: import sys; initial_prefix = sys.prefix
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  r: |
+    before <- reticulate::py_require()
+    namespace <- asNamespace("reticulate")
+    original <- get("python_config", namespace)
+    replacement <- function(...) {
+      config <- original(...)
+      config$libpython <- "incompatible-libpython"
+      config
+    }
+    unlockBinding("python_config", namespace)
+    assign("python_config", replacement, envir = namespace)
+    lockBinding("python_config", namespace)
+    outcome <- tryCatch(
+      reticulate::py_require("py-yaml12"),
+      error = conditionMessage
+    )
+    stopifnot(
+      grepl(
+        "New environment does not use the same Python binary",
+        outcome,
+        fixed = TRUE
+      ),
+      grepl("new libpython: incompatible-libpython", outcome, fixed = TRUE),
+      identical(reticulate::py_require(), before)
+    )
+    unlockBinding("python_config", namespace)
+    assign("python_config", original, envir = namespace)
+    lockBinding("python_config", namespace)
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  python: sys.prefix == initial_prefix
+result:
+  content:
+    - type: text
+      text: |
+        True
+  isError: false

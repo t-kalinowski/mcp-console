@@ -1,10 +1,13 @@
 //! Native managed Python requirements and activation commits.
 //!
 //! This owner chooses declaration transitions and when to prepare a candidate.
-//! Reticulate retains live compatibility checks and environment activation; the
-//! R adapter preserves presentation metadata and the activation commit boundary.
+//! The native owner checks the selected environment and activates it through
+//! the retained CPython library. The R adapter supplies candidate configuration
+//! and preserves presentation metadata and the activation commit boundary.
 
 mod r;
+
+use std::path::Path;
 
 use r::{Adapter, Declaration, Record, Value};
 
@@ -26,7 +29,7 @@ struct Manifest {
 struct Requirements {
     current: Option<Manifest>,
     // A transient matching key for an environment already activated by
-    // reticulate, not a second independently mutable requirement manifest.
+    // Console, not a second independently mutable requirement manifest.
     pending_activation: Option<Manifest>,
 }
 
@@ -149,12 +152,50 @@ impl Requirements {
             r::check_activation().map_err(r::from_r_error)?;
             let version = adapter.call("live_python_version", &[])?;
             let python = adapter.resolve(&candidate, &version)?;
-            adapter.call("activate", &[&python, candidate.value()])?
+            Self::activate(adapter, &python, &candidate)?
         } else {
             Value::null()
         };
         candidate.append_history(&request.record)?;
         Ok((candidate, config))
+    }
+
+    fn activate(adapter: &Adapter, python: &Value, candidate: &Record) -> Result<Value> {
+        let config = Record::config(adapter.call("candidate_config", &[python])?)?;
+        let selected_libpython = config.get("libpython")?;
+        let live_libpython = adapter.call("live_libpython", &[])?;
+        if !selected_libpython.identical(&live_libpython)? {
+            return Err(format!(
+                "New environment does not use the same Python binary\nnew libpython: {}\nold libpython: {}",
+                selected_libpython.text()?,
+                live_libpython.text()?
+            )
+            .into());
+        }
+
+        let python = python.text()?;
+        let script = Path::new(&python)
+            .parent()
+            .ok_or("selected Python executable has no parent directory")?
+            .join("activate_this.py");
+        let script = script
+            .to_str()
+            .ok_or("Python activation script path is not UTF-8")?;
+        let executable = config.get("executable")?.text()?;
+        let completed = super::library::activate_environment(script, &executable)?;
+        if !completed {
+            // CPython retained the original exception and traceback. Rethrow
+            // through reticulate's existing condition and interrupt boundary.
+            adapter.call("raise_python_setup_error", &[])?;
+            return Err("Python activation failed without an exception".into());
+        }
+
+        let config = adapter.call("available_config", &[config.value()])?;
+        // Record the transient key only after Python and process-environment
+        // setup succeed. Reticulate updates its configuration from this return
+        // value, then writes the active binding that publishes PythonActivated.
+        adapter.call("record_activation", &[candidate.value()])?;
+        Ok(config)
     }
 
     fn prepare(adapter: &Adapter, packages: Value) -> Result<Option<String>> {
