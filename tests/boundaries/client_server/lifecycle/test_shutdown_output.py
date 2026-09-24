@@ -6,6 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.assertions import last_tool_text
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.records import Transcript
@@ -29,15 +30,24 @@ def _shutdown_with_collected_output(
         )
         try:
             client.initialize_and_list_tools()
-            waiting = client.start_send(
-                r="shutdown output checkpoints", timeout_ms=40_000
-            )
+            client.send(r="shutdown output checkpoints", timeout_ms=0)
+            assert last_tool_text(client) == "\n[running; poll with an empty send]"
             control.connect(client)
-            # The worker seeing this cell proves the pending call was admitted
-            # before shutdown; a competing poll has no ordering guarantee.
             control.wait_for(0, "evaluation_started")
             control.send_control(0, "emit_output")
             control.wait_for(0, "output_processed")
+
+            waiting = client.start_send(timeout_ms=40_000)
+            client.send(timeout_ms=0)
+            assert client.transcript[-1]["result"] == {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "[worker evaluation is already being polled]",
+                    }
+                ],
+                "isError": True,
+            }, client.transcript[-1]
             if completed:
                 control.send_control(0, "complete")
                 control.wait_for(0, "completion_processed")
