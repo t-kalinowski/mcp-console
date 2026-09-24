@@ -5,34 +5,50 @@ use super::PreparationOutcome;
 const PYTHON_BRIDGE_SOURCE: &str = include_str!("bridge.R");
 const PYTHON_INITIALIZER_SOURCE: &str = include_str!("initialize.R");
 
-/// Interpreter startup and candidate configuration remain hosted by reticulate.
-pub(super) struct Runtime {
+/// Reticulate supplies the selected configuration and attaches to the native interpreter.
+pub(super) struct Adapter {
     bridge: crate::r_bridge::Bridge,
-    initialized: bool,
+}
+
+#[derive(serde::Deserialize)]
+pub(super) struct SelectedPython {
+    pub(super) python: String,
+    pub(super) libpython: String,
+    pub(super) python_home: String,
 }
 
 pub(super) fn configure_worker_environment() -> std::io::Result<()> {
     super::platform::set_environment(c"RETICULATE_REMAP_OUTPUT_STREAMS", c"0", true)
 }
 
-impl Runtime {
+impl Adapter {
     pub(super) fn initialize() -> Result<Self, String> {
         let source = format!(
             "base::local(\n  {{\n    state <- ({PYTHON_BRIDGE_SOURCE})\n{PYTHON_INITIALIZER_SOURCE}\n    state\n  }},\n  envir = base::new.env(parent = base::baseenv())\n)"
         );
         Ok(Self {
             bridge: crate::r_bridge::Bridge::initialize(&source, "Python")?,
-            initialized: false,
         })
     }
 
-    pub(super) fn ensure_initialized(&mut self) -> Result<bool, String> {
-        if !self.initialized {
-            // Keep the existing R error/interrupt boundary for startup only.
-            // An interrupted initialization is retried by the next cell.
-            self.initialized = self.bridge.evaluate_completed("")?;
-        }
-        Ok(self.initialized)
+    pub(super) fn select(&mut self) -> Result<Option<SelectedPython>, String> {
+        // Discovery and serialization share the existing R interrupt boundary.
+        self.bridge
+            .evaluate_completed_string("select")?
+            .map(|selected| {
+                serde_json::from_str(&selected)
+                    .map_err(|error| format!("invalid selected Python configuration: {error}"))
+            })
+            .transpose()
+    }
+
+    pub(super) fn cancel_selection(&self) -> Result<(), String> {
+        self.bridge.call0_integer(c"cancel_python_selection")?;
+        Ok(())
+    }
+
+    pub(super) fn attach_and_setup(&mut self) -> Result<bool, String> {
+        self.bridge.evaluate_completed("")
     }
 
     pub(super) fn prepare(&self, packages: Vec<String>) -> Result<PreparationOutcome, String> {
@@ -104,6 +120,21 @@ pub extern "C-unwind" fn mcp_console_install_python_runtime(libpython: SEXP) -> 
         .map_err(|error| harp::anyhow!("{error}"))?;
     crate::sql::install_python_runtime().map_err(|error| harp::anyhow!("{error}"))?;
     unsafe { Ok(libr::R_NilValue) }
+}
+
+#[allow(clippy::result_large_err)]
+#[harp::register]
+pub extern "C-unwind" fn mcp_console_python_runtime_configured() -> harp::Result<SEXP> {
+    super::library::mark_runtime_configured().map_err(|error| harp::anyhow!("{error}"))?;
+    unsafe { Ok(libr::R_NilValue) }
+}
+
+#[allow(clippy::result_large_err)]
+#[harp::register]
+pub extern "C-unwind" fn mcp_console_python_runtime_is_configured() -> harp::Result<SEXP> {
+    let configured =
+        super::library::runtime_configured().map_err(|error| harp::anyhow!("{error}"))?;
+    Ok(harp::object::RObject::from(configured).sexp)
 }
 
 // Release the initial GIL when control leaves reticulate's C initializer,

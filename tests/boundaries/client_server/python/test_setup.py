@@ -1,6 +1,8 @@
 #!/usr/bin/env -S uv run --script
 
+import json
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -12,10 +14,534 @@ from support.assertions import (
 )
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
-from support.normalization import code
+from support.normalization import code, normalize_python_resolution_error
+from support.native import build_interposer
 from support.records import Transcript
+from support.requirements import NATIVE_FIXTURES, requires
 from support.resolvers import send_and_collect_runtime_python_resolution
 from support.suites import run_this_suite
+
+
+@executions(DIRECT, SANDBOXED)
+@requires(NATIVE_FIXTURES)
+def test_python_first_initializes_before_reticulate_attaches(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        probe = build_interposer(temporary, "python_initialized")
+        serve = (
+            execution.serve("--writable-root", temporary_directory)
+            if execution == SANDBOXED
+            else execution.serve()
+        )
+        with McpClient(binary, serve) as client:
+            client.initialize_and_list_tools()
+            # fmt: r
+            r = code(f"""
+                startup_probe <- dyn.load({json.dumps(str(probe))})
+                startup_calls <- 0L
+                callback_calls <- 0L
+                Sys.unsetenv("RETICULATE_PYTHON")
+                expected_python <- normalizePath(Sys.which("python3"))
+                options(reticulate.python.beforeInitialized = function() {{
+                  callback_calls <<- callback_calls + 1L
+                  initialized <- .C(
+                    getNativeSymbolInfo(
+                      "mcp_console_probe_python_initialized",
+                      PACKAGE = .GlobalEnv$startup_probe
+                    ),
+                    value = 0L
+                  )$value
+                  if (initialized == 1L) {{
+                    stop(sprintf("callback %d ran after CPython initialization", callback_calls))
+                  }}
+                  reticulate::use_python(expected_python, required = TRUE)
+                }})
+                invisible(suppressMessages(base::trace(
+                  "py_initialize",
+                  tracer = quote({{
+                    assign(
+                      "startup_calls",
+                      get("startup_calls", envir = .GlobalEnv) + 1L,
+                      envir = .GlobalEnv
+                    )
+                    stopifnot(identical(
+                      .C(
+                        getNativeSymbolInfo(
+                          "mcp_console_probe_python_initialized",
+                          PACKAGE = .GlobalEnv$startup_probe
+                        ),
+                        value = 0L
+                      )$value,
+                      1L
+                    ))
+                  }}),
+                  print = FALSE,
+                  where = asNamespace("reticulate")
+                )))
+                """)
+            client.send(r=r)
+            assert last_result_text(client) == "[done]", client.transcript[-1]
+            client.transcript[-1]["send"]["r"] = r.replace(
+                str(probe), "<test python probe>"
+            )
+            client.send(
+                # fmt: python
+                python=code("""
+                    startup_value = 41
+                    startup_value + 1
+                    """)
+            )
+            assert last_result_text(client) == "42\n", client.transcript[-1]
+            client.send(
+                # fmt: r
+                r=code("""
+                    stopifnot(startup_calls == 1L)
+                    stopifnot(callback_calls == 1L)
+                    stopifnot(identical(
+                      normalizePath(reticulate::py_config()$python),
+                      expected_python
+                    ))
+                    reticulate::py_to_r(reticulate::py$startup_value) + 1L
+                    """)
+            )
+            assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
+            return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+@requires(NATIVE_FIXTURES)
+def test_r_first_initializes_before_reticulate_attaches(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        probe = build_interposer(temporary, "python_initialized")
+        serve = (
+            execution.serve("--writable-root", temporary_directory)
+            if execution == SANDBOXED
+            else execution.serve()
+        )
+        with McpClient(binary, serve) as client:
+            client.initialize_and_list_tools()
+            # fmt: r
+            r = code(f"""
+                startup_probe <- dyn.load({json.dumps(str(probe))})
+                startup_calls <- 0L
+                invisible(suppressMessages(base::trace(
+                  "py_initialize",
+                  tracer = quote({{
+                    assign(
+                      "startup_calls",
+                      get("startup_calls", envir = .GlobalEnv) + 1L,
+                      envir = .GlobalEnv
+                    )
+                    stopifnot(identical(
+                      .C(
+                        getNativeSymbolInfo(
+                          "mcp_console_probe_python_initialized",
+                          PACKAGE = .GlobalEnv$startup_probe
+                        ),
+                        value = 0L
+                      )$value,
+                      1L
+                    ))
+                  }}),
+                  print = FALSE,
+                  where = asNamespace("reticulate")
+                )))
+                invisible(reticulate::py_config())
+                reticulate::py_run_string("startup_value = 41")
+                stopifnot(startup_calls == 1L)
+                reticulate::py_to_r(reticulate::py$startup_value) + 1L
+                """)
+            client.send(r=r)
+            assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
+            client.transcript[-1]["send"]["r"] = r.replace(
+                str(probe), "<test python probe>"
+            )
+            client.send(python="startup_value + 1")
+            assert last_result_text(client) == "42\n", client.transcript[-1]
+            return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_r_first_runs_selection_callback_once(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with McpClient(binary, execution.serve()) as client:
+        client.initialize_and_list_tools()
+        # fmt: r
+        r = code("""
+            Sys.unsetenv("RETICULATE_PYTHON")
+            expected_python <- normalizePath(Sys.which("python3"))
+            callback_calls <- 0L
+            options(reticulate.python.beforeInitialized = function() {
+              callback_calls <<- callback_calls + 1L
+              reticulate::use_python(expected_python, required = TRUE)
+            })
+            config <- reticulate::py_config()
+            stopifnot(callback_calls == 1L)
+            stopifnot(identical(normalizePath(config$python), expected_python))
+            42L
+            """)
+        client.send(r=r)
+        assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
+        client.send(python="41 + 1")
+        assert last_result_text(client) == "42\n", client.transcript[-1]
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+@requires(NATIVE_FIXTURES)
+def test_retries_attachment_without_reinitializing_python(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        probe = build_interposer(temporary, "python_initialized")
+        serve = (
+            execution.serve("--writable-root", temporary_directory)
+            if execution == SANDBOXED
+            else execution.serve()
+        )
+        with McpClient(binary, serve) as client:
+            client.initialize_and_list_tools()
+            # fmt: r
+            r = code(f"""
+                startup_probe <- dyn.load({json.dumps(str(probe))})
+                invisible(suppressMessages(base::trace(
+                  "py_run_string_impl",
+                  tracer = quote({{
+                    if (grepl("sys.executable  =", code, fixed = TRUE)) {{
+                      startup_environment <<- Sys.getenv(c("VIRTUAL_ENV", "PATH", "R_SESSION_INITIALIZED"))
+                      stop(structure(
+                        list(message = "synthetic reticulate attach failure", call = NULL),
+                        class = c(attachment_failure, "condition")
+                      ))
+                    }}
+                  }}),
+                  print = FALSE,
+                  where = asNamespace("reticulate")
+                )))
+                for (attachment_failure in c("error", "interrupt")) {{
+                  failure <- tryCatch(
+                    reticulate::py_config(),
+                    error = conditionMessage,
+                    interrupt = conditionMessage
+                  )
+                  stopifnot(!reticulate::py_available(initialize = FALSE))
+                  stopifnot(grepl("synthetic reticulate attach failure", failure, fixed = TRUE))
+                  stopifnot(identical(
+                    Sys.getenv(names(startup_environment)), startup_environment
+                  ))
+                  stopifnot(identical(
+                    .C(
+                      getNativeSymbolInfo(
+                        "mcp_console_probe_python_initialized",
+                        PACKAGE = startup_probe
+                      ),
+                      value = 0L
+                    )$value,
+                    1L
+                  ))
+                }}
+                invisible(suppressMessages(base::untrace(
+                  "py_run_string_impl", where = asNamespace("reticulate")
+                )))
+                config <- reticulate::py_config()
+                sys <- reticulate::import("sys", convert = FALSE)
+                stopifnot(identical(config$executable, reticulate::py_to_r(sys$executable)))
+                reticulate::py_run_string("startup_value = 41")
+                reticulate::py_to_r(reticulate::py$startup_value) + 1L
+                """)
+            client.send(r=r)
+            assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
+            client.transcript[-1]["send"]["r"] = r.replace(
+                str(probe), "<test python probe>"
+            )
+            client.send(python="startup_value + 1")
+            assert last_result_text(client) == "42\n", client.transcript[-1]
+            return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_retries_selection_after_interrupt(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with McpClient(binary, execution.serve()) as client:
+        client.initialize_and_list_tools()
+        # fmt: r
+        r = code(r"""
+            r_marker <- 41L
+            invisible(suppressMessages(base::trace(
+              "py_discover_config",
+              tracer = quote({
+                if (
+                  !exists(
+                    "selection_interrupted",
+                    envir = .GlobalEnv,
+                    inherits = FALSE
+                  )
+                ) {
+                  assign("selection_interrupted", TRUE, envir = .GlobalEnv)
+                  stop(base::structure(
+                    base::list(message = "synthetic selection interrupt", call = NULL),
+                    class = c("interrupt", "condition")
+                  ))
+                }
+              }),
+              print = FALSE,
+              where = asNamespace("reticulate")
+            )))
+            """)
+        client.send(r=r)
+        assert last_result_text(client) == "[done]", client.transcript[-1]
+        client.send(
+            # fmt: python
+            python=code("""
+                raise AssertionError("interrupted selection ran the cell")
+                """)
+        )
+        assert client.transcript[-1]["result"]["isError"] is False, client.transcript[
+            -1
+        ]
+        client.send(python="r.r_marker + 1")
+        assert last_result_text(client) == "42\n", client.transcript[-1]
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_restores_selection_environment_after_interrupt(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with McpClient(binary, execution.serve()) as client:
+        client.initialize_and_list_tools()
+        # fmt: r
+        r = code(r"""
+            Sys.setenv(PYTHONPATH = "selection-original")
+            original_environment <- Sys.getenv(
+              c(
+                "VIRTUAL_ENV",
+                "R_SESSION_INITIALIZED",
+                "PYTHONIOENCODING",
+                "PATH",
+                "LD_LIBRARY_PATH",
+                "PYTHONPATH"
+              ),
+              unset = NA_character_
+            )
+            selection_env_interrupted <- FALSE
+            invisible(suppressMessages(base::trace(
+              "Sys.setenv",
+              exit = quote({
+                if ("PYTHONPATH" %in% names(list(...)) && !selection_env_interrupted) {
+                  selection_env_interrupted <<- TRUE
+                  stop(base::structure(
+                    base::list(
+                      message = "synthetic selection environment interrupt",
+                      call = NULL
+                    ),
+                    class = c("interrupt", "condition")
+                  ))
+                }
+              }),
+              print = FALSE,
+              where = baseenv()
+            )))
+            """)
+        client.send(r=r)
+        assert last_result_text(client) == "[done]", client.transcript[-1]
+        client.send(
+            # fmt: python
+            python=code("""
+                raise AssertionError("interrupted selection ran the cell")
+                """)
+        )
+        assert client.transcript[-1]["result"]["isError"] is False, client.transcript[
+            -1
+        ]
+        # fmt: r
+        r = code("""
+            stopifnot(selection_env_interrupted)
+            stopifnot(identical(
+              Sys.getenv(names(original_environment), unset = NA_character_),
+              original_environment
+            ))
+            42L
+            """)
+        client.send(r=r)
+        assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
+        client.send(python="41 + 1")
+        assert last_result_text(client) == "42\n", client.transcript[-1]
+        client.send(
+            # fmt: r
+            r=code("""
+                stopifnot(identical(
+                  Sys.getenv("PYTHONPATH"),
+                  original_environment[["PYTHONPATH"]]
+                ))
+                42L
+                """)
+        )
+        assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_restores_virtualenv_after_selection_interrupt(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with McpClient(binary, execution.serve()) as client:
+        client.initialize_and_list_tools()
+        # fmt: r
+        r = code("""
+            interrupted <- TRUE
+            invisible(suppressMessages(base::trace(
+              "Sys.setenv",
+              exit = quote({
+                if ("VIRTUAL_ENV" %in% names(list(...)) && !interrupted) {
+                  interrupted <<- TRUE
+                  stop(structure(
+                    list(message = "selection interrupted", call = NULL),
+                    class = c("interrupt", "condition")
+                  ))
+                }
+              }),
+              print = FALSE,
+              where = baseenv()
+            )))
+            for (previous in c(NA_character_, "before-selection")) {
+              if (is.na(previous)) {
+                Sys.unsetenv("VIRTUAL_ENV")
+              } else {
+                Sys.setenv(VIRTUAL_ENV = previous)
+              }
+              interrupted <- FALSE
+              failure <- tryCatch(reticulate::py_config(), interrupt = conditionMessage)
+              stopifnot(
+                identical(failure, "selection interrupted"),
+                identical(Sys.getenv("VIRTUAL_ENV", unset = NA_character_), previous),
+                !reticulate::py_available(initialize = FALSE)
+              )
+            }
+            invisible(suppressMessages(base::untrace("Sys.setenv", where = baseenv())))
+            42L
+            """)
+        client.send(r=r)
+        assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
+        client.send(python="41 + 1")
+        assert last_result_text(client) == "42\n", client.transcript[-1]
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_recovers_from_conflicting_requirements_before_python_startup(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with McpClient(binary, execution.serve()) as client:
+        client.initialize_and_list_tools()
+        client.send(r="startup_marker <- 41L")
+        assert last_result_text(client) == "[done]", client.transcript[-1]
+        result = client.send(
+            python="raise AssertionError('failed preparation ran the cell')",
+            requirements={"python": ["numpy<1", "numpy>=2"]},
+        )
+        assert result["isError"] is True, result
+        output = last_result_text(client)
+        assert "No solution found" in output, client.transcript[-1]
+        client.transcript[-1]["result"]["content"][0]["text"] = (
+            normalize_python_resolution_error(output)
+        )
+        client.send(
+            # fmt: r
+            r=code("""
+                stopifnot(!reticulate::py_available(initialize = FALSE))
+                startup_marker + 1L
+                """)
+        )
+        assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
+        client.send(python="r.startup_marker + 1", requirements={"python": ["numpy"]})
+        assert last_result_text(client) == "42\n", client.transcript[-1]
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_serializes_selected_python_once_inside_interrupt_boundary(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with McpClient(binary, execution.serve()) as client:
+        client.initialize_and_list_tools()
+        # fmt: r
+        r = code(r"""
+            original_environment <- Sys.getenv(
+              c(
+                "VIRTUAL_ENV",
+                "R_SESSION_INITIALIZED",
+                "PYTHONIOENCODING",
+                "PATH",
+                "LD_LIBRARY_PATH",
+                "PYTHONPATH"
+              ),
+              unset = NA_character_
+            )
+            selection_serializations <- 0L
+            invisible(suppressMessages(base::trace(
+              "toJSON",
+              tracer = quote({
+                if (
+                  is.list(x) &&
+                    identical(
+                      names(x),
+                      c("python", "libpython", "python_home")
+                    )
+                ) {
+                  selection_serializations <<- selection_serializations + 1L
+                  if (selection_serializations == 1L) {
+                    base::stop(base::structure(
+                      base::list(
+                        message = "synthetic serialization interrupt",
+                        call = NULL
+                      ),
+                      class = c("interrupt", "condition")
+                    ))
+                  }
+                }
+              }),
+              print = FALSE,
+              where = asNamespace("jsonlite")
+            )))
+            """)
+        client.send(r=r)
+        assert last_result_text(client) == "[done]", client.transcript[-1]
+        client.send(python="raise AssertionError('interrupted selection ran the cell')")
+        assert client.transcript[-1]["result"]["isError"] is False, client.transcript[
+            -1
+        ]
+        # fmt: r
+        r = code("""
+            stopifnot(!reticulate::py_available(initialize = FALSE))
+            stopifnot(identical(
+              Sys.getenv(names(original_environment), unset = NA_character_),
+              original_environment
+            ))
+            42L
+            """)
+        client.send(r=r)
+        assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
+        # fmt: python
+        python = code("""
+            import importlib.util
+
+            assert importlib.util.find_spec("yaml12") is not None
+            42
+            """)
+        client.send(python=python, requirements={"python": ["py-yaml12"]})
+        assert last_result_text(client) == "42\n", client.transcript[-1]
+        client.send(r="stopifnot(selection_serializations == 2L); 42L")
+        assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
+        return client.finish()
 
 
 @executions(DIRECT, SANDBOXED)
@@ -175,6 +701,13 @@ def test_retries_matplotlib_setup_after_interrupt(
                     pass
 
             sys.modules["matplotlib.pyplot"] = InterruptingPyplot("matplotlib.pyplot")
+
+            import _mcp_console
+
+            def configure_again(*args):
+                raise AssertionError("Python runtime configured twice")
+
+            _mcp_console.configure_import_resolution = configure_again
             )---")
             """)
         client.send(r=r)

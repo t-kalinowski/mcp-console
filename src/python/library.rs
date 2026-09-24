@@ -61,6 +61,7 @@ struct LoadedLibrary {
     configuration: Option<Configuration>,
     sql_runtime_installed: bool,
     runtime_installed: bool,
+    runtime_configured: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -97,6 +98,7 @@ struct PythonApi {
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum Interpreter {
     Uninitialized,
+    Initializing,
     External,
     // PyEval_SaveThread's main-thread state, retained until process exit.
     RustOwned { saved_thread: Option<usize> },
@@ -147,9 +149,69 @@ pub(super) fn initialize(
     program_name: &str,
     python_home: &str,
 ) -> Result<bool, String> {
-    with_library(path, |library| {
-        library.initialize(program_name, python_home)
-    })
+    let path = path.canonicalize().map_err(|error| {
+        format!(
+            "failed to resolve Python shared library `{}`: {error}",
+            path.display()
+        )
+    })?;
+    ensure_loaded(&path)?;
+    let (api, program_name_wide, python_home_wide) = {
+        let mut slot = PYTHON_LIBRARY
+            .lock()
+            .map_err(|_| "Python shared library state is unavailable".to_string())?;
+        let library = slot.as_mut().unwrap();
+        library.ensure_path(&path)?;
+        if library.interpreter == Interpreter::Initializing {
+            return Err("Python interpreter initialization is already in progress".to_string());
+        }
+        // SAFETY: The resolved function has no preconditions.
+        if unsafe { (library.api.is_initialized)() } != 0 {
+            if library.interpreter == Interpreter::Uninitialized {
+                library.interpreter = Interpreter::External;
+            }
+            library.ensure_configuration(program_name, python_home)?;
+            return Ok(matches!(library.interpreter, Interpreter::RustOwned { .. }));
+        }
+        match library.interpreter {
+            Interpreter::Uninitialized => {}
+            Interpreter::External => {
+                return Err("externally owned Python interpreter was finalized".to_string());
+            }
+            Interpreter::RustOwned { .. } => {
+                return Err("Rust-owned Python interpreter was finalized".to_string());
+            }
+            Interpreter::Initializing => unreachable!(),
+        }
+        let configuration = Configuration::new(program_name, python_home)?;
+        let program_name_wide = configuration.program_name_wide.as_ptr();
+        let python_home_wide = configuration.python_home_wide.as_ptr();
+        library.configuration = Some(configuration);
+        library.interpreter = Interpreter::Initializing;
+        (library.api, program_name_wide, python_home_wide)
+    };
+
+    // The selected configuration remains owned by the process-lifetime library
+    // state. Release its lock before CPython runs site hooks or callbacks.
+    unsafe {
+        (api.set_program_name)(program_name_wide);
+        (api.set_python_home)(python_home_wide);
+        (api.initialize_ex)(0);
+    }
+    // SAFETY: The resolved function has no preconditions.
+    if unsafe { (api.is_initialized)() } == 0 {
+        return Err("CPython initialization did not complete".to_string());
+    }
+    let mut argv = [program_name_wide.cast_mut()];
+    unsafe {
+        (api.set_argv)(1, argv.as_mut_ptr());
+        (api.set_signal)(libc::SIGPIPE, libc::SIG_IGN);
+    }
+    let mut slot = PYTHON_LIBRARY
+        .lock()
+        .map_err(|_| "Python shared library state is unavailable".to_string())?;
+    slot.as_mut().unwrap().interpreter = Interpreter::RustOwned { saved_thread: None };
+    Ok(true)
 }
 
 pub(super) fn install_runtime(source: &str) -> Result<(), String> {
@@ -174,7 +236,14 @@ pub(super) fn install_runtime(source: &str) -> Result<(), String> {
 }
 
 pub(super) fn install_sql_runtime(source: &str) -> Result<(), String> {
-    let api = api()?;
+    let api = {
+        let slot = PYTHON_LIBRARY.lock().unwrap();
+        let library = slot.as_ref().ok_or("Python shared library is not loaded")?;
+        if library.sql_runtime_installed {
+            return Ok(());
+        }
+        library.api
+    };
     let source = CString::new(source)
         .map_err(|_| "embedded Python SQL runtime source contains NUL".to_string())?;
     api.with_gil(|api| unsafe { api.run_module(c"_mcp_console_sql", &source) })?;
@@ -198,6 +267,28 @@ fn api() -> Result<PythonApi, String> {
 
 pub(super) fn install_services() -> Result<(), String> {
     api()?.with_gil(services::install)
+}
+
+pub(super) fn runtime_configured() -> Result<bool, String> {
+    let slot = PYTHON_LIBRARY
+        .lock()
+        .map_err(|_| "Python shared library state is unavailable")?;
+    Ok(slot
+        .as_ref()
+        .ok_or("Python shared library is not loaded")?
+        .runtime_configured)
+}
+
+pub(super) fn mark_runtime_configured() -> Result<(), String> {
+    let mut slot = PYTHON_LIBRARY
+        .lock()
+        .map_err(|_| "Python shared library state is unavailable")?;
+    let library = slot.as_mut().ok_or("Python shared library is not loaded")?;
+    if !library.runtime_installed || !library.sql_runtime_installed {
+        return Err("Python runtime configuration preceded installation".to_string());
+    }
+    library.runtime_configured = true;
+    Ok(())
 }
 
 pub(super) fn activate_environment(script: &str, executable: &str) -> Result<bool, String> {
@@ -294,13 +385,44 @@ fn installed_sql_api() -> Result<Option<PythonApi>, String> {
 }
 
 pub(super) fn finish_initialization() -> Result<(), String> {
-    let mut library_slot = PYTHON_LIBRARY
+    let save_thread = {
+        let slot = PYTHON_LIBRARY
+            .lock()
+            .map_err(|_| "Python shared library state is unavailable".to_string())?;
+        let library = slot
+            .as_ref()
+            .ok_or_else(|| "Python shared library is not loaded".to_string())?;
+        match library.interpreter {
+            Interpreter::Uninitialized => {
+                return Err("Python interpreter is not initialized".to_string());
+            }
+            Interpreter::Initializing => {
+                return Err("Python interpreter initialization is incomplete".to_string());
+            }
+            Interpreter::External
+            | Interpreter::RustOwned {
+                saved_thread: Some(_),
+            } => return Ok(()),
+            Interpreter::RustOwned { saved_thread: None } => {}
+        }
+        if unsafe { (library.api.is_initialized)() } == 0 {
+            return Err("Rust-owned Python interpreter was finalized".to_string());
+        }
+        library.api.save_thread
+    };
+    // Reticulate has returned from its C adapter. Release the library lock
+    // before detaching the initial main-thread state.
+    let thread_state = unsafe { save_thread() };
+    if thread_state.is_null() {
+        return Err("CPython did not return its initial thread state".to_string());
+    }
+    let mut slot = PYTHON_LIBRARY
         .lock()
         .map_err(|_| "Python shared library state is unavailable".to_string())?;
-    let library = library_slot
-        .as_mut()
-        .ok_or_else(|| "Python shared library is not loaded".to_string())?;
-    library.finish_initialization()
+    slot.as_mut().unwrap().interpreter = Interpreter::RustOwned {
+        saved_thread: Some(thread_state as usize),
+    };
+    Ok(())
 }
 
 fn with_library<T>(
@@ -313,17 +435,34 @@ fn with_library<T>(
             path.display()
         )
     })?;
+    ensure_loaded(&path)?;
     let mut library_slot = PYTHON_LIBRARY
         .lock()
         .map_err(|_| "Python shared library state is unavailable".to_string())?;
-    if library_slot.is_none() {
-        *library_slot = Some(LoadedLibrary::open(path.clone())?);
-    }
     let library = library_slot
         .as_mut()
         .expect("Python shared library should have been loaded");
     library.ensure_path(&path)?;
     operation(library)
+}
+
+fn ensure_loaded(path: &Path) -> Result<(), String> {
+    let missing = PYTHON_LIBRARY
+        .lock()
+        .map_err(|_| "Python shared library state is unavailable".to_string())?
+        .is_none();
+    if missing {
+        // Loading a shared object may run its constructors. Keep those outside
+        // the library-state lock just as we do for interpreter execution.
+        let loaded = LoadedLibrary::open(path.to_path_buf())?;
+        let mut slot = PYTHON_LIBRARY
+            .lock()
+            .map_err(|_| "Python shared library state is unavailable".to_string())?;
+        if slot.is_none() {
+            *slot = Some(loaded);
+        }
+    }
+    Ok(())
 }
 
 impl LoadedLibrary {
@@ -357,6 +496,7 @@ impl LoadedLibrary {
             configuration: None,
             sql_runtime_installed: false,
             runtime_installed: false,
+            runtime_configured: false,
         })
     }
 
@@ -382,56 +522,6 @@ impl LoadedLibrary {
         Ok(matches!(self.interpreter, Interpreter::RustOwned { .. }))
     }
 
-    fn initialize(&mut self, program_name: &str, python_home: &str) -> Result<bool, String> {
-        // SAFETY: The resolved function has no preconditions.
-        if unsafe { (self.api.is_initialized)() } != 0 {
-            if self.interpreter == Interpreter::Uninitialized {
-                self.interpreter = Interpreter::External;
-            }
-            self.ensure_configuration(program_name, python_home)?;
-            return Ok(matches!(self.interpreter, Interpreter::RustOwned { .. }));
-        }
-
-        match self.interpreter {
-            Interpreter::Uninitialized => {}
-            Interpreter::External => {
-                return Err("externally owned Python interpreter was finalized".to_string());
-            }
-            Interpreter::RustOwned { .. } => {
-                return Err("Rust-owned Python interpreter was finalized".to_string());
-            }
-        }
-
-        let configuration = Configuration::new(program_name, python_home)?;
-        // SAFETY: The pointers are NUL-terminated process-lifetime buffers.
-        // CPython is not initialized, and these legacy configuration calls
-        // must precede Py_InitializeEx for the supported Python versions.
-        unsafe {
-            (self.api.set_program_name)(configuration.program_name_wide.as_ptr());
-            (self.api.set_python_home)(configuration.python_home_wide.as_ptr());
-            (self.api.initialize_ex)(0);
-        }
-        // SAFETY: The resolved function has no preconditions.
-        if unsafe { (self.api.is_initialized)() } == 0 {
-            return Err("CPython initialization did not complete".to_string());
-        }
-
-        let mut argv = [configuration.program_name_wide.as_ptr().cast_mut()];
-        // SAFETY: CPython is initialized and argv points to the retained,
-        // NUL-terminated program-name buffer.
-        unsafe {
-            (self.api.set_argv)(1, argv.as_mut_ptr());
-            // Py_InitializeEx(0) does not install Python's signal handlers,
-            // including its normal SIGPIPE disposition. Preserve the prior
-            // reticulate-hosted behavior for the worker process lifetime.
-            (self.api.set_signal)(libc::SIGPIPE, libc::SIG_IGN);
-        }
-
-        self.configuration = Some(configuration);
-        self.interpreter = Interpreter::RustOwned { saved_thread: None };
-        Ok(true)
-    }
-
     fn ensure_configuration(&self, program_name: &str, python_home: &str) -> Result<(), String> {
         let Some(configuration) = self.configuration.as_ref() else {
             return Ok(());
@@ -440,36 +530,6 @@ impl LoadedLibrary {
             return Ok(());
         }
         Err("Python interpreter is already initialized with different configuration".to_string())
-    }
-
-    fn finish_initialization(&mut self) -> Result<(), String> {
-        match self.interpreter {
-            Interpreter::Uninitialized => {
-                return Err("Python interpreter is not initialized".to_string());
-            }
-            Interpreter::External
-            | Interpreter::RustOwned {
-                saved_thread: Some(_),
-            } => {
-                return Ok(());
-            }
-            Interpreter::RustOwned { saved_thread: None } => {}
-        }
-        // SAFETY: The resolved function has no preconditions.
-        if unsafe { (self.api.is_initialized)() } == 0 {
-            return Err("Rust-owned Python interpreter was finalized".to_string());
-        }
-        // SAFETY: Rust initialized CPython on this thread, and reticulate's
-        // wrapped C initializer leaves this initial thread state attached on
-        // both its return and unwind paths.
-        let thread_state = unsafe { (self.api.save_thread)() };
-        if thread_state.is_null() {
-            return Err("CPython did not return its initial thread state".to_string());
-        }
-        self.interpreter = Interpreter::RustOwned {
-            saved_thread: Some(thread_state as usize),
-        };
-        Ok(())
     }
 }
 

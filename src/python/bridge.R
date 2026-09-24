@@ -1,6 +1,5 @@
 base::local(
   {
-    initialized <- FALSE
     managed <- Sys.getenv("MCP_CONSOLE_MANAGED_PYTHON", unset = NA_character_)
     dynamic_resolution <- identical(
       Sys.getenv(
@@ -15,7 +14,6 @@ base::local(
     # reticulate without adding dispatcher names to the user's globals.
     python_dispatch <-
       "(lambda: None).__builtins__['_mcp_console_dispatch']()"
-    python_module <- NULL
     pending_import_resolution <- NULL
     requirements_adapter <- NULL
     `%||%` <- function(x, y) if (is.null(x)) y else x
@@ -371,14 +369,13 @@ base::local(
     }
 
     initialize_python_runtime <- function(strict = FALSE) {
-      if (!is.null(python_module)) {
-        return(invisible(TRUE))
-      }
-
-      python_config <- reticulate::py_config()
-      if (!is.null(python_module)) {
-        return(invisible(TRUE))
-      }
+      python_config <- local({
+        # Python-first selection already delivered this callback before
+        # discovery. Reticulate's attachment must not deliver it again.
+        previous_options <- options(reticulate.python.beforeInitialized = NULL)
+        on.exit(options(previous_options), add = TRUE)
+        reticulate::py_config()
+      })
       if (python_config$version < minimum_python) {
         if (!strict) {
           return(invisible(FALSE))
@@ -392,16 +389,14 @@ base::local(
           call. = FALSE
         )
       }
+      if (isTRUE(.Call("mcp_console_python_runtime_is_configured"))) {
+        return(invisible(TRUE))
+      }
       invisible(.Call(
         "mcp_console_install_python_runtime",
         python_config$libpython
       ))
-      python_module <<- reticulate::import("_mcp_console", convert = FALSE)
-      configured <- FALSE
-      on.exit(
-        if (!configured) python_module <<- NULL,
-        add = TRUE
-      )
+      python_module <- reticulate::import("_mcp_console", convert = FALSE)
       disabled_reason <- if (is.na(managed)) {
         managed_python_disabled_message
       } else {
@@ -423,7 +418,7 @@ base::local(
         local = TRUE,
         convert = FALSE
       ))
-      configured <- TRUE
+      invisible(.Call("mcp_console_python_runtime_configured"))
       invisible(TRUE)
     }
 
@@ -492,12 +487,11 @@ base::local(
     }
 
     evaluate_impl <- function() {
-      if (!initialized) {
-        initialize_python_runtime(strict = TRUE)
-        check_python_setup(.Call("mcp_console_disable_matplotlib_show"))
-        initialized <<- TRUE
+      if (identical(source, "select")) {
+        return(selected_python())
       }
-
+      initialize_python_runtime(strict = TRUE)
+      check_python_setup(.Call("mcp_console_disable_matplotlib_show"))
       invisible()
     }
 
