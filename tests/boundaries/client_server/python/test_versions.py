@@ -40,6 +40,7 @@ def test_uses_current_r_library_for_managed_python_resolution(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
+    # The worker uses the current R library, while host uv must not inherit it.
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
         real_uv = shutil.which("uv")
@@ -47,6 +48,7 @@ def test_uses_current_r_library_for_managed_python_resolution(
         uv_record = temporary / "uv-environment.jsonl"
         r_libs_record = temporary / "uv-r-libs.jsonl"
         environment, _ = r_test_environment()
+        environment.pop("R_LIBS", None)
         environment["RETICULATE_UV"] = str(
             Path(__file__).parents[3] / "fixtures" / "record_uv_environment"
         )
@@ -76,19 +78,17 @@ def test_uses_current_r_library_for_managed_python_resolution(
             )
             return library
 
-        def assert_resolver_used(library: str) -> None:
+        def assert_resolver_ignored_r_library() -> None:
             records = [
                 json.loads(line)
                 for line in r_libs_record.read_text(encoding="utf-8").splitlines()
             ]
             assert records, "managed Python resolution did not invoke uv"
-            assert all(record is not None for record in records), records
-            first_libraries = [record.split(os.pathsep, 1)[0] for record in records]
-            assert first_libraries == [library] * len(records), first_libraries
+            assert all(record is None for record in records), records
 
         client.send(requirements={"r": ["zeallot"]})
         assert last_result_text(client) == "[prepared]"
-        prepared_r_library = current_r_library()
+        assert Path(current_r_library()).is_dir()
         uv_record.write_text("", encoding="utf-8")
         r_libs_record.write_text("", encoding="utf-8")
         # Printing unconstrained requirements asks the host for the default
@@ -99,7 +99,7 @@ def test_uses_current_r_library_for_managed_python_resolution(
             """)
         client.send(r=r)
         assert last_result_text(client) == "[done]", client.transcript[-1]
-        assert_resolver_used(prepared_r_library)
+        assert_resolver_ignored_r_library()
 
         uv_record.write_text("", encoding="utf-8")
         r_libs_record.write_text("", encoding="utf-8")
@@ -110,7 +110,7 @@ def test_uses_current_r_library_for_managed_python_resolution(
             """)
         client.send(r=r)
         assert last_result_text(client) == "[done]", client.transcript[-1]
-        assert_resolver_used(prepared_r_library)
+        assert_resolver_ignored_r_library()
 
         uv_record.write_text("", encoding="utf-8")
         r_libs_record.write_text("", encoding="utf-8")
@@ -121,8 +121,8 @@ def test_uses_current_r_library_for_managed_python_resolution(
         assert last_result_text(client) == (
             "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
         )
-        restarted_r_library = current_r_library()
-        assert_resolver_used(restarted_r_library)
+        assert Path(current_r_library()).is_dir()
+        assert_resolver_ignored_r_library()
         return client.finish()
 
 

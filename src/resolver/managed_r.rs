@@ -189,14 +189,14 @@ impl ManagedR {
 }
 
 pub(crate) fn detect_r_bootstrap(
-    python: &mut super::ManagedPythonResolverConfiguration,
+    python: &super::ManagedPythonResolverConfiguration,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<Option<ManagedRBootstrap>, String> {
     discover(python, on_started).map(|(bootstrap, _)| bootstrap)
 }
 
 pub(crate) fn discover(
-    python: &mut super::ManagedPythonResolverConfiguration,
+    python: &super::ManagedPythonResolverConfiguration,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<(Option<ManagedRBootstrap>, PathBuf), String> {
     let resolver = ResolverProcess::new();
@@ -258,16 +258,12 @@ fn discover_r_resolver_with(
     Ok(Some(ManagedRResolverConfiguration { ir, rscript }))
 }
 
-fn select_ir_command(python: &mut super::ManagedPythonResolverConfiguration) -> Option<IrCommand> {
-    let path_ir = find_path_entry("ir");
-    let path_uv = find_path_entry("uv");
+fn select_ir_command(python: &super::ManagedPythonResolverConfiguration) -> Option<IrCommand> {
+    let path_ir = super::find_path_entry("ir");
+    let path_uv = super::find_path_entry("uv");
     if let Some(ir) = path_ir {
-        if let Some(uv) = path_uv.as_ref() {
-            python.set_default_uv(uv.as_os_str().to_os_string());
-        }
         Some(IrCommand::direct(ir))
     } else if let Some(uv) = path_uv {
-        python.set_default_uv(uv.as_os_str().to_os_string());
         Some(IrCommand::through_path_uv(uv))
     } else {
         python
@@ -503,21 +499,6 @@ fn resolve_r_with_process(
         rscript: configuration.rscript.clone(),
         requirements,
     })
-}
-
-fn find_path_entry(program: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    // A broken symlink or non-executable entry is a broken installation, not
-    // permission to select a different resolver.
-    std::env::split_paths(&path)
-        .map(|directory| {
-            if directory.as_os_str().is_empty() {
-                PathBuf::from(".").join(program)
-            } else {
-                directory.join(program)
-            }
-        })
-        .find(|candidate| std::fs::symlink_metadata(candidate).is_ok())
 }
 
 fn validate_ir_version(

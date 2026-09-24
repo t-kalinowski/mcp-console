@@ -118,7 +118,6 @@ pub(crate) fn resolve_python(
 pub(crate) fn resolve_python_manifest(
     requirements: crate::worker_protocol::PythonRequirementManifest,
     _configuration: &super::ManagedPythonResolverConfiguration,
-    _managed_r: Option<&ManagedR>,
     _on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<ManagedPython, String> {
     crate::python_requirement::validate_all(&requirements.packages)?;
@@ -129,7 +128,6 @@ pub(crate) fn resolve_python_manifest(
 pub(crate) fn resolve_python_version(
     constraints: Vec<String>,
     _configuration: &super::ManagedPythonResolverConfiguration,
-    _managed_r: &ManagedR,
     _on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<String, String> {
     crate::python_requirement::validate_version_constraints(&constraints)?;

@@ -52,15 +52,18 @@ def before_resolver_spawn(
         fake_bin.mkdir()
         fixtures = Path(__file__).resolve().parents[3] / "fixtures"
         (fake_bin / "ir").symlink_to(fixtures / "startup_ir")
+        (fake_bin / "uv").symlink_to(fixtures / "startup_ir")
         (fake_bin / "python3").symlink_to(sys.executable)
         environment, _ = r_test_environment()
         real_ir = shutil.which("ir")
-        assert real_ir is not None
+        real_uv = shutil.which("uv")
+        assert real_ir is not None and real_uv is not None
         environment.update(
             {
                 "TMPDIR": str(root),
                 "PATH": os.pathsep.join([str(fake_bin), environment["PATH"]]),
                 "MCP_CONSOLE_TEST_REAL_IR": real_ir,
+                "MCP_CONSOLE_TEST_REAL_UV": real_uv,
                 "MCP_CONSOLE_TEST_STARTUP_PHASE": "none",
                 "MCP_CONSOLE_TEST_STARTUP_RECORD": str(root / "resolver.jsonl"),
                 "MCP_CONSOLE_TEST_SPAWN_LIBRARY": str(
@@ -135,7 +138,9 @@ def test_interrupts_first_cell_between_resolver_phases(
             json.loads(line)
             for line in (root / "resolver.jsonl").read_text().splitlines()
         ]
-        assert invocations == [{"program": "ir", "arguments": ["--version"]}]
+        assert len(invocations) == 1, invocations
+        assert invocations[0]["program"] == "uv", invocations
+        assert invocations[0]["arguments"][:2] == ["python", "list"], invocations
         client.send(control="interrupt", timeout_ms=0)
         assert last_tool_text(client) == RUNNING
         release.release()

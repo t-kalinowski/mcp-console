@@ -3,9 +3,9 @@ use std::mem::MaybeUninit;
 use std::os::unix::process::CommandExt as _;
 use std::path::Path;
 use std::process::{Child, ChildStdin, Command, ExitStatus};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 #[derive(Clone)]
@@ -40,6 +40,7 @@ struct LocalControl {
     events: Sender<ResolverEvent>,
     control: Arc<AtomicU8>,
     cleanup: Arc<AtomicBool>,
+    waiting: Arc<Mutex<bool>>,
 }
 
 const CONTROL_NONE: u8 = 0;
@@ -72,6 +73,7 @@ pub(super) struct ResolverProcess {
     event_receiver: Receiver<ResolverEvent>,
     control: Arc<AtomicU8>,
     cleanup: Arc<AtomicBool>,
+    waiting: Arc<Mutex<bool>>,
 }
 
 impl ResolverProcess {
@@ -82,6 +84,7 @@ impl ResolverProcess {
             event_receiver,
             control: Arc::new(AtomicU8::new(CONTROL_NONE)),
             cleanup: Arc::new(AtomicBool::new(false)),
+            waiting: Arc::new(Mutex::new(false)),
         }
     }
 
@@ -90,12 +93,34 @@ impl ResolverProcess {
             events: self.events.clone(),
             control: self.control.clone(),
             cleanup: self.cleanup.clone(),
+            waiting: self.waiting.clone(),
         })
     }
 
     pub(super) fn watch_exit(&self, pid: u32) {
         self.cleanup.store(false, Ordering::SeqCst);
+        *self.waiting.lock().expect("resolver phase lock") = true;
         watch_resolver_exit(pid, self.events.clone());
+    }
+
+    fn finish_wait(&self, kind: &str) -> Result<(), String> {
+        let mut waiting = self.waiting.lock().expect("resolver phase lock");
+        let mut cancelled = false;
+        while let Ok(event) = self.event_receiver.try_recv() {
+            match event {
+                ResolverEvent::Interrupt { reply, .. } => {
+                    let _ = reply.send(Ok(()));
+                }
+                ResolverEvent::Cancel => cancelled = true,
+                ResolverEvent::Exited(_) => {}
+            }
+        }
+        *waiting = false;
+        if cancelled {
+            Err(format!("{kind} resolution cancelled"))
+        } else {
+            Ok(())
+        }
     }
 
     pub(super) fn wait(
@@ -124,6 +149,8 @@ impl ResolverControl for LocalControl {
         let (reply, response) = mpsc::channel();
         let marked = self.mark_control(CONTROL_INTERRUPTED);
         let clear_marker = marked.then(|| self.control.clone());
+        let waiting = self.waiting.lock().expect("resolver phase lock");
+        let wait_for_reply = *waiting;
         if self
             .events
             .send(ResolverEvent::Interrupt {
@@ -134,6 +161,10 @@ impl ResolverControl for LocalControl {
         {
             self.clear_control(CONTROL_INTERRUPTED, marked);
             return Ok(false);
+        }
+        drop(waiting);
+        if !wait_for_reply {
+            return Ok(true);
         }
         match response.recv() {
             Ok(result) => result.map(|()| true),
@@ -338,7 +369,10 @@ fn wait_for_resolver(
         program,
         kind,
         &resolver.cleanup,
-    )?;
+    );
+    let phase_result = resolver.finish_wait(kind);
+    let status = status?;
+    phase_result?;
     let write_result = receive_result(input, "stdin writer", kind)?;
     let stdout = receive_result(stdout, "stdout reader", kind)?
         .map_err(|error| format!("failed to read resolver stdout: {error}"))?;

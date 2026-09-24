@@ -100,13 +100,10 @@ impl Client {
             .as_ref()
             .ok_or_else(|| "managed Python environment is unavailable".to_string())?
             .managed_parts()?;
-        let managed_r = environment.r.as_ref().ok_or_else(|| {
-            "managed Python version resolution requires a managed R environment".to_string()
-        })?;
         let result = crate::resolver::execution::resolve_python_version(
             request.constraints,
             resolver,
-            managed_r,
+            environment.r.as_ref(),
             |handle| self.register_resolver_stop_handle(&generation, handle),
         );
         self.clear_resolver_stop_handle(&generation)?;

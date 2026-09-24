@@ -120,6 +120,23 @@ impl ManagedPython {
 pub(crate) fn resolve_python_manifest(
     requirements: crate::worker_protocol::PythonRequirementManifest,
     configuration: &super::ManagedPythonResolverConfiguration,
+    on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
+) -> Result<ManagedPython, String> {
+    resolve_python_manifest_with_r(requirements, configuration, None, on_started)
+}
+
+pub(crate) fn resolve_python_manifest_for_remote(
+    requirements: crate::worker_protocol::PythonRequirementManifest,
+    configuration: &super::ManagedPythonResolverConfiguration,
+    managed_r: Option<&super::ManagedR>,
+    on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
+) -> Result<ManagedPython, String> {
+    resolve_python_manifest_with_r(requirements, configuration, managed_r, on_started)
+}
+
+fn resolve_python_manifest_with_r(
+    requirements: crate::worker_protocol::PythonRequirementManifest,
+    configuration: &super::ManagedPythonResolverConfiguration,
     managed_r: Option<&super::ManagedR>,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<ManagedPython, String> {
@@ -168,7 +185,6 @@ pub(crate) fn resolve_python_manifest(
         ));
     }
     check_resolver_control(&resolver, "managed Python resolution")?;
-
     let python = output_path.python()?;
     warm_matplotlib(&python, &resolver, &mut on_started)?;
     Ok(ManagedPython {
@@ -180,11 +196,28 @@ pub(crate) fn resolve_python_manifest(
 pub(crate) fn resolve_python_version(
     constraints: Vec<String>,
     configuration: &super::ManagedPythonResolverConfiguration,
+    on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
+) -> Result<String, String> {
+    resolve_python_version_with_r(constraints, configuration, None, on_started)
+}
+
+pub(crate) fn resolve_python_version_for_remote(
+    constraints: Vec<String>,
+    configuration: &super::ManagedPythonResolverConfiguration,
     managed_r: &super::ManagedR,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<String, String> {
+    resolve_python_version_with_r(constraints, configuration, Some(managed_r), on_started)
+}
+
+fn resolve_python_version_with_r(
+    constraints: Vec<String>,
+    configuration: &super::ManagedPythonResolverConfiguration,
+    managed_r: Option<&super::ManagedR>,
+    on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
+) -> Result<String, String> {
     crate::python_requirement::validate_version_constraints(&constraints)?;
-    let versions = resolve_python_versions(configuration, Some(managed_r), on_started)?;
+    let versions = resolve_python_versions(configuration, managed_r, on_started)?;
     versions
         .resolve(&constraints)
         .map_err(|error| format!("managed Python version resolution failed: {}", error.trim()))
