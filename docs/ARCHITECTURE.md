@@ -465,6 +465,8 @@ A successful replacement starts with fresh in-memory state and the retained envi
 
 Closing MCP input begins shutdown of the implicit console session.
 The server stops accepting generation work, requests bounded retirement of the active relay and worker, cancels an active host resolver, joins the remaining relay I/O tasks, and reaps owned processes.
+After worker retirement, the server writes responses for calls accepted before input closes, including collected output and a shutdown notice for an active evaluation.
+It bounds that delivery wait so a blocked MCP output pipe cannot hold shutdown open indefinitely.
 The protocol documents define the exact closure and retirement order.
 
 ## Output ownership

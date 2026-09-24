@@ -578,6 +578,7 @@ pub async fn run(
     let server = ConsoleServer::new(worker, relay, no_sandbox, sandbox_settings, target)
         .map_err(std::io::Error::other)?;
     let worker = server.worker.clone();
+    let deliveries = server.deliveries.clone();
     let (input_closed, wait_for_input_close) = oneshot::channel();
     let input = ShutdownReader::new(tokio::io::stdin(), input_closed);
     let transport = crate::server_transport::ServerTransport::new(
@@ -591,7 +592,11 @@ pub async fn run(
             .await
             .unwrap_or_else(|_| Instant::now());
         let deadline = shutdown_started + WORKER_SHUTDOWN_GRACE;
-        worker.shutdown(deadline).await?;
+        let result = worker.shutdown(deadline).await;
+        deliveries
+            .settle_before_close(Instant::now() + WORKER_SHUTDOWN_GRACE)
+            .await;
+        result?;
         Ok::<(), String>(())
     };
 

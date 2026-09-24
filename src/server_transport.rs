@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use rmcp::RoleServer;
 use rmcp::model::{ClientNotification, ClientRequest, JsonRpcMessage, RequestId};
@@ -275,6 +276,30 @@ impl ResponseDeliveries {
         for delivery in deliveries {
             delivery.unclaimed();
         }
+    }
+
+    /// Let responses accepted before input EOF reach stdout, with a bound for
+    /// clients that stop reading their output pipe.
+    pub(crate) async fn settle_before_close(&self, deadline: Instant) {
+        let settled = async {
+            loop {
+                let changed = self.gate_changed.notified();
+                tokio::pin!(changed);
+                changed.as_mut().enable();
+                {
+                    let state = self.lock();
+                    if state.active.is_empty()
+                        && state.pending.is_empty()
+                        && state.pending_writes == 0
+                    {
+                        return;
+                    }
+                }
+                changed.await;
+            }
+        };
+        let _ = tokio::time::timeout_at(deadline.into(), settled).await;
+        self.close();
     }
 
     fn take_write_delivery(
@@ -808,9 +833,7 @@ where
                 }
             }
             Some(JsonRpcMessage::Response(_) | JsonRpcMessage::Error(_)) => {}
-            None => {
-                self.deliveries.close();
-            }
+            None => {}
         }
         message
     }
@@ -1097,7 +1120,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn eof_cancels_pending_response_write() {
+    async fn eof_preserves_pending_response_write_until_transport_closes() {
         let deliveries = ResponseDeliveries::default();
         let response_id = request_id(1);
         let admission = deliveries.reserve(response_id.clone()).unwrap();
@@ -1125,11 +1148,14 @@ mod tests {
 
         drop(input);
         assert!(transport.receive().await.is_none());
+        assert_eq!(deliveries.lock().pending_writes, 1);
+        assert!(current_call(&deliveries, &response_id).is_some());
+        deliveries.close();
         let error = tokio::time::timeout(std::time::Duration::from_secs(1), send)
             .await
             .expect("response write should be cancelled")
             .expect("response write task should finish")
-            .expect_err("EOF should cancel the pending response write");
+            .expect_err("closing the transport should cancel the pending response write");
 
         assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe);
         assert_eq!(deliveries.lock().pending_writes, 0);
