@@ -13,6 +13,7 @@ type PyIsInitialized = unsafe extern "C" fn() -> libc::c_int;
 type PySetProgramName = unsafe extern "C" fn(*const libc::wchar_t);
 type PySetPythonHome = unsafe extern "C" fn(*const libc::wchar_t);
 type PyInitializeEx = unsafe extern "C" fn(libc::c_int);
+type PySysSetArgvEx = unsafe extern "C" fn(libc::c_int, *mut *mut libc::wchar_t, libc::c_int);
 type PySysSetArgv = unsafe extern "C" fn(libc::c_int, *mut *mut libc::wchar_t);
 type PyOsSetSignal = unsafe extern "C" fn(libc::c_int, libc::sighandler_t) -> libc::sighandler_t;
 type PyEvalSaveThread = unsafe extern "C" fn() -> *mut libc::c_void;
@@ -87,6 +88,7 @@ struct PythonApi {
     set_python_home: PySetPythonHome,
     initialize_ex: PyInitializeEx,
     set_argv: PySysSetArgv,
+    set_argv_ex: PySysSetArgvEx,
     set_signal: PyOsSetSignal,
     save_thread: PyEvalSaveThread,
     restore_thread: PyEvalRestoreThread,
@@ -164,6 +166,7 @@ pub(super) fn initialize(
     path: &Path,
     program_name: &str,
     python_home: &str,
+    update_path: bool,
 ) -> Result<bool, String> {
     let path = path.canonicalize().map_err(|error| {
         format!(
@@ -222,7 +225,13 @@ pub(super) fn initialize(
     }
     let mut argv = [program_name_wide.cast_mut()];
     unsafe {
-        (api.set_argv)(1, argv.as_mut_ptr());
+        if update_path {
+            (api.set_argv)(1, argv.as_mut_ptr());
+        } else {
+            // Native sessions add the workspace after installing the runtime.
+            // Never search the executable directory, even during setup imports.
+            (api.set_argv_ex)(1, argv.as_mut_ptr(), 0);
+        }
         (api.set_signal)(libc::SIGPIPE, libc::SIG_IGN);
     }
     let mut slot = PYTHON_LIBRARY
@@ -908,6 +917,7 @@ impl PythonApi {
             set_python_home: unsafe { load_symbol(library, path, b"Py_SetPythonHome\0")? },
             initialize_ex: unsafe { load_symbol(library, path, b"Py_InitializeEx\0")? },
             set_argv: unsafe { load_symbol(library, path, b"PySys_SetArgv\0")? },
+            set_argv_ex: unsafe { load_symbol(library, path, b"PySys_SetArgvEx\0")? },
             set_signal: unsafe { load_symbol(library, path, b"PyOS_setsig\0")? },
             save_thread: unsafe { load_symbol(library, path, b"PyEval_SaveThread\0")? },
             restore_thread: unsafe { load_symbol(library, path, b"PyEval_RestoreThread\0")? },

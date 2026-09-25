@@ -17,7 +17,8 @@ from support.assertions import (
 )
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
-from support.records import Transcript
+from support.records import Transcript, TranscriptWithCompanions
+from support.requirements import UNPRIVILEGED, requires
 from support.normalization import code
 from support.native import build_interposer
 
@@ -431,6 +432,7 @@ def test_records_python_execution(binary: Path, execution: Execution) -> Transcr
             markdown = (session / "transcript.md").read_text()
             quarto = (session / "transcript.qmd").read_text()
             assert "recorded_value = 41" in markdown and "recorded_value = 41" in quarto
+            assert "  python-packages: []\n" in quarto
             assert "ValueError: recorded failure" in markdown
             assert (session / "outputs/call-000001.log").read_text() == "42\n"
             events = [
@@ -910,3 +912,208 @@ def test_accepts_parent_components_in_selected_executable(
                     in last_result_text(client)
                 ), client.transcript[-1]
             return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_excludes_executable_directory_from_imports(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        workspace = Path(directory)
+        venv = workspace / "environment"
+        subprocess.run(
+            [sys.executable, "-m", "venv", "--copies", "--without-pip", venv],
+            check=True,
+            capture_output=True,
+        )
+        selected = venv / "bin/python3"
+        site = Path(
+            subprocess.check_output(
+                [selected, "-I", "-c", "import site; print(site.getsitepackages()[0])"],
+                text=True,
+            ).strip()
+        )
+        (site / "selected_package.py").write_text("value = 42\n")
+        (venv / "bin/json.py").write_text(
+            "raise RuntimeError('imported executable directory')\n"
+        )
+        (venv / "bin/selected_package.py").write_text("value = -1\n")
+        env = environment(venv / "bin")
+        env.pop("PYTHONPATH", None)
+        with McpClient(binary, execution.serve(), env, workspace) as client:
+            client.initialize_and_list_tools()
+            for control in ({}, {"control": "restart"}):
+                client.send(
+                    **control,
+                    # fmt: python
+                    python=code("""
+                        import json
+                        import os
+                        import sys
+                        import selected_package
+
+                        assert sys.path[0] == ""
+                        assert os.path.dirname(sys.executable) not in sys.path
+                        assert selected_package.value == 42
+                        json.dumps({"selected package": selected_package.value})
+                        """),
+                )
+                assert not client.transcript[-1]["result"]["isError"], (
+                    client.transcript[-1]
+                )
+                assert "'{\"selected package\": 42}'\n" in last_result_text(client)
+            return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_records_managed_python_defaults(
+    binary: Path, execution: Execution
+) -> TranscriptWithCompanions:
+    with tempfile.TemporaryDirectory() as directory:
+        workspace = Path(directory)
+        (workspace / "uv").symlink_to(shutil.which("uv"))
+        with McpClient(
+            binary, execution.serve(), environment(workspace), workspace
+        ) as client:
+            client.initialize_and_list_tools()
+            client.send(
+                # fmt: python
+                python=code("""
+                    import numpy, pandas
+
+                    retained = 42
+                    retained
+                    """)
+            )
+            assert last_result_text(client) == "42\n"
+            client.send(requirements={"python": ["six"]})
+            assert client.transcript[-1]["result"]["isError"]
+            client.send(python="retained")
+            assert last_result_text(client) == "42\n"
+            records = client.finish()
+        (session,) = (workspace / ".agents/console/sessions").iterdir()
+        quarto = (session / "transcript.qmd").read_text()
+        assert "  python-packages:\n    - numpy\n    - pandas\n" in quarto, quarto
+        assert "  packages: []\n" in quarto, quarto
+        assert "six" not in quarto, quarto
+        events = [
+            json.loads(line)
+            for line in (session / "internal/events.jsonl").read_text().splitlines()
+        ]
+        assert events[0]["dynamic_resolution"] is False
+        return TranscriptWithCompanions(
+            records, {"qmd": quarto.replace(str(workspace.resolve()), "<workspace>")}
+        )
+
+
+@requires(UNPRIVILEGED)
+@executions(DIRECT)
+def test_reports_direct_storage_retirement_failure(
+    binary: Path, execution: Execution
+) -> Transcript:
+    records = []
+    for stage in ("restart", "shutdown", "startup failure"):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            venv = workspace / "environment"
+            subprocess.run(
+                [sys.executable, "-m", "venv", "--without-pip", venv],
+                check=True,
+                capture_output=True,
+            )
+            site = Path(
+                subprocess.check_output(
+                    [
+                        venv / "bin/python3",
+                        "-I",
+                        "-c",
+                        "import site; print(site.getsitepackages()[0])",
+                    ],
+                    text=True,
+                ).strip()
+            )
+            # fmt: python
+            restrict = code("""
+                import os
+                from pathlib import Path
+
+                temporary = Path(os.environ["TMPDIR"])
+                Path("worker-temporary").write_text(str(temporary))
+                restricted = temporary / "restricted"
+                restricted.mkdir()
+                (restricted / "retained.txt").write_text("private contents")
+                restricted.chmod(0)
+                """)
+            if stage == "startup failure":
+                # fmt: python
+                hook = code("""
+                    import os
+                    from pathlib import Path
+
+                    if "MCP_CONSOLE_LOCAL_RUNTIME" in os.environ:
+                        temporary = Path(os.environ["TMPDIR"])
+                        Path("worker-temporary").write_text(str(temporary))
+                        restricted = temporary / "restricted"
+                        restricted.mkdir()
+                        (restricted / "retained.txt").write_text("private contents")
+                        restricted.chmod(0)
+                        os._exit(47)
+                    """)
+                (site / "sitecustomize.py").write_text(hook)
+            try:
+                with McpClient(
+                    binary, execution.serve(), environment(venv / "bin"), workspace
+                ) as client:
+                    client.initialize_and_list_tools()
+                    client.send(python=restrict if stage != "startup failure" else "42")
+                    if stage == "restart":
+                        client.send(python="temporary.chmod(0)")
+                        client.send(
+                            control="restart", python="print('replacement ran')"
+                        )
+                    if stage != "shutdown":
+                        assert client.transcript[-1]["result"]["isError"], (
+                            client.transcript[-1]
+                        )
+                        assert (
+                            "cannot remove worker temporary directory"
+                            in last_result_text(client)
+                        ), client.transcript[-1]
+                        assert "replacement ran\n" not in last_result_text(client)
+                    client.stdin.close()
+                    client.process.wait(timeout=15)
+                    stderr = client.stderr.read()
+                    if stage == "startup failure":
+                        # Startup already delivered its retirement error over MCP.
+                        assert client.process.returncode == 0 and stderr == "", stderr
+                    else:
+                        assert client.process.returncode != 0, (stage, stderr)
+                        assert "cannot remove worker temporary directory" in stderr, (
+                            stderr
+                        )
+                    temporary = Path((workspace / "worker-temporary").read_text())
+                    assert temporary.exists()
+                    assert (venv / "bin/python3").exists()
+                    records.append({"stage": stage})
+                    records.extend(client.transcript)
+                    records.append({"stderr": stderr})
+                    # Normalize only this owned, run-specific path.
+                    for record in records:
+                        for content in record.get("result", {}).get("content", []):
+                            if content["type"] == "text":
+                                content["text"] = content["text"].replace(
+                                    str(temporary), "<worker temporary>"
+                                )
+                        if "stderr" in record:
+                            record["stderr"] = record["stderr"].replace(
+                                str(temporary), "<worker temporary>"
+                            )
+            finally:
+                marker = workspace / "worker-temporary"
+                if marker.exists():
+                    temporary = Path(marker.read_text())
+                    if temporary.exists():
+                        temporary.chmod(0o700)
+                        (temporary / "restricted").chmod(0o700)
+                        shutil.rmtree(temporary)
+    return records

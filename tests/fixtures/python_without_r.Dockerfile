@@ -4,8 +4,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && rm -rf /var/lib/apt/lists/*
 COPY dist/uv /usr/local/bin/uv
 COPY dist/*.whl /tmp/wheels/
+RUN useradd --create-home console
+USER console
 RUN uv python install 3.12 && uv tool install /tmp/wheels/*.whl
-ENV PATH="/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-COPY tests /acceptance/tests
-WORKDIR /acceptance
+ENV PATH="/home/console/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+COPY --chown=console:console tests /home/console/acceptance/tests
+WORKDIR /home/console/acceptance
 CMD ["uv", "run", "--no-project", "--python", "3.12", "tests/without_r.py"]

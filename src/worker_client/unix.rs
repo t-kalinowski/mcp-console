@@ -63,6 +63,7 @@ struct RelayConnection {
 
 struct RelayProcess {
     temporary: Option<crate::local_runtime::TemporaryDirectory>,
+    temporary_retirement: Result<(), String>,
     child: Child,
     retirement_grace: Duration,
     no_sandbox: bool,
@@ -393,6 +394,7 @@ impl RelayProcess {
             };
         Ok(Self {
             temporary: None,
+            temporary_retirement: Ok(()),
             child,
             retirement_grace,
             no_sandbox,
@@ -563,7 +565,10 @@ impl RelayProcess {
     fn finish_reaped_status(&mut self, status: ExitStatus) -> Result<(), String> {
         self.exited = true;
         self.reaped = true;
-        self.temporary.take();
+        if let Some(mut temporary) = self.temporary.take() {
+            self.temporary_retirement = temporary.retire();
+            self.temporary_retirement.clone()?;
+        }
         if self.ssh {
             return if status.success() {
                 Ok(())
@@ -1335,7 +1340,7 @@ impl RelayConnection {
                 .lock()
                 .map_err(|_| "worker child lock poisoned".to_string())?;
             let cleanup = if child.is_reaped() {
-                Ok(())
+                child.temporary_retirement.clone()
             } else {
                 child.retire_launcher()
             };

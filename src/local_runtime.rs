@@ -144,7 +144,7 @@ pub(crate) fn r_home() -> Result<PathBuf, Box<dyn std::error::Error>> {
 
 /// Direct launches have no runner-owned private TMPDIR. The relay lifetime
 /// retains this directory and removes it only after retiring its worker.
-pub(crate) struct TemporaryDirectory(PathBuf);
+pub(crate) struct TemporaryDirectory(Option<PathBuf>);
 
 impl TemporaryDirectory {
     pub(crate) fn create() -> Result<Self, String> {
@@ -160,16 +160,33 @@ impl TemporaryDirectory {
             ));
         }
         bytes.pop();
-        Ok(Self(PathBuf::from(OsString::from_vec(bytes))))
+        Ok(Self(Some(PathBuf::from(OsString::from_vec(bytes)))))
     }
 
     pub(crate) fn path(&self) -> &Path {
-        &self.0
+        self.0.as_deref().expect("temporary directory not retired")
+    }
+
+    pub(crate) fn retire(&mut self) -> Result<(), String> {
+        let Some(path) = self.0.take() else {
+            return Ok(());
+        };
+        match std::fs::remove_dir_all(&path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(format!(
+                "cannot remove worker temporary directory {}: {error}",
+                path.display()
+            )),
+        }
     }
 }
 
 impl Drop for TemporaryDirectory {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        // Pre-launch failures have no relay retirement result to carry errors.
+        if let Err(error) = self.retire() {
+            eprintln!("{error}");
+        }
     }
 }

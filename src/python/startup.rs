@@ -13,6 +13,7 @@ pub(crate) fn initialize_selected(selected: &SelectedPython) -> Result<bool, Str
         Path::new(&selected.libpython),
         &selected.python,
         &selected.python_home,
+        true,
     )
 }
 
@@ -87,7 +88,7 @@ impl Runtime {
         let selected = &configuration.embedding;
         // Let CPython's program-name/pyvenv.cfg path initialization select the
         // virtualenv. Setting PythonHome to its base overrides that selection.
-        super::library::initialize(Path::new(&selected.libpython), &selected.python, "")?;
+        super::library::initialize(Path::new(&selected.libpython), &selected.python, "", false)?;
         let result = setup_runtime_with_sql(
             Path::new(&selected.libpython),
             ImportResolution {

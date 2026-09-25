@@ -61,11 +61,14 @@ A restart clears Python objects, but does not resolve another environment.
 The embedded interpreter uses the selected environment's packages and prefixes; subprocesses and multiprocessing use its Python executable.
 The selected environment takes precedence over inherited or sandbox-configured `PYTHONHOME` and `PYTHONPLATLIBDIR`.
 Workspace modules and packages are importable without `PYTHONPATH`; the working-directory import entry also follows `os.chdir()`.
+The executable directory is not added to the import path.
 The worker has private temporary storage, retired after startup failure, restart, and shutdown.
+If direct-session cleanup fails, Console reports the remaining directory and the filesystem error; a failed restart does not execute its submitted cell.
 Retirement does not delete resolver caches or the retained environment.
 
 Python expressions, persistent objects, output, exceptions, `input()`, interrupts, and recording use the same evaluator and coordinator as mixed-language sessions.
 Interrupts received while the worker is idle do not interrupt the next Python cell.
+When `uv` resolved the initial environment, the generated Quarto document declares its NumPy and pandas defaults without enabling live requirements.
 Matplotlib plots are returned when Matplotlib is already installed in the selected environment; the default manifest does not install it.
 To use additional packages, prepare a Python environment before starting Console and make it available through the PATH fallback or existing explicit-selection interface.
 Live `requirements`, automatic missing-import installation, R cells, and SQL cells are unavailable.

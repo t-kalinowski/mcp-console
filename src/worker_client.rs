@@ -599,6 +599,16 @@ impl Client {
             .is_some_and(crate::local_runtime::Selection::python_only)
     }
 
+    pub(crate) fn managed_python_defaults(&self) -> bool {
+        matches!(
+            self.0.local_runtime,
+            Some(crate::local_runtime::Selection::Python {
+                managed: Some(_),
+                ..
+            })
+        )
+    }
+
     pub(crate) fn dynamic_resolution(&self) -> bool {
         self.0.dynamic_resolution
     }

@@ -153,3 +153,10 @@ LANDLOCK = Requirement(
     landlock_available(),
     "requires Landlock with truncate enforcement (ABI 3 or later)",
 )
+
+
+UNPRIVILEGED = Requirement(
+    "unprivileged filesystem access",
+    os.geteuid() != 0,
+    "requires an account without root permission bypass",
+)

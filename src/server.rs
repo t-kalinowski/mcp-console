@@ -298,6 +298,7 @@ impl ConsoleServer {
         let transcript = crate::transcript::Transcript::with_target(
             recording_directory,
             dynamic_resolution,
+            worker.managed_python_defaults(),
             target.clone(),
         );
         worker.record_with(transcript.clone());
