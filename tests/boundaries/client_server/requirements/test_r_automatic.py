@@ -456,7 +456,8 @@ def test_preserves_missing_package_conditions_after_resolution_failure(
             describe_missing(notloaded.pkg::missing)
             describe_missing(notloaded.pkg:::missing)
             describe_missing(library(notloaded.pkg))
-            requireNamespace("notloaded.pkg", quietly = TRUE)
+            print(requireNamespace("notloaded.pkg"))
+            print(requireNamespace("notloaded.pkg", quietly = TRUE))
             suppressWarnings(require(notloaded.pkg, quietly = TRUE))
             suppressWarnings(library(notloaded.pkg, logical.return = TRUE))
             """)
@@ -464,11 +465,11 @@ def test_preserves_missing_package_conditions_after_resolution_failure(
             [Path(environment["R_HOME"]) / "bin/Rscript", "--vanilla", "-"],
             input=details,
             env=environment,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
             check=True,
         )
-        assert reference.stderr == "", reference.stderr
         with McpClient(binary, execution.serve(), environment) as client:
             client.initialize_and_list_tools()
             for restart in (False, True):
@@ -490,7 +491,7 @@ def test_preserves_missing_package_conditions_after_resolution_failure(
                     "comparison": "exact equality of printed condition details",
                 }
                 runs = ir_run_records(record)[baseline:]
-                assert len(runs) == 7, runs
+                assert len(runs) == 8, runs
                 assert all("notloaded.pkg" in ir_requirements(run) for run in runs)
 
             # Explicit preparation still reports the resolver's failure.

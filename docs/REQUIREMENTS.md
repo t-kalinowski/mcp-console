@@ -153,7 +153,9 @@ A restart that also adds requirements serializes behind the active environment r
 An interrupted or lifecycle-cancelled request is reported to its operation, and a candidate from a replaced generation cannot commit into its replacement.
 
 If `ir` cannot resolve a package requested at runtime, `library()` and namespace loads surface their normal R errors, preserving the original condition class, message, call, and package fields.
-`require()` and `requireNamespace()` return `FALSE` as in base R, and the worker remains available.
+`require()` and `requireNamespace()` return `FALSE` for missing packages, as in base R.
+With its default `quietly = FALSE`, `requireNamespace()` prints a failure diagnostic; `quietly = TRUE` suppresses that output.
+The worker remains available.
 Explicit `requirements.r` preparation still reports the resolver failure.
 If applying the candidate library fails, the worker reports `RActivationFailed`, the server discards the candidate, and further requirement changes in that generation require restart; the worker remains available so its in-memory state can be saved.
 Transport, sideband, protocol, and bridge-infrastructure failures retain the existing worker-failure behavior.

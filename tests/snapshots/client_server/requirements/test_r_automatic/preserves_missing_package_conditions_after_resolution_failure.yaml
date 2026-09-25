@@ -45,7 +45,8 @@ send:
     describe_missing(notloaded.pkg::missing)
     describe_missing(notloaded.pkg:::missing)
     describe_missing(library(notloaded.pkg))
-    requireNamespace("notloaded.pkg", quietly = TRUE)
+    print(requireNamespace("notloaded.pkg"))
+    print(requireNamespace("notloaded.pkg", quietly = TRUE))
     suppressWarnings(require(notloaded.pkg, quietly = TRUE))
     suppressWarnings(library(notloaded.pkg, logical.return = TRUE))
 result:
@@ -115,7 +116,8 @@ send:
     describe_missing(notloaded.pkg::missing)
     describe_missing(notloaded.pkg:::missing)
     describe_missing(library(notloaded.pkg))
-    requireNamespace("notloaded.pkg", quietly = TRUE)
+    print(requireNamespace("notloaded.pkg"))
+    print(requireNamespace("notloaded.pkg", quietly = TRUE))
     suppressWarnings(require(notloaded.pkg, quietly = TRUE))
     suppressWarnings(library(notloaded.pkg, logical.return = TRUE))
 result:
