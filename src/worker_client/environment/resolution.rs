@@ -163,12 +163,40 @@ impl Client {
                     environment.r.as_ref(),
                 )?
             };
+            if let Some(crate::local_runtime::Selection::Python {
+                selected: inspected,
+                ..
+            }) = &mut environment.local_runtime
+            {
+                // Inspect the resolved candidate before retirement. Both launch
+                // configuration and manifest stay provisional in this clone.
+                *inspected = Box::new(self.inspect_managed_python(generation, &selected)?);
+            }
             environment.python = Some(PythonEnvironment::Managed { selected, resolver });
         }
         self.ensure_startup(generation)
             .map_err(EnvironmentResolutionFailure::Operation)?;
         environment.duckdb_extensions = duckdb_extensions;
         Ok(environment)
+    }
+
+    fn inspect_managed_python(
+        &self,
+        generation: &WorkerGeneration,
+        candidate: &crate::resolver::ManagedPython,
+    ) -> Result<crate::python::NativePython, EnvironmentResolutionFailure> {
+        self.ensure_startup(generation)
+            .map_err(EnvironmentResolutionFailure::Operation)?;
+        let mut stop_handle = None;
+        let result = crate::python::inspect_native(candidate.python(), |handle| {
+            stop_handle = Some(handle.clone());
+            self.register_resolver_stop_handle(generation, handle)
+        });
+        self.clear_resolver_stop_handle(generation)
+            .map_err(EnvironmentResolutionFailure::Operation)?;
+        self.ensure_startup(generation)
+            .map_err(EnvironmentResolutionFailure::Operation)?;
+        classify_resolver_result(result, stop_handle.as_ref())
     }
 
     pub(super) fn resolve_managed_r(

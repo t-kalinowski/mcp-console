@@ -57,7 +57,18 @@ Existing explicit `RETICULATE_PYTHON` selection remains supported.
 Its captured value is preserved when sandbox environment inheritance is disabled or project environment settings provide a different value.
 
 The session retains the selected environment and executable across cells, restarts, and worker replacement.
-A restart clears Python objects, but does not resolve another environment.
+A plain restart clears Python objects and reuses the accepted environment without resolving again.
+In a Console-managed uv session, `requirements.python` can add packages before the first worker starts, alone or with a Python cell.
+Once a worker is running, changed requirements require `control: "restart"`, with or without accompanying code.
+Requirements already retained are a no-op, including on a running worker.
+Live additions are rejected without changing the environment or silently restarting.
+
+Restart preparation resolves the complete candidate manifest, including defaults and earlier additions, and inspects the resulting executable before retiring the current worker.
+Validation, resolution, or inspection failure preserves that worker, its objects, retained requirements, and queued input.
+Same-call code and input are sent only after successful replacement.
+After retirement begins, ordinary retirement and replacement failure semantics apply; the retired worker cannot be restored.
+The mutable session environment commits the manifest, executable, and inspected embedding configuration together.
+Discarding a candidate does not delete shared resolver caches or mutate the accepted environment in place.
 The embedded interpreter uses the selected environment's packages and prefixes; subprocesses and multiprocessing use its Python executable.
 The selected environment takes precedence over inherited or sandbox-configured `PYTHONHOME` and `PYTHONPLATLIBDIR`.
 Workspace modules and packages are importable without `PYTHONPATH`; the working-directory import entry also follows `os.chdir()`.
@@ -68,10 +79,10 @@ Retirement does not delete resolver caches or the retained environment.
 
 Python expressions, persistent objects, output, exceptions, `input()`, interrupts, and recording use the same evaluator and coordinator as mixed-language sessions.
 Interrupts received while the worker is idle do not interrupt the next Python cell.
-When `uv` resolved the initial environment, the generated Quarto document declares its NumPy and pandas defaults without enabling live requirements.
+When `uv` resolved the initial environment, the generated Quarto document declares NumPy, pandas, and accepted package additions without R defaults or rejected requirements.
 Matplotlib plots are returned when Matplotlib is already installed in the selected environment; the default manifest does not install it.
-To use additional packages, prepare a Python environment before starting Console and make it available through the PATH fallback or existing explicit-selection interface.
-Live `requirements`, automatic missing-import installation, R cells, and SQL cells are unavailable.
+PATH fallback and explicitly selected environments remain non-managed; prepare their packages before starting Console.
+Live environment updates, automatic missing-import installation, R and DuckDB requirements, R cells, and SQL cells are unavailable.
 The tool schema and descriptions reflect these limits; rejected requests leave existing Python state usable.
 This mode is local only; SSH and prepared Docker/SBX targets retain their existing R runtime requirements.
 

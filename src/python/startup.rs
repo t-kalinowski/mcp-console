@@ -1,7 +1,7 @@
 use super::{ImportResolution, PreparationOutcome, reticulate};
 use std::path::Path;
 
-#[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub(crate) struct SelectedPython {
     pub(crate) python: String,
     pub(crate) libpython: String,
@@ -84,7 +84,10 @@ impl Runtime {
         })
     }
 
-    pub(super) fn native(configuration: &super::NativePython) -> Result<Self, String> {
+    pub(super) fn native(
+        configuration: &super::NativePython,
+        managed: bool,
+    ) -> Result<Self, String> {
         let selected = &configuration.embedding;
         // Let CPython's program-name/pyvenv.cfg path initialization select the
         // virtualenv. Setting PythonHome to its base overrides that selection.
@@ -93,7 +96,11 @@ impl Runtime {
             Path::new(&selected.libpython),
             ImportResolution {
                 callback: None,
-                disabled_reason: Some(crate::local_runtime::IMPORT_DISABLED),
+                disabled_reason: Some(if managed {
+                    crate::local_runtime::MANAGED_IMPORT_DISABLED
+                } else {
+                    crate::local_runtime::IMPORT_DISABLED
+                }),
             },
             false,
         )

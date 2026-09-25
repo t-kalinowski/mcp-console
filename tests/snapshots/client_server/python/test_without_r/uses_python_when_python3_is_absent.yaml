@@ -2,7 +2,53 @@
 !same-as python-only MCP initialization for this execution mode
 ---
 send:
-  python: import sys; assert sys.executable.endswith('/python'); 42
+  python: >-
+    import sys; assert sys.executable.endswith('/python'); identity =
+    object(); identity_id = id(identity); 42
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false
+---
+send:
+  requirements:
+    python:
+      - py-yaml12
+result:
+  content:
+    - type: text
+      text: >-
+        Python requirements are unavailable in this non-managed Python session;
+        install packages before starting the session
+  isError: true
+---
+send:
+  python: assert id(identity) == identity_id; 42
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false
+---
+send:
+  control: restart
+  requirements:
+    python:
+      - py-yaml12
+  python: raise AssertionError('non-managed restart ran')
+result:
+  content:
+    - type: text
+      text: >-
+        Python requirements are unavailable in this non-managed Python session;
+        install packages before starting the session
+  isError: true
+---
+send:
+  python: assert id(identity) == identity_id; 42
 result:
   content:
     - type: text

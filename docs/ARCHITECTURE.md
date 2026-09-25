@@ -530,6 +530,7 @@ Recording is a server responsibility and does not add messages to either private
 On the first `send` call, the server creates a private run directory under `.agents/console/sessions/` in its working directory.
 It appends tool calls and assembled results to `internal/events.jsonl`.
 The initial `session_started` event records whether dynamic environment resolution is available.
+Sans-R uv-managed sessions separately record `python_preparation: true` while dynamic resolution remains disabled.
 The Quarto projection uses that capability and the captured Python-only managed selection separately to declare initial requirements.
 For SSH sessions, it also records `target.transport` and the initial remote `target.workspace` separately from the local `working_directory` that owns the recording.
 Docker session metadata additionally records compute kind, requested/resolved image identity, and container workspace; generation events identify created containers.
@@ -550,10 +551,12 @@ It is a chronological call ledger: a timed-out cell, later polls, and eventual r
 The source-only Quarto document contains the source from calls with exactly one submitted R, Python, or SQL field in call order; it omits stdin, options, results, errors, polls, and artifacts.
 It includes qualifying source from rejected calls and failed evaluations.
 Its `ir` front matter declares the managed built-in R and Python requirements followed by cumulative explicit declarations from recorded calls.
-Python-only managed sessions declare NumPy and pandas without R defaults or rejected live requirements.
+Python-only managed sessions declare NumPy and pandas plus packages from `python_environment_accepted` events emitted at the prestart/restart environment commit.
+They omit R defaults and rejected or discarded candidate requirements; accepted manifests remain recorded even if later worker replacement fails.
 Bare sessions omit both managed defaults and rejected requirement payloads.
 It does not declare a Python version, so `ir render transcript.qmd` uses reticulate's default managed Python selection.
-The declarations are submitted inputs, not a lockfile or an exact record of successful retained and automatically inferred requirements.
+In R-present sessions the declarations are submitted inputs, not an exact record of successful retained and automatically inferred requirements.
+Neither mode records a dependency lockfile.
 For local sessions, rendering executes the captured client-authored cells in order in a fresh Quarto/knitr runtime outside the MCP Console worker sandbox and exports their new output.
 Rendering does not reconstruct session control, stdin, recorded results, or artifacts.
 SQL chunks require a DBI connection supplied by the document user.

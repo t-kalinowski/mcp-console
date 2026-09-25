@@ -13,7 +13,7 @@ use super::startup::SelectedPython;
 const INSPECTION_SOURCE: &str = include_str!("inspection.py");
 
 /// Executable and environment identity observed together on the host.
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct NativePython {
     pub(crate) embedding: SelectedPython,

@@ -1,5 +1,5 @@
 ---
-!same-as python-only MCP initialization for this execution mode
+!same-as python-managed MCP initialization for this execution mode
 ---
 send:
   python: import numpy, pandas; 42

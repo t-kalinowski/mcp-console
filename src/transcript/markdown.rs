@@ -49,7 +49,7 @@ impl Writers {
         quarto: PathBuf,
         working_directory: &str,
         dynamic_resolution: bool,
-        managed_python_defaults: bool,
+        python_preparation: bool,
         target: Option<&Value>,
     ) -> Self {
         Self {
@@ -58,7 +58,7 @@ impl Writers {
                 quarto,
                 working_directory,
                 dynamic_resolution,
-                managed_python_defaults,
+                python_preparation,
                 target,
             ),
         }
@@ -77,7 +77,7 @@ impl QuartoWriter {
         path: PathBuf,
         working_directory: &str,
         dynamic_resolution: bool,
-        managed_python_defaults: bool,
+        python_preparation: bool,
         target: Option<&Value>,
     ) -> Self {
         let mut writer = Self {
@@ -96,7 +96,7 @@ impl QuartoWriter {
                     .map(|requirement| (*requirement).to_string()),
             );
         }
-        if dynamic_resolution || managed_python_defaults {
+        if dynamic_resolution || python_preparation {
             writer.python_requirements.extend(
                 crate::worker_protocol::DEFAULT_PYTHON_PACKAGES
                     .iter()
@@ -109,6 +109,10 @@ impl QuartoWriter {
     fn append(&mut self, event: &Event<'_>) -> Result<(), String> {
         let changed = match event {
             Event::SessionStarted { .. } => true,
+            Event::PythonEnvironmentAccepted { packages } => {
+                self.python_requirements = packages.to_vec();
+                true
+            }
             Event::ToolCall { request, .. } => {
                 let mut changed = false;
                 if self.dynamic_resolution
@@ -317,6 +321,10 @@ impl ProjectionWriter {
 
 fn render_event(document: &mut String, envelope: &Envelope<'_>) -> Result<(), String> {
     match &envelope.event {
+        Event::PythonEnvironmentAccepted { packages } => {
+            document.push_str("## Accepted Python environment\n\n");
+            push_json(document, &json!({ "packages": packages }))
+        }
         Event::SessionStarted {
             session,
             working_directory,

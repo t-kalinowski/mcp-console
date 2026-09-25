@@ -22,6 +22,7 @@ See the [runtime limitations](docs/BUILTIN_RUNTIME.md#current-limitations) and [
 Local sessions can run Python without R.
 When R is absent, Console uses `uv` to resolve its default Python environment, or uses `python3` then `python` from `PATH` when `uv` is absent.
 These sessions support Python execution, input, plots, interrupts, restart, and recording; live requirements, automatic package installation, and SQL are unavailable.
+When Console manages Python through uv, `requirements.python` prepares packages before first use or with an explicit restart.
 With R installed, the worker retains mixed R/Python execution through reticulate and a persistent DuckDB connection for SQL.
 See [Python sessions without R](docs/BUILTIN_RUNTIME.md#python-sessions-without-r) for selection and package limitations.
 

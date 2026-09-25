@@ -7,12 +7,18 @@ The [`send` operation-order reference](SEND_OPERATIONS.md) owns validation timin
 This guide describes preparation before a cell, standalone preparation, and requirements included in restart.
 [Host resolution and trust](#host-resolution-and-trust) explains why requirement input is restricted and which work runs with server permissions.
 
-Local [Python sessions without R](BUILTIN_RUNTIME.md#python-sessions-without-r) resolve only their initial environment.
+Local [Python sessions without R](BUILTIN_RUNTIME.md#python-sessions-without-r) support explicit startup and restart preparation when Console manages the environment through uv.
 When `uv` is available, the existing local host resolver prepares the default Python manifest before MCP readiness and retains the result for replacement workers.
 This does not invoke R, Rscript, or `ir`, and no installation runs inside the sandboxed worker.
 Executable inspection uses isolated Python mode, excluding workspace imports, `PYTHONPATH`, and the user site; the selected installation and its environment remain trusted.
 Without `uv`, a Python executable on `PATH` supplies its preinstalled packages.
-Live requirement additions and automatic import resolution are unavailable in this mode, including when Console resolved the initial environment itself.
+`requirements.python` alone or with a Python cell prepares additions before the first worker starts.
+After startup, changed requirements need `control: "restart"`, with or without code; already retained requirements are a no-op.
+The existing prestart/restart transaction resolves the complete candidate manifest and inspects its executable before retirement, using the captured resolver configuration and existing cancellation and child cleanup.
+Resolution or inspection failure preserves the current worker and environment; successful commit updates the retained manifest, executable, and launch configuration together.
+Plain restarts and crash replacement reuse that accepted environment without another resolution.
+PATH fallback and explicit selections do not enable preparation.
+Live requirement additions, automatic import resolution, R requirements, and DuckDB requirements are unavailable in this mode.
 The remaining preparation and SQL behavior in this document applies to sessions with R.
 
 Prepared requirements configure the built-in worker; they do not attach an R package, import a Python package, or load a DuckDB extension.
