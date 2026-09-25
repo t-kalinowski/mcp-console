@@ -231,8 +231,11 @@ result:
               - "null"
           timeout_ms:
             description: |-
-              Maximum time this call waits once a cell has been dispatched or the call has attached to an
-              active evaluation, including one automatic worker replacement attempt. Reaching the timeout
+              Omit `timeout_ms` for normal calls, including polls (default: 60,000 milliseconds). The call
+              returns as soon as execution finishes; the timeout is a maximum wait, not a fixed delay.
+              To wait, use the default or a longer timeout instead of repeated short polls. Use `timeout_ms: 0`
+              to deliberately start background work. The wait starts after cell dispatch or attachment to an
+              active evaluation and includes one automatic worker replacement attempt. Reaching the timeout
               does not cancel evaluation, resolution, or startup. Inline control, interrupt grace, restart,
               and explicit requirement preparation happen before dispatch and may make the complete call take
               longer. This value does not limit standalone preparation. Automatic R and Python import
