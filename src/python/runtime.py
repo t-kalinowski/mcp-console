@@ -578,12 +578,6 @@ def _mcp_console_activate_process_environment(
 _mcp_console = _types.ModuleType("_mcp_console")
 
 
-def _mcp_console_dispatch(state=_mcp_console.__dict__):
-    operation = state.pop("operation")
-    arguments = state.pop("arguments")
-    return state[operation](*arguments)
-
-
 def _mcp_console_without_automatic_resolution(
     operation,
     *arguments,
@@ -603,7 +597,6 @@ _mcp_console.configure_import_resolution = _mcp_console_import_finder.configure
 _mcp_console.without_automatic_resolution = _mcp_console_without_automatic_resolution
 _mcp_console.eval_cell = _mcp_console_eval_cell
 _sys.modules[_mcp_console.__name__] = _mcp_console
-_builtins.__dict__["_mcp_console_dispatch"] = _mcp_console_dispatch
 _mcp_console_configure_psutil()
 
 

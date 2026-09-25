@@ -59,9 +59,25 @@ struct LoadedLibrary {
     api: PythonApi,
     interpreter: Interpreter,
     configuration: Option<Configuration>,
-    sql_runtime_installed: bool,
-    runtime_installed: bool,
-    runtime_configured: bool,
+    setup: SetupCompletion,
+}
+
+#[derive(Default)]
+struct SetupCompletion {
+    services: bool,
+    evaluator: bool,
+    sql: bool,
+    configured: bool,
+}
+
+impl SetupCompletion {
+    fn mark_configured(&mut self) -> Result<(), String> {
+        if !self.services || !self.evaluator || !self.sql {
+            return Err("Python runtime configuration preceded installation".to_string());
+        }
+        self.configured = true;
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -218,7 +234,7 @@ pub(super) fn install_runtime(source: &str) -> Result<(), String> {
     let api = {
         let slot = PYTHON_LIBRARY.lock().unwrap();
         let library = slot.as_ref().ok_or("Python shared library is not loaded")?;
-        if library.runtime_installed {
+        if library.setup.evaluator {
             return Ok(());
         }
         library.api
@@ -231,7 +247,8 @@ pub(super) fn install_runtime(source: &str) -> Result<(), String> {
         .unwrap()
         .as_mut()
         .unwrap()
-        .runtime_installed = true;
+        .setup
+        .evaluator = true;
     Ok(())
 }
 
@@ -239,7 +256,7 @@ pub(super) fn install_sql_runtime(source: &str) -> Result<(), String> {
     let api = {
         let slot = PYTHON_LIBRARY.lock().unwrap();
         let library = slot.as_ref().ok_or("Python shared library is not loaded")?;
-        if library.sql_runtime_installed {
+        if library.setup.sql {
             return Ok(());
         }
         library.api
@@ -247,12 +264,7 @@ pub(super) fn install_sql_runtime(source: &str) -> Result<(), String> {
     let source = CString::new(source)
         .map_err(|_| "embedded Python SQL runtime source contains NUL".to_string())?;
     api.with_gil(|api| unsafe { api.run_module(c"_mcp_console_sql", &source) })?;
-    PYTHON_LIBRARY
-        .lock()
-        .unwrap()
-        .as_mut()
-        .unwrap()
-        .sql_runtime_installed = true;
+    PYTHON_LIBRARY.lock().unwrap().as_mut().unwrap().setup.sql = true;
     Ok(())
 }
 
@@ -265,8 +277,74 @@ fn api() -> Result<PythonApi, String> {
         .ok_or_else(|| "Python shared library is not loaded".to_string())
 }
 
+pub(super) fn services_installed() -> Result<bool, String> {
+    let slot = PYTHON_LIBRARY
+        .lock()
+        .map_err(|_| "Python shared library state is unavailable")?;
+    Ok(slot
+        .as_ref()
+        .ok_or("Python shared library is not loaded")?
+        .setup
+        .services)
+}
+
 pub(super) fn install_services() -> Result<(), String> {
-    api()?.with_gil(services::install)
+    let (api, installed) = {
+        let slot = PYTHON_LIBRARY
+            .lock()
+            .map_err(|_| "Python shared library state is unavailable")?;
+        let library = slot.as_ref().ok_or("Python shared library is not loaded")?;
+        (library.api, library.setup.services)
+    };
+    api.with_gil(|api| services::install(api, installed))?;
+    if !installed {
+        PYTHON_LIBRARY
+            .lock()
+            .map_err(|_| "Python shared library state is unavailable")?
+            .as_mut()
+            .unwrap()
+            .setup
+            .services = true;
+    }
+    Ok(())
+}
+
+pub(super) fn configure_import_resolution(
+    resolution: super::ImportResolution<'_>,
+) -> Result<bool, String> {
+    api()?.with_gil(|api| unsafe {
+        let function = api.function(c"_mcp_console", c"configure_import_resolution")?;
+        let builtins = (api.import_add_module)(c"builtins".as_ptr());
+        if builtins.is_null() {
+            return api.finish_setup(std::ptr::null_mut());
+        }
+        let namespace = (api.module_get_dict)(builtins);
+        if namespace.is_null() {
+            return api.finish_setup(std::ptr::null_mut());
+        }
+        let none = (api.dict_get_item_string)(namespace, c"None".as_ptr());
+        if none.is_null() {
+            return api.finish_setup(std::ptr::null_mut());
+        }
+        let reason = resolution.disabled_reason.map(|reason| {
+            (api.unicode_from_string_and_size)(reason.as_ptr().cast(), reason.len() as isize)
+        });
+        if reason.is_some_and(|reason| reason.is_null()) {
+            return api.finish_setup(std::ptr::null_mut());
+        }
+        let result = (api.call_function_obj_args)(
+            function,
+            resolution
+                .callback
+                .map_or(none, |callback| callback.as_ptr()),
+            reason.unwrap_or(none),
+            std::ptr::null_mut::<PyObject>(),
+        );
+        if let Some(reason) = reason {
+            (api.dec_ref)(reason);
+        }
+        api.finish_setup(result)
+    })
 }
 
 pub(super) fn runtime_configured() -> Result<bool, String> {
@@ -276,7 +354,8 @@ pub(super) fn runtime_configured() -> Result<bool, String> {
     Ok(slot
         .as_ref()
         .ok_or("Python shared library is not loaded")?
-        .runtime_configured)
+        .setup
+        .configured)
 }
 
 pub(super) fn mark_runtime_configured() -> Result<(), String> {
@@ -284,11 +363,7 @@ pub(super) fn mark_runtime_configured() -> Result<(), String> {
         .lock()
         .map_err(|_| "Python shared library state is unavailable")?;
     let library = slot.as_mut().ok_or("Python shared library is not loaded")?;
-    if !library.runtime_installed || !library.sql_runtime_installed {
-        return Err("Python runtime configuration preceded installation".to_string());
-    }
-    library.runtime_configured = true;
-    Ok(())
+    library.setup.mark_configured()
 }
 
 pub(super) fn activate_environment(script: &str, executable: &str) -> Result<bool, String> {
@@ -381,7 +456,7 @@ fn installed_sql_api() -> Result<Option<PythonApi>, String> {
     let Some(library) = library_slot.as_ref() else {
         return Ok(None);
     };
-    Ok(library.sql_runtime_installed.then_some(library.api))
+    Ok(library.setup.sql.then_some(library.api))
 }
 
 pub(super) fn finish_initialization() -> Result<(), String> {
@@ -494,9 +569,7 @@ impl LoadedLibrary {
             api,
             interpreter,
             configuration: None,
-            sql_runtime_installed: false,
-            runtime_installed: false,
-            runtime_configured: false,
+            setup: SetupCompletion::default(),
         })
     }
 

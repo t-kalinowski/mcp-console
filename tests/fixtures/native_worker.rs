@@ -21,6 +21,17 @@ fn spawn_probe(
     crate::sideband::Reader,
     crate::sideband::Writer,
 ) {
+    spawn_probe_with_configuration(scenario, None)
+}
+
+fn spawn_probe_with_configuration(
+    scenario: &str,
+    configuration: Option<&str>,
+) -> (
+    std::process::Child,
+    crate::sideband::Reader,
+    crate::sideband::Writer,
+) {
     let (reader, writer, endpoints) = crate::sideband::bind().expect("bind sideband");
     let mut command = Command::new(std::env::current_exe().expect("test executable"));
     command
@@ -33,9 +44,79 @@ fn spawn_probe(
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
+    if let Some(configuration) = configuration {
+        command.env("MCP_CONSOLE_NATIVE_PYTHON_CONFIG", configuration);
+    }
     endpoints.configure_process(&mut command);
     let child = command.spawn().expect("start native worker probe");
     (child, reader, writer)
+}
+
+#[test]
+fn native_python_setup_runs_cells_without_r() {
+    let fixture = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/embedded_python_config.py"
+    );
+    let configuration = Command::new("python3")
+        .arg(fixture)
+        .output()
+        .expect("run known Python fixture");
+    assert!(configuration.status.success());
+    let configuration = String::from_utf8(configuration.stdout).expect("fixture configuration");
+    let (child, mut reader, _writer) =
+        spawn_probe_with_configuration("python_setup", Some(&configuration));
+    let ready = reader.receive();
+    if ready.is_err() {
+        let output = child.wait_with_output().expect("native Python probe exit");
+        panic!(
+            "native Python probe failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    assert!(matches!(ready.unwrap(), WorkerMessage::Ready));
+
+    let mut cells = Vec::new();
+    for _ in 0..6 {
+        let mut output = String::new();
+        let mut diagnostic = String::new();
+        loop {
+            let message = match reader.receive() {
+                Ok(message) => message,
+                Err(error) => {
+                    let result = child.wait_with_output().expect("native Python probe exit");
+                    panic!(
+                        "native Python sideband closed: {error}; {}",
+                        String::from_utf8_lossy(&result.stderr)
+                    );
+                }
+            };
+            match message {
+                WorkerMessage::ConsoleOutput { data } => output.push_str(&data),
+                WorkerMessage::ConsoleDiagnostic { data } => diagnostic.push_str(&data),
+                WorkerMessage::Completed => break,
+                _ => panic!("unexpected native Python response"),
+            }
+        }
+        cells.push((output, diagnostic));
+    }
+    assert_eq!(cells[0].0, "42\n");
+    assert_eq!(cells[1].0, "43\n");
+    assert!(cells[2].1.contains("ValueError: native setup failure"));
+    assert_eq!(cells[3].0, "44\n");
+    assert_eq!(cells[4], (String::new(), String::new()));
+    assert!(
+        cells[5]
+            .1
+            .contains("Automatic resolution disabled in native fixture")
+    );
+    assert!(
+        child
+            .wait_with_output()
+            .expect("native Python probe exit")
+            .status
+            .success()
+    );
 }
 
 #[test]
@@ -103,6 +184,74 @@ fn native_probe() {
     writer
         .send(&WorkerMessage::Ready)
         .expect("report readiness");
+
+    if scenario == "python_setup" {
+        let name = if cfg!(target_os = "macos") {
+            c"libR.dylib"
+        } else {
+            c"libR.so"
+        };
+        let r_library = unsafe { libc::dlopen(name.as_ptr(), libc::RTLD_NOLOAD | libc::RTLD_NOW) };
+        assert!(r_library.is_null(), "libR was loaded before Python setup");
+        let configuration: crate::python::SelectedPython = serde_json::from_str(
+            &std::env::var("MCP_CONSOLE_NATIVE_PYTHON_CONFIG").expect("fixture configuration"),
+        )
+        .expect("parse fixture configuration");
+        crate::python::initialize_selected(&configuration).expect("initialize known Python");
+        assert!(
+            crate::python::setup_runtime(
+                std::path::Path::new(&configuration.libpython),
+                crate::python::ImportResolution {
+                    callback: None,
+                    disabled_reason: Some("Automatic resolution disabled in native fixture"),
+                },
+            )
+            .expect("install native Python setup")
+        );
+        crate::python::finish_initialization().expect("release initial Python GIL");
+        for (index, source) in [
+            r#"native_value = 41
+native_value + 1"#,
+            r#"native_value += 2
+native_value"#,
+            r#"raise ValueError('native setup failure')"#,
+            r#"native_value += 1
+native_value"#,
+            r#"import _mcp_console
+
+def fail_reconfiguration(*arguments):
+    raise AssertionError('configured runtime was installed twice')
+
+_mcp_console.configure_import_resolution = fail_reconfiguration"#,
+            r#"import mcp_console_missing_native_fixture_package"#,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            crate::python::evaluate_embedded(source, &format!("<native-python:{index}>"))
+                .expect("evaluate native Python cell");
+            if index == 4 {
+                assert!(
+                    crate::python::setup_runtime(
+                        std::path::Path::new(&configuration.libpython),
+                        crate::python::ImportResolution {
+                            callback: None,
+                            disabled_reason: Some(
+                                "Automatic resolution disabled in native fixture"
+                            ),
+                        },
+                    )
+                    .expect("reuse completed Python setup")
+                );
+            }
+            writer
+                .send(&WorkerMessage::Completed)
+                .expect("report completed Python cell");
+        }
+        let r_library = unsafe { libc::dlopen(name.as_ptr(), libc::RTLD_NOLOAD | libc::RTLD_NOW) };
+        assert!(r_library.is_null(), "libR was loaded during Python setup");
+        return;
+    }
 
     if scenario == "interrupt" {
         let descriptor = match core::next_command().expect("next command") {

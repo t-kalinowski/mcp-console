@@ -1,6 +1,7 @@
 use std::ffi::{CStr, CString, c_char, c_int};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::ThreadId;
 
 use super::{PyObject, PythonApi, load_symbol};
@@ -33,39 +34,53 @@ struct Services {
 }
 
 static SERVICES: OnceLock<Services> = OnceLock::new();
+// These stages can complete before a later installation step fails. A retry
+// reuses the method table and Python module instead of wrapping streams again.
+static METHODS_REGISTERED: AtomicBool = AtomicBool::new(false);
+static MODULE_INSTALLED: AtomicBool = AtomicBool::new(false);
 
-pub(super) fn install(api: &PythonApi) -> Result<(), String> {
-    if let Some(services) = SERVICES.get() {
+pub(super) fn install(api: &PythonApi, installed: bool) -> Result<(), String> {
+    if installed {
+        let services = SERVICES
+            .get()
+            .expect("installed Python services retain callbacks");
         api.call_unit(c"_mcp_console_services", c"install_interrupt")?;
         return worker::install_python_interrupt(services.set_interrupt);
     }
-    // The owning Python handle is process-long; no library lock spans Python.
-    let library = libloading::os::unix::Library::this();
-    let path = std::path::Path::new("loaded Python");
-    unsafe {
+    let services = if let Some(services) = SERVICES.get() {
+        services
+    } else {
+        // The owning Python handle is process-long; no library lock spans Python.
+        let library = libloading::os::unix::Library::this();
+        let path = std::path::Path::new("loaded Python");
         let exception = |name| -> Result<usize, String> {
-            Ok(*load_symbol::<*const *mut PyObject>(&library, path, name)? as usize)
+            Ok(unsafe { *load_symbol::<*const *mut PyObject>(&library, path, name)? } as usize)
         };
         let services = Services {
             api: *api,
             thread: std::thread::current().id(),
-            pid: libc::getpid(),
-            unicode_utf8: load_symbol(&library, path, b"PyUnicode_AsUTF8AndSize\0")?,
-            inc_ref: load_symbol(&library, path, b"Py_IncRef\0")?,
-            set_none: load_symbol(&library, path, b"PyErr_SetNone\0")?,
-            set_string: load_symbol(&library, path, b"PyErr_SetString\0")?,
-            set_interrupt: load_symbol(&library, path, b"PyErr_SetInterrupt\0")?,
-            none: load_symbol::<*mut PyObject>(&library, path, b"_Py_NoneStruct\0")? as usize,
+            pid: unsafe { libc::getpid() },
+            unicode_utf8: unsafe { load_symbol(&library, path, b"PyUnicode_AsUTF8AndSize\0")? },
+            inc_ref: unsafe { load_symbol(&library, path, b"Py_IncRef\0")? },
+            set_none: unsafe { load_symbol(&library, path, b"PyErr_SetNone\0")? },
+            set_string: unsafe { load_symbol(&library, path, b"PyErr_SetString\0")? },
+            set_interrupt: unsafe { load_symbol(&library, path, b"PyErr_SetInterrupt\0")? },
+            none: unsafe { load_symbol::<*mut PyObject>(&library, path, b"_Py_NoneStruct\0")? }
+                as usize,
             runtime_error: exception(b"PyExc_RuntimeError\0")?,
             keyboard_interrupt: exception(b"PyExc_KeyboardInterrupt\0")?,
             eof_error: exception(b"PyExc_EOFError\0")?,
         };
-        let add_functions: unsafe extern "C" fn(*mut PyObject, *const Method) -> c_int =
-            load_symbol(&library, path, b"PyModule_AddFunctions\0")?;
-        let set_interrupt = services.set_interrupt;
         SERVICES
             .set(services)
             .map_err(|_| "Python services already installed")?;
+        SERVICES.get().unwrap()
+    };
+    if !METHODS_REGISTERED.load(Ordering::Acquire) {
+        let library = libloading::os::unix::Library::this();
+        let path = std::path::Path::new("loaded Python");
+        let add_functions: unsafe extern "C" fn(*mut PyObject, *const Method) -> c_int =
+            unsafe { load_symbol(&library, path, b"PyModule_AddFunctions\0")? };
         // CPython retains the method definitions for the process lifetime.
         let methods = Box::leak(Box::new([
             method(c"write", write, 8), // METH_O
@@ -80,17 +95,23 @@ pub(super) fn install(api: &PythonApi) -> Result<(), String> {
                 doc: std::ptr::null(),
             },
         ]));
-        let module = (api.import_add_module)(c"_mcp_console_services".as_ptr());
-        if module.is_null() || add_functions(module, methods.as_ptr()) != 0 {
+        let module = unsafe { (api.import_add_module)(c"_mcp_console_services".as_ptr()) };
+        if module.is_null() || unsafe { add_functions(module, methods.as_ptr()) } != 0 {
             api.display_pending_exception();
             return Err("failed to install Python console callbacks".to_string());
         }
+        METHODS_REGISTERED.store(true, Ordering::Release);
+    }
+    // Keep the library-state lock out of this interpreter execution. A failed
+    // source installation leaves this stage open for a later setup attempt.
+    if !MODULE_INSTALLED.load(Ordering::Acquire) {
         let source = CString::new(include_str!("../services.py")).unwrap();
-        api.run_module(c"_mcp_console_services", &source)?;
+        unsafe { api.run_module(c"_mcp_console_services", &source)? };
+        MODULE_INSTALLED.store(true, Ordering::Release);
         // signal.signal in install_interrupt() sets CPython's handler. Install the
         // worker's native handler afterwards so R and managed input also wake.
-        worker::install_python_interrupt(set_interrupt)?;
     }
+    worker::install_python_interrupt(services.set_interrupt)?;
     Ok(())
 }
 

@@ -503,12 +503,9 @@ def test_retries_python_runtime_initialization_after_interrupt(
             # fmt: r
             r = code(r"""
                 invisible(suppressMessages(base::trace(
-                  "py_set_attr",
+                  "r_to_py",
                   tracer = quote({
-                    if (
-                      identical(name, "operation") &&
-                        identical(value, "configure_import_resolution")
-                    ) {
+                    if (is.function(x) && identical(convert, FALSE)) {
                       invisible(readline("python runtime configuring> "))
                     }
                   }),
@@ -520,8 +517,8 @@ def test_retries_python_runtime_initialization_after_interrupt(
                 client, "[done]", "Python configuration checkpoint", r=r
             )
 
-            # The input request proves runtime configuration has started before
-            # interrupting it, after any first-use Python preparation completes.
+            # Callback conversion starts after reticulate attaches and Console
+            # installs its services, before native evaluator setup completes.
             client.send(python="42")
             assert last_result_text(client) == (
                 '[input requested: "python runtime configuring> "]\n[waiting for stdin]'
@@ -537,7 +534,7 @@ def test_retries_python_runtime_initialization_after_interrupt(
             # fmt: r
             r = code(r"""
                 invisible(suppressMessages(base::untrace(
-                  "py_set_attr",
+                  "r_to_py",
                   where = asNamespace("reticulate")
                 )))
                 length(getHook("reticulate::matplotlib.pyplot::load"))

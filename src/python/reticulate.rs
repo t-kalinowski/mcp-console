@@ -1,6 +1,6 @@
 use libr::SEXP;
 
-use super::PreparationOutcome;
+use super::{PreparationOutcome, SelectedPython};
 
 const PYTHON_BRIDGE_SOURCE: &str = include_str!("bridge.R");
 const PYTHON_INITIALIZER_SOURCE: &str = include_str!("initialize.R");
@@ -8,13 +8,6 @@ const PYTHON_INITIALIZER_SOURCE: &str = include_str!("initialize.R");
 /// Reticulate supplies the selected configuration and attaches to the native interpreter.
 pub(super) struct Adapter {
     bridge: crate::r_bridge::Bridge,
-}
-
-#[derive(serde::Deserialize)]
-pub(super) struct SelectedPython {
-    pub(super) python: String,
-    pub(super) libpython: String,
-    pub(super) python_home: String,
 }
 
 pub(super) fn configure_worker_environment() -> std::io::Result<()> {
@@ -47,8 +40,12 @@ impl Adapter {
         Ok(())
     }
 
-    pub(super) fn attach_and_setup(&mut self) -> Result<bool, String> {
-        self.bridge.evaluate_completed("")
+    pub(super) fn attach(&mut self) -> Result<bool, String> {
+        self.bridge.evaluate_completed("attach")
+    }
+
+    pub(super) fn setup(&mut self) -> Result<bool, String> {
+        self.bridge.evaluate_completed("setup")
     }
 
     pub(super) fn prepare(&self, packages: Vec<String>) -> Result<PreparationOutcome, String> {
@@ -76,9 +73,13 @@ pub extern "C-unwind" fn mcp_console_initialize_python(
     let libpython = Option::<String>::try_from(harp::object::RObject::view(libpython))?
         .ok_or_else(|| harp::anyhow!("Python-hosted R is not supported"))?;
     let python_home = String::try_from(harp::object::RObject::view(python_home))?;
+    let selected = SelectedPython {
+        python,
+        libpython,
+        python_home,
+    };
     let rust_owned =
-        super::library::initialize(std::path::Path::new(&libpython), &python, &python_home)
-            .map_err(|error| harp::anyhow!("{error}"))?;
+        super::initialize_selected(&selected).map_err(|error| harp::anyhow!("{error}"))?;
     Ok(harp::object::RObject::from(rust_owned).sexp)
 }
 
@@ -94,39 +95,69 @@ pub extern "C-unwind" fn mcp_console_load_python_library(path: SEXP) -> harp::Re
     Ok(harp::object::RObject::from(rust_owned).sexp)
 }
 
-// Reticulate's initialization lifecycle installs Console's native services.
+// Reticulate calls this after installing its own stream and input hooks.
 #[allow(clippy::result_large_err)]
 #[harp::register]
 pub extern "C-unwind" fn mcp_console_install_python_services(
     libpython: SEXP,
 ) -> harp::Result<SEXP> {
     let libpython = String::try_from(harp::object::RObject::view(libpython))?;
-    super::library::load(std::path::Path::new(&libpython))
-        .and_then(|_| super::library::install_services())
+    super::startup::install_services(std::path::Path::new(&libpython))
         .map_err(|error| harp::anyhow!("{error}"))?;
     unsafe { Ok(libr::R_NilValue) }
 }
 
-// Install the private evaluator through the Rust-owned CPython API while
-// retaining reticulate's existing post-initialization lifecycle point.
+// Reticulate converts the optional R resolver callback. Native startup owns
+// the installation and CPython call; no reticulate string dispatcher runs it.
 #[allow(clippy::result_large_err)]
 #[harp::register]
-pub extern "C-unwind" fn mcp_console_install_python_runtime(libpython: SEXP) -> harp::Result<SEXP> {
+pub extern "C-unwind" fn mcp_console_setup_python_runtime(
+    libpython: SEXP,
+    callback: SEXP,
+    disabled_reason: SEXP,
+) -> harp::Result<SEXP> {
     let libpython = Option::<String>::try_from(harp::object::RObject::view(libpython))?
         .ok_or_else(|| harp::anyhow!("Python-hosted R is not supported"))?;
-    super::library::load(std::path::Path::new(&libpython))
-        .map_err(|error| harp::anyhow!("{error}"))?;
-    super::library::install_runtime(super::RUNTIME_SOURCE)
-        .map_err(|error| harp::anyhow!("{error}"))?;
-    crate::sql::install_python_runtime().map_err(|error| harp::anyhow!("{error}"))?;
-    unsafe { Ok(libr::R_NilValue) }
+    let disabled_reason = if unsafe { disabled_reason == libr::R_NilValue } {
+        None
+    } else {
+        Some(String::try_from(harp::object::RObject::view(
+            disabled_reason,
+        ))?)
+    };
+    let callback = reticulate_callback(callback)?;
+    let completed = super::setup_runtime(
+        std::path::Path::new(&libpython),
+        super::ImportResolution {
+            callback,
+            disabled_reason: disabled_reason.as_deref(),
+        },
+    )
+    .map_err(|error| harp::anyhow!("{error}"))?;
+    Ok(harp::object::RObject::from(completed).sexp)
 }
 
-#[allow(clippy::result_large_err)]
-#[harp::register]
-pub extern "C-unwind" fn mcp_console_python_runtime_configured() -> harp::Result<SEXP> {
-    super::library::mark_runtime_configured().map_err(|error| harp::anyhow!("{error}"))?;
-    unsafe { Ok(libr::R_NilValue) }
+fn reticulate_callback(callback: SEXP) -> harp::Result<Option<std::ptr::NonNull<libc::c_void>>> {
+    // A converted reticulate callable is an R function with a `py_object`
+    // reference environment. Keep this adapter-specific representation here.
+    // The .Call argument retains that wrapper for the CPython configuration
+    // call; the finder retains the resulting Python callback afterwards.
+    unsafe {
+        if callback == libr::R_NilValue {
+            return Ok(None);
+        }
+        let reference = libr::Rf_getAttrib(callback, libr::Rf_install(c"py_object".as_ptr()));
+        if libr::TYPEOF(reference) != libr::ENVSXP as i32 {
+            return Err(harp::anyhow!("reticulate callback has no Python reference"));
+        }
+        let pointer = libr::Rf_findVarInFrame(reference, libr::Rf_install(c"pyobj".as_ptr()));
+        if libr::TYPEOF(pointer) != libr::EXTPTRSXP as i32 {
+            return Err(harp::anyhow!("reticulate callback has no Python object"));
+        }
+        std::ptr::NonNull::new(libr::R_ExternalPtrAddr(pointer))
+            .map(Some)
+            .ok_or_else(|| harp::anyhow!("reticulate callback Python object is unavailable"))
+    }
 }
 
 #[allow(clippy::result_large_err)]
@@ -142,7 +173,7 @@ pub extern "C-unwind" fn mcp_console_python_runtime_is_configured() -> harp::Res
 #[allow(clippy::result_large_err)]
 #[harp::register]
 pub extern "C-unwind" fn mcp_console_finish_python_initialization() -> harp::Result<SEXP> {
-    super::library::finish_initialization().map_err(|error| harp::anyhow!("{error}"))?;
+    super::finish_initialization().map_err(|error| harp::anyhow!("{error}"))?;
     unsafe { Ok(libr::R_NilValue) }
 }
 

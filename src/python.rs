@@ -2,7 +2,19 @@ mod requirements;
 mod reticulate;
 mod startup;
 
+pub(crate) use startup::{
+    SelectedPython, finish_initialization, initialize_selected, setup_runtime,
+};
+
 const RUNTIME_SOURCE: &str = include_str!("python/runtime.py");
+
+/// Values supplied by an interpreter adapter when the private evaluator is
+/// configured. A caller without managed resolution supplies no callback.
+pub(crate) struct ImportResolution<'a> {
+    // The adapter keeps a converted callback alive for this setup call.
+    pub(crate) callback: Option<std::ptr::NonNull<libc::c_void>>,
+    pub(crate) disabled_reason: Option<&'a str>,
+}
 
 #[derive(serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -50,12 +62,16 @@ impl Runtime {
         if !self.startup.ensure_initialized()? {
             return Ok(());
         }
-        library::evaluate(source, &filename)
+        evaluate_embedded(source, &filename)
     }
 
     pub(crate) fn prepare(&self, packages: Vec<String>) -> Result<PreparationOutcome, String> {
         self.startup.prepare(packages)
     }
+}
+
+pub(crate) fn evaluate_embedded(source: &str, filename: &str) -> Result<(), String> {
+    library::evaluate(source, filename)
 }
 
 pub(crate) fn install_sql_runtime(source: &str) -> Result<(), String> {
