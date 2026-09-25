@@ -23,6 +23,10 @@ The built-in worker requires **R even for Python and SQL**.
 It embeds R, uses reticulate for Python interoperability, and provides a persistent DuckDB connection for SQL.
 Python-only execution is not yet implemented.
 
+`mcp-console inspect-python /absolute/path/to/python` describes one already-selected CPython executable for native embedding.
+It prints JSON with the selected executable, shared library, and Python home, or reports why that executable cannot be embedded.
+This command does not select an interpreter or start a Console session.
+
 ## Quickstart
 
 Use an MCP client of your choice, such as [Codex](https://developers.openai.com/codex/mcp), [Claude Code](https://code.claude.com/docs/en/mcp), or [OpenCode](https://opencode.ai/docs/mcp-servers/).

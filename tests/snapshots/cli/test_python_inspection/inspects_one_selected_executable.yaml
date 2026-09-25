@@ -1,0 +1,8 @@
+---
+command: inspect-python
+fields:
+  - libpython
+  - python
+  - python_home
+selected_executable_preserved: true
+embedding_library_available: true

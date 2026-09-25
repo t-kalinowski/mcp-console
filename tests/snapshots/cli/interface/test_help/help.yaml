@@ -8,9 +8,10 @@ stderr: |
   Usage: mcp-console [OPTIONS] <COMMAND>
 
   Commands:
-    serve    Run the MCP server over standard input and output
-    sandbox  Run a command with the default or an explicit sandbox policy
-    help     Print this message or the help of the given subcommand(s)
+    inspect-python  Describe an already-selected Python executable for native embedding
+    serve           Run the MCP server over standard input and output
+    sandbox         Run a command with the default or an explicit sandbox policy
+    help            Print this message or the help of the given subcommand(s)
 
   Options:
     -c, --config <KEY=VALUE>  Override project configuration; repeat for multiple dotted KEY=VALUE assignments
@@ -28,9 +29,10 @@ stdout: |
   Usage: mcp-console [OPTIONS] <COMMAND>
 
   Commands:
-    serve    Run the MCP server over standard input and output
-    sandbox  Run a command with the default or an explicit sandbox policy
-    help     Print this message or the help of the given subcommand(s)
+    inspect-python  Describe an already-selected Python executable for native embedding
+    serve           Run the MCP server over standard input and output
+    sandbox         Run a command with the default or an explicit sandbox policy
+    help            Print this message or the help of the given subcommand(s)
 
   Options:
     -c, --config <KEY=VALUE>  Override project configuration; repeat for multiple dotted KEY=VALUE assignments

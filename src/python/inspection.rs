@@ -1,18 +1,17 @@
-use std::fs::{self, OpenOptions};
-use std::os::unix::fs::OpenOptionsExt as _;
+use std::ffi::OsString;
+use std::fs::{self, File};
+use std::os::fd::FromRawFd as _;
+use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
+use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
-use std::process::{self, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::process::Stdio;
 
 use crate::resolver::ResolverStopHandle;
-use crate::resolver::process::{
-    ResolverProcess, completed_write, read_output, resolver_command, stop_resolver,
-};
+use crate::resolver::process::{ResolverProcess, completed_write, read_output, resolver_command};
 
 use super::startup::SelectedPython;
 
 const INSPECTION_SOURCE: &str = include_str!("inspection.py");
-static OUTPUT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Describe a selected executable without changing the calling process or
 /// selecting a replacement. Ordinary reticulate startup already supplies its
@@ -30,6 +29,7 @@ pub(crate) fn inspect_selected(
     let selected = executable
         .to_str()
         .ok_or_else(|| "selected Python executable is not UTF-8".to_string())?;
+    let identity = ExecutableIdentity::capture(executable)?;
     let result = InspectionOutput::create()?;
     let resolver = ResolverProcess::new();
     let mut command = resolver_command(executable);
@@ -47,7 +47,8 @@ pub(crate) fn inspect_selected(
     let stderr = read_output(child.stderr.take().expect("inspection stderr is piped"));
     resolver.watch_exit(child.id());
     if let Err(error) = on_started(resolver.stop_handle()) {
-        stop_resolver(&mut child, executable, "Python inspection")
+        resolver
+            .abort(&mut child, executable, "Python inspection")
             .map_err(|cleanup| format!("{error}; {cleanup}"))?;
         return Err(error);
     }
@@ -73,7 +74,7 @@ pub(crate) fn inspect_selected(
             .map_err(|error| format!("failed to read selected Python configuration: {error}"))?,
     )
     .map_err(|error| format!("invalid selected Python configuration: {error}"))?;
-    description.validate(executable)?;
+    description.validate(executable, identity)?;
     let python_home = if description.base_prefix == description.base_exec_prefix {
         description.base_prefix.clone()
     } else {
@@ -102,8 +103,29 @@ struct Description {
     base_exec_prefix: String,
 }
 
+#[derive(PartialEq)]
+struct ExecutableIdentity {
+    device: u64,
+    inode: u64,
+}
+
+impl ExecutableIdentity {
+    fn capture(path: &Path) -> Result<Self, String> {
+        let metadata = fs::metadata(path).map_err(|error| {
+            format!("failed to inspect selected Python executable identity: {error}")
+        })?;
+        Ok(Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        })
+    }
+}
+
 impl Description {
-    fn validate(&self, selected: &Path) -> Result<(), String> {
+    fn validate(&self, selected: &Path, identity: ExecutableIdentity) -> Result<(), String> {
+        if ExecutableIdentity::capture(selected)? != identity {
+            return Err("selected Python executable changed during inspection".to_string());
+        }
         let reported = fs::canonicalize(&self.executable).map_err(|error| {
             format!(
                 "selected Python reported unusable executable `{}`: {error}",
@@ -144,29 +166,25 @@ struct InspectionOutput(PathBuf);
 
 impl InspectionOutput {
     fn create() -> Result<Self, String> {
-        for _ in 0..100 {
-            let sequence = OUTPUT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!(
-                "mcp-console-python-inspection-{}-{sequence}",
-                process::id()
+        let mut template = std::env::temp_dir()
+            .join("mcp-console-python-inspection-XXXXXX")
+            .as_os_str()
+            .as_bytes()
+            .to_vec();
+        template.push(0);
+        // SAFETY: mkstemp replaces the trailing Xs and returns a new owned fd.
+        let descriptor = unsafe { libc::mkstemp(template.as_mut_ptr().cast()) };
+        if descriptor < 0 {
+            return Err(format!(
+                "failed to create Python inspection output: {}",
+                std::io::Error::last_os_error()
             ));
-            match OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(&path)
-            {
-                Ok(_) => return Ok(Self(path)),
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-                Err(error) => {
-                    return Err(format!(
-                        "failed to create Python inspection output `{}`: {error}",
-                        path.display()
-                    ));
-                }
-            }
         }
-        Err("failed to allocate Python inspection output".to_string())
+        // SAFETY: the descriptor is uniquely owned here. The child opens the
+        // path itself, so close this descriptor before launching it.
+        drop(unsafe { File::from_raw_fd(descriptor) });
+        let path = OsString::from_vec(template[..template.len() - 1].to_vec());
+        Ok(Self(PathBuf::from(path)))
     }
 
     fn path(&self) -> &Path {

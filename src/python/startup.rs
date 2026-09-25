@@ -1,7 +1,7 @@
 use super::{ImportResolution, PreparationOutcome, reticulate};
 use std::path::Path;
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub(crate) struct SelectedPython {
     pub(crate) python: String,
     pub(crate) libpython: String,

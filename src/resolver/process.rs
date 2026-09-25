@@ -136,6 +136,18 @@ impl ResolverProcess {
     ) -> Result<ResolverOutput, String> {
         wait_for_resolver(self, child, input, stdout, stderr, program, kind)
     }
+
+    pub(crate) fn abort(
+        &self,
+        child: &mut Child,
+        program: &Path,
+        kind: &str,
+    ) -> Result<(), String> {
+        let result = stop_resolver(child, program, kind);
+        self.cleanup.store(result.is_ok(), Ordering::SeqCst);
+        let _ = self.finish_wait(kind);
+        result.map(|_| ())
+    }
 }
 
 impl ResolverControl for LocalControl {
