@@ -21,6 +21,7 @@ from support.processes import (
     live_processes,
 )
 from support.records import Transcript
+from support.r import reference_r_error
 from support.requirements import PROCESS_EVENTS, command, requires
 from support.resolvers import (
     ir_requirements,
@@ -134,7 +135,7 @@ def send_and_collect_runtime_r_resolution(
         if output != "[done]" or not chunks:
             chunks.append(output)
         collected = "".join(chunks)
-        assert collected == expected, repr(collected)
+        assert collected == expected, {"actual": collected, "expected": expected}
 
         calls = client.transcript[call_start:]
         submitted = calls[0]
@@ -146,6 +147,17 @@ def send_and_collect_runtime_r_resolution(
         submitted["result"] = final_result
         client.transcript[call_start:] = [submitted]
         return
+
+
+def send_and_compare_r_error(
+    client: McpClient, environment: dict[str, str], source: str
+) -> None:
+    expected = reference_r_error(environment, source)
+    send_and_collect_runtime_r_resolution(client, expected, r=source)
+    # Like plot references, record the live comparison after exact equality.
+    client.transcript[-1]["result"]["content"][0]["text"] = (
+        "<error output identical to live Rscript>"
+    )
 
 
 @executions(DIRECT, SANDBOXED)
@@ -392,6 +404,120 @@ def test_retains_automatic_r_package_after_error_and_restart(
 
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
+def test_preserves_missing_package_conditions_after_resolution_failure(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        environment, record = recording_ir_environment(
+            Path(temporary), fail_requirement="notloaded.pkg"
+        )
+        # fmt: r
+        caught = code(r"""
+            tryCatch(
+              loadNamespace("notloaded.pkg"),
+              packageNotFoundError = function(e) "expected missing-package error"
+            )
+            """)
+        # Compare the original condition, including its call and package fields,
+        # with this host's R rather than recreating R's condition in the test.
+        # fmt: r
+        details = code(r"""
+            describe_missing <- function(expr) {
+              tryCatch(
+                withCallingHandlers(
+                  expr,
+                  packageNotFoundError = function(e) {
+                    cat("calling handler: ")
+                    print(class(e))
+                  }
+                ),
+                packageNotFoundError = function(e) {
+                  print(e)
+                  print(list(
+                    message = conditionMessage(e),
+                    call = deparse(conditionCall(e)),
+                    package = e$package,
+                    lib.loc = if (is.null(e$lib.loc)) {
+                      NULL
+                    } else {
+                      identical(e$lib.loc, .libPaths())
+                    }
+                  ))
+                  invisible(NULL)
+                }
+              )
+            }
+            describe_missing(loadNamespace("notloaded.pkg"))
+            describe_missing(notloaded.pkg::missing)
+            describe_missing(notloaded.pkg:::missing)
+            describe_missing(library(notloaded.pkg))
+            requireNamespace("notloaded.pkg", quietly = TRUE)
+            suppressWarnings(require(notloaded.pkg, quietly = TRUE))
+            suppressWarnings(library(notloaded.pkg, logical.return = TRUE))
+            """)
+        reference = subprocess.run(
+            [Path(environment["R_HOME"]) / "bin/Rscript", "--vanilla", "-"],
+            input=details,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert reference.stderr == "", reference.stderr
+        with McpClient(binary, execution.serve(), environment) as client:
+            client.initialize_and_list_tools()
+            for restart in (False, True):
+                if restart:
+                    client.send(control="restart")
+                send_and_collect_runtime_r_resolution(
+                    client, '[1] "expected missing-package error"\n', r=caught
+                )
+                baseline = len(ir_run_records(record))
+                send_and_collect_runtime_r_resolution(
+                    client, reference.stdout, r=details
+                )
+                client.transcript[-1]["result"]["content"][0]["text"] = (
+                    "<condition classes, messages, calls, and fields identical to live Rscript>"
+                )
+                runs = ir_run_records(record)[baseline:]
+                assert len(runs) == 7, runs
+                assert all("notloaded.pkg" in ir_requirements(run) for run in runs)
+
+            # Explicit preparation still reports the resolver's failure.
+            client.send(requirements={"r": ["notloaded.pkg"]})
+            assert "synthetic `ir` failure for notloaded.pkg" in last_result_text(
+                client
+            )
+            return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+@requires(command("ir"))
+def test_matches_base_r_missing_package_error_display(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        environment, _ = recording_ir_environment(
+            Path(temporary), fail_requirement="notloaded.pkg"
+        )
+        with McpClient(binary, execution.serve(), environment) as client:
+            client.initialize_and_list_tools()
+            for source in (
+                "library(notloaded.pkg)",
+                "base::library(notloaded.pkg)",
+                'loadNamespace("notloaded.pkg")',
+                'base::loadNamespace("notloaded.pkg")',
+                "notloaded.pkg::missing",
+                "notloaded.pkg:::missing",
+                'package <- "notloaded.pkg"; library(package, character.only = TRUE)',
+                "loader <- library; loader(notloaded.pkg)",
+            ):
+                send_and_compare_r_error(client, environment, source)
+            return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+@requires(command("ir"))
 def test_does_not_resolve_unreached_package_loads(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -411,15 +537,14 @@ def test_does_not_resolve_unreached_package_loads(
         assert last_result_text(client) == "[1] 42\n"
         assert len(ir_run_records(record)) == baseline
 
-        client.send(r=f"library({missing})")
-        assert f"synthetic `ir` failure for {missing}" in last_result_text(client)
+        source = f"library({missing})"
+        send_and_compare_r_error(client, environment, source)
         failed = len(ir_run_records(record))
         assert failed == baseline + 1
 
         client.send(r="42L")
         assert last_result_text(client) == "[1] 42\n"
-        client.send(r=f"library({missing})")
-        assert f"synthetic `ir` failure for {missing}" in last_result_text(client)
+        send_and_compare_r_error(client, environment, source)
         assert len(ir_run_records(record)) == failed + 1
         return client.finish()
 

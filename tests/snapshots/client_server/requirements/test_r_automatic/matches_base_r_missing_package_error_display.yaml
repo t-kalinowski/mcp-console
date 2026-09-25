@@ -1,0 +1,66 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  r: library(notloaded.pkg)
+result:
+  content:
+    - type: text
+      text: <error output identical to live Rscript>
+  isError: false
+---
+send:
+  r: base::library(notloaded.pkg)
+result:
+  content:
+    - type: text
+      text: <error output identical to live Rscript>
+  isError: false
+---
+send:
+  r: loadNamespace("notloaded.pkg")
+result:
+  content:
+    - type: text
+      text: <error output identical to live Rscript>
+  isError: false
+---
+send:
+  r: base::loadNamespace("notloaded.pkg")
+result:
+  content:
+    - type: text
+      text: <error output identical to live Rscript>
+  isError: false
+---
+send:
+  r: notloaded.pkg::missing
+result:
+  content:
+    - type: text
+      text: <error output identical to live Rscript>
+  isError: false
+---
+send:
+  r: notloaded.pkg:::missing
+result:
+  content:
+    - type: text
+      text: <error output identical to live Rscript>
+  isError: false
+---
+send:
+  r: package <- "notloaded.pkg"; library(package, character.only = TRUE)
+result:
+  content:
+    - type: text
+      text: <error output identical to live Rscript>
+  isError: false
+---
+send:
+  r: loader <- library; loader(notloaded.pkg)
+result:
+  content:
+    - type: text
+      text: <error output identical to live Rscript>
+  isError: false

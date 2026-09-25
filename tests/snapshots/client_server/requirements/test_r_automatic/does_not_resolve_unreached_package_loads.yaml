@@ -25,9 +25,7 @@ send:
 result:
   content:
     - type: text
-      text: >
-        Error: R package resolution failed with exit status: 1: synthetic `ir`
-        failure for mcpconsolenotarealpackage
+      text: <error output identical to live Rscript>
   isError: false
 ---
 send:
@@ -44,7 +42,5 @@ send:
 result:
   content:
     - type: text
-      text: >
-        Error: R package resolution failed with exit status: 1: synthetic `ir`
-        failure for mcpconsolenotarealpackage
+      text: <error output identical to live Rscript>
   isError: false
