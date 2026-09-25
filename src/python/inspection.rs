@@ -50,6 +50,9 @@ pub(crate) fn inspect_native(
     let resolver = ResolverProcess::new();
     let mut command = resolver_command(executable);
     command
+        // Inspect the selected installation without executing workspace,
+        // PYTHONPATH, or user-site code with the host resolver's permissions.
+        .arg("-I")
         .arg("-c")
         .arg(INSPECTION_SOURCE)
         .arg(result.path())

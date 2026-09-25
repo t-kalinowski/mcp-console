@@ -10,6 +10,7 @@ This guide describes preparation before a cell, standalone preparation, and requ
 Local [Python sessions without R](BUILTIN_RUNTIME.md#python-sessions-without-r) resolve only their initial environment.
 When `uv` is available, the existing local host resolver prepares the default Python manifest before MCP readiness and retains the result for replacement workers.
 This does not invoke R, Rscript, or `ir`, and no installation runs inside the sandboxed worker.
+Executable inspection uses isolated Python mode, excluding workspace imports, `PYTHONPATH`, and the user site; the selected installation and its environment remain trusted.
 Without `uv`, a Python executable on `PATH` supplies its preinstalled packages.
 Live requirement additions and automatic import resolution are unavailable in this mode, including when Console resolved the initial environment itself.
 The remaining preparation and SQL behavior in this document applies to sessions with R.

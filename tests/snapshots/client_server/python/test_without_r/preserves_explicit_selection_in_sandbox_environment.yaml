@@ -1,0 +1,64 @@
+---
+send:
+  python: |
+    import os
+    import sys
+
+    assert os.environ["RETICULATE_PYTHON"] == sys.executable
+    print("explicit selection retained")
+result:
+  content:
+    - type: text
+      text: |
+        explicit selection retained
+  isError: false
+---
+send:
+  control: restart
+  python: |
+    import os
+    import sys
+
+    assert os.environ["RETICULATE_PYTHON"] == sys.executable
+    print("explicit selection retained")
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        explicit selection retained
+        [done]
+  isError: false
+---
+send:
+  python: |
+    import os
+    import sys
+
+    assert os.environ["RETICULATE_PYTHON"] == sys.executable
+    print("explicit selection retained")
+result:
+  content:
+    - type: text
+      text: |
+        explicit selection retained
+  isError: false
+---
+send:
+  control: restart
+  python: |
+    import os
+    import sys
+
+    assert os.environ["RETICULATE_PYTHON"] == sys.executable
+    print("explicit selection retained")
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        explicit selection retained
+        [done]
+  isError: false

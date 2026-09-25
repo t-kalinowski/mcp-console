@@ -1,6 +1,6 @@
 # Context: repository source plus dist/*.whl and an executable dist/uv for Linux.
 FROM ubuntu:24.04
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libgcc-s1 \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates gcc libc6-dev \
     && rm -rf /var/lib/apt/lists/*
 COPY dist/uv /usr/local/bin/uv
 COPY dist/*.whl /tmp/wheels/

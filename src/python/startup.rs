@@ -106,6 +106,9 @@ impl Runtime {
             }
             Ok(())
         });
+        if result.is_err() {
+            super::library::display_setup_exception()?;
+        }
         let finished = finish_initialization();
         result?;
         finished?;

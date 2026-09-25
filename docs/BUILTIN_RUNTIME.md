@@ -54,6 +54,7 @@ An available resolver that fails reports the failure without trying a different 
 With no `uv`, selection checks `python3` then `python` on `PATH`; the selected CPython must provide a usable shared embedding library.
 If no interpreter is available, the error asks the user to install `uv` or CPython and restart the server.
 Existing explicit `RETICULATE_PYTHON` selection remains supported.
+Its captured value is preserved when sandbox environment inheritance is disabled or project environment settings provide a different value.
 
 The session retains the selected environment and executable across cells, restarts, and worker replacement.
 A restart clears Python objects, but does not resolve another environment.

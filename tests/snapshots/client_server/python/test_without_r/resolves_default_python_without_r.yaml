@@ -24,6 +24,12 @@ send:
     with multiprocessing.get_context("spawn").Pool(1) as pool:
         child = pool.apply(eval, ("__import__('sys').executable",))
     assert child == sys.executable
+    # Release the pool's semaphores before restarting a worker
+    # whose interpreter is intentionally never finalized.
+    del pool
+    import gc
+
+    gc.collect()
     selected = sys.executable
     retained = 41
     identity = object()

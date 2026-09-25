@@ -19,6 +19,7 @@ from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.records import Transcript
 from support.normalization import code
+from support.native import build_interposer
 
 
 def environment(path: Path) -> dict[str, str]:
@@ -79,6 +80,12 @@ def test_resolves_default_python_without_r(
                     with multiprocessing.get_context("spawn").Pool(1) as pool:
                         child = pool.apply(eval, ("__import__('sys').executable",))
                     assert child == sys.executable
+                    # Release the pool's semaphores before restarting a worker
+                    # whose interpreter is intentionally never finalized.
+                    del pool
+                    import gc
+
+                    gc.collect()
                     selected = sys.executable
                     retained = 41
                     identity = object()
@@ -477,8 +484,8 @@ def test_interrupts_python_and_replaces_a_failed_worker(
                 # fmt: python
                 python=code("""
                     print("loop entered")
-                    while True:
-                        pass
+                    # Keep interrupt locations stable across Python bytecode versions.
+                    while True: pass  # fmt: skip
                     """),
                 timeout_ms=100,
             )
@@ -519,3 +526,163 @@ def test_uses_path_uv_with_legacy_managed_uv_selection(
             client.send(python="import numpy, pandas; 42")
             assert last_result_text(client) == "42\n", client.transcript[-1]
             return client.finish()[3:]
+
+
+@executions(SANDBOXED)
+def test_preserves_explicit_selection_in_sandbox_environment(
+    binary: Path, execution: Execution
+) -> Transcript:
+    records = []
+    for inherit in (False, True):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            config = workspace / ".agents/console/config.yaml"
+            config.parent.mkdir(parents=True)
+            config.write_text(
+                json.dumps(
+                    {
+                        "sandbox": {
+                            "inherit_environment": inherit,
+                            "environment": {
+                                "RETICULATE_PYTHON": "/invalid/project/python"
+                            },
+                        }
+                    }
+                )
+            )
+            env = environment(workspace)
+            env["RETICULATE_PYTHON"] = sys.executable
+            with McpClient(binary, execution.serve(), env, workspace) as client:
+                client.initialize_and_list_tools()
+                for control in ({}, {"control": "restart"}):
+                    client.send(
+                        **control,
+                        # fmt: python
+                        python=code("""
+                            import os
+                            import sys
+
+                            assert os.environ["RETICULATE_PYTHON"] == sys.executable
+                            print("explicit selection retained")
+                            """),
+                    )
+                    assert "explicit selection retained\n" in last_result_text(client)
+                records.extend(client.finish()[3:])
+    return records
+
+
+@executions(DIRECT, SANDBOXED)
+def test_inspection_excludes_workspace_and_pythonpath(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        workspace = Path(directory)
+        (workspace / "python3").symlink_to(sys.executable)
+        poisoned_path = workspace / "pythonpath"
+        poisoned_path.mkdir()
+        # fmt: python
+        payload = code("""
+            from pathlib import Path
+
+            Path("host-import-executed").touch()
+            raise RuntimeError("inspection imported workspace code")
+            """)
+        (workspace / "ctypes.py").write_text(payload)
+        (poisoned_path / "sitecustomize.py").write_text(payload)
+        env = environment(workspace)
+        env["PYTHONPATH"] = str(poisoned_path)
+        with McpClient(binary, execution.serve(), env, workspace) as client:
+            client.initialize_and_list_tools()
+            assert not (workspace / "host-import-executed").exists()
+            # Workload imports keep their ordinary semantics inside the worker.
+            (workspace / "ctypes.py").unlink()
+            (poisoned_path / "sitecustomize.py").unlink()
+            shutil.rmtree(poisoned_path / "__pycache__", ignore_errors=True)
+            client.send(python="41 + 1")
+            assert last_result_text(client) == "42\n"
+            return client.finish()[3:]
+
+
+def failed_native_startup(binary: Path, execution: Execution) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        workspace = Path(directory)
+        probe = build_interposer(workspace, "python_exit_state")
+        venv = workspace / "environment"
+        subprocess.run(
+            [sys.executable, "-m", "venv", "--without-pip", venv],
+            check=True,
+            capture_output=True,
+        )
+        selected = venv / "bin/python3"
+        site = Path(
+            subprocess.check_output(
+                [selected, "-c", "import site; print(site.getsitepackages()[0])"],
+                text=True,
+            ).strip()
+        )
+        # A real installed startup hook changes only the embedded worker.
+        # fmt: python
+        hook = code(f"""
+            import os
+            import sys
+
+            if "MCP_CONSOLE_LOCAL_RUNTIME" in os.environ:
+                import ctypes
+                from pathlib import Path
+
+                probe = ctypes.CDLL({str(probe)!r})
+                Path("startup-temporary").write_text(os.environ["TMPDIR"])
+                sys.prefix = "changed-by-startup-hook"
+            """)
+        (site / "sitecustomize.py").write_text(hook)
+        arguments = (
+            execution.serve("--writable-root", str(workspace))
+            if execution == SANDBOXED
+            else execution.serve()
+        )
+        with McpClient(
+            binary, arguments, environment(venv / "bin"), workspace
+        ) as client:
+            client.initialize_and_list_tools()
+            result = client.send(
+                python="raise AssertionError('failed startup ran cell')"
+            )
+            assert result["isError"], result
+            records = client.finish()[3:]
+            temporary = Path((workspace / "startup-temporary").read_text())
+            assert not temporary.exists(), "failed worker storage remains"
+            assert selected.exists(), "failed startup removed selected environment"
+            for record in records:
+                for content in record.get("result", {}).get("content", []):
+                    if content["type"] == "text":
+                        content["text"] = content["text"].replace(
+                            str(venv), "<selected environment>"
+                        )
+            return records
+
+
+@executions(DIRECT, SANDBOXED)
+def test_startup_failure_restores_python_thread(
+    binary: Path, execution: Execution
+) -> Transcript:
+    records = failed_native_startup(binary, execution)
+    diagnostic = records[0]["result"]["content"][0]["text"]
+    assert "Python exit thread attached\n" in diagnostic, diagnostic
+    assert "Python exit thread detached" not in diagnostic, diagnostic
+    return records
+
+
+@executions(DIRECT, SANDBOXED)
+def test_startup_failure_preserves_python_exception(
+    binary: Path, execution: Execution
+) -> Transcript:
+    records = failed_native_startup(binary, execution)
+    diagnostic = records[0]["result"]["content"][0]["text"]
+    assert (
+        "RuntimeError: embedded Python prefix differs from the selected environment"
+        in diagnostic
+    ), diagnostic
+    assert "'changed-by-startup-hook' != '<selected environment>'" in diagnostic, (
+        diagnostic
+    )
+    return records

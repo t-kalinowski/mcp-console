@@ -1,0 +1,9 @@
+---
+send:
+  python: 41 + 1
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false

@@ -271,6 +271,7 @@ When R is absent, the server resolves the default Python manifest through the ex
 The session retains the managed result and inspected environment identity, independently of reticulate's user-selection variable.
 The same coordinator constructs an absent R integration, native Python runtime, and no R DBI backend.
 Native CPython path initialization follows the selected executable's virtualenv configuration; shared setup verifies its prefixes and configures child-process selection.
+Startup failures retain Python tracebacks on the startup diagnostic stream, and every coordinator return restores the Python thread before extension-library exit destructors.
 The native runner owns sandbox temporary storage; direct relay lifetimes own a private directory and retire it after the worker, including failed startup.
 Neither lifetime owns resolver cache removal.
 The retained library state records each completed installation step and marks setup configured only after the CPython configuration call succeeds, so an incomplete setup can retry without initializing the interpreter again.

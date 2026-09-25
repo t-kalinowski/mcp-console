@@ -660,3 +660,21 @@ def _mcp_console_configure_native_environment(
 
 
 _mcp_console.configure_native_environment = _mcp_console_configure_native_environment
+
+
+# Startup has not announced Ready, so its diagnostics belong on the original
+# stderr transport rather than the evaluation-output sideband.
+def _mcp_console_display_setup_exception(
+    _state=_builtins.__dict__,
+    _traceback=_traceback,
+    _stderr=_sys.__stderr__,
+) -> None:
+    error = _state.pop("_mcp_console_setup_error", None)
+    if error is not None:
+        _traceback.print_exception(
+            type(error), error, error.__traceback__, file=_stderr
+        )
+        _stderr.flush()
+
+
+_mcp_console.display_setup_exception = _mcp_console_display_setup_exception

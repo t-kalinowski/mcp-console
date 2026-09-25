@@ -18,6 +18,7 @@ pub(crate) enum Selection {
     },
     Python {
         selected: Box<crate::python::NativePython>,
+        explicit: Option<OsString>,
         // Retain the resolver result as a managed environment, without turning
         // its executable into a RETICULATE_PYTHON user selection.
         managed: Option<ManagedPython>,
@@ -37,7 +38,7 @@ impl Selection {
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<Self, String> {
         let explicit = configured.filter(|value| !value.is_empty() && value != "managed");
-        let (executable, managed) = if let Some(explicit) = explicit {
+        let (executable, managed) = if let Some(explicit) = &explicit {
             let executable = PathBuf::from(explicit);
             let executable = if executable.components().count() == 1 {
                 crate::resolver::find_path_entry(
@@ -70,6 +71,7 @@ impl Selection {
         let selected = crate::python::inspect_native(&executable, on_started)?;
         Ok(Self::Python {
             selected: Box::new(selected),
+            explicit,
             managed,
         })
     }
@@ -84,8 +86,18 @@ impl Selection {
             serde_json::to_string(self)
                 .map_err(|error| format!("cannot encode local runtime selection: {error}"))?,
         );
-        if let Self::R { home } = self {
-            command.env("R_HOME", home);
+        match self {
+            Self::R { home } => {
+                command.env("R_HOME", home);
+            }
+            Self::Python { explicit, .. } => {
+                if let Some(python) = explicit {
+                    command.env("RETICULATE_PYTHON", python);
+                } else {
+                    command.env_remove("RETICULATE_PYTHON");
+                }
+                command.env_remove("MCP_CONSOLE_MANAGED_PYTHON");
+            }
         }
         Ok(())
     }

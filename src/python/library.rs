@@ -393,6 +393,21 @@ pub(super) fn configure_native_environment(
     })
 }
 
+pub(super) fn display_setup_exception() -> Result<(), String> {
+    let api = {
+        let slot = PYTHON_LIBRARY
+            .lock()
+            .map_err(|_| "Python shared library state is unavailable")?;
+        let library = slot.as_ref().ok_or("Python shared library is not loaded")?;
+        // Retained setup exceptions arise after the private runtime is installed.
+        if !library.setup.evaluator {
+            return Ok(());
+        }
+        library.api
+    };
+    api.with_gil(|api| api.call_unit(c"_mcp_console", c"display_setup_exception"))
+}
+
 pub(super) fn activate_environment(script: &str, executable: &str) -> Result<bool, String> {
     api()?.with_gil(|api| unsafe {
         let function = api.function(c"_mcp_console", c"activate_environment")?;

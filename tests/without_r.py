@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["py-yaml12>=0.2.0"]
+# ///
+
 """Run the public sans-R cases against an installed build on an R-free host.
 
 Use tests/fixtures/python_without_r.Dockerfile for a reproducible Linux host.
@@ -8,6 +13,8 @@ import importlib.util
 import os
 import shutil
 from pathlib import Path
+
+from support.snapshots import check_recording
 
 assert "R_HOME" not in os.environ, "unset R_HOME on the R-free host"
 assert all(shutil.which(name) is None for name in ("R", "Rscript", "ir"))
@@ -26,5 +33,11 @@ for name, case in vars(module).items():
         continue
     for execution in case.executions:
         print(f"{name}[{execution.name}]", flush=True)
-        case(binary, execution)
+        check_recording(
+            "client_server/python/test_without_r",
+            name.removeprefix("test_"),
+            case(binary, execution),
+            update=False,
+            execution=execution.name,
+        )
 print("Installed R-free public MCP acceptance passed", flush=True)

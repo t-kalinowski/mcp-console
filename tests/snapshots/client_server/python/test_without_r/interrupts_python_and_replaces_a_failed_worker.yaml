@@ -10,8 +10,8 @@ result:
 send:
   python: |
     print("loop entered")
-    while True:
-        pass
+    # Keep interrupt locations stable across Python bytecode versions.
+    while True: pass  # fmt: skip
   timeout_ms: 100
 result:
   content:

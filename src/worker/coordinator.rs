@@ -16,6 +16,14 @@ struct Coordinator {
 }
 
 pub(crate) fn run() -> Result<(), Box<dyn Error>> {
+    let result = run_session();
+    // Every return, including startup and readiness failures, must restore
+    // Python's initial thread before extension-library process destructors.
+    crate::python::prepare_process_exit()?;
+    result
+}
+
+fn run_session() -> Result<(), Box<dyn Error>> {
     let (reader, writer) = crate::sideband::connect_from_env()?;
     let selection = crate::local_runtime::Selection::from_environment()?;
     interrupt::normalize_signal()?;
@@ -49,9 +57,7 @@ pub(crate) fn run() -> Result<(), Box<dyn Error>> {
         python,
         sql,
     };
-    let result = coordinator.run();
-    crate::python::prepare_process_exit()?;
-    result
+    coordinator.run()
 }
 
 #[cfg(target_os = "linux")]
