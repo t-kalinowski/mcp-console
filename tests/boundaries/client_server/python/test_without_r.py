@@ -142,7 +142,7 @@ def test_resolves_default_python_without_r(
                             content["text"] = content["text"].replace(
                                 selected, "<selected Python>"
                             )
-            return records[3:]
+            return records
 
 
 @executions(DIRECT, SANDBOXED)
@@ -232,7 +232,7 @@ def test_uses_path_python_without_uv(binary: Path, execution: Execution) -> Tran
                                 .replace(str(temporary), "<worker temporary>")
                                 .replace(str(replacement), "<replacement temporary>")
                             )
-            return records[3:]
+            return records
 
 
 @executions(DIRECT, SANDBOXED)
@@ -285,7 +285,7 @@ def test_uses_python_when_python3_is_absent(
                 python="import sys; assert sys.executable.endswith('/python'); 42"
             )
             assert last_result_text(client) == "42\n", client.transcript[-1]
-            return client.finish()[3:]
+            return client.finish()
 
 
 @executions(DIRECT, SANDBOXED)
@@ -379,7 +379,7 @@ def test_cleans_temporary_storage_after_startup_failure(
             temporary = Path((root / "startup-temporary").read_text())
             assert not temporary.exists(), "failed worker storage remains"
             assert selected.exists(), "startup failure deleted the environment"
-            return client.finish()[3:]
+            return client.finish()
 
 
 @executions(DIRECT)
@@ -426,7 +426,7 @@ def test_records_python_execution(binary: Path, execution: Execution) -> Transcr
                 last_result_text(client)
                 == "[worker stopped: in-memory state lost]\n[starting new worker]\nFalse\n[done]"
             )
-            records = client.finish()[3:]
+            records = client.finish()
             (session,) = (workspace / ".agents/console/sessions").iterdir()
             markdown = (session / "transcript.md").read_text()
             quarto = (session / "transcript.qmd").read_text()
@@ -464,7 +464,7 @@ def test_preserves_explicit_python_selection(
                 python="import os, sys; assert sys.executable == os.environ['RETICULATE_PYTHON']; 42"
             )
             assert last_result_text(client) == "42\n", client.transcript[-1]
-            return client.finish()[3:]
+            return client.finish()
 
 
 @executions(DIRECT, SANDBOXED)
@@ -502,7 +502,7 @@ def test_interrupts_python_and_replaces_a_failed_worker(
             client.send(python="assert 'retained' not in globals(); 42")
             assert last_result_text(client) == "42\n", client.transcript[-1]
             assert not temporary.exists(), "failed worker storage remains"
-            records = client.finish()[3:]
+            records = client.finish()
             for record in records:
                 for content in record.get("result", {}).get("content", []):
                     if content["type"] == "text":
@@ -525,7 +525,7 @@ def test_uses_path_uv_with_legacy_managed_uv_selection(
             client.initialize_and_list_tools()
             client.send(python="import numpy, pandas; 42")
             assert last_result_text(client) == "42\n", client.transcript[-1]
-            return client.finish()[3:]
+            return client.finish()
 
 
 @executions(SANDBOXED)
@@ -567,7 +567,7 @@ def test_preserves_explicit_selection_in_sandbox_environment(
                             """),
                     )
                     assert "explicit selection retained\n" in last_result_text(client)
-                records.extend(client.finish()[3:])
+                records.extend(client.finish())
     return records
 
 
@@ -600,7 +600,7 @@ def test_inspection_excludes_workspace_and_pythonpath(
             shutil.rmtree(poisoned_path / "__pycache__", ignore_errors=True)
             client.send(python="41 + 1")
             assert last_result_text(client) == "42\n"
-            return client.finish()[3:]
+            return client.finish()
 
 
 def failed_native_startup(binary: Path, execution: Execution) -> Transcript:
@@ -648,7 +648,7 @@ def failed_native_startup(binary: Path, execution: Execution) -> Transcript:
                 python="raise AssertionError('failed startup ran cell')"
             )
             assert result["isError"], result
-            records = client.finish()[3:]
+            records = client.finish()
             temporary = Path((workspace / "startup-temporary").read_text())
             assert not temporary.exists(), "failed worker storage remains"
             assert selected.exists(), "failed startup removed selected environment"
@@ -666,7 +666,7 @@ def test_startup_failure_restores_python_thread(
     binary: Path, execution: Execution
 ) -> Transcript:
     records = failed_native_startup(binary, execution)
-    diagnostic = records[0]["result"]["content"][0]["text"]
+    diagnostic = records[-1]["result"]["content"][0]["text"]
     assert "Python exit thread attached\n" in diagnostic, diagnostic
     assert "Python exit thread detached" not in diagnostic, diagnostic
     return records
@@ -677,7 +677,7 @@ def test_startup_failure_preserves_python_exception(
     binary: Path, execution: Execution
 ) -> Transcript:
     records = failed_native_startup(binary, execution)
-    diagnostic = records[0]["result"]["content"][0]["text"]
+    diagnostic = records[-1]["result"]["content"][0]["text"]
     assert (
         "RuntimeError: embedded Python prefix differs from the selected environment"
         in diagnostic
@@ -729,4 +729,4 @@ def test_uses_environment_through_directory_alias(
                 last_result_text(client)
                 == "selected environment retained through directory alias\n"
             ), client.transcript[-1]
-            return client.finish()[3:]
+            return client.finish()

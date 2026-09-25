@@ -82,7 +82,10 @@ def test_initializes_and_lists_tools(
     binary: Path, execution: Execution
 ) -> TranscriptWithCompanions:
     companions = {
-        "bare.yaml": _initializes_and_lists_tools(binary, execution, bare=True)
+        "bare.yaml": _initializes_and_lists_tools(binary, execution, bare=True),
+        "python-only.yaml": _initializes_and_lists_tools(
+            binary, execution, python_only=True
+        ),
     }
     if execution == SANDBOXED:
         companions["proxy.yaml"] = _initializes_and_lists_tools(
@@ -109,6 +112,7 @@ def _initializes_and_lists_tools(
     execution: Execution,
     *,
     bare: bool = False,
+    python_only: bool = False,
     proxy: bool = False,
     workspace_profile: bool = False,
     ssh: bool = False,
@@ -121,6 +125,19 @@ def _initializes_and_lists_tools(
     with tempfile.TemporaryDirectory() as library:
         if bare and not ssh:
             environment = bare_runtime_environment(environment, Path(library))
+        if python_only:
+            python_bin = Path(library) / "bin"
+            python_bin.mkdir()
+            (python_bin / "python3").symlink_to(sys.executable)
+            environment["PATH"] = str(python_bin)
+            for name in (
+                "R_HOME",
+                "R_LIBS",
+                "R_LIBS_USER",
+                "RETICULATE_PYTHON",
+                "RETICULATE_UV",
+            ):
+                environment.pop(name, None)
         workspace = Path(library) / "workspace"
         workspace.mkdir()
         if ssh:
@@ -164,7 +181,11 @@ def _initializes_and_lists_tools(
                 assert list(config.parent.iterdir()) == [config], workspace
             else:
                 assert not (workspace / ".agents/console").exists(), workspace
-            if bare:
+            if python_only:
+                assert {"r", "sql", "requirements"}.isdisjoint(
+                    send["inputSchema"]["properties"]
+                )
+            if bare or python_only:
                 assert "requirements" not in send["inputSchema"]["properties"]
                 transcript = client.finish()
                 if ssh:

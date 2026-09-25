@@ -136,6 +136,7 @@ This is a narrow exception to preserving literal runtime errors in snapshots: na
 The initialization, initialized notification, and tool-list exchange have full references in `client_server/server/test_tools::initializes_and_lists_tools`.
 Its primary snapshot records the sandboxed handshake; its `.direct.yaml` companion records the direct handshake.
 The `.bare.yaml` and `.bare.direct.yaml` companions preserve the corresponding interfaces when resolver commands are unavailable.
+The `.python-only.yaml` and `.python-only.direct.yaml` companions record local Python sessions without R.
 The `.proxy.yaml` companion records the sandboxed interface with a project-configured network proxy.
 The `.workspace.yaml` companion records the native workspace profile.
 The `.ssh.yaml` and `.ssh.direct.yaml` companions record bare SSH targets with that profile, using a deterministic preparation peer without starting a remote worker.
@@ -144,7 +145,7 @@ When selected, this reference case runs before the other cases, including during
 At each position in a transcript, the runner compares the complete exchange against the appropriate reference before abbreviating it.
 This includes multiple client sessions in one case.
 A differing or incomplete handshake stays in full.
-For a case with declared execution modes, an exact match becomes `!same-as MCP initialization for this execution mode`, with a `bare` prefix for that reference family.
+For a case with declared execution modes, an exact match becomes `!same-as MCP initialization for this execution mode`, with a variant prefix such as `bare` or `python-only` for that reference family.
 Portable behavior shares one snapshot while each mode verifies its own complete handshake.
 Only the canonical reference case's YAML companions define additional handshake variants; an unmatched exchange stays in full.
 For other cases, each matching exchange becomes `!same-as PATH`, naming the reference it actually matched; mixed sessions retain their separate references.
