@@ -158,14 +158,15 @@ result:
               - "null"
           timeout_ms:
             description: |-
-              Omit `timeout_ms` for normal calls, including polls (default: 60,000 milliseconds). The call
-              returns as soon as execution finishes; the timeout is a maximum wait, not a fixed delay.
-              To wait, use the default or a longer timeout instead of repeated short polls. Use `timeout_ms: 0`
-              to deliberately start background work. The wait starts after cell dispatch or attachment to an
-              active evaluation and includes one automatic worker replacement attempt. Reaching the timeout
-              does not cancel evaluation, resolution, or startup. Inline control, interrupt grace, restart,
-              and explicit requirement preparation happen before dispatch and may make the complete call take
-              longer. This value does not limit standalone preparation. Automatic R and Python import
+              Omit for normal calls and polls. This limits how long the tool waits; it returns immediately
+              when execution completes. Reaching the timeout does not cancel execution. Use `0` to start
+              background work, then poll with an empty `send`.
+
+              Defaults to 60,000 milliseconds. The wait starts after cell dispatch or attachment to an active
+              evaluation and includes one automatic worker replacement attempt. It does not cancel resolution
+              or startup. Inline control, interrupt grace, restart, and explicit requirement preparation happen
+              before dispatch and may make the complete call take longer. This value does not limit standalone
+              preparation. Automatic R and Python import
               resolution are part of the running evaluation and count toward this wait. On expiry, the call
               returns available output and a state marker, such as
               `[running; poll with an empty send]` or `[worker starting]`. If evaluation remains active, poll
