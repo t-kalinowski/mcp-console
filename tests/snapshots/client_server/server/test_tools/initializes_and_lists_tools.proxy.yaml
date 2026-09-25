@@ -68,9 +68,17 @@ result:
         properties:
           r:
             description: |-
-              One complete R cell evaluated in persistent global state. Its final visible expression
-              autoprints through R's normal console display; R also autoprints earlier visible top-level
-              expressions. Leave the primary result last and print only when additional output is needed.
+              One complete R cell evaluated in persistent global state. Prefer Console for R execution,
+              including tests and package checks. When a fresh session is needed and existing in-memory
+              state can be discarded, send `control: "restart"` and `r` together; the code runs in the new
+              worker. For background execution, use `timeout_ms: 0`, then poll with an empty `send`.
+              Avoid `callr` merely to obtain fresh state or nonblocking execution. Use a subprocess when
+              the task requires separate process isolation, preserving the current session while running
+              independently, or ordinary R behavior without Console's runtime hooks.
+
+              The cell's final visible expression autoprints through R's normal console display; R also
+              autoprints earlier visible top-level expressions. Leave the primary result last and print
+              only when additional output is needed.
               When dynamic resolution is available, the built-in worker resolves missing plain CRAN
               package names on demand through `library()`, `require()`, `requireNamespace()`,
               `loadNamespace()`, `::`, or `:::`. Use packages directly; do not probe package availability
