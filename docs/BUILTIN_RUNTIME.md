@@ -59,7 +59,7 @@ Its captured value is preserved when sandbox environment inheritance is disabled
 The session retains the selected environment and executable across cells, restarts, and worker replacement.
 A restart clears Python objects, but does not resolve another environment.
 The embedded interpreter uses the selected environment's packages and prefixes; subprocesses and multiprocessing use its Python executable.
-The selected environment takes precedence over inherited or sandbox-configured `PYTHONHOME`.
+The selected environment takes precedence over inherited or sandbox-configured `PYTHONHOME` and `PYTHONPLATLIBDIR`.
 Workspace modules and packages are importable without `PYTHONPATH`; the working-directory import entry also follows `os.chdir()`.
 The worker has private temporary storage, retired after startup failure, restart, and shutdown.
 Retirement does not delete resolver caches or the retained environment.

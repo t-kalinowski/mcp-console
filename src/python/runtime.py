@@ -649,7 +649,7 @@ def _mcp_console_configure_native_environment(
                 f"{getattr(_sys, name)!r} != {expected[name]!r}"
             )
     executable = expected["embedding"]["python"]
-    if _sys.executable != executable:
+    if not _os.path.samefile(_sys.executable, executable):
         raise RuntimeError("embedded Python executable differs from host selection")
     directory = _os.path.dirname(executable)
     inherited = _os.environ.get("PATH", "")

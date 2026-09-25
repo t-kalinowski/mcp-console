@@ -798,6 +798,19 @@ def test_imports_workspace_modules_without_pythonpath(
 def test_ignores_pythonhome_for_selected_environment(
     binary: Path, execution: Execution
 ) -> Transcript:
+    return ignores_python_layout_override(binary, execution, "PYTHONHOME")
+
+
+@executions(DIRECT, SANDBOXED)
+def test_ignores_pythonplatlibdir_for_selected_environment(
+    binary: Path, execution: Execution
+) -> Transcript:
+    return ignores_python_layout_override(binary, execution, "PYTHONPLATLIBDIR")
+
+
+def ignores_python_layout_override(
+    binary: Path, execution: Execution, variable: str
+) -> Transcript:
     records = []
     for inherit in (True, False):
         with tempfile.TemporaryDirectory() as directory:
@@ -815,25 +828,25 @@ def test_ignores_pythonhome_for_selected_environment(
                     {
                         "sandbox": {
                             "inherit_environment": inherit,
-                            "environment": {"PYTHONHOME": "/invalid/configured/home"},
+                            "environment": {variable: "unavailable-configured-layout"},
                         }
                     }
                 )
             )
             env = environment(venv / "bin")
-            env["PYTHONHOME"] = "/invalid/inherited/home"
+            env[variable] = "unavailable-inherited-layout"
             with McpClient(binary, execution.serve(), env, workspace) as client:
                 client.initialize_and_list_tools()
                 for control in ({}, {"control": "restart"}):
                     client.send(
                         **control,
                         # fmt: python
-                        python=code("""
+                        python=code(f"""
                             import os
                             import sys
                             import subprocess
 
-                            assert "PYTHONHOME" not in os.environ
+                            assert "{variable}" not in os.environ
                             assert "RETICULATE_PYTHON" not in os.environ
                             assert os.path.samefile(sys.prefix, "environment")
                             assert sys.prefix != sys.base_prefix
@@ -849,3 +862,51 @@ def test_ignores_pythonhome_for_selected_environment(
                     ), client.transcript[-1]
                 records.extend(client.finish())
     return records
+
+
+@executions(DIRECT, SANDBOXED)
+def test_accepts_parent_components_in_selected_executable(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        workspace = Path(directory)
+        venv = workspace / "environment"
+        subprocess.run(
+            [sys.executable, "-m", "venv", "--without-pip", venv],
+            check=True,
+            capture_output=True,
+        )
+        (workspace / "alias").mkdir()
+        selected = workspace / "alias/../environment/bin/python3"
+        env = environment(workspace)
+        env["RETICULATE_PYTHON"] = str(selected)
+        with McpClient(binary, execution.serve(), env, workspace) as client:
+            client.initialize_and_list_tools()
+            for control in ({}, {"control": "restart"}):
+                client.send(
+                    **control,
+                    # fmt: python
+                    python=code("""
+                        import os
+                        import subprocess
+                        import sys
+
+                        selected = os.environ["RETICULATE_PYTHON"]
+                        assert "/../" in selected
+                        assert sys.executable == selected
+                        assert os.path.samefile(sys.prefix, "environment")
+                        assert sys.prefix != sys.base_prefix
+                        child = subprocess.check_output(
+                            [sys.executable, "-c", "import sys; print(sys.executable); print(sys.prefix)"],
+                            text=True,
+                        ).splitlines()
+                        assert os.path.samefile(child[0], selected)
+                        assert os.path.samefile(child[1], sys.prefix)
+                        print("selected executable and environment retained")
+                        """),
+                )
+                assert (
+                    "selected executable and environment retained\n"
+                    in last_result_text(client)
+                ), client.transcript[-1]
+            return client.finish()

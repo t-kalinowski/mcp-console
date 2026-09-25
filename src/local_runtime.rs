@@ -95,9 +95,11 @@ impl Selection {
                         format!("cannot encode local runtime selection: {error}")
                     })?,
                 );
-                // Inspection ignores PYTHONHOME. Keep embedding and child
-                // interpreters on that selection after sandbox projection too.
-                command.env_remove("PYTHONHOME");
+                // Inspection ignores Python layout overrides. Keep embedding
+                // and children on that selection after sandbox projection too.
+                command
+                    .env_remove("PYTHONHOME")
+                    .env_remove("PYTHONPLATLIBDIR");
                 if let Some(python) = explicit {
                     command.env("RETICULATE_PYTHON", python);
                 } else {
