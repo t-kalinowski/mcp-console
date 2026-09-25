@@ -29,6 +29,30 @@ pub(super) fn interrupt_wakeup_fd() -> RawFd {
         .as_raw_fd()
 }
 
+pub(super) fn drain_interrupt_wakeup() -> io::Result<()> {
+    let mut bytes = [0u8; 64];
+    loop {
+        let count = unsafe {
+            libc::read(
+                interrupt_wakeup_fd(),
+                bytes.as_mut_ptr().cast(),
+                bytes.len(),
+            )
+        };
+        if count > 0 {
+            continue;
+        }
+        let error = io::Error::last_os_error();
+        if count < 0 && error.kind() == io::ErrorKind::Interrupted {
+            continue;
+        }
+        if count < 0 && error.kind() == io::ErrorKind::WouldBlock {
+            return Ok(());
+        }
+        return Err(io::Error::other("worker interrupt wakeup closed"));
+    }
+}
+
 static CONSOLE_STDIN: Mutex<ConsoleStdin> = Mutex::new(ConsoleStdin {
     pushback: VecDeque::new(),
     line_prefix: Vec::new(),

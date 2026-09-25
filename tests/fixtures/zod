@@ -1162,10 +1162,13 @@ def main() -> None:
                     "prompt": "prompt head " + "p" * 20000 + " prompt tail> ",
                 },
             )
+            wait_for_test_control(0, "read_preview_input")
             stdin = input()
             send(writer, {"kind": "input_received"})
             send_output(writer, f"received {stdin}\n")
             send(writer, {"kind": "completed"})
+            wait_for_server_to_process_sideband(reader, writer)
+            emit_test_event(0, "preview_input_processed")
             continue
 
         if source == "language error":

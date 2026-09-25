@@ -61,14 +61,14 @@ enum ResolverInterrupt {
     AlreadyExited,
 }
 
-pub(super) struct ResolverOutput {
-    pub(super) status: ExitStatus,
-    pub(super) write_result: io::Result<()>,
-    pub(super) stdout: Vec<u8>,
-    pub(super) stderr: Vec<u8>,
+pub(crate) struct ResolverOutput {
+    pub(crate) status: ExitStatus,
+    pub(crate) write_result: io::Result<()>,
+    pub(crate) stdout: Vec<u8>,
+    pub(crate) stderr: Vec<u8>,
 }
 
-pub(super) struct ResolverProcess {
+pub(crate) struct ResolverProcess {
     events: Sender<ResolverEvent>,
     event_receiver: Receiver<ResolverEvent>,
     control: Arc<AtomicU8>,
@@ -77,7 +77,7 @@ pub(super) struct ResolverProcess {
 }
 
 impl ResolverProcess {
-    pub(super) fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let (events, event_receiver) = mpsc::channel();
         Self {
             events,
@@ -88,7 +88,7 @@ impl ResolverProcess {
         }
     }
 
-    pub(super) fn stop_handle(&self) -> ResolverStopHandle {
+    pub(crate) fn stop_handle(&self) -> ResolverStopHandle {
         ResolverStopHandle::new(LocalControl {
             events: self.events.clone(),
             control: self.control.clone(),
@@ -99,7 +99,7 @@ impl ResolverProcess {
 
     // Mark the spawned child active before publishing its stop handle. An
     // interrupt in that gap must wait for the child's actual signal result.
-    pub(super) fn watch_exit(&self, pid: u32) {
+    pub(crate) fn watch_exit(&self, pid: u32) {
         self.cleanup.store(false, Ordering::SeqCst);
         *self.waiting.lock().expect("resolver phase lock") = true;
         watch_resolver_exit(pid, self.events.clone());
@@ -125,7 +125,7 @@ impl ResolverProcess {
         }
     }
 
-    pub(super) fn wait(
+    pub(crate) fn wait(
         &self,
         child: &mut Child,
         input: Receiver<io::Result<()>>,
@@ -135,6 +135,18 @@ impl ResolverProcess {
         kind: &str,
     ) -> Result<ResolverOutput, String> {
         wait_for_resolver(self, child, input, stdout, stderr, program, kind)
+    }
+
+    pub(crate) fn abort(
+        &self,
+        child: &mut Child,
+        program: &Path,
+        kind: &str,
+    ) -> Result<(), String> {
+        let result = stop_resolver(child, program, kind);
+        self.cleanup.store(result.is_ok(), Ordering::SeqCst);
+        let _ = self.finish_wait(kind);
+        result.map(|_| ())
     }
 }
 
@@ -209,7 +221,7 @@ fn clear_control(state: &AtomicU8, control: u8, marked: bool) {
     }
 }
 
-pub(super) fn completed_write() -> Receiver<io::Result<()>> {
+pub(crate) fn completed_write() -> Receiver<io::Result<()>> {
     let (sender, receiver) = mpsc::channel();
     sender
         .send(Ok(()))
@@ -217,7 +229,7 @@ pub(super) fn completed_write() -> Receiver<io::Result<()>> {
     receiver
 }
 
-pub(super) fn read_output(
+pub(crate) fn read_output(
     mut output: impl io::Read + Send + 'static,
 ) -> Receiver<io::Result<Vec<u8>>> {
     let (sender, receiver) = mpsc::channel();
@@ -237,7 +249,7 @@ pub(super) fn write_input(mut input: ChildStdin, bytes: Vec<u8>) -> Receiver<io:
     receiver
 }
 
-pub(super) fn resolver_command(program: &Path) -> Command {
+pub(crate) fn resolver_command(program: &Path) -> Command {
     let mut command = Command::new(program);
     command.process_group(0);
     // SAFETY: the closure calls only libc signal functions after fork and
@@ -424,11 +436,7 @@ fn resolver_has_exited(pid: u32) -> io::Result<bool> {
     Ok(unsafe { status.assume_init().si_pid() } == pid as libc::pid_t)
 }
 
-pub(super) fn stop_resolver(
-    child: &mut Child,
-    program: &Path,
-    kind: &str,
-) -> Result<ExitStatus, String> {
+fn stop_resolver(child: &mut Child, program: &Path, kind: &str) -> Result<ExitStatus, String> {
     // SAFETY: `process_group(0)` made the resolver PID its process-group ID.
     let result = unsafe { libc::killpg(child.id() as libc::pid_t, libc::SIGKILL) };
     if result < 0 {

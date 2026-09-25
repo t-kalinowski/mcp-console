@@ -35,6 +35,16 @@ result:
 send:
   stdin: |
     answer
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [waiting for stdin]
+  isError: false
+---
+send: {}
 result:
   content:
     - type: text

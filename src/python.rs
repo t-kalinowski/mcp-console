@@ -1,7 +1,9 @@
+mod inspection;
 mod requirements;
 mod reticulate;
 mod startup;
 
+pub(crate) use inspection::inspect_selected;
 pub(crate) use startup::{
     SelectedPython, finish_initialization, initialize_selected, setup_runtime,
 };

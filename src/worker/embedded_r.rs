@@ -298,6 +298,7 @@ fn initialize_r_repl() -> Result<(), Box<dyn Error>> {
     }
     super::interrupt::initialize(super::interrupt::State {
         signal: mcp_r_record_interrupt,
+        requested: interrupt_pending,
         pending: console_interrupt_pending,
         acknowledge: acknowledge_console_interrupt,
     })?;

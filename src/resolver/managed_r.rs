@@ -4,7 +4,7 @@ use std::process::{Command, Stdio};
 
 use super::process::{
     ResolverOutput, ResolverProcess, ResolverStopHandle, completed_write, read_output,
-    resolver_command, stop_resolver,
+    resolver_command,
 };
 
 const MANAGED_R_LIBRARY_RESOLVER_SOURCE: &str = include_str!("programs/r_library.R");
@@ -571,7 +571,9 @@ fn collect_resolver_output(
     if let Some(on_started) = on_started.take()
         && let Err(error) = on_started(resolver.stop_handle())
     {
-        let _ = stop_resolver(child, program, kind);
+        resolver
+            .abort(child, program, kind)
+            .map_err(|cleanup| format!("{error}; {cleanup}"))?;
         return Err(error);
     }
     resolver.wait(child, completed_write(), stdout, stderr, program, kind)

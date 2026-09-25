@@ -5,7 +5,7 @@ use super::{PreparationOutcome, SelectedPython};
 const PYTHON_BRIDGE_SOURCE: &str = include_str!("bridge.R");
 const PYTHON_INITIALIZER_SOURCE: &str = include_str!("initialize.R");
 
-/// Reticulate supplies the selected configuration and attaches to the native interpreter.
+/// Reticulate selects Python, retains Console's embedding configuration, and attaches.
 pub(super) struct Adapter {
     bridge: crate::r_bridge::Bridge,
 }
@@ -28,6 +28,7 @@ impl Adapter {
         // Discovery and serialization share the existing R interrupt boundary.
         self.bridge
             .evaluate_completed_string("select")?
+            .filter(|selected| !selected.is_empty())
             .map(|selected| {
                 serde_json::from_str(&selected)
                     .map_err(|error| format!("invalid selected Python configuration: {error}"))
@@ -58,6 +59,18 @@ impl Adapter {
         serde_json::from_str(&response)
             .map_err(|error| format!("invalid Python preparation response: {error}"))
     }
+}
+
+// Called once for a fresh selection, before the adapter changes the worker
+// environment. The adapter retains these embedding fields for attachment.
+#[allow(clippy::result_large_err)]
+#[harp::register]
+pub extern "C-unwind" fn mcp_console_inspect_python(python: SEXP) -> harp::Result<SEXP> {
+    let python = String::try_from(harp::object::RObject::view(python))?;
+    let selected = crate::worker::inspect_python(std::path::Path::new(&python))
+        .map_err(|error| harp::anyhow!("{error}"))?;
+    let result = serde_json::to_string(&selected).map_err(|error| harp::anyhow!("{error}"))?;
+    Ok(harp::object::RObject::from(result).sexp)
 }
 
 // Rust initializes the exact interpreter selected by reticulate. Reticulate

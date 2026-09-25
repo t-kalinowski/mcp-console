@@ -1,6 +1,8 @@
 #!/usr/bin/env -S uv run --script
 
 import json
+import subprocess
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -12,6 +14,8 @@ from support.assertions import (
     last_result_text,
     wait_for_evaluation_output,
 )
+from support.checkpoints import FifoCheckpoint
+from support.processes import host_process_id, process_exists, stop_process_id
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code, normalize_python_resolution_error
@@ -20,6 +24,351 @@ from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, requires
 from support.resolvers import send_and_collect_runtime_python_resolution
 from support.suites import run_this_suite
+
+
+@executions(DIRECT, SANDBOXED)
+@requires(NATIVE_FIXTURES)
+def test_preserves_queued_inspection_interrupt(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        probe = build_interposer(
+            Path(temporary_directory), "queued_inspection_interrupt"
+        )
+        serve = (
+            execution.serve("--writable-root", temporary_directory)
+            if execution == SANDBOXED
+            else execution.serve()
+        )
+        with McpClient(binary, serve) as client:
+            client.initialize_and_list_tools()
+            client.send(
+                # fmt: r
+                r=code(f"""
+                    dyn.load({json.dumps(str(probe))})
+                    retained_pid <- Sys.getpid()
+                    retained_value <- 41L
+                    options(reticulate.python.beforeInitialized = function() {{
+                      options(reticulate.python.beforeInitialized = NULL)
+                      invisible(.C("queue_inspection_interrupt"))
+                    }})
+                    """)
+            )
+            # Keep R from consuming the queued SIGINT before inspection enters
+            # its native callback. The inspection owner must still cancel it.
+            client.send(
+                # fmt: r
+                r=code("""
+                    suspendInterrupts(invisible(reticulate::py_config()))
+                    """)
+            )
+            client.send(
+                # fmt: r
+                r=code("""
+                    stopifnot(Sys.getpid() == retained_pid)
+                    stopifnot(!reticulate::py_available(initialize = FALSE))
+                    retained_value + 1L
+                    """)
+            )
+            assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
+            client.send(
+                # fmt: python
+                python=code("""
+                    retried_value = 43
+                    retried_value
+                    """)
+            )
+            assert last_result_text(client) == "43\n", client.transcript[-1]
+            records = client.finish()
+            for record in records:
+                if "send" in record and "r" in record["send"]:
+                    record["send"]["r"] = record["send"]["r"].replace(
+                        str(probe), "<interrupt fixture>"
+                    )
+            return records
+
+
+@executions(DIRECT, SANDBOXED)
+def test_cancels_native_inspection_and_retries(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        subprocess.run(
+            [sys.executable, "-m", "venv", "--without-pip", temporary / "venv"],
+            check=True,
+            capture_output=True,
+        )
+        selected = temporary / "venv/bin/python"
+        subprocess.run(
+            ["uv", "pip", "install", "--python", selected, "numpy", "pandas"],
+            check=True,
+            capture_output=True,
+        )
+        fixture = Path(__file__).resolve().parents[3] / "fixtures"
+        site = Path(
+            subprocess.check_output(
+                [selected, fixture / "native_python_paths.py", "site-packages"],
+                text=True,
+            ).strip()
+        )
+        shutil.copyfile(
+            fixture / "native_python_sitecustomize.py", site / "sitecustomize.py"
+        )
+        (site / "inspection-mode").write_text("inspection-checkpoint")
+        ready = FifoCheckpoint.create(site / "inspection-ready")
+        release = FifoCheckpoint.create(site / "inspection-release")
+        pid = None
+        try:
+            serve = (
+                execution.serve("--writable-root", temporary_directory)
+                if execution == SANDBOXED
+                else execution.serve()
+            )
+            with McpClient(binary, serve) as client:
+                client.initialize_and_list_tools()
+                client.send(
+                    # fmt: r
+                    r=code(f"""
+                        retained_value <- 41L
+                        retained_pid <- Sys.getpid()
+                        Sys.setenv(RETICULATE_PYTHON = {
+                          json.dumps(str(selected))
+                        })
+                        """)
+                )
+                operation = client.start_send(
+                    # fmt: python
+                    python=code("""
+                        unexecuted_value = 1
+                        """)
+                )
+                ready.wait("native Python inspection")
+                pid = host_process_id(
+                    int((site / "inspection-pid").read_text()), client.process.pid
+                )
+                result_file = Path((site / "inspection-result").read_text())
+                assert result_file.exists()
+                interrupt = client.start_send(control="interrupt", timeout_ms=0)
+                client.receive_many([operation, interrupt])
+                assert not process_exists(pid), "inspection child was not reaped"
+                pid = None
+                assert not result_file.exists(), "inspection output was not removed"
+                (site / "inspection-mode").write_text("inspection-output")
+                client.send(
+                    # fmt: r
+                    r=code("""
+                        stopifnot(Sys.getpid() == retained_pid)
+                        stopifnot(!reticulate::py_available(initialize = FALSE))
+                        retained_value + 1L
+                        """)
+                )
+                assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
+                client.send(
+                    # fmt: python
+                    python=code("""
+                        retried_value = 43
+                        retried_value
+                        """)
+                )
+                assert last_result_text(client) == "43\n", client.transcript[-1]
+                assert (site / "inspection-count").read_text() == "1\n1\n"
+                client.send(
+                    # fmt: python
+                    python=code("""
+                        retried_value + 1
+                        """)
+                )
+                assert last_result_text(client) == "44\n", client.transcript[-1]
+                assert (site / "inspection-count").read_text() == "1\n1\n"
+                records = client.finish()
+                for record in records:
+                    if "send" in record and "r" in record["send"]:
+                        record["send"]["r"] = record["send"]["r"].replace(
+                            str(selected), "<selected python>"
+                        )
+                return records
+        finally:
+            stop_process_id(pid)
+            ready.close()
+            release.close()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_retries_failed_native_inspection(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with McpClient(binary, execution.serve()) as client:
+        client.initialize_and_list_tools()
+        client.send(
+            # fmt: r
+            r=code("""
+                retained_pid <- Sys.getpid()
+                retained_value <- 41L
+                invisible(asNamespace("reticulate"))
+                return_missing <- TRUE
+                assignInNamespace(
+                  "py_discover_config",
+                  local({
+                    original <- get("py_discover_config", asNamespace("reticulate"))
+                    function(...) {
+                      config <- original(...)
+                      if (return_missing) {
+                        config$python <- "/missing-selected-python"
+                      }
+                      config
+                    }
+                  }),
+                  "reticulate"
+                )
+                startup_environment <- Sys.getenv(
+                  c(
+                    "VIRTUAL_ENV",
+                    "R_SESSION_INITIALIZED",
+                    "PYTHONIOENCODING",
+                    "PATH",
+                    "LD_LIBRARY_PATH",
+                    "PYTHONPATH"
+                  ),
+                  unset = NA_character_
+                )
+                """)
+        )
+        client.send(
+            # fmt: python
+            python=code("""
+                unexecuted_value = 1
+                """)
+        )
+        assert last_result_text(client) == (
+            "Error: selected Python executable is not an absolute file: /missing-selected-python\n"
+        ), client.transcript[-1]
+        client.send(
+            # fmt: r
+            r=code("""
+                stopifnot(Sys.getpid() == retained_pid)
+                stopifnot(!reticulate::py_available(initialize = FALSE))
+                stopifnot(identical(
+                  Sys.getenv(names(startup_environment), unset = NA_character_),
+                  startup_environment
+                ))
+                failure <- tryCatch(reticulate::py_config(), error = identity)
+                stopifnot(inherits(failure, "console_python_inspection_error"))
+                stopifnot(!reticulate::py_available(initialize = FALSE))
+                return_missing <- FALSE
+                retained_value + 1L
+                """)
+        )
+        assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
+        client.send(
+            # fmt: python
+            python=code("""
+                retried_value = 43
+                retried_value
+                """)
+        )
+        assert last_result_text(client) == "43\n", client.transcript[-1]
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_console_configures_selected_python(
+    binary: Path, execution: Execution
+) -> Transcript:
+    transcript = []
+    for first in ("python", "r"):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary = Path(temporary_directory)
+            subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "venv",
+                    "--without-pip",
+                    "--copies",
+                    temporary / "venv",
+                ],
+                check=True,
+                capture_output=True,
+            )
+            selected = temporary / "venv/bin/python"
+            subprocess.run(
+                ["uv", "pip", "install", "--python", selected, "numpy", "pandas"],
+                check=True,
+                capture_output=True,
+            )
+            serve = (
+                execution.serve("--writable-root", temporary_directory)
+                if execution == SANDBOXED
+                else execution.serve()
+            )
+            with McpClient(binary, serve) as client:
+                client.initialize_and_list_tools()
+                client.send(
+                    # fmt: r
+                    r=code(f"""
+                        selected_python <- {json.dumps(str(selected))}
+                        Sys.unsetenv("RETICULATE_PYTHON")
+                        reticulate::use_python(selected_python, required = TRUE)
+                        selection_calls <- 0L
+                        assignInNamespace("py_discover_config", local({{
+                          original <- get("py_discover_config", asNamespace("reticulate"))
+                          function(...) {{
+                            selection_calls <<- selection_calls + 1L
+                            config <- original(...)
+                            stopifnot(identical(normalizePath(config$python), normalizePath(selected_python)))
+                            selected_python <<- config$python
+                            config$libpython <- "/missing-reticulate-libpython"
+                            config$pythonhome <- "/missing-reticulate-home"
+                            config
+                          }}
+                        }}), "reticulate")
+                        """)
+                )
+                assert last_result_text(client) == "[done]", client.transcript[-1]
+                if first == "python":
+                    client.send(
+                        # fmt: python
+                        python=code("""
+                            owned_value = 41
+                            """)
+                    )
+                else:
+                    client.send(
+                        # fmt: r
+                        r=code("""
+                            reticulate::py_run_string("owned_value = 41")
+                            """)
+                    )
+                assert last_result_text(client) == "[done]", client.transcript[-1]
+                client.send(
+                    # fmt: r
+                    r=code("""
+                        config <- reticulate::py_config()
+                        stopifnot(selection_calls == 1L)
+                        stopifnot(identical(config$python, selected_python))
+                        stopifnot(file.exists(config$libpython))
+                        stopifnot(dir.exists(config$pythonhome))
+                        stopifnot(!identical(config$pythonhome, dirname(dirname(selected_python))))
+                        reticulate::py_to_r(reticulate::py$owned_value) + 1L
+                        """)
+                )
+                assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
+                client.send(
+                    # fmt: python
+                    python=code("""
+                        owned_value + 2
+                        """)
+                )
+                assert last_result_text(client) == "43\n", client.transcript[-1]
+                records = client.finish()
+                for record in records:
+                    if "send" in record and "r" in record["send"]:
+                        record["send"]["r"] = record["send"]["r"].replace(
+                            str(selected), "<selected python>"
+                        )
+                transcript.extend(records)
+    return transcript
 
 
 @executions(DIRECT, SANDBOXED)

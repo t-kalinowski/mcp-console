@@ -60,10 +60,6 @@ base::local(
         python_not_found(
           "Installation of Python not found, Python bindings not loaded."
         )
-      } else if (.Platform$OS.type != "windows" && is.null(config$libpython)) {
-        python_not_found(
-          "Python shared library not found, Python bindings not loaded."
-        )
       } else if (get("is_incompatible_arch", namespace)(config)) {
         fmt <- "Your current architecture is %s; however, this version of Python was compiled for %s."
         message <- sprintf(
@@ -73,6 +69,19 @@ base::local(
         )
         python_not_found(message)
       }
+      state$check_python_version(config)
+      # Discovery retains reticulate's selection precedence and metadata.
+      # Console owns the embedding fields consumed by both native startup
+      # and reticulate's later attachment to that same interpreter.
+      embedding <- jsonlite::fromJSON(tryCatch(
+        .Call("mcp_console_inspect_python", config$python),
+        error = function(error) {
+          class(error) <- c("console_python_inspection_error", class(error))
+          stop(error)
+        }
+      ))
+      config$libpython <- embedding$libpython
+      config$pythonhome <- embedding$python_home
       python_embedded <<- !is.null(get("main_process_python_info", namespace)())
 
       # These are reticulate's environment inputs to CPython. Set them before
@@ -142,7 +151,18 @@ base::local(
       pending <- is.null(selected) &&
         !reticulate::py_available(initialize = FALSE)
       on.exit(if (pending && !is.null(selected)) cancel_selection(), add = TRUE)
-      config <- select_python(run_before_initialized = TRUE)
+      config <- tryCatch(
+        select_python(run_before_initialized = TRUE),
+        console_python_inspection_error = function(error) {
+          message("Error: ", conditionMessage(error))
+          NULL
+        }
+      )
+      # Inspection has not committed an interpreter or environment. Report
+      # its failure as cell output and leave the existing worker retryable.
+      if (is.null(config)) {
+        return("")
+      }
       result <- jsonlite::toJSON(
         list(
           python = config$python,
