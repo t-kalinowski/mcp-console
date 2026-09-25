@@ -27,6 +27,68 @@ from support.suites import run_this_suite
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(NATIVE_FIXTURES)
+def test_preserves_queued_inspection_interrupt(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        probe = build_interposer(
+            Path(temporary_directory), "queued_inspection_interrupt"
+        )
+        serve = (
+            execution.serve("--writable-root", temporary_directory)
+            if execution == SANDBOXED
+            else execution.serve()
+        )
+        with McpClient(binary, serve) as client:
+            client.initialize_and_list_tools()
+            client.send(
+                # fmt: r
+                r=code(f"""
+                    dyn.load({json.dumps(str(probe))})
+                    retained_pid <- Sys.getpid()
+                    retained_value <- 41L
+                    options(reticulate.python.beforeInitialized = function() {{
+                      options(reticulate.python.beforeInitialized = NULL)
+                      invisible(.C("queue_inspection_interrupt"))
+                    }})
+                    """)
+            )
+            # Keep R from consuming the queued SIGINT before inspection enters
+            # its native callback. The inspection owner must still cancel it.
+            client.send(
+                # fmt: r
+                r=code("""
+                    suspendInterrupts(invisible(reticulate::py_config()))
+                    """)
+            )
+            client.send(
+                # fmt: r
+                r=code("""
+                    stopifnot(Sys.getpid() == retained_pid)
+                    stopifnot(!reticulate::py_available(initialize = FALSE))
+                    retained_value + 1L
+                    """)
+            )
+            assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
+            client.send(
+                # fmt: python
+                python=code("""
+                    retried_value = 43
+                    retried_value
+                    """)
+            )
+            assert last_result_text(client) == "43\n", client.transcript[-1]
+            records = client.finish()
+            for record in records:
+                if "send" in record and "r" in record["send"]:
+                    record["send"]["r"] = record["send"]["r"].replace(
+                        str(probe), "<interrupt fixture>"
+                    )
+            return records
+
+
+@executions(DIRECT, SANDBOXED)
 def test_cancels_native_inspection_and_retries(
     binary: Path, execution: Execution
 ) -> Transcript:

@@ -9,6 +9,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 // mixed runtime, R supplies the state so nested calls share one acknowledgment.
 pub(super) struct State {
     pub signal: unsafe extern "C" fn(),
+    // Recorded SIGINT, including while an interpreter defers its delivery.
+    pub requested: fn() -> bool,
     pub pending: fn() -> bool,
     pub acknowledge: fn() -> bool,
 }
@@ -72,6 +74,7 @@ pub(super) fn initialize_native() -> io::Result<()> {
     initialize_native_input_watch()?;
     initialize(State {
         signal: record_native_interrupt,
+        requested: native_pending,
         pending: native_pending,
         acknowledge: acknowledge_native_interrupt,
     })
@@ -240,12 +243,15 @@ pub(crate) fn install_python_interrupt(
 pub(crate) fn inspect_python(
     executable: &std::path::Path,
 ) -> Result<crate::python::SelectedPython, String> {
+    let requested = STATE.get().expect("interrupt state initialized").requested;
     super::input::drain_interrupt_wakeup().map_err(|error| error.to_string())?;
     let (finished, completion) = io::pipe().map_err(|error| error.to_string())?;
     std::thread::scope(|scope| {
         let mut watcher = None;
         let result = crate::python::inspect_selected(executable, |handle| {
-            if pending() {
+            // Draining stale wakeups must not hide a queued request just
+            // because the calling R callback currently defers interrupts.
+            if requested() {
                 return Err("Python inspection interrupted".to_string());
             }
             watcher = Some(scope.spawn(move || {
