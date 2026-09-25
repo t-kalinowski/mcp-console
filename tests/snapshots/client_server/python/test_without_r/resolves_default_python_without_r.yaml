@@ -1,0 +1,190 @@
+---
+send:
+  python: |
+    import json
+    import os
+    import subprocess
+    import sys
+    import numpy
+    import pandas
+
+    assert "RETICULATE_PYTHON" not in os.environ
+    assert sys.prefix != sys.base_prefix
+    base = os.path.join(sys.base_prefix, "bin", "python3")
+    probe = "import importlib.util; assert importlib.util.find_spec('pandas') is None"
+    subprocess.run([base, "-I", "-c", probe], check=True)
+    probe = "import json, sys, pandas; print(json.dumps([sys.executable, sys.prefix, sys.exec_prefix]))"
+    child = json.loads(subprocess.check_output([sys.executable, "-c", probe], text=True))
+    assert child == [sys.executable, sys.prefix, sys.exec_prefix]
+    child = json.loads(subprocess.check_output(["python", "-c", probe], text=True))
+    assert child == [sys.executable, sys.prefix, sys.exec_prefix]
+    assert os.environ["VIRTUAL_ENV"] == sys.prefix
+    import multiprocessing
+
+    with multiprocessing.get_context("spawn").Pool(1) as pool:
+        child = pool.apply(eval, ("__import__('sys').executable",))
+    assert child == sys.executable
+    selected = sys.executable
+    retained = 41
+    identity = object()
+    identity_id = id(identity)
+    retained + 1
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false
+---
+send:
+  python: assert id(identity) == identity_id; retained + 2
+result:
+  content:
+    - type: text
+      text: |
+        43
+  isError: false
+---
+send:
+  r: "1"
+result:
+  content:
+    - type: text
+      text: R and SQL cells are unavailable in Python sessions without R
+  isError: true
+---
+send:
+  python: assert id(identity) == identity_id; retained + 2
+result:
+  content:
+    - type: text
+      text: |
+        43
+  isError: false
+---
+send:
+  sql: SELECT 1
+result:
+  content:
+    - type: text
+      text: R and SQL cells are unavailable in Python sessions without R
+  isError: true
+---
+send:
+  python: assert id(identity) == identity_id; retained + 2
+result:
+  content:
+    - type: text
+      text: |
+        43
+  isError: false
+---
+send:
+  requirements:
+    python:
+      - six
+result:
+  content:
+    - type: text
+      text: >-
+        live requirements are unavailable in Python sessions without R; install
+        packages before starting the session
+  isError: true
+---
+send:
+  python: assert id(identity) == identity_id; retained + 2
+result:
+  content:
+    - type: text
+      text: |
+        43
+  isError: false
+---
+send:
+  requirements:
+    r:
+      - cli
+result:
+  content:
+    - type: text
+      text: >-
+        live requirements are unavailable in Python sessions without R; install
+        packages before starting the session
+  isError: true
+---
+send:
+  python: assert id(identity) == identity_id; retained + 2
+result:
+  content:
+    - type: text
+      text: |
+        43
+  isError: false
+---
+send:
+  requirements:
+    duckdb:
+      - json
+result:
+  content:
+    - type: text
+      text: >-
+        live requirements are unavailable in Python sessions without R; install
+        packages before starting the session
+  isError: true
+---
+send:
+  python: assert id(identity) == identity_id; retained + 2
+result:
+  content:
+    - type: text
+      text: |
+        43
+  isError: false
+---
+send:
+  python: import mcp_console_package_that_does_not_exist
+result:
+  content:
+    - type: text
+      text: |
+        Traceback (most recent call last):
+          File "<string>", line 466, in _mcp_console_eval_cell
+          File "<mcp-console:python:e8>", line 1, in <module>
+          File "<string>", line 180, in find_spec
+          File "<string>", line 51, in _mcp_console_missing_module
+        ModuleNotFoundError: No module named 'mcp_console_package_that_does_not_exist'.
+
+        automatic package installation is unavailable in Python sessions without R; install packages before starting the session
+  isError: false
+---
+send:
+  python: assert id(identity) == identity_id; retained + 2
+result:
+  content:
+    - type: text
+      text: |
+        43
+  isError: false
+---
+send:
+  python: print(selected)
+result:
+  content:
+    - type: text
+      text: |
+        <selected Python>
+  isError: false
+---
+send:
+  control: restart
+  python: import sys, pandas; print(sys.executable)
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        <selected Python>
+        [done]
+  isError: false

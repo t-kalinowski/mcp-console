@@ -1,0 +1,5 @@
+---
+stderr: >
+  R is unavailable and neither `uv`, `python3`, nor `python` was found on
+  PATH; install uv or CPython with a shared libpython and restart MCP
+  Console

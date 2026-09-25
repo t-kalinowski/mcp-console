@@ -62,6 +62,7 @@ struct RelayConnection {
 }
 
 struct RelayProcess {
+    temporary: Option<crate::local_runtime::TemporaryDirectory>,
     child: Child,
     retirement_grace: Duration,
     no_sandbox: bool,
@@ -139,6 +140,7 @@ impl WorkerRuntime {
     ) -> Result<Worker, SendFailure> {
         let super::WorkerSpec {
             target,
+            local_runtime,
             executable,
             arguments,
             relay,
@@ -182,7 +184,22 @@ impl WorkerRuntime {
             };
             (command, None, None)
         };
+        let temporary = if no_sandbox
+            && local_runtime.is_some_and(crate::local_runtime::Selection::python_only)
+        {
+            Some(crate::local_runtime::TemporaryDirectory::create()?)
+        } else {
+            None
+        };
+        if let Some(temporary) = &temporary {
+            command.env("TMPDIR", temporary.path());
+        }
         if target.is_none() {
+            // Never accept an ambient internal selection for custom workers.
+            command.env_remove(crate::local_runtime::ENVIRONMENT);
+            if let Some(runtime) = local_runtime {
+                runtime.configure(&mut command)?;
+            }
             if let Some(python) = python {
                 python.configure_worker(&mut command);
             }
@@ -227,6 +244,7 @@ impl WorkerRuntime {
             notify_output_exit,
         )
         .map_err(|error| format!("failed to monitor worker relay: {error}"))?;
+        child.temporary = temporary;
         let relay_stdin = child
             .take_stdin()
             .expect("piped worker relay stdin should be available");
@@ -374,6 +392,7 @@ impl RelayProcess {
                 }
             };
         Ok(Self {
+            temporary: None,
             child,
             retirement_grace,
             no_sandbox,
@@ -544,6 +563,7 @@ impl RelayProcess {
     fn finish_reaped_status(&mut self, status: ExitStatus) -> Result<(), String> {
         self.exited = true;
         self.reaped = true;
+        self.temporary.take();
         if self.ssh {
             return if status.success() {
                 Ok(())

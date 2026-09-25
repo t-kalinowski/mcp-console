@@ -71,8 +71,8 @@ struct SetupCompletion {
 }
 
 impl SetupCompletion {
-    fn mark_configured(&mut self) -> Result<(), String> {
-        if !self.services || !self.evaluator || !self.sql {
+    fn mark_configured(&mut self, sql: bool) -> Result<(), String> {
+        if !self.services || !self.evaluator || (sql && !self.sql) {
             return Err("Python runtime configuration preceded installation".to_string());
         }
         self.configured = true;
@@ -211,7 +211,9 @@ pub(super) fn initialize(
     // state. Release its lock before CPython runs site hooks or callbacks.
     unsafe {
         (api.set_program_name)(program_name_wide);
-        (api.set_python_home)(python_home_wide);
+        if !python_home.is_empty() {
+            (api.set_python_home)(python_home_wide);
+        }
         (api.initialize_ex)(0);
     }
     // SAFETY: The resolved function has no preconditions.
@@ -358,12 +360,37 @@ pub(super) fn runtime_configured() -> Result<bool, String> {
         .configured)
 }
 
-pub(super) fn mark_runtime_configured() -> Result<(), String> {
+pub(super) fn mark_runtime_configured(sql: bool) -> Result<(), String> {
     let mut slot = PYTHON_LIBRARY
         .lock()
         .map_err(|_| "Python shared library state is unavailable")?;
     let library = slot.as_mut().ok_or("Python shared library is not loaded")?;
-    library.setup.mark_configured()
+    library.setup.mark_configured(sql)
+}
+
+pub(super) fn configure_native_environment(
+    configuration: &super::NativePython,
+) -> Result<(), String> {
+    let executable = serde_json::to_string(configuration)
+        .map_err(|error| format!("cannot encode native Python environment: {error}"))?;
+    api()?.with_gil(|api| unsafe {
+        let function = api.function(c"_mcp_console", c"configure_native_environment")?;
+        let executable = (api.unicode_from_string_and_size)(
+            executable.as_ptr().cast(),
+            executable.len() as isize,
+        );
+        if executable.is_null() {
+            return Err("cannot encode selected Python executable".into());
+        }
+        let result =
+            (api.call_function_obj_args)(function, executable, std::ptr::null_mut::<PyObject>());
+        (api.dec_ref)(executable);
+        if api.finish_setup(result)? {
+            Ok(())
+        } else {
+            Err("selected Python process setup failed".into())
+        }
+    })
 }
 
 pub(super) fn activate_environment(script: &str, executable: &str) -> Result<bool, String> {

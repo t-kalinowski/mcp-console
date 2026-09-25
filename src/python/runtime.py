@@ -627,3 +627,36 @@ def _mcp_console_activate_environment(
 
 
 _mcp_console.activate_environment = _mcp_console_activate_environment
+
+
+# Keep native-only setup after the existing evaluator so R-present traceback
+# locations remain stable. The host inspection and embedded interpreter must
+# agree on the environment, not merely on the shared library they loaded.
+def _mcp_console_configure_native_environment(
+    configuration: str,
+    _json=_json,
+    _sys=_sys,
+    _os=_os,
+    _configure_process=_mcp_console_activate_process_environment,
+) -> None:
+    expected = _json.loads(configuration)
+    for name in ("prefix", "exec_prefix", "base_prefix", "base_exec_prefix"):
+        if getattr(_sys, name) != expected[name]:
+            raise RuntimeError(
+                f"embedded Python {name} differs from the selected environment: "
+                f"{getattr(_sys, name)!r} != {expected[name]!r}"
+            )
+    executable = expected["embedding"]["python"]
+    if _sys.executable != executable:
+        raise RuntimeError("embedded Python executable differs from host selection")
+    directory = _os.path.dirname(executable)
+    inherited = _os.environ.get("PATH", "")
+    _os.environ["PATH"] = directory + (_os.pathsep + inherited if inherited else "")
+    if _sys.prefix != _sys.base_prefix:
+        _os.environ["VIRTUAL_ENV"] = _sys.prefix
+    else:
+        _os.environ.pop("VIRTUAL_ENV", None)
+    _configure_process(executable)
+
+
+_mcp_console.configure_native_environment = _mcp_console_configure_native_environment

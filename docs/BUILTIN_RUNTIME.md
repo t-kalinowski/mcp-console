@@ -22,7 +22,7 @@ A [Docker target](DOCKER.md) instead runs the relay and worker in a fresh owned 
 The controller retains the server and records; binds persist across restart, while the container's writable layer is discarded.
 Dynamic package preparation is disabled, and Docker Quarto projections follow the same non-executing convention.
 They do not reproduce the remote filesystem when rendered locally.
-Each worker generation contains:
+With R available, each worker generation contains:
 
 - one persistent R global environment;
 - one persistent Python `__main__` namespace embedded through reticulate; and
@@ -40,6 +40,33 @@ Submit code-bearing `send` calls sequentially and collect a running cell before 
 A control-only interrupt may overlap a pending `send` while that call resolves or prepares requirements, including for restart.
 The same call may first interrupt or restart the session through its optional `control` field.
 Code-free `send` calls poll, supply stdin, prepare requirements, interrupt, or restart the same implicit session.
+
+## Python sessions without R
+
+Local sessions discover R through `R_HOME` or `R` on `PATH`.
+If neither exists, ordinary `mcp-console serve` starts a Python session without requiring an interpreter-selection variable or another launch flag.
+An invalid explicit `R_HOME` or a broken discovered R installation reports an R error; it does not select Python instead.
+
+With `uv` available, the server uses its existing host resolver and default Python manifest (`numpy` and `pandas`) to select and retain an ephemeral environment.
+Resolution honors the captured resolver configuration, cache handling, and Python version ranking.
+It runs outside the worker sandbox and may install packages with server permissions.
+An available resolver that fails reports the failure without trying a different interpreter.
+With no `uv`, selection checks `python3` then `python` on `PATH`; the selected CPython must provide a usable shared embedding library.
+If no interpreter is available, the error asks the user to install `uv` or CPython and restart the server.
+Existing explicit `RETICULATE_PYTHON` selection remains supported.
+
+The session retains the selected environment and executable across cells, restarts, and worker replacement.
+A restart clears Python objects, but does not resolve another environment.
+The embedded interpreter uses the selected environment's packages and prefixes; subprocesses and multiprocessing use its Python executable.
+The worker has private temporary storage, retired after startup failure, restart, and shutdown.
+Retirement does not delete resolver caches or the retained environment.
+
+Python expressions, persistent objects, output, exceptions, `input()`, interrupts, and recording use the same evaluator and coordinator as mixed-language sessions.
+Matplotlib plots are returned when Matplotlib is already installed in the selected environment; the default manifest does not install it.
+To use additional packages, prepare a Python environment before starting Console and make it available through the PATH fallback or existing explicit-selection interface.
+Live `requirements`, automatic missing-import installation, R cells, and SQL cells are unavailable.
+The tool schema and descriptions reflect these limits; rejected requests leave existing Python state usable.
+This mode is local only; SSH and prepared Docker/SBX targets retain their existing R runtime requirements.
 
 ## Cells and polling
 
@@ -239,7 +266,7 @@ The final expression of a cell is displayed through Python's normal display hook
 An uncaught exception prints its traceback and completes as a language outcome.
 The Python session remains usable, including state established before the exception.
 Python 3.10 or later is required.
-R is initialized eagerly, and reticulate remains required for Python interpreter selection, candidate configuration, and cross-language access.
+When R is available, it is initialized eagerly and reticulate supplies Python interpreter selection, candidate configuration, and cross-language access.
 Console initializes the selected interpreter before reticulate attaches for conversion, cross-language calls, and event integration.
 Console activates live managed environments through its retained CPython library.
 The built-in startup display width for NumPy and pandas is 200 columns, and evaluated code may change it.
@@ -539,7 +566,8 @@ The [implemented architecture](ARCHITECTURE.md) describes the session record and
 - Managed DuckDB cannot query Python objects until they are bound as R data; a selected Python driver sees only objects registered on its own connection.
 - SQL previews do not include affected-row counts or total result counts.
 - Only default-device R graphics and open pyplot figures are captured automatically.
-  Managed graphics and Python caches use each worker's R session temporary directory, including with `--no-sandbox`.
+  With R available, managed graphics and Python caches use each worker's R session temporary directory, including with `--no-sandbox`.
+  Without R, the native runner or direct relay lifetime owns the worker's private temporary storage.
 - In the default sandboxed mode, normal restart, automatic failure replacement, orderly server shutdown, and unexpected server or relay failure retire descendants across process-group and session changes.
   On Linux, the native namespace monitor waits for kernel retirement of the namespace before acknowledging cleanup.
   On macOS, the guarantee covers the owned process group and detached descendants observed by the runner; a later descendant that becomes orphaned before its fork event is resolved remains outside this guarantee.

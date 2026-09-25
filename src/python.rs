@@ -3,7 +3,7 @@ mod requirements;
 mod reticulate;
 mod startup;
 
-pub(crate) use inspection::inspect_selected;
+pub(crate) use inspection::{NativePython, inspect_native, inspect_selected};
 pub(crate) use startup::{
     SelectedPython, finish_initialization, initialize_selected, setup_runtime,
 };
@@ -43,6 +43,8 @@ pub(crate) enum SqlProvider {
     Handled,
 }
 
+pub(crate) use platform::configure_worker_environment as configure_native_worker_environment;
+
 pub(crate) fn configure_worker_environment(
     temporary_directory: &std::path::Path,
 ) -> std::io::Result<()> {
@@ -54,6 +56,13 @@ impl Runtime {
     pub(crate) fn initialize() -> Result<Self, String> {
         Ok(Self {
             startup: startup::Runtime::initialize()?,
+            next_evaluation_id: 1,
+        })
+    }
+
+    pub(crate) fn native(selected: &NativePython) -> Result<Self, String> {
+        Ok(Self {
+            startup: startup::Runtime::native(selected)?,
             next_evaluation_id: 1,
         })
     }

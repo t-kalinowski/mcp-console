@@ -120,6 +120,7 @@ struct ClientInner {
     lifecycle: Mutex<LifecycleControl>,
     environment: Option<Mutex<Environment>>,
     dynamic_resolution: bool,
+    local_runtime: Option<crate::local_runtime::Selection>,
     target: Option<crate::target_session::Session>,
     recording: Mutex<Option<crate::transcript::Transcript>>,
 }
@@ -150,6 +151,7 @@ struct WorkerSpec<'a> {
     managed_r: Option<&'a crate::resolver::ManagedR>,
     dynamic_resolution: bool,
     callbacks: WorkerCallbacks,
+    local_runtime: Option<&'a crate::local_runtime::Selection>,
     target: Option<&'a crate::target_session::Session>,
 }
 
@@ -386,29 +388,46 @@ impl Client {
         let configured_python = std::env::var_os("RETICULATE_PYTHON");
         let program = std::env::current_exe()
             .map_err(|error| format!("failed to locate the R worker executable: {error}"))?;
+        let local_runtime;
         #[cfg(unix)]
-        let (r, duckdb_extensions, python, r_resolver) = {
-            match crate::resolver::detect_r_bootstrap(&python_resolver, on_started)? {
-                Some(bootstrap) => (
-                    None,
-                    Default::default(),
-                    None,
-                    RResolver::Pending(BuiltinSetup {
-                        bootstrap: crate::resolver::execution::Bootstrap::Local(bootstrap),
-                        python_resolver: crate::resolver::execution::PythonConfiguration::Local(
-                            python_resolver,
-                        ),
-                        configured_python,
-                    }),
-                ),
-                None => (
-                    None,
-                    Default::default(),
-                    Some(PythonEnvironment::bare(configured_python)),
-                    RResolver::Disabled,
-                ),
-            }
-        };
+        let (r, duckdb_extensions, python, r_resolver) =
+            if !crate::local_runtime::Selection::r_is_present() {
+                local_runtime = Some(crate::local_runtime::Selection::python(
+                    configured_python,
+                    &python_resolver.without_r_bootstrap(),
+                    on_started,
+                )?);
+                (None, Default::default(), None, RResolver::Disabled)
+            } else {
+                let (bootstrap, rscript) = crate::resolver::discover(&python_resolver, on_started)?;
+                let home = rscript
+                    .parent()
+                    .and_then(std::path::Path::parent)
+                    .ok_or("discovered R executable has no R home")?;
+                local_runtime = Some(crate::local_runtime::Selection::R {
+                    home: home.to_path_buf(),
+                });
+                match bootstrap {
+                    Some(bootstrap) => (
+                        None,
+                        Default::default(),
+                        None,
+                        RResolver::Pending(BuiltinSetup {
+                            bootstrap: crate::resolver::execution::Bootstrap::Local(bootstrap),
+                            python_resolver: crate::resolver::execution::PythonConfiguration::Local(
+                                python_resolver,
+                            ),
+                            configured_python,
+                        }),
+                    ),
+                    None => (
+                        None,
+                        Default::default(),
+                        Some(PythonEnvironment::bare(configured_python)),
+                        RResolver::Disabled,
+                    ),
+                }
+            };
         #[cfg(not(unix))]
         let (r, duckdb_extensions, python, r_resolver) = (
             Option::<crate::resolver::ManagedR>::None,
@@ -421,7 +440,7 @@ impl Client {
             )?),
             RResolver::Discover,
         );
-        Ok(Self::with_arguments(
+        let mut client = Self::with_arguments(
             program,
             vec![OsString::from("worker")],
             None,
@@ -435,7 +454,11 @@ impl Client {
                 r,
                 r_resolver,
             }),
-        ))
+        );
+        Arc::get_mut(&mut client.0)
+            .expect("new client")
+            .local_runtime = local_runtime;
+        Ok(client)
     }
 
     fn with_arguments(
@@ -464,6 +487,7 @@ impl Client {
             lifecycle: Mutex::new(LifecycleControl::new()),
             environment: environment.map(Mutex::new),
             dynamic_resolution,
+            local_runtime: None,
             target: None,
             recording: Mutex::new(None),
         }))
@@ -568,12 +592,29 @@ impl Client {
         Ok(client)
     }
 
+    pub(crate) fn python_only(&self) -> bool {
+        self.0
+            .local_runtime
+            .as_ref()
+            .is_some_and(crate::local_runtime::Selection::python_only)
+    }
+
     pub(crate) fn dynamic_resolution(&self) -> bool {
         self.0.dynamic_resolution
     }
 
     /// Interprets preparation, control, evaluation, stdin, and polling for the session.
     pub(crate) async fn send(&self, request: SendRequest) -> Result<Response, String> {
+        if self.python_only() {
+            if request.requirements.is_some() {
+                return Err(crate::local_runtime::PREPARATION_DISABLED.into());
+            }
+            if let Some(cell) = &request.cell
+                && !matches!(cell.language, crate::cell::Language::Python)
+            {
+                return Err("R and SQL cells are unavailable in Python sessions without R".into());
+            }
+        }
         if let Some(target) = &self.0.target
             && !target.is_ssh()
             && request.requirements.is_some()
@@ -1611,6 +1652,7 @@ impl Client {
                 .and_then(|environment| environment.r.as_ref());
             let spec = WorkerSpec {
                 target: self.0.target.as_ref(),
+                local_runtime: self.0.local_runtime.as_ref(),
                 executable: &self.0.program,
                 arguments: &self.0.arguments,
                 relay: self.0.relay.as_deref(),

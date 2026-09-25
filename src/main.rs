@@ -10,6 +10,8 @@ mod docker_sandbox;
 #[cfg(unix)]
 mod input_watch;
 #[cfg(unix)]
+mod local_runtime;
+#[cfg(unix)]
 mod process_descriptors;
 #[cfg(unix)]
 mod process_exit;

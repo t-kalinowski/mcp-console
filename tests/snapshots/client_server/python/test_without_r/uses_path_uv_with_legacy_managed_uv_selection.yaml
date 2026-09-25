@@ -1,0 +1,9 @@
+---
+send:
+  python: import numpy, pandas; 42
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false

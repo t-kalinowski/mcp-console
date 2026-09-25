@@ -12,27 +12,40 @@ struct Coordinator {
     writer: crate::sideband::Writer,
     r: Integration,
     python: crate::python::Runtime,
-    sql: crate::sql::Bridge,
+    sql: Option<crate::sql::Bridge>,
 }
 
 pub(crate) fn run() -> Result<(), Box<dyn Error>> {
     let (reader, writer) = crate::sideband::connect_from_env()?;
-    let r_home = harp::command::r_home_setup()?;
-    #[cfg(target_os = "linux")]
-    reexec_with_r_library_path(&r_home, &reader, &writer)?;
+    let selection = crate::local_runtime::Selection::from_environment()?;
     interrupt::normalize_signal()?;
-    // Startup supplies R's existing session directory; R retains its ownership.
-    let temporary_directory = embedded_r::initialize_r(&r_home)?;
-    crate::python::configure_worker_environment(&temporary_directory)?;
-    core::initialize(reader, writer.clone())?;
-    let r = embedded_r::Runtime::initialize()?;
-    let python = crate::python::Runtime::initialize()?;
-    let sql = crate::sql::Bridge::initialize()?;
+    let (r, python, sql) =
+        if let Some(crate::local_runtime::Selection::Python { selected, .. }) = selection {
+            // Native sandbox launches supply runner-owned private storage. Direct
+            // launches supply a directory retained by the server's relay lifetime.
+            let temporary = std::env::var_os("TMPDIR")
+                .ok_or("Python worker launch did not supply temporary storage")?;
+            crate::python::configure_native_worker_environment(std::path::Path::new(&temporary))?;
+            core::initialize(reader, writer.clone())?;
+            let r = Integration::new(None)?;
+            let python = crate::python::Runtime::native(&selected)?;
+            (r, python, None)
+        } else {
+            let r_home = harp::command::r_home_setup()?;
+            #[cfg(target_os = "linux")]
+            reexec_with_r_library_path(&r_home, &reader, &writer)?;
+            let temporary_directory = embedded_r::initialize_r(&r_home)?;
+            crate::python::configure_worker_environment(&temporary_directory)?;
+            core::initialize(reader, writer.clone())?;
+            let r = Integration::new(Some(embedded_r::Runtime::initialize()?))?;
+            let python = crate::python::Runtime::initialize()?;
+            let sql = Some(crate::sql::Bridge::initialize()?);
+            (r, python, sql)
+        };
     writer.send(&WorkerMessage::Ready)?;
-
     let mut coordinator = Coordinator {
         writer,
-        r: Integration::new(Some(r))?,
+        r,
         python,
         sql,
     };
@@ -187,7 +200,7 @@ fn evaluate_cell(
     cell: Cell,
     r: &Integration,
     python: &mut crate::python::Runtime,
-    sql: &mut crate::sql::Bridge,
+    sql: &mut Option<crate::sql::Bridge>,
 ) -> Result<(), String> {
     r.idle()?;
     if core::is_shutting_down() {
@@ -214,7 +227,10 @@ fn evaluate_cell(
         let result = match cell.language {
             Language::R => r.evaluate_r(cell.source),
             Language::Python => python.evaluate(&cell.source),
-            Language::Sql => sql.evaluate(&cell.source),
+            Language::Sql => sql
+                .as_mut()
+                .expect("SQL admission requires R")
+                .evaluate(&cell.source),
         };
         core::finish_cell();
         if graphics {

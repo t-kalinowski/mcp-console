@@ -19,15 +19,17 @@ This is a **development preview** with changing interfaces.
 MCP Console supports macOS and Linux; Windows is unsupported.
 See the [runtime limitations](docs/BUILTIN_RUNTIME.md#current-limitations) and [sandbox lifetime limits](docs/SANDBOX.md#supported-hosts-and-lifetime-limits).
 
-The built-in worker requires **R even for Python and SQL**.
-It embeds R, uses reticulate for Python interoperability, and provides a persistent DuckDB connection for SQL.
-Python-only execution is not yet implemented.
+Local sessions can run Python without R.
+When R is absent, Console uses `uv` to resolve its default Python environment, or uses `python3` then `python` from `PATH` when `uv` is absent.
+These sessions support Python execution, input, plots, interrupts, restart, and recording; live requirements, automatic package installation, and SQL are unavailable.
+With R installed, the worker retains mixed R/Python execution through reticulate and a persistent DuckDB connection for SQL.
+See [Python sessions without R](docs/BUILTIN_RUNTIME.md#python-sessions-without-r) for selection and package limitations.
 
 ## Quickstart
 
 Use an MCP client of your choice, such as [Codex](https://developers.openai.com/codex/mcp), [Claude Code](https://code.claude.com/docs/en/mcp), or [OpenCode](https://opencode.ai/docs/mcp-servers/).
 
-You need [uv](https://docs.astral.sh/uv/getting-started/installation/) and R on `PATH`.
+Use [uv](https://docs.astral.sh/uv/getting-started/installation/) for installation and the default local Python environment.
 If you need R, install [rig](https://github.com/r-lib/rig#id-installation), then run `rig add release`.
 
 Installing the current source also needs Git, [rustup](https://rustup.rs/) with Rust 1.95 or later, and your platform's build tools.

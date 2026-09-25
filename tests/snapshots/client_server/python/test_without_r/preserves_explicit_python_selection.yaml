@@ -1,0 +1,11 @@
+---
+send:
+  python: >-
+    import os, sys; assert sys.executable ==
+    os.environ['RETICULATE_PYTHON']; 42
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false

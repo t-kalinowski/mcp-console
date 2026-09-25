@@ -7,6 +7,13 @@ The [`send` operation-order reference](SEND_OPERATIONS.md) owns validation timin
 This guide describes preparation before a cell, standalone preparation, and requirements included in restart.
 [Host resolution and trust](#host-resolution-and-trust) explains why requirement input is restricted and which work runs with server permissions.
 
+Local [Python sessions without R](BUILTIN_RUNTIME.md#python-sessions-without-r) resolve only their initial environment.
+When `uv` is available, the existing local host resolver prepares the default Python manifest before MCP readiness and retains the result for replacement workers.
+This does not invoke R, Rscript, or `ir`, and no installation runs inside the sandboxed worker.
+Without `uv`, a Python executable on `PATH` supplies its preinstalled packages.
+Live requirement additions and automatic import resolution are unavailable in this mode, including when Console resolved the initial environment itself.
+The remaining preparation and SQL behavior in this document applies to sessions with R.
+
 Prepared requirements configure the built-in worker; they do not attach an R package, import a Python package, or load a DuckDB extension.
 Runtime use is covered by the [built-in runtime guide](BUILTIN_RUNTIME.md).
 Exact live-worker messages and custom-worker receipts belong to the [worker protocol](WORKER_PROTOCOL.md).
