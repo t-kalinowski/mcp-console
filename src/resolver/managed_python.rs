@@ -8,7 +8,7 @@ use serde::Serialize;
 
 use super::process::{
     ResolverOutput, ResolverProcess, ResolverStopHandle, completed_write, read_output,
-    resolver_command, stop_resolver,
+    resolver_command,
 };
 
 const PYTHON_PATH_SOURCE: &str = r#"
@@ -488,7 +488,9 @@ where
     if let Some(on_started) = on_started.take()
         && let Err(error) = on_started(resolver.stop_handle())
     {
-        let _ = stop_resolver(&mut child, program, kind);
+        resolver
+            .abort(&mut child, program, kind)
+            .map_err(|cleanup| format!("{error}; {cleanup}"))?;
         return Err(error);
     }
     resolver.wait(&mut child, completed_write(), stdout, stderr, program, kind)

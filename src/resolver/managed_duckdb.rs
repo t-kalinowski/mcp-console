@@ -3,7 +3,7 @@ use std::process::Stdio;
 use serde::Serialize;
 
 use super::process::{
-    ResolverProcess, ResolverStopHandle, read_output, resolver_command, stop_resolver, write_input,
+    ResolverProcess, ResolverStopHandle, read_output, resolver_command, write_input,
 };
 
 const MANAGED_DUCKDB_EXTENSION_RESOLVER_SOURCE: &str = include_str!("programs/duckdb_extensions.R");
@@ -43,7 +43,9 @@ pub(crate) fn resolve_duckdb_extensions(
     let resolver = ResolverProcess::new();
     resolver.watch_exit(child.id());
     if let Err(error) = on_started(resolver.stop_handle()) {
-        let _ = stop_resolver(&mut child, rscript, "DuckDB extension");
+        resolver
+            .abort(&mut child, rscript, "DuckDB extension")
+            .map_err(|cleanup| format!("{error}; {cleanup}"))?;
         return Err(error);
     }
     let output = resolver.wait(

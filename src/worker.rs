@@ -24,7 +24,9 @@ pub(crate) use core::{
 #[cfg(unix)]
 pub(crate) use input::{PythonInput, read_python_input};
 #[cfg(unix)]
-pub(crate) use interrupt::{acknowledge_python_interrupt, install_python_interrupt};
+pub(crate) use interrupt::{
+    acknowledge_python_interrupt, inspect_python, install_python_interrupt,
+};
 
 #[cfg(not(unix))]
 pub(crate) fn run() -> Result<(), Box<dyn std::error::Error>> {
