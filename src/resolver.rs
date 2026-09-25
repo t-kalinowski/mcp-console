@@ -20,7 +20,7 @@ mod python_version;
 #[cfg(not(unix))]
 mod unsupported;
 
-fn find_path_entry(program: &str) -> Option<std::path::PathBuf> {
+pub(crate) fn find_path_entry(program: &str) -> Option<std::path::PathBuf> {
     let path = std::env::var_os("PATH")?;
     // A broken symlink or non-executable entry is a broken installation, not
     // permission to select a different resolver.
@@ -46,8 +46,7 @@ pub(crate) use managed_python::{
 };
 #[cfg(unix)]
 pub(crate) use managed_r::{
-    ManagedR, ManagedRBootstrap, ManagedRResolverConfiguration, detect_r_bootstrap, discover,
-    resolve_r, resolve_r_with,
+    ManagedR, ManagedRBootstrap, ManagedRResolverConfiguration, discover, resolve_r, resolve_r_with,
 };
 #[cfg(unix)]
 pub(crate) use process::{ResolverControl, ResolverStopHandle};

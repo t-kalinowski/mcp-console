@@ -193,6 +193,13 @@ fn native_input_watch_events() -> libc::c_short {
 #[cfg(target_os = "macos")]
 fn observe_native_input_watch() -> Result<(), String> {
     let mut event = unsafe { std::mem::zeroed() };
+    // A Python input call may consume the bytes after poll observed kqueue
+    // readiness. Drain the current event without blocking on a future write;
+    // the outer descriptor wait remains the sole blocking admission point.
+    let immediate = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
     let count = unsafe {
         libc::kevent(
             native_input_watch_fd(),
@@ -200,7 +207,7 @@ fn observe_native_input_watch() -> Result<(), String> {
             0,
             &mut event,
             1,
-            std::ptr::null(),
+            &immediate,
         )
     };
     if count < 0 {

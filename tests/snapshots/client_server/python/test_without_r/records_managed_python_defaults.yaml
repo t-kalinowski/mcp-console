@@ -1,0 +1,36 @@
+---
+!same-as python-only MCP initialization for this execution mode
+---
+send:
+  python: |
+    import numpy, pandas
+
+    retained = 42
+    retained
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false
+---
+send:
+  requirements:
+    python:
+      - six
+result:
+  content:
+    - type: text
+      text: >-
+        live requirements are unavailable in Python sessions without R; install
+        packages before starting the session
+  isError: true
+---
+send:
+  python: retained
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false

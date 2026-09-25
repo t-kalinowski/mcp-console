@@ -627,3 +627,59 @@ def _mcp_console_activate_environment(
 
 
 _mcp_console.activate_environment = _mcp_console_activate_environment
+
+
+# Keep native-only setup after the existing evaluator so R-present traceback
+# locations remain stable. The host inspection and embedded interpreter must
+# agree on the environment, not merely on the shared library they loaded.
+def _mcp_console_configure_native_environment(
+    configuration: str,
+    _json=_json,
+    _sys=_sys,
+    _os=_os,
+    _configure_process=_mcp_console_activate_process_environment,
+) -> None:
+    expected = _json.loads(configuration)
+    for name in ("prefix", "exec_prefix", "base_prefix", "base_exec_prefix"):
+        # Framework launchers and embedding can retain different spellings of
+        # the same directory (for example /var and /private/var on macOS).
+        if _os.path.realpath(getattr(_sys, name)) != _os.path.realpath(expected[name]):
+            raise RuntimeError(
+                f"embedded Python {name} differs from the selected environment: "
+                f"{getattr(_sys, name)!r} != {expected[name]!r}"
+            )
+    executable = expected["embedding"]["python"]
+    if not _os.path.samefile(_sys.executable, executable):
+        raise RuntimeError("embedded Python executable differs from host selection")
+    directory = _os.path.dirname(executable)
+    inherited = _os.environ.get("PATH", "")
+    _os.environ["PATH"] = directory + (_os.pathsep + inherited if inherited else "")
+    if _sys.prefix != _sys.base_prefix:
+        _os.environ["VIRTUAL_ENV"] = _sys.prefix
+    else:
+        _os.environ.pop("VIRTUAL_ENV", None)
+    # Match an interactive interpreter: imports follow the current workspace,
+    # including a later os.chdir(), rather than the selected executable's bin.
+    _sys.path.insert(0, "")
+    _configure_process(executable)
+
+
+_mcp_console.configure_native_environment = _mcp_console_configure_native_environment
+
+
+# Startup has not announced Ready, so its diagnostics belong on the original
+# stderr transport rather than the evaluation-output sideband.
+def _mcp_console_display_setup_exception(
+    _state=_builtins.__dict__,
+    _traceback=_traceback,
+    _stderr=_sys.__stderr__,
+) -> None:
+    error = _state.pop("_mcp_console_setup_error", None)
+    if error is not None:
+        _traceback.print_exception(
+            type(error), error, error.__traceback__, file=_stderr
+        )
+        _stderr.flush()
+
+
+_mcp_console.display_setup_exception = _mcp_console_display_setup_exception

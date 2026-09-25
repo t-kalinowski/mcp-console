@@ -283,16 +283,28 @@ impl ConsoleServer {
                 }
             }
         };
+        let python_only = worker.python_only();
+        let languages = if python_only {
+            Languages {
+                r: false,
+                sql: false,
+                ..languages
+            }
+        } else {
+            languages
+        };
         let target = worker.target_metadata();
         let dynamic_resolution = worker.dynamic_resolution();
         let transcript = crate::transcript::Transcript::with_target(
             recording_directory,
             dynamic_resolution,
+            worker.managed_python_defaults(),
             target.clone(),
         );
         worker.record_with(transcript.clone());
         let security = execution::description(&policy, no_sandbox, target.as_ref());
-        let tool_router = Self::configured_tool_router(languages, dynamic_resolution, &security);
+        let tool_router =
+            Self::configured_tool_router(languages, dynamic_resolution, &security, python_only);
         Ok(Self {
             worker,
             transcript,
@@ -306,6 +318,7 @@ impl ConsoleServer {
         languages: Languages,
         dynamic_resolution: bool,
         security: &str,
+        python_only: bool,
     ) -> ToolRouter<Self> {
         let mut router = Self::tool_router();
         let send = router
@@ -318,6 +331,16 @@ impl ConsoleServer {
             .as_mut()
             .expect("send tool must have a description")
             .to_mut();
+        if python_only {
+            let remaining = description
+                .split_once("\n\nSend one complete")
+                .expect("shared send description")
+                .1;
+            *description = format!(
+                "Persistent local Python workbench. State persists across calls. R and SQL cells, live requirements, and automatic package installation are unavailable in this session. Python uses the environment selected at server startup; restart resets objects and retains that environment.\n\nSend one complete{remaining}"
+            );
+            *description = description.replace("`r`, `python`, or `sql` cell", "`python` cell");
+        }
         description.push_str("\n\n");
         description.push_str(security);
         let schema = Arc::make_mut(&mut send.attr.input_schema);
@@ -348,6 +371,30 @@ impl ConsoleServer {
         ] {
             if !enabled {
                 properties.shift_remove(field);
+            }
+        }
+        if python_only {
+            for (field, description) in [
+                (
+                    "python",
+                    "One complete Python cell in persistent state. The final expression displays automatically. Use input() for managed stdin; Matplotlib plots return as PNG images when installed. Use only packages already in the selected environment. R integration, SQL cells, live requirements, and automatic package installation are unavailable. Use control: restart with python to run in a fresh worker using the same environment, or timeout_ms: 0 then poll for background execution.",
+                ),
+                (
+                    "control",
+                    "Applies lifecycle control alone or before compatible same-call fields. interrupt requests SIGINT from the live worker and preserves Python state. After successful delivery, stdin is queued and send waits 100 milliseconds before observing the earlier evaluation or attempting an optional following cell; that cell is not run if the interrupted evaluation remains active. restart discards Python objects, debugger state, and unread stdin, retains the selected environment, and sends same-call stdin and code only to the replacement worker.",
+                ),
+                (
+                    "stdin",
+                    r"Input for an active read, prompt, or debugger. When responding to active input, omit code and send stdin on its own. Its UTF-8 encoding is queued exactly; no newline is added. Line-oriented input normally needs a trailing `\n`. After interrupt, nonempty stdin is queued before the 100-millisecond grace and may be consumed while the earlier operation unwinds. After restart, same-call stdin goes only to the replacement. When sent with a cell, nonempty text is queued before code runs. Empty text queues nothing. If output ends in [waiting for stdin], send the requested input here. Unread text can satisfy later reads and is discarded by restart.",
+                ),
+                (
+                    "timeout_ms",
+                    "Omit for normal calls and polls. Defaults to 60,000 milliseconds. This limits the wait after cell dispatch or attachment to an active evaluation and includes one automatic worker replacement attempt. Reaching the timeout does not cancel execution or startup. Inline control, interrupt grace, and restart happen before dispatch and may make the complete call take longer. Use 0 for background execution, then poll with an empty send. If a response ends with [running; poll with an empty send] or [worker starting], poll without resubmitting the cell.",
+                ),
+            ] {
+                if let Some(property) = properties.get_mut(field) {
+                    property["description"] = description.into();
+                }
             }
         }
         if !dynamic_resolution {
@@ -403,6 +450,10 @@ Each result has at most 8 KiB of UTF-8 text, including notices; oversized output
         if let Some(cell) = cell.as_ref()
             && !self.languages.enables(cell.language)
         {
+            if self.worker.python_only() && !matches!(cell.language, crate::cell::Language::Python)
+            {
+                return Err("R and SQL cells are unavailable in Python sessions without R".into());
+            }
             return Err(format!(
                 "`{}` cells are disabled by `{LANGUAGES_ENV}`",
                 Languages::field(cell.language)

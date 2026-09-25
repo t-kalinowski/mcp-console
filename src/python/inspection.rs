@@ -12,6 +12,17 @@ use super::startup::SelectedPython;
 
 const INSPECTION_SOURCE: &str = include_str!("inspection.py");
 
+/// Executable and environment identity observed together on the host.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct NativePython {
+    pub(crate) embedding: SelectedPython,
+    pub(crate) prefix: String,
+    pub(crate) exec_prefix: String,
+    pub(crate) base_prefix: String,
+    pub(crate) base_exec_prefix: String,
+}
+
 /// Describe a selected executable without changing the calling process or
 /// selecting a replacement. The selected installation is trusted and must
 /// remain stable through initialization; concurrent replacement is unsupported.
@@ -19,6 +30,13 @@ pub(crate) fn inspect_selected(
     executable: &Path,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<SelectedPython, String> {
+    inspect_native(executable, on_started).map(|selected| selected.embedding)
+}
+
+pub(crate) fn inspect_native(
+    executable: &Path,
+    on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
+) -> Result<NativePython, String> {
     if !executable.is_absolute() || !executable.is_file() {
         return Err(format!(
             "selected Python executable is not an absolute file: {}",
@@ -32,6 +50,9 @@ pub(crate) fn inspect_selected(
     let resolver = ResolverProcess::new();
     let mut command = resolver_command(executable);
     command
+        // Inspect the selected installation without executing workspace,
+        // PYTHONPATH, or user-site code with the host resolver's permissions.
+        .arg("-I")
         .arg("-c")
         .arg(INSPECTION_SOURCE)
         .arg(result.path())
@@ -81,12 +102,18 @@ pub(crate) fn inspect_selected(
             description.base_prefix, description.base_exec_prefix
         )
     };
-    Ok(SelectedPython {
-        // sys.executable verifies the child's identity, while the caller's
-        // spelling retains a selected virtualenv or other executable symlink.
-        python: selected.to_string(),
-        libpython: description.libpython,
-        python_home,
+    Ok(NativePython {
+        embedding: SelectedPython {
+            // sys.executable verifies the child's identity, while the caller's
+            // spelling retains a selected virtualenv or other executable symlink.
+            python: selected.to_string(),
+            libpython: description.libpython,
+            python_home,
+        },
+        prefix: description.prefix,
+        exec_prefix: description.exec_prefix,
+        base_prefix: description.base_prefix,
+        base_exec_prefix: description.base_exec_prefix,
     })
 }
 

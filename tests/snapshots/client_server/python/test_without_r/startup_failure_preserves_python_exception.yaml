@@ -1,0 +1,17 @@
+---
+!same-as python-only MCP initialization for this execution mode
+---
+send:
+  python: raise AssertionError('failed startup ran cell')
+result:
+  content:
+    - type: text
+      text: |-
+        Traceback (most recent call last):
+          File "<string>", line 647, in _mcp_console_configure_native_environment
+        RuntimeError: embedded Python prefix differs from the selected environment: 'changed-by-startup-hook' != '<selected environment>'
+        selected Python process setup failed
+        Python exit thread attached
+        [worker sideband read failed: worker sideband closed]
+        [worker exited with status 1]
+  isError: true

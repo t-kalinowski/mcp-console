@@ -1,0 +1,11 @@
+---
+!same-as python-only MCP initialization for this execution mode
+---
+send:
+  python: import sys; assert sys.executable.endswith('/python'); 42
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false

@@ -49,11 +49,18 @@ impl Writers {
         quarto: PathBuf,
         working_directory: &str,
         dynamic_resolution: bool,
+        managed_python_defaults: bool,
         target: Option<&Value>,
     ) -> Self {
         Self {
             markdown: ProjectionWriter::new(markdown, "Markdown transcript"),
-            quarto: QuartoWriter::new(quarto, working_directory, dynamic_resolution, target),
+            quarto: QuartoWriter::new(
+                quarto,
+                working_directory,
+                dynamic_resolution,
+                managed_python_defaults,
+                target,
+            ),
         }
     }
 
@@ -70,6 +77,7 @@ impl QuartoWriter {
         path: PathBuf,
         working_directory: &str,
         dynamic_resolution: bool,
+        managed_python_defaults: bool,
         target: Option<&Value>,
     ) -> Self {
         let mut writer = Self {
@@ -87,6 +95,8 @@ impl QuartoWriter {
                     .iter()
                     .map(|requirement| (*requirement).to_string()),
             );
+        }
+        if dynamic_resolution || managed_python_defaults {
             writer.python_requirements.extend(
                 crate::worker_protocol::DEFAULT_PYTHON_PACKAGES
                     .iter()

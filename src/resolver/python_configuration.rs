@@ -32,6 +32,16 @@ impl ManagedPythonResolverConfiguration {
         }
     }
 
+    pub(crate) fn without_r_bootstrap(mut self) -> Self {
+        // `managed` asks reticulate to obtain uv. Without R, use the uv on
+        // PATH if present and retain the captured UV_* configuration unchanged.
+        if self.reticulate_uv.as_deref() == Some(OsStr::new("managed")) {
+            self.uv = super::find_path_entry("uv").map(Into::into);
+            self.reticulate_uv = self.uv.clone();
+        }
+        self
+    }
+
     pub(super) fn explicit_uv(&self) -> Option<&OsStr> {
         self.explicit_uv.as_deref()
     }

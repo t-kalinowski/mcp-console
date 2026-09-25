@@ -13,6 +13,7 @@ type PyIsInitialized = unsafe extern "C" fn() -> libc::c_int;
 type PySetProgramName = unsafe extern "C" fn(*const libc::wchar_t);
 type PySetPythonHome = unsafe extern "C" fn(*const libc::wchar_t);
 type PyInitializeEx = unsafe extern "C" fn(libc::c_int);
+type PySysSetArgvEx = unsafe extern "C" fn(libc::c_int, *mut *mut libc::wchar_t, libc::c_int);
 type PySysSetArgv = unsafe extern "C" fn(libc::c_int, *mut *mut libc::wchar_t);
 type PyOsSetSignal = unsafe extern "C" fn(libc::c_int, libc::sighandler_t) -> libc::sighandler_t;
 type PyEvalSaveThread = unsafe extern "C" fn() -> *mut libc::c_void;
@@ -71,8 +72,8 @@ struct SetupCompletion {
 }
 
 impl SetupCompletion {
-    fn mark_configured(&mut self) -> Result<(), String> {
-        if !self.services || !self.evaluator || !self.sql {
+    fn mark_configured(&mut self, sql: bool) -> Result<(), String> {
+        if !self.services || !self.evaluator || (sql && !self.sql) {
             return Err("Python runtime configuration preceded installation".to_string());
         }
         self.configured = true;
@@ -87,6 +88,7 @@ struct PythonApi {
     set_python_home: PySetPythonHome,
     initialize_ex: PyInitializeEx,
     set_argv: PySysSetArgv,
+    set_argv_ex: PySysSetArgvEx,
     set_signal: PyOsSetSignal,
     save_thread: PyEvalSaveThread,
     restore_thread: PyEvalRestoreThread,
@@ -164,6 +166,7 @@ pub(super) fn initialize(
     path: &Path,
     program_name: &str,
     python_home: &str,
+    update_path: bool,
 ) -> Result<bool, String> {
     let path = path.canonicalize().map_err(|error| {
         format!(
@@ -211,7 +214,9 @@ pub(super) fn initialize(
     // state. Release its lock before CPython runs site hooks or callbacks.
     unsafe {
         (api.set_program_name)(program_name_wide);
-        (api.set_python_home)(python_home_wide);
+        if !python_home.is_empty() {
+            (api.set_python_home)(python_home_wide);
+        }
         (api.initialize_ex)(0);
     }
     // SAFETY: The resolved function has no preconditions.
@@ -220,7 +225,13 @@ pub(super) fn initialize(
     }
     let mut argv = [program_name_wide.cast_mut()];
     unsafe {
-        (api.set_argv)(1, argv.as_mut_ptr());
+        if update_path {
+            (api.set_argv)(1, argv.as_mut_ptr());
+        } else {
+            // Native sessions add the workspace after installing the runtime.
+            // Never search the executable directory, even during setup imports.
+            (api.set_argv_ex)(1, argv.as_mut_ptr(), 0);
+        }
         (api.set_signal)(libc::SIGPIPE, libc::SIG_IGN);
     }
     let mut slot = PYTHON_LIBRARY
@@ -358,12 +369,52 @@ pub(super) fn runtime_configured() -> Result<bool, String> {
         .configured)
 }
 
-pub(super) fn mark_runtime_configured() -> Result<(), String> {
+pub(super) fn mark_runtime_configured(sql: bool) -> Result<(), String> {
     let mut slot = PYTHON_LIBRARY
         .lock()
         .map_err(|_| "Python shared library state is unavailable")?;
     let library = slot.as_mut().ok_or("Python shared library is not loaded")?;
-    library.setup.mark_configured()
+    library.setup.mark_configured(sql)
+}
+
+pub(super) fn configure_native_environment(
+    configuration: &super::NativePython,
+) -> Result<(), String> {
+    let executable = serde_json::to_string(configuration)
+        .map_err(|error| format!("cannot encode native Python environment: {error}"))?;
+    api()?.with_gil(|api| unsafe {
+        let function = api.function(c"_mcp_console", c"configure_native_environment")?;
+        let executable = (api.unicode_from_string_and_size)(
+            executable.as_ptr().cast(),
+            executable.len() as isize,
+        );
+        if executable.is_null() {
+            return Err("cannot encode selected Python executable".into());
+        }
+        let result =
+            (api.call_function_obj_args)(function, executable, std::ptr::null_mut::<PyObject>());
+        (api.dec_ref)(executable);
+        if api.finish_setup(result)? {
+            Ok(())
+        } else {
+            Err("selected Python process setup failed".into())
+        }
+    })
+}
+
+pub(super) fn display_setup_exception() -> Result<(), String> {
+    let api = {
+        let slot = PYTHON_LIBRARY
+            .lock()
+            .map_err(|_| "Python shared library state is unavailable")?;
+        let library = slot.as_ref().ok_or("Python shared library is not loaded")?;
+        // Retained setup exceptions arise after the private runtime is installed.
+        if !library.setup.evaluator {
+            return Ok(());
+        }
+        library.api
+    };
+    api.with_gil(|api| api.call_unit(c"_mcp_console", c"display_setup_exception"))
 }
 
 pub(super) fn activate_environment(script: &str, executable: &str) -> Result<bool, String> {
@@ -866,6 +917,7 @@ impl PythonApi {
             set_python_home: unsafe { load_symbol(library, path, b"Py_SetPythonHome\0")? },
             initialize_ex: unsafe { load_symbol(library, path, b"Py_InitializeEx\0")? },
             set_argv: unsafe { load_symbol(library, path, b"PySys_SetArgv\0")? },
+            set_argv_ex: unsafe { load_symbol(library, path, b"PySys_SetArgvEx\0")? },
             set_signal: unsafe { load_symbol(library, path, b"PyOS_setsig\0")? },
             save_thread: unsafe { load_symbol(library, path, b"PyEval_SaveThread\0")? },
             restore_thread: unsafe { load_symbol(library, path, b"PyEval_RestoreThread\0")? },

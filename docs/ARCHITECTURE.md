@@ -230,14 +230,14 @@ It reports readiness, accepts complete cells and supported preparation operation
 The built-in worker's `worker::core` owns shared sideband state, command readiness, deferred operation messages, active cell language, resolver exchanges, output publication, and shutdown and failure state.
 Its cell state also suppresses R resolution during SQL callbacks.
 The `worker::coordinator` owns one message loop, preparation and cell dispatch, and completion reporting.
-It retains Python and SQL adapters alongside an optional `worker::r_integration` boundary for R event waiting, idle callbacks, graphics, and interrupt handling.
+It retains a Python adapter and an optional SQL adapter alongside an optional `worker::r_integration` boundary for R event waiting, idle callbacks, graphics, and interrupt handling.
 The `worker::input` module owns interactive stdin buffering and preserves unfinished input across operations.
 The `worker::interrupt` service owns native signal distribution, input wakeup setup, blocking native command waiting, and Python interrupt acknowledgment through startup-supplied state callbacks that do not enter an interpreter.
 Its native interrupt state and wait can run without initializing R; the ordinary startup installs R's pending and suspended state instead.
 These shared services neither access R globals directly nor evaluate R code.
 The `worker::embedded_r` adapter supplies the mixed runtime's interrupt-state callbacks and owns R initialization, interrupt checks and deferral, native error boundaries, event handling, graphics, and R console callbacks.
 Its REPL latch distinguishes submitted R source from interactive input; shared cell state identifies the enclosing language.
-R initialization remains eager, and managed SQL remains R-backed.
+When R is available, its initialization remains eager; managed SQL remains R-backed.
 
 Command readiness is separate from waiting: when no command is ready, the coordinator uses R's event-aware wait and services its idle callbacks before waiting again.
 Without R integration, it uses the native sideband, interrupt, and stdin-closure wait.
@@ -245,9 +245,9 @@ R retains the native unwind boundaries for its event and interpreter operations.
 Cell dispatch starts graphics before marking the cell active, clears the active cell after evaluation, finalizes graphics even after an evaluation error, then finishes managed input before the final idle turn and completion.
 Both R and Python cells use those R graphics hooks because Python can call R and create plots; SQL retains its existing exclusion.
 Idle event processing retains its own graphics and input cleanup ordering in the R adapter.
-Startup supplies the existing R session temporary directory to Python cache setup without changing its location or cleanup ownership.
+R-present startup supplies the existing R session temporary directory to Python cache setup without changing its location or cleanup ownership.
 
-The built-in worker embeds R on its main thread.
+When R is available, the built-in worker embeds it on its main thread.
 On Linux, it re-executes before R initialization with the selected `R_HOME/lib` first in `LD_LIBRARY_PATH`, preserving inherited library paths and its sideband endpoint.
 This lets native R packages resolve R's shared libraries even when that R installation is absent from the system linker cache.
 Its language adapters provide persistent Python and SQL within that worker process.
@@ -265,7 +265,15 @@ Reticulate continues to supply its other interoperability metadata and environme
 The Rust Python facade loads and retains that file-backed `libpython`, initializes CPython without holding its library-state lock through interpreter code, or attaches its handle if CPython was already initialized.
 Reticulate then attaches its conversion and event runtime to the running interpreter; Console calls the existing private cell evaluator directly through the CPython API.
 Native startup installs Console's stream, input, interrupt, and plot services after reticulate's competing hooks, then installs the private evaluator and SQL adapter and configures automatic import resolution through the retained CPython interface.
-The same setup accepts an absent resolver callback and a disabled reason from an R-independent caller; ordinary sessions still initialize R eagerly and use reticulate for selection and attachment.
+The same setup accepts an absent resolver callback and a disabled reason from an R-independent caller; R-present sessions initialize R eagerly and use reticulate for selection and attachment.
+Local runtime availability is captured at server startup in `src/local_runtime.rs` and passed through internal launch configuration to each worker.
+When R is absent, the server resolves the default Python manifest through the existing local host resolver, or selects PATH Python when uv is absent, and inspects that executable before MCP readiness.
+The session retains the managed result and inspected environment identity, independently of reticulate's user-selection variable.
+The same coordinator constructs an absent R integration, native Python runtime, and no R DBI backend.
+Native CPython path initialization follows the selected executable's virtualenv configuration; shared setup verifies its prefixes and configures child-process selection.
+Startup failures retain Python tracebacks on the startup diagnostic stream, and every coordinator return restores the Python thread before extension-library exit destructors.
+The native runner owns sandbox temporary storage; direct relay lifetimes own a private directory and retire it after the worker, including failed startup.
+Neither lifetime owns resolver cache removal.
 The retained library state records each completed installation step and marks setup configured only after the CPython configuration call succeeds, so an incomplete setup can retry without initializing the interpreter again.
 The native requirement owner calls Console's Python activation helper through that retained library; the helper runs the selected environment's activation script and completes process-environment setup.
 The R adapter still calls the Matplotlib setup helper through a narrow native entry point at the existing module-load and first-cell lifecycle points.
@@ -277,7 +285,7 @@ The worker's native signal handler wakes blocked input and marks interrupts for 
 Python acknowledgment respects R's suspended-interrupt state and clears accepted interrupts so nested calls do not deliver them twice.
 Reticulate's event polling remains active.
 
-Reticulate remains required for interpreter discovery and selection, automatic-resolution callbacks, object conversion, and cross-language and module-load integration.
+In R-present sessions, reticulate remains required for interpreter discovery and selection, automatic-resolution callbacks, object conversion, and cross-language and module-load integration.
 Console owns initialization of the selected interpreter and tracks completion of its private runtime setup in the retained library state.
 Both a first Python cell and Python use from R reach that native owner before reticulate attaches.
 If applying or serializing a fresh selection fails or is interrupted, the adapter restores the captured environment inputs.
@@ -521,7 +529,8 @@ The [relay protocol](RELAY_PROTOCOL.md) owns that ordering guarantee, and the [b
 Recording is a server responsibility and does not add messages to either private protocol.
 On the first `send` call, the server creates a private run directory under `.agents/console/sessions/` in its working directory.
 It appends tool calls and assembled results to `internal/events.jsonl`.
-The initial `session_started` event records whether dynamic environment resolution is available, and the Quarto projection derives its managed defaults from that capability.
+The initial `session_started` event records whether dynamic environment resolution is available.
+The Quarto projection uses that capability and the captured Python-only managed selection separately to declare initial requirements.
 For SSH sessions, it also records `target.transport` and the initial remote `target.workspace` separately from the local `working_directory` that owns the recording.
 Docker session metadata additionally records compute kind, requested/resolved image identity, and container workspace; generation events identify created containers.
 Docker Sandbox metadata records its compute provider, template digest, CLI version, target workspace, and shares; generation events identify VM names and UUIDs separately from container IDs.
@@ -541,6 +550,7 @@ It is a chronological call ledger: a timed-out cell, later polls, and eventual r
 The source-only Quarto document contains the source from calls with exactly one submitted R, Python, or SQL field in call order; it omits stdin, options, results, errors, polls, and artifacts.
 It includes qualifying source from rejected calls and failed evaluations.
 Its `ir` front matter declares the managed built-in R and Python requirements followed by cumulative explicit declarations from recorded calls.
+Python-only managed sessions declare NumPy and pandas without R defaults or rejected live requirements.
 Bare sessions omit both managed defaults and rejected requirement payloads.
 It does not declare a Python version, so `ir render transcript.qmd` uses reticulate's default managed Python selection.
 The declarations are submitted inputs, not a lockfile or an exact record of successful retained and automatically inferred requirements.

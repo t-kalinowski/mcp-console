@@ -1,0 +1,6 @@
+---
+stderr: |
+  managed Python version resolution failed with exit status: 2: error: invalid value 'invalid-console-acceptance-preference' for '--python-preference <PYTHON_PREFERENCE>'
+    [possible values: only-managed, managed, system, only-system]
+
+  For more information, try '--help'.

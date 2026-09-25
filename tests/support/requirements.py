@@ -141,9 +141,22 @@ LINUX_NATIVE = Requirement(
     "requires Linux ELF loading and seccomp",
 )
 
+NON_UTF8_FILENAMES = Requirement(
+    "non-UTF-8 filenames",
+    sys.platform == "linux",
+    "requires Linux; macOS rejects non-UTF-8 filenames",
+)
+
 
 LANDLOCK = Requirement(
     "Landlock filesystem enforcement",
     landlock_available(),
     "requires Landlock with truncate enforcement (ABI 3 or later)",
+)
+
+
+UNPRIVILEGED = Requirement(
+    "unprivileged filesystem access",
+    os.geteuid() != 0,
+    "requires an account without root permission bypass",
 )

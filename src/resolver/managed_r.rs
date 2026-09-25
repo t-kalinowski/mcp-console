@@ -188,13 +188,6 @@ impl ManagedR {
     }
 }
 
-pub(crate) fn detect_r_bootstrap(
-    python: &super::ManagedPythonResolverConfiguration,
-    on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
-) -> Result<Option<ManagedRBootstrap>, String> {
-    discover(python, on_started).map(|(bootstrap, _)| bootstrap)
-}
-
 pub(crate) fn discover(
     python: &super::ManagedPythonResolverConfiguration,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
