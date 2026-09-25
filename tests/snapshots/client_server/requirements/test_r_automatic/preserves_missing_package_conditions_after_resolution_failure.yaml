@@ -55,6 +55,10 @@ result:
         <condition classes, messages, calls, and fields identical to live
         Rscript>
   isError: false
+transcript_normalization:
+  target: result.content[0].text
+  reference: same source in live Rscript --vanilla
+  comparison: exact equality of printed condition details
 ---
 send:
   control: restart
@@ -121,6 +125,10 @@ result:
         <condition classes, messages, calls, and fields identical to live
         Rscript>
   isError: false
+transcript_normalization:
+  target: result.content[0].text
+  reference: same source in live Rscript --vanilla
+  comparison: exact equality of printed condition details
 ---
 send:
   requirements:

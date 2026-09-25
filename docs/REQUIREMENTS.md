@@ -112,7 +112,8 @@ Prepared packages and extensions still must be attached, imported, or loaded by 
 The built-in R worker resolves a missing plain package name when evaluated code reaches `library()`, `require()`, `requireNamespace()`, `loadNamespace()`, `::`, or `:::`.
 It prepares missing `library()` packages before running R's original body in the same call frame, preserving the caller's expression in errors.
 This preparation precedes namespace loading because `library()` can report a missing package in its `find.package()` check.
-For `base::loadNamespace`, it runs R's original formals and body in a private lexical environment that intercepts the existing `retry_loadNamespace` restart, makes the package available, and lets R's implementation continue.
+For `base::loadNamespace`, it runs R's original formals and body in a private lexical environment that prepares the package at the existing retryable missing-package path.
+If preparation succeeds, namespace loading continues; otherwise R's original `withRestarts()` body signals the original condition with its native call chain.
 Preserving the original body keeps packages that inspect `loadNamespace()` compatible.
 `require()` delegates to `library()`, `requireNamespace()` delegates to `loadNamespace()`, and the namespace operators use `loadNamespace()` when needed.
 

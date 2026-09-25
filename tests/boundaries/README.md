@@ -125,6 +125,14 @@ The response's `result` or `error`, when present, appears directly at the docume
 Some cases add `transcript_normalization` after the response.
 This is structured harness metadata, never a field or text observed at the captured boundary.
 Its `target` identifies the normalized value, and its remaining fields describe information omitted or replaced in the snapshot.
+
+The R missing-package fidelity cases compare condition classes, fields, and complete error output against the same source in a live `Rscript --vanilla` process.
+Unhandled reference errors exit naturally; only Rscript's `Execution halted` footer is removed because Console remains running after a cell error.
+The Console display cases enable `showErrorCalls` to match Rscript's default, so call chains remain part of the exact comparison.
+After equality succeeds, these cases record the live comparison with `transcript_normalization` metadata instead of fixing the host R version's wording in YAML.
+An equality failure reports both complete outputs.
+This is a narrow exception to preserving literal runtime errors in snapshots: native R behavior, rather than one platform or R version's output, is the contract.
+
 The initialization, initialized notification, and tool-list exchange have full references in `client_server/server/test_tools::initializes_and_lists_tools`.
 Its primary snapshot records the sandboxed handshake; its `.direct.yaml` companion records the direct handshake.
 The `.bare.yaml` and `.bare.direct.yaml` companions preserve the corresponding interfaces when resolver commands are unavailable.

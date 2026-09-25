@@ -9,7 +9,6 @@ from pathlib import Path
 
 from support.client import McpClient
 from support.execution import Execution
-from support.normalization import code
 
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
@@ -34,25 +33,18 @@ def r_test_environment() -> tuple[dict[str, str], Path]:
 
 
 def reference_r_error(environment: dict[str, str], source: str) -> str:
-    # Match interactive R's error display, including Console's embedded R.
-    # Keep the native formatter, but omit batch call traces and "Execution halted".
-    # fmt: r
-    setup = code("""
-        options(
-          showErrorCalls = FALSE,
-          error = function() quit(save = "no", status = 1L, runLast = FALSE)
-        )
-        """)
     result = subprocess.run(
         [Path(environment["R_HOME"]) / "bin/Rscript", "--vanilla", "-"],
-        input=setup + "\n" + source,
+        input=source,
         env=environment,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
     )
     assert result.returncode == 1, result
-    return result.stdout
+    # The persistent Console worker does not exit when an R cell errors.
+    assert result.stdout.endswith("Execution halted\n"), result.stdout
+    return result.stdout.removesuffix("Execution halted\n")
 
 
 def build_r_input_handler(

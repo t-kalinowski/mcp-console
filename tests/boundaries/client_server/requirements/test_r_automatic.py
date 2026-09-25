@@ -158,6 +158,11 @@ def send_and_compare_r_error(
     client.transcript[-1]["result"]["content"][0]["text"] = (
         "<error output identical to live Rscript>"
     )
+    client.transcript[-1]["transcript_normalization"] = {
+        "target": "result.content[0].text",
+        "reference": "same source in live Rscript --vanilla",
+        "comparison": "exact equality, including Calls; excluding Execution halted",
+    }
 
 
 @executions(DIRECT, SANDBOXED)
@@ -479,6 +484,11 @@ def test_preserves_missing_package_conditions_after_resolution_failure(
                 client.transcript[-1]["result"]["content"][0]["text"] = (
                     "<condition classes, messages, calls, and fields identical to live Rscript>"
                 )
+                client.transcript[-1]["transcript_normalization"] = {
+                    "target": "result.content[0].text",
+                    "reference": "same source in live Rscript --vanilla",
+                    "comparison": "exact equality of printed condition details",
+                }
                 runs = ir_run_records(record)[baseline:]
                 assert len(runs) == 7, runs
                 assert all("notloaded.pkg" in ir_requirements(run) for run in runs)
@@ -502,6 +512,7 @@ def test_matches_base_r_missing_package_error_display(
         )
         with McpClient(binary, execution.serve(), environment) as client:
             client.initialize_and_list_tools()
+            client.send(r="options(showErrorCalls = TRUE)")
             for source in (
                 "library(notloaded.pkg)",
                 "base::library(notloaded.pkg)",
@@ -511,6 +522,8 @@ def test_matches_base_r_missing_package_error_display(
                 "notloaded.pkg:::missing",
                 'package <- "notloaded.pkg"; library(package, character.only = TRUE)',
                 "loader <- library; loader(notloaded.pkg)",
+                "lookup <- function() library(notloaded.pkg); lookup()",
+                'lookup <- function() loadNamespace("notloaded.pkg"); lookup()',
             ):
                 send_and_compare_r_error(client, environment, source)
             return client.finish()
@@ -533,6 +546,7 @@ def test_does_not_resolve_unreached_package_loads(
         assert last_result_text(client) == "[prepared]"
         baseline = len(ir_run_records(record))
 
+        client.send(r="options(showErrorCalls = TRUE)")
         client.send(r=f"if (FALSE) library({missing}); 42L")
         assert last_result_text(client) == "[1] 42\n"
         assert len(ir_run_records(record)) == baseline

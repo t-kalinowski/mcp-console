@@ -12,6 +12,7 @@ base::local(
 
     original_library <- base::library
     original_load_namespace <- base::loadNamespace
+    original_with_restarts <- base::withRestarts
 
     is_plain_package_name <- function(package) {
       base::is.character(package) &&
@@ -151,39 +152,51 @@ base::local(
 
     # Keep R's loadNamespace syntax intact for packages that inspect its body.
     # Intercept only the retryable missing-package path through lexical scope.
-    managed_with_restarts <- function(expr, ...) {
-      load_namespace_frame <- base::parent.frame()
-      base::withCallingHandlers(
-        base::withRestarts(expr, ...),
-        packageNotFoundError = function(condition) {
-          restart <- base::findRestart(
-            "retry_loadNamespace",
-            condition
-          )
-          partial <- base::get0(
-            "partial",
-            envir = load_namespace_frame,
-            inherits = FALSE,
-            ifnotfound = TRUE
-          )
-          if (
-            base::is.null(restart) ||
-              !base::is.null(condition$lib.loc) ||
-              !base::identical(partial, FALSE) ||
-              !is_plain_package_name(condition$package)
-          ) {
-            return(base::invisible(NULL))
-          }
+    prepare_namespace_package <- function(load_namespace_frame) {
+      condition <- base::get("cond", load_namespace_frame, inherits = FALSE)
+      partial <- base::get("partial", load_namespace_frame, inherits = FALSE)
+      if (
+        !base::is.null(condition$lib.loc) ||
+          !base::identical(partial, FALSE) ||
+          !is_plain_package_name(condition$package)
+      ) {
+        return(FALSE)
+      }
 
-          outcome <- ensure_r_package(condition$package)
-          if (base::identical(outcome$kind, "failed")) {
-            signal_resolution_failure(outcome)
-          }
-          if (package_available(condition$package)) {
-            base::invokeRestart(restart)
-          }
-          base::invisible(NULL)
-        }
+      outcome <- ensure_r_package(condition$package)
+      if (base::identical(outcome$kind, "failed")) {
+        signal_resolution_failure(outcome)
+      }
+      package_available(condition$package)
+    }
+
+    make_managed_with_restarts <- function() {
+      restart_environment <- base::new.env(
+        parent = base::environment(original_with_restarts)
+      )
+      base::assign(
+        ".mcp_console_prepare_namespace",
+        prepare_namespace_package,
+        envir = restart_environment
+      )
+      base::lockEnvironment(restart_environment, bindings = TRUE)
+      managed_with_restarts <- base::`environment<-`(
+        original_with_restarts,
+        restart_environment
+      )
+      # Preparation returns before base signals the condition, preserving its
+      # original restart frames and Calls output when the package stays missing.
+      base::`body<-`(
+        managed_with_restarts,
+        value = base::substitute(
+          {
+            if (.mcp_console_prepare_namespace(base::parent.frame())) {
+              return(NULL)
+            }
+            original_body
+          },
+          base::list(original_body = base::body(original_with_restarts))
+        )
       )
     }
 
@@ -193,7 +206,7 @@ base::local(
       )
       base::assign(
         "withRestarts",
-        managed_with_restarts,
+        make_managed_with_restarts(),
         envir = load_namespace_environment
       )
 

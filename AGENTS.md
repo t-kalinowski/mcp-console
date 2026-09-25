@@ -277,6 +277,7 @@ Keep these invariants intact:
   Do not use busy loops or short fixed-interval polling when the state transition can notify a condition variable, descriptor, or platform event.
 - Preserve client-visible runtime output in transcript snapshots, including complete errors and tracebacks.
   Normalize only incidental values such as run-specific temporary paths; do not replace behavior with summaries or placeholders.
+  Native R fidelity cases may record a live-reference comparison after asserting exact equality with the same source in `Rscript --vanilla`, including error calls and condition classes; see `tests/boundaries/README.md`.
   Synthetic stress repetitions may use lossless text-and-count notation after exact full-response assertions; see `tests/support/evidence.py`.
 - Keep embedded R, Python, SQL, and shell fixture programs as readable multiline strings.
   Use escapes such as `\n` only when the character is data.
