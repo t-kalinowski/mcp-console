@@ -4,7 +4,7 @@ import json
 import os
 import sys
 import tempfile
-from contextlib import closing
+from contextlib import ExitStack, closing
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -29,6 +29,7 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, requires
 from support.suites import run_this_suite
+from boundaries.client_server._harness import ZodFixtureControl
 
 TEXT_BUDGET = 8 * 1024
 
@@ -261,9 +262,15 @@ def test_preserves_active_prompt_and_state_after_text_flood(
     binary: Path, execution: Execution
 ) -> Transcript:
     worker = Path(__file__).resolve().parents[3] / "fixtures/zod"
-    with McpClient(binary, execution.serve("--worker", str(worker))) as client:
+    environment = os.environ.copy()
+    with ZodFixtureControl() as control, ExitStack() as resources:
+        control.configure(environment)
+        client = resources.enter_context(
+            McpClient(binary, execution.serve("--worker", str(worker)), environment)
+        )
         client.initialize_and_list_tools()
         client.send(r="preview prompt")
+        control.connect(client)
         text = last_tool_text(client)
         assert len(text.encode()) <= TEXT_BUDGET
         assert text.startswith("prompt output head\n")
@@ -279,8 +286,12 @@ def test_preserves_active_prompt_and_state_after_text_flood(
             pattern=CONTROL_OMISSION,
         )
         normalize_preview_paths(client)
-        client.send(stdin="answer\n")
-        assert last_tool_text(client) == "received answer\n"
+        client.send(stdin="answer\n", timeout_ms=0)
+        assert last_tool_text(client) == "\n[waiting for stdin]"
+        control.send_control(0, "read_preview_input")
+        control.wait_for(0, "preview_input_processed")
+        client.send()
+        assert last_tool_text(client) == "received answer\n", last_tool_text(client)
         compact_previews(client, "x", "y", "z", "s", "p", "ab", "�")
         return client.finish()
 

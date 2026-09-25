@@ -145,7 +145,7 @@ def record_resolved_r_library(environment: dict[str, str], directory: Path) -> N
 
 def resolver_interrupt_permission_environment(
     temporary_path: Path,
-) -> tuple[dict[str, str], FifoCheckpoint, FifoCheckpoint, Path, Path]:
+) -> tuple[dict[str, str], FifoCheckpoint, FifoCheckpoint, Path, Path, Path]:
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
     fake_bin = temporary_path / "bin"
@@ -174,10 +174,13 @@ def resolver_interrupt_permission_environment(
     environment["PATH"] = os.pathsep.join((str(fake_bin), path))
     environment["TMPDIR"] = str(temporary_path)
     denied_interrupt = temporary_path / "resolver-sigint-denied"
+    resolver_watches = temporary_path / "resolver-watches"
+    resolver_watches.mkdir()
     resolver_group = temporary_path / "resolver-group"
     resolver_started = FifoCheckpoint.create(temporary_path / "resolver-started")
     resolver_lifetime = FifoCheckpoint.create(temporary_path / "resolver-lifetime")
     environment["MCP_CONSOLE_TEST_DENIED_SIGINT"] = str(denied_interrupt)
+    environment["MCP_CONSOLE_TEST_RESOLVER_WATCHES"] = str(resolver_watches)
     environment["MCP_CONSOLE_TEST_RESOLVER_GROUP"] = str(resolver_group)
     environment["MCP_CONSOLE_TEST_RESOLVER_STARTED"] = str(resolver_started.path)
     environment["MCP_CONSOLE_TEST_RESOLVER_LIFETIME"] = str(resolver_lifetime.path)
@@ -192,6 +195,7 @@ def resolver_interrupt_permission_environment(
         resolver_lifetime,
         resolver_group,
         denied_interrupt,
+        resolver_watches,
     )
 
 
