@@ -577,6 +577,12 @@ def _mcp_console_activate_process_environment(
 
 _mcp_console = _types.ModuleType("_mcp_console")
 
+# Native startup configures the import finder through CPython. Reticulate
+# supplies its converted callback without executing Python source here.
+# Keep the embedded-source lines below stable: public traceback transcripts
+# record their line numbers, including the SQL dispatch wrapper following
+# this setup boundary.
+
 
 def _mcp_console_without_automatic_resolution(
     operation,
@@ -597,6 +603,7 @@ _mcp_console.configure_import_resolution = _mcp_console_import_finder.configure
 _mcp_console.without_automatic_resolution = _mcp_console_without_automatic_resolution
 _mcp_console.eval_cell = _mcp_console_eval_cell
 _sys.modules[_mcp_console.__name__] = _mcp_console
+# Native startup calls this module directly instead of using a dispatcher.
 _mcp_console_configure_psutil()
 
 
