@@ -38,8 +38,11 @@ static int deny_killpg(pid_t process_group, int signal) {
 static int observe_waitid(idtype_t type, id_t id, siginfo_t *info, int options) {
     const char *directory = getenv("MCP_CONSOLE_TEST_RESOLVER_WATCHES");
     if (directory != NULL && type == P_PID && (options & WNOWAIT) != 0) {
-        // The exit watcher starts after the server marks this child active.
-        // A child-side marker can precede that registration during spawn.
+        // watch_exit marks the child active before starting this watcher.
+        // This alone does not prove stop-handle registration. These custom-worker
+        // tests match the later ir run PID: discovery has already consumed
+        // on_started and registered the shared ResolverProcess stop handle
+        // before the preceding ir --version call returns.
         char path[PATH_MAX];
         int length = snprintf(path, sizeof(path), "%s/%u", directory, (unsigned)id);
         if (length < 0 || (size_t)length >= sizeof(path)) _exit(121);
