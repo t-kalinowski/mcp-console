@@ -641,7 +641,9 @@ def _mcp_console_configure_native_environment(
 ) -> None:
     expected = _json.loads(configuration)
     for name in ("prefix", "exec_prefix", "base_prefix", "base_exec_prefix"):
-        if getattr(_sys, name) != expected[name]:
+        # Framework launchers and embedding can retain different spellings of
+        # the same directory (for example /var and /private/var on macOS).
+        if _os.path.realpath(getattr(_sys, name)) != _os.path.realpath(expected[name]):
             raise RuntimeError(
                 f"embedded Python {name} differs from the selected environment: "
                 f"{getattr(_sys, name)!r} != {expected[name]!r}"

@@ -605,7 +605,7 @@ def test_inspection_excludes_workspace_and_pythonpath(
 
 def failed_native_startup(binary: Path, execution: Execution) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
-        workspace = Path(directory)
+        workspace = Path(directory).resolve()
         probe = build_interposer(workspace, "python_exit_state")
         venv = workspace / "environment"
         subprocess.run(
@@ -686,3 +686,47 @@ def test_startup_failure_preserves_python_exception(
         diagnostic
     )
     return records
+
+
+@executions(DIRECT, SANDBOXED)
+def test_uses_environment_through_directory_alias(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        workspace = Path(directory)
+        original = workspace / "original"
+        original.mkdir()
+        venv = original / "environment"
+        subprocess.run(
+            [sys.executable, "-m", "venv", "--without-pip", venv],
+            check=True,
+            capture_output=True,
+        )
+        alias = workspace / "alias"
+        alias.symlink_to(original, target_is_directory=True)
+        env = environment(alias / "environment/bin")
+        env["MCP_CONSOLE_TEST_ENVIRONMENT"] = str(venv)
+        with McpClient(binary, execution.serve(), env) as client:
+            client.initialize_and_list_tools()
+            client.send(
+                # fmt: python
+                python=code("""
+                    import os
+                    import sys
+                    import subprocess
+
+                    assert "RETICULATE_PYTHON" not in os.environ
+                    assert os.path.samefile(sys.prefix, os.environ["MCP_CONSOLE_TEST_ENVIRONMENT"])
+                    assert os.path.samefile(sys.exec_prefix, sys.prefix)
+                    child = subprocess.check_output(
+                        [sys.executable, "-c", "import sys; print(sys.prefix)"], text=True
+                    ).strip()
+                    assert os.path.samefile(child, sys.prefix)
+                    print("selected environment retained through directory alias")
+                    """),
+            )
+            assert (
+                last_result_text(client)
+                == "selected environment retained through directory alias\n"
+            ), client.transcript[-1]
+            return client.finish()[3:]
