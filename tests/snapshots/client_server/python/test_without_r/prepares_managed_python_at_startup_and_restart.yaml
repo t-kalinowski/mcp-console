@@ -41,7 +41,9 @@ result:
   isError: false
 ---
 send:
-  python: assert id(identity) == identity_id; print('same worker')
+  python: |
+    assert id(identity) == identity_id
+    print("same worker")
 result:
   content:
     - type: text
@@ -53,7 +55,9 @@ send:
   requirements:
     python:
       - py-yaml12
-  python: assert id(identity) == identity_id; print('no-op cell')
+  python: |
+    assert id(identity) == identity_id
+    print("no-op cell")
 result:
   content:
     - type: text
@@ -62,7 +66,9 @@ result:
   isError: false
 ---
 send:
-  python: input('old worker> '); open('old-worker-consumed-input', 'w').close()
+  python: |
+    input("old worker> ")
+    open("old-worker-consumed-input", "w").close()
 result:
   content:
     - type: text
@@ -94,7 +100,9 @@ result:
   isError: false
 ---
 send:
-  python: assert 'identity' not in globals(); print(input())
+  python: |
+    assert "identity" not in globals()
+    print(input())
 result:
   content:
     - type: text
@@ -140,7 +148,10 @@ result:
   isError: false
 ---
 send:
-  python: import os; os._exit(47)
+  python: |
+    import os
+
+    os._exit(47)
 result:
   content:
     - type: text
@@ -185,7 +196,10 @@ send:
     python:
       - more-itertools
       - py-yaml12
-  python: import yaml12, more_itertools; print('retained restart')
+  python: |
+    import yaml12, more_itertools
+
+    print("retained restart")
 result:
   content:
     - type: text
@@ -204,7 +218,10 @@ send:
   requirements:
     python:
       - py-yaml12
-  python: import yaml12; print('startup package available')
+  python: |
+    import yaml12
+
+    print("startup package available")
 result:
   content:
     - type: text
@@ -240,7 +257,9 @@ result:
   isError: false
 ---
 send:
-  python: assert id(identity) == identity_id; print('same worker')
+  python: |
+    assert id(identity) == identity_id
+    print("same worker")
 result:
   content:
     - type: text
@@ -252,7 +271,9 @@ send:
   requirements:
     python:
       - py-yaml12
-  python: assert id(identity) == identity_id; print('no-op cell')
+  python: |
+    assert id(identity) == identity_id
+    print("no-op cell")
 result:
   content:
     - type: text
@@ -261,7 +282,9 @@ result:
   isError: false
 ---
 send:
-  python: input('old worker> '); open('old-worker-consumed-input', 'w').close()
+  python: |
+    input("old worker> ")
+    open("old-worker-consumed-input", "w").close()
 result:
   content:
     - type: text
@@ -277,7 +300,9 @@ send:
       - more-itertools
   stdin: |
     replacement input
-  python: assert 'identity' not in globals(); print(input())
+  python: |
+    assert "identity" not in globals()
+    print(input())
 result:
   content:
     - type: text
@@ -332,7 +357,10 @@ result:
   isError: false
 ---
 send:
-  python: import os; os._exit(47)
+  python: |
+    import os
+
+    os._exit(47)
 result:
   content:
     - type: text
@@ -377,7 +405,10 @@ send:
     python:
       - more-itertools
       - py-yaml12
-  python: import yaml12, more_itertools; print('retained restart')
+  python: |
+    import yaml12, more_itertools
+
+    print("retained restart")
 result:
   content:
     - type: text

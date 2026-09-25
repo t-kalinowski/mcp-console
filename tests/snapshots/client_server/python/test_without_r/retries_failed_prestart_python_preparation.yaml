@@ -48,7 +48,10 @@ result:
   isError: false
 ---
 send:
-  python: import yaml12; print(input('prepared> '))
+  python: |
+    import yaml12
+
+    print(input("prepared> "))
 result:
   content:
     - type: text
@@ -75,7 +78,8 @@ send:
   requirements:
     python:
       - py-yaml12
-  python: raise AssertionError('failed preparation ran code')
+  python: |
+    raise AssertionError("failed preparation ran code")
   stdin: |
     rejected input
 result:
@@ -100,7 +104,8 @@ send:
   requirements:
     python:
       - py-yaml12
-  python: raise AssertionError('failed preparation ran code')
+  python: |
+    raise AssertionError("failed preparation ran code")
   stdin: |
     rejected input
 result:
@@ -122,7 +127,10 @@ result:
   isError: false
 ---
 send:
-  python: import yaml12; print(input('prepared> '))
+  python: |
+    import yaml12
+
+    print(input("prepared> "))
 result:
   content:
     - type: text

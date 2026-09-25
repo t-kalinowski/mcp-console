@@ -170,7 +170,7 @@ impl Client {
             {
                 // Inspect the resolved candidate before retirement. Both launch
                 // configuration and manifest stay provisional in this clone.
-                *inspected = Box::new(self.inspect_managed_python(generation, &selected)?);
+                **inspected = self.inspect_managed_python(generation, &selected)?;
             }
             environment.python = Some(PythonEnvironment::Managed { selected, resolver });
         }

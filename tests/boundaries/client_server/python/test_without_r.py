@@ -87,7 +87,12 @@ def preparation_records(records: Transcript, root: Path) -> Transcript:
                 .replace(str(root.resolve()), "<preparation>")
                 .replace(str(root), "<preparation>")
             )
-            if text.startswith("managed Python resolution failed:"):
+            if text.startswith(
+                (
+                    "managed Python resolution failed:",
+                    "[managed Python resolution failed:",
+                )
+            ):
                 text = normalize_python_resolution_error(text)
             content["text"] = text
     return records
@@ -110,7 +115,14 @@ def test_prepares_managed_python_at_startup_and_restart(
                 client.send(
                     requirements={"python": ["py-yaml12"]},
                     **(
-                        {"python": "import yaml12; print('startup package available')"}
+                        {
+                            # fmt: python
+                            "python": code("""
+                                import yaml12
+
+                                print("startup package available")
+                                """)
+                        }
                         if with_code
                         else {}
                     ),
@@ -140,16 +152,28 @@ def test_prepares_managed_python_at_startup_and_restart(
                 client.send(requirements={"python": ["py-yaml12", "numpy"]})
                 assert last_result_text(client) == "[prepared]"
                 client.send(
-                    python="assert id(identity) == identity_id; print('same worker')"
+                    # fmt: python
+                    python=code("""
+                        assert id(identity) == identity_id
+                        print("same worker")
+                        """)
                 )
                 assert last_result_text(client) == "same worker\n"
                 client.send(
                     requirements={"python": ["py-yaml12"]},
-                    python="assert id(identity) == identity_id; print('no-op cell')",
+                    # fmt: python
+                    python=code("""
+                        assert id(identity) == identity_id
+                        print("no-op cell")
+                        """),
                 )
                 assert last_result_text(client) == "no-op cell\n"
                 client.send(
-                    python="input('old worker> '); open('old-worker-consumed-input', 'w').close()"
+                    # fmt: python
+                    python=code("""
+                        input("old worker> ")
+                        open("old-worker-consumed-input", "w").close()
+                        """)
                 )
                 assert "[waiting for stdin]" in last_result_text(client)
                 uv.symlink_to(shutil.which("uv"))
@@ -158,7 +182,13 @@ def test_prepares_managed_python_at_startup_and_restart(
                     requirements={"python": ["more-itertools"]},
                     stdin="replacement input\n",
                     **(
-                        {"python": "assert 'identity' not in globals(); print(input())"}
+                        {
+                            # fmt: python
+                            "python": code("""
+                                assert "identity" not in globals()
+                                print(input())
+                                """)
+                        }
                         if with_code
                         else {}
                     ),
@@ -168,7 +198,11 @@ def test_prepares_managed_python_at_startup_and_restart(
                 )
                 if not with_code:
                     client.send(
-                        python="assert 'identity' not in globals(); print(input())"
+                        # fmt: python
+                        python=code("""
+                            assert "identity" not in globals()
+                            print(input())
+                            """)
                     )
                 assert "replacement input\n" in last_result_text(client)
                 assert not (workspace / "old-worker-consumed-input").exists()
@@ -176,7 +210,14 @@ def test_prepares_managed_python_at_startup_and_restart(
                 uv.unlink()
                 for control in ({}, {"control": "restart"}, {"crash": True}):
                     if control.pop("crash", False):
-                        client.send(python="import os; os._exit(47)")
+                        client.send(
+                            # fmt: python
+                            python=code("""
+                                import os
+
+                                os._exit(47)
+                                """)
+                        )
                         assert "status 47" in last_result_text(client), (
                             client.transcript[-1]
                         )
@@ -201,7 +242,12 @@ def test_prepares_managed_python_at_startup_and_restart(
                 client.send(
                     control="restart",
                     requirements={"python": ["more-itertools", "py-yaml12"]},
-                    python="import yaml12, more_itertools; print('retained restart')",
+                    # fmt: python
+                    python=code("""
+                        import yaml12, more_itertools
+
+                        print("retained restart")
+                        """),
                 )
                 assert "retained restart\n" in last_result_text(client), (
                     client.transcript[-1]
@@ -230,7 +276,12 @@ def test_failed_managed_preparation_preserves_worker_and_input(
             with McpClient(binary, execution.serve(), env, root) as client:
                 client.initialize_and_list_tools()
                 client.send(
-                    python="identity = object(); identity_id = id(identity); 42",
+                    # fmt: python
+                    python=code("""
+                        identity = object()
+                        identity_id = id(identity)
+                        42
+                        """),
                     stdin="retained input\n",
                 )
                 assert last_result_text(client) == "42\n"
@@ -251,7 +302,10 @@ def test_failed_managed_preparation_preserves_worker_and_input(
                             stdin="must not reach old worker\n",
                             **(
                                 {
-                                    "python": "raise AssertionError('failed restart ran code')"
+                                    # fmt: python
+                                    "python": code("""
+                                        raise AssertionError("failed restart ran code")
+                                        """)
                                 }
                                 if with_code
                                 else {}
@@ -280,7 +334,11 @@ def test_failed_managed_preparation_preserves_worker_and_input(
                         )
                         assert expected in text, response
                         client.send(
-                            python="assert id(identity) == identity_id; print('objects intact')"
+                            # fmt: python
+                            python=code("""
+                                assert id(identity) == identity_id
+                                print("objects intact")
+                                """)
                         )
                         assert last_result_text(client) == "objects intact\n"
                 before = (root / "resolutions.jsonl").read_text()
@@ -288,7 +346,10 @@ def test_failed_managed_preparation_preserves_worker_and_input(
                     {"requirements": {"python": ["py-yaml12"]}},
                     {
                         "requirements": {"python": ["py-yaml12"]},
-                        "python": "identity = None",
+                        # fmt: python
+                        "python": code("""
+                            identity = None
+                            """),
                         "stdin": "rejected live input\n",
                     },
                     {
@@ -302,17 +363,31 @@ def test_failed_managed_preparation_preserves_worker_and_input(
                     response = client.send(**request)
                     assert response.get("isError", True), response
                 assert (root / "resolutions.jsonl").read_text() == before
-                client.send(python="assert id(identity) == identity_id; print(input())")
+                client.send(
+                    # fmt: python
+                    python=code("""
+                        assert id(identity) == identity_id
+                        print(input())
+                        """)
+                )
                 assert (
                     last_result_text(client)
                     == '[input requested: ""]\nretained input\n'
                 ), client.transcript[-1]
-                client.send(python="print(input('remaining> '))")
+                client.send(
+                    # fmt: python
+                    python=code("""
+                        print(input("remaining> "))
+                        """)
+                )
                 assert "[waiting for stdin]" in last_result_text(client)
                 client.send(
                     control="interrupt",
                     requirements={"python": ["py-yaml12"]},
-                    python="identity = None",
+                    # fmt: python
+                    python=code("""
+                        identity = None
+                        """),
                     stdin="rejected interrupt input\n",
                 )
                 assert client.transcript[-1]["result"]["isError"], client.transcript[-1]
@@ -331,7 +406,12 @@ def test_failed_managed_preparation_preserves_worker_and_input(
                 client.send(
                     control="restart",
                     requirements={"python": ["py-yaml12"]},
-                    python="import yaml12; print('accepted')",
+                    # fmt: python
+                    python=code("""
+                        import yaml12
+
+                        print("accepted")
+                        """),
                 )
                 assert "accepted\n" in last_result_text(client), client.transcript[-1]
                 assert (root / "resolutions.jsonl").read_text() != before
@@ -370,7 +450,10 @@ def test_retries_failed_prestart_python_preparation(
                         requirements={"python": ["py-yaml12"]},
                         **(
                             {
-                                "python": "raise AssertionError('failed preparation ran code')",
+                                # fmt: python
+                                "python": code("""
+                                    raise AssertionError("failed preparation ran code")
+                                    """),
                                 "stdin": "rejected input\n",
                             }
                             if with_code
@@ -383,7 +466,14 @@ def test_retries_failed_prestart_python_preparation(
                 (root / "mode").write_text("success")
                 client.send(requirements={"python": ["py-yaml12"]})
                 assert last_result_text(client) == "[prepared]"
-                client.send(python="import yaml12; print(input('prepared> '))")
+                client.send(
+                    # fmt: python
+                    python=code("""
+                        import yaml12
+
+                        print(input("prepared> "))
+                        """)
+                )
                 assert "[waiting for stdin]" in last_result_text(client), (
                     client.transcript[-1]
                 )
@@ -418,11 +508,20 @@ def test_shutdown_cancels_sans_r_python_preparation(
                 with McpClient(binary, execution.serve(), env, root) as client:
                     client.initialize_and_list_tools()
                     if restart:
-                        client.send(python="retained = 42; retained")
+                        client.send(
+                            # fmt: python
+                            python=code("""
+                                retained = 42
+                                retained
+                                """)
+                        )
                         assert last_result_text(client) == "42\n"
                     client.start_send(
                         requirements={"python": ["py-yaml12"]},
-                        python="raise AssertionError('cancelled preparation ran code')",
+                        # fmt: python
+                        python=code("""
+                            raise AssertionError("cancelled preparation ran code")
+                            """),
                         **({"control": "restart"} if restart else {}),
                     )
                     started.wait("resolver entered before input closure")
