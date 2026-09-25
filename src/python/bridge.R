@@ -10,10 +10,6 @@ base::local(
     )
     # Python 3.9 and older are intentionally outside the bridge contract.
     minimum_python <- base::numeric_version("3.10")
-    # Import-resolver registration still converts its R callback through
-    # reticulate without adding dispatcher names to the user's globals.
-    python_dispatch <-
-      "(lambda: None).__builtins__['_mcp_console_dispatch']()"
     pending_import_resolution <- NULL
     requirements_adapter <- NULL
     `%||%` <- function(x, y) if (is.null(x)) y else x
@@ -368,14 +364,18 @@ base::local(
       invisible()
     }
 
-    initialize_python_runtime <- function(strict = FALSE) {
-      python_config <- local({
+    attached_python_config <- function() {
+      local({
         # Python-first selection already delivered this callback before
         # discovery. Reticulate's attachment must not deliver it again.
         previous_options <- options(reticulate.python.beforeInitialized = NULL)
         on.exit(options(previous_options), add = TRUE)
         reticulate::py_config()
       })
+    }
+
+    initialize_python_runtime <- function(strict = FALSE) {
+      python_config <- attached_python_config()
       if (python_config$version < minimum_python) {
         if (!strict) {
           return(invisible(FALSE))
@@ -392,33 +392,22 @@ base::local(
       if (isTRUE(.Call("mcp_console_python_runtime_is_configured"))) {
         return(invisible(TRUE))
       }
-      invisible(.Call(
-        "mcp_console_install_python_runtime",
-        python_config$libpython
-      ))
-      python_module <- reticulate::import("_mcp_console", convert = FALSE)
       disabled_reason <- if (is.na(managed)) {
         managed_python_disabled_message
       } else {
         NULL
       }
-      callback <- if (is.na(managed)) NULL else resolve_import_distribution
-      reticulate::py_set_attr(
-        python_module,
-        "operation",
-        "configure_import_resolution"
-      )
-      reticulate::py_set_attr(
-        python_module,
-        "arguments",
-        list(callback, disabled_reason)
-      )
-      invisible(reticulate::py_run_string(
-        python_dispatch,
-        local = TRUE,
-        convert = FALSE
+      callback <- if (is.na(managed)) {
+        NULL
+      } else {
+        reticulate::r_to_py(resolve_import_distribution, convert = FALSE)
+      }
+      check_python_setup(.Call(
+        "mcp_console_setup_python_runtime",
+        python_config$libpython,
+        callback,
+        disabled_reason
       ))
-      invisible(.Call("mcp_console_python_runtime_configured"))
       invisible(TRUE)
     }
 
@@ -490,6 +479,11 @@ base::local(
       if (identical(source, "select")) {
         return(selected_python())
       }
+      if (identical(source, "attach")) {
+        attached_python_config()
+        return(invisible())
+      }
+      stopifnot(identical(source, "setup"))
       initialize_python_runtime(strict = TRUE)
       check_python_setup(.Call("mcp_console_disable_matplotlib_show"))
       invisible()

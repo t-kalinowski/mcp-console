@@ -257,6 +257,9 @@ Its private R environment bridge conditionally wraps `base::library` and runs R'
 The reticulate selection adapter supplies one interpreter configuration before Python initializes.
 The Rust Python facade loads and retains that file-backed `libpython`, initializes CPython without holding its library-state lock through interpreter code, or attaches its handle if CPython was already initialized.
 Reticulate then attaches its conversion and event runtime to the running interpreter; Console calls the existing private cell evaluator directly through the CPython API.
+Native startup installs Console's stream, input, interrupt, and plot services after reticulate's competing hooks, then installs the private evaluator and SQL adapter and configures automatic import resolution through the retained CPython interface.
+The same setup accepts an absent resolver callback and a disabled reason from an R-independent caller; ordinary sessions still initialize R eagerly and use reticulate for selection and attachment.
+The retained library state records each completed installation step and marks setup configured only after the CPython configuration call succeeds, so an incomplete setup can retry without initializing the interpreter again.
 The native requirement owner calls Console's Python activation helper through that retained library; the helper runs the selected environment's activation script and completes process-environment setup.
 The R adapter still calls the Matplotlib setup helper through a narrow native entry point at the existing module-load and first-cell lifecycle points.
 The native calls preserve the caller's R interrupt state while Python runs.
