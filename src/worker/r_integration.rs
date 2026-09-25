@@ -28,6 +28,9 @@ impl Integration {
         if let Some(r) = &self.r {
             r.idle()
         } else {
+            // Consume idle SIGINT before admitting another cell. CPython's
+            // pending hook then sees acknowledged state and returns normally.
+            interrupt::acknowledge_python_interrupt();
             core::observe_stdin_shutdown()
         }
     }

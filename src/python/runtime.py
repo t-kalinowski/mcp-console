@@ -658,6 +658,9 @@ def _mcp_console_configure_native_environment(
         _os.environ["VIRTUAL_ENV"] = _sys.prefix
     else:
         _os.environ.pop("VIRTUAL_ENV", None)
+    # Match an interactive interpreter: imports follow the current workspace,
+    # including a later os.chdir(), rather than the selected executable's bin.
+    _sys.path.insert(0, "")
     _configure_process(executable)
 
 

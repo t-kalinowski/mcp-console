@@ -81,16 +81,23 @@ impl Selection {
     }
 
     pub(crate) fn configure(&self, command: &mut Command) -> Result<(), String> {
-        command.env(
-            ENVIRONMENT,
-            serde_json::to_string(self)
-                .map_err(|error| format!("cannot encode local runtime selection: {error}"))?,
-        );
         match self {
             Self::R { home } => {
+                // R_HOME already carries the retained selection as a native
+                // path; do not require Unix filename bytes to be UTF-8 JSON.
+                command.env_remove(ENVIRONMENT);
                 command.env("R_HOME", home);
             }
             Self::Python { explicit, .. } => {
+                command.env(
+                    ENVIRONMENT,
+                    serde_json::to_string(self).map_err(|error| {
+                        format!("cannot encode local runtime selection: {error}")
+                    })?,
+                );
+                // Inspection ignores PYTHONHOME. Keep embedding and child
+                // interpreters on that selection after sandbox projection too.
+                command.env_remove("PYTHONHOME");
                 if let Some(python) = explicit {
                     command.env("RETICULATE_PYTHON", python);
                 } else {
@@ -111,6 +118,26 @@ impl Selection {
             })
             .transpose()
     }
+}
+
+pub(crate) fn r_home() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    // Harp's setup reads R_HOME with env::var and mistakes non-UTF-8 values
+    // for absence. Preserve its validation using the native path in that case.
+    let Some(home) = std::env::var_os("R_HOME").filter(|home| home.to_str().is_none()) else {
+        return Ok(harp::command::r_home_setup()?);
+    };
+    let home = PathBuf::from(home);
+    if !home
+        .try_exists()
+        .map_err(|error| format!("Can't check if `R_HOME` path exists: {error}"))?
+    {
+        return Err(format!("The `R_HOME` path '{}' does not exist.", home.display()).into());
+    }
+    harp::command::r_command(&home, |command| {
+        command.arg("RHOME");
+    })
+    .map_err(|error| format!("Can't run R: {error}"))?;
+    Ok(home)
 }
 
 /// Direct launches have no runner-owned private TMPDIR. The relay lifetime

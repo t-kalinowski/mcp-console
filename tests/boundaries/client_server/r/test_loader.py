@@ -13,8 +13,9 @@ from support.client import McpClient
 from support.normalization import code
 from support.r import r_test_environment
 from support.records import Transcript
+from support.resolvers import bare_runtime_environment
 from support.execution import DIRECT
-from support.requirements import LINUX_NATIVE, requires
+from support.requirements import LINUX_NATIVE, NON_UTF8_FILENAMES, requires
 from support.suites import run_this_suite
 
 
@@ -112,6 +113,38 @@ def test_loads_native_libraries_from_selected_r_home(binary: Path) -> Transcript
                     """)
             )
             assert tool_text(result) == "[1] 42\n", result
+            return client.finish()
+
+
+@requires(NON_UTF8_FILENAMES)
+def test_preserves_non_utf8_r_home(binary: Path) -> Transcript:
+    environment, _ = r_test_environment()
+    original = Path(environment["R_HOME"])
+    with tempfile.TemporaryDirectory() as directory:
+        library = Path(directory) / "library"
+        library.mkdir()
+        environment = bare_runtime_environment(environment, library)
+        selected = Path(directory) / os.fsdecode(b"R-home-\xff")
+        selected.symlink_to(original, target_is_directory=True)
+        environment["R_HOME"] = str(selected)
+        # R requires a byte-oriented locale for paths outside UTF-8.
+        environment["LC_ALL"] = "C"
+        # Native sandbox policy requires UTF-8 environment values; exercise
+        # the direct launch contract that supports arbitrary Unix path bytes.
+        with McpClient(binary, DIRECT.serve(), environment) as client:
+            client.initialize_and_list_tools()
+            for control in ({}, {"control": "restart"}):
+                client.send(
+                    **control,
+                    # fmt: r
+                    r=code("""
+                        stopifnot(as.raw(255) %in% charToRaw(Sys.getenv("R_HOME")))
+                        42L
+                        """),
+                )
+                assert "[1] 42\n" in tool_text(client.transcript[-1]["result"]), (
+                    client.transcript[-1]
+                )
             return client.finish()
 
 

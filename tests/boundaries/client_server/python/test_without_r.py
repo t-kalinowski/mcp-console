@@ -730,3 +730,122 @@ def test_uses_environment_through_directory_alias(
                 == "selected environment retained through directory alias\n"
             ), client.transcript[-1]
             return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_consumes_idle_interrupt_before_next_python_cell(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory)
+        (path / "python3").symlink_to(sys.executable)
+        with McpClient(binary, execution.serve(), environment(path)) as client:
+            client.initialize_and_list_tools()
+            client.send(python="retained = 40")
+            client.send(control="interrupt")
+            client.send(python="retained += 1; retained")
+            assert last_result_text(client) == "41\n", client.transcript[-1]
+            client.send(control="interrupt", python="retained += 1; retained")
+            assert last_result_text(client) == "42\n[done]", client.transcript[-1]
+            client.send(python="retained")
+            assert last_result_text(client) == "42\n", client.transcript[-1]
+            return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_imports_workspace_modules_without_pythonpath(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        workspace = Path(directory)
+        (workspace / "python3").symlink_to(sys.executable)
+        (workspace / "workspace_module.py").write_text("value = 20\n")
+        package = workspace / "workspace_package"
+        package.mkdir()
+        (package / "__init__.py").write_text("value = 22\n")
+        subdirectory = workspace / "subdirectory"
+        subdirectory.mkdir()
+        (subdirectory / "after_chdir.py").write_text("value = 43\n")
+        env = environment(workspace)
+        env.pop("PYTHONPATH", None)
+        with McpClient(binary, execution.serve(), env, workspace) as client:
+            client.initialize_and_list_tools()
+            for control in ({}, {"control": "restart"}):
+                client.send(
+                    **control,
+                    # fmt: python
+                    python=code("""
+                        import os
+                        import sys
+                        import workspace_module
+                        import workspace_package
+
+                        assert "PYTHONPATH" not in os.environ
+                        assert sys.path[0] == ""
+                        assert workspace_module.value + workspace_package.value == 42
+                        os.chdir("subdirectory")
+                        import after_chdir
+
+                        after_chdir.value
+                        """),
+                )
+                assert "43\n" in last_result_text(client), client.transcript[-1]
+                assert not client.transcript[-1]["result"]["isError"]
+            return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_ignores_pythonhome_for_selected_environment(
+    binary: Path, execution: Execution
+) -> Transcript:
+    records = []
+    for inherit in (True, False):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            venv = workspace / "environment"
+            subprocess.run(
+                [sys.executable, "-m", "venv", "--without-pip", venv],
+                check=True,
+                capture_output=True,
+            )
+            config = workspace / ".agents/console/config.yaml"
+            config.parent.mkdir(parents=True)
+            config.write_text(
+                json.dumps(
+                    {
+                        "sandbox": {
+                            "inherit_environment": inherit,
+                            "environment": {"PYTHONHOME": "/invalid/configured/home"},
+                        }
+                    }
+                )
+            )
+            env = environment(venv / "bin")
+            env["PYTHONHOME"] = "/invalid/inherited/home"
+            with McpClient(binary, execution.serve(), env, workspace) as client:
+                client.initialize_and_list_tools()
+                for control in ({}, {"control": "restart"}):
+                    client.send(
+                        **control,
+                        # fmt: python
+                        python=code("""
+                            import os
+                            import sys
+                            import subprocess
+
+                            assert "PYTHONHOME" not in os.environ
+                            assert "RETICULATE_PYTHON" not in os.environ
+                            assert os.path.samefile(sys.prefix, "environment")
+                            assert sys.prefix != sys.base_prefix
+                            child = subprocess.check_output(
+                                [sys.executable, "-c", "import sys; print(sys.prefix)"], text=True
+                            ).strip()
+                            assert os.path.samefile(child, sys.prefix)
+                            print("selected environment retained")
+                            """),
+                    )
+                    assert "selected environment retained\n" in last_result_text(
+                        client
+                    ), client.transcript[-1]
+                records.extend(client.finish())
+    return records

@@ -39,7 +39,7 @@ fn run_session() -> Result<(), Box<dyn Error>> {
             let python = crate::python::Runtime::native(&selected)?;
             (r, python, None)
         } else {
-            let r_home = harp::command::r_home_setup()?;
+            let r_home = crate::local_runtime::r_home()?;
             #[cfg(target_os = "linux")]
             reexec_with_r_library_path(&r_home, &reader, &writer)?;
             let temporary_directory = embedded_r::initialize_r(&r_home)?;
