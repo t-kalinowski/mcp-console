@@ -1,11 +1,17 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <unistd.h>
+
+#ifdef __linux__
+#include <dlfcn.h>
+#endif
 
 static void write_pid_marker(const char *name, pid_t process_id) {
     const char *marker = getenv(name);
@@ -29,6 +35,26 @@ static int deny_killpg(pid_t process_group, int signal) {
     return kill(-process_group, signal);
 }
 
+static int observe_waitid(idtype_t type, id_t id, siginfo_t *info, int options) {
+    const char *directory = getenv("MCP_CONSOLE_TEST_RESOLVER_WATCHES");
+    if (directory != NULL && type == P_PID && (options & WNOWAIT) != 0) {
+        // The exit watcher starts after the server marks this child active.
+        // A child-side marker can precede that registration during spawn.
+        char path[PATH_MAX];
+        int length = snprintf(path, sizeof(path), "%s/%u", directory, (unsigned)id);
+        if (length < 0 || (size_t)length >= sizeof(path)) _exit(121);
+        int descriptor = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        if (descriptor < 0) _exit(122);
+        close(descriptor);
+    }
+#ifdef __APPLE__
+    return waitid(type, id, info, options);
+#else
+    return ((int (*)(idtype_t, id_t, siginfo_t *, int))dlsym(RTLD_NEXT, "waitid"))(
+        type, id, info, options);
+#endif
+}
+
 __attribute__((constructor))
 static void remove_interposer_from_child_environment(void) {
     unsetenv("DYLD_INSERT_LIBRARIES");
@@ -42,8 +68,12 @@ static struct {
     const void *replacee;
 } interposers[] __attribute__((section("__DATA,__interpose"))) = {
     {(const void *)&deny_killpg, (const void *)&killpg},
+    {(const void *)&observe_waitid, (const void *)&waitid},
 };
 
 #else
 int killpg(pid_t process_group, int signal) { return deny_killpg(process_group, signal); }
+int waitid(idtype_t type, id_t id, siginfo_t *info, int options) {
+    return observe_waitid(type, id, info, options);
+}
 #endif
