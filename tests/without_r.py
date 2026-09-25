@@ -7,8 +7,11 @@
 
 Use tests/fixtures/python_without_r.Dockerfile for a reproducible Linux host.
 The container must permit native namespaces (for example, docker --privileged).
+Its direct cases run as an unprivileged user; native sandbox cases run as root
+for hosts that restrict unprivileged network namespace configuration.
 """
 
+import argparse
 import importlib.util
 import os
 import shutil
@@ -28,10 +31,16 @@ spec = importlib.util.spec_from_file_location("sans_r_acceptance", suite)
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--execution", choices=("direct", "sandbox"))
+execution_name = parser.parse_args().execution
+
 for name, case in vars(module).items():
     if not name.startswith("test_"):
         continue
     for execution in case.executions:
+        if execution_name is not None and execution.name != execution_name:
+            continue
         print(f"{name}[{execution.name}]", flush=True)
         check_recording(
             "client_server/python/test_without_r",
