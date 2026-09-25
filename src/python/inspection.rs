@@ -30,6 +30,7 @@ pub(crate) fn inspect_selected(
         .to_str()
         .ok_or_else(|| "selected Python executable is not UTF-8".to_string())?;
     let identity = ExecutableIdentity::capture(executable)?;
+    let image_identity = ExecutableIdentity::capture_image(executable)?;
     let result = InspectionOutput::create()?;
     let resolver = ResolverProcess::new();
     let mut command = resolver_command(executable);
@@ -74,7 +75,7 @@ pub(crate) fn inspect_selected(
             .map_err(|error| format!("failed to read selected Python configuration: {error}"))?,
     )
     .map_err(|error| format!("invalid selected Python configuration: {error}"))?;
-    description.validate(executable, identity)?;
+    description.validate(executable, identity, image_identity)?;
     let python_home = if description.base_prefix == description.base_exec_prefix {
         description.base_prefix.clone()
     } else {
@@ -96,6 +97,7 @@ pub(crate) fn inspect_selected(
 #[serde(deny_unknown_fields)]
 struct Description {
     executable: PathBuf,
+    image_identity: [u64; 2],
     libpython: String,
     prefix: String,
     exec_prefix: String,
@@ -119,12 +121,50 @@ impl ExecutableIdentity {
             inode: metadata.ino(),
         })
     }
+
+    fn capture_image(path: &Path) -> Result<Self, String> {
+        #[cfg(target_os = "macos")]
+        {
+            // Framework bin launchers can exec Resources/Python.app while
+            // preserving their bin path as sys.executable.
+            let resolved = fs::canonicalize(path).map_err(|error| {
+                format!("failed to resolve selected Python executable: {error}")
+            })?;
+            let bin = resolved.parent();
+            let version = bin.and_then(Path::parent);
+            let versions = version.and_then(Path::parent);
+            let framework = versions.and_then(Path::parent);
+            if bin.is_some_and(|part| part.file_name().is_some_and(|name| name == "bin"))
+                && versions
+                    .is_some_and(|part| part.file_name().is_some_and(|name| name == "Versions"))
+                && framework.is_some_and(|part| {
+                    part.file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| name.ends_with(".framework"))
+                })
+            {
+                let image = version
+                    .expect("framework version was found")
+                    .join("Resources/Python.app/Contents/MacOS/Python");
+                return Self::capture(&image);
+            }
+        }
+        Self::capture(path)
+    }
 }
 
 impl Description {
-    fn validate(&self, selected: &Path, identity: ExecutableIdentity) -> Result<(), String> {
+    fn validate(
+        &self,
+        selected: &Path,
+        identity: ExecutableIdentity,
+        image_identity: ExecutableIdentity,
+    ) -> Result<(), String> {
         if ExecutableIdentity::capture(selected)? != identity {
             return Err("selected Python executable changed during inspection".to_string());
+        }
+        if self.image_identity != [image_identity.device, image_identity.inode] {
+            return Err("selected Python executable image differs from selected file".to_string());
         }
         let reported = fs::canonicalize(&self.executable).map_err(|error| {
             format!(

@@ -56,6 +56,42 @@ def test_rejects_missing_executable_without_output(binary: Path) -> Transcript:
     return [{"command": "inspect-python", "error": "selected executable is missing"}]
 
 
+def test_rejects_a_different_executable_image(binary: Path) -> Transcript:
+    fixture = Path(__file__).resolve().parents[2] / "fixtures"
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        wrapper = root / "python-wrapper"
+        wrapper.write_text(
+            f"#!{sys.executable}\n"
+            + (fixture / "native_python_wrapper.py").read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        wrapper.chmod(0o755)
+        shutil.copyfile(
+            fixture / "native_python_sitecustomize.py", root / "sitecustomize.py"
+        )
+        (root / "inspection-mode").write_text("impersonate", encoding="utf-8")
+        result = subprocess.run(
+            [binary, "inspect-python", wrapper],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert result.returncode == 1 and result.stdout == "", result
+        assert (
+            result.stderr
+            == "selected Python executable image differs from selected file\n"
+        )
+    return [
+        {
+            "command": "inspect-python",
+            "exit_code": result.returncode,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+        }
+    ]
+
+
 def test_interrupt_reaps_selected_executable(binary: Path) -> Transcript:
     fixture = Path(__file__).resolve().parents[2] / "fixtures"
     with TemporaryDirectory() as temporary:

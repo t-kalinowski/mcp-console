@@ -2,6 +2,7 @@
 
 import os
 import socket
+import sys
 import sysconfig
 from pathlib import Path
 
@@ -31,5 +32,7 @@ elif mode == "wait":
     connection.connect(address)
     connection.sendall(f"{os.getpid()}\n".encode())
     connection.recv(1)
+elif mode == "impersonate":
+    sys.executable = os.environ["MCP_CONSOLE_SELECTED_WRAPPER"]
 else:
     raise ValueError(f"unknown inspection mode: {mode}")

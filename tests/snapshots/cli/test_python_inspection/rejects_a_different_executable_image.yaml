@@ -1,0 +1,6 @@
+---
+command: inspect-python
+exit_code: 1
+stdout: ""
+stderr: |
+  selected Python executable image differs from selected file

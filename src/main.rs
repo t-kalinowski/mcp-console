@@ -188,8 +188,15 @@ fn inspect_python_command(executable: &std::path::Path) -> Result<String, String
             return;
         };
         let mut signal = [0];
-        if notification.read(&mut signal).is_ok_and(|count| count == 1) {
-            let _ = handle.stop();
+        loop {
+            match notification.read(&mut signal) {
+                Ok(1) => {
+                    let _ = handle.stop();
+                    break;
+                }
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                _ => break,
+            }
         }
     });
     let result = python::inspect_selected(executable, |handle| {
