@@ -110,8 +110,10 @@ Prepared packages and extensions still must be attached, imported, or loaded by 
 ## Automatic R package resolution
 
 The built-in R worker resolves a missing plain package name when evaluated code reaches `library()`, `require()`, `requireNamespace()`, `loadNamespace()`, `::`, or `:::`.
-It wraps `base::library` because `library()` calls `find.package()` and can report a missing package before it reaches namespace loading.
-For `base::loadNamespace`, it runs R's original formals and body in a private lexical environment that intercepts the existing `retry_loadNamespace` restart, makes the package available, and lets R's implementation continue.
+It prepares missing `library()` packages before running R's original body in the same call frame, preserving the caller's expression in errors.
+This preparation precedes namespace loading because `library()` can report a missing package in its `find.package()` check.
+For `base::loadNamespace`, it runs R's original formals and body in a private lexical environment that prepares the package at the existing retryable missing-package path.
+If preparation succeeds, namespace loading continues; otherwise R's original `withRestarts()` body signals the original condition with its native call chain.
 Preserving the original body keeps packages that inspect `loadNamespace()` compatible.
 `require()` delegates to `library()`, `requireNamespace()` delegates to `loadNamespace()`, and the namespace operators use `loadNamespace()` when needed.
 
@@ -150,7 +152,11 @@ Interrupt targets the active resolver, while restart or shutdown cancels it.
 A restart that also adds requirements serializes behind the active environment resolution before it prepares those additions and replaces the worker.
 An interrupted or lifecycle-cancelled request is reported to its operation, and a candidate from a replaced generation cannot commit into its replacement.
 
-If `ir` cannot resolve a package requested at runtime, `library()` and namespace loads surface their normal R errors, while `require()` may return `FALSE` according to `logical.return`; the worker remains available.
+If `ir` cannot resolve a package requested at runtime, `library()` and namespace loads surface their normal R errors, preserving the original condition class, message, call, and package fields.
+`require()` and `requireNamespace()` return `FALSE` for missing packages, as in base R.
+With its default `quietly = FALSE`, `requireNamespace()` prints a failure diagnostic; `quietly = TRUE` suppresses that output.
+The worker remains available.
+Explicit `requirements.r` preparation still reports the resolver failure.
 If applying the candidate library fails, the worker reports `RActivationFailed`, the server discards the candidate, and further requirement changes in that generation require restart; the worker remains available so its in-memory state can be saved.
 Transport, sideband, protocol, and bridge-infrastructure failures retain the existing worker-failure behavior.
 

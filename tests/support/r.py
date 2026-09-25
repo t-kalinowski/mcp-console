@@ -32,6 +32,21 @@ def r_test_environment() -> tuple[dict[str, str], Path]:
     return environment, home / "bin" / "Rscript"
 
 
+def reference_r_error(environment: dict[str, str], source: str) -> str:
+    result = subprocess.run(
+        [Path(environment["R_HOME"]) / "bin/Rscript", "--vanilla", "-"],
+        input=source,
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    assert result.returncode == 1, result
+    # The persistent Console worker does not exit when an R cell errors.
+    assert result.stdout.endswith("Execution halted\n"), result.stdout
+    return result.stdout.removesuffix("Execution halted\n")
+
+
 def build_r_input_handler(
     directory: Path,
     environment: dict[str, str],
