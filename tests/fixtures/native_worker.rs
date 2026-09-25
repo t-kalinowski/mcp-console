@@ -1,17 +1,64 @@
+use std::io::{self, Read};
 use std::os::fd::AsRawFd;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
 
 use super::*;
 
 fn receive(reader: &mut crate::sideband::Reader) -> WorkerMessage {
-    let mut descriptor = libc::pollfd {
-        fd: reader.as_raw_fd(),
-        events: libc::POLLIN,
-        revents: 0,
+    receive_bounded(reader)
+        .expect("native worker response")
+        .expect("native worker did not respond")
+}
+
+fn receive_bounded(reader: &mut crate::sideband::Reader) -> io::Result<Option<WorkerMessage>> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(message) = reader.receive_buffered()? {
+            return Ok(Some(message));
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(None);
+        }
+        let timeout = remaining.as_millis().try_into().unwrap_or(i32::MAX);
+        let mut descriptor = libc::pollfd {
+            fd: reader.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        match unsafe { libc::poll(&mut descriptor, 1, timeout) } {
+            0 => return Ok(None),
+            -1 if io::Error::last_os_error().kind() == io::ErrorKind::Interrupted => continue,
+            -1 => return Err(io::Error::last_os_error()),
+            _ => match reader.read_chunk() {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => continue,
+                Err(error) => return Err(error),
+            },
+        }
+    }
+}
+
+fn receive_python_probe(reader: &mut crate::sideband::Reader, child: &mut Child) -> WorkerMessage {
+    let reason = match receive_bounded(reader) {
+        Ok(Some(message)) => return message,
+        Ok(None) => "timed out waiting for a sideband message".to_owned(),
+        Err(error) => format!("sideband receive failed: {error}"),
     };
-    let ready = unsafe { libc::poll(&mut descriptor, 1, 10_000) };
-    assert!(ready > 0, "native worker did not respond");
-    reader.receive().expect("native worker response")
+    let _ = child.kill();
+    let status = child.wait().expect("native Python probe exit");
+    let mut stderr = Vec::new();
+    child
+        .stderr
+        .take()
+        .expect("native Python probe stderr")
+        .read_to_end(&mut stderr)
+        .expect("read native Python probe stderr");
+    panic!(
+        "native Python probe {reason} (exit {status}): {}",
+        String::from_utf8_lossy(&stderr)
+    );
 }
 
 fn spawn_probe(
@@ -64,33 +111,19 @@ fn native_python_setup_runs_cells_without_r() {
         .expect("run known Python fixture");
     assert!(configuration.status.success());
     let configuration = String::from_utf8(configuration.stdout).expect("fixture configuration");
-    let (child, mut reader, _writer) =
+    let (mut child, mut reader, _writer) =
         spawn_probe_with_configuration("python_setup", Some(&configuration));
-    let ready = reader.receive();
-    if ready.is_err() {
-        let output = child.wait_with_output().expect("native Python probe exit");
-        panic!(
-            "native Python probe failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-    assert!(matches!(ready.unwrap(), WorkerMessage::Ready));
+    assert!(matches!(
+        receive_python_probe(&mut reader, &mut child),
+        WorkerMessage::Ready
+    ));
 
     let mut cells = Vec::new();
     for _ in 0..6 {
         let mut output = String::new();
         let mut diagnostic = String::new();
         loop {
-            let message = match reader.receive() {
-                Ok(message) => message,
-                Err(error) => {
-                    let result = child.wait_with_output().expect("native Python probe exit");
-                    panic!(
-                        "native Python sideband closed: {error}; {}",
-                        String::from_utf8_lossy(&result.stderr)
-                    );
-                }
-            };
+            let message = receive_python_probe(&mut reader, &mut child);
             match message {
                 WorkerMessage::ConsoleOutput { data } => output.push_str(&data),
                 WorkerMessage::ConsoleDiagnostic { data } => diagnostic.push_str(&data),
