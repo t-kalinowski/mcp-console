@@ -15,7 +15,7 @@ from support.assertions import (
     wait_for_evaluation_output,
 )
 from support.checkpoints import FifoCheckpoint
-from support.processes import process_exists, stop_process_id
+from support.processes import host_process_id, process_exists, stop_process_id
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code, normalize_python_resolution_error
@@ -38,6 +38,11 @@ def test_cancels_native_inspection_and_retries(
             capture_output=True,
         )
         selected = temporary / "venv/bin/python"
+        subprocess.run(
+            ["uv", "pip", "install", "--python", selected, "numpy", "pandas"],
+            check=True,
+            capture_output=True,
+        )
         fixture = Path(__file__).resolve().parents[3] / "fixtures"
         site = Path(
             subprocess.check_output(
@@ -77,7 +82,9 @@ def test_cancels_native_inspection_and_retries(
                         """)
                 )
                 ready.wait("native Python inspection")
-                pid = int((site / "inspection-pid").read_text())
+                pid = host_process_id(
+                    int((site / "inspection-pid").read_text()), client.process.pid
+                )
                 result_file = Path((site / "inspection-result").read_text())
                 assert result_file.exists()
                 interrupt = client.start_send(control="interrupt", timeout_ms=0)
@@ -223,6 +230,11 @@ def test_console_configures_selected_python(
                 capture_output=True,
             )
             selected = temporary / "venv/bin/python"
+            subprocess.run(
+                ["uv", "pip", "install", "--python", selected, "numpy", "pandas"],
+                check=True,
+                capture_output=True,
+            )
             serve = (
                 execution.serve("--writable-root", temporary_directory)
                 if execution == SANDBOXED
