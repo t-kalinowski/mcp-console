@@ -1,7 +1,13 @@
+// Ordinary sessions receive reticulate's configuration. The executable-only
+// entrypoint is available to native callers and exercised by the R-free probe.
+#[cfg_attr(not(test), allow(dead_code))]
+mod inspection;
 mod requirements;
 mod reticulate;
 mod startup;
 
+#[cfg_attr(not(test), allow(unused_imports))]
+pub(crate) use inspection::inspect_selected;
 pub(crate) use startup::{
     SelectedPython, finish_initialization, initialize_selected, setup_runtime,
 };

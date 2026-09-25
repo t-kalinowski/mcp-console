@@ -255,6 +255,8 @@ The SQL router uses a DBI provider in embedded R or a DB-API provider in CPython
 The R provider owns a managed DuckDB connection by default and can retain a user-selected DBI connection; the Python provider retains a user-selected DB-API connection without converting it or its result rows through reticulate.
 Its private R environment bridge conditionally wraps `base::library` and runs R's unchanged `base::loadNamespace` body in a private lexical environment that intercepts its retry restart; it applies accepted managed libraries and reports activation outcomes.
 The reticulate selection adapter supplies one interpreter configuration before Python initializes.
+For an already-selected executable, the separate native inspection capability runs that executable in an owned child, reads its `sysconfig` embedding paths and base identity, and validates its shared library without changing the caller's process.
+Its result is isolated from ordinary startup output and can feed the same native initializer; it does not select Python or run in the reticulate handoff.
 The Rust Python facade loads and retains that file-backed `libpython`, initializes CPython without holding its library-state lock through interpreter code, or attaches its handle if CPython was already initialized.
 Reticulate then attaches its conversion and event runtime to the running interpreter; Console calls the existing private cell evaluator directly through the CPython API.
 Native startup installs Console's stream, input, interrupt, and plot services after reticulate's competing hooks, then installs the private evaluator and SQL adapter and configures automatic import resolution through the retained CPython interface.

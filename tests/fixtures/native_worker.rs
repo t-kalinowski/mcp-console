@@ -1,9 +1,66 @@
 use std::io::{self, Read};
 use std::os::fd::AsRawFd;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use super::*;
+
+static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+struct PythonFixture(PathBuf);
+
+impl PythonFixture {
+    fn new() -> Self {
+        let sequence = FIXTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "mcp-console-embed-test-{}-{sequence}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&path).expect("create Python fixture directory");
+        Self(path)
+    }
+
+    fn executable(&self) -> PathBuf {
+        self.0.join("venv/bin/python")
+    }
+
+    fn create_venv(&self) -> PathBuf {
+        let output = Command::new("python3")
+            .args(["-m", "venv", "--without-pip"])
+            .arg(self.0.join("venv"))
+            .output()
+            .expect("create test virtual environment");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let output = Command::new(self.executable())
+            .args([
+                "-c",
+                r#"import site
+print(site.getsitepackages()[0])
+"#,
+            ])
+            .output()
+            .expect("find virtual environment site packages");
+        assert!(output.status.success());
+        PathBuf::from(String::from_utf8(output.stdout).unwrap().trim())
+    }
+
+    fn sitecustomize(&self, site_packages: &Path, source: &str) {
+        std::fs::write(site_packages.join("sitecustomize.py"), source)
+            .expect("install test startup hook");
+    }
+}
+
+impl Drop for PythonFixture {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.0).expect("remove Python fixture directory");
+    }
+}
 
 fn receive(reader: &mut crate::sideband::Reader) -> WorkerMessage {
     receive_bounded(reader)
@@ -101,18 +158,19 @@ fn spawn_probe_with_configuration(
 
 #[test]
 fn native_python_setup_runs_cells_without_r() {
-    let fixture = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/embedded_python_config.py"
-    );
-    let configuration = Command::new("python3")
-        .arg(fixture)
+    let selected = Command::new("python3")
+        .args([
+            "-c",
+            r#"import sys
+print(sys.executable)
+"#,
+        ])
         .output()
-        .expect("run known Python fixture");
-    assert!(configuration.status.success());
-    let configuration = String::from_utf8(configuration.stdout).expect("fixture configuration");
+        .expect("find test Python executable");
+    assert!(selected.status.success());
+    let selected = String::from_utf8(selected.stdout).expect("selected executable");
     let (mut child, mut reader, _writer) =
-        spawn_probe_with_configuration("python_setup", Some(&configuration));
+        spawn_probe_with_configuration("python_setup", Some(selected.trim()));
     assert!(matches!(
         receive_python_probe(&mut reader, &mut child),
         WorkerMessage::Ready
@@ -150,6 +208,116 @@ fn native_python_setup_runs_cells_without_r() {
             .status
             .success()
     );
+}
+
+#[test]
+fn native_python_inspection_preserves_virtualenv_executable_and_startup_output() {
+    let fixture = PythonFixture::new();
+    let site_packages = fixture.create_venv();
+    fixture.sitecustomize(
+        &site_packages,
+        r#"print('startup output before inspection result')
+"#,
+    );
+    let selected = crate::python::inspect_selected(&fixture.executable(), |_| Ok(()))
+        .expect("inspect virtual environment");
+    assert_eq!(selected.python, fixture.executable().to_str().unwrap());
+    assert_ne!(
+        selected.python_home,
+        fixture.0.join("venv").to_str().unwrap()
+    );
+    assert!(
+        selected
+            .python_home
+            .split(':')
+            .all(|root| Path::new(root).is_dir())
+    );
+    assert!(Path::new(&selected.libpython).is_file());
+}
+
+#[test]
+fn native_python_inspection_rejects_invalid_executable_and_missing_library() {
+    let fixture = PythonFixture::new();
+    let missing = fixture.0.join("missing-python");
+    let error = crate::python::inspect_selected(&missing, |_| Ok(())).unwrap_err();
+    assert!(error.contains("selected Python executable"), "{error}");
+
+    let site_packages = fixture.create_venv();
+    fixture.sitecustomize(
+        &site_packages,
+        r#"import sysconfig
+
+original_get_config_var = sysconfig.get_config_var
+
+def missing_library(name):
+    if name == "LDLIBRARY":
+        return "missing-embedding-library.so"
+    return original_get_config_var(name)
+
+sysconfig.get_config_var = missing_library
+"#,
+    );
+    let error = crate::python::inspect_selected(&fixture.executable(), |_| Ok(())).unwrap_err();
+    assert!(error.contains("embedding library is missing"), "{error}");
+
+    std::fs::write(fixture.0.join("fake-library.so"), "not a shared library").unwrap();
+    fixture.sitecustomize(
+        &site_packages,
+        &format!(
+            r#"import sysconfig
+
+original_get_config_var = sysconfig.get_config_var
+
+def unusable_library(name):
+    if name in ("LIBDIR", "PYTHONFRAMEWORKPREFIX"):
+        return {:?}
+    if name == "LDLIBRARY":
+        return "fake-library.so"
+    return original_get_config_var(name)
+
+sysconfig.get_config_var = unusable_library
+"#,
+            fixture.0.to_str().unwrap()
+        ),
+    );
+    let error = crate::python::inspect_selected(&fixture.executable(), |_| Ok(())).unwrap_err();
+    assert!(error.contains("embedding library is unusable"), "{error}");
+}
+
+#[test]
+fn native_python_inspection_cancellation_cleans_up_and_allows_retry() {
+    use std::os::unix::net::UnixListener;
+
+    let fixture = PythonFixture::new();
+    let site_packages = fixture.create_venv();
+    let socket = fixture.0.join("ready.sock");
+    let listener = UnixListener::bind(&socket).expect("bind startup checkpoint");
+    fixture.sitecustomize(
+        &site_packages,
+        &format!(
+            r#"import socket
+connection = socket.socket(socket.AF_UNIX)
+connection.connect({:?})
+connection.recv(1)
+"#,
+            socket.to_str().unwrap()
+        ),
+    );
+    let mut stop_handle = None;
+    let error = crate::python::inspect_selected(&fixture.executable(), |handle| {
+        let (_connection, _) = listener.accept().expect("observe Python startup");
+        handle.stop()?;
+        stop_handle = Some(handle);
+        Ok(())
+    })
+    .unwrap_err();
+    assert!(error.contains("cancelled"), "{error}");
+    assert!(stop_handle.unwrap().cleanup_confirmed());
+
+    std::fs::remove_file(site_packages.join("sitecustomize.py")).unwrap();
+    let selected = crate::python::inspect_selected(&fixture.executable(), |_| Ok(()))
+        .expect("retry selected Python inspection");
+    assert_eq!(selected.python, fixture.executable().to_str().unwrap());
 }
 
 #[test]
@@ -226,10 +394,11 @@ fn native_probe() {
         };
         let r_library = unsafe { libc::dlopen(name.as_ptr(), libc::RTLD_NOLOAD | libc::RTLD_NOW) };
         assert!(r_library.is_null(), "libR was loaded before Python setup");
-        let configuration: crate::python::SelectedPython = serde_json::from_str(
-            &std::env::var("MCP_CONSOLE_NATIVE_PYTHON_CONFIG").expect("fixture configuration"),
-        )
-        .expect("parse fixture configuration");
+        let executable =
+            std::env::var("MCP_CONSOLE_NATIVE_PYTHON_CONFIG").expect("selected Python executable");
+        let configuration =
+            crate::python::inspect_selected(std::path::Path::new(&executable), |_| Ok(()))
+                .expect("inspect selected Python executable");
         crate::python::initialize_selected(&configuration).expect("initialize known Python");
         assert!(
             crate::python::setup_runtime(

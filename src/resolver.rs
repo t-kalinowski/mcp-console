@@ -13,7 +13,7 @@ mod managed_python;
 #[cfg(unix)]
 mod managed_r;
 #[cfg(unix)]
-mod process;
+pub(crate) mod process;
 mod python_configuration;
 #[cfg(unix)]
 mod python_version;

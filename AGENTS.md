@@ -217,7 +217,7 @@ Keep these invariants intact:
 ### Language adapters
 
 - `src/r_bridge.rs` — shared Rust FFI for process-lifetime private R bridge environments.
-- `src/python.rs`, `src/python/startup.rs`, `src/python/library.rs`, `src/python/library/services.rs`, `src/python/services.py`, `src/python/runtime.py` — native interpreter startup, shared post-initialization setup and completion, direct CPython cell dispatch, console services, main-thread stream hooks, and the private Python evaluator.
+- `src/python.rs`, `src/python/startup.rs`, `src/python/inspection.{rs,py}`, `src/python/library.rs`, `src/python/library/services.rs`, `src/python/services.py`, `src/python/runtime.py` — native interpreter startup, inspection of an already-selected executable, shared post-initialization setup and completion, direct CPython cell dispatch, console services, main-thread stream hooks, and the private Python evaluator.
 - `src/python/requirements.rs`, `src/python/requirements/r.rs` — native requirement values, declaration transitions, preparation orchestration, live activation through the CPython library, and pending activation key, with R field layout, attributes, encodings, history, identity comparison, and notification conversion confined to the active-binding adapter.
 - `src/python/reticulate.rs`, `src/python/initialize.R`, `src/python/bridge.R` — retained reticulate selection and attachment adapter, candidate configuration lookup, declaration checks, and automatic-resolution forwarding.
   R remains required and eagerly initialized.
