@@ -37,14 +37,6 @@ pub struct ConfigOverrides {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    #[cfg(unix)]
-    /// Describe an already-selected Python executable for native embedding
-    InspectPython {
-        /// Absolute path to the selected Python executable
-        #[arg(value_name = "EXECUTABLE")]
-        executable: PathBuf,
-    },
-
     /// Run the MCP server over standard input and output
     Serve {
         #[command(flatten)]

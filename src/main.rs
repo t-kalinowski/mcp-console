@@ -50,14 +50,6 @@ fn main() -> ExitCode {
     let cli = cli::Cli::parse();
     let mut overrides = cli.overrides.values;
     match cli.command {
-        #[cfg(unix)]
-        cli::Command::InspectPython { executable } => match inspect_python_command(&executable) {
-            Ok(configuration) => {
-                println!("{configuration}");
-                ExitCode::SUCCESS
-            }
-            Err(error) => exit_with_error(error),
-        },
         cli::Command::Serve {
             worker,
             relay,
@@ -145,73 +137,6 @@ fn main() -> ExitCode {
             }
         }
     }
-}
-
-#[cfg(unix)]
-static INSPECTION_SIGNAL: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
-
-#[cfg(unix)]
-extern "C" fn cancel_inspection_signal(_: libc::c_int) {
-    use std::sync::atomic::Ordering;
-
-    let descriptor = INSPECTION_SIGNAL.swap(-1, Ordering::Relaxed);
-    if descriptor >= 0 {
-        // SAFETY: write is async-signal-safe, and this handler sends one byte.
-        unsafe { libc::write(descriptor, b"1".as_ptr().cast(), 1) };
-    }
-}
-
-#[cfg(unix)]
-fn inspect_python_command(executable: &std::path::Path) -> Result<String, String> {
-    use std::io::{self, Read};
-    use std::os::fd::AsRawFd as _;
-    use std::sync::atomic::Ordering;
-
-    let (mut notification, sender) = io::pipe().map_err(|error| error.to_string())?;
-    INSPECTION_SIGNAL.store(sender.as_raw_fd(), Ordering::Relaxed);
-    // The CLI process exits after this command. Its signal handler only
-    // forwards cancellation to the existing resolver stop handle.
-    unsafe {
-        let mut action: libc::sigaction = std::mem::zeroed();
-        action.sa_sigaction = cancel_inspection_signal as *const () as usize;
-        libc::sigemptyset(&mut action.sa_mask);
-        for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
-            if libc::sigaction(signal, &action, std::ptr::null_mut()) != 0 {
-                return Err(io::Error::last_os_error().to_string());
-            }
-        }
-    }
-    let (handle_sender, handle_receiver) =
-        std::sync::mpsc::channel::<resolver::ResolverStopHandle>();
-    let watcher = std::thread::spawn(move || {
-        let Ok(handle) = handle_receiver.recv() else {
-            return;
-        };
-        let mut signal = [0];
-        loop {
-            match notification.read(&mut signal) {
-                Ok(1) => {
-                    let _ = handle.stop();
-                    break;
-                }
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-                _ => break,
-            }
-        }
-    });
-    let result = python::inspect_selected(executable, |handle| {
-        handle_sender
-            .send(handle)
-            .map_err(|_| "Python inspection cancellation watcher stopped".to_string())
-    });
-    INSPECTION_SIGNAL.store(-1, Ordering::Relaxed);
-    drop(handle_sender);
-    drop(sender);
-    watcher
-        .join()
-        .map_err(|_| "Python inspection cancellation watcher panicked".to_string())?;
-    let configuration = result?;
-    serde_json::to_string(&configuration).map_err(|error| error.to_string())
 }
 
 fn run_server(

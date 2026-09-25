@@ -148,21 +148,7 @@ pub(super) fn wait_for_activity(sideband_fd: libc::c_int) -> Result<bool, String
             return Err("native worker wait received an invalid descriptor".to_string());
         }
         if descriptors[1].revents != 0 {
-            let mut bytes = [0u8; 64];
-            loop {
-                let count =
-                    unsafe { libc::read(wakeup_fd, bytes.as_mut_ptr().cast(), bytes.len()) };
-                if count > 0 {
-                    continue;
-                }
-                if count < 0 && io::Error::last_os_error().kind() == io::ErrorKind::WouldBlock {
-                    break;
-                }
-                if count < 0 && io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
-                    continue;
-                }
-                return Err("native worker interrupt wakeup failed".to_string());
-            }
+            super::input::drain_interrupt_wakeup().map_err(|error| error.to_string())?;
         }
         if descriptors[0].revents != 0 {
             return Ok(true);
@@ -247,4 +233,43 @@ pub(crate) fn install_python_interrupt(
         ));
     }
     Ok(())
+}
+
+/// Connect inspection cancellation to the worker's existing SIGINT wakeup.
+/// ResolverProcess continues to own termination, output collection and reaping.
+pub(crate) fn inspect_python(
+    executable: &std::path::Path,
+) -> Result<crate::python::SelectedPython, String> {
+    super::input::drain_interrupt_wakeup().map_err(|error| error.to_string())?;
+    let (finished, completion) = io::pipe().map_err(|error| error.to_string())?;
+    std::thread::scope(|scope| {
+        let mut watcher = None;
+        let result = crate::python::inspect_selected(executable, |handle| {
+            if pending() {
+                return Err("Python inspection interrupted".to_string());
+            }
+            watcher = Some(scope.spawn(move || {
+                match crate::readiness::wait_for_io(
+                    super::input::interrupt_wakeup_fd(),
+                    libc::POLLIN,
+                    Some(&finished),
+                ) {
+                    Ok(ready) if ready.stream => handle.stop(),
+                    Ok(_) => Ok(()),
+                    Err(error) => {
+                        let _ = handle.stop();
+                        Err(error.to_string())
+                    }
+                }
+            }));
+            Ok(())
+        });
+        drop(completion);
+        if let Some(watcher) = watcher {
+            watcher
+                .join()
+                .map_err(|_| "Python inspection interrupt watcher panicked")??;
+        }
+        result
+    })
 }

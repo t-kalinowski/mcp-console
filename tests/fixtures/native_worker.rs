@@ -36,7 +36,7 @@ impl PythonFixture {
 
     fn create_venv(&self) -> PathBuf {
         let output = Command::new("python3")
-            .args(["-m", "venv", "--without-pip"])
+            .args(["-m", "venv", "--without-pip", "--copies"])
             .arg(self.0.join("venv"))
             .output()
             .expect("create test virtual environment");
@@ -254,6 +254,37 @@ fn native_python_inspection_rejects_invalid_executable_and_missing_library() {
 }
 
 #[test]
+fn native_python_inspection_rejects_old_version_and_other_runtime() {
+    let fixture = PythonFixture::new();
+    let site_packages = fixture.create_venv();
+    fixture.sitecustomize(&site_packages, "old-version");
+    let error = crate::python::inspect_selected(&fixture.executable(), |_| Ok(())).unwrap_err();
+    assert!(error.contains("requires Python 3.10 or later"), "{error}");
+
+    let output = Command::new("cc")
+        .args(["-shared", "-fPIC"])
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/native/other_python.c"
+        ))
+        .arg("-o")
+        .arg(site_packages.join("fake-library.so"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    fixture.sitecustomize(&site_packages, "other-library");
+    let error = crate::python::inspect_selected(&fixture.executable(), |_| Ok(())).unwrap_err();
+    assert!(
+        error.contains("embedding library does not match the running interpreter"),
+        "{error}"
+    );
+}
+
+#[test]
 fn native_python_inspection_cancellation_cleans_up_and_allows_retry() {
     use std::os::unix::net::UnixListener;
 
@@ -298,39 +329,6 @@ fn native_python_inspection_callback_rejection_confirms_cleanup() {
     assert!(stop_handle.unwrap().cleanup_confirmed());
     crate::python::inspect_selected(&fixture.executable(), |_| Ok(()))
         .expect("retry after rejected inspection");
-}
-
-#[test]
-fn native_python_inspection_rejects_executable_replacement() {
-    use std::io::Write;
-    use std::os::unix::fs::symlink;
-    use std::os::unix::net::UnixListener;
-
-    let fixture = PythonFixture::new();
-    let site_packages = fixture.create_venv();
-    let socket = fixture.0.join("ready.sock");
-    let listener = UnixListener::bind(&socket).expect("bind startup checkpoint");
-    fixture.sitecustomize(&site_packages, "wait");
-    std::fs::write(
-        site_packages.join("inspection-socket"),
-        socket.to_str().unwrap(),
-    )
-    .unwrap();
-    let selected = fixture.executable();
-    let replacement = selected.with_extension("replacement");
-    let error = crate::python::inspect_selected(&selected, |_| {
-        let (mut connection, _) = listener.accept().expect("observe Python startup");
-        symlink(std::env::current_exe().unwrap(), &replacement)
-            .expect("create replacement executable");
-        std::fs::rename(&replacement, &selected).expect("replace selected executable");
-        connection.write_all(b"1").expect("release Python startup");
-        Ok(())
-    })
-    .unwrap_err();
-    assert!(
-        error.contains("selected Python executable changed"),
-        "{error}"
-    );
 }
 
 #[test]

@@ -374,8 +374,7 @@ base::local(
       })
     }
 
-    initialize_python_runtime <- function(strict = FALSE) {
-      python_config <- attached_python_config()
+    check_python_version <- function(python_config, strict = TRUE) {
       if (python_config$version < minimum_python) {
         if (!strict) {
           return(invisible(FALSE))
@@ -388,6 +387,14 @@ base::local(
           ),
           call. = FALSE
         )
+      }
+      TRUE
+    }
+
+    initialize_python_runtime <- function(strict = FALSE) {
+      python_config <- attached_python_config()
+      if (!check_python_version(python_config, strict)) {
+        return(invisible(FALSE))
       }
       if (isTRUE(.Call("mcp_console_python_runtime_is_configured"))) {
         return(invisible(TRUE))

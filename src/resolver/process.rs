@@ -436,11 +436,7 @@ fn resolver_has_exited(pid: u32) -> io::Result<bool> {
     Ok(unsafe { status.assume_init().si_pid() } == pid as libc::pid_t)
 }
 
-pub(crate) fn stop_resolver(
-    child: &mut Child,
-    program: &Path,
-    kind: &str,
-) -> Result<ExitStatus, String> {
+fn stop_resolver(child: &mut Child, program: &Path, kind: &str) -> Result<ExitStatus, String> {
     // SAFETY: `process_group(0)` made the resolver PID its process-group ID.
     let result = unsafe { libc::killpg(child.id() as libc::pid_t, libc::SIGKILL) };
     if result < 0 {
