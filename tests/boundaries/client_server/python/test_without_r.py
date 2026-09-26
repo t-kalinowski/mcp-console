@@ -98,6 +98,89 @@ def preparation_records(records: Transcript, root: Path) -> Transcript:
     return records
 
 
+@executions(SANDBOXED)
+def test_skips_project_uv_left_by_a_writable_worker(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        workspace = root / "workspace"
+        workspace.mkdir()
+        config = workspace / ".agents/console/config.yaml"
+        config.parent.mkdir(parents=True)
+        config.write_text('extends: ":workspace"\n')
+        safe_bin = root / "safe-bin"
+        safe_bin.mkdir()
+        (safe_bin / "uv").symlink_to(shutil.which("uv"))
+        with McpClient(
+            binary, execution.serve(), environment(safe_bin), workspace
+        ) as client:
+            client.initialize_and_list_tools()
+            client.send(
+                # fmt: python
+                python=code(r"""
+                    from pathlib import Path
+
+                    candidate = Path(".venv/bin/uv")
+                    candidate.parent.mkdir(parents=True)
+                    candidate.write_text("#!/bin/sh\nprintf touched > project-uv-executed\nexit 87\n")
+                    candidate.chmod(0o755)
+                    """)
+            )
+            assert not client.transcript[-1]["result"]["isError"], client.transcript[-1]
+            client.finish()
+        project_uv = workspace / ".venv/bin/uv"
+        assert project_uv.is_file()
+        env = environment(project_uv.parent)
+        env["PATH"] = os.pathsep.join((str(project_uv.parent), str(safe_bin)))
+        with McpClient(binary, execution.serve(), env, workspace) as client:
+            client.initialize_and_list_tools()
+            client.send(
+                control="restart",
+                requirements={"python": ["py-yaml12"]},
+                # fmt: python
+                python=code("""
+                    import yaml12
+
+                    print("safe uv prepared Python")
+                    """),
+            )
+            assert last_result_text(client).endswith(
+                "safe uv prepared Python\n[done]"
+            ), client.transcript[-1]
+            assert not (workspace / "project-uv-executed").exists()
+            records = client.finish()
+        explicit = dict(env, RETICULATE_UV=str(project_uv))
+        rejected = subprocess.run(
+            [binary, *execution.serve()],
+            cwd=workspace,
+            env=explicit,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert rejected.returncode != 0
+        assert "selected uv" in rejected.stderr
+        assert "project or a worker-writable path" in rejected.stderr
+        assert not (workspace / "project-uv-executed").exists()
+        records.append({"explicit_project_uv": "rejected without execution"})
+        explicit_python = dict(explicit, RETICULATE_PYTHON=sys.executable)
+        with McpClient(binary, execution.serve(), explicit_python, workspace) as client:
+            client.initialize_and_list_tools()
+            client.send(
+                # fmt: python
+                python=code("""
+                    print("explicit Python retained")
+                    """)
+            )
+            assert "explicit Python retained\n" in last_result_text(client)
+            client.finish()
+        assert not (workspace / "project-uv-executed").exists()
+        records.append({"explicit_python_selection": "kept without uv execution"})
+        return records
+
+
 @executions(DIRECT, SANDBOXED)
 def test_prepares_managed_python_at_startup_and_restart(
     binary: Path, execution: Execution
@@ -270,10 +353,12 @@ def test_failed_managed_preparation_preserves_worker_and_input(
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
+        workspace = root / "workspace"
+        workspace.mkdir()
         env = preparation_environment(root)
         started = FifoCheckpoint.create(root / "started")
         try:
-            with McpClient(binary, execution.serve(), env, root) as client:
+            with McpClient(binary, execution.serve(), env, workspace) as client:
                 client.initialize_and_list_tools()
                 client.send(
                     # fmt: python
@@ -416,7 +501,7 @@ def test_failed_managed_preparation_preserves_worker_and_input(
                 assert "accepted\n" in last_result_text(client), client.transcript[-1]
                 assert (root / "resolutions.jsonl").read_text() != before
                 records = preparation_records(client.finish(), root)
-            (session,) = (root / ".agents/console/sessions").iterdir()
+            (session,) = (workspace / ".agents/console/sessions").iterdir()
             events = [
                 json.loads(line)
                 for line in (session / "internal/events.jsonl").read_text().splitlines()
@@ -441,8 +526,10 @@ def test_retries_failed_prestart_python_preparation(
     for with_code in (False, True):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            workspace = root / "workspace"
+            workspace.mkdir()
             env = preparation_environment(root)
-            with McpClient(binary, execution.serve(), env, root) as client:
+            with McpClient(binary, execution.serve(), env, workspace) as client:
                 client.initialize_and_list_tools()
                 for mode in ("failure", "inspection"):
                     (root / "mode").write_text(mode)
@@ -501,11 +588,13 @@ def test_shutdown_cancels_sans_r_python_preparation(
     ):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            workspace = root / "workspace"
+            workspace.mkdir()
             env = preparation_environment(root)
             (root / "mode").write_text(mode)
             started = FifoCheckpoint.create(root / "started")
             try:
-                with McpClient(binary, execution.serve(), env, root) as client:
+                with McpClient(binary, execution.serve(), env, workspace) as client:
                     client.initialize_and_list_tools()
                     if restart:
                         client.send(
@@ -542,7 +631,7 @@ def test_shutdown_cancels_sans_r_python_preparation(
                             "stderr": client.stderr.read(),
                         }
                     )
-                (session,) = (root / ".agents/console/sessions").iterdir()
+                (session,) = (workspace / ".agents/console/sessions").iterdir()
                 events = [
                     json.loads(line)
                     for line in (session / "internal/events.jsonl")

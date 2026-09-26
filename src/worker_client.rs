@@ -394,7 +394,20 @@ impl Client {
         #[cfg(unix)]
         let (r, duckdb_extensions, python, r_resolver) =
             if !crate::local_runtime::Selection::r_is_present() {
-                let resolver = python_resolver.without_r_bootstrap();
+                let resolver = if configured_python
+                    .as_deref()
+                    .is_some_and(|value| !value.is_empty() && value != "managed")
+                {
+                    // Explicit Python selection has no managed resolver to run.
+                    python_resolver
+                } else {
+                    let roots = if no_sandbox {
+                        Vec::new()
+                    } else {
+                        crate::local_runtime::blocked_uv_roots(&sandbox_settings)?
+                    };
+                    python_resolver.without_r_bootstrap(&roots)?
+                };
                 let (selection, managed) = crate::local_runtime::Selection::python(
                     configured_python,
                     &resolver,

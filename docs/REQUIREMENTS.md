@@ -9,6 +9,8 @@ This guide describes preparation before a cell, standalone preparation, and requ
 
 Local [Python sessions without R](BUILTIN_RUNTIME.md#python-sessions-without-r) support explicit startup and restart preparation when Console manages the environment through uv.
 When `uv` is available, the existing local host resolver prepares the default Python manifest before MCP readiness and retains the result for replacement workers.
+For sandboxed sans-R local selection, project-resident `uv` executables and executables beneath configured worker write grants are skipped before use; PATH selection continues to the next candidate, while an explicit selection there fails.
+The selected executable is resolved and retained so a worker cannot redirect later host preparation by replacing a PATH entry.
 This does not invoke R, Rscript, or `ir`, and no installation runs inside the sandboxed worker.
 Executable inspection uses isolated Python mode, excluding workspace imports, `PYTHONPATH`, and the user site; the selected installation and its environment remain trusted.
 Without `uv`, a Python executable on `PATH` supplies its preinstalled packages.

@@ -124,6 +124,47 @@ impl Selection {
     }
 }
 
+/// Exclude project executables even if this worker's policy is read-only:
+/// another server instance may already have let a worker replace them.
+pub(crate) fn blocked_uv_roots(
+    settings: &crate::settings::SandboxSettings,
+) -> Result<Vec<PathBuf>, String> {
+    let workspace = std::env::current_dir()
+        .map_err(|error| format!("cannot find launch workspace: {error}"))?;
+    let mut roots = vec![
+        workspace
+            .canonicalize()
+            .map_err(|error| format!("cannot resolve launch workspace: {error}"))?,
+    ];
+    if let Some(entries) = settings
+        .get("filesystem")
+        .and_then(|filesystem| filesystem.get("entries"))
+        .and_then(serde_json::Value::as_array)
+    {
+        for entry in entries {
+            if entry
+                .get("access")
+                .and_then(crate::settings::native_variant_name)
+                != Some("write")
+            {
+                continue;
+            }
+            if let Some(path) = entry
+                .pointer("/path/path")
+                .and_then(serde_json::Value::as_str)
+            {
+                let path = PathBuf::from(path);
+                roots.push(
+                    path.canonicalize()
+                        .or_else(|_| std::path::absolute(path))
+                        .map_err(|error| format!("cannot resolve worker writable root: {error}"))?,
+                );
+            }
+        }
+    }
+    Ok(roots)
+}
+
 pub(crate) fn r_home() -> Result<PathBuf, Box<dyn std::error::Error>> {
     // Harp's setup reads R_HOME with env::var and mistakes non-UTF-8 values
     // for absence. Preserve its validation using the native path in that case.

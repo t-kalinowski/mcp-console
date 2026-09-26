@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -32,14 +33,30 @@ impl ManagedPythonResolverConfiguration {
         }
     }
 
-    pub(crate) fn without_r_bootstrap(mut self) -> Self {
-        // `managed` asks reticulate to obtain uv. Without R, use the uv on
-        // PATH if present and retain the captured UV_* configuration unchanged.
-        if self.reticulate_uv.as_deref() == Some(OsStr::new("managed")) {
-            self.uv = super::find_path_entry("uv").map(Into::into);
-            self.reticulate_uv = self.uv.clone();
-        }
-        self
+    pub(crate) fn without_r_bootstrap(mut self, blocked: &[PathBuf]) -> Result<Self, String> {
+        // A prior worker may have replaced a project uv. Select and pin a
+        // resolved executable before any resolver process starts.
+        let uv = match self.explicit_uv.as_deref() {
+            Some(value) if value != OsStr::new("managed") => {
+                let path = PathBuf::from(value);
+                let path = if path.components().count() == 1 {
+                    super::find_path_entry(path.to_str().ok_or("selected uv is not UTF-8")?)
+                        .unwrap_or(path)
+                } else {
+                    path
+                };
+                Some(select_uv_path(&path, blocked)?.ok_or_else(|| {
+                    format!(
+                        "selected uv `{}` is in the project or a worker-writable path",
+                        path.display()
+                    )
+                })?)
+            }
+            _ => find_safe_path_uv(blocked)?,
+        };
+        self.uv = uv.clone().map(Into::into);
+        self.reticulate_uv = self.uv.clone();
+        Ok(self)
     }
 
     pub(super) fn explicit_uv(&self) -> Option<&OsStr> {
@@ -116,6 +133,30 @@ impl ManagedPythonResolverConfiguration {
         }
         Ok(())
     }
+}
+
+fn find_safe_path_uv(blocked: &[PathBuf]) -> Result<Option<PathBuf>, String> {
+    let Some(path) = std::env::var_os("PATH") else {
+        return Ok(None);
+    };
+    for directory in std::env::split_paths(&path) {
+        let candidate = directory.join("uv");
+        if std::fs::symlink_metadata(&candidate).is_ok()
+            && let Some(selected) = select_uv_path(&candidate, blocked)?
+        {
+            return Ok(Some(selected));
+        }
+    }
+    Ok(None)
+}
+
+fn select_uv_path(candidate: &Path, blocked: &[PathBuf]) -> Result<Option<PathBuf>, String> {
+    // Preserve an existing broken selection outside blocked roots so its
+    // resolver error remains visible instead of silently choosing another uv.
+    let absolute = std::path::absolute(candidate)
+        .map_err(|error| format!("cannot locate selected uv: {error}"))?;
+    let selected = candidate.canonicalize().unwrap_or(absolute);
+    Ok((!blocked.iter().any(|root| selected.starts_with(root))).then_some(selected))
 }
 
 fn normalize_python_preference(environment: &mut BTreeMap<OsString, OsString>) {

@@ -57,6 +57,9 @@ Existing explicit `RETICULATE_PYTHON` selection remains supported.
 Its captured value is preserved when sandbox environment inheritance is disabled or project environment settings provide a different value.
 
 The session retains the selected environment and executable across cells, restarts, and worker replacement.
+At sandboxed local sans-R launch, Console skips `uv` executables whose resolved path is inside the project or a configured worker write grant, then checks later PATH entries.
+An explicit `RETICULATE_UV` at such a path is rejected before execution.
+The accepted executable path is retained for subsequent preparation, including across worker generations.
 A plain restart clears Python objects and reuses the accepted environment without resolving again.
 In a Console-managed uv session, `requirements.python` can add packages before the first worker starts, alone or with a Python cell.
 Once a worker is running, changed requirements require `control: "restart"`, with or without accompanying code.
