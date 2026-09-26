@@ -22,7 +22,7 @@ import shlex
 import signal
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -52,10 +52,16 @@ actions = parser.add_mutually_exclusive_group()
 actions.add_argument("--list", action="store_true", dest="list_tests")
 actions.add_argument("--locate", metavar="SELECTOR")
 parser.add_argument("--update", action="store_true")
-parser.add_argument(
+profiles = parser.add_mutually_exclusive_group()
+profiles.add_argument(
     "--quick",
     action="store_true",
-    help="skip extended stress and external SSH, Docker, and SBX integration tests",
+    help="alias for the default smoke profile; explicit selectors keep their scope",
+)
+profiles.add_argument(
+    "--full",
+    action="store_true",
+    help="run all capability-applicable cases when no selectors are supplied",
 )
 parser.add_argument(
     "--timeout",
@@ -96,17 +102,6 @@ if "--bootstrap" in sys.argv[1:]:
     arguments = sys.argv[1:]
     arguments.remove("--bootstrap")
     os.execvp("uv", ["uv", "run", "--script", __file__, *arguments])
-
-
-if "--quick" in sys.argv[1:]:
-    # Apply the profile before importing suites and their capability probes.
-    # Case subprocesses inherit it, including when a provider was configured.
-    os.environ["MCP_CONSOLE_TEST_QUICK"] = "1"
-    for variable in (
-        "MCP_CONSOLE_TEST_DOCKER_IMAGE",
-        "MCP_CONSOLE_TEST_SBX_TEMPLATE",
-    ):
-        os.environ[variable] = ""
 
 
 from support.cases import (
@@ -307,13 +302,18 @@ class RunningCase:
 
 class ProgressReporter:
     def __init__(
-        self, *, quick: bool, update: bool, full_update: bool, jobs: int, timeout: float
+        self,
+        *,
+        update: bool,
+        full_update: bool,
+        jobs: int,
+        timeout: float,
     ) -> None:
         self.update = update
         self.full_update = full_update
         self.rerun = ["scripts/test"]
-        if quick:
-            self.rerun.append("--quick")
+        if full_update:
+            self.rerun.append("--full")
         if update:
             self.rerun.append("--update")
         if full_update and jobs != parser.get_default("jobs"):
@@ -388,7 +388,11 @@ class ProgressReporter:
 
 
 def selected_cases(
-    suites: dict[str, Path], selectors: list[str], *, report: bool = True
+    suites: dict[str, Path],
+    selectors: Sequence[str],
+    *,
+    report: bool = True,
+    check_requirements: bool = True,
 ) -> list[tuple[str, str, Path]]:
     selected_suites: dict[str, list[str] | None] = {}
     if selectors:
@@ -425,7 +429,8 @@ def selected_cases(
         selected.extend(
             (suite_name, case_name, suite_path)
             for case_name in case_names
-            if available_executions(
+            if not check_requirements
+            or available_executions(
                 cases[case_name], f"{suite_name}::{case_name}", report=report
             )
         )
@@ -620,33 +625,35 @@ def main() -> None:
     assert suite_paths, "no transcript suites found"
 
     suites = {suite_identifier(path): path for path in suite_paths}
-    orphans = orphan_snapshots(suites)
-    full_update = (
-        options.update
-        and not options.selectors
-        and not options.list_tests
-        and options.locate is None
-    )
+    # The global audit imports every suite, including external provider probes.
+    # Keep smoke and focused runs confined to their selected suites.
+    full_selection = options.full and not options.selectors and options.locate is None
+    orphans = orphan_snapshots(suites) if full_selection else []
+    full_update = options.update and full_selection and not options.list_tests
     if orphans and not full_update:
         for orphan in orphans:
             print(f"orphan snapshot: {orphan.relative_to(root)}", file=sys.stderr)
-        raise SystemExit("run scripts/test --update to remove orphan snapshots")
+        raise SystemExit("run scripts/test --full --update to remove orphan snapshots")
 
-    if options.list_tests:
-        for suite_name, suite_path in suites.items():
-            cases = load_suite(suite_path)
-            for case_name in cases:
-                if options.quick and not available_executions(
-                    cases[case_name], f"{suite_name}::{case_name}", report=False
-                ):
-                    continue
-                print(f"{suite_name}::{case_name}")
-        return
     if options.locate is not None:
         locate(suites, options.locate)
         return
 
-    selected = selected_cases(suites, options.selectors, report=not options.build)
+    selectors = options.selectors
+    if not selectors and not options.full:
+        from _profiles import SMOKE
+
+        selectors = SMOKE
+    selected = selected_cases(
+        suites,
+        selectors,
+        report=not options.build,
+        check_requirements=not options.list_tests,
+    )
+    if options.list_tests:
+        for suite_name, case_name, _ in selected:
+            print(f"{suite_name}::{case_name}")
+        return
     if options.build:
         arguments = sys.argv[1:]
         arguments.remove("--build")
@@ -666,7 +673,6 @@ def main() -> None:
         break
 
     reporter = ProgressReporter(
-        quick=options.quick,
         update=options.update,
         full_update=full_update,
         jobs=options.jobs,
@@ -689,7 +695,7 @@ def main() -> None:
             checked_snapshots=checked_snapshots,
             reporter=reporter,
         )
-        if options.update and not options.selectors:
+        if full_update:
             prune_stale_snapshots(checked_snapshots, orphans)
     finally:
         reporter.close()
