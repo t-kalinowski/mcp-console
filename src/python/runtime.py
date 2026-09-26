@@ -467,7 +467,6 @@ def _mcp_console_eval_cell(
         if expression is not None:
             _sys.displayhook(_eval(expression, _main.__dict__))
     except _BaseException:
-        # CPython's NUL SyntaxError has no source location to show.
         _print_exc(limit=0 if "\0" in source else None)
     try:
         for image in _collect_plots():
