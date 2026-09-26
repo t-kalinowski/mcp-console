@@ -399,9 +399,12 @@ fn is_abstract_python_request(value: &OsStr) -> bool {
         }
     }
     let version = version.strip_suffix('t').unwrap_or(version);
-    !version.is_empty()
-        && version.split('.').all(|component| {
-            !component.is_empty() && component.bytes().all(|byte| byte.is_ascii_digit())
+    let components = version.split('.').collect::<Vec<_>>();
+    components.len() <= 3
+        && components.iter().all(|component| {
+            !component.is_empty()
+                && component.bytes().all(|byte| byte.is_ascii_digit())
+                && component.parse::<u8>().is_ok()
         })
 }
 
