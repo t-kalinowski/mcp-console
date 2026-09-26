@@ -107,7 +107,7 @@ def main() -> None:
     # Keep ownership beside the source, outside Git and Cargo's mutable output.
     # Explicit source overrides and automatic selection share this same lock.
     source_lock = checkout.with_name(f"{checkout.name}.stage.lock")
-    with checkout_owner(ROOT), exclusive([source_lock], "sandbox source"):
+    with checkout_owner(ROOT), exclusive([source_lock], "sandbox source", wait=True):
         stage(args, pin)
 
 

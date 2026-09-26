@@ -127,7 +127,7 @@ scripts/test --update BOUNDARY/SUITE[::CASE]
 `scripts/format` attempts Ruff, Yamark, rustfmt, and Air in sequence and reports each result.
 A missing or failing formatter does not prevent the remaining formatters from running; the default exits successfully, while `--strict` returns failure if any formatter failed.
 Review its output and resulting changes.
-Validation records and phase logs remain in `.dev-workflow/runs/`; see `docs/DEVELOPMENT.md` for ownership and the host concurrency budget.
+Validation records and phase logs remain in `.dev-workflow/runs/`; see `docs/DEVELOPMENT.md` for checkout ownership and concurrent worktrees.
 `scripts/check` is the ordinary final local gate: stage the companion, validate extracted runtime sources, check architecture, check Rust formatting and Clippy, run Rust tests in debug, and run the explicit smoke transcript profile against the release executable.
 `scripts/check --quick` is a backwards-compatible alias for this default.
 `scripts/check --full` adds repository-tooling self-tests, all capability-applicable transcripts, and uv source and wheel installation checks.
