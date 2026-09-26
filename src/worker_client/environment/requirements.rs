@@ -1,8 +1,25 @@
+use rmcp::schemars;
 use std::collections::BTreeSet;
 
-use super::state::{Environment, PythonEnvironment, ensure_python_additions_available};
+use super::state::{Environment, PythonEnvironment, ensure_managed_python_available};
 
+#[derive(Clone, Copy, Default, PartialEq, Eq, serde::Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[schemars(inline)]
+pub(crate) enum RequirementsAction {
+    Get,
+    #[default]
+    Add,
+    Set,
+    Reset,
+}
+
+#[derive(Default)]
 pub(crate) struct Requirements {
+    pub(crate) call_id: Option<u64>,
+    pub(crate) action: RequirementsAction,
+    pub(crate) python_version: Vec<String>,
+    pub(crate) exclude_newer: Option<Option<String>>,
     pub(crate) duckdb: Vec<String>,
     pub(crate) python: Vec<String>,
     pub(crate) r: Vec<String>,
@@ -10,22 +27,42 @@ pub(crate) struct Requirements {
 
 impl Requirements {
     pub(in crate::worker_client) fn validate(&self) -> Result<(), String> {
-        if self.duckdb.is_empty() && self.r.is_empty() && self.python.is_empty() {
+        if self.action == RequirementsAction::Add
+            && self.duckdb.is_empty()
+            && self.r.is_empty()
+            && self.python.is_empty()
+            && self.python_version.is_empty()
+            && self.exclude_newer.is_none()
+        {
             return Err(
                 "at least one of `requirements.r`, `requirements.python`, or `requirements.duckdb` is required"
                     .to_string(),
             );
         }
+        if self.action == RequirementsAction::Add {
+            for (name, length) in [
+                ("duckdb", self.duckdb.len()),
+                ("r", self.r.len()),
+                ("python", self.python.len()),
+            ] {
+                if length > 64 {
+                    let noun = if name == "duckdb" {
+                        "extensions"
+                    } else {
+                        "requirements"
+                    };
+                    return Err(format!("`requirements.{name}` accepts at most 64 {noun}"));
+                }
+            }
+        }
         validate_duckdb_extensions(&self.duckdb)?;
         validate_r_requirements(&self.r)?;
-        validate_python_requirements(&self.python)
+        crate::python_requirement::validate_all(&self.python)?;
+        crate::python_requirement::validate_version_constraints(&self.python_version)
     }
 }
 
 fn validate_duckdb_extensions(extensions: &[String]) -> Result<(), String> {
-    if extensions.len() > 64 {
-        return Err("`requirements.duckdb` accepts at most 64 extensions".to_string());
-    }
     if extensions.iter().any(|extension| extension.len() > 64) {
         return Err("DuckDB extension names must be at most 64 ASCII characters".to_string());
     }
@@ -44,9 +81,6 @@ fn validate_duckdb_extensions(extensions: &[String]) -> Result<(), String> {
 }
 
 fn validate_r_requirements(requirements: &[String]) -> Result<(), String> {
-    if requirements.len() > 64 {
-        return Err("`requirements.r` accepts at most 64 requirements".to_string());
-    }
     if requirements
         .iter()
         .any(|requirement| requirement.trim().is_empty())
@@ -63,14 +97,8 @@ fn validate_r_requirements(requirements: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_python_requirements(python: &[String]) -> Result<(), String> {
-    if python.len() > 64 {
-        return Err("`requirements.python` accepts at most 64 requirements".to_string());
-    }
-    crate::python_requirement::validate_all(python)
-}
-
 pub(in crate::worker_client) struct RequirementDelta {
+    pub(super) restart_required: bool,
     pub(super) duckdb_extensions: BTreeSet<String>,
     pub(super) duckdb_changed: bool,
     pub(super) python_additions: BTreeSet<String>,
@@ -84,12 +112,23 @@ impl RequirementDelta {
         environment: &Environment,
         requirements: Requirements,
     ) -> Result<Self, String> {
+        if matches!(
+            requirements.action,
+            RequirementsAction::Set | RequirementsAction::Reset
+        ) {
+            return Self::replacement(environment, requirements);
+        }
         let Requirements {
             mut duckdb,
             python,
             r,
+            python_version,
+            exclude_newer,
+            ..
         } = requirements;
-        ensure_python_additions_available(environment, &python)?;
+        if !python.is_empty() {
+            ensure_managed_python_available(environment)?;
+        }
         let pending = match &environment.r_resolver {
             super::super::RResolver::Pending(setup) => Some(setup),
             _ => None,
@@ -126,15 +165,69 @@ impl RequirementDelta {
             python_candidate = Some(crate::worker_protocol::default_python_requirement_manifest());
         }
 
+        let current_python = environment.declaration().python_manifest();
+        let mut candidate = python_candidate
+            .clone()
+            .unwrap_or_else(|| current_python.clone());
+        candidate.python_version.extend(python_version);
+        if let Some(cutoff) = exclude_newer {
+            if current_python.exclude_newer.is_some() && cutoff != current_python.exclude_newer {
+                return Err("use requirements.action=\"set\" to replace exclude_newer".into());
+            }
+            candidate.exclude_newer = cutoff;
+        }
+        let candidate = candidate.normalized();
+        let restart_required = candidate.python_version != current_python.python_version
+            || candidate.exclude_newer != current_python.exclude_newer;
+        if restart_required {
+            ensure_managed_python_available(environment)?;
+            python_candidate = Some(candidate);
+        }
         let (r_requirements, r_changed) = merge_r_requirements(environment, r);
 
         Ok(Self {
+            restart_required,
             duckdb_extensions,
             duckdb_changed,
             python_additions,
             python_candidate,
             r_requirements,
             r_changed,
+        })
+    }
+
+    fn replacement(environment: &Environment, requirements: Requirements) -> Result<Self, String> {
+        let current = environment.declaration();
+        let candidate = if requirements.action == RequirementsAction::Reset {
+            environment.startup_declaration()
+        } else {
+            super::inspection::Declaration {
+                r: requirements.r,
+                python: requirements.python,
+                duckdb: requirements.duckdb,
+                python_version: requirements.python_version,
+                exclude_newer: requirements.exclude_newer.flatten(),
+            }
+            .normalized()
+        };
+        let changed = candidate != current;
+        let pending = matches!(environment.r_resolver, super::super::RResolver::Pending(_));
+        let python = candidate.python_manifest();
+        let manages_python = environment.manages_python();
+        if python != current.python_manifest() && !manages_python {
+            ensure_managed_python_available(environment)?;
+        }
+        Ok(Self {
+            restart_required: true,
+            duckdb_changed: changed && (candidate.duckdb != current.duckdb || pending),
+            duckdb_extensions: candidate.duckdb.into_iter().collect(),
+            python_additions: Default::default(),
+            python_candidate: (changed
+                && manages_python
+                && (pending || python != current.python_manifest()))
+            .then_some(python),
+            r_changed: changed && (pending || candidate.r != current.r || environment.r.is_none()),
+            r_requirements: candidate.r,
         })
     }
 
@@ -155,19 +248,13 @@ pub(super) fn merge_r_requirements(
                 .map(|requirement| (*requirement).to_string()),
         );
     }
-    if environment.custom_worker {
-        additions.extend(
-            super::super::CUSTOM_DUCKDB_R_REQUIREMENTS
-                .iter()
-                .map(|requirement| (*requirement).to_string()),
-        );
-    }
     let current = environment
         .r
         .as_ref()
         .map(|managed| managed.requirements().iter().cloned().collect())
         .unwrap_or_default();
-    let changed = !additions.is_subset(&current);
+    let changed =
+        !additions.is_subset(&current) || (environment.custom_worker && environment.r.is_none());
     (current.union(&additions).cloned().collect(), changed)
 }
 

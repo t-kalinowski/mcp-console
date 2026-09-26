@@ -25,7 +25,7 @@ result:
     - name: send
       description: >-
         Persistent local Python workbench. State persists across calls. R and
-        SQL cells, live requirements, and automatic package installation are
+        SQL cells, requirement changes, and automatic package installation are
         unavailable in this session. Python uses the environment selected at
         server startup; restart resets objects and retains that environment.
 
@@ -66,7 +66,7 @@ result:
               One complete Python cell in persistent state. The final expression
               displays automatically. Use input() for managed stdin; Matplotlib plots
               return as PNG images when installed. Use only packages already in the
-              selected environment. R integration, SQL cells, live requirements, and
+              selected environment. R integration, SQL cells, requirement changes, and
               automatic package installation are unavailable. Use control: restart
               with python to run in a fresh worker using the same environment, or
               timeout_ms: 0 then poll for background execution.
@@ -87,6 +87,22 @@ result:
             enum:
               - interrupt
               - restart
+          requirements:
+            type:
+              - object
+              - "null"
+            description: >-
+              Inspect the server's retained declaration with action=get. Preparation
+              is unavailable for this target; the declaration is not an
+              installed-package inventory.
+            properties:
+              action:
+                type: string
+                enum:
+                  - get
+            required:
+              - action
+            additionalProperties: false
           stdin:
             description: >-
               Input for an active read, prompt, or debugger. When responding to active

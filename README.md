@@ -21,7 +21,7 @@ See the [runtime limitations](docs/BUILTIN_RUNTIME.md#current-limitations) and [
 
 Local sessions can run Python without R.
 When R is absent, Console uses `uv` to resolve its default Python environment, or uses `python3` then `python` from `PATH` when `uv` is absent.
-These sessions support Python execution, input, plots, interrupts, restart, and recording; live requirements, automatic package installation, and SQL are unavailable.
+These sessions support Python execution, input, plots, interrupts, restart, and recording; requirement changes, automatic package installation, and SQL are unavailable.
 With R installed, the worker retains mixed R/Python execution through reticulate and a persistent DuckDB connection for SQL.
 See [Python sessions without R](docs/BUILTIN_RUNTIME.md#python-sessions-without-r) for selection and package limitations.
 
@@ -103,7 +103,10 @@ The [process diagram and ownership guide](docs/ARCHITECTURE.md#process-layout) e
 - The **runtime worker** owns live R, Python, and SQL state and evaluates one cell at a time.
 - The **private sandbox runner** owns native enforcement, private temporary storage, and descendant supervision within its [documented limits](docs/SANDBOX.md#supported-hosts-and-lifetime-limits).
 
-Restart discards in-memory language and database state while retaining prepared requirements in the server.
+Restart discards in-memory language and database state while retaining selected requirements in the server.
+Use `send(requirements={"action": "get"})` to inspect them.
+Add is the default; `set` replaces the complete declaration, including with no optional packages, and `reset` restores startup defaults.
+Changed replacements of a live worker require `control="restart"`; see [requirements management](docs/REQUIREMENTS.md#inspecting-and-replacing-requirements).
 Recordings remain files; they are not session checkpoints.
 The architecture separates host setup and recording from evaluated code, while the shared worker enables interoperation and means a restart affects all three languages.
 

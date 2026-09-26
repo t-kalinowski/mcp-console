@@ -1,0 +1,714 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  requirements:
+    action: get
+result:
+  content:
+    - type: text
+      text: |-
+        {
+          "requirements": {
+            "r": [
+              "DBI",
+              "arrow",
+              "duckdb",
+              "nanoarrow",
+              "reticulate",
+              "tidyverse"
+            ],
+            "python": [
+              "numpy",
+              "pandas"
+            ],
+            "duckdb": [
+              "icu",
+              "json"
+            ],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "prepared": false,
+          "runtime_requirements": {
+            "r": [
+              "DBI",
+              "arrow",
+              "duckdb",
+              "jsonlite",
+              "nanoarrow",
+              "pillar",
+              "reticulate",
+              "tibble",
+              "utf8"
+            ],
+            "python": []
+          }
+        }
+  structuredContent:
+    requirements:
+      r:
+        - DBI
+        - arrow
+        - duckdb
+        - nanoarrow
+        - reticulate
+        - tidyverse
+      python:
+        - numpy
+        - pandas
+      duckdb:
+        - icu
+        - json
+      python_version: []
+      exclude_newer: ~
+    prepared: false
+    runtime_requirements:
+      r:
+        - DBI
+        - arrow
+        - duckdb
+        - jsonlite
+        - nanoarrow
+        - pillar
+        - reticulate
+        - tibble
+        - utf8
+      python: []
+  isError: false
+---
+send:
+  r: marker <- 42L; pid <- Sys.getpid()
+  requirements:
+    action: set
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  requirements:
+    action: get
+result:
+  content:
+    - type: text
+      text: |-
+        {
+          "requirements": {
+            "r": [],
+            "python": [],
+            "duckdb": [],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "prepared": true,
+          "runtime_requirements": {
+            "r": [
+              "DBI",
+              "arrow",
+              "duckdb",
+              "jsonlite",
+              "nanoarrow",
+              "pillar",
+              "reticulate",
+              "tibble",
+              "utf8"
+            ],
+            "python": []
+          }
+        }
+  structuredContent:
+    requirements:
+      r: []
+      python: []
+      duckdb: []
+      python_version: []
+      exclude_newer: ~
+    prepared: true
+    runtime_requirements:
+      r:
+        - DBI
+        - arrow
+        - duckdb
+        - jsonlite
+        - nanoarrow
+        - pillar
+        - reticulate
+        - tibble
+        - utf8
+      python: []
+  isError: false
+---
+send:
+  control: restart
+  requirements:
+    action: set
+    r:
+      - missing.fixture
+    python:
+      - six
+  r: marker <- 0L
+result:
+  content:
+    - type: text
+      text: >-
+        [R package resolution failed with exit status: 1: synthetic `ir` failure
+        for missing.fixture]
+  isError: true
+---
+send:
+  requirements:
+    action: get
+result:
+  content:
+    - type: text
+      text: |-
+        {
+          "requirements": {
+            "r": [],
+            "python": [],
+            "duckdb": [],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "prepared": true,
+          "runtime_requirements": {
+            "r": [
+              "DBI",
+              "arrow",
+              "duckdb",
+              "jsonlite",
+              "nanoarrow",
+              "pillar",
+              "reticulate",
+              "tibble",
+              "utf8"
+            ],
+            "python": []
+          }
+        }
+  structuredContent:
+    requirements:
+      r: []
+      python: []
+      duckdb: []
+      python_version: []
+      exclude_newer: ~
+    prepared: true
+    runtime_requirements:
+      r:
+        - DBI
+        - arrow
+        - duckdb
+        - jsonlite
+        - nanoarrow
+        - pillar
+        - reticulate
+        - tibble
+        - utf8
+      python: []
+  isError: false
+---
+send:
+  control: restart
+  requirements:
+    action: set
+    r:
+      - praise
+    duckdb:
+      - not_a_real_duckdb_extension
+result:
+  content:
+    - type: text
+      text: |-
+        DuckDB extension resolution failed with exit status: 1: Error in `duckdb_result()`:
+        ! Invalid Error: HTTP Error: Failed to download extension "not_a_real_duckdb_extension" at URL "<DuckDB extension URL>" (HTTP 404)
+
+        Candidate extensions: "motherduck", "odbc", "unity_catalog", "delta", "lance"
+        For more info, visit <DuckDB extension troubleshooting URL>
+        ℹ Context: rapi_execute
+        ℹ Error type: INVALID
+        Backtrace:
+             ▆
+          1. ├─base::local(...)
+          2. │ └─base::eval.parent(substitute(eval(quote(expr), envir)))
+          3. │   └─base::eval(expr, p)
+          4. │     └─base::eval(expr, p)
+          5. ├─base::eval(...)
+          6. │ └─base::eval(...)
+          7. │   ├─DBI::dbExecute(connection, base::paste("INSTALL", identifier))
+          8. │   └─DBI::dbExecute(connection, base::paste("INSTALL", identifier))
+          9. │     ├─DBI::dbSendStatement(conn, statement, ...)
+         10. │     └─DBI::dbSendStatement(conn, statement, ...)
+         11. │       ├─DBI::dbSendQuery(conn, statement, ...)
+         12. │       └─duckdb::dbSendQuery(conn, statement, ...)
+         13. │         └─duckdb (local) .local(conn, statement, ...)
+         14. │           └─duckdb:::duckdb_result(connection = conn, stmt_lst = stmt_lst, arrow = arrow)
+         15. │             └─duckdb:::duckdb_execute(res)
+         16. │               └─duckdb:::rethrow_rapi_execute(...)
+         17. │                 ├─rlang::try_fetch(...)
+         18. │                 │ ├─base::tryCatch(...)
+         19. │                 │ │ └─base (local) tryCatchList(expr, classes, parentenv, handlers)
+         20. │                 │ │   └─base (local) tryCatchOne(expr, names, parentenv, handlers[[1L]])
+         21. │                 │ │     └─base (local) doTryCatch(return(expr), name, parentenv, handler)
+         22. │                 │ └─base::withCallingHandlers(...)
+         23. │                 └─duckdb:::rapi_execute(stmt, convert_opts)
+         24. ├─duckdb (local) `<fn>`(...)
+         25. │ └─rlang::abort(error_parts, class = "duckdb_error", !!!fields)
+         26. │   └─rlang:::signal_abort(cnd, .file)
+         27. │     └─base::signalCondition(cnd)
+         28. └─rlang (local) `<fn>`(`<dckdb_rr>`)
+         29.   └─handlers[[1L]](cnd)
+         30.     └─duckdb:::rethrow_error_from_rapi(e, call)
+         31.       └─rlang::abort(msg, call = call)
+        Execution halted
+  isError: true
+---
+send:
+  requirements:
+    action: get
+result:
+  content:
+    - type: text
+      text: |-
+        {
+          "requirements": {
+            "r": [],
+            "python": [],
+            "duckdb": [],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "prepared": true,
+          "runtime_requirements": {
+            "r": [
+              "DBI",
+              "arrow",
+              "duckdb",
+              "jsonlite",
+              "nanoarrow",
+              "pillar",
+              "reticulate",
+              "tibble",
+              "utf8"
+            ],
+            "python": []
+          }
+        }
+  structuredContent:
+    requirements:
+      r: []
+      python: []
+      duckdb: []
+      python_version: []
+      exclude_newer: ~
+    prepared: true
+    runtime_requirements:
+      r:
+        - DBI
+        - arrow
+        - duckdb
+        - jsonlite
+        - nanoarrow
+        - pillar
+        - reticulate
+        - tibble
+        - utf8
+      python: []
+  isError: false
+---
+send:
+  r: stopifnot(marker == 42L, pid == Sys.getpid())
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  control: restart
+  requirements:
+    action: set
+    r:
+      - praise
+    duckdb:
+      - fts
+  r: stopifnot(requireNamespace("praise"), !exists("marker"))
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        Loading required namespace: praise
+        [done]
+  isError: false
+---
+send:
+  requirements:
+    action: get
+result:
+  content:
+    - type: text
+      text: |-
+        {
+          "requirements": {
+            "r": [
+              "praise"
+            ],
+            "python": [],
+            "duckdb": [
+              "fts"
+            ],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "prepared": true,
+          "runtime_requirements": {
+            "r": [
+              "DBI",
+              "arrow",
+              "duckdb",
+              "jsonlite",
+              "nanoarrow",
+              "pillar",
+              "reticulate",
+              "tibble",
+              "utf8"
+            ],
+            "python": []
+          }
+        }
+  structuredContent:
+    requirements:
+      r:
+        - praise
+      python: []
+      duckdb:
+        - fts
+      python_version: []
+      exclude_newer: ~
+    prepared: true
+    runtime_requirements:
+      r:
+        - DBI
+        - arrow
+        - duckdb
+        - jsonlite
+        - nanoarrow
+        - pillar
+        - reticulate
+        - tibble
+        - utf8
+      python: []
+  isError: false
+---
+send:
+  sql: LOAD fts; SELECT 42 AS answer
+result:
+  content:
+    - type: text
+      text: |
+        # A tibble: 1 × 1
+           answer
+          <int32>
+        1      42
+  isError: false
+---
+send:
+  control: restart
+  requirements:
+    action: set
+    python:
+      - six
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: false
+---
+send:
+  requirements:
+    action: get
+result:
+  content:
+    - type: text
+      text: |-
+        {
+          "requirements": {
+            "r": [],
+            "python": [
+              "six"
+            ],
+            "duckdb": [],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "prepared": true,
+          "runtime_requirements": {
+            "r": [
+              "DBI",
+              "arrow",
+              "duckdb",
+              "jsonlite",
+              "nanoarrow",
+              "pillar",
+              "reticulate",
+              "tibble",
+              "utf8"
+            ],
+            "python": []
+          }
+        }
+  structuredContent:
+    requirements:
+      r: []
+      python:
+        - six
+      duckdb: []
+      python_version: []
+      exclude_newer: ~
+    prepared: true
+    runtime_requirements:
+      r:
+        - DBI
+        - arrow
+        - duckdb
+        - jsonlite
+        - nanoarrow
+        - pillar
+        - reticulate
+        - tibble
+        - utf8
+      python: []
+  isError: false
+---
+send:
+  python: import yaml12; yaml12.__name__
+result:
+  content:
+    - type: text
+      text: |
+        [resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']
+        'yaml12'
+  isError: false
+---
+send:
+  requirements:
+    action: get
+result:
+  content:
+    - type: text
+      text: |-
+        {
+          "requirements": {
+            "r": [],
+            "python": [
+              "py-yaml12",
+              "six"
+            ],
+            "duckdb": [],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "prepared": true,
+          "runtime_requirements": {
+            "r": [
+              "DBI",
+              "arrow",
+              "duckdb",
+              "jsonlite",
+              "nanoarrow",
+              "pillar",
+              "reticulate",
+              "tibble",
+              "utf8"
+            ],
+            "python": []
+          }
+        }
+  structuredContent:
+    requirements:
+      r: []
+      python:
+        - py-yaml12
+        - six
+      duckdb: []
+      python_version: []
+      exclude_newer: ~
+    prepared: true
+    runtime_requirements:
+      r:
+        - DBI
+        - arrow
+        - duckdb
+        - jsonlite
+        - nanoarrow
+        - pillar
+        - reticulate
+        - tibble
+        - utf8
+      python: []
+  isError: false
+---
+send:
+  r: stopifnot(requireNamespace("mcpcleared", quietly = TRUE))
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  requirements:
+    action: get
+result:
+  content:
+    - type: text
+      text: |-
+        {
+          "requirements": {
+            "r": [
+              "mcpcleared"
+            ],
+            "python": [
+              "py-yaml12",
+              "six"
+            ],
+            "duckdb": [],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "prepared": true,
+          "runtime_requirements": {
+            "r": [
+              "DBI",
+              "arrow",
+              "duckdb",
+              "jsonlite",
+              "nanoarrow",
+              "pillar",
+              "reticulate",
+              "tibble",
+              "utf8"
+            ],
+            "python": []
+          }
+        }
+  structuredContent:
+    requirements:
+      r:
+        - mcpcleared
+      python:
+        - py-yaml12
+        - six
+      duckdb: []
+      python_version: []
+      exclude_newer: ~
+    prepared: true
+    runtime_requirements:
+      r:
+        - DBI
+        - arrow
+        - duckdb
+        - jsonlite
+        - nanoarrow
+        - pillar
+        - reticulate
+        - tibble
+        - utf8
+      python: []
+  isError: false
+---
+send:
+  control: restart
+  requirements:
+    action: reset
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: false
+---
+send:
+  requirements:
+    action: get
+result:
+  content:
+    - type: text
+      text: |-
+        {
+          "requirements": {
+            "r": [
+              "DBI",
+              "arrow",
+              "duckdb",
+              "nanoarrow",
+              "reticulate",
+              "tidyverse"
+            ],
+            "python": [
+              "numpy",
+              "pandas"
+            ],
+            "duckdb": [
+              "icu",
+              "json"
+            ],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "prepared": true,
+          "runtime_requirements": {
+            "r": [
+              "DBI",
+              "arrow",
+              "duckdb",
+              "jsonlite",
+              "nanoarrow",
+              "pillar",
+              "reticulate",
+              "tibble",
+              "utf8"
+            ],
+            "python": []
+          }
+        }
+  structuredContent:
+    requirements:
+      r:
+        - DBI
+        - arrow
+        - duckdb
+        - nanoarrow
+        - reticulate
+        - tidyverse
+      python:
+        - numpy
+        - pandas
+      duckdb:
+        - icu
+        - json
+      python_version: []
+      exclude_newer: ~
+    prepared: true
+    runtime_requirements:
+      r:
+        - DBI
+        - arrow
+        - duckdb
+        - jsonlite
+        - nanoarrow
+        - pillar
+        - reticulate
+        - tibble
+        - utf8
+      python: []
+  isError: false

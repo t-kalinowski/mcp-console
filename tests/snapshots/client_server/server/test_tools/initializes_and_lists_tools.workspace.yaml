@@ -155,14 +155,20 @@ result:
               - restart
           requirements:
             description: |-
-              Additive R packages, Python packages, or DuckDB extensions to retain for later calls.
+              Inspect or manage retained R packages, Python packages, and DuckDB extensions.
+              action=get returns a read-only snapshot, including Python constraints and separate runtime
+              infrastructure. It cannot accompany code, stdin, control, or payload fields. The complete
+              manifest is in structuredContent.requirements even when it exceeds the text preview limit.
+              action=add is the default; action=set replaces the whole declaration without injecting defaults;
+              action=reset restores startup defaults. Changed replacements require control="restart" with a
+              live worker. Empty set means no optional requirements; bare {} is invalid.
               Requirements alone perform standalone preparation. With one cell, they are preconditions of
               that cell. With `control = "restart"`, they are part of the restart transaction, with or
-              without a cell. Requirements are not accepted with interrupt unless a cell follows.
+              without a cell. Only add can accompany interrupt, and only when a cell follows.
               Preparation does not import, attach, or load dependencies. On a code-bearing call without
               control, preparation completes before same-call nonempty stdin is queued. Standalone
               preparation cannot queue nonempty stdin. With restart, failure leaves the current worker
-              unchanged and sends neither stdin nor code. With interrupt and a following cell, signal
+              unchanged and sends neither stdin nor code. With add, interrupt, and a following cell, signal
               delivery and stdin enqueue happen before requirements are validated or prepared and are not
               rolled back if that later work fails. Ordinary CRAN packages used by the built-in R worker need
               not be declared here; use `requirements.r` to stage packages ahead of evaluation or provide
@@ -176,9 +182,37 @@ result:
               - object
               - "null"
             properties:
+              action:
+                description: |-
+                  get inspects the committed declaration without starting a worker or consuming output.
+                  add (default) accumulates requirements. set replaces all lists and Python constraints;
+                  omitted fields are empty, including when only action is supplied. reset restores startup
+                  defaults. get and reset reject payload fields. Changed set/reset with a live worker require
+                  control="restart"; the complete candidate resolves before the old worker is retired.
+                  add accepts up to 64 entries per language per call; set accepts the complete accumulated manifest.
+                type: string
+                enum:
+                  - get
+                  - add
+                  - set
+                  - reset
+              python_version:
+                description: |-
+                  Python version constraints, preserved by get and replaced as a whole by set. Add appends
+                  constraints; changing constraints with a live worker requires control="restart".
+                type: array
+                items:
+                  type: string
+              exclude_newer:
+                description: |-
+                  Python package publication cutoff accepted by uv, for example "2026-01-01". set clears an
+                  omitted or null cutoff; add preserves an omitted cutoff and cannot replace an existing one.
+                type:
+                  - string
+                  - "null"
               duckdb:
                 description: |-
-                  Additive DuckDB extension names for the managed DuckDB backend, for standalone preparation,
+                  DuckDB extension names for the managed DuckDB backend, for standalone preparation,
                   preparation before a cell, or a restart transaction, for example `fts`, `spatial`, or `excel`.
                   JSON and ICU are included in built-in defaults. Names must start with a lowercase ASCII
                   letter and contain only lowercase ASCII letters, digits, and underscores. The host resolver
@@ -190,11 +224,9 @@ result:
                   type: string
                   minLength: 1
                   maxLength: 64
-                maxItems: 64
-                default: []
               r:
                 description: |-
-                  Additive, single-line `ir` package references for standalone preparation, preparation before a
+                  Single-line `ir` package references for standalone preparation, preparation before a
                   cell, or a restart transaction, for example `data.table`, `sf`, or `yaml12`. Use this field
                   to stage packages ahead of evaluation or supply an explicit supported remote `ir` reference.
                   Automatic R discovery accepts only plain package names. An idle worker that implements R
@@ -204,11 +236,9 @@ result:
                 items:
                   type: string
                   minLength: 1
-                maxItems: 64
-                default: []
               python:
                 description: |-
-                  Additive, named PEP 508 registry requirements for standalone preparation, preparation before a
+                  Named PEP 508 registry requirements for standalone preparation, preparation before a
                   cell, or a restart transaction, for example `polars>=1`, `scikit-learn`, or
                   `matplotlib; python_version >= '3.10'`. Use explicit requirements when automatic import
                   inference needs a different distribution, a version, an extra, or an environment marker, or
@@ -222,8 +252,6 @@ result:
                 items:
                   type: string
                   minLength: 1
-                maxItems: 64
-                default: []
             additionalProperties: false
           stdin:
             description: |-

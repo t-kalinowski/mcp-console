@@ -344,7 +344,12 @@ It retains the selected bootstrap as pending setup and accepts MCP input before 
 An operation that first needs an environment resolves the defaults through the normal generation-owned resolver lifecycle and commits the complete candidate only after all preparation succeeds.
 With directly available `uv`, local Python preparation runs before R library preparation and does not require a managed R library; reticulate bootstrap remains the R-backed fallback when direct `uv` is unavailable.
 For an ordinary cell, this happens after evaluation admission, so the client can poll or interrupt preparation.
-Explicit requirements remain preconditions of evaluation and combine their additions with the pending defaults.
+Explicit requirements remain preconditions of evaluation.
+Default-add requests combine additions with pending defaults; set/reset calculate a whole-declaration candidate using the same environment owner and resolver transaction.
+Retained R requirements describe the declaration separately from necessary R bridge and SQL infrastructure.
+Managed Python already carries its logical manifest, including an empty package list.
+A separate read-only projection is published at generation-checked environment commits.
+Inspection reads that short-lived snapshot lock without acquiring the environment lock held during resolution.
 If no resolver bootstrap is available, it accepts MCP input with an empty retained environment and a fixed bare capability that disables later dynamic resolution.
 The worker itself starts lazily when an operation first needs it; preparing retained requirements can happen without launching a worker.
 An explicit restart starts its replacement eagerly, including when the session had not started a worker before.
@@ -566,7 +571,10 @@ SQL chunks require a DBI connection supplied by the document user.
 
 SSH, Docker, and Docker Sandbox projections identify the execution target and omit the local execution root.
 Rendering them executes the captured cells, so the user must prepare an appropriate environment and files first; the document does not reproduce remote files.
-Every generated QMD includes the `ir render transcript.qmd` command in a frontmatter comment.
+A committed set/reset records the normalized declaration, Python constraints, and originating call ID in a `requirements_selected` event.
+The Markdown projection displays it; Quarto inserts it before the accompanying cell, marks environment boundaries, and disables evaluation.
+One header manifest cannot replay cells with incompatible historical requirements.
+QMD without replacement boundaries includes the `ir render transcript.qmd` command in a frontmatter comment.
 
 For a local session, render the source projection from the recording directory with:
 

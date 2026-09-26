@@ -55,6 +55,7 @@ impl Client {
             duckdb_extensions,
             duckdb_changed,
             python_additions: _,
+            restart_required: _,
             python_candidate,
             r_requirements,
             r_changed,
@@ -184,6 +185,13 @@ impl Client {
             stop_handle = Some(handle.clone());
             self.register_resolver_stop_handle(generation, handle)
         };
+        let retained = requirements.clone();
+        let requirements = requirements
+            .into_iter()
+            .chain(self.0.runtime_r_requirements.iter().cloned())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
         let result = match resolver {
             super::super::RResolver::Discover => {
                 crate::resolver::resolve_r(requirements, on_started)
@@ -211,6 +219,7 @@ impl Client {
         self.clear_resolver_stop_handle(generation)
             .map_err(EnvironmentResolutionFailure::Operation)?;
         classify_resolver_result(result, stop_handle.as_ref())
+            .map(|managed| managed.with_retained_requirements(retained))
     }
 
     fn resolve_managed_python_host(

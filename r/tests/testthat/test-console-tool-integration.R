@@ -160,3 +160,37 @@ test_that("console_tool works when registered with an ellmer chat", {
     })
   })
 })
+
+
+test_that("requirements actions preserve scalar fields and empty lists", {
+  with_temp_working_directory({
+    send <- console_tool(path = real_mcp_console(), no_sandbox = TRUE)
+    startup <- jsonlite::fromJSON(
+      send(requirements = list(action = "get"))@text
+    )
+    expect_false(startup$prepared)
+    send(
+      requirements = list(
+        action = "set",
+        r = character(),
+        python = character(),
+        duckdb = character(),
+        python_version = ">=3.11",
+        exclude_newer = "2026-01-01"
+      )
+    )
+    selected <- jsonlite::fromJSON(
+      send(requirements = list(action = "get"))@text
+    )
+    expect_length(selected$requirements$python, 0L)
+    expect_identical(selected$requirements$python_version, ">=3.11")
+    expect_identical(selected$requirements$exclude_newer, "2026-01-01")
+    declaration <- selected$requirements
+    declaration$action <- "set"
+    send(requirements = declaration)
+    expect_identical(
+      jsonlite::fromJSON(send(requirements = list(action = "get"))@text),
+      selected
+    )
+  })
+})

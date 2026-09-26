@@ -23,10 +23,10 @@ mod platform;
 #[path = "worker_client/unsupported.rs"]
 mod platform;
 
-pub(crate) use environment::Requirements;
 use environment::{
     Environment, PreparationIntent, PrepareResult, PythonEnvironment, RuntimeRResolutionFailure,
 };
+pub(crate) use environment::{Requirements, RequirementsAction};
 use evaluation::{Evaluation, EvaluationWait};
 use lifecycle::{
     ControlledSendAdmission, LifecycleControl, OldGenerationCommitDisposition, WorkerGeneration,
@@ -70,6 +70,13 @@ impl SendRequest {
         let Some(requirements) = &self.requirements else {
             return Ok(());
         };
+        if matches!(
+            requirements.action,
+            RequirementsAction::Set | RequirementsAction::Reset
+        ) && matches!(self.control, Some(SendControl::Interrupt))
+        {
+            return Err("requirements.action=set/reset cannot accompany interrupt; use control=\"restart\" to replace a live environment".into());
+        }
         if !dynamic_resolution {
             return Err(
                 "dynamic environment resolution is unavailable; install `ir` or `uv` and restart MCP Console"
@@ -119,6 +126,8 @@ struct ClientInner {
     output: OutputTape,
     lifecycle: Mutex<LifecycleControl>,
     environment: Option<Mutex<Environment>>,
+    requirements_snapshot: Mutex<serde_json::Value>,
+    runtime_r_requirements: Vec<String>,
     dynamic_resolution: bool,
     local_runtime: Option<crate::local_runtime::Selection>,
     target: Option<crate::target_session::Session>,
@@ -485,6 +494,21 @@ impl Client {
             preparation: tokio::sync::RwLock::new(()),
             output: OutputTape::new(),
             lifecycle: Mutex::new(LifecycleControl::new()),
+            requirements_snapshot: Mutex::new(
+                environment
+                    .as_ref()
+                    .map(Environment::inspection)
+                    .unwrap_or(serde_json::Value::Null),
+            ),
+            runtime_r_requirements: environment
+                .as_ref()
+                .map(|env| {
+                    env.runtime_r_requirements()
+                        .iter()
+                        .map(|s| (*s).into())
+                        .collect()
+                })
+                .unwrap_or_default(),
             environment: environment.map(Mutex::new),
             dynamic_resolution,
             local_runtime: None,
@@ -987,11 +1011,7 @@ impl Client {
         transcript: crate::transcript::Transcript,
         call_id: Option<u64>,
     ) -> Result<ControlledEvaluation, String> {
-        let requirements = requirements.unwrap_or(Requirements {
-            duckdb: Vec::new(),
-            python: Vec::new(),
-            r: Vec::new(),
-        });
+        let requirements = requirements.unwrap_or_default();
         let stdin_follows = stdin.as_ref().is_some_and(|stdin| !stdin.is_empty());
         let restart = self.restart_blocking(
             requirements,
@@ -1635,14 +1655,8 @@ impl Client {
             if let Some(environment) = environment.as_mut()
                 && matches!(environment.r_resolver, RResolver::Pending(_))
             {
-                let delta = environment::RequirementDelta::calculate(
-                    environment,
-                    Requirements {
-                        duckdb: Vec::new(),
-                        python: Vec::new(),
-                        r: Vec::new(),
-                    },
-                )?;
+                let delta =
+                    environment::RequirementDelta::calculate(environment, Requirements::default())?;
                 let prepared = self
                     .resolve_prestart_environment(&generation, environment, delta)
                     .map_err(|failure| SendFailure::from(failure.into_message()))?;
@@ -1653,6 +1667,7 @@ impl Client {
                     .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
                 lifecycle.ensure_startup(&generation)?;
                 **environment = prepared;
+                self.publish_requirements(environment);
             }
             let python = environment
                 .as_ref()

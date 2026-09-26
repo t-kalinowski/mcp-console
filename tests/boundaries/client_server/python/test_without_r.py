@@ -48,9 +48,7 @@ def test_resolves_default_python_without_r(
         with McpClient(binary, execution.serve(), environment(path)) as client:
             client.initialize_and_list_tools()
             schema = client.transcript[-1]["result"]["tools"][0]
-            assert {"r", "sql", "requirements"}.isdisjoint(
-                schema["inputSchema"]["properties"]
-            )
+            assert {"r", "sql"}.isdisjoint(schema["inputSchema"]["properties"])
             assert (
                 "without R" in schema["description"]
                 or "R and SQL" in schema["description"]

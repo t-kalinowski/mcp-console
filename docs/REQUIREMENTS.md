@@ -29,7 +29,8 @@ The local server keeps requirement merging, transaction and activation decisions
 Remote results require confirmed resolver cleanup before commit; uncertain completion blocks further preparation and replacement.
 
 [Docker targets](DOCKER.md) and [Docker Sandbox targets](DOCKER_SANDBOX.md) deliberately use a preinstalled image environment.
-Capability probes never select `uv` or `ir`; `requirements`, automatic resolution, and worker preparation callbacks are disabled.
+Capability probes never select `uv` or `ir`; requirement changes, automatic resolution, and worker preparation callbacks are disabled.
+`requirements.action="get"` can inspect the retained declaration.
 Reticulate cannot silently create a managed environment.
 Rebuild the image and start a new server session to add packages.
 
@@ -45,9 +46,10 @@ MCP Console retains one environment configuration in server memory:
 - a selected Python environment and normalized Python manifest; and
 - a set of prepared DuckDB extension names.
 
-The sets are additive.
+The sets are additive by default.
 Repeating an accepted requirement is idempotent, and a restart reuses everything retained so far, including R packages and Python distributions resolved automatically during earlier cells.
-The current API has no operation to remove a requirement, replace a manifest, select a named environment, or persist the retained configuration across server processes.
+Use `requirements.action` to inspect or replace the declaration.
+There are no named environments or persistence across server processes.
 
 The built-in server prepares these defaults when an operation first needs an environment:
 
@@ -59,7 +61,7 @@ The built-in server prepares these defaults when an operation first needs an env
 
 These defaults apply when startup finds a resolver bootstrap from `ir` on `PATH`, `uv` on `PATH`, an explicit `uv` selection, or ambient reticulate.
 Server-managed Python additionally needs `uv`; when only `ir` is on `PATH`, the resolved reticulate installation supplies it.
-If no resolver bootstrap is available, the built-in server retains no managed environment, exposes no `requirements` field, and starts a bare runtime from the packages already available to R, reticulate, and DuckDB.
+If no resolver bootstrap is available, the built-in server retains no managed environment, exposes only `requirements.action="get"`, and starts a bare runtime from the packages already available to R, reticulate, and DuckDB.
 R, Python, and SQL cells remain available, with ordinary R missing-package errors and explicit unavailable-adapter diagnostics where appropriate.
 
 Before starting the MCP transport, the server locates R and detects resolver capability without installing packages or invoking `ir`.
@@ -69,7 +71,7 @@ Closing a pipe or socket used for MCP standard input cancels an active probe and
 
 `initialize`, `tools/list`, empty polls, and control-only interrupts do not prepare the defaults.
 An ordinary first cell prepares them after evaluation admission, so `timeout_ms` can return a running response while installation continues.
-Explicit requirements prepare the defaults and additions together before the cell's evaluation wait; standalone preparation does not start a worker.
+Default-add requirements prepare the defaults and additions together before the cell's evaluation wait; standalone preparation does not start a worker.
 Restart and idle nonempty stdin also prepare the defaults when they start the first worker.
 The MCP transport remains available during this preparation: interrupt targets the active resolver, and closing MCP input cancels it during server shutdown.
 A failed or cancelled preparation leaves the initial environment pending for a later attempt; resolver cache effects may remain.
@@ -82,6 +84,71 @@ The default DuckDB extensions are installed in DuckDB's native cache but are loa
 
 A custom worker skips all three default preparations.
 Its more limited requirements contract is described under [Custom workers](#custom-workers).
+
+## Inspecting and replacing requirements
+
+`requirements.action` accepts `get`, `add`, `set`, and `reset`:
+
+| Action          | Meaning                                                                                                                                                                                                                  |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `get`           | Return the normalized, committed declaration without starting a worker, resolving packages, consuming output, or changing evaluation state. Reject code, stdin (including empty stdin), control, and all payload fields. |
+| `add` (default) | Accumulate requirements, preserving idempotency and supported live additions.                                                                                                                                            |
+| `set`           | Replace the entire declaration. Omitted language lists and Python constraints are cleared. No startup defaults are merged into the replacement.                                                                          |
+| `reset`         | Restore the configured startup declaration, discarding explicit and automatically acquired requirements. Reject all package lists and constraint fields, even empty or null ones.                                        |
+
+```python
+send(requirements={"action": "get"})
+send(requirements={"python": ["requests"]})
+send(control="restart", requirements={"action": "set", "python": ["requests>=2"]})
+send(control="restart", requirements={"action": "set"})
+send(control="restart", requirements={"action": "reset"})
+```
+
+`{"action": "set"}` selects no optional requirements.
+It is equivalent to empty `r`, `python`, and `duckdb` lists, and differs from `reset`.
+A bare `{}` remains invalid.
+Ordinary restart preserves the selected declaration, including an empty declaration; subsequent additions do not restore cleared defaults.
+Automatic resolution remains enabled and later user code can acquire requirements again.
+Replacement does not delete caches or prohibit packages already available through infrastructure, ambient R libraries, or a user-selected interpreter.
+
+Inspection returns `requirements`, `prepared`, and `runtime_requirements` in MCP `structuredContent`.
+`requirements` is a declaration, not an installed-package inventory.
+It contains the three language lists, `python_version` (a list of supported version constraints), and `exclude_newer` (a publication cutoff string or null).
+Copy `requirements`, edit it, add `action: "set"`, and submit it to replace the declaration without losing constraints.
+Before preparation, `prepared: false` distinguishes selected startup defaults from a resolved environment.
+While evaluation or resolution is busy, inspection returns the last committed snapshot, never an uncommitted candidate.
+Small snapshots also appear as JSON text.
+Larger snapshots return a short text notice and the complete structured content; the Python and R wrappers return complete JSON text for inspection.
+`add` accepts at most 64 entries per language per call.
+`set` accepts complete manifests accumulated through repeated additions and has no per-list count limit.
+
+The managed mixed-language worker separately prepares its R infrastructure: `reticulate`, `jsonlite`, `DBI`, `duckdb`, `arrow`, `nanoarrow`, `pillar`, `tibble`, and `utf8`, with their dependencies.
+These packages support the implemented Python bridge and SQL adapters.
+They remain available when the optional declaration is empty.
+NumPy and pandas are optional Python conveniences; an empty managed Python declaration runs standard-library code without either distribution.
+R/Python conversions that need NumPy still require it.
+Custom workers retain their existing `DBI`, `duckdb`, and `jsonlite` preparation infrastructure.
+Preinstalled and unmanaged targets have no Console-managed package infrastructure to report.
+
+A changed `set` or `reset` with a live worker requires `control="restart"`.
+A call without it fails before resolution or mutation and leaves no pending replacement.
+Without a live worker, the server resolves and retains the candidate without starting a worker unless the call otherwise requests one.
+It resolves the complete candidate before committing or retiring the old worker.
+Failure or cancellation preserves the retained environment and worker; resolver cache and build effects may remain.
+After commit, the existing restart and admission path runs any accompanying cell only in the successfully started replacement.
+Failure after retirement cannot restore discarded interpreter state.
+An unchanged replacement requires no preparation, but an explicitly requested restart still happens and excludes uncommitted activations from the retired generation.
+`set` and `reset` cannot accompany `control="interrupt"`.
+
+`add` also accepts `python_version` and `exclude_newer`: version constraints accumulate, and a supplied cutoff can fill an unset cutoff but cannot replace an existing one.
+Changing these constraints with a live worker requires restart.
+`set` clears omitted constraints; `reset` restores startup constraints (currently none).
+Captured resolver settings such as `UV_*` remain startup configuration and are not rewritten by these session operations.
+User-selected Python, Python sessions without R, bare runtimes, Docker, and Docker Sandbox retain their existing preparation limits; inspection does not enable new preparation paths.
+
+Committed replacements are recorded with their declaration and call ID in the event journal and Markdown transcript.
+Quarto records the environment boundaries, including Python constraints, and disables automatic execution after a replacement.
+Recreate those environments before enabling replay; one cumulative or final manifest may not satisfy historical cells.
 
 ## Requirements for a cell
 
@@ -96,7 +163,8 @@ Use the optional `requirements` field on a code-bearing `send` when a cell needs
 }
 ```
 
-The field contains R, Python, and DuckDB arrays and requires at least one entry across them.
+For the default `add` action, supply R, Python, or DuckDB arrays with at least one entry, or Python constraints.
+`set` accepts empty lists and omitted fields.
 It may accompany any cell language because the built-in languages share one worker environment: an R requirement can accompany a Python cell, for example.
 Without a cell, requirements perform standalone preparation or participate in a restart transaction.
 Requirements are cell preconditions, with the control-specific ordering and partial effects described in the [operation table](SEND_OPERATIONS.md#operations).
@@ -435,7 +503,7 @@ A custom worker always rejects managed Python requirements, regardless of `RETIC
 
 Bare mode is selected only when no resolver bootstrap is available from `ir` on `PATH`, `uv` on `PATH`, an explicit `uv` selection, or ambient reticulate.
 The server skips default R, Python, and DuckDB preparation.
-The `send` schema retains R, Python, and SQL cells but omits `requirements`; a manually supplied requirements payload is also rejected.
+The `send` schema retains R, Python, and SQL cells and exposes `requirements.action="get"` for inspection; requirement changes are rejected.
 Automatic R wrappers and the Python import resolver callback are disabled.
 Installed packages and ambient language adapters continue to work.
 Missing R packages keep their ordinary `library()` behavior, while missing Python imports explain that dynamic resolution is unavailable.

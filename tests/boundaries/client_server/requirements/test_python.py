@@ -452,6 +452,19 @@ def test_restart_loses_state_and_retains_python_requirements(
 def test_restart_discards_pre_marker_python_activation(
     binary: Path, execution: Execution
 ) -> Transcript:
+    return restart_discards_pre_marker_activation(binary, execution, {})
+
+
+@executions(DIRECT, SANDBOXED)
+def test_set_discards_pre_marker_python_activation(
+    binary: Path, execution: Execution
+) -> Transcript:
+    return restart_discards_pre_marker_activation(binary, execution, {"action": "set"})
+
+
+def restart_discards_pre_marker_activation(
+    binary: Path, execution: Execution, action: dict
+) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
         replacement_requirement = "mcp-console-restart-fixture"
@@ -542,7 +555,7 @@ def test_restart_discards_pre_marker_python_activation(
 
             restart = client.start_send(
                 control="restart",
-                requirements={"python": [replacement_requirement]},
+                requirements={**action, "python": [replacement_requirement]},
             )
             uv_started.wait("restart Python resolution")
             activation_release.release()

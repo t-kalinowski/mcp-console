@@ -36,6 +36,48 @@ def options(binary: Path, execution: Execution) -> dict:
 
 
 @executions(DIRECT, SANDBOXED)
+def test_clients_inspect_and_replace_requirements(
+    binary: Path, execution: Execution
+) -> Transcript:
+    results = []
+    with tempfile.TemporaryDirectory() as directory:
+        settings = {
+            "command": binary,
+            "args": execution.serve(),
+            "server_parameters": {"cwd": directory},
+        }
+        with MCPConsole(**settings) as console:
+            startup = json.loads(console.send(requirements={"action": "get"}))
+            assert startup["prepared"] is False
+            console.send(
+                requirements={
+                    "action": "set",
+                    "python": [],
+                    "python_version": [">=3.11"],
+                    "exclude_newer": "2026-01-01",
+                }
+            )
+            selected = json.loads(console.send(requirements={"action": "get"}))
+            console.send(requirements=dict(selected["requirements"], action="set"))
+            assert selected["requirements"]["python"] == []
+            results.append({"sync": selected})
+
+        async def asynchronous() -> None:
+            async with AsyncMCPConsole(**settings) as console:
+                startup = json.loads(await console.send(requirements={"action": "get"}))
+                assert startup["prepared"] is False
+                await console.send(requirements={"action": "set"})
+                selected = json.loads(
+                    await console.send(requirements={"action": "get"})
+                )
+                assert selected["requirements"]["python"] == []
+                results.append({"async": selected})
+
+        asyncio.run(asynchronous())
+    return results
+
+
+@executions(DIRECT, SANDBOXED)
 def test_sync_and_async_clients_receive_bounded_previews(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -210,7 +252,15 @@ def test_callable_tools_follow_connected_server_fields(
                     "bare",
                     bare,
                     "1 + 1",
-                    {"r", "python", "sql", "control", "stdin", "timeout_ms"},
+                    {
+                        "r",
+                        "python",
+                        "sql",
+                        "control",
+                        "requirements",
+                        "stdin",
+                        "timeout_ms",
+                    },
                 ),
                 (
                     "custom",
@@ -220,6 +270,10 @@ def test_callable_tools_follow_connected_server_fields(
                 ),
             ):
                 async with AsyncMCPConsole(**settings) as console:
+                    if label == "bare":
+                        assert console.send_tool.input_schema["properties"][
+                            "requirements"
+                        ]["properties"]["action"]["enum"] == ["get"]
                     output = await exercise_tools(console, source, expected_fields)
                 with MCPConsole(**settings) as console:
                     assert (
