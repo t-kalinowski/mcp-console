@@ -31,6 +31,11 @@ pub(super) enum Event<'a> {
         #[serde(skip_serializing_if = "Option::is_none")]
         sandbox: Option<&'a crate::target_launch::SandboxIdentity>,
     },
+    RequirementsSelected {
+        call_id: Option<u64>,
+        action: &'a str,
+        snapshot: &'a Value,
+    },
     ToolCall {
         call_id: u64,
         request_id: &'a RequestId,

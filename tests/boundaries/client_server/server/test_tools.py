@@ -207,11 +207,11 @@ def _initializes_and_lists_tools(
             else:
                 assert not (workspace / ".agents/console").exists(), workspace
             if python_only:
-                assert {"r", "sql", "requirements"}.isdisjoint(
-                    send["inputSchema"]["properties"]
-                )
+                assert {"r", "sql"}.isdisjoint(send["inputSchema"]["properties"])
             if bare or python_only:
-                assert "requirements" not in send["inputSchema"]["properties"]
+                assert send["inputSchema"]["properties"]["requirements"]["properties"][
+                    "action"
+                ]["enum"] == ["get"]
                 transcript = client.finish()
                 if ssh:
                     transcript = json.loads(
@@ -224,11 +224,25 @@ def _initializes_and_lists_tools(
             assert send_requirements["type"] == ["object", "null"], send_requirements
             assert send_requirements["additionalProperties"] is False, send_requirements
             requirement_properties = send_requirements["properties"]
-            assert requirement_properties.keys() == {"duckdb", "r", "python"}
-            for requirement in requirement_properties.values():
+            assert requirement_properties.keys() == {
+                "action",
+                "duckdb",
+                "r",
+                "python",
+                "python_version",
+                "exclude_newer",
+            }
+            assert requirement_properties["action"]["enum"] == [
+                "get",
+                "add",
+                "set",
+                "reset",
+            ]
+            for name in ("duckdb", "r", "python"):
+                requirement = requirement_properties[name]
                 assert requirement["type"] == "array", requirement
-                assert requirement["maxItems"] == 64, requirement
-                assert requirement["default"] == [], requirement
+                assert "default" not in requirement, requirement
+                assert "maxItems" not in requirement, requirement
                 assert requirement["items"]["type"] == "string", requirement
                 assert requirement["items"]["minLength"] == 1, requirement
             assert requirement_properties["duckdb"]["items"]["maxLength"] == 64

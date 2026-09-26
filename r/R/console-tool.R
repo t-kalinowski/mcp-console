@@ -89,7 +89,13 @@ console_tool <- function(..., path = NULL, version = NULL, no_sandbox = FALSE) {
     if (!is.null(arguments$requirements)) {
       requirements <- arguments$requirements
       requirements <- requirements[!vapply(requirements, is.null, logical(1))]
-      requirements <- lapply(requirements, \(x) unname(as.list(x)))
+      arrays <- intersect(
+        names(requirements),
+        c("r", "python", "duckdb", "python_version")
+      )
+      requirements[arrays] <- lapply(requirements[arrays], \(x) {
+        unname(as.list(x))
+      })
       arguments$requirements <- json_object(requirements)
     }
 
@@ -388,6 +394,14 @@ mcp_pump <- function(client, timeout) {
 }
 
 mcp_contents <- function(result) {
+  if (!is.null(result$structuredContent$requirements)) {
+    return(ellmer::ContentText(as.character(jsonlite::toJSON(
+      result$structuredContent,
+      auto_unbox = TRUE,
+      null = "null",
+      pretty = TRUE
+    ))))
+  }
   content <- result$content
   content <- lapply(content, function(x) {
     if (identical(x$type, "text")) {

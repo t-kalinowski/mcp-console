@@ -85,6 +85,19 @@ def test_standalone_preparation_before_worker_startup_is_causal_and_idempotent(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
+    return standalone_preparation(binary, execution, {})
+
+
+@executions(DIRECT, SANDBOXED)
+def test_standalone_replacement_is_inspectable_before_worker_startup(
+    binary: Path, execution: Execution
+) -> Transcript:
+    return standalone_preparation(binary, execution, {"action": "set"})
+
+
+def standalone_preparation(
+    binary: Path, execution: Execution, action: dict
+) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     relay = (
         Path(__file__).resolve().parents[3]
@@ -158,10 +171,16 @@ def test_standalone_preparation_before_worker_startup_is_causal_and_idempotent(
             assert not list(temporary.rglob("mcp-console-server-relay-wire.jsonl"))
 
             preparation = client.start_send(
-                requirements={"r": ["standalone-requirement"]},
+                requirements={**action, "r": ["standalone-requirement"]},
                 timeout_ms=0,
             )
             resolver_started.wait("standalone requirement resolver")
+            if action:
+                snapshot = client.send(requirements={"action": "get"})[
+                    "structuredContent"
+                ]
+                assert snapshot["prepared"] is False
+                assert snapshot["requirements"]["r"] == []
             assert not worker_started.exists(), worker_started
             assert not list(temporary.rglob("mcp-console-server-relay-wire.jsonl"))
             readable, _, _ = select.select([client.stdout], [], [], 0.25)
@@ -179,7 +198,7 @@ def test_standalone_preparation_before_worker_startup_is_causal_and_idempotent(
             assert not list(temporary.rglob("mcp-console-server-relay-wire.jsonl"))
 
             repeated = client.send(
-                requirements={"r": ["standalone-requirement"]},
+                requirements={**action, "r": ["standalone-requirement"]},
                 timeout_ms=0,
             )
             assert repeated == {

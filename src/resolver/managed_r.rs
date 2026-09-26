@@ -175,6 +175,11 @@ impl ManagedR {
         Ok(())
     }
 
+    pub(crate) fn with_retained_requirements(mut self, requirements: Vec<String>) -> Self {
+        self.requirements = requirements;
+        self
+    }
+
     pub(crate) fn requirements(&self) -> &[String] {
         &self.requirements
     }

@@ -84,6 +84,24 @@ impl Transcript {
         })))
     }
 
+    pub(crate) fn requirements_selected(
+        &self,
+        call_id: Option<u64>,
+        action: &str,
+        snapshot: &serde_json::Value,
+    ) {
+        self.update(|state| {
+            state.materialize()?.append(
+                Event::RequirementsSelected {
+                    call_id,
+                    action,
+                    snapshot,
+                },
+                Utc::now(),
+            )
+        });
+    }
+
     pub(crate) fn target_generation(
         &self,
         container_id: Option<&str>,

@@ -165,6 +165,22 @@ result:
             enum:
               - interrupt
               - restart
+          requirements:
+            type:
+              - object
+              - "null"
+            description: >-
+              Inspect the server's retained declaration with action=get. Preparation
+              is unavailable for this target; the declaration is not an
+              installed-package inventory.
+            properties:
+              action:
+                type: string
+                enum:
+                  - get
+            required:
+              - action
+            additionalProperties: false
           stdin:
             description: |-
               Input for an active read, prompt, or debugger. When responding to active input, omit R, Python,

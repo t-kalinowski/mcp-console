@@ -173,6 +173,7 @@ impl Client {
                     .as_mut()
                     .ok_or_else(|| "managed Python environment is unavailable".to_string())?
                     .replace_managed(managed)?;
+                self.publish_requirements(environment);
                 Ok(disposition)
             }
             OldGenerationCommitDisposition::DiscardForReplacement => Ok(disposition),

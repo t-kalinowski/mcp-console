@@ -110,6 +110,7 @@ impl Client {
             .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
         if lifecycle.state == LifecycleState::Ready && lifecycle.generation.is(&generation) {
             commit_managed_r(&mut environment, managed);
+            self.publish_requirements(&environment);
             Ok(OldGenerationCommitDisposition::Commit)
         } else {
             Ok(OldGenerationCommitDisposition::DiscardForReplacement)

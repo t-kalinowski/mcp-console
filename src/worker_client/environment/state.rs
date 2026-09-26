@@ -119,13 +119,7 @@ impl PythonEnvironment {
     }
 }
 
-pub(super) fn ensure_python_additions_available(
-    environment: &Environment,
-    additions: &[String],
-) -> Result<(), String> {
-    if additions.is_empty() {
-        return Ok(());
-    }
+pub(super) fn ensure_managed_python_available(environment: &Environment) -> Result<(), String> {
     if environment.custom_worker {
         return Err("Python requirements are unavailable with a custom worker".to_string());
     }
