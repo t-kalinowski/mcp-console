@@ -40,7 +40,7 @@ const USER_SELECTED_PYTHON_ERROR: &str = "managed Python requirements are disabl
 pub(in crate::worker_client) enum PythonEnvironment {
     Managed {
         selected: crate::resolver::ManagedPython,
-        resolver: crate::resolver::execution::PythonConfiguration,
+        resolver: Box<crate::resolver::execution::PythonConfiguration>,
     },
     UserSelected(OsString),
     Ambient,
@@ -67,7 +67,9 @@ impl PythonEnvironment {
         let selected = crate::resolver::resolve_python(&[], &resolver, managed_r, on_started)?;
         Ok(Self::Managed {
             selected,
-            resolver: crate::resolver::execution::PythonConfiguration::Local(resolver),
+            resolver: Box::new(crate::resolver::execution::PythonConfiguration::Local(
+                resolver,
+            )),
         })
     }
 

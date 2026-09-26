@@ -63,7 +63,7 @@ impl Client {
         let early_resolver = match &environment.r_resolver {
             RResolver::Pending(setup) => Some(&setup.python_resolver),
             _ => match environment.python.as_ref() {
-                Some(PythonEnvironment::Managed { resolver, .. }) => Some(resolver),
+                Some(PythonEnvironment::Managed { resolver, .. }) => Some(resolver.as_ref()),
                 _ => None,
             },
         };
@@ -172,7 +172,10 @@ impl Client {
                 // configuration and manifest stay provisional in this clone.
                 **inspected = self.inspect_managed_python(generation, &selected)?;
             }
-            environment.python = Some(PythonEnvironment::Managed { selected, resolver });
+            environment.python = Some(PythonEnvironment::Managed {
+                selected,
+                resolver: Box::new(resolver),
+            });
         }
         self.ensure_startup(generation)
             .map_err(EnvironmentResolutionFailure::Operation)?;

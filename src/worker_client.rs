@@ -422,9 +422,9 @@ impl Client {
                 local_runtime = Some(selection);
                 let python = managed.map(|selected| PythonEnvironment::Managed {
                     selected,
-                    resolver: crate::resolver::execution::PythonConfiguration::Local(
+                    resolver: Box::new(crate::resolver::execution::PythonConfiguration::Local(
                         resolver.expect("managed resolver"),
-                    ),
+                    )),
                 });
                 (None, Default::default(), python, RResolver::Disabled)
             } else {
