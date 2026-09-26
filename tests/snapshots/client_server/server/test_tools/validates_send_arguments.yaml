@@ -2,7 +2,8 @@
 !same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.direct.yaml
 ---
 send:
-  python: inspect controlled restart state
+  python: |
+    print("hello")
   wait_ms: 0
 result:
   content:
@@ -14,9 +15,9 @@ result:
   isError: true
 ---
 send:
-  r: inspect controlled restart state
-  python: inspect controlled restart state
-  sql: inspect controlled restart state
+  r: "1"
+  python: "1"
+  sql: SELECT 1
   control: restart
   requirements:
     r:
@@ -65,7 +66,7 @@ result:
   isError: true
 ---
 send:
-  r: inspect controlled restart state
+  r: stop('cell was run')
   control: ~
   requirements: {}
 result:
@@ -77,7 +78,7 @@ result:
   isError: true
 ---
 send:
-  r: inspect controlled restart state
+  r: stop('cell was run')
   control: restart
   requirements: {}
 result:
@@ -89,7 +90,7 @@ result:
   isError: true
 ---
 send:
-  r: inspect controlled restart state
+  r: stop('cell was run')
   requirements:
     r:
       - ""
@@ -100,7 +101,7 @@ result:
   isError: true
 ---
 send:
-  r: inspect controlled restart state
+  r: stop('cell was run')
   requirements:
     python:
       - example @ https://example.invalid/example.whl
@@ -114,7 +115,7 @@ result:
   isError: true
 ---
 send:
-  r: inspect controlled restart state
+  r: stop('cell was run')
   requirements:
     duckdb:
       - spatial FROM community
@@ -127,16 +128,20 @@ result:
   isError: true
 ---
 send:
-  r: set controlled restart state
+  python: |
+    import os
+
+    worker_pid = os.getpid()
+    sentinel = 42
 result:
   content:
     - type: text
-      text: |
-        zod controlled state: old
+      text: "[done]"
   isError: false
 ---
 send:
-  python: inspect controlled restart state
+  python: |
+    print("hello")
   wait_ms: 0
 result:
   content:
@@ -148,9 +153,9 @@ result:
   isError: true
 ---
 send:
-  r: inspect controlled restart state
-  python: inspect controlled restart state
-  sql: inspect controlled restart state
+  r: "1"
+  python: "1"
+  sql: SELECT 1
   control: restart
   requirements:
     r:
@@ -199,7 +204,7 @@ result:
   isError: true
 ---
 send:
-  r: inspect controlled restart state
+  r: stop('cell was run')
   control: ~
   requirements: {}
 result:
@@ -211,7 +216,7 @@ result:
   isError: true
 ---
 send:
-  r: inspect controlled restart state
+  r: stop('cell was run')
   control: restart
   requirements: {}
 result:
@@ -223,7 +228,7 @@ result:
   isError: true
 ---
 send:
-  r: inspect controlled restart state
+  r: stop('cell was run')
   requirements:
     r:
       - ""
@@ -234,7 +239,7 @@ result:
   isError: true
 ---
 send:
-  r: inspect controlled restart state
+  r: stop('cell was run')
   requirements:
     python:
       - example @ https://example.invalid/example.whl
@@ -248,7 +253,7 @@ result:
   isError: true
 ---
 send:
-  r: inspect controlled restart state
+  r: stop('cell was run')
   requirements:
     duckdb:
       - spatial FROM community
@@ -261,23 +266,26 @@ result:
   isError: true
 ---
 send:
-  r: inspect controlled restart state
+  python: |
+    assert os.getpid() == worker_pid
+    assert sentinel == 42
+    print(sentinel)
 result:
   content:
     - type: text
       text: |
-        zod controlled state: old; evaluation=1
+        42
   isError: false
 ---
 send:
-  r: input without request
+  python: print(input())
   stdin: |
     accepted
 result:
   content:
     - type: text
       text: |
-        zod stdin: accepted
+        accepted
   isError: false
 ---
 send:

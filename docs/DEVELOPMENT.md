@@ -134,6 +134,7 @@ scripts/test \
 ```
 
 These checks reject malformed requests before startup and with a live worker without preparing a package environment.
+Rejected requests contain real R, Python, and SQL source; the live-worker probes execute Python cells in the fixture and record every evaluation.
 Resolver capability discovery is distinct from dependency preparation.
 For preparation/lifecycle changes, also run the real-runtime sequence and the existing causal startup and custom-worker restart cases:
 

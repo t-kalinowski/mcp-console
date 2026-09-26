@@ -61,6 +61,9 @@ def _admission_client(binary: Path) -> Iterator[tuple[McpClient, Path]]:
         environment["TMPDIR"] = str(temporary)
         environment["MCP_CONSOLE_TEST_RESOLVER_RECORD"] = str(resolver_record)
         environment["MCP_CONSOLE_TEST_ZOD_STARTED"] = str(worker_started)
+        environment["MCP_CONSOLE_TEST_ZOD_PYTHON_CELLS"] = str(
+            temporary / "cells.jsonl"
+        )
 
         with McpClient(
             binary, DIRECT.serve("--worker", str(zod)), environment
@@ -77,15 +80,15 @@ def _admission_client(binary: Path) -> Iterator[tuple[McpClient, Path]]:
 def test_invalid_send_has_no_external_effects(binary: Path) -> Transcript:
     with _admission_client(binary) as (client, temporary):
         invalid = (
-            {"r": "echo invalid R cell ran", "requirements": {"r": [""]}},
+            {"r": "stop('invalid R cell ran')", "requirements": {"r": [""]}},
             {
-                "python": "echo invalid Python cell ran",
+                "python": "raise AssertionError('invalid Python cell ran')",
                 "requirements": {
                     "python": ["example @ https://example.invalid/example.whl"]
                 },
             },
             {
-                "sql": "echo invalid DuckDB cell ran",
+                "sql": "SELECT 1",
                 "requirements": {"duckdb": ["spatial FROM community"]},
             },
         )
@@ -393,42 +396,59 @@ def test_validates_send_arguments(binary: Path) -> Transcript:
             "invalid input started a worker"
         )
 
-        result = client.send(r="set controlled restart state")
-        assert result["content"] == [
-            {"type": "text", "text": "zod controlled state: old\n"}
-        ]
-        pid = (temporary / "zod-controlled-restart-old-worker").read_text()
+        # fmt: python
+        setup = code("""
+            import os
+
+            worker_pid = os.getpid()
+            sentinel = 42
+            """)
+        result = client.send(python=setup)
+        assert result["content"] == [{"type": "text", "text": "[done]"}], result
         _reject_send_arguments(client)
-        result = client.send(r="inspect controlled restart state")
-        assert result["content"] == [
-            {"type": "text", "text": "zod controlled state: old; evaluation=1\n"}
-        ], result
-        evaluations = temporary / "zod-controlled-restart-cell-evaluations"
-        assert evaluations.read_text() == f"{pid} old 1\n"
+        # fmt: python
+        verify = code("""
+            assert os.getpid() == worker_pid
+            assert sentinel == 42
+            print(sentinel)
+            """)
+        result = client.send(python=verify)
+        assert result["content"] == [{"type": "text", "text": "42\n"}], result
         assert not (temporary / "zod-sigint-received").exists()
 
         # An accepted stdin write follows every rejected stdin request in order.
-        result = client.send(r="input without request", stdin="accepted\n")
-        assert result["content"] == [
-            {"type": "text", "text": "zod stdin: accepted\n"}
-        ], result
+        result = client.send(python="print(input())", stdin="accepted\n")
+        assert result["content"] == [{"type": "text", "text": "accepted\n"}], result
+        cells = [
+            json.loads(line)
+            for line in (temporary / "cells.jsonl").read_text().splitlines()
+        ]
+        assert cells == [
+            {"kind": "evaluate", "language": "python", "source": source}
+            for source in (setup, verify, "print(input())")
+        ], cells
         result = client.send(r=None)
         assert result["content"] == [{"type": "text", "text": "\n[idle]"}], result
         return client.finish()
 
 
 def _reject_send_arguments(client: McpClient) -> None:
-    # These are custom-worker commands, including in the Python and SQL fields.
-    result = client.send(python="inspect controlled restart state", wait_ms=0)
+    result = client.send(
+        # fmt: python
+        python=code("""
+            print("hello")
+            """),
+        wait_ms=0,
+    )
     assert result["isError"] is True, result
     assert result["content"][0]["text"] == (
         "failed to deserialize parameters: unknown field `wait_ms`, expected one "
         "of `r`, `python`, `sql`, `control`, `requirements`, `stdin`, `timeout_ms`"
     ), result
     result = client.send(
-        r="inspect controlled restart state",
-        python="inspect controlled restart state",
-        sql="inspect controlled restart state",
+        r="1",
+        python="1",
+        sql="SELECT 1",
         control="restart",
         requirements={"r": ["praise"]},
     )
@@ -462,9 +482,7 @@ def _reject_send_arguments(client: McpClient) -> None:
     ), result
 
     for control in (None, "restart"):
-        result = client.send(
-            r="inspect controlled restart state", control=control, requirements={}
-        )
+        result = client.send(r="stop('cell was run')", control=control, requirements={})
         assert result["isError"] is True, result
         assert result["content"][0]["text"] == (
             "at least one of `requirements.r`, `requirements.python`, or "
@@ -472,7 +490,7 @@ def _reject_send_arguments(client: McpClient) -> None:
         ), result
 
     result = client.send(
-        r="inspect controlled restart state",
+        r="stop('cell was run')",
         requirements={"r": [""]},
     )
     assert result["isError"] is True, result
@@ -482,7 +500,7 @@ def _reject_send_arguments(client: McpClient) -> None:
 
     invalid_python = "example @ https://example.invalid/example.whl"
     result = client.send(
-        r="inspect controlled restart state",
+        r="stop('cell was run')",
         requirements={"python": [invalid_python]},
     )
     assert result["isError"] is True, result
@@ -492,7 +510,7 @@ def _reject_send_arguments(client: McpClient) -> None:
     ), result
 
     result = client.send(
-        r="inspect controlled restart state",
+        r="stop('cell was run')",
         requirements={"duckdb": ["spatial FROM community"]},
     )
     assert result["isError"] is True, result
