@@ -24,13 +24,6 @@ class Requirement:
     reason: str
 
 
-EXTENDED = Requirement(
-    "extended stress coverage",
-    os.environ.get("MCP_CONSOLE_TEST_QUICK") != "1",
-    "omitted by --quick; run without --quick to include it",
-)
-
-
 # Keep implementation availability here until the corresponding runtime lands.
 WORKER = Requirement(
     "worker", sys.platform in {"darwin", "linux"}, "workers require macOS or Linux"

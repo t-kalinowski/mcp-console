@@ -164,9 +164,10 @@ def test_prepares_and_uses_cran_packages(
 
     # fmt: r
     r = code(r"""
+        managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
         stopifnot(
-          identical(dirname(find.package("praise")), .libPaths()[[1L]]),
-          identical(dirname(find.package("zeallot")), .libPaths()[[1L]])
+          identical(dirname(find.package("praise")), .libPaths()[[managed_index]]),
+          identical(dirname(find.package("zeallot")), .libPaths()[[managed_index]])
         )
         result <- dplyr::summarise(
           data.frame(value = c(40L, 2L)),
@@ -190,8 +191,9 @@ def test_sends_r_cell_with_initial_requirements(
 
     # fmt: r
     r = code(r"""
+        managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
         stopifnot(
-          identical(dirname(find.package("praise")), .libPaths()[[1L]])
+          identical(dirname(find.package("praise")), .libPaths()[[managed_index]])
         )
         praise::praise("ready")
         """)
@@ -217,7 +219,9 @@ def test_prepares_r_requirements_after_worker_startup(
     r = code(r"""
         sentinel <- 42L
         worker_pid <- Sys.getpid()
-        initial_library <- .libPaths()[[1L]]
+        managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
+        sandbox_library <- if (managed_index == 2L) .libPaths()[[1L]] else NULL
+        initial_library <- .libPaths()[[managed_index]]
         """)
     client.send(r=r)
     assert last_result_text(client) == "[done]"
@@ -227,8 +231,9 @@ def test_prepares_r_requirements_after_worker_startup(
         stopifnot(
           identical(sentinel, 42L),
           identical(Sys.getpid(), worker_pid),
+          is.null(sandbox_library) || identical(.libPaths()[[1L]], sandbox_library),
           !initial_library %in% .libPaths(),
-          identical(dirname(find.package("zeallot")), .libPaths()[[1L]])
+          identical(dirname(find.package("zeallot")), .libPaths()[[managed_index]])
         )
         42L
         """)
@@ -336,7 +341,8 @@ def test_failed_mixed_preparation_retains_live_python_activation(
             # fmt: r
             setup = code(r"""
                 invisible(reticulate::py_config())
-                cat(.libPaths()[[1L]])
+                managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
+                cat(.libPaths()[[managed_index]])
                 """)
             client.send(r=setup)
             initial_library = Path(last_result_text(client))
@@ -458,13 +464,14 @@ def test_evaluates_with_default_managed_r(
         client.initialize_and_list_tools()
         # fmt: r
         r = code(r"""
+            managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
             stopifnot(
-              identical(dirname(find.package("tidyverse")), .libPaths()[[1L]]),
-              identical(dirname(find.package("reticulate")), .libPaths()[[1L]]),
-              identical(dirname(find.package("DBI")), .libPaths()[[1L]]),
-              identical(dirname(find.package("duckdb")), .libPaths()[[1L]]),
-              identical(dirname(find.package("arrow")), .libPaths()[[1L]]),
-              identical(dirname(find.package("nanoarrow")), .libPaths()[[1L]]),
+              identical(dirname(find.package("tidyverse")), .libPaths()[[managed_index]]),
+              identical(dirname(find.package("reticulate")), .libPaths()[[managed_index]]),
+              identical(dirname(find.package("DBI")), .libPaths()[[managed_index]]),
+              identical(dirname(find.package("duckdb")), .libPaths()[[managed_index]]),
+              identical(dirname(find.package("arrow")), .libPaths()[[managed_index]]),
+              identical(dirname(find.package("nanoarrow")), .libPaths()[[managed_index]]),
               vapply(
                 c("ggplot2", "dplyr", "readr", "jsonlite"),
                 requireNamespace,
@@ -555,12 +562,13 @@ def test_prepares_initial_r_requirements(
 
         # fmt: r
         r = code(r"""
+            managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
             stopifnot(
               identical(
                 dirname(find.package("praise")),
-                .libPaths()[[1L]]
+                .libPaths()[[managed_index]]
               ),
-              normalizePath(.libPaths()[[2L]]) ==
+              normalizePath(.libPaths()[[managed_index + 1L]]) ==
                 normalizePath(Sys.getenv("MCP_CONSOLE_AMBIENT_R_LIBRARY"))
             )
             42L
@@ -582,17 +590,18 @@ def test_prepares_initial_r_requirements(
 
         # fmt: r
         prepared_r = code(r"""
+            managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
             stopifnot(
               "py-yaml12" %in% reticulate::py_require()$packages,
               identical(
                 dirname(find.package("praise")),
-                .libPaths()[[1L]]
+                .libPaths()[[managed_index]]
               ),
               identical(
                 dirname(find.package("zeallot")),
-                .libPaths()[[1L]]
+                .libPaths()[[managed_index]]
               ),
-              normalizePath(.libPaths()[[2L]]) ==
+              normalizePath(.libPaths()[[managed_index + 1L]]) ==
                 normalizePath(Sys.getenv("MCP_CONSOLE_AMBIENT_R_LIBRARY"))
             )
             42L

@@ -166,7 +166,9 @@ impl Requirements {
         let live_libpython = adapter.call("live_libpython", &[])?;
         if !selected_libpython.identical(&live_libpython)? {
             return Err(format!(
-                "New environment does not use the same Python binary\nnew libpython: {}\nold libpython: {}",
+                "New environment does not use the same Python binary
+new libpython: {}
+old libpython: {}",
                 selected_libpython.text()?,
                 live_libpython.text()?
             )

@@ -337,7 +337,9 @@ impl ConsoleServer {
                 .expect("shared send description")
                 .1;
             *description = format!(
-                "Persistent local Python workbench. State persists across calls. R and SQL cells, live requirements, and automatic package installation are unavailable in this session. Python uses the environment selected at server startup; restart resets objects and retains that environment.\n\nSend one complete{remaining}"
+                "Persistent local Python workbench. State persists across calls. R and SQL cells, live requirements, and automatic package installation are unavailable in this session. Python uses the environment selected at server startup; restart resets objects and retains that environment.
+
+Send one complete{remaining}"
             );
             *description = description.replace("`r`, `python`, or `sql` cell", "`python` cell");
         }

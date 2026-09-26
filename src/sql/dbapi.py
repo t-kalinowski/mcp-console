@@ -256,3 +256,10 @@ def dispatch(source):
 
 
 _builtins.console_sql_connection = console_sql_connection
+
+
+def take_managed_restore_request():
+    global _restore_managed
+    requested = _restore_managed
+    _restore_managed = False
+    return requested

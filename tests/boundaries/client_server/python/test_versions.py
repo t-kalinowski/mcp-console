@@ -62,13 +62,19 @@ def test_uses_current_r_library_for_managed_python_resolution(
             current_directory=temporary,
         )
         client.initialize_and_list_tools()
-        client.send(r="initial_r_library <- .libPaths()[[1L]]")
+        # fmt: r
+        r = code(r"""
+            managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
+            initial_r_library <- .libPaths()[[managed_index]]
+            """)
+        client.send(r=r)
         assert last_result_text(client) == "[done]"
 
         def current_r_library() -> str:
             # fmt: r
             r = code(r"""
-                cat(jsonlite::toJSON(.libPaths()[[1L]], auto_unbox = TRUE))
+                managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
+                cat(jsonlite::toJSON(.libPaths()[[managed_index]], auto_unbox = TRUE))
                 """)
             client.send(r=r)
             output = last_result_text(client)
@@ -221,7 +227,10 @@ def test_validates_registry_only_python_requirements(
         worker_installation = temporary / "worker-python-installation"
         for selector in (worker_executable, worker_retained_selector):
             selector.write_text(
-                '#!/bin/sh\ntouch "$0.executed"\nexit 97\n',
+                """#!/bin/sh
+touch "$0.executed"
+exit 97
+""",
                 encoding="utf-8",
             )
             selector.chmod(0o755)

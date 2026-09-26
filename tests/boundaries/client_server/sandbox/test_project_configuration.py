@@ -2,7 +2,6 @@
 
 import json
 import os
-import socket
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -15,7 +14,7 @@ from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
 from support.records import TranscriptWithCompanions
 from support.requirements import NATIVE_FIXTURES, SANDBOX, requires
-from support.sandbox_configuration import NATIVE_PROXY
+from support.sandbox_configuration import NATIVE_PROXY, host_tcp_ports
 from support.suites import run_this_suite
 
 
@@ -25,9 +24,11 @@ def _snapshot_survives_replacement(
     # fmt: python
     exercise = code(r"""
         import errno
+        import json
         import os
         from pathlib import Path
         import socket
+        from urllib.parse import urlsplit
 
         host = Path(os.environ["MCP_CONSOLE_TEST_PROJECT"])
         configured = os.environ["MCP_CONSOLE_TEST_CONFIGURED"] == "1"
@@ -43,10 +44,15 @@ def _snapshot_survives_replacement(
                 assert not allowed and error.errno in (errno.EPERM, errno.EACCES, errno.EROFS)
             else:
                 assert allowed, name
+        # A proxy listener can reuse a host port in its network namespace.
+        proxy_ports = {
+            urlsplit(os.environ.get(key, "")).port
+            for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")
+        }
+        ports = json.loads(os.environ["MCP_CONSOLE_TEST_PORTS"])
+        port = next(port for port in ports if port not in proxy_ports)
         try:
-            socket.create_connection(
-                ("127.0.0.1", int(os.environ["MCP_CONSOLE_TEST_PORT"])), timeout=2
-            )
+            socket.create_connection(("127.0.0.1", port), timeout=2)
         except OSError:
             pass
         else:
@@ -54,7 +60,7 @@ def _snapshot_survives_replacement(
         os.chdir(host / "CLI cache")
         print("captured grants, proxy selection, and restricted network verified")
         """)
-    with TemporaryDirectory() as directory, socket.socket() as listener:
+    with TemporaryDirectory() as directory, host_tcp_ports() as ports:
         host = Path(directory).resolve()
         for name in ("output café 雪", "CLI cache", "neighbor"):
             (host / name).mkdir()
@@ -85,9 +91,7 @@ def _snapshot_survives_replacement(
             "MCP_CONSOLE_SANDBOX_SETTINGS": "invalid ambient settings",
         }
         environment.pop("RETICULATE_PYTHON", None)
-        listener.bind(("127.0.0.1", 0))
-        listener.listen()
-        environment["MCP_CONSOLE_TEST_PORT"] = str(listener.getsockname()[1])
+        environment["MCP_CONSOLE_TEST_PORTS"] = json.dumps(ports)
         expected = "captured grants, proxy selection, and restricted network verified\n"
         with McpClient(
             binary, ("serve", "--writable-root", "CLI cache"), environment, host

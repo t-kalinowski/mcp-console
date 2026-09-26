@@ -54,6 +54,9 @@ base::local(
     }
 
     sql_connection <- function() {
+      if (.Call("mcp_console_sql_take_restore_request")) {
+        selected_connection <<- NULL
+      }
       ensure_connection()
     }
 

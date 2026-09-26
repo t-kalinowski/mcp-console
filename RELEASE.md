@@ -147,7 +147,7 @@ Check the kernel AppArmor records for a `net_admin` denial under the `unprivileg
 Keep the empty-`PATH` smoke checks: they verify that the installed bundle works without a host helper.
 
 For local installation checks on such a host, use a disposable development container with the build prerequisites above and an isolated checkout.
-Start it as container root with `--cap-add SYS_ADMIN --security-opt apparmor=unconfined --security-opt seccomp=unconfined --security-opt systempaths=unconfined`, then run `scripts/check` inside it.
+Start it as container root with `--cap-add SYS_ADMIN --security-opt apparmor=unconfined --security-opt seccomp=unconfined --security-opt systempaths=unconfined`, then run `scripts/check --full` inside it.
 These settings permit the nested namespace operations without changing the host's AppArmor policy.
 Removing Docker's default system-path masks permits namespace-local procfs; otherwise inherited procfs can make PID-based process inspection fail, including `processx` initialization.
 Keep the checkout and `TMPDIR` on the same writable filesystem because the installation tests rename build artifacts into their temporary directory.
@@ -175,7 +175,7 @@ Update `Cargo.toml` and the root `mcp-console` entry in `Cargo.lock`; `pyproject
 
 A version bump also changes CLI and MCP snapshots.
 Regenerate affected snapshots with `scripts/test --update ...`, updating the full handshake snapshot before abbreviated transcripts as described in `tests/boundaries/README.md`.
-Review the diffs for version-only changes, then run `scripts/format` and `scripts/check` before opening the release PR.
+Review the diffs for version-only changes, then run `scripts/format` and `scripts/check --full` before opening the release PR.
 
 Rehearse the Release workflow on the release branch before tagging, replacing `release/X.Y.Z` with that branch:
 

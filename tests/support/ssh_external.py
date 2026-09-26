@@ -14,7 +14,6 @@ from pathlib import Path
 from support.requirements import Requirement
 
 ROOT = Path(__file__).resolve().parents[2]
-QUICK = os.environ.get("MCP_CONSOLE_TEST_QUICK") == "1"
 CONFIGURED = json.loads(os.environ.get("MCP_CONSOLE_TEST_SSH_EXTERNAL") or "null")
 HOST = (
     CONFIGURED["target"]["transport"]["host"]
@@ -53,10 +52,8 @@ def reachable() -> bool:
 
 EXTERNAL_SSH = Requirement(
     "external SSH target",
-    not QUICK and reachable(),
-    "omitted by --quick; run without --quick to include it"
-    if QUICK
-    else "no reachable test host; select another with MCP_CONSOLE_TEST_SSH_HOST",
+    reachable(),
+    "no reachable test host; select another with MCP_CONSOLE_TEST_SSH_HOST",
 )
 
 

@@ -318,6 +318,7 @@ def test_queries_a_ragnar_store_created_in_r(
 
     # fmt: r
     r = code(r"""
+        managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
         stopifnot(
           identical(
             DBI::dbGetQuery(
@@ -326,7 +327,7 @@ def test_queries_a_ragnar_store_created_in_r(
             )$value,
             42L
           ),
-          identical(dirname(find.package("ragnar")), .libPaths()[[1L]])
+          identical(dirname(find.package("ragnar")), .libPaths()[[managed_index]])
         )
         embed_banana <- function(x) {
           out <- matrix(1, nrow = length(x), ncol = 2L)
@@ -902,7 +903,10 @@ def test_exposes_catalog_as_lazy_r_relations(
         """)
     client.send(r=r)
     assert last_tool_text(client) == (
-        "same connection: TRUE\nlazy table: TRUE\nlazy view: TRUE\n"
+        """same connection: TRUE
+lazy table: TRUE
+lazy view: TRUE
+"""
     )
 
     sql = code(r"""
@@ -919,7 +923,13 @@ def test_exposes_catalog_as_lazy_r_relations(
         writeLines(paste(values$label, values$value, values$doubled, sep = ":"))
         """)
     client.send(r=r)
-    assert last_tool_text(client) == "a:2:4\nb:5:10\nc:11:22\n"
+    assert (
+        last_tool_text(client)
+        == """a:2:4
+b:5:10
+c:11:22
+"""
+    )
     return client.finish()
 
 

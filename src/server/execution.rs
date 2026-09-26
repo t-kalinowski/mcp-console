@@ -74,7 +74,7 @@ pub(super) fn description(
         match kind {
             Some("docker" | "docker_sandbox") => {
                 let (identity, storage) = if kind == Some("docker_sandbox") { ("template", "VM") } else { ("image", "container") };
-                description.push_str(&format!("Each generation uses the captured immutable {identity} identity. Use preinstalled R, Python, and SQL packages; dynamic package preparation is disabled even if ir or uv is installed. Records, output spools, and returned images are written by the controller beneath .agents/console/sessions/; declared shares can expose them to the worker. Restart discards files stored only in the {storage} and preserves shared files. Quarto exports default to non-executing and require a deliberately recreated target environment."));
+                description.push_str(&format!("Each generation uses the captured immutable {identity} identity. Use preinstalled R, Python, and SQL packages; dynamic package preparation is disabled even if ir or uv is installed. Records, output spools, and returned images are written by the controller beneath .agents/console/sessions/; declared shares can expose them to the worker. Restart discards files stored only in the {storage} and preserves shared files. Quarto exports execute recorded cells when rendered; prepare the target environment and files first."));
                 if kind == Some("docker") {
                     description.push_str(" Docker uses ordinary bridge networking. Without a proxy, external-sandbox delegates filesystem and network enforcement to Docker: native filesystem entries and network: restricted add no restrictions in that mode.");
                 }

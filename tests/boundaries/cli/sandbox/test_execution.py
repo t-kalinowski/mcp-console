@@ -295,7 +295,10 @@ def test_enforces_host_read_only_and_temporary_writes(binary: Path) -> Transcrip
         assert host_file.read_text(encoding="utf-8") == "host data"
         assert not Path(temporary_directory).exists()
 
-    entry["stdout"] = "host data\nsandbox temp\n<sandbox temp>\n"
+    entry["stdout"] = """host data
+sandbox temp
+<sandbox temp>
+"""
     entry["transcript_normalization"] = {
         "target": "stdout line 3",
         "sandbox_temporary_directory": "omitted",

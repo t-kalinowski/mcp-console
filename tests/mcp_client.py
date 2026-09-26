@@ -182,7 +182,7 @@ class McpClientTests(unittest.TestCase):
                 os.mkfifo(root / name)
                 checkpoints.append(os.open(root / name, os.O_RDWR | os.O_NONBLOCK))
             process = subprocess.Popen(
-                [sys.executable, runner, "--jobs", "1", *arguments],
+                [sys.executable, runner, "--full", "--jobs", "1", *arguments],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,

@@ -243,7 +243,12 @@ def test_callable_preserves_line_breaks_around_images(
     with MCPConsole(**options(binary, execution)) as console:
         synchronous = console.send(r="emit image")
     assert (
-        synchronous == asynchronous == "before image\n[image/png output]\nafter image\n"
+        synchronous
+        == asynchronous
+        == """before image
+[image/png output]
+after image
+"""
     )
     return [{"output": synchronous}]
 

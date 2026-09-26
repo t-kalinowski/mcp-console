@@ -1,0 +1,60 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  r: |
+    library <- .libPaths()[[1L]]
+    stopifnot(
+      identical(Sys.getenv("MCP_CONSOLE_SANDBOX"), "1"),
+      startsWith(
+        library,
+        paste0(normalizePath(tempdir()), .Platform$file.sep)
+      ),
+      dir.exists(library),
+      file.access(library, 2L) == 0L
+    )
+    suppressMessages(suppressWarnings(install.packages(
+      "mcpconsolelocalpkg_0.0.1.tar.gz",
+      repos = NULL,
+      type = "source",
+      quiet = TRUE
+    )))
+    stopifnot(
+      identical(dirname(find.package("mcpconsolelocalpkg")), library),
+      identical(mcpconsolelocalpkg::answer(), 42L)
+    )
+    cat("installed in sandbox library\n")
+result:
+  content:
+    - type: text
+      text: |
+        installed in sandbox library
+  isError: false
+---
+send:
+  control: restart
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: false
+---
+send:
+  r: |
+    stopifnot(
+      startsWith(
+        .libPaths()[[1L]],
+        paste0(normalizePath(tempdir()), .Platform$file.sep)
+      ),
+      dir.exists(.libPaths()[[1L]])
+    )
+    cat("new sandbox library ready\n")
+result:
+  content:
+    - type: text
+      text: |
+        new sandbox library ready
+  isError: false

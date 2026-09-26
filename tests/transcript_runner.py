@@ -227,6 +227,15 @@ class TranscriptRunnerTests(unittest.TestCase):
             directory.mkdir(parents=True, exist_ok=True)
 
         shutil.copy2(RUNNER, self.boundaries / "_run.py")
+        (self.boundaries / "_profiles.py").write_text(
+            # fmt: python
+            code("""
+                SMOKE = (
+                    "client_server/server/test_tools::initializes_and_lists_tools",
+                    "client_server/server/test_tools::selected",
+                )
+                """)
+        )
         for name in (
             "__init__.py",
             "cases.py",
@@ -294,13 +303,33 @@ class TranscriptRunnerTests(unittest.TestCase):
             encoding="utf-8",
         )
         cargo.chmod(0o755)
+        return self.script_environment(commands)
+
+    def script_environment(self, commands: Path) -> dict[str, str]:
+        # Exercise the bootstrap argv with this test's prepared interpreter.
+        # Resolving the copied runner's SDK dependencies would make each temporary
+        # checkout depend on registry access inside the command's ten-second limit.
+        uv = commands / "uv"
+        uv.write_text(
+            f"#!{sys.executable}\n"
+            # fmt: python
+            + code("""
+                import os
+                import sys
+
+                assert sys.argv[1:3] == ["run", "--script"], sys.argv
+                os.execv(sys.executable, [sys.executable, *sys.argv[3:]])
+                """),
+            encoding="utf-8",
+        )
+        uv.chmod(0o755)
         return os.environ | {
             "PATH": f"{commands}{os.pathsep}{os.environ['PATH']}",
-            # Isolate the fake build's budget while reusing uv dependencies.
-            "UV_CACHE_DIR": subprocess.check_output(
-                ["uv", "cache", "dir"], text=True
-            ).strip(),
+            # Isolate the fake build's host concurrency budget.
             "XDG_CACHE_HOME": str(self.root / "cache"),
+            # Any accidental real dependency resolution must fail immediately.
+            "UV_CACHE_DIR": str(self.root / "cache/uv"),
+            "UV_OFFLINE": "1",
         }
 
     def test_script_builds_and_uses_release_with_a_stale_debug_binary(self) -> None:
@@ -336,9 +365,9 @@ class TranscriptRunnerTests(unittest.TestCase):
             PUBLIC_SUITE
             # fmt: python
             + code("""
-                from support.requirements import EXTENDED, requires
+                from support.requirements import Requirement, requires
 
-                test_selected = requires(EXTENDED)(test_selected)
+                test_selected = requires(Requirement("fixture", False, "unavailable"))(test_selected)
                 """),
         )
         result = subprocess.run(
@@ -367,10 +396,12 @@ class TranscriptRunnerTests(unittest.TestCase):
         cargo = commands / "cargo"
         cargo.write_text("#!/bin/sh\nexit 99\n")
         cargo.chmod(0o755)
+        environment = self.script_environment(commands)
         (self.root / "target/release/mcp-console").unlink()
         suite = "client_server/server/test_tools"
         for arguments, status, expected in (
             (("--help",), 0, "usage: scripts/test"),
+            (("--quick", "--full"), 2, "not allowed with argument"),
             (("--list",), 0, f"{suite}::selected"),
             (("--locate", f"{suite}::selected"), 0, "source: tests/boundaries/"),
             (("--execution", "direct"), 2, "execution modes"),
@@ -384,8 +415,7 @@ class TranscriptRunnerTests(unittest.TestCase):
                 result = subprocess.run(
                     [scripts / "test", *arguments],
                     cwd=self.root,
-                    env=os.environ
-                    | {"PATH": f"{commands}{os.pathsep}{os.environ['PATH']}"},
+                    env=environment,
                     capture_output=True,
                     text=True,
                     timeout=10,
@@ -457,8 +487,7 @@ class TranscriptRunnerTests(unittest.TestCase):
         )
         sbx.chmod(0o755)
         shutil.rmtree(self.root / "target")
-        environment = os.environ | {
-            "PATH": f"{commands}{os.pathsep}{os.environ['PATH']}",
+        environment = self.script_environment(commands) | {
             "MCP_CONSOLE_TEST_SBX_TEMPLATE": "fixture@sha256:example",
             "MCP_CONSOLE_TEST_SBX_NETWORK": "0",
             "MCP_CONSOLE_TEST_SBX_INNER_DOCKER": "0",
@@ -489,7 +518,10 @@ class TranscriptRunnerTests(unittest.TestCase):
         commands = self.root / "commands"
         commands.mkdir()
         uv = commands / "uv"
-        uv.write_text("#!/bin/sh\necho invoked > uv-receipt\nexit 97\n")
+        uv.write_text("""#!/bin/sh
+echo invoked > uv-receipt
+exit 97
+""")
         uv.chmod(0o755)
         for arguments, status in (
             (("--help",), 0),
@@ -727,10 +759,10 @@ class TranscriptRunnerTests(unittest.TestCase):
                 """),
             encoding="utf-8",
         )
-        listed = self.run_runner("--list")
+        listed = self.run_runner("--full", "--list")
         self.assertEqual(listed.returncode, 0, listed.stderr)
         self.assertIn("::unselected", listed.stdout)
-        result = self.run_runner("--jobs", "1")
+        result = self.run_runner("--full", "--jobs", "1")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((self.root / "selected.marker").exists())
         self.assertFalse((self.root / "unselected.marker").exists())
@@ -746,37 +778,139 @@ class TranscriptRunnerTests(unittest.TestCase):
         self.assertEqual(selected_skip.returncode, 0, selected_skip.stderr)
         self.assertIn("fixture deliberately unavailable", selected_skip.stdout)
 
-    def test_quick_profile_skips_stress_and_disables_external_providers(self) -> None:
+    def test_script_profiles_and_explicit_selectors(self) -> None:
+        environment = self.prepare_script()
+        environment.update(
+            {
+                "MCP_CONSOLE_TEST_DOCKER_IMAGE": "fixture-image",
+                "MCP_CONSOLE_TEST_SBX_TEMPLATE": "fixture-template",
+            }
+        )
         self.suite.write_text(
             PUBLIC_SUITE
             # fmt: python
             + code("""
                 import os
-                from support.requirements import EXTENDED, requires
 
-                test_unselected = requires(EXTENDED)(test_unselected)
-                if os.environ.get("MCP_CONSOLE_TEST_QUICK") == "1":
-                    for variable in (
-                        "MCP_CONSOLE_TEST_DOCKER_IMAGE",
-                        "MCP_CONSOLE_TEST_SBX_TEMPLATE",
-                    ):
-                        assert os.environ[variable] == "", variable
+                assert os.environ["MCP_CONSOLE_TEST_DOCKER_IMAGE"] == "fixture-image"
+                assert os.environ["MCP_CONSOLE_TEST_SBX_TEMPLATE"] == "fixture-template"
                 """),
         )
-        result = self.run_runner("--quick")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue((self.root / "selected.marker").exists())
-        self.assertFalse((self.root / "unselected.marker").exists())
-        self.assertIn("::unselected: skipped; extended stress coverage", result.stdout)
-        listed = self.run_runner("--quick", "--list")
-        self.assertEqual(listed.returncode, 0, listed.stderr)
-        self.assertIn("::selected", listed.stdout)
-        self.assertNotIn("::unselected", listed.stdout)
-        result = self.run_runner()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue((self.root / "unselected.marker").exists())
+        for profile in ((), ("--quick",), ("--full",)):
+            for selectors in (
+                (),
+                ("client_server/server/test_tools::unselected",),
+                ("client_server/server/test_tools",),
+            ):
+                with self.subTest(profile=profile, selectors=selectors):
+                    expected = (
+                        {"unselected"}
+                        if selectors and "::" in selectors[0]
+                        else {"initialization", "selected", "unselected"}
+                        if selectors or profile == ("--full",)
+                        else {"initialization", "selected"}
+                    )
+                    for marker in self.root.glob("*.marker"):
+                        marker.unlink()
+                    for listing in (True, False):
+                        result = subprocess.run(
+                            [
+                                "scripts/test",
+                                *profile,
+                                *(["--list"] if listing else []),
+                                *selectors,
+                            ],
+                            cwd=self.root,
+                            env=environment,
+                            capture_output=True,
+                            text=True,
+                            timeout=10,
+                        )
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        if listing:
+                            names = {
+                                line.split("::")[1]
+                                for line in result.stdout.splitlines()
+                            }
+                            self.assertEqual(
+                                names,
+                                {
+                                    "initializes_and_lists_tools"
+                                    if name == "initialization"
+                                    else name
+                                    for name in expected
+                                },
+                            )
+                    self.assertEqual(
+                        {p.stem for p in self.root.glob("*.marker")}, expected
+                    )
 
-    def test_quick_profile_skips_external_ssh_without_changing_host_selection(
+    def test_smoke_and_focused_runs_do_not_import_unselected_suites(self) -> None:
+        other = self.suite.with_name("test_expensive.py")
+        other.write_text('raise RuntimeError("unselected suite imported")')
+        other_snapshots = self.snapshots.with_name("test_expensive")
+        other_snapshots.mkdir()
+        (other_snapshots / "example.yaml").write_text("""---
+runner: example
+...
+""")
+        for arguments in (
+            (),
+            ("--quick",),
+            ("client_server/server/test_tools::selected",),
+            ("--full", "client_server/server/test_tools::selected"),
+            ("--full", "client_server/server/test_tools"),
+            ("--full", "--list", "client_server/server/test_tools"),
+            ("--full", "--locate", "client_server/server/test_tools::selected"),
+            ("--full", "--update", "client_server/server/test_tools::selected"),
+        ):
+            with self.subTest(arguments=arguments):
+                result = self.run_runner(*arguments)
+                self.assertEqual(result.returncode, 0, result.stderr)
+        full = self.run_runner("--full")
+        self.assertNotEqual(full.returncode, 0)
+        self.assertIn("unselected suite imported", full.stderr)
+
+    def test_smoke_update_preserves_unselected_and_orphan_snapshots(self) -> None:
+        orphan = self.snapshots / "deleted_case.yaml"
+        orphan.write_text("""---
+runner: orphan
+...
+""")
+        unselected = self.snapshots / "unselected.yaml"
+        original = unselected.read_bytes()
+        for profile in ((), ("--quick",)):
+            result = self.run_runner(*profile, "--update")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(orphan.exists())
+            self.assertEqual(unselected.read_bytes(), original)
+        full = self.run_runner("--full", "--update")
+        self.assertEqual(full.returncode, 0, full.stderr)
+        self.assertFalse(orphan.exists())
+
+    def test_full_profile_selected_updates_preserve_unrelated_orphans(self) -> None:
+        orphan = self.snapshots / "deleted_case.yaml"
+        orphan.write_text("""---
+runner: orphan
+...
+""")
+        selected = self.snapshots / "selected.yaml"
+        expected = b"---\nrunner: selected\n"
+        for selector in (
+            "client_server/server/test_tools::selected",
+            "client_server/server/test_tools",
+        ):
+            with self.subTest(selector=selector):
+                selected.write_text("""---
+runner: outdated
+...
+""")
+                result = self.run_runner("--full", "--update", selector)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(selected.read_bytes(), expected)
+                self.assertTrue(orphan.exists())
+
+    def test_explicit_profiles_preserve_external_ssh_host_selection(
         self,
     ) -> None:
         shutil.copy2(
@@ -825,12 +959,12 @@ class TranscriptRunnerTests(unittest.TestCase):
                     "MCP_CONSOLE_TEST_SSH_EXTERNAL": external,
                     "FIXTURE_SSH_EXTERNAL": external,
                 }
-                for quick in (True, False):
+                for profile in ([], ["--quick"], ["--full"]):
                     result = subprocess.run(
                         [
                             sys.executable,
                             self.boundaries / "_run.py",
-                            *(["--quick"] if quick else []),
+                            *profile,
                             "client_server/server/test_tools::selected",
                         ],
                         cwd=self.root,
@@ -840,32 +974,24 @@ class TranscriptRunnerTests(unittest.TestCase):
                         timeout=10,
                     )
                     self.assertEqual(result.returncode, 0, result.stderr)
-                    if quick:
-                        self.assertFalse(probes.exists())
-                        self.assertFalse((self.root / "selected.marker").exists())
-                        self.assertIn(
-                            "external SSH target: omitted by --quick",
-                            result.stdout,
-                        )
-                    else:
-                        self.assertTrue((self.root / "selected.marker").exists())
-                        expected = [
-                            "-T",
-                            "-a",
-                            "-o",
-                            "BatchMode=yes",
-                            "-o",
-                            "ConnectTimeout=3",
-                            *(["-F", "fixture-ssh-config"] if external else []),
-                            "--",
-                            "configured-host" if external else "fixture-host",
-                            "true",
-                        ]
-                        self.assertTrue(probes.read_text())
-                        for line in probes.read_text().splitlines():
-                            self.assertEqual(json.loads(line), expected)
-                        probes.unlink()
-                        (self.root / "selected.marker").unlink()
+                    self.assertTrue((self.root / "selected.marker").exists())
+                    expected = [
+                        "-T",
+                        "-a",
+                        "-o",
+                        "BatchMode=yes",
+                        "-o",
+                        "ConnectTimeout=3",
+                        *(["-F", "fixture-ssh-config"] if external else []),
+                        "--",
+                        "configured-host" if external else "fixture-host",
+                        "true",
+                    ]
+                    self.assertTrue(probes.read_text())
+                    for line in probes.read_text().splitlines():
+                        self.assertEqual(json.loads(line), expected)
+                    probes.unlink()
+                    (self.root / "selected.marker").unlink()
 
     def test_records_timings_for_each_execution_and_snapshot_failure(self) -> None:
         self.suite.write_text(
@@ -885,7 +1011,10 @@ class TranscriptRunnerTests(unittest.TestCase):
         for failed in (False, True):
             if failed:
                 (self.snapshots / "selected.yaml").write_text(
-                    "---\nrunner: different\n...\n"
+                    """---
+runner: different
+...
+"""
                 )
             result = subprocess.run(
                 [sys.executable, self.boundaries / "_run.py", selector],
@@ -978,7 +1107,7 @@ class TranscriptRunnerTests(unittest.TestCase):
         stale = self.snapshots / "selected.md"
         stale.write_text("obsolete companion", encoding="utf-8")
         before = (self.snapshots / "unselected.yaml").read_bytes()
-        result = self.run_runner("--update", "--jobs", "1")
+        result = self.run_runner("--full", "--update", "--jobs", "1")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.snapshots / "unselected.yaml").read_bytes(), before)
         self.assertEqual(companion.read_text(), "retained companion")
@@ -1004,7 +1133,7 @@ class TranscriptRunnerTests(unittest.TestCase):
                 """),
             encoding="utf-8",
         )
-        result = self.run_runner("--update", "--jobs", "1")
+        result = self.run_runner("--full", "--update", "--jobs", "1")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((self.root / "first.marker").exists())
         self.assertTrue((self.root / "second.marker").exists())
@@ -1020,7 +1149,7 @@ class TranscriptRunnerTests(unittest.TestCase):
                 'return [{"runner": execution.name}]',
             )
         )
-        differing = self.run_runner("--update", "--jobs", "1")
+        differing = self.run_runner("--full", "--update", "--jobs", "1")
         self.assertNotEqual(differing.returncode, 0)
         self.assertIn("second", differing.stderr)
 
@@ -1046,7 +1175,7 @@ class TranscriptRunnerTests(unittest.TestCase):
                 """),
             encoding="utf-8",
         )
-        result = self.run_runner("--update", "--jobs", "1")
+        result = self.run_runner("--full", "--update", "--jobs", "1")
         self.assertEqual(result.returncode, 0, result.stderr)
         snapshot = (self.snapshots / "selected.yaml").read_text()
         self.assertEqual(snapshot.count("!same-as"), 2, snapshot)
@@ -1091,7 +1220,7 @@ class TranscriptRunnerTests(unittest.TestCase):
                 """),
             encoding="utf-8",
         )
-        result = self.run_runner("--update", "--jobs", "1")
+        result = self.run_runner("--full", "--update", "--jobs", "1")
         self.assertEqual(result.returncode, 0, result.stderr)
         for reference in self.snapshots.glob("initializes_and_lists_tools*.yaml"):
             self.assertNotIn("id:", reference.read_text())
@@ -1105,7 +1234,7 @@ class TranscriptRunnerTests(unittest.TestCase):
         self.suite.write_text(
             self.suite.read_text().replace("else direct", "else sandbox")
         )
-        differing = self.run_runner("--jobs", "1")
+        differing = self.run_runner("--full", "--jobs", "1")
         self.assertNotEqual(differing.returncode, 0)
         self.assertIn("result: sandbox", differing.stderr)
         self.assertIn("::selected[direct] differs", differing.stderr)
@@ -1166,7 +1295,7 @@ class TranscriptRunnerTests(unittest.TestCase):
                 """)
         )
         self.suite.write_text(source.replace("AVAILABLE", "True"))
-        result = self.run_runner("--update", "--jobs", "1")
+        result = self.run_runner("--full", "--update", "--jobs", "1")
         self.assertEqual(result.returncode, 0, result.stderr)
         references = {
             path: path.read_bytes()
@@ -1199,7 +1328,11 @@ class TranscriptRunnerTests(unittest.TestCase):
         self.suite.write_text(PUBLIC_SUITE + HANGING_SUITE, encoding="utf-8")
         for name in ("hangs", "failure_beside_hang"):
             (self.snapshots / f"{name}.yaml").write_text(
-                "---\nrunner: released\n...\n", encoding="utf-8"
+                """---
+runner: released
+...
+""",
+                encoding="utf-8",
             )
         checkpoints = []
         for name in (
@@ -1488,7 +1621,11 @@ class TranscriptRunnerTests(unittest.TestCase):
     def test_runner_loss_retires_case_holding_the_gil(self) -> None:
         self.suite.write_text(PUBLIC_SUITE + GIL_HOLDING_SUITE, encoding="utf-8")
         (self.snapshots / "holds_gil.yaml").write_text(
-            "---\nrunner: released\n...\n", encoding="utf-8"
+            """---
+runner: released
+...
+""",
+            encoding="utf-8",
         )
         subprocess.run(
             [
@@ -1552,7 +1689,12 @@ class TranscriptRunnerTests(unittest.TestCase):
     def test_case_can_fork_without_thread_safety_warnings(self) -> None:
         self.suite.write_text(PUBLIC_SUITE + FORKING_SUITE, encoding="utf-8")
         (self.snapshots / "forks.yaml").write_text(
-            "---\nrunner: forked\nwarnings: []\n...\n", encoding="utf-8"
+            """---
+runner: forked
+warnings: []
+...
+""",
+            encoding="utf-8",
         )
         result = self.run_runner("client_server/server/test_tools::forks")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -1573,7 +1715,7 @@ class TranscriptRunnerTests(unittest.TestCase):
             f"{suite}::unselected",
         ]
 
-        listed = self.run_runner("--list")
+        listed = self.run_runner("--full", "--list")
         self.assertEqual(listed.returncode, 0, listed.stderr)
         self.assertEqual(listed.stdout.splitlines(), cases)
 
@@ -1622,9 +1764,15 @@ class TranscriptRunnerTests(unittest.TestCase):
 
     def test_orphan_rejection_and_full_update_cleanup(self) -> None:
         orphan = self.snapshots / "deleted_case.yaml"
-        orphan.write_text("---\nrunner: orphan\n...\n", encoding="utf-8")
+        orphan.write_text(
+            """---
+runner: orphan
+...
+""",
+            encoding="utf-8",
+        )
 
-        rejected = self.run_runner("--list")
+        rejected = self.run_runner("--full", "--list")
         self.assertNotEqual(rejected.returncode, 0)
         self.assertIn(
             "orphan snapshot: "
@@ -1632,10 +1780,11 @@ class TranscriptRunnerTests(unittest.TestCase):
             rejected.stderr,
         )
         self.assertIn(
-            "run scripts/test --update to remove orphan snapshots", rejected.stderr
+            "run scripts/test --full --update to remove orphan snapshots",
+            rejected.stderr,
         )
 
-        updated = self.run_runner("--update", "--jobs", "2")
+        updated = self.run_runner("--full", "--update", "--jobs", "2")
         self.assertEqual(updated.returncode, 0, updated.stderr)
         self.assertFalse(orphan.exists())
         self.assertIn(
@@ -1651,17 +1800,19 @@ class TranscriptRunnerTests(unittest.TestCase):
             },
         )
 
-    def test_failure_rerun_preserves_custom_timeout(self) -> None:
-        (self.snapshots / "selected.yaml").write_text("---\nrunner: mismatch\n...\n")
-        for profile in ([], ["--quick"]):
+    def test_focused_failure_rerun_omits_profiles_and_preserves_timeout(self) -> None:
+        (self.snapshots / "selected.yaml").write_text("""---
+runner: mismatch
+...
+""")
+        for profile in ([], ["--quick"], ["--full"]):
             with self.subTest(profile=profile):
                 arguments = [
-                    *profile,
                     "--timeout",
                     "1200.5",
                     "client_server/server/test_tools::selected",
                 ]
-                result = self.run_runner(*arguments)
+                result = self.run_runner(*profile, *arguments)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(
                     f"rerun: scripts/test {shlex.join(arguments)}", result.stderr
@@ -1695,24 +1846,21 @@ class TranscriptRunnerTests(unittest.TestCase):
                 """)
         )
         orphan = self.snapshots / "deleted_case.yaml"
-        orphan.write_text("---\nrunner: orphan\n...\n")
-        for profile in ([], ["--quick"]):
-            with self.subTest(profile=profile):
-                arguments = [*profile, "--update", "--jobs", "1"]
-                result = self.run_runner(*arguments)
-                self.assertNotEqual(result.returncode, 0)
-                receipt = next(
-                    line
-                    for line in result.stderr.splitlines()
-                    if line.startswith("rerun: ")
-                )
-                self.assertEqual(
-                    receipt, f"rerun: scripts/test {shlex.join(arguments)}"
-                )
-                self.assertTrue(orphan.exists())
-                retried = self.run_runner(*shlex.split(receipt)[2:])
-                self.assertIn("fixture failed before snapshot update", retried.stderr)
-                self.assertNotIn("orphan snapshot:", retried.stderr)
+        orphan.write_text("""---
+runner: orphan
+...
+""")
+        arguments = ["--full", "--update", "--jobs", "1"]
+        result = self.run_runner(*arguments)
+        self.assertNotEqual(result.returncode, 0)
+        receipt = next(
+            line for line in result.stderr.splitlines() if line.startswith("rerun: ")
+        )
+        self.assertEqual(receipt, f"rerun: scripts/test {shlex.join(arguments)}")
+        self.assertTrue(orphan.exists())
+        retried = self.run_runner(*shlex.split(receipt)[2:])
+        self.assertIn("fixture failed before snapshot update", retried.stderr)
+        self.assertNotIn("orphan snapshot:", retried.stderr)
 
     def test_parallel_failure_exits_and_reports_every_failure(self) -> None:
         self.suite.write_text(FAILING_SUITE, encoding="utf-8")
@@ -1729,7 +1877,7 @@ class TranscriptRunnerTests(unittest.TestCase):
         started = os.open(self.root / "started", os.O_RDWR | os.O_NONBLOCK)
         release_first = os.open(self.root / "release-first", os.O_RDWR)
         release_second = os.open(self.root / "release-second", os.O_RDWR)
-        process = self.start_runner("--jobs", "2")
+        process = self.start_runner("--full", "--jobs", "2")
         try:
             acknowledgements = b""
             while len(acknowledgements) < 2:

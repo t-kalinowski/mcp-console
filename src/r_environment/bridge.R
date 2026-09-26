@@ -1,6 +1,27 @@
 base::local(
   {
     managed <- base::.libPaths()[[1L]]
+    temporary_library <- NULL
+    if (
+      base::identical(base::Sys.getenv("MCP_CONSOLE_SANDBOX"), "1") ||
+        base::nzchar(base::Sys.getenv("MCP_CONSOLE_EXECUTION_COMPUTE"))
+    ) {
+      temporary_library <- base::tempfile(
+        "mcp-console-library-",
+        tmpdir = base::tempdir()
+      )
+      base::stopifnot(base::dir.create(temporary_library))
+      temporary_library <- base::normalizePath(
+        temporary_library,
+        winslash = "/",
+        mustWork = TRUE
+      )
+      base::.libPaths(base::c(temporary_library, base::.libPaths()))
+      base::stopifnot(base::identical(
+        base::.libPaths()[[1L]],
+        temporary_library
+      ))
+    }
     in_progress <- base::character()
     dynamic_resolution <- base::identical(
       base::Sys.getenv(
@@ -40,8 +61,10 @@ base::local(
         mustWork = TRUE
       )
       paths <- base::.libPaths()
-      base::.libPaths(base::c(library, paths[paths != managed]))
-      if (!base::identical(base::.libPaths()[[1L]], library)) {
+      paths <- paths[!paths %in% base::c(managed, temporary_library)]
+      base::.libPaths(base::c(temporary_library, library, paths))
+      managed_index <- if (base::is.null(temporary_library)) 1L else 2L
+      if (!base::identical(base::.libPaths()[[managed_index]], library)) {
         base::stop("resolved R library was not added to .libPaths()")
       }
       managed <<- library

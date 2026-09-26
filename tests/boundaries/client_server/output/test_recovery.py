@@ -24,11 +24,11 @@ from support.previews import (
     session_directory,
 )
 from support.records import Transcript
-from support.requirements import EXTENDED, NATIVE_FIXTURES, requires
+from support.requirements import NATIVE_FIXTURES, requires
 from support.suites import run_this_suite
 
 
-@requires(NATIVE_FIXTURES, EXTENDED)
+@requires(NATIVE_FIXTURES)
 def test_cancelled_control_recovery_keeps_bounded_allocations(
     binary: Path,
 ) -> Transcript:
@@ -83,7 +83,10 @@ def test_cancelled_control_recovery_keeps_bounded_allocations(
             compact_previews(
                 client,
                 "\n[idle]",
-                "\n[worker stopped: in-memory state lost]\n[starting new worker]\n[done]",
+                """
+[worker stopped: in-memory state lost]
+[starting new worker]
+[done]""",
                 "x",
             )
             return client.finish()
@@ -96,7 +99,7 @@ def test_recovered_recorded_cells_keep_bounded_source_markers(
     return recovered_recorded_cells(binary, count=32, silent=False)
 
 
-@requires(NATIVE_FIXTURES, EXTENDED)
+@requires(NATIVE_FIXTURES)
 def test_recovered_silent_cells_discard_file_receipts(binary: Path) -> Transcript:
     return recovered_recorded_cells(binary, count=512, silent=True)
 
@@ -211,7 +214,10 @@ def recovered_recorded_cells(binary: Path, *, count: int, silent: bool) -> Trans
             compact_previews(
                 client,
                 "\n[idle]",
-                "\n[worker stopped: in-memory state lost]\n[starting new worker]\n[done]",
+                """
+[worker stopped: in-memory state lost]
+[starting new worker]
+[done]""",
                 "x",
                 "\n[done]",
             )
@@ -359,7 +365,10 @@ def test_cancelled_active_polls_replay_before_later_output(binary: Path) -> Tran
                 compact_previews(
                     client,
                     "\n[idle]",
-                    "\n[worker stopped: in-memory state lost]\n[starting new worker]\n[done]",
+                    """
+[worker stopped: in-memory state lost]
+[starting new worker]
+[done]""",
                     "x",
                 )
                 return client.finish()
@@ -432,7 +441,7 @@ def test_image_recovery_moves_the_retained_preview(binary: Path) -> Transcript:
         return client.finish()
 
 
-@requires(NATIVE_FIXTURES, EXTENDED)
+@requires(NATIVE_FIXTURES)
 def test_recovered_image_omissions_keep_bounded_state(binary: Path) -> Transcript:
     count = 1024
     with recovery_client(binary) as (client, profile, reached, release):

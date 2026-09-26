@@ -203,8 +203,8 @@ Journals, transcripts, output spools, and returned image bytes remain beneath th
 Declared binds may expose that directory to the workload.
 Other files remain inside the container or declared binds.
 
-Quarto projections identify Docker, omit an incorrect controller execution root, and default to `execute.eval: false`.
-Deliberately recreate the target environment and filesystem before enabling execution.
+Quarto projections identify Docker and omit an incorrect controller execution root.
+Rendering executes the captured cells, so recreate the target environment and files first.
 
 ### Bounded output and retained text
 
@@ -238,7 +238,7 @@ Cancellation of a running build is covered through the legacy builder's observab
 docker build -f examples/docker/Dockerfile -t mcp-console-test:analysis .
 export MCP_CONSOLE_TEST_DOCKER_IMAGE=mcp-console-test:analysis
 scripts/test cli/test_docker client_server/server/test_docker client_server/server/test_docker_setup client_server/server/test_docker_lifecycle client_server/server/test_docker_sandbox
-scripts/check
+scripts/check --full
 ```
 
 Deferred capabilities include SSH plus Docker, ordinary Docker compute enforcement, Podman guarantees, Windows containers or controllers, inline Dockerfiles, GPU/device/resource controls, arbitrary Docker flags, managed package preparation, synchronization, reconnect/resume, and reusable user containers.
