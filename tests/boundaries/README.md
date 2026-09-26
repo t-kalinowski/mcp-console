@@ -205,9 +205,11 @@ Run commands from the repository root:
 
 ```bash
 scripts/test
+scripts/test --full
 scripts/test client_server/server/test_tools
 scripts/test client_server/server/test_tools::initializes_and_lists_tools
 scripts/test --list
+scripts/test --full --list
 scripts/test --locate client_server/server/test_tools
 scripts/test --locate client_server/server/test_tools::initializes_and_lists_tools
 scripts/test --jobs 1 client_server/python/test_runtime
@@ -224,7 +226,8 @@ The Python SDK integration dependencies retain the published lower bounds withou
 CI resolves current SDK releases when the weekly uv cache is empty and can reuse them for the rest of that UTC ISO week.
 Local runs reuse their uv environment until it needs updating; use `uv run --upgrade --script tests/boundaries/_run.py client_server/integrations/test_python` to refresh the SDKs explicitly after building the executable.
 CI also uses this release executable for the R package and installed-wheel integration checks; `scripts/check-core` keeps Rust unit tests in debug so their debug assertions remain enabled.
-With no selectors, `scripts/test` runs every suite and case in separate processes, with at least two concurrent cases and otherwise one per available CPU by default.
+With no selectors, `scripts/test` runs the smoke selection; `scripts/test --full` runs all capability-applicable cases.
+Each selected case runs in a separate process, with at least two concurrent cases and otherwise one per available CPU by default.
 Pass `--jobs N` to set the maximum concurrency or `--jobs 1` to run serially.
 Each case has a 600-second deadline that starts when its supervisor launches.
 The deadline includes snapshot formatting, comparison, and updates, which run in the supervised case process so the coordinator can keep handling signals and sibling failures.
@@ -261,7 +264,7 @@ Use `execution.serve()` to compose common arguments and let the fixture select `
 Sandbox-only policy arguments belong in a sandbox fixture, for example `SANDBOXED.serve("--writable-root", str(path))`.
 The direct fixture rejects writable roots with that example in its error.
 
-Cases run by default.
+Selected cases run by default.
 Declare only the capabilities a case needs, beside its definition, with `@requires(...)` from `support.requirements`.
 For example, `@requires(SANDBOX)` identifies a sandbox contract, `@requires(PROCESS_EVENTS)` identifies a test using shared process observation, and `@requires(command("quarto"))` identifies an optional executable.
 All platform availability decisions belong in test support.
@@ -300,7 +303,7 @@ This preserves differences as failures instead of letting the last mode overwrit
 The canonical initialization case is the exception: each available mode updates its own full and bare-runtime references (`.direct.yaml` and `.bare.direct.yaml` for direct mode).
 Full updates retain initialization references for unavailable modes.
 Multi-session transcripts reuse the same mode-aware handshake compaction.
-All cases remain discoverable with `--list` and `--locate`; execution and updates report the selector, mode when applicable, and each missing capability's reason.
+All cases remain discoverable with `scripts/test --full --list` and `scripts/test --locate SELECTOR`; execution and updates report the selector, mode when applicable, and each missing capability's reason.
 An explicitly selected unavailable case is reported as skipped.
 
 Server cases create an `McpClient`, call `initialize_and_list_tools()`, perform their `send()` interactions, and return `client.finish()`.
