@@ -192,9 +192,10 @@ def test_mixed_runtime_shares_recordings_and_restart_without_native(
             == os.environ["MCP_CONSOLE_TEST_SBX_TEMPLATE"]
         )
         qmd = (session / "transcript.qmd").read_text()
-        assert (
-            "root.dir" not in qmd and "eval: false" in qmd and "Docker Sandbox" in qmd
-        )
+        frontmatter = qmd.split("---", 2)[1]
+        assert "root.dir" not in qmd and "execute:" not in frontmatter, qmd
+        assert "# Run `ir render transcript.qmd`" in frontmatter, qmd
+        assert "Docker Sandbox" in qmd, qmd
         created = [call["args"] for call in calls(root) if call["args"][0] == "create"]
         assert len(created) == 3
         assert all(

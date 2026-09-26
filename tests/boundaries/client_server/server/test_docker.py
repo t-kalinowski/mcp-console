@@ -154,7 +154,10 @@ def test_persistent_image_runtime_and_controller_records(binary: Path) -> Transc
         assert generations[0].startswith(container)
         assert generations[1].startswith(replacement)
         qmd = (session / "transcript.qmd").read_text()
-        assert "root.dir" not in qmd and "eval: false" in qmd and "Docker" in qmd, qmd
+        frontmatter = qmd.split("---", 2)[1]
+        assert "root.dir" not in qmd and "execute:" not in frontmatter, qmd
+        assert "# Run `ir render transcript.qmd`" in frontmatter, qmd
+        assert "Docker" in qmd, qmd
         result = json.dumps(transcript[3:]).replace(str(root), "<docker-test>")
         for identity in (container, replacement):
             result = result.replace(identity, "<container>")
