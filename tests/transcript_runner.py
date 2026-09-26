@@ -792,19 +792,23 @@ exit 97
         commands = self.root / "commands"
         commands.mkdir()
         executable = commands / "R"
-        executable.write_text("#!/bin/sh\nexit 99\n")
-        executable.chmod(0o755)
         marker = self.root / "selected.marker"
-        for home, on_path, expected in (
-            (None, False, False),
-            (str(self.root / "selected-R-home"), False, True),
-            ("", False, True),
-            (None, True, True),
+        for home, entry, expected in (
+            (None, None, False),
+            (str(self.root / "selected-R-home"), None, True),
+            ("", None, True),
+            (None, "executable", True),
+            (None, "non-executable", True),
+            (None, "broken symlink", True),
         ):
-            with self.subTest(home=home, on_path=on_path):
-                environment = os.environ | {
-                    "PATH": str(commands if on_path else self.root / "empty-path")
-                }
+            with self.subTest(home=home, entry=entry):
+                executable.unlink(missing_ok=True)
+                if entry == "broken symlink":
+                    executable.symlink_to(commands / "missing-R")
+                elif entry is not None:
+                    executable.write_text("#!/bin/sh\nexit 99\n")
+                    executable.chmod(0o755 if entry == "executable" else 0o644)
+                environment = os.environ | {"PATH": str(commands)}
                 environment.pop("R_HOME", None)
                 if home is not None:
                     environment["R_HOME"] = home
