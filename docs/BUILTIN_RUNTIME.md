@@ -226,6 +226,7 @@ Packages prepared for the session are available but are not attached automatical
 In sandboxed built-in R sessions, the first `.libPaths()` entry is a fresh writable directory inside R's `tempdir()`.
 `install.packages()` without a `lib` argument uses this directory, so packages installed by a cell are available to later cells in the same worker generation.
 The directory is temporary and is not retained across a worker restart; managed R libraries follow it in `.libPaths()` and remain available after restart.
+Until a package is installed there, R's `library()` listing call warns that the temporary library contains no packages.
 Downloads and package builds still depend on a configured repository, the sandbox's network policy, and installed system tools.
 
 ### On-demand R packages
