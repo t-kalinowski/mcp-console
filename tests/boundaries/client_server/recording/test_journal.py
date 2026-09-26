@@ -131,6 +131,7 @@ def test_selects_existing_project_or_home_recording_directory(
                 environment={**os.environ, "HOME": str(home)},
                 current_directory=workspace,
                 record_in_project=False,
+                use_home_configuration=True,
             ) as client:
                 client.initialize_and_list_tools()
                 assert not (home / ".agents").exists()
@@ -182,6 +183,7 @@ def test_rejects_non_utf8_home_recording_path(binary: Path) -> Transcript:
             environment={**os.environ, "HOME": str(home)},
             current_directory=workspace,
             record_in_project=False,
+            use_home_configuration=True,
         ) as client:
             client.initialize_and_list_tools()
             # Configuration was captured at launch; recording is selected on send.

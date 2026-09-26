@@ -247,6 +247,20 @@ def test_discovers_home_configuration_with_project_precedence(
             _, stderr = client.finish_with_standard_error()
             assert stderr == "", stderr
 
+        opt_out_workspace = root / "opt-out-client"
+        opt_out_workspace.mkdir()
+        with McpClient(
+            binary,
+            ("serve", "--no-sandbox"),
+            environment=environment,
+            current_directory=opt_out_workspace,
+            record_in_project=False,
+        ) as client:
+            client.initialize_and_list_tools()
+            _, stderr = client.finish_with_standard_error()
+            assert stderr == "", stderr
+        assert not (opt_out_workspace / ".agents").exists()
+
         configure(workspace, {})
         with McpClient(
             binary,
@@ -271,6 +285,7 @@ def test_discovers_home_configuration_with_project_precedence(
             environment=environment,
             current_directory=workspace,
             record_in_project=False,
+            use_home_configuration=True,
         ) as client:
             client.initialize_and_list_tools()
             _, stderr = client.finish_with_standard_error()
