@@ -446,7 +446,6 @@ def _mcp_console_eval_cell(
     _exec=_builtins.exec,
     _eval=_builtins.eval,
     _BaseException=_builtins.BaseException,
-    _SyntaxError=_builtins.SyntaxError,
     _collect_plots=_mcp_console_collect_plots,
     _publish_plot=_services.publish_plot,
     _sys=_sys,
@@ -462,18 +461,14 @@ def _mcp_console_eval_cell(
         else:
             statements = _compile(module, filename, "exec")
             expression = None
-    except _SyntaxError:
-        _print_exc(limit=0)
+
+        if statements is not None:
+            _exec(statements, _main.__dict__)
+        if expression is not None:
+            _sys.displayhook(_eval(expression, _main.__dict__))
     except _BaseException:
-        _print_exc()
-    else:
-        try:
-            if statements is not None:
-                _exec(statements, _main.__dict__)
-            if expression is not None:
-                _sys.displayhook(_eval(expression, _main.__dict__))
-        except _BaseException:
-            _print_exc()
+        # CPython's NUL SyntaxError has no source location to show.
+        _print_exc(limit=0 if "\0" in source else None)
     try:
         for image in _collect_plots():
             _publish_plot(image)

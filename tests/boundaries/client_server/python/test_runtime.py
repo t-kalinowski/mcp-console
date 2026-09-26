@@ -610,7 +610,7 @@ def test_recovers_from_python_errors(binary: Path, execution: Execution) -> Tran
         """)
     client.send(python=python)
     output = last_result_text(client)
-    assert not output.startswith("Traceback (most recent call last):\n")
+    assert output.startswith("Traceback (most recent call last):\n")
     assert "<mcp-console:python:" in output
     assert output.endswith("SyntaxError: 'await' outside function\n")
     client.send(python='"compile_partial" in globals()')
@@ -620,6 +620,10 @@ def test_recovers_from_python_errors(binary: Path, execution: Execution) -> Tran
     output = last_result_text(client)
     assert client.transcript[-1]["result"]["isError"] is False
     assert output == "SyntaxError: source code string cannot contain null bytes\n"
+    client.send(python="1 / 0")
+    output = last_result_text(client)
+    assert 'File "<mcp-console:python:e5>", line 1, in <module>' in output
+    assert output.endswith("ZeroDivisionError: division by zero\n")
     client.send(python="answer")
     assert last_result_text(client) == "41\n"
     return client.finish()
