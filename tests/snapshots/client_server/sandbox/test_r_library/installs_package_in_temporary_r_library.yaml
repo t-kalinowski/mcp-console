@@ -13,12 +13,11 @@ send:
       dir.exists(library),
       file.access(library, 2L) == 0L
     )
-    suppressMessages(suppressWarnings(install.packages(
+    install.packages(
       "mcpconsolelocalpkg_0.0.1.tar.gz",
       repos = NULL,
-      type = "source",
-      quiet = TRUE
-    )))
+      type = "source"
+    )
     stopifnot(
       identical(dirname(find.package("mcpconsolelocalpkg")), library),
       identical(mcpconsolelocalpkg::answer(), 42L)
@@ -28,6 +27,20 @@ result:
   content:
     - type: text
       text: |
+        Installing package into ‘<sandbox R library>’
+        (as ‘lib’ is unspecified)
+        * installing *source* package ‘mcpconsolelocalpkg’ ...
+        ** this is package ‘mcpconsolelocalpkg’ version ‘0.0.1’
+        ** using staged installation
+        ** R
+        ** byte-compile and prepare package for lazy loading
+        ** help
+        *** installing help indices
+        ** building package indices
+        ** testing if installed package can be loaded from temporary location
+        ** testing if installed package can be loaded from final location
+        ** testing if installed package keeps a record of temporary installation path
+        * DONE (mcpconsolelocalpkg)
         installed in sandbox library
   isError: false
 ---

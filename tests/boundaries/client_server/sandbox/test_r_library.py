@@ -1,5 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
+import re
 import sys
 import tarfile
 from pathlib import Path
@@ -45,8 +46,18 @@ Encoding: UTF-8
                 """),
             encoding="utf-8",
         )
+        (package / "man").mkdir()
+        (package / "man" / "answer.Rd").write_text(
+            r"""\name{answer}
+\alias{answer}
+\title{Return the fixture answer}
+\usage{answer()}
+\description{Returns 42.}
+""",
+            encoding="utf-8",
+        )
         archive = workspace / "mcpconsolelocalpkg_0.0.1.tar.gz"
-        with tarfile.open(archive, "w:gz") as tar:
+        with tarfile.open(archive, "w:gz", format=tarfile.USTAR_FORMAT) as tar:
             tar.add(package, arcname=package.name)
 
         with McpClient(binary, ("serve",), environment, workspace) as client:
@@ -64,12 +75,11 @@ Encoding: UTF-8
                       dir.exists(library),
                       file.access(library, 2L) == 0L
                     )
-                    suppressMessages(suppressWarnings(install.packages(
+                    install.packages(
                       "mcpconsolelocalpkg_0.0.1.tar.gz",
                       repos = NULL,
-                      type = "source",
-                      quiet = TRUE
-                    )))
+                      type = "source"
+                    )
                     stopifnot(
                       identical(dirname(find.package("mcpconsolelocalpkg")), library),
                       identical(mcpconsolelocalpkg::answer(), 42L)
@@ -77,8 +87,12 @@ Encoding: UTF-8
                     cat("installed in sandbox library\n")
                     """)
             )
-            assert last_tool_text(client) == "installed in sandbox library\n", (
-                last_tool_text(client)
+            output = last_tool_text(client)
+            assert output.endswith("installed in sandbox library\n"), output
+            match = re.match(r"Installing package into .(/[^\n]+).\n", output)
+            assert match is not None, output
+            client.transcript[-1]["result"]["content"][0]["text"] = output.replace(
+                match.group(1), "<sandbox R library>"
             )
             client.send(control="restart")
             assert last_tool_text(client).endswith("[starting new worker]\n[idle]")
