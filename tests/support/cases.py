@@ -1,5 +1,6 @@
 import os
 import pickle
+import shutil
 import signal
 import subprocess
 import sys
@@ -12,6 +13,27 @@ from threading import Event, Lock, Thread
 from typing import BinaryIO
 
 CASE_CLEANUP_SECONDS = 15
+
+
+def case_runtime_environment() -> dict[str, str]:
+    """Keep installed runtimes available when cases use an isolated HOME."""
+    environment = os.environ.copy()
+    if rscript := shutil.which("Rscript"):
+        # R's default library and user directories depend on HOME.
+        # fmt: r
+        source = r"""
+        cat(Sys.getenv("R_LIBS_USER"), "\n")
+        cat(dirname(dirname(tools::R_user_dir("reticulate", "cache"))), "\n")
+        cat(dirname(dirname(tools::R_user_dir("reticulate", "data"))), "\n")
+        """
+        output = subprocess.check_output(
+            [rscript, "--vanilla", "-e", source], text=True
+        ).splitlines()
+        libraries, cache, data = output
+        environment.setdefault("R_LIBS_USER", libraries)
+        environment.setdefault("R_USER_CACHE_DIR", cache)
+        environment.setdefault("R_USER_DATA_DIR", data)
+    return environment
 
 
 class CaseCancelled(Exception):
@@ -101,6 +123,7 @@ def run_case_subprocess(
     events: SimpleQueue,
     index: int,
     *,
+    environment: dict[str, str],
     update: bool,
 ) -> set[Path]:
     runner = Path(__file__).resolve().parents[1] / "boundaries" / "_run.py"
@@ -135,7 +158,7 @@ def run_case_subprocess(
                 start_new_session=True,
                 pass_fds=(ownership_reader,),
                 env={
-                    **os.environ,
+                    **environment,
                     "HOME": str(home),
                     "MCP_CONSOLE_TEST_CASE_DEADLINE": str(started_at + timeout),
                 },
