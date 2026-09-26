@@ -26,6 +26,26 @@ TEMPLATE = "docker.io/example/console@sha256:" + "a" * 64
 
 
 @requires(POSIX)
+def test_minimum_and_newer_cli_versions(binary: Path) -> list:
+    records = []
+    for version in ("0.42.1", "0.42.2", "0.45.1", "0.100.0", "1.0.0"):
+        with workspace() as root:
+            environment = cli_peer(root / "peer")
+            configure(root, template=TEMPLATE)
+            (root / "peer/version").write_text(f"sbx version: v{version} fixture")
+            with McpClient(binary, ("serve",), environment, root) as client:
+                client.initialize_and_list_tools()
+                client.send(r="42")
+                assert last_result_text(client) == "provider peer\n"
+                client.finish()
+            assert not (root / "peer/vms").exists()
+            records.append(
+                {"fake_provider_version": version, "evaluation_completed": True}
+            )
+    return records
+
+
+@requires(POSIX)
 def test_compute_selection_skips_native_bundle_and_captures_configuration(
     binary: Path,
 ) -> list:
@@ -134,7 +154,7 @@ def test_cancelled_creation_and_probe_retire_owned_resources(binary: Path) -> li
 def test_cli_contract_failures_are_noninteractive(binary: Path) -> list:
     records = []
     for mode, expected in (
-        ("unsupported-version", "requires supported sbx v0.42.1"),
+        ("unsupported-version", "requires sbx v0.42.1 or newer"),
         ("malformed-listing", "invalid Docker Sandbox listing"),
         ("create-failed", "creation returned no identity"),
     ):
