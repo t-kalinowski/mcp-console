@@ -116,7 +116,7 @@ impl Runtime {
     }
 
     pub(super) fn evaluate(&self, source: String) -> Result<(), String> {
-        // Console reads during preflight belong to R error handlers, not source.
+        // Console reads during preflight are interactive input, never cell source.
         REPL_EVALUATING.store(true, Ordering::SeqCst);
         if !self.parser.complete(&source)? {
             return Ok(());

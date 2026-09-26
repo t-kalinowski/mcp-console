@@ -11,7 +11,7 @@ SMOKE = (
     "cli/interface/test_help::help",
     "cli/test_config_overrides::layers_project_then_cli_in_order",
     # Real runtimes, persistent state, and mixed-language recording with a plot.
-    "client_server/r/test_runtime::applies_complete_expressions_before_incomplete_source",
+    "client_server/r/test_runtime::rejects_incomplete_and_invalid_source",
     "client_server/python/test_runtime::evaluates_cells_in_persistent_reticulate_state",
     "client_server/sql/test_catalog::evaluates_queries_in_a_persistent_catalog",
     "client_server/recording/test_markdown::records_real_mixed_language_session",

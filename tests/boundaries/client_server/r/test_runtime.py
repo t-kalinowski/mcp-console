@@ -102,6 +102,62 @@ def test_rejects_incomplete_and_invalid_source(
 
 
 @executions(DIRECT, SANDBOXED)
+def test_rejects_source_without_error_side_effects(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = McpClient(binary, execution.serve())
+    client.initialize_and_list_tools()
+    # Seed a real traceback and verify the error hook still handles runtime errors.
+    # fmt: r
+    r = code(r"""
+        error_hook_calls <- 0L
+        options(error = quote({
+          error_hook_calls <<- error_hook_calls + 1L
+          traceback()
+        }))
+        f <- function() stop("seed traceback")
+        f()
+        """)
+    client.send(r=r)
+    client.send(r="traceback()")
+    previous_traceback = last_tool_text(client)
+    assert 'stop("seed traceback")' in previous_traceback
+    # fmt: r
+    incomplete = code(r"""
+        created <- TRUE
+        (
+        """)
+    # fmt: r
+    invalid = code(r"""
+        created <- TRUE
+        )
+        """)
+    # fmt: r
+    duplicate_formal = code(r"""
+        created <- TRUE
+        function(x, x) x
+        """)
+    for source in (incomplete, invalid, duplicate_formal):
+        client.send(r=source)
+        assert last_tool_text(client).startswith("Error: "), last_tool_text(client)
+        assert 'stop("seed traceback")' not in last_tool_text(client), last_tool_text(
+            client
+        )
+        client.send(r="traceback()")
+        assert last_tool_text(client) == previous_traceback, last_tool_text(client)
+    # fmt: r
+    r = code(r"""
+        stopifnot(
+          error_hook_calls == 1L,
+          !exists("created", envir = globalenv(), inherits = FALSE)
+        )
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "[done]", last_tool_text(client)
+    return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
 def test_preserves_parser_warning_behavior(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -130,7 +186,8 @@ def test_preserves_parser_warning_behavior(
         function(x, x) x
         """)
     client.send(r=r)
-    assert last_tool_text(client).endswith("error handler warn: 2\n")
+    assert "repeated formal argument 'x'" in last_tool_text(client)
+    assert "error handler warn:" not in last_tool_text(client)
     # The warning becomes an error only when the native REPL reaches the literal.
     # fmt: r
     r = code(r"""

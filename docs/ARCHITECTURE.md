@@ -251,7 +251,8 @@ When R is available, the built-in worker embeds it on its main thread.
 Before entering the native DLL REPL, it validates the entire cell with a cached private R function that calls `suppressWarnings(str2expression(source))` and discards the generated expression vector.
 The helper is initialized in R's base environment and evaluated directly under `R_ToplevelExec()`, without invoking task callbacks, adding history, or changing `.Last.value`.
 Parser warnings remain owned by the native REPL; validation does not mutate warning options or suspend interrupts.
-Incomplete or invalid source reports the native parse condition with the internal helper call removed, without evaluating any submitted expression.
+The helper returns `NULL` for valid source or the parser's diagnostic string for rejected source.
+The worker writes that diagnostic directly to the console without invoking `options(error)` or replacing `.Traceback`; parser errors do not propagate to R's top level.
 On Linux, it re-executes before R initialization with the selected `R_HOME/lib` first in `LD_LIBRARY_PATH`, preserving inherited library paths and its sideband endpoint.
 This lets native R packages resolve R's shared libraries even when that R installation is absent from the system linker cache.
 Its language adapters provide persistent Python and SQL within that worker process.

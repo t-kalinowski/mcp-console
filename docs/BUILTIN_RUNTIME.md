@@ -213,7 +213,8 @@ A waiting `send` whose evaluation finishes before restart interrupts it receives
 
 R cells must parse completely before any expression is evaluated.
 Incomplete or syntactically invalid source is rejected without applying earlier expressions from that cell.
-Validation reports R's parse diagnostics without the internal helper call and leaves task callbacks, history, and `.Last.value` unchanged.
+Validation reports R's parse diagnostics without invoking `options(error)` or changing `.Traceback`, task callbacks, history, or `.Last.value`.
+Rejected cells do not add internal helper calls to the diagnostic or traceback.
 Accepted cells run in persistent global state through R's native console loop.
 Global bindings and `.Last.value` remain available to later calls.
 R parse, evaluation, and print errors are console output followed by normal completion; the worker stays reusable.
