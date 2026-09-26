@@ -187,6 +187,16 @@ def test_rejects_unsupported_managed_inputs(
         ("UV_PYTHON", "project-python"),
         ("UV_CONFIG_FILE", 'find-links = ["./packages"]'),
         ("UV_CONFIG_FILE", 'python-preference = "system"'),
+        ("LD_PRELOAD", "./missing-preload.so"),
+        ("LD_AUDIT", "./missing-audit.so"),
+        ("LD_LIBRARY_PATH", "./missing-libraries"),
+        ("LD_LIBRARY_PATH", "/usr/$LIB"),
+        ("LD_LIBRARY_PATH", "/usr/lib:"),
+        ("DYLD_LIBRARY_PATH", "./missing-libraries"),
+        ("DYLD_FALLBACK_LIBRARY_PATH", "./missing-libraries"),
+        # macOS rejects missing inserted libraries before Console can start.
+        # Even an empty loader setting is outside the managed contract.
+        ("DYLD_INSERT_LIBRARIES", ""),
     ):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -206,7 +216,7 @@ def test_rejects_unsupported_managed_inputs(
                 assert client.process.returncode != 0
                 assert "unsupported managed Python setting" in diagnostic, diagnostic
                 assert "unsafe-resolver-executed" not in diagnostic
-                records.append({"rejected": value})
+                records.append({"setting": name, "rejected": value})
     return records
 
 
@@ -317,6 +327,8 @@ def test_rejects_worker_writable_uv_storage(
         ("UV_CACHE_DIR", "UV_CACHE_DIR"),
         ("UV_PYTHON_INSTALL_DIR", "UV_PYTHON_INSTALL_DIR"),
         ("UV_CACHE_DIR with parent components", "UV_CACHE_DIR"),
+        ("LD_LIBRARY_PATH", "LD_LIBRARY_PATH"),
+        ("LD_LIBRARY_PATH after semicolon", "LD_LIBRARY_PATH"),
     ):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -345,6 +357,8 @@ def test_rejects_worker_writable_uv_storage(
                 )
             else:
                 env[variable] = str(workspace / "uv-storage")
+            if label.endswith("semicolon"):
+                env[variable] = "/usr/lib;" + env[variable]
             with McpClient(binary, execution.serve(), env, workspace) as client:
                 client.process.wait(timeout=30)
                 diagnostic = client.stderr.read()

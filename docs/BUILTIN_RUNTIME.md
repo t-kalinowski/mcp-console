@@ -77,6 +77,8 @@ An explicit `RETICULATE_UV` in a writable location fails.
 Effective cache and installation locations, inventory paths, and candidate interpreters must also be outside worker write access before host inspection.
 Full filesystem write policies require an explicitly selected environment.
 Resolver Python helpers and executable inspection use isolated Python mode; host resolver children do not inherit Python startup variables.
+Managed startup rejects inherited `LD_*` and `DYLD_*` loader settings, except `LD_LIBRARY_PATH` with existing, canonical directory paths that neither overlap nor contain worker write grants.
+Relative paths, symlink aliases, empty entries, and loader tokens such as `$ORIGIN` are unsupported.
 Shared resolver caches are never deleted when retiring a worker or discarding a candidate.
 
 A plain restart clears Python objects and reuses the accepted environment without resolving again.

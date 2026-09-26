@@ -135,6 +135,13 @@ def _initializes_and_lists_tools(
             python_bin.mkdir()
             if python_managed:
                 (python_bin / "uv").symlink_to(shutil.which("uv"))
+                # Installation metadata from setup-uv is not resolver configuration.
+                environment["UV_VERSION"] = "0.0.0"
+                loader_path = Path(library).resolve() / "lib"
+                loader_path.mkdir()
+                environment["LD_LIBRARY_PATH"] = os.pathsep.join(
+                    [environment.get("LD_LIBRARY_PATH") or "/usr/lib", str(loader_path)]
+                )
             else:
                 (python_bin / "python3").symlink_to(sys.executable)
             environment["PATH"] = str(python_bin)

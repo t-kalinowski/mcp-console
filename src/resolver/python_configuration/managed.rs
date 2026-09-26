@@ -15,6 +15,35 @@ struct Index {
 
 impl ManagedPythonResolverConfiguration {
     pub(super) fn capture_managed_settings(&self) -> Result<BTreeMap<OsString, OsString>, String> {
+        // Later host resolvers and inspection inherit this process environment.
+        // Exclude loader hooks before a worker could create their missing files.
+        for (name, value) in std::env::vars_os() {
+            let name = name.to_string_lossy();
+            if name == "LD_LIBRARY_PATH" {
+                let value = value.to_str().ok_or_else(|| unsupported(&name))?;
+                for directory in value.split([':', ';']) {
+                    let path = Path::new(directory);
+                    if !path.is_absolute() {
+                        return Err(unsupported(&name));
+                    }
+                    self.ensure_safe_python_path(path)?;
+                    // Literal, canonical directories cannot be redirected by an
+                    // intermediate symlink, loader token, or nested write grant.
+                    if directory.contains('$')
+                        || !path.is_dir()
+                        || path.canonicalize().ok().as_deref() != Some(path)
+                        || self
+                            .worker_writable
+                            .iter()
+                            .any(|root| root.starts_with(path))
+                    {
+                        return Err(unsupported(&name));
+                    }
+                }
+            } else if name.starts_with("LD_") || name.starts_with("DYLD_") {
+                return Err(unsupported(&name));
+            }
+        }
         let mut settings = BTreeMap::new();
         for path in self.config_files() {
             self.ensure_safe_python_path(&path)?;
@@ -69,6 +98,7 @@ impl ManagedPythonResolverConfiguration {
                         | "UV_NO_SYSTEM_CONFIG"
                         | "UV_RUN_RECURSION_DEPTH"
                         | "UV_INTERNAL__PARENT_INTERPRETER"
+                        | "UV_VERSION" // Installer metadata, not a uv resolver setting.
                 )
             ) {
                 continue;
