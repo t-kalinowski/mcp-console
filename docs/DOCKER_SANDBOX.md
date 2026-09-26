@@ -9,7 +9,8 @@ Both the relay and built-in worker execute inside a newly owned microVM for each
 This is distinct from [ordinary Docker Engine containers](DOCKER.md).
 Console does not use the host Docker API to control Sandboxes, embed SBX, or call its private daemon API.
 The durable configuration name is `docker_sandbox`.
-This adapter supports standalone **sbx v0.42.1**; other versions fail before creating a VM.
+This adapter requires standalone **sbx v0.42.1 or newer**, with no upper version bound.
+Console uses the same CLI contract with newer releases; local acceptance tests expose incompatible changes when run with the installed SBX.
 It does not support the older `docker sandbox` CLI.
 
 ## Prerequisites and template setup
@@ -221,7 +222,7 @@ sbx ls --json
 
 These are fixed argument arrays; the configured in-VM Console prefix replaces `mcp-console`.
 No command uses a login shell, `sbx run shell`, or TTY allocation.
-The [create](https://docs.docker.com/reference/cli/sbx/create/) and [exec](https://docs.docker.com/reference/cli/sbx/exec/) contracts are version-checked.
+Console checks the minimum CLI version before using the [create](https://docs.docker.com/reference/cli/sbx/create/) and [exec](https://docs.docker.com/reference/cli/sbx/exec/) contracts.
 The shared [target launch envelope](RELAY_PROTOCOL.md#target-launch-envelope) carries the bootstrap, compatibility response, relay bytes, and retirement receipt.
 The relay protocol is unchanged.
 Provider setup output stays outside the relay stream; unexpected execution stdout fails the launch with a bounded diagnostic.
@@ -285,9 +286,11 @@ That test invokes the inner Docker CLI through `sbx exec`; it never uses the con
 Tests modify only rules scoped to their owned VM, verify actual HTTP access, and compare global rules and unrelated resources.
 They never initialize or reset the user's policy.
 Real fixtures serialize access to the VM runtime because SBX's default per-VM memory allocation can overcommit a controller under CPU-count test concurrency.
-Fake CLI tests run separately and cover deterministic uncertainty, version/schema failures, argument handling, and replacement barriers; they are not evidence of microVM execution.
+Discovery checks provider availability without restricting its version; the adapter enforces the minimum version during execution.
+Fake CLI tests run separately and cover the minimum and newer versions, deterministic uncertainty, version/schema failures, argument handling, and replacement barriers; they are not evidence of microVM execution.
 
 The implementation was exercised on macOS 26.6.2 arm64 with sbx v0.42.1 (`cc6e400a4a3ce3ce5e0b2b77b8ee352aac854c64`).
+The runtime, lifecycle, and policy suites also passed on macOS 26.7 arm64 with sbx v0.45.1 (`9d79d90ee4c5d297fb3d36b75384e8cea7a4fbcb`), including network-policy and inner-Docker acceptance.
 Linux controller acceptance requires a supported SBX/KVM host; Docker Engine on Linux is insufficient evidence.
 The same capability-based tests apply without per-test OS allowlists.
 

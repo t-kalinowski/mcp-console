@@ -50,8 +50,10 @@ if real:
 
 if args == ["version"]:
     print(
-        "sbx version: v0.41.0 fixture"
+        "sbx version: v0.42.0 fixture"
         if mode == "unsupported-version"
+        else (root / "version").read_text()
+        if (root / "version").exists()
         else "sbx version: v0.42.1 fixture"
     )
 elif args[0] == "ls":
