@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import select
 import shutil
@@ -21,6 +22,7 @@ from pathlib import Path
 
 from support.client import McpClient
 from support.events import Events
+from support.normalization import code
 from support.processes import capture_process_identity, signal_process
 from support.requirements import POSIX, PROCESS_EVENTS
 
@@ -134,6 +136,47 @@ def test_waits_with_client(binary: Path) -> list[dict[str, str]]:
 
 @unittest.skipUnless(POSIX.available, POSIX.reason)
 class McpClientTests(unittest.TestCase):
+    def test_isolates_console_home_without_changing_home_or_project_config(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            environment = os.environ | {
+                "HOME": str(root / "caller-home"),
+                "MCP_CONSOLE_HOME": str(root / "caller-console"),
+            }
+            # fmt: python
+            source = code("""
+                import json
+                import os
+                import sys
+                from pathlib import Path
+
+                values = {name: os.environ[name] for name in ("HOME", "MCP_CONSOLE_HOME")}
+                Path("environment.json").write_text(json.dumps(values))
+                assert sys.stdin.read() == ""
+                """)
+            for record_in_project in (False, True):
+                with self.subTest(record_in_project=record_in_project):
+                    workspace = root / str(record_in_project)
+                    workspace.mkdir()
+                    with McpClient(
+                        Path(sys.executable),
+                        ("-c", source),
+                        environment=environment,
+                        current_directory=workspace,
+                        record_in_project=record_in_project,
+                    ) as client:
+                        client.finish()
+                    actual = json.loads((workspace / "environment.json").read_text())
+                    self.assertEqual(actual["HOME"], environment["HOME"])
+                    self.assertNotEqual(
+                        actual["MCP_CONSOLE_HOME"], environment["MCP_CONSOLE_HOME"]
+                    )
+                    self.assertFalse(
+                        (workspace / ".agents/console/config.yaml").exists()
+                    )
+
     @contextmanager
     def client_runner(
         self, suite: str, *arguments: str

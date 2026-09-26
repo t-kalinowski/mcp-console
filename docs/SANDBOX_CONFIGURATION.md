@@ -10,14 +10,15 @@ That provider accepts only `provider`, `environment`, and `inherit_environment` 
 It uses Docker's existing policy without applying native defaults or requiring a native companion.
 The native policy configuration below applies to native selection.
 
-`serve` and ordinary `sandbox` launches read only `.agents/console/config.yaml` beneath the launch working directory.
-Only that directory is searched: no ancestors, home directory, or global configuration.
-An absent file preserves the defaults; an unreadable file or malformed YAML prevents launch.
-Repeated `-c KEY=VALUE` options then overlay the project configuration before schema and native policy validation.
+`serve` and ordinary `sandbox` launches read `.agents/console/config.yaml` beneath the launch working directory, then `~/.agents/console/config.yaml` if the project file is absent.
+No ancestors are searched.
+`MCP_CONSOLE_HOME` can replace the default home Console directory without changing the workload's `HOME`.
+If neither file exists, defaults apply; an unreadable file or malformed YAML prevents launch.
+Repeated `-c KEY=VALUE` options then overlay the selected configuration before schema and native policy validation.
 See [configuration layering](CONFIGURATION.md) for dotted keys, inline values, merge rules, and precedence.
 
-Project configuration is trusted launcher input and can widen workload permissions.
-Review it before launching Console in a project.
+Project and home configuration are trusted launcher inputs and can widen workload permissions.
+Review the selected file before launching Console.
 Console forwards native sandbox fields and values to the runner, which owns their validation and defaults.
 Console supplies only its application policy and launch requirements.
 
@@ -39,7 +40,7 @@ extends: :read-only
 ```
 
 Omitting `extends` preserves Console's existing defaults.
-No version field, named user profiles, inheritance chains, alternate discovery locations, or initializer are implemented.
+No version field, named user profiles, inheritance chains, other discovery locations, or initializer are implemented.
 Use `-c extends=:workspace` or `-c extends=:read-only` to select a built-in for one launch.
 Unsupported identifiers reach the native runner and receive its diagnostic.
 

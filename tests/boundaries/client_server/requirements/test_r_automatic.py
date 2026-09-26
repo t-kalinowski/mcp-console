@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from functools import cache
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -21,7 +22,7 @@ from support.processes import (
     live_processes,
 )
 from support.records import Transcript
-from support.r import reference_r_error
+from support.r import r_test_environment, reference_r_error
 from support.requirements import PROCESS_EVENTS, command, requires
 from support.resolvers import (
     ir_requirements,
@@ -90,6 +91,18 @@ Encoding: UTF-8
     return libraries
 
 
+@cache
+def installed_fixture_r_libraries(
+    packages: tuple[str, ...],
+) -> tuple[tempfile.TemporaryDirectory, tuple[Path, Path]]:
+    # Each case runs its execution modes sequentially in one process. Retain
+    # only immutable installed packages until that process exits; library
+    # views, resolver records, and worker state remain execution-local.
+    temporary = tempfile.TemporaryDirectory(prefix="mcp-console-r-packages-")
+    environment, _ = r_test_environment()
+    return temporary, fixture_r_libraries(environment, Path(temporary.name), packages)
+
+
 def recording_fixture_r_environment(
     directory: Path,
     packages: tuple[str, ...],
@@ -98,7 +111,7 @@ def recording_fixture_r_environment(
     isolated_library = directory / "r-library"
     environment["R_LIBS_SITE"] = str(isolated_library)
     environment["R_LIBS_USER"] = str(isolated_library)
-    source_libraries = fixture_r_libraries(environment, directory, packages)
+    _, source_libraries = installed_fixture_r_libraries(packages)
     environment["MCP_CONSOLE_TEST_IR_SOURCE_LIBRARIES"] = os.pathsep.join(
         map(str, source_libraries)
     )

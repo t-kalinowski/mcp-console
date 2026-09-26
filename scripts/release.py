@@ -51,8 +51,10 @@ def command_output(
     return result.stdout.strip() if strip else result.stdout
 
 
-def run_command(command: list[str], env: dict[str, str] | None = None) -> None:
-    result = subprocess.run(command, env=env, check=False)
+def run_command(
+    command: list[str], env: dict[str, str] | None = None, *, cwd: Path | None = None
+) -> None:
+    result = subprocess.run(command, env=env, cwd=cwd, check=False)
     if result.returncode != 0:
         raise ReleaseError(
             f"{' '.join(command)} failed with status {result.returncode}"
@@ -109,12 +111,14 @@ def smoke_mcp(
     executable: Path,
     version: str,
     env: dict[str, str],
+    workspace: Path,
     startup_timeout: float,
     response_timeout: float,
 ) -> None:
     process = subprocess.Popen(
         [str(executable), "serve"],
         env=env,
+        cwd=workspace,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -372,8 +376,13 @@ def smoke_wheel(args: argparse.Namespace) -> None:
     with tempfile.TemporaryDirectory(prefix="mcp-console-empty-path-") as directory:
         sandbox_env = os.environ.copy()
         sandbox_env["PATH"] = directory
-        run_command([str(cargo_bin), "sandbox", "--", "/usr/bin/true"], env=sandbox_env)
-        run_command([str(installed), "sandbox", "--", "/usr/bin/true"], env=sandbox_env)
+        sandbox_env["MCP_CONSOLE_HOME"] = str(Path(directory) / "console")
+        for executable in (cargo_bin, installed):
+            run_command(
+                [str(executable), "sandbox", "--", "/usr/bin/true"],
+                env=sandbox_env,
+                cwd=Path(directory),
+            )
 
     internal_ir = installed.resolve().with_name("ir")
     require(not internal_ir.exists(), f"wheel contains sibling `ir`: {internal_ir}")
@@ -400,10 +409,12 @@ def smoke_wheel(args: argparse.Namespace) -> None:
         env.pop("RETICULATE_UV", None)
         env["R_HOME"] = r_home
         env["PATH"] = path
+        env["MCP_CONSOLE_HOME"] = str(uv_bin / "console")
         smoke_mcp(
             installed,
             version,
             env,
+            uv_bin,
             args.startup_timeout_seconds,
             args.response_timeout_seconds,
         )

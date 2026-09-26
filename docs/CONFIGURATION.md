@@ -1,10 +1,18 @@
 # Configuration layering
 
-`serve` and ordinary `sandbox` launches read `.agents/console/config.yaml` beneath the current directory, then apply each `-c KEY=VALUE` or `--config KEY=VALUE` in command-line order.
+`serve` and ordinary `sandbox` launches read `.agents/console/config.yaml` beneath the current directory, falling back to `~/.agents/console/config.yaml` when the project file is absent.
+They then apply each `-c KEY=VALUE` or `--config KEY=VALUE` in command-line order.
 Options may appear before or after the subcommand.
-Only the current directory is searched; an absent file starts with an empty configuration.
+No ancestor directories are searched; if neither file exists, configuration starts empty.
 An unreadable file or malformed YAML prevents launch.
+An existing project file takes precedence even when it is invalid.
 Overrides change the configuration for this launch without editing the file.
+
+Set `MCP_CONSOLE_HOME` to an absolute directory to replace the default home Console directory, `~/.agents/console`.
+Console uses `<MCP_CONSOLE_HOME>/config.yaml` for fallback configuration and `<MCP_CONSOLE_HOME>/sessions/` for fallback recordings.
+Project configuration and an existing project recording directory still take precedence independently.
+An empty or relative override is an error when the fallback directory is selected; Console does not expand `~` in the value.
+This setting changes only Console's file locations; `HOME` and the configuration and storage of R, Python, uv, and Docker remain unchanged.
 
 ```sh
 mcp-console serve -c extends=:workspace

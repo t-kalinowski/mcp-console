@@ -115,13 +115,14 @@ Each Console checkout keeps its own application Cargo output and wheel staging a
 Use `scripts/test --full --list` to discover selectors and `scripts/test --locate SELECTOR` to find source lines and the primary snapshot before building.
 These routes are starting points; read the relevant contract and case before changing behavior.
 
-| Task                   | Owning source                                              | Public check                                      | Selected snapshot update                                                                                    |
-| ---------------------- | ---------------------------------------------------------- | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| Output previews        | `src/worker_client/output/`                                | `scripts/test client_server/output/test_previews` | `scripts/test --update client_server/output/test_previews`                                                  |
-| Delivery recovery      | `src/worker_client/output/`, `src/server_transport.rs`     | `scripts/test client_server/output/test_recovery` | `scripts/test --update client_server/output/test_recovery`                                                  |
-| Configuration layering | `src/config.rs`, `src/config/`                             | `scripts/test cli/test_config_overrides`          | `scripts/test --update cli/test_config_overrides`                                                           |
-| Fixture serialization  | `tests/support/snapshots.py`, `tests/transcript_runner.py` | `tests/transcript_runner.py`                      | For handshake changes: `scripts/test --update client_server/server/test_tools::initializes_and_lists_tools` |
-| Validation ownership   | `checkout_workflow.py`, `build_backend.py`                 | `python3 tests/workflow.py`                       | No transcript snapshots                                                                                     |
+| Task                   | Owning source                                                  | Public check                                                                  | Selected snapshot update                                                                                    |
+| ---------------------- | -------------------------------------------------------------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Output previews        | `src/worker_client/output/`                                    | `scripts/test client_server/output/test_previews`                             | `scripts/test --update client_server/output/test_previews`                                                  |
+| Delivery recovery      | `src/worker_client/output/`, `src/server_transport.rs`         | `scripts/test client_server/output/test_recovery`                             | `scripts/test --update client_server/output/test_recovery`                                                  |
+| Configuration layering | `src/config.rs`, `src/config/`                                 | `scripts/test cli/test_config_overrides`                                      | `scripts/test --update cli/test_config_overrides`                                                           |
+| Console file locations | `src/console_paths.rs`, `src/settings.rs`, `src/transcript.rs` | `scripts/test cli/test_config_overrides client_server/recording/test_journal` | `scripts/test --update cli/test_config_overrides client_server/recording/test_journal`                      |
+| Fixture serialization  | `tests/support/snapshots.py`, `tests/transcript_runner.py`     | `tests/transcript_runner.py`                                                  | For handshake changes: `scripts/test --update client_server/server/test_tools::initializes_and_lists_tools` |
+| Validation ownership   | `checkout_workflow.py`, `build_backend.py`                     | `python3 tests/workflow.py`                                                   | No transcript snapshots                                                                                     |
 
 For MCP admission changes, use the public server with a custom worker and resolver sentinels:
 
@@ -148,6 +149,29 @@ scripts/test \
 `prepares_with_empty_stdin_then_restarts` owns the successful preparation, repeated preparation with empty stdin, and preparation-plus-restart sequence formerly in `validates_send_arguments`.
 It uses small R packages, verifies their availability in the managed library, and checks live-state preservation and reset in direct and sandboxed execution.
 The smoke selection and its real R/Python/SQL, persistent-state, mixed-language recording, and native-sandbox executions remain unchanged.
+
+For automatic R package discovery and live activation, start with the reached-package case, then run its suite:
+
+```sh
+scripts/test client_server/requirements/test_r_automatic::resolves_reached_r_packages_at_runtime
+scripts/test client_server/requirements/test_r_automatic
+```
+
+The local-package cases retain the real MCP server, worker, R evaluator, and package loader.
+They install immutable fixture packages once per case process for its sequential direct and sandbox executions.
+Each execution creates fresh library views, resolver records, checkpoints, and runtime state; only requested packages become visible through activation.
+The recording resolver still uses real `ir` for the base environment.
+The suite also keeps real-resolver coverage of automatic installation, errors, and restart.
+
+For real `ir` resolution, installation, default-library selection, and explicit preparation before and after startup, also run:
+
+```sh
+scripts/test \
+  client_server/requirements/test_r::prepares_and_uses_cran_packages \
+  client_server/requirements/test_r::prepares_initial_r_requirements \
+  client_server/requirements/test_r::prepares_r_requirements_after_worker_startup \
+  client_server/requirements/test_r::evaluates_with_default_managed_r
+```
 
 A case selector narrows a suite further, for example:
 

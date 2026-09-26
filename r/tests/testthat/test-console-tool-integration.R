@@ -56,7 +56,20 @@ with_temp_working_directory <- function(code) {
   directory <- tempfile("mcp-console-test-")
   dir.create(directory)
   old <- setwd(directory)
-  on.exit(setwd(old), add = TRUE)
+  old_console <- Sys.getenv("MCP_CONSOLE_HOME", unset = NA_character_)
+  on.exit(
+    {
+      setwd(old)
+      if (is.na(old_console)) {
+        Sys.unsetenv("MCP_CONSOLE_HOME")
+      } else {
+        Sys.setenv(MCP_CONSOLE_HOME = old_console)
+      }
+      unlink(directory, recursive = TRUE)
+    },
+    add = TRUE
+  )
+  Sys.setenv(MCP_CONSOLE_HOME = file.path(getwd(), "console"))
   force(code)
 }
 
@@ -150,6 +163,12 @@ test_that("console_tool works when registered with an ellmer chat", {
             expect_match(text, "adapter head\n", fixed = TRUE)
             expect_match(text, "adapter tail\n", fixed = TRUE)
             expect_match(text, "rendered UTF-8 bytes", fixed = TRUE)
+            expect_match(
+              text,
+              file.path(getwd(), "console", "sessions"),
+              fixed = TRUE
+            )
+            expect_length(list.dirs("console/sessions", recursive = FALSE), 1L)
           },
           finally = {
             rm(chat)
