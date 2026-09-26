@@ -1,7 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -12,10 +11,13 @@ from support.assertions import last_tool_text
 from support.client import McpClient
 from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
-from support.r import r_test_environment
 from support.records import TranscriptWithCompanions
-from support.requirements import NATIVE_FIXTURES, SANDBOX, requires
-from support.sandbox_configuration import NATIVE_PROXY, host_tcp_ports
+from support.requirements import NATIVE_FIXTURES, SANDBOX, command, requires
+from support.sandbox_configuration import (
+    NATIVE_PROXY,
+    host_tcp_ports,
+    isolated_home_environment,
+)
 from support.suites import run_this_suite
 
 
@@ -87,27 +89,8 @@ def _snapshot_survives_replacement(
                 encoding="utf-8",
             )
         capture = host / "payloads.jsonl"
-        environment, rscript = r_test_environment()
-        # Preserve host libraries when isolating configuration discovery from HOME.
-        libraries = subprocess.run(
-            [
-                rscript,
-                "--vanilla",
-                "-e",
-                # fmt: r
-                code("""
-                    cat(paste(.libPaths(), collapse = .Platform$path.sep))
-                    """),
-            ],
-            env=environment,
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout
         environment = {
-            **environment,
-            "HOME": home,
-            "R_LIBS": libraries,
+            **isolated_home_environment(home),
             LOADER_VARIABLE: str(build_interposer(host, "runner_configuration")),
             "MCP_CONSOLE_TEST_RUNNER_CONFIGURATION": str(capture),
             "MCP_CONSOLE_TEST_PROJECT": str(host),
@@ -195,12 +178,13 @@ def _snapshot_survives_replacement(
         )
 
 
-@requires(SANDBOX, NATIVE_FIXTURES)
+# The final restart prepares live requirements, which currently requires R.
+@requires(SANDBOX, NATIVE_FIXTURES, command("R"))
 def test_retains_project_settings_after_edits(binary: Path) -> TranscriptWithCompanions:
     return _snapshot_survives_replacement(binary, configured=True)
 
 
-@requires(SANDBOX, NATIVE_FIXTURES)
+@requires(SANDBOX, NATIVE_FIXTURES, command("R"))
 def test_retains_defaults_after_config_creation(
     binary: Path,
 ) -> TranscriptWithCompanions:

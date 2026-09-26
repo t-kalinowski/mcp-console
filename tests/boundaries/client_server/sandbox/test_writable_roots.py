@@ -1,7 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -16,6 +15,7 @@ from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
 from support.records import TranscriptWithCompanions
 from support.requirements import LINUX_SANDBOX, MACOS_SANDBOX, NATIVE_FIXTURES, requires
+from support.sandbox_configuration import isolated_home_environment
 from support.suites import run_this_suite
 
 
@@ -63,7 +63,7 @@ def _writable_roots_reach_every_runner_launch(
         _ = (host / "future output" / "persistent").write_text("user data")
         print("future root is writable after restart")
         """)
-    with TemporaryDirectory() as directory:
+    with TemporaryDirectory() as directory, TemporaryDirectory() as home:
         host = Path(directory).resolve()
         roots = [host / "output café 雪", host / "cache"]
         for root in [*roots, host / "neighbor"]:
@@ -72,7 +72,7 @@ def _writable_roots_reach_every_runner_launch(
         future = host / "future output"
         capture = host / "runner-configurations.jsonl"
         environment = {
-            **os.environ,
+            **isolated_home_environment(home),
             LOADER_VARIABLE: str(build_interposer(host, "runner_configuration")),
             "MCP_CONSOLE_TEST_RUNNER_CONFIGURATION": str(capture),
             "MCP_CONSOLE_TEST_HOST": str(host),
@@ -97,7 +97,14 @@ def _writable_roots_reach_every_runner_launch(
             assert result.stdout == result.stderr == ""
             assert not future.exists()
 
-        with McpClient(binary, SANDBOXED.serve(*options), environment, host) as client:
+        with McpClient(
+            binary,
+            SANDBOXED.serve(*options),
+            environment,
+            host,
+            use_home_configuration=True,
+        ) as client:
+            assert not (host / ".agents/console/config.yaml").exists()
             client.initialize_and_list_tools()
             client.send(python=exercise)
             assert last_tool_text(client).endswith(
