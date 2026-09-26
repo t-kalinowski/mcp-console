@@ -258,5 +258,8 @@ def dispatch(source):
 _builtins.console_sql_connection = console_sql_connection
 
 
-def restore_managed_requested():
-    return _restore_managed
+def take_managed_restore_request():
+    global _restore_managed
+    requested = _restore_managed
+    _restore_managed = False
+    return requested

@@ -97,8 +97,8 @@ pub(crate) fn use_r_sql() -> Result<(), String> {
     library::use_r_sql()
 }
 
-pub(crate) fn sql_restore_requested() -> Result<bool, String> {
-    library::sql_restore_requested()
+pub(crate) fn take_sql_restore_request() -> Result<bool, String> {
+    library::take_sql_restore_request()
 }
 
 pub(crate) fn prepare_process_exit() -> Result<(), String> {

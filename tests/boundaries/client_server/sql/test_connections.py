@@ -209,8 +209,30 @@ def test_python_restores_managed_connection_before_r_reads_it(
     output = last_tool_text(client)
     assert output == "managed: TRUE\nvalue: 42\n", output
 
+    # fmt: python
+    python = code("""
+        import _mcp_console_sql
+        import sys
+
+        use_r_code = _mcp_console_sql.use_r.__code__
+
+
+        def reject_repeated_restore(frame, event, argument):
+            if event == "call" and frame.f_code is use_r_code:
+                raise SystemExit("repeated managed restoration")
+            return reject_repeated_restore
+
+
+        sys.settrace(reject_repeated_restore)
+        """)
+    client.send(python=python)
+    assert last_tool_text(client) == "[done]"
+
     client.send(sql="SELECT value FROM managed_values")
-    assert "42" in last_tool_text(client)
+    preview = last_tool_text(client)
+    assert "value" in preview and "42" in preview, preview
+    client.send(python="sys.settrace(None)")
+    assert last_tool_text(client) == "[done]"
 
     # Python can call R again before its own cell finishes.
     # fmt: r

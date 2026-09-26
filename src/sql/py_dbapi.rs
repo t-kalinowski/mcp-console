@@ -29,8 +29,8 @@ pub extern "C-unwind" fn mcp_console_sql_use_r() -> harp::Result<SEXP> {
 
 #[allow(clippy::result_large_err)]
 #[harp::register]
-pub extern "C-unwind" fn mcp_console_sql_restore_requested() -> harp::Result<SEXP> {
+pub extern "C-unwind" fn mcp_console_sql_take_restore_request() -> harp::Result<SEXP> {
     let requested =
-        crate::python::sql_restore_requested().map_err(|error| harp::anyhow!("{error}"))?;
+        crate::python::take_sql_restore_request().map_err(|error| harp::anyhow!("{error}"))?;
     Ok(harp::object::RObject::from(requested).sexp)
 }
