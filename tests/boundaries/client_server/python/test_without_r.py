@@ -154,6 +154,21 @@ def test_worker_writable_uv_storage_disables_managed_uv(
         ("UV_CACHE_DIR", "UV_CACHE_DIR"),
         ("UV_PYTHON_INSTALL_DIR", "UV_PYTHON_INSTALL_DIR"),
         ("UV_CACHE_DIR with parent components", "UV_CACHE_DIR"),
+        ("UV_FIND_LINKS", "UV_FIND_LINKS"),
+        ("UV_FIND_LINKS file URL list", "UV_FIND_LINKS"),
+        ("UV_FIND_LINKS directory link", "UV_FIND_LINKS"),
+        ("UV_FIND_LINKS write grant", "UV_FIND_LINKS"),
+        ("UV_FIND_LINKS unknown scheme", "UV_FIND_LINKS"),
+        ("UV_INDEX file URL list", "UV_INDEX"),
+        ("UV_INDEX named file URL", "UV_INDEX"),
+        ("UV_DEFAULT_INDEX file URL", "UV_DEFAULT_INDEX"),
+        ("UV_INDEX_URL file URL", "UV_INDEX_URL"),
+        ("UV_EXTRA_INDEX_URL file URL list", "UV_EXTRA_INDEX_URL"),
+        ("UV_PYTHON_INSTALL_MIRROR file URL", "UV_PYTHON_INSTALL_MIRROR"),
+        ("UV_PYPY_INSTALL_MIRROR file URL", "UV_PYPY_INSTALL_MIRROR"),
+        ("UV_PYTHON_DOWNLOADS_JSON_URL file URL", "UV_PYTHON_DOWNLOADS_JSON_URL"),
+        ("UV_PYTHON_CACHE_DIR", "UV_PYTHON_CACHE_DIR"),
+        ("UV_BUILD_CONSTRAINT", "UV_BUILD_CONSTRAINT"),
     ):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -181,14 +196,129 @@ def test_worker_writable_uv_storage_disables_managed_uv(
                     root / "protected/missing/../../workspace/uv-storage"
                 )
             else:
-                env[variable] = str(workspace / "uv-storage")
+                source = workspace / "uv storage"
+                env[variable] = source.as_uri() if "file URL" in label else str(source)
+                if label.endswith("list"):
+                    delimiter = "," if variable == "UV_FIND_LINKS" else " "
+                    env[variable] = (
+                        "https://example.invalid/packages" + delimiter + env[variable]
+                    )
+                if "named" in label:
+                    env[variable] = "packages=" + env[variable]
+                if label.endswith("directory link"):
+                    source.mkdir()
+                    link = root / "linked-packages"
+                    link.symlink_to(source, target_is_directory=True)
+                    env[variable] = link.as_uri()
+                if label.endswith("write grant"):
+                    source = root / "writable-packages"
+                    source.mkdir()
+                    config.write_text(
+                        json.dumps(
+                            {
+                                "sandbox": {
+                                    "filesystem": {
+                                        "entries": [
+                                            {
+                                                "path": {
+                                                    "type": "path",
+                                                    "path": str(source),
+                                                },
+                                                "access": "write",
+                                            }
+                                        ],
+                                    }
+                                }
+                            }
+                        )
+                    )
+                    env[variable] = source.as_uri()
+                if label.endswith("unknown scheme"):
+                    env[variable] = "packages:local"
             with McpClient(binary, execution.serve(), env, workspace) as client:
                 client.initialize_and_list_tools()
                 schema = client.transcript[2]["result"]["tools"][0]["inputSchema"]
                 assert "requirements" not in schema["properties"]
                 client.finish()
             assert not marker.exists()
+            env["RETICULATE_UV"] = str(uv)
+            with McpClient(binary, execution.serve(), env, workspace) as client:
+                client.process.wait(timeout=30)
+                diagnostic = client.stderr.read()
+                assert (
+                    f"selected uv cannot use worker-writable {variable}" in diagnostic
+                ), diagnostic
+                assert not marker.exists()
             records.append({label: "managed uv disabled"})
+    return records
+
+
+@executions(SANDBOXED)
+def test_temporary_write_grants_exclude_host_uv(
+    binary: Path, execution: Execution
+) -> Transcript:
+    records = []
+    for options, special, temporary_root in (
+        ({"exclude_tmpdir_env_var": False}, None, "/var/tmp"),
+        ({"exclude_slash_tmp": False}, None, "/tmp"),
+        (None, None, "/var/tmp"),
+        (None, None, "/tmp"),
+        ({}, "tmpdir", "/var/tmp"),
+        ({}, "slash_tmp", "/tmp"),
+    ):
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            tempfile.TemporaryDirectory(dir=temporary_root) as inherited,
+        ):
+            workspace = Path(directory)
+            config = workspace / ".agents/console/config.yaml"
+            config.parent.mkdir(parents=True)
+            sandbox = {"workspace_options": options}
+            if special:
+                sandbox["filesystem"] = {
+                    "entries": [
+                        {
+                            "path": {"type": "special", "value": {"kind": special}},
+                            "access": "write",
+                        }
+                    ]
+                }
+            config.write_text(
+                json.dumps(
+                    {
+                        "extends": ":workspace",
+                        "sandbox": sandbox,
+                    }
+                )
+            )
+            uv = Path(inherited) / "uv"
+            marker = workspace / "uv-executed"
+            uv.write_text(
+                f"#!{sys.executable}\n"
+                # fmt: python
+                + code(f"""
+                    from pathlib import Path
+
+                    Path({str(marker)!r}).touch()
+                    raise SystemExit(87)
+                    """)
+            )
+            uv.chmod(0o755)
+            env = environment(Path(inherited))
+            env.update(RETICULATE_UV=str(uv), TMPDIR=inherited)
+            with McpClient(binary, execution.serve(), env, workspace) as client:
+                client.process.wait(timeout=30)
+                diagnostic = client.stderr.read()
+                assert "project or a worker-writable path" in diagnostic, diagnostic
+                assert not marker.exists()
+                records.append(
+                    {
+                        "options": options,
+                        "special": special,
+                        "temporary_root": temporary_root,
+                        "stderr": diagnostic.replace(str(uv), "<temporary>/uv"),
+                    }
+                )
     return records
 
 
@@ -937,7 +1067,11 @@ def test_resolves_default_python_without_r(
         uv = shutil.which("uv")
         assert uv is not None
         (path / "uv").symlink_to(uv)
-        with McpClient(binary, execution.serve(), environment(path)) as client:
+        packages = path / "protected packages"
+        packages.mkdir()
+        env = environment(path)
+        env["UV_FIND_LINKS"] = packages.as_uri()
+        with McpClient(binary, execution.serve(), env) as client:
             client.initialize_and_list_tools()
             schema = client.transcript[-1]["result"]["tools"][0]
             assert {"r", "sql"}.isdisjoint(schema["inputSchema"]["properties"])

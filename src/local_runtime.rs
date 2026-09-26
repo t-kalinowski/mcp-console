@@ -163,6 +163,20 @@ pub(crate) fn blocked_uv_roots(
             .canonicalize()
             .map_err(|error| format!("cannot resolve launch workspace: {error}"))?,
     ];
+    let workspace_profile =
+        settings.get("extends").and_then(serde_json::Value::as_str) == Some(":workspace");
+    // Settings have Console's defaults applied; explicit null selects the
+    // native defaults, which grant both inherited temporary locations.
+    let temporary_grant = |option| {
+        workspace_profile
+            && settings
+                .get("workspace_options")
+                .and_then(|options| options.get(option))
+                .and_then(serde_json::Value::as_bool)
+                != Some(true)
+    };
+    let mut tmpdir = temporary_grant("exclude_tmpdir_env_var");
+    let mut slash_tmp = temporary_grant("exclude_slash_tmp");
     if let Some(entries) = entries {
         for entry in entries {
             if entry
@@ -171,6 +185,14 @@ pub(crate) fn blocked_uv_roots(
                 != Some("write")
             {
                 continue;
+            }
+            match entry
+                .pointer("/path/value/kind")
+                .and_then(crate::settings::native_variant_name)
+            {
+                Some("tmpdir") => tmpdir = true,
+                Some("slash_tmp") => slash_tmp = true,
+                _ => {}
             }
             if let Some(path) = entry
                 .pointer("/path/path")
@@ -184,6 +206,15 @@ pub(crate) fn blocked_uv_roots(
                 );
             }
         }
+    }
+    for path in slash_tmp.then(|| PathBuf::from("/tmp")).into_iter().chain(
+        tmpdir
+            .then(|| std::env::var_os("TMPDIR"))
+            .flatten()
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute()),
+    ) {
+        roots.push(path.canonicalize().unwrap_or(path));
     }
     Ok(roots)
 }

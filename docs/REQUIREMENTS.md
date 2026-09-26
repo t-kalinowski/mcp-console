@@ -15,6 +15,8 @@ A bare `UV_PYTHON` executable name is pinned to a protected executable before re
 Without a protected executable for a bare name, implicit uv management is disabled and an explicit uv selection fails.
 Full filesystem write policies, special root write grants, and externally enforced filesystem policies have no protected automatic interpreter selection; they require an explicit Python selection.
 Worker-writable uv cache, Python installation, tool, and explicit config paths disable implicit uv selection or reject an explicit selection.
+The same check covers local package indexes, find-links sources, Python download sources, and requirement-file overrides supplied through uv environment variables, including file URLs.
+Inherited `TMPDIR` and `/tmp` write grants count as worker-writable paths when enabled by the workspace policy or explicit special-path entries.
 Console disables implicit project uv configuration discovery, checks effective uv cache and installation locations, and rejects a worker-writable selected interpreter before host inspection.
 The selected executable is resolved and retained so a worker cannot redirect later host preparation by replacing a PATH entry.
 This does not invoke R, Rscript, or `ir`, and no installation runs inside the sandboxed worker.

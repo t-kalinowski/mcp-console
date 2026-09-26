@@ -53,7 +53,7 @@ impl ManagedPythonResolverConfiguration {
                     .insert(OsString::from("UV_PYTHON_SEARCH_PATH"), protected);
             }
         }
-        if let Some(variable) = self.worker_writable_storage()? {
+        if let Some(variable) = self.worker_writable_configuration()? {
             if self.explicit_uv.is_some() {
                 return Err(format!("selected uv cannot use worker-writable {variable}"));
             }
@@ -221,13 +221,14 @@ impl ManagedPythonResolverConfiguration {
         self.find_protected_path_entry(OsStr::new("python"))
     }
 
-    fn worker_writable_storage(&self) -> Result<Option<&'static str>, String> {
+    fn worker_writable_configuration(&self) -> Result<Option<&'static str>, String> {
         if self.worker_writable.is_empty() {
             return Ok(None);
         }
         for name in [
             "UV_CACHE_DIR",
             "UV_PYTHON_INSTALL_DIR",
+            "UV_PYTHON_CACHE_DIR",
             "UV_TOOL_DIR",
             "UV_CONFIG_FILE",
             "UV_PROJECT_ENVIRONMENT",
@@ -236,6 +237,51 @@ impl ManagedPythonResolverConfiguration {
                 && self.path_is_worker_writable(Path::new(value))?
             {
                 return Ok(Some(name));
+            }
+        }
+        // These inputs can supply build code or interpreter downloads. Parse
+        // file URLs before checking paths, including percent-encoded names.
+        for (name, delimiter) in [
+            ("UV_FIND_LINKS", ','),
+            ("UV_INDEX", ' '),
+            ("UV_EXTRA_INDEX_URL", ' '),
+            ("UV_DEFAULT_INDEX", '\0'),
+            ("UV_INDEX_URL", '\0'),
+            ("UV_PYTHON_INSTALL_MIRROR", '\0'),
+            ("UV_PYPY_INSTALL_MIRROR", '\0'),
+            ("UV_PYTHON_DOWNLOADS_JSON_URL", '\0'),
+            ("UV_CONSTRAINT", ' '),
+            ("UV_BUILD_CONSTRAINT", ' '),
+            ("UV_OVERRIDE", ' '),
+        ] {
+            let Some(value) = self.environment.get(OsStr::new(name)) else {
+                continue;
+            };
+            let value = value
+                .to_str()
+                .ok_or_else(|| format!("{name} is not UTF-8"))?;
+            for source in value
+                .split(|c: char| c == delimiter || (name == "UV_INDEX" && c.is_whitespace()))
+                .filter(|source| !source.is_empty())
+            {
+                let source = if matches!(name, "UV_INDEX" | "UV_DEFAULT_INDEX") {
+                    source
+                        .split_once('=')
+                        .filter(|(name, _)| !name.contains(':'))
+                        .map_or(source, |(_, url)| url)
+                } else {
+                    source
+                };
+                let path = match pep508_rs::VerbatimUrl::parse_url(source) {
+                    Ok(url) if url.scheme() == "file" => url
+                        .to_file_path()
+                        .map_err(|_| format!("{name} has an unsupported local file URL"))?,
+                    Ok(url) if pep508_rs::Scheme::parse(url.scheme()).is_some() => continue,
+                    _ => PathBuf::from(source),
+                };
+                if self.path_is_worker_writable(&path)? {
+                    return Ok(Some(name));
+                }
             }
         }
         if let Some(value) = self.environment.get(OsStr::new("UV_PYTHON"))

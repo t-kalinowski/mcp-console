@@ -1,0 +1,38 @@
+---
+options:
+  exclude_tmpdir_env_var: false
+special: ~
+temporary_root: /var/tmp
+stderr: |
+  selected uv `<temporary>/uv` is in the project or a worker-writable path
+---
+options:
+  exclude_slash_tmp: false
+special: ~
+temporary_root: /tmp
+stderr: |
+  selected uv `<temporary>/uv` is in the project or a worker-writable path
+---
+options: ~
+special: ~
+temporary_root: /var/tmp
+stderr: |
+  selected uv `<temporary>/uv` is in the project or a worker-writable path
+---
+options: ~
+special: ~
+temporary_root: /tmp
+stderr: |
+  selected uv `<temporary>/uv` is in the project or a worker-writable path
+---
+options: {}
+special: tmpdir
+temporary_root: /var/tmp
+stderr: |
+  selected uv `<temporary>/uv` is in the project or a worker-writable path
+---
+options: {}
+special: slash_tmp
+temporary_root: /tmp
+stderr: |
+  selected uv `<temporary>/uv` is in the project or a worker-writable path
