@@ -149,6 +149,29 @@ scripts/test \
 It uses small R packages, verifies their availability in the managed library, and checks live-state preservation and reset in direct and sandboxed execution.
 The smoke selection and its real R/Python/SQL, persistent-state, mixed-language recording, and native-sandbox executions remain unchanged.
 
+For automatic R package discovery and live activation, start with the reached-package case, then run its suite:
+
+```sh
+scripts/test client_server/requirements/test_r_automatic::resolves_reached_r_packages_at_runtime
+scripts/test client_server/requirements/test_r_automatic
+```
+
+The local-package cases retain the real MCP server, worker, R evaluator, and package loader.
+They install immutable fixture packages once per case process for its sequential direct and sandbox executions.
+Each execution creates fresh library views, resolver records, checkpoints, and runtime state; only requested packages become visible through activation.
+The recording resolver still uses real `ir` for the base environment.
+The suite also keeps real-resolver coverage of automatic installation, errors, and restart.
+
+For real `ir` resolution, installation, default-library selection, and explicit preparation before and after startup, also run:
+
+```sh
+scripts/test \
+  client_server/requirements/test_r::prepares_and_uses_cran_packages \
+  client_server/requirements/test_r::prepares_initial_r_requirements \
+  client_server/requirements/test_r::prepares_r_requirements_after_worker_startup \
+  client_server/requirements/test_r::evaluates_with_default_managed_r
+```
+
 A case selector narrows a suite further, for example:
 
 ```sh
