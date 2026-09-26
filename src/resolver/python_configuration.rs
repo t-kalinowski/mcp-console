@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -38,7 +38,8 @@ impl ManagedPythonResolverConfiguration {
     pub(crate) fn without_r_bootstrap(mut self, blocked: &[PathBuf]) -> Result<Self, String> {
         // A prior worker may have replaced a project uv. Select and pin a
         // resolved executable before any resolver process starts.
-        self.worker_writable = blocked.to_vec();
+        self.worker_writable = blocked.iter().map(|root| normalize_path(root)).collect();
+        let blocked = &self.worker_writable;
         if let Some(variable) = self.worker_writable_storage()? {
             if self.explicit_uv.is_some() {
                 return Err(format!("selected uv cannot use worker-writable {variable}"));
@@ -148,6 +149,8 @@ impl ManagedPythonResolverConfiguration {
             })
             .ok_or_else(|| format!("cannot resolve uv path: {}", path.display()))?;
         let resolved = resolved.join(absolute.strip_prefix(ancestor).expect("path ancestor"));
+        let absolute = normalize_path(&absolute);
+        let resolved = normalize_path(&resolved);
         Ok(self
             .worker_writable
             .iter()
@@ -228,6 +231,20 @@ impl ManagedPythonResolverConfiguration {
         }
         Ok(())
     }
+}
+
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::CurDir => {}
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
 }
 
 fn find_safe_path_uv(blocked: &[PathBuf]) -> Result<Option<PathBuf>, String> {

@@ -153,7 +153,11 @@ def test_worker_writable_uv_storage_disables_managed_uv(
     binary: Path, execution: Execution
 ) -> Transcript:
     records = []
-    for variable in ("UV_CACHE_DIR", "UV_PYTHON_INSTALL_DIR"):
+    for label, variable in (
+        ("UV_CACHE_DIR", "UV_CACHE_DIR"),
+        ("UV_PYTHON_INSTALL_DIR", "UV_PYTHON_INSTALL_DIR"),
+        ("UV_CACHE_DIR with parent components", "UV_CACHE_DIR"),
+    ):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             workspace = root / "workspace"
@@ -174,14 +178,20 @@ def test_worker_writable_uv_storage_disables_managed_uv(
             uv.chmod(0o755)
             (bin_dir / "python3").symlink_to(sys.executable)
             env = environment(bin_dir)
-            env[variable] = str(workspace / "uv-storage")
+            if label.endswith("parent components"):
+                (root / "protected").mkdir()
+                env[variable] = str(
+                    root / "protected/missing/../../workspace/uv-storage"
+                )
+            else:
+                env[variable] = str(workspace / "uv-storage")
             with McpClient(binary, execution.serve(), env, workspace) as client:
                 client.initialize_and_list_tools()
                 schema = client.transcript[2]["result"]["tools"][0]["inputSchema"]
                 assert "requirements" not in schema["properties"]
                 client.finish()
             assert not marker.exists()
-            records.append({variable: "managed uv disabled"})
+            records.append({label: "managed uv disabled"})
     return records
 
 

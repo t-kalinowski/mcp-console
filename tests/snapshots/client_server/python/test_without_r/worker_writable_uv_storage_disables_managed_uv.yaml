@@ -2,3 +2,5 @@
 UV_CACHE_DIR: managed uv disabled
 ---
 UV_PYTHON_INSTALL_DIR: managed uv disabled
+---
+UV_CACHE_DIR with parent components: managed uv disabled
