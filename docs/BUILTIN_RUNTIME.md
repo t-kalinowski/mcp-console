@@ -223,6 +223,12 @@ Ordinary R console output and diagnostics remain distinct worker channels but bo
 The built-in startup width is 200 columns; evaluated code may change its options.
 Packages prepared for the session are available but are not attached automatically.
 
+In sandboxed built-in R sessions, the first `.libPaths()` entry is a fresh writable directory inside R's `tempdir()`.
+`install.packages()` without a `lib` argument uses this directory, so packages installed by a cell are available to later cells in the same worker generation.
+The directory is temporary and is not retained across a worker restart; managed R libraries follow it in `.libPaths()` and remain available after restart.
+Until a package is installed there, R's `library()` listing call warns that the temporary library contains no packages.
+Downloads and package builds still depend on a configured repository, the sandbox's network policy, and installed system tools.
+
 ### On-demand R packages
 
 When dynamic environment resolution is available, the built-in worker can prepare a missing plain R package name while the current cell is running.
@@ -244,7 +250,7 @@ Each missing package is resolved only when execution reaches a covered operation
 In a bare runtime, the worker does not replace `base::library` or `base::loadNamespace`.
 Installed packages work normally, missing packages retain their ordinary R behavior, and `requirements.r` is not available.
 
-When the server returns a candidate library, the worker prepends it through the managed `.libPaths()` bridge and reports activation before resuming the original base call.
+When the server returns a candidate library, the worker places it first among the managed `.libPaths()` entries, after the sandbox's temporary library when present, and reports activation before resuming the original base call.
 The server retains the library only after that report.
 The worker is not replaced, so its PID, R globals, loaded namespaces, Python objects, DuckDB catalog, and unread input remain available.
 Once activation succeeds, the retained environment survives later namespace or cell errors and is reused by later cells and restart.

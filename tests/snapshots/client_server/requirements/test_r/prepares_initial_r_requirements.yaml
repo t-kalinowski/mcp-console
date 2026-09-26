@@ -68,12 +68,13 @@ result:
 ---
 send:
   r: |
+    managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
     stopifnot(
       identical(
         dirname(find.package("praise")),
-        .libPaths()[[1L]]
+        .libPaths()[[managed_index]]
       ),
-      normalizePath(.libPaths()[[2L]]) ==
+      normalizePath(.libPaths()[[managed_index + 1L]]) ==
         normalizePath(Sys.getenv("MCP_CONSOLE_AMBIENT_R_LIBRARY"))
     )
     42L
@@ -108,17 +109,18 @@ result:
 ---
 send:
   r: |
+    managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
     stopifnot(
       "py-yaml12" %in% reticulate::py_require()$packages,
       identical(
         dirname(find.package("praise")),
-        .libPaths()[[1L]]
+        .libPaths()[[managed_index]]
       ),
       identical(
         dirname(find.package("zeallot")),
-        .libPaths()[[1L]]
+        .libPaths()[[managed_index]]
       ),
-      normalizePath(.libPaths()[[2L]]) ==
+      normalizePath(.libPaths()[[managed_index + 1L]]) ==
         normalizePath(Sys.getenv("MCP_CONSOLE_AMBIENT_R_LIBRARY"))
     )
     42L
@@ -142,17 +144,18 @@ result:
 ---
 send:
   r: |
+    managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
     stopifnot(
       "py-yaml12" %in% reticulate::py_require()$packages,
       identical(
         dirname(find.package("praise")),
-        .libPaths()[[1L]]
+        .libPaths()[[managed_index]]
       ),
       identical(
         dirname(find.package("zeallot")),
-        .libPaths()[[1L]]
+        .libPaths()[[managed_index]]
       ),
-      normalizePath(.libPaths()[[2L]]) ==
+      normalizePath(.libPaths()[[managed_index + 1L]]) ==
         normalizePath(Sys.getenv("MCP_CONSOLE_AMBIENT_R_LIBRARY"))
     )
     42L
