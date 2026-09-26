@@ -710,7 +710,14 @@ def test_prepares_managed_python_at_startup_and_restart(
             shutil.copy2(shutil.which("uv"), uv)
             client.send(control="restart", requirements={"python": ["six"]})
             assert not client.transcript[-1]["result"]["isError"]
-            client.send(python="import six, yaml12, more_itertools; 42")
+            client.send(
+                # fmt: python
+                python=code("""
+                    import six, yaml12, more_itertools
+
+                    42
+                    """)
+            )
             assert last_result_text(client) == "42\n"
             records = client.finish()
         (session,) = (workspace / ".agents/console/sessions").iterdir()

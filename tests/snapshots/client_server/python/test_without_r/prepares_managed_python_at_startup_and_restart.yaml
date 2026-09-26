@@ -227,7 +227,10 @@ result:
   isError: false
 ---
 send:
-  python: import six, yaml12, more_itertools; 42
+  python: |
+    import six, yaml12, more_itertools
+
+    42
 result:
   content:
     - type: text
