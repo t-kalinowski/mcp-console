@@ -438,10 +438,14 @@ def test_restart_replaces_first_use_cell_and_stdin(
         fixture.wait_for_resolver()
         armed.touch()
         client.response_timeout = 600
+        # Read the replacement's queued bytes directly: managed input() can
+        # expose an input request before consuming already-queued input.
         # fmt: python
-        python = code("""
+        python = code(r"""
+            import sys
+
             assert "startup_cell_ran" not in globals()
-            assert input() == "replacement input"
+            assert sys.stdin.readline() == "replacement input\n"
             print("replacement only")
             """)
         replacement = client.start_send(
