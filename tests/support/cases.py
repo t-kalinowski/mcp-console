@@ -16,7 +16,7 @@ CASE_CLEANUP_SECONDS = 15
 
 
 def case_runtime_environment() -> dict[str, str]:
-    """Keep installed runtimes available when cases use an isolated HOME."""
+    """Keep host tool state available when cases use an isolated HOME."""
     environment = os.environ.copy()
     if rscript := shutil.which("Rscript"):
         # R's default library and user directories depend on HOME.
@@ -33,6 +33,9 @@ def case_runtime_environment() -> dict[str, str]:
         environment.setdefault("R_LIBS_USER", libraries)
         environment.setdefault("R_USER_CACHE_DIR", cache)
         environment.setdefault("R_USER_DATA_DIR", data)
+    if "DOCKER_CONFIG" not in environment and "HOME" in environment:
+        # The Docker CLI otherwise switches contexts and credentials with HOME.
+        environment["DOCKER_CONFIG"] = str(Path(environment["HOME"]) / ".docker")
     return environment
 
 

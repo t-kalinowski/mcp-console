@@ -393,6 +393,51 @@ class TranscriptRunnerTests(unittest.TestCase):
         self.assertNotEqual((self.root / "case-home").read_text(), str(ambient_home))
         self.assertTrue(config.exists())
 
+    def test_cases_preserve_docker_cli_configuration(self) -> None:
+        environment = self.prepare_script()
+        ambient_home = self.root / "ambient-home"
+        docker_config = ambient_home / ".docker"
+        docker_config.mkdir(parents=True)
+        (docker_config / "config.json").write_text(
+            '{"currentContext":"selected"}', encoding="utf-8"
+        )
+        explicit_config = self.root / "explicit-docker-config"
+        explicit_config.mkdir()
+        environment["HOME"] = str(ambient_home)
+        self.suite.write_text(
+            PUBLIC_SUITE
+            # fmt: python
+            + code("""
+                import os
+
+
+                def test_selected(binary: Path) -> list[dict[str, str]]:
+                    expected = os.environ["EXPECTED_DOCKER_CONFIG"]
+                    assert os.environ.get("DOCKER_CONFIG") == expected
+                    assert Path(os.environ["HOME"]) != Path(expected).parent
+                    return record(binary, "selected")
+                """),
+            encoding="utf-8",
+        )
+        for selected in (docker_config, explicit_config):
+            with self.subTest(selected=selected):
+                case_environment = environment | {
+                    "EXPECTED_DOCKER_CONFIG": str(selected)
+                }
+                if selected == docker_config:
+                    case_environment.pop("DOCKER_CONFIG", None)
+                else:
+                    case_environment["DOCKER_CONFIG"] = str(selected)
+                result = subprocess.run(
+                    ["scripts/test", "client_server/server/test_tools::selected"],
+                    cwd=self.root,
+                    env=case_environment,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_script_creates_empty_timings_when_selected_case_is_skipped(self) -> None:
         environment = self.prepare_script()
         self.suite.write_text(
