@@ -109,6 +109,7 @@ def test_resolves_default_python_without_r(
                 client.send(python="assert id(identity) == identity_id; retained + 2")
                 assert last_result_text(client) == "43\n"
             client.send(python="import mcp_console_package_that_does_not_exist")
+            assert 'File "<string>"' not in last_result_text(client)
             assert "automatic package installation is unavailable" in last_result_text(
                 client
             )
