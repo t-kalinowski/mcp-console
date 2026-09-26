@@ -503,7 +503,7 @@ A custom worker always rejects managed Python requirements, regardless of `RETIC
 
 Bare mode is selected only when no resolver bootstrap is available from `ir` on `PATH`, `uv` on `PATH`, an explicit `uv` selection, or ambient reticulate.
 The server skips default R, Python, and DuckDB preparation.
-The `send` schema retains R, Python, and SQL cells but omits `requirements`; a manually supplied requirements payload is also rejected.
+The `send` schema retains R, Python, and SQL cells and exposes `requirements.action="get"` for inspection; requirement changes are rejected.
 Automatic R wrappers and the Python import resolver callback are disabled.
 Installed packages and ambient language adapters continue to work.
 Missing R packages keep their ordinary `library()` behavior, while missing Python imports explain that dynamic resolution is unavailable.
