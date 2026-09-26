@@ -87,22 +87,18 @@ class McpClient:
         if current_directory is None:
             assert self.temporary_directory is not None
             current_directory = Path(self.temporary_directory.name)
-        self.configuration_home: tempfile.TemporaryDirectory[str] | None = None
+        self.console_home: tempfile.TemporaryDirectory[str] | None = None
+        if not use_home_configuration:
+            self.console_home = tempfile.TemporaryDirectory()
+            environment = {
+                **(os.environ if environment is None else environment),
+                "MCP_CONSOLE_HOME": self.console_home.name,
+            }
         if record_in_project:
             (current_directory / ".agents").mkdir(
                 mode=0o700, parents=True, exist_ok=True
             )
             (current_directory / ".agents/console").mkdir(mode=0o700, exist_ok=True)
-        config = current_directory / ".agents/console/config.yaml"
-        if not os.path.lexists(config) and not use_home_configuration:
-            if record_in_project:
-                config.write_text("{}\n", encoding="utf-8")
-            else:
-                self.configuration_home = tempfile.TemporaryDirectory()
-                environment = {
-                    **(os.environ if environment is None else environment),
-                    "HOME": self.configuration_home.name,
-                }
         process = subprocess.Popen(
             [binary, *arguments],
             env=environment,
@@ -328,8 +324,8 @@ class McpClient:
             stream.close()
         if self.temporary_directory is not None:
             self.temporary_directory.cleanup()
-        if self.configuration_home is not None:
-            self.configuration_home.cleanup()
+        if self.console_home is not None:
+            self.console_home.cleanup()
 
     def close(self) -> None:
         """Close input, allow staged retirement, then kill only the server PID."""

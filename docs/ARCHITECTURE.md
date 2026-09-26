@@ -535,6 +535,7 @@ The [relay protocol](RELAY_PROTOCOL.md) owns that ordering guarantee, and the [b
 Recording is a server responsibility and does not add messages to either private protocol.
 On the first `send` call, the server creates a private run directory under the launch working directory's `.agents/console/sessions/` if `.agents/console` already exists there.
 Otherwise it writes under `~/.agents/console/sessions/` without creating a project `.agents` directory.
+`MCP_CONSOLE_HOME` can replace the default `~/.agents/console` directory; project directory selection still takes precedence.
 Raw-log paths returned to clients are relative to the launch directory for project recordings and absolute for home recordings.
 It appends tool calls and assembled results to `internal/events.jsonl`.
 The initial `session_started` event records whether dynamic environment resolution is available.

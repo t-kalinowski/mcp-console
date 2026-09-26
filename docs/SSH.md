@@ -164,6 +164,7 @@ The runner retains its own limits, including no independent recovery after runne
 Direct execution retains its lack of runner-owned descendant cleanup.
 
 Journals, output spools, transcripts, and returned image bytes stay in the local project's `.agents/console/sessions/` when `.agents/console` already exists there, or in the controller's `~/.agents/console/sessions/` otherwise.
+The controller's `MCP_CONSOLE_HOME` can replace the fallback directory without changing the remote account's home or configuration.
 Session metadata records the SSH destination and initial remote execution directory separately from the local recording workspace.
 Arbitrary files created by cells remain remote.
 The source-only Quarto projection includes remote target context and omits the controller `root.dir`.

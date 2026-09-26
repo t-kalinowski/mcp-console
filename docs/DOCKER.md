@@ -84,6 +84,7 @@ Their diagnostics use stderr, independently of MCP and relay protocol stdout.
 ## Configuration reference
 
 Console discovers `.agents/console/config.yaml` in the controller's fixed launch directory, then `~/.agents/console/config.yaml` if the project file is absent.
+The controller's `MCP_CONSOLE_HOME` can replace the fallback directory for configuration and recordings without changing Docker's home or CLI state.
 There is no ancestor search, container-side discovery, interpolation, tilde expansion, reload, or file synchronization.
 The captured target, raw native policy, CLI writable roots, and launch directory remain fixed for the session.
 The recording location is selected on the first `send` call and remains fixed afterward.

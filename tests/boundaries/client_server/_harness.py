@@ -417,7 +417,7 @@ class SocketGateMcpClient(McpClient):
         assert process.stderr is not None
 
         self.temporary_directory = None
-        self.configuration_home = None
+        self.console_home = None
         self.process = process
         self.stdin = input_stream
         self.stdout = SocketTextReader(output_reader)

@@ -42,6 +42,7 @@ Do not treat `design-sketches/` as evidence of implemented behavior.
 ## Platform and development
 
 Project configuration is read from `.agents/console/config.yaml` in the launch working directory, falling back to `~/.agents/console/config.yaml` only when the project file is absent.
+`MCP_CONSOLE_HOME` selects an absolute replacement for the home Console directory, shared by fallback configuration and recordings; it does not change `HOME` or runtime storage.
 Repeated `-c KEY=VALUE` overrides apply in command-line order before application decoding and validation.
 Keep `src/config.rs` and its parsers independent of application field names: mappings merge recursively, while lists, scalars, and explicit null replace prior values.
 Top-level `extends` selects the native `":workspace"` or `":read-only"` built-in; omission preserves the default policy.
@@ -140,6 +141,10 @@ Explicit case or suite selectors retain their scope with any profile flag.
 Per-execution transcript timings are recorded beside validation results in `case-timings.jsonl`.
 
 ### Boundary snapshots
+
+Transcript cases and default MCP client fixtures isolate Console with a temporary `MCP_CONSOLE_HOME`, preserving `HOME` and the caller's tool environment.
+Do not reconstruct runtime or provider defaults to isolate Console configuration.
+Home discovery cases select their environment explicitly and opt in to it with `use_home_configuration=True`.
 
 The full profile includes every case; declare capability requirements beside affected cases with `@requires(...)` from `tests/support/requirements.py`.
 Keep platform availability in test support.

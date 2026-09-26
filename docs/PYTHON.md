@@ -247,6 +247,6 @@ The helper creates no client, thread, subprocess, or temporary launcher.
 The synchronous and asynchronous clients and framework adapters receive the same bounded MCP results through their existing methods.
 Each complete result contains at most 8 KiB of rendered UTF-8 text across all text blocks, including notices; images have a separate allowance.
 Oversized output includes the beginning, latest tail, and a retained raw-log path when available.
-That path is relative to the Console server's launch directory when its `.agents/console` exists, or absolute under the server's home directory otherwise.
+That path is relative to the Console server's launch directory when its `.agents/console` exists, or absolute under its Console home directory (`~/.agents/console` by default, or `MCP_CONSOLE_HOME`) otherwise.
 For SSH and container targets, both locations are on the controller.
 Retrieving omitted text requires filesystem access to the selected location through existing file tools; the clients add no retrieval methods and never re-run a cell to recover its original output.

@@ -113,22 +113,35 @@ def test_selects_existing_project_or_home_recording_directory(
     records = []
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
-        for case in ("home", "project", "project path is a file"):
+        for case in (
+            "home",
+            "project",
+            "project path is a file",
+            "console home",
+            "project with console home",
+        ):
             base = root / case
             home = base / "home"
             workspace = base / "workspace"
             home.mkdir(parents=True)
             workspace.mkdir()
             project_console = workspace / ".agents/console"
-            if case == "project":
+            in_project = case in ("project", "project with console home")
+            if in_project:
                 project_console.mkdir(parents=True)
             elif case == "project path is a file":
                 project_console.parent.mkdir()
                 project_console.write_text("occupied", encoding="utf-8")
+            environment = os.environ | {"HOME": str(home)}
+            environment.pop("MCP_CONSOLE_HOME", None)
+            console_home = home / ".agents/console"
+            if "console home" in case:
+                console_home = base / "console"
+                environment["MCP_CONSOLE_HOME"] = str(console_home)
             with McpClient(
                 binary,
                 execution.serve("--worker", str(zod)),
-                environment={**os.environ, "HOME": str(home)},
+                environment=environment,
                 current_directory=workspace,
                 record_in_project=False,
                 use_home_configuration=True,
@@ -136,15 +149,15 @@ def test_selects_existing_project_or_home_recording_directory(
                 client.initialize_and_list_tools()
                 assert not (home / ".agents").exists()
                 client.send(r="preview huge line")
-                recording_root = workspace if case == "project" else home
-                (session,) = (recording_root / ".agents/console/sessions").iterdir()
+                recording_root = project_console if in_project else console_home
+                (session,) = (recording_root / "sessions").iterdir()
                 log = session / "outputs/call-000001.log"
                 assert log.is_file(), log
                 public_path = (
                     Path(
                         f".agents/console/sessions/{session.name}/outputs/call-000001.log"
                     )
-                    if case == "project"
+                    if in_project
                     else log
                 )
                 text = "".join(
@@ -155,13 +168,15 @@ def test_selects_existing_project_or_home_recording_directory(
                 assert str(public_path) in text
                 if case == "home":
                     assert not (workspace / ".agents").exists()
-                if case == "project":
+                if in_project or "console home" in case:
                     assert not (home / ".agents").exists()
                 client.finish()
             records.append(
                 {
                     "case": case,
-                    "recording_root": "project" if case == "project" else "home",
+                    "recording_root": "project"
+                    if in_project
+                    else ("console home" if "console home" in case else "home"),
                 }
             )
     return records
@@ -177,10 +192,12 @@ def test_rejects_non_utf8_home_recording_path(binary: Path) -> Transcript:
         project_console = workspace / ".agents/console"
         project_console.mkdir(parents=True)
         (project_console / "config.yaml").write_text("{}\n", encoding="utf-8")
+        environment = os.environ | {"HOME": str(home)}
+        environment.pop("MCP_CONSOLE_HOME", None)
         with McpClient(
             binary,
             ("serve", "--no-sandbox", "--worker", str(zod)),
-            environment={**os.environ, "HOME": str(home)},
+            environment=environment,
             current_directory=workspace,
             record_in_project=False,
             use_home_configuration=True,

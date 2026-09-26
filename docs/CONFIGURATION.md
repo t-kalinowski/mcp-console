@@ -8,6 +8,12 @@ An unreadable file or malformed YAML prevents launch.
 An existing project file takes precedence even when it is invalid.
 Overrides change the configuration for this launch without editing the file.
 
+Set `MCP_CONSOLE_HOME` to an absolute directory to replace the default home Console directory, `~/.agents/console`.
+Console uses `<MCP_CONSOLE_HOME>/config.yaml` for fallback configuration and `<MCP_CONSOLE_HOME>/sessions/` for fallback recordings.
+Project configuration and an existing project recording directory still take precedence independently.
+An empty or relative override is an error when the fallback directory is selected; Console does not expand `~` in the value.
+This setting changes only Console's file locations; `HOME` and the configuration and storage of R, Python, uv, and Docker remain unchanged.
+
 ```sh
 mcp-console serve -c extends=:workspace
 mcp-console -c extends=:workspace serve -c sandbox.network=enabled

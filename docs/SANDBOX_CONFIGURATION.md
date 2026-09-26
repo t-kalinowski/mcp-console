@@ -12,6 +12,7 @@ The native policy configuration below applies to native selection.
 
 `serve` and ordinary `sandbox` launches read `.agents/console/config.yaml` beneath the launch working directory, then `~/.agents/console/config.yaml` if the project file is absent.
 No ancestors are searched.
+`MCP_CONSOLE_HOME` can replace the default home Console directory without changing the workload's `HOME`.
 If neither file exists, defaults apply; an unreadable file or malformed YAML prevents launch.
 Repeated `-c KEY=VALUE` options then overlay the selected configuration before schema and native policy validation.
 See [configuration layering](CONFIGURATION.md) for dotted keys, inline values, merge rules, and precedence.

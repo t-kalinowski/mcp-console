@@ -108,7 +108,6 @@ if "--bootstrap" in sys.argv[1:]:
 from support.cases import (
     CaseCancelled,
     CaseProcess,
-    case_runtime_environment,
     run_case_subprocess,
     supervise_case,
 )
@@ -477,7 +476,6 @@ def run_cases(
     if not selected:
         return
 
-    environment = case_runtime_environment()
     events: SimpleQueue[tuple[int, float | None, CaseProcess | None]] = SimpleQueue()
     executor = ThreadPoolExecutor(max_workers=min(jobs, len(selected)))
     futures: dict[int, Future[set[Path]]] = {}
@@ -517,7 +515,6 @@ def run_cases(
                 timeout,
                 events,
                 index,
-                environment=environment,
                 update=update,
             )
             futures[index] = future

@@ -75,9 +75,9 @@ result:
         worker sandbox with the remote account's trusted setup permissions; bare
         runtimes require preinstalled packages. Records and returned images are
         saved on the controller beneath its existing project .agents/console
-        directory or its home .agents/console directory. Files created by code
-        remain remote. The source-only Quarto export does not reproduce the
-        remote filesystem.
+        directory or its Console home directory. Files created by code remain
+        remote. The source-only Quarto export does not reproduce the remote
+        filesystem.
       inputSchema:
         $schema: https://json-schema.org/draft/2020-12/schema
         additionalProperties: false

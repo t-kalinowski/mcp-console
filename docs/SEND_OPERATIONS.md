@@ -73,7 +73,7 @@ Every complete result shares an 8 KiB rendered UTF-8 text budget, including prep
 Oversized output returns a bounded beginning and latest tail; images use a separate allowance.
 A poll consumes its newly observed interval, including omitted text, without replaying the middle in later responses.
 Retained raw cell logs are flushed at response cuts and remain accessible during evaluation.
-Their paths are relative to the server's launch directory when its `.agents/console` exists, or absolute under the server's home directory otherwise.
+Their paths are relative to the server's launch directory when its `.agents/console` exists, or absolute under its Console home directory (`~/.agents/console` by default, or `MCP_CONSOLE_HOME`) otherwise.
 For remote and container targets, both locations are on the controller.
 Reading these logs requires a filesystem tool that can access that location and does not change polling state.
 See [output and errors](BUILTIN_RUNTIME.md#output-and-notices) for preview, retention, and loss reporting.

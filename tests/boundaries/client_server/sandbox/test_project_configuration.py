@@ -93,14 +93,8 @@ def _snapshot_survives_replacement(
         environment.pop("RETICULATE_PYTHON", None)
         environment["MCP_CONSOLE_TEST_PORTS"] = json.dumps(ports)
         expected = "captured grants, proxy selection, and restricted network verified\n"
-        # The Console directory exists for records, but the default case starts
-        # without a project config file.
         with McpClient(
-            binary,
-            ("serve", "--writable-root", "CLI cache"),
-            environment,
-            host,
-            record_in_project=False,
+            binary, ("serve", "--writable-root", "CLI cache"), environment, host
         ) as client:
             client.initialize_and_list_tools()
             # Configured startup probes the native sandbox without starting a worker.

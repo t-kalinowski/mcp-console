@@ -555,7 +555,7 @@ Some bytes missing from the file may still appear in the preview, so these raw l
 Startup, idle, and other sources without an active cell log report that their omitted text is unavailable, without borrowing a later cell's path.
 
 Advertised `.agents/console/sessions/...` paths are relative to the **Console server's launch directory**.
-When that directory lacks `.agents/console`, the advertised path is absolute under the server's home directory.
+When that directory lacks `.agents/console`, the advertised path is absolute under the server's Console home directory (`~/.agents/console` by default, or `MCP_CONSOLE_HOME`).
 For SSH, Docker, and Docker Sandbox, both locations are on the controller.
 Full retained text requires a filesystem tool with access to the selected recording location; a tool that can read only the worker filesystem or another client host is insufficient.
 Console does not discover file tools or provide a read/search interface in this version.

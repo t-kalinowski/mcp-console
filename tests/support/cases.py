@@ -1,6 +1,5 @@
 import os
 import pickle
-import shutil
 import signal
 import subprocess
 import sys
@@ -13,32 +12,6 @@ from threading import Event, Lock, Thread
 from typing import BinaryIO
 
 CASE_CLEANUP_SECONDS = 15
-
-
-def case_runtime_environment() -> dict[str, str]:
-    """Keep host tool state available when cases use an isolated HOME."""
-    environment = os.environ.copy()
-    r_home = environment.get("R_HOME")
-    rscript = Path(r_home) / "bin/Rscript" if r_home else shutil.which("Rscript")
-    if rscript and Path(rscript).is_file():
-        # R's default library and user directories depend on HOME.
-        # fmt: r
-        source = r"""
-        cat(Sys.getenv("R_LIBS_USER"), "\n")
-        cat(dirname(dirname(tools::R_user_dir("reticulate", "cache"))), "\n")
-        cat(dirname(dirname(tools::R_user_dir("reticulate", "data"))), "\n")
-        """
-        output = subprocess.check_output(
-            [rscript, "--vanilla", "-e", source], text=True
-        ).splitlines()
-        libraries, cache, data = output
-        environment.setdefault("R_LIBS_USER", libraries)
-        environment.setdefault("R_USER_CACHE_DIR", cache)
-        environment.setdefault("R_USER_DATA_DIR", data)
-    if "DOCKER_CONFIG" not in environment and "HOME" in environment:
-        # The Docker CLI otherwise switches contexts and credentials with HOME.
-        environment["DOCKER_CONFIG"] = str(Path(environment["HOME"]) / ".docker")
-    return environment
 
 
 class CaseCancelled(Exception):
@@ -128,7 +101,6 @@ def run_case_subprocess(
     events: SimpleQueue,
     index: int,
     *,
-    environment: dict[str, str],
     update: bool,
 ) -> set[Path]:
     runner = Path(__file__).resolve().parents[1] / "boundaries" / "_run.py"
@@ -139,9 +111,6 @@ def run_case_subprocess(
         tempfile.TemporaryFile() as stderr,
     ):
         result = Path(directory) / "result.pickle"
-        # Cases can launch Console directly; keep account config out of defaults.
-        home = Path(directory) / "home"
-        home.mkdir(mode=0o700)
         started_at = time.monotonic()
         ownership_reader, ownership_writer = os.pipe()
         command = [
@@ -163,8 +132,9 @@ def run_case_subprocess(
                 start_new_session=True,
                 pass_fds=(ownership_reader,),
                 env={
-                    **environment,
-                    "HOME": str(home),
+                    **os.environ,
+                    # Isolate Console files without changing host tool state.
+                    "MCP_CONSOLE_HOME": str(Path(directory) / "console"),
                     "MCP_CONSOLE_TEST_CASE_DEADLINE": str(started_at + timeout),
                 },
             )
