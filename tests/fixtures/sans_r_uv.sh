@@ -3,10 +3,9 @@
 root=$(dirname "$0")
 checkpoint() {
     trap 'echo "$message" >&2; exit 1' INT
-    mkfifo "$root/wait-$$"
     exec 3>"$root/alive"
     printf 1 >&3
-    cat "$root/wait-$$" >/dev/null &
+    cat "$root/wait" >/dev/null &
     waiter=$!
     printf 1 > "$root/started"
     wait "$waiter"

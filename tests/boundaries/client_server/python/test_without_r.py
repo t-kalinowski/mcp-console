@@ -54,6 +54,7 @@ def preparation_environment(root: Path) -> dict[str, str]:
         program.write_text(fixture.read_text())
         program.chmod(0o755)
     shutil.copy2(shutil.which("uv"), root / "real-uv")
+    os.mkfifo(root / "wait")
     # A resolver may succeed while its selected executable is not embeddable.
     description = {
         "executable": str(root / "invalid-python"),
@@ -527,6 +528,9 @@ def test_worker_writable_candidate_preserves_running_worker(
             assert "outside Console storage" in last_result_text(client), (
                 client.transcript[-1]
             )
+            client.transcript[-1]["result"]["content"][0]["text"] = last_result_text(
+                client
+            ).replace(str(candidate.resolve()), "<workspace>/candidate-python")
             assert not marker.exists()
             assert not (workspace / "replacement-ran").exists()
             client.send(

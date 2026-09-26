@@ -50,7 +50,7 @@ pub(super) fn configure(
             ),
             (
                 "control",
-                "Applies lifecycle control alone or before compatible same-call fields. interrupt requests SIGINT and preserves Python state; same-call stdin is queued before the interrupt grace. Python requirements with interrupt are rejected before signaling or queuing input. restart discards objects and unread stdin, then sends same-call stdin and code only to the replacement. With requirements.python, the complete candidate environment is resolved and inspected before stopping the current worker. Preparation failure preserves the current worker, retained requirements, and queued input; same-call code and stdin are not sent. Retirement or replacement failure follows the ordinary restart contract. Plain restart reuses the accepted environment.",
+                "Applies lifecycle control alone or before compatible same-call fields. interrupt requests SIGINT from the live worker and preserves Python state; during preparation it retires the candidate sandbox. Same-call stdin is queued before the interrupt grace. Python requirements with interrupt are rejected before signaling or queuing input. restart discards objects and unread stdin, then sends same-call stdin and code only to the replacement. With requirements.python, the complete candidate environment is resolved and inspected before stopping the current worker. Preparation failure preserves the current worker, retained requirements, and queued input; same-call code and stdin are not sent. Retirement or replacement failure follows the ordinary restart contract. Plain restart reuses the accepted environment.",
             ),
         ] {
             if let Some(property) = properties.get_mut(field) {

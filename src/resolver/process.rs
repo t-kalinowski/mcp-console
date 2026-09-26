@@ -490,7 +490,7 @@ fn wait_for_resolver(
 fn interrupt_resolver(child: &mut Child) -> io::Result<ResolverInterrupt> {
     let pid = child.id();
     // SAFETY: `process_group(0)` made the resolver PID its process-group ID.
-    if unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGINT) } == 0 {
+    if unsafe { libc::killpg(pid as libc::pid_t, libc::SIGINT) } == 0 {
         return Ok(ResolverInterrupt::Signaled);
     }
     let error = io::Error::last_os_error();
