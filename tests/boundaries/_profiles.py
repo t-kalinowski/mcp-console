@@ -18,7 +18,7 @@ SMOKE = (
     # Interactive input and interruption, in direct and sandboxed execution.
     "client_server/r/test_stdin::routes_idle_and_timed_out_stdin",
     "client_server/lifecycle/test_interrupts::interrupts_running_worker_with_sigint",
-    # Native filesystem and network policy through the standalone CLI.
-    "cli/sandbox/test_execution::enforces_host_read_only_and_temporary_writes",
+    # Cross-platform native filesystem and network policy through the CLI.
+    "cli/sandbox/test_writable_roots::writable_roots_augment_default_permissions",
     "cli/sandbox/test_execution::denies_network_access",
 )
