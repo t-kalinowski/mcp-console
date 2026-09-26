@@ -64,20 +64,7 @@ worker:
   kind: console_diagnostic
   data: |
     Traceback (most recent call last):
----
-worker:
-  kind: console_diagnostic
-  data: |2
-      File "<string>", line 466, in _mcp_console_eval_cell
----
-worker:
-  kind: console_diagnostic
-  data: |2
       File "<mcp-console:python:e1>", line 19, in <module>
----
-worker:
-  kind: console_diagnostic
-  data: |
     ValueError: boom
 ---
 worker:
