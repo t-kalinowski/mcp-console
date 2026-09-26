@@ -272,7 +272,23 @@ impl ActiveTranscript {
             std::process::id()
         );
         let project_console = working_directory.join(".agents/console");
-        let in_project = project_console.is_dir();
+        let in_project = match std::fs::metadata(&project_console) {
+            Ok(metadata) => metadata.is_dir(),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) =>
+            {
+                false
+            }
+            Err(error) => {
+                return Err(format!(
+                    "cannot inspect {}: {error}",
+                    project_console.display()
+                ));
+            }
+        };
         let console = if in_project {
             project_console
         } else {
