@@ -20,6 +20,14 @@ pub(super) fn configure(
         "Persistent local Python workbench. State persists across calls. R and SQL cells, live requirements, and automatic package installation are unavailable in this session. {environment}\n\nSend one complete{remaining}"
     );
     *description = description.replace("`r`, `python`, or `sql` cell", "`python` cell");
+    if python_preparation {
+        description.truncate(
+            description
+                .find("Dependency resolution, when available,")
+                .expect("local dependency description"),
+        );
+        description.push_str("Python preparation uses a separate native sandbox with network access and Console-owned storage. Only registry wheels are supported; use trusted dependencies.");
+    }
     for (field, description) in [
         (
             "python",

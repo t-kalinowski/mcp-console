@@ -525,12 +525,14 @@ def test_worker_writable_candidate_preserves_running_worker(
                     """),
             )
             assert client.transcript[-1]["result"]["isError"]
-            assert "outside Console storage" in last_result_text(client), (
-                client.transcript[-1]
+            diagnostic = last_result_text(client)
+            assert (
+                diagnostic
+                == f"[managed Python path is outside Console storage: {candidate}]"
             )
-            client.transcript[-1]["result"]["content"][0]["text"] = last_result_text(
-                client
-            ).replace(str(candidate.resolve()), "<workspace>/candidate-python")
+            client.transcript[-1]["result"]["content"][0]["text"] = diagnostic.replace(
+                str(candidate), "<workspace>/candidate-python"
+            )
             assert not marker.exists()
             assert not (workspace / "replacement-ran").exists()
             client.send(
@@ -595,7 +597,7 @@ def test_skips_project_uv_left_by_a_writable_worker(
                 "safe uv prepared Python\n[done]"
             ), client.transcript[-1]
             assert not (workspace / "project-uv-executed").exists()
-            records = client.finish()
+            records = client.finish()[3:]
         explicit = dict(env, RETICULATE_UV=str(project_uv))
         rejected = subprocess.run(
             [binary, *execution.serve()],

@@ -57,9 +57,9 @@ result:
 
         Evaluated code can read host files, cannot directly access the network,
         and can write in the worker's private temporary directory and to paths
-        explicitly allowed by the launcher. Dependency resolution, when
-        available, runs outside the sandbox and may execute installation or
-        build code; use only trusted dependencies.
+        explicitly allowed by the launcher. Python preparation uses a separate
+        native sandbox with network access and Console-owned storage. Only
+        registry wheels are supported; use trusted dependencies.
       inputSchema:
         $schema: https://json-schema.org/draft/2020-12/schema
         additionalProperties: false

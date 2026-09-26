@@ -56,9 +56,9 @@ result:
 
 
         Evaluated code runs without a sandbox, with the server's permissions,
-        including filesystem and network access. Dependency resolution, when
-        available, may execute installation or build code; use only trusted
-        dependencies.
+        including filesystem and network access. Python preparation uses a
+        separate native sandbox with network access and Console-owned storage.
+        Only registry wheels are supported; use trusted dependencies.
       inputSchema:
         $schema: https://json-schema.org/draft/2020-12/schema
         additionalProperties: false
