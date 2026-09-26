@@ -160,7 +160,14 @@ def test_rejects_invalid_project_configuration(binary: Path) -> Transcript:
         ("invalid tagged scalar", "sandbox: {network: !!int enabled}", "YAML"),
         ("empty", "", "one mapping document"),
         ("sequence", "[]", "mapping"),
-        ("multiple documents", "---\n{}\n---\n{}", "one mapping document"),
+        (
+            "multiple documents",
+            """---
+{}
+---
+{}""",
+            "one mapping document",
+        ),
         ("malformed", "sandbox: [", "line"),
         ("top-level field", "profile: default", "profile"),
         ("sandbox type", "sandbox: false", "sandbox"),

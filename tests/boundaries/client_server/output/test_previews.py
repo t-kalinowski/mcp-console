@@ -63,11 +63,18 @@ def check_preview(binary: Path, execution: Execution, scenario: str) -> Transcri
         session = next((Path(temporary) / ".agents/console/sessions").iterdir())
         raw = (session / "outputs/call-000001.log").read_bytes()
         assert raw.startswith(b"preview head\n")
-        assert raw.endswith(b"\npreview tail: final diagnostic\nafter final image\n")
+        assert raw.endswith(b"""
+preview tail: final diagnostic
+after final image
+""")
         if scenario == "preview redraw":
             assert (
                 text
-                == "preview head\nprogress final\npreview tail: final diagnostic\nafter final image\n"
+                == """preview head
+progress final
+preview tail: final diagnostic
+after final image
+"""
             )
         else:
             assert "omitted" in text

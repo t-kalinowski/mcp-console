@@ -221,7 +221,10 @@ def test_validates_registry_only_python_requirements(
         worker_installation = temporary / "worker-python-installation"
         for selector in (worker_executable, worker_retained_selector):
             selector.write_text(
-                '#!/bin/sh\ntouch "$0.executed"\nexit 97\n',
+                """#!/bin/sh
+touch "$0.executed"
+exit 97
+""",
                 encoding="utf-8",
             )
             selector.chmod(0o755)

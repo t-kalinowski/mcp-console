@@ -151,7 +151,9 @@ title: MCP Console code cells
             document.push_str("---\n\n");
             write!(
                 document,
-                "<!-- Cells ran on {} target {}. Files and environments remain remote. Prepare them before rendering here. -->\n\n",
+                r#"<!-- Cells ran on {} target {}. Files and environments remain remote. Prepare them before rendering here. -->
+
+"#,
                 match target.pointer("/compute/kind").and_then(Value::as_str) {
                     Some("docker") => "Docker",
                     Some("docker_sandbox") => "Docker Sandbox",
@@ -362,7 +364,10 @@ fn render_event(document: &mut String, envelope: &Envelope<'_>) -> Result<(), St
         } => {
             writeln!(
                 document,
-                "## Artifact {artifact_id} for call {call_id}\n\n[Artifact {artifact_id} from call {call_id}](<{path}>)\n"
+                "## Artifact {artifact_id} for call {call_id}
+
+[Artifact {artifact_id} from call {call_id}](<{path}>)
+"
             )
             .expect("writing to a String cannot fail");
             Ok(())
@@ -378,7 +383,12 @@ fn render_event(document: &mut String, envelope: &Envelope<'_>) -> Result<(), St
             if *inline_omitted_bytes != 0 || *discarded_bytes != 0 {
                 writeln!(
                     document,
-                    "## Retained output for call {call_id}\n\n[Retained text output for call {call_id}](<{path}>)\n\n{retained_bytes} raw bytes retained; {inline_omitted_bytes} rendered UTF-8 bytes omitted from inline responses; {discarded_bytes} raw bytes not retained in this file.\n"
+                    "## Retained output for call {call_id}
+
+[Retained text output for call {call_id}](<{path}>)
+
+{retained_bytes} raw bytes retained; {inline_omitted_bytes} rendered UTF-8 bytes omitted from inline responses; {discarded_bytes} raw bytes not retained in this file.
+"
                 )
                 .expect("writing to a String cannot fail");
             }

@@ -185,7 +185,10 @@ def test_delegated_environment_and_no_sandbox(binary: Path) -> Transcript:
                 )
                 wait_for_evaluation_output(
                     client,
-                    "No module named 'mcpConsoleDefinitelyMissingPackage'.\n\nMCP Console dynamic environment resolution is unavailable for Docker targets. Install the distribution in the image and start a new server session.\n",
+                    """No module named 'mcpConsoleDefinitelyMissingPackage'.
+
+MCP Console dynamic environment resolution is unavailable for Docker targets. Install the distribution in the image and start a new server session.
+""",
                     "missing preinstalled Python package",
                     # fmt: python
                     python=code("""

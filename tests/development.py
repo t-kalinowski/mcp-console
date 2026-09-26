@@ -62,7 +62,13 @@ class DevelopmentTests(unittest.TestCase):
         first = self.commit()
         self.write("src/lib.rs", "first\nlower layer\n")
         parent = self.commit()
-        self.write("src/lib.rs", "first\nlower layer\nnew behavior\n")
+        self.write(
+            "src/lib.rs",
+            """first
+lower layer
+new behavior
+""",
+        )
         self.write("tests/snapshots/case.yaml", "result: 42\nstatus: done\n")
         self.write("tests/case.py", "assert True\n")
         self.write("docs/change.md", "Explanation\n")
@@ -99,7 +105,13 @@ class DevelopmentTests(unittest.TestCase):
         self.commit()
         self.write("src/layer.rs", "committed\nstaged\n")
         self.git("add", "src/layer.rs")
-        self.write("src/layer.rs", "committed\nstaged\nunstaged\n")
+        self.write(
+            "src/layer.rs",
+            """committed
+staged
+unstaged
+""",
+        )
 
         result = self.command("review-diff", "parent", "--json")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -263,7 +275,10 @@ class DevelopmentTests(unittest.TestCase):
             json.loads(result.stdout)["companion"]["staged_revision"], "0" * 40
         )
         (commands / "cargo").write_text(
-            "#!/bin/sh\necho no installed toolchain >&2\nexit 9\n"
+            """#!/bin/sh
+echo no installed toolchain >&2
+exit 9
+"""
         )
         result = self.command(
             "preflight", "--json", script_root=self.root, environment=environment
