@@ -39,7 +39,7 @@ result:
   content:
     - type: text
       text: |
-        Error in str2expression(source) : <text>:4:0: unexpected end of input
+        Error: <text>:4:0: unexpected end of input
         2: (
         3: 
           ^

@@ -47,6 +47,7 @@ def test_rejects_incomplete_and_invalid_source(
         """)
     client.send(r=r)
     assert "unexpected end of input" in last_tool_text(client), last_tool_text(client)
+    assert last_tool_text(client).startswith("Error: "), last_tool_text(client)
     assert client.transcript[-1]["result"]["isError"] is False
     # fmt: r
     unchanged = code(r"""
@@ -61,6 +62,7 @@ def test_rejects_incomplete_and_invalid_source(
     assert last_tool_text(client) == "[1] 41\n"
     client.send(r=")")
     assert "unexpected ')'" in last_tool_text(client)
+    assert last_tool_text(client).startswith("Error: "), last_tool_text(client)
     # fmt: r
     r = code(r"""
         answer <- 43
@@ -69,6 +71,7 @@ def test_rejects_incomplete_and_invalid_source(
         """)
     client.send(r=r)
     assert "unexpected ')'" in last_tool_text(client)
+    assert last_tool_text(client).startswith("Error: "), last_tool_text(client)
     assert client.transcript[-1]["result"]["isError"] is False
     client.send(r=unchanged)
     assert last_tool_text(client) == "[1] 41\n"
@@ -137,6 +140,45 @@ def test_preserves_parser_warning_behavior(
     client.send(r=r)
     assert "(converted from warning)" in last_tool_text(client)
     assert last_tool_text(client).endswith("error handler warn: 2\n")
+    client.send(r="answer")
+    assert last_tool_text(client) == "[1] 42\n"
+    return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_preserves_parser_warning_handlers(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = McpClient(binary, execution.serve())
+    client.initialize_and_list_tools()
+    # The native REPL's R_ToplevelExec isolates condition handlers between cells.
+    # Register the handler in the cell where the native parser will warn.
+    # fmt: r
+    r = code(r"""
+        parser_warnings <- 0L
+        globalCallingHandlers(warning = function(w) {
+          parser_warnings <<- parser_warnings + 1L
+          cat("global warning handler\n")
+          invokeRestart("muffleWarning")
+        })
+        invisible(1.0L)
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "global warning handler\n", last_tool_text(client)
+    client.send(r="parser_warnings")
+    assert last_tool_text(client) == "[1] 1\n"
+    # An error from the handler must occur after the preceding assignment.
+    # fmt: r
+    r = code(r"""
+        globalCallingHandlers(NULL)
+        globalCallingHandlers(warning = function(w) {
+          stop("global warning handler", call. = FALSE)
+        })
+        answer <- 42
+        1.0L
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "Error: global warning handler\n"
     client.send(r="answer")
     assert last_tool_text(client) == "[1] 42\n"
     return client.finish()

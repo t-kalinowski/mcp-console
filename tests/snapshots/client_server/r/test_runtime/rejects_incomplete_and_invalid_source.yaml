@@ -18,7 +18,7 @@ result:
   content:
     - type: text
       text: |
-        Error in str2expression(source) : <text>:5:0: unexpected end of input
+        Error: <text>:5:0: unexpected end of input
         3: answer + (
         4: 
           ^
@@ -45,7 +45,7 @@ result:
   content:
     - type: text
       text: |
-        Error in str2expression(source) : <text>:1:1: unexpected ')'
+        Error: <text>:1:1: unexpected ')'
         1: )
             ^
   isError: false
@@ -59,7 +59,7 @@ result:
   content:
     - type: text
       text: |
-        Error in str2expression(source) : <text>:3:1: unexpected ')'
+        Error: <text>:3:1: unexpected ')'
         2: created <- TRUE
         3: )
            ^
