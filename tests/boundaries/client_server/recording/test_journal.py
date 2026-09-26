@@ -166,6 +166,41 @@ def test_selects_existing_project_or_home_recording_directory(
     return records
 
 
+def test_rejects_non_utf8_home_recording_path(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        home = Path(os.fsdecode(os.fsencode(temporary) + b"/home-\xff"))
+        workspace = root / "workspace"
+        workspace.mkdir()
+        project_console = workspace / ".agents/console"
+        project_console.mkdir(parents=True)
+        (project_console / "config.yaml").write_text("{}\n", encoding="utf-8")
+        with McpClient(
+            binary,
+            ("serve", "--no-sandbox", "--worker", str(zod)),
+            environment={**os.environ, "HOME": str(home)},
+            current_directory=workspace,
+            record_in_project=False,
+        ) as client:
+            client.initialize_and_list_tools()
+            # Configuration was captured at launch; recording is selected on send.
+            (project_console / "config.yaml").unlink()
+            project_console.rmdir()
+            client.send(r="echo echo")
+            assert client.transcript[-1]["result"] == {
+                "content": [{"type": "text", "text": "zod: echo\n"}],
+                "isError": False,
+            }, client.transcript[-1]
+            transcript, stderr = client.finish_with_standard_error()
+        assert stderr == (
+            "mcp-console: transcript recording disabled: recording path must be UTF-8\n"
+        ), stderr
+        assert not (workspace / ".agents/console/sessions").exists()
+        transcript.append({"server stderr": stderr.strip()})
+        return transcript
+
+
 @executions(DIRECT, SANDBOXED)
 def test_continues_without_record_when_record_cannot_be_created(
     binary: Path,

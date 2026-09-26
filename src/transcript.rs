@@ -302,6 +302,9 @@ impl ActiveTranscript {
         } else {
             directory.clone()
         };
+        if public_directory.to_str().is_none() {
+            return Err("recording path must be UTF-8".to_string());
+        }
         create_private_directory(&sessions, true)
             .map_err(|error| format!("failed to create {}: {error}", sessions.display()))?;
         create_private_directory(&directory, false)
