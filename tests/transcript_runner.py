@@ -438,6 +438,69 @@ class TranscriptRunnerTests(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_cases_preserve_paths_from_selected_r_home(self) -> None:
+        environment = self.prepare_script()
+        r_home = self.root / "selected-R"
+        (r_home / "bin").mkdir(parents=True)
+        rscript = (
+            f"#!{sys.executable}\n"
+            # fmt: python
+            + code("""
+                from pathlib import Path
+
+                installation = Path(__file__).resolve().parents[1]
+                for name in ("library", "cache", "data"):
+                    print(installation / name)
+                """)
+        )
+        for executable in (r_home / "bin/Rscript", self.root / "commands/Rscript"):
+            executable.write_text(rscript, encoding="utf-8")
+            executable.chmod(0o755)
+        environment["R_HOME"] = str(r_home)
+        for name in ("R_LIBS_USER", "R_USER_CACHE_DIR", "R_USER_DATA_DIR"):
+            environment.pop(name, None)
+        self.suite.write_text(
+            PUBLIC_SUITE
+            # fmt: python
+            + code("""
+                import os
+
+
+                def test_selected(binary: Path) -> list[dict[str, str]]:
+                    installation = Path(os.environ["R_HOME"]).resolve()
+                    assert os.environ["R_LIBS_USER"] == str(installation / "library")
+                    assert os.environ["R_USER_CACHE_DIR"] == str(installation / "cache")
+                    assert os.environ["R_USER_DATA_DIR"] == str(installation / "data")
+                    return record(binary, "selected")
+                """),
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            ["scripts/test", "client_server/server/test_tools::selected"],
+            cwd=self.root,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        (self.root / "commands/Rscript").unlink()
+        environment["PATH"] = str(self.root / "commands")
+        result = subprocess.run(
+            [
+                sys.executable,
+                self.boundaries / "_run.py",
+                "client_server/server/test_tools::selected",
+            ],
+            cwd=self.root,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_script_creates_empty_timings_when_selected_case_is_skipped(self) -> None:
         environment = self.prepare_script()
         self.suite.write_text(

@@ -18,7 +18,9 @@ CASE_CLEANUP_SECONDS = 15
 def case_runtime_environment() -> dict[str, str]:
     """Keep host tool state available when cases use an isolated HOME."""
     environment = os.environ.copy()
-    if rscript := shutil.which("Rscript"):
+    r_home = environment.get("R_HOME")
+    rscript = Path(r_home) / "bin/Rscript" if r_home else shutil.which("Rscript")
+    if rscript and Path(rscript).is_file():
         # R's default library and user directories depend on HOME.
         # fmt: r
         source = r"""
