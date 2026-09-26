@@ -282,6 +282,10 @@ Keep these invariants intact:
   Normalize only incidental values such as run-specific temporary paths; do not replace behavior with summaries or placeholders.
   Native R fidelity cases may record a live-reference comparison after asserting exact equality with the same source in `Rscript --vanilla`, including error calls and condition classes; see `tests/boundaries/README.md`.
   Synthetic stress repetitions may use lossless text-and-count notation after exact full-response assertions; see `tests/support/evidence.py`.
+- Show line breaks directly in multiline string literals so messages, documents, and embedded programs are readable in source.
+  As a rule, do not use more than two `\n` escapes to lay out one string.
+  Keep escapes when the newline itself is data or a short delimiter, terminator, or expected value is clearer with them.
+  Preserve exact indentation and trailing newlines when changing a literal.
 - Keep embedded R, Python, SQL, and shell fixture programs as readable multiline strings.
   Use escapes such as `\n` only when the character is data.
 - Put `# fmt: r` or `# fmt: python` immediately before each embedded R or Python test program, including `code(...)` calls nested inside other calls.

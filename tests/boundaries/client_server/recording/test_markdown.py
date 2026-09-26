@@ -139,7 +139,10 @@ def test_emits_yamark_formatted_documents(
         )
         client.initialize_and_list_tools()
         client.send(r="emit image")
-        source = "echo before\n````\n<div>not markdown</div>\nafter"
+        source = """echo before
+````
+<div>not markdown</div>
+after"""
         client.send(python=source)
         client.request(
             "tools/call",
@@ -175,14 +178,32 @@ def test_emits_yamark_formatted_documents(
         quarto = (session / "transcript.qmd").read_text(encoding="utf-8")
         assert f"`````python\n{source}\n`````" in markdown
         assert (
-            "`````text\nzod python: before\n````\n<div>not markdown</div>\nafter\n`````"
+            """`````text
+zod python: before
+````
+<div>not markdown</div>
+after
+`````"""
             in markdown
         )
-        assert "```sql\n  --| eval: false\necho SELECT 42\n```" in markdown
+        assert (
+            """```sql
+  --| eval: false
+echo SELECT 42
+```"""
+            in markdown
+        )
         assert '"typo": true' in markdown
         assert "```{r}\nemit image\n```" in quarto
         assert f"`````{{python}}\n{source}\n`````" in quarto
-        assert "```{sql}\n\n  --| eval: false\necho SELECT 42\n```" in quarto
+        assert (
+            """```{sql}
+
+  --| eval: false
+echo SELECT 42
+```"""
+            in quarto
+        )
         assert "execute:" not in quarto
         assert '    - "foo:"' in quarto
         assert "    - foo#bar" in quarto

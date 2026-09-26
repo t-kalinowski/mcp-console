@@ -1184,7 +1184,10 @@ def test_uses_selected_virtualenv(binary: Path, execution: Execution) -> Transcr
             client.send(control="restart", python="'value' in globals()")
             assert (
                 last_result_text(client)
-                == "[worker stopped: in-memory state lost]\n[starting new worker]\nFalse\n[done]"
+                == """[worker stopped: in-memory state lost]
+[starting new worker]
+False
+[done]"""
             ), client.transcript[-1]
             assert not temporary.exists(), "retired worker storage remains"
             client.send(python="import tempfile; print(tempfile.gettempdir())")
@@ -1383,7 +1386,10 @@ def test_records_python_execution(binary: Path, execution: Execution) -> Transcr
             client.send(control="restart", python="'recorded_value' in globals()")
             assert (
                 last_result_text(client)
-                == "[worker stopped: in-memory state lost]\n[starting new worker]\nFalse\n[done]"
+                == """[worker stopped: in-memory state lost]
+[starting new worker]
+False
+[done]"""
             )
             records = client.finish()
             (session,) = (workspace / ".agents/console/sessions").iterdir()
@@ -1948,7 +1954,13 @@ def test_records_managed_python_defaults(
             records = client.finish()
         (session,) = (workspace / ".agents/console/sessions").iterdir()
         quarto = (session / "transcript.qmd").read_text()
-        assert "  python-packages:\n    - numpy\n    - pandas\n" in quarto, quarto
+        assert (
+            """  python-packages:
+    - numpy
+    - pandas
+"""
+            in quarto
+        ), quarto
         assert "  packages: []\n" in quarto, quarto
         assert "six" not in quarto, quarto
         events = [

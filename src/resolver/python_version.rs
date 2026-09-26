@@ -125,7 +125,11 @@ impl PythonVersions {
             .collect::<Vec<_>>()
             .join(", ");
         Err(format!(
-            "Requested Python version constraints could not be satisfied.\n  constraints: \"{requested}\"\nHint: Call `py_require(python_version = <string>, action = \"set\")` to replace constraints.\nAvailable Python versions found: {available}\n"
+            "Requested Python version constraints could not be satisfied.
+  constraints: \"{requested}\"
+Hint: Call `py_require(python_version = <string>, action = \"set\")` to replace constraints.
+Available Python versions found: {available}
+"
         ))
     }
 

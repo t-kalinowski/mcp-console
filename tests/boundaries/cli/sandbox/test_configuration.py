@@ -461,7 +461,10 @@ def test_target_cannot_replace_active_policy(binary: Path) -> Transcript:
         assert result.stderr == ""
         expected = (
             json.dumps(permissive)
-            + "\nactive policy still denies writes\nnested sandbox cannot grant host writes\n"
+            + """
+active policy still denies writes
+nested sandbox cannot grant host writes
+"""
         )
         assert result.stdout == expected
         assert not forbidden.exists()

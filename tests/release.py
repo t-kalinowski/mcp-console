@@ -1135,8 +1135,13 @@ class ReleaseScriptTests(unittest.TestCase):
                 "build-dependencies"
             ]
             (root / "Cargo.toml").write_text(
-                '[package]\nname = "sandbox-artifact-build"\nversion = "0.0.0"\n'
-                'edition = "2024"\n[build-dependencies]\n'
+                """[package]
+name = "sandbox-artifact-build"
+version = "0.0.0"
+"""
+                """edition = "2024"
+[build-dependencies]
+"""
                 + "".join(
                     f"{name} = {json.dumps(version)}\n"
                     for name, version in dependencies.items()

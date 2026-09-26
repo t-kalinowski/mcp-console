@@ -239,34 +239,65 @@ def _restart_drains_relay_output_before_nonzero_launcher_error(
             stop_client(client)
 
 
-@requires(SANDBOX)
+@requires(SANDBOX, NATIVE_FIXTURES)
 def test_restart_preserves_relay_retirement_failure(binary: Path) -> Transcript:
-    zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
-    client = McpClient(binary, SANDBOXED.serve("--worker", str(zod)))
-    try:
-        client.initialize_and_list_tools()
-        client.send(r="fail sideband during shutdown")
-        assert last_tool_text(client) == "[done]"
-
-        client.send(control="restart")
-        result = client.transcript[-1]["result"]
-        assert result["isError"] is True, result
-        output = result["content"][0]["text"]
-        prefix = "[worker sideband read failed: "
-        assert output.startswith(prefix), output
-        assert output.endswith("]"), output
-        assert "\n" not in output, output
-        assert "; additionally" not in output, output
-        assert "worker launcher" not in output, output
-        assert "[starting new worker]" not in output, output
-        result["content"][0]["text"] = prefix + "<invalid frame>]"
-        client.transcript[-1]["transcript_normalization"] = {
-            "target": "result.content[0].text",
-            "replacements": {"sideband_failure_detail": "<invalid frame>"},
-        }
-        return client.transcript
-    finally:
-        stop_client(client)
+    fixtures = Path(__file__).resolve().parents[3] / "fixtures"
+    with (
+        tempfile.TemporaryDirectory() as temporary_directory,
+        ZodFixtureControl(Path(temporary_directory)) as control,
+    ):
+        temporary = Path(temporary_directory)
+        environment = os.environ.copy()
+        control.configure(environment)
+        environment["MCP_CONSOLE_TEST_RELAY_BINARY"] = str(binary)
+        environment["MCP_CONSOLE_TEST_RELAY_READ_DYLIB"] = str(
+            build_interposer(temporary, "relay_stdout_read_interposer")
+        )
+        environment["MCP_CONSOLE_TEST_RELAY_READ_MATCH"] = (
+            '{"kind":"console_output","data":}'
+        )
+        client = McpClient(
+            binary,
+            SANDBOXED.serve(
+                "--worker",
+                str(fixtures / "zod"),
+                "--relay",
+                str(fixtures / "retirement_read_relay"),
+            ),
+            environment,
+        )
+        try:
+            client.initialize_and_list_tools()
+            client.send(r="fail sideband during shutdown")
+            assert last_tool_text(client) == "[done]"
+            control.connect(client)
+            blocked_path = wait_for_marker(temporary, "relay-read-*-blocked", client)
+            with closing(FifoCheckpoint.attach(blocked_path)) as blocked:
+                control.send_control(0, "emit_shutdown_failure")
+                blocked.wait(
+                    "malformed sideband read", FIXTURE_CHECKPOINT_TIMEOUT_SECONDS
+                )
+                # The bytes are already read; retirement's join releases the
+                # parser. No worker scheduling is required within shutdown grace.
+                client.send(control="restart")
+            result = client.transcript[-1]["result"]
+            assert result["isError"] is True, result
+            output = result["content"][0]["text"]
+            prefix = "[worker sideband read failed: "
+            assert output.startswith(prefix), output
+            assert output.endswith("]"), output
+            assert "\n" not in output, output
+            assert "; additionally" not in output, output
+            assert "worker launcher" not in output, output
+            assert "[starting new worker]" not in output, output
+            result["content"][0]["text"] = prefix + "<invalid frame>]"
+            client.transcript[-1]["transcript_normalization"] = {
+                "target": "result.content[0].text",
+                "replacements": {"sideband_failure_detail": "<invalid frame>"},
+            }
+            return client.transcript
+        finally:
+            stop_client(client)
 
 
 @requires(SANDBOX, PROCESS_EVENTS, NATIVE_FIXTURES)

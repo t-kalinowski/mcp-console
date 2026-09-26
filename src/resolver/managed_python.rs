@@ -185,7 +185,11 @@ fn resolve_python_manifest_with_r(
         })
         .expect("resolver input strings should serialize as JSON");
         return Err(format!(
-            "managed Python resolution failed:\nresolver input:\n{input}\nuv output:\n{error}"
+            "managed Python resolution failed:
+resolver input:
+{input}
+uv output:
+{error}"
         ));
     }
     check_resolver_control(&resolver, "managed Python resolution")?;

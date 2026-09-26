@@ -504,7 +504,10 @@ class TranscriptRunnerTests(unittest.TestCase):
         commands = self.root / "commands"
         commands.mkdir()
         uv = commands / "uv"
-        uv.write_text("#!/bin/sh\necho invoked > uv-receipt\nexit 97\n")
+        uv.write_text("""#!/bin/sh
+echo invoked > uv-receipt
+exit 97
+""")
         uv.chmod(0o755)
         for arguments, status in (
             (("--help",), 0),
@@ -900,7 +903,10 @@ class TranscriptRunnerTests(unittest.TestCase):
         for failed in (False, True):
             if failed:
                 (self.snapshots / "selected.yaml").write_text(
-                    "---\nrunner: different\n...\n"
+                    """---
+runner: different
+...
+"""
                 )
             result = subprocess.run(
                 [sys.executable, self.boundaries / "_run.py", selector],
@@ -1214,7 +1220,11 @@ class TranscriptRunnerTests(unittest.TestCase):
         self.suite.write_text(PUBLIC_SUITE + HANGING_SUITE, encoding="utf-8")
         for name in ("hangs", "failure_beside_hang"):
             (self.snapshots / f"{name}.yaml").write_text(
-                "---\nrunner: released\n...\n", encoding="utf-8"
+                """---
+runner: released
+...
+""",
+                encoding="utf-8",
             )
         checkpoints = []
         for name in (
@@ -1503,7 +1513,11 @@ class TranscriptRunnerTests(unittest.TestCase):
     def test_runner_loss_retires_case_holding_the_gil(self) -> None:
         self.suite.write_text(PUBLIC_SUITE + GIL_HOLDING_SUITE, encoding="utf-8")
         (self.snapshots / "holds_gil.yaml").write_text(
-            "---\nrunner: released\n...\n", encoding="utf-8"
+            """---
+runner: released
+...
+""",
+            encoding="utf-8",
         )
         subprocess.run(
             [
@@ -1567,7 +1581,12 @@ class TranscriptRunnerTests(unittest.TestCase):
     def test_case_can_fork_without_thread_safety_warnings(self) -> None:
         self.suite.write_text(PUBLIC_SUITE + FORKING_SUITE, encoding="utf-8")
         (self.snapshots / "forks.yaml").write_text(
-            "---\nrunner: forked\nwarnings: []\n...\n", encoding="utf-8"
+            """---
+runner: forked
+warnings: []
+...
+""",
+            encoding="utf-8",
         )
         result = self.run_runner("client_server/server/test_tools::forks")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -1637,7 +1656,13 @@ class TranscriptRunnerTests(unittest.TestCase):
 
     def test_orphan_rejection_and_full_update_cleanup(self) -> None:
         orphan = self.snapshots / "deleted_case.yaml"
-        orphan.write_text("---\nrunner: orphan\n...\n", encoding="utf-8")
+        orphan.write_text(
+            """---
+runner: orphan
+...
+""",
+            encoding="utf-8",
+        )
 
         rejected = self.run_runner("--list")
         self.assertNotEqual(rejected.returncode, 0)
@@ -1667,7 +1692,10 @@ class TranscriptRunnerTests(unittest.TestCase):
         )
 
     def test_failure_rerun_preserves_custom_timeout(self) -> None:
-        (self.snapshots / "selected.yaml").write_text("---\nrunner: mismatch\n...\n")
+        (self.snapshots / "selected.yaml").write_text("""---
+runner: mismatch
+...
+""")
         for profile in ([], ["--quick"]):
             with self.subTest(profile=profile):
                 arguments = [
@@ -1710,7 +1738,10 @@ class TranscriptRunnerTests(unittest.TestCase):
                 """)
         )
         orphan = self.snapshots / "deleted_case.yaml"
-        orphan.write_text("---\nrunner: orphan\n...\n")
+        orphan.write_text("""---
+runner: orphan
+...
+""")
         for profile in ([], ["--quick"]):
             with self.subTest(profile=profile):
                 arguments = [*profile, "--update", "--jobs", "1"]
