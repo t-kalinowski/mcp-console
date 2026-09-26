@@ -102,6 +102,10 @@ def test_records_real_mixed_language_session(
         assert f"```{{sql}}\n{sql}```" in quarto
         assert "Artifact 1" not in quarto
         assert "execute:" not in quarto
+        assert (
+            "# Run `ir render transcript.qmd` in a prepared environment to execute these cells."
+            in quarto.split("---", 2)[1]
+        )
         assert markdown.endswith("\n")
         assert quarto.endswith("\n")
 

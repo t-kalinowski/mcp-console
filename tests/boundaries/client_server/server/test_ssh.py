@@ -271,8 +271,10 @@ def _preinstalled_remote_runtime(binary: Path, execution: Execution) -> Transcri
         assert len(artifacts) == 1, artifacts
         assert artifacts[0].read_bytes() == image_bytes
         qmd = (session / "transcript.qmd").read_text()
+        frontmatter = qmd.split("---", 2)[1]
         assert "root.dir" not in qmd, qmd
-        assert "eval: false" in qmd, qmd
+        assert "execute:" not in frontmatter, qmd
+        assert "# Run `ir render transcript.qmd`" in frontmatter, qmd
         # Keep literal wire output; only the incidental temporary paths vary.
         return json.loads(json.dumps(transcript).replace(str(root), "<ssh-test>"))
 

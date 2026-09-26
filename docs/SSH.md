@@ -166,8 +166,8 @@ Direct execution retains its lack of runner-owned descendant cleanup.
 Journals, output spools, transcripts, and returned image bytes stay in the local project's `.agents/console/sessions/`.
 Session metadata records the SSH destination and initial remote execution directory separately from the local recording workspace.
 Arbitrary files created by cells remain remote.
-The source-only Quarto projection includes remote target context, omits the controller `root.dir`, and defaults to `execute.eval: false`.
-Enable execution only after deliberately preparing an environment and filesystem for those cells; local rendering does not reproduce the remote filesystem.
+The source-only Quarto projection includes remote target context and omits the controller `root.dir`.
+Rendering executes the captured cells, so prepare an appropriate environment and files first; local rendering does not reproduce the remote filesystem.
 
 ### Bounded output and retained text
 

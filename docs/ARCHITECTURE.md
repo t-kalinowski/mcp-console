@@ -558,9 +558,9 @@ For local sessions, rendering executes the captured client-authored cells in ord
 Rendering does not reconstruct session control, stdin, recorded results, or artifacts.
 SQL chunks require a DBI connection supplied by the document user.
 
-SSH, Docker, and Docker Sandbox projections identify the execution target, omit the local execution root, and set `execute.eval: false`.
-By default, rendering them locally displays the captured source without executing it.
-Replaying remote cells requires the user to select and provision an appropriate execution environment; the document does not reproduce remote files.
+SSH, Docker, and Docker Sandbox projections identify the execution target and omit the local execution root.
+Rendering them executes the captured cells, so the user must prepare an appropriate environment and files first; the document does not reproduce remote files.
+Every generated QMD includes the `ir render transcript.qmd` command in a frontmatter comment.
 
 For a local session, render the source projection from the recording directory with:
 
