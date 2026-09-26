@@ -6,10 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::Serialize;
 
-use super::process::{
-    ResolverOutput, ResolverProcess, ResolverStopHandle, completed_write, read_output,
-    resolver_command,
-};
+use super::process::{ResolverOutput, ResolverProcess, ResolverStopHandle, completed_write};
 
 const PYTHON_PATH_SOURCE: &str = r#"
 import sys
@@ -39,10 +36,10 @@ struct ResolverInput<'a> {
 struct PythonPathOutput(PathBuf);
 
 impl PythonPathOutput {
-    fn create() -> Result<Self, String> {
+    fn create(directory: &Path) -> Result<Self, String> {
         for _ in 0..100 {
             let sequence = PYTHON_PATH_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!(
+            let path = directory.join(format!(
                 "mcp-console-managed-python-{}-{sequence}",
                 process::id()
             ));
@@ -143,18 +140,14 @@ fn resolve_python_manifest_with_r(
     crate::python_requirement::validate_all(&requirements.packages)?;
     crate::python_requirement::validate_version_constraints(&requirements.python_version)?;
     let requirements = requirements.normalized();
-    let resolver = ResolverProcess::new();
+    let resolver = ResolverProcess::for_preparation(configuration.preparation_directory())?;
     let mut on_started = Some(on_started);
-    validate_uv_storage(configuration, managed_r, &resolver, &mut on_started)?;
     let versions =
         resolve_python_versions_with(configuration, managed_r, &resolver, &mut on_started)?;
     let resolved_python = versions
         .resolve(&requirements.python_version)
         .map_err(|error| format!("managed Python version resolution failed: {}", error.trim()))?;
-    versions.validate_paths(&resolved_python, |path| {
-        configuration.ensure_safe_python_path(path)
-    })?;
-    let output_path = PythonPathOutput::create()?;
+    let output_path = PythonPathOutput::create(&configuration.output_directory())?;
     let output = run_managed_python_resolver(
         &requirements,
         &resolved_python,
@@ -195,54 +188,11 @@ uv output:
     check_resolver_control(&resolver, "managed Python resolution")?;
     let python = output_path.python()?;
     configuration.ensure_safe_python_path(&python)?;
-    warm_matplotlib(&python, &resolver, &mut on_started)?;
+    warm_matplotlib(&python, configuration, &resolver, &mut on_started)?;
     Ok(ManagedPython {
         python,
         requirements,
     })
-}
-
-fn validate_uv_storage<F>(
-    configuration: &super::ManagedPythonResolverConfiguration,
-    managed_r: Option<&super::ManagedR>,
-    resolver: &ResolverProcess,
-    on_started: &mut Option<F>,
-) -> Result<(), String>
-where
-    F: FnOnce(ResolverStopHandle) -> Result<(), String>,
-{
-    if !configuration.has_worker_writable_roots() {
-        return Ok(());
-    }
-    let program = Path::new(configuration.uv()?);
-    for (args, kind) in [
-        (["cache", "dir"], "uv cache"),
-        (["python", "dir"], "uv Python installation"),
-    ] {
-        let mut command = resolver_command(program);
-        command
-            .args(args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        configure_python_resolver(&mut command, configuration, managed_r)?;
-        let output = run_resolver_command(command, resolver, on_started, program, kind)?;
-        if !output.status.success() {
-            return Err(format!("{kind} lookup failed: {}", resolver_error(&output)));
-        }
-        check_resolver_control(resolver, kind)?;
-        let value = String::from_utf8(output.stdout)
-            .map_err(|_| format!("{kind} returned a non-UTF-8 path"))?;
-        let path = Path::new(value.trim());
-        if !path.is_absolute() {
-            return Err(format!(
-                "{kind} returned a non-absolute path: {}",
-                path.display()
-            ));
-        }
-        configuration.ensure_safe_python_path(path)?;
-    }
-    Ok(())
 }
 
 pub(crate) fn resolve_python_version(
@@ -283,7 +233,7 @@ fn resolve_python_versions<F>(
 where
     F: FnOnce(ResolverStopHandle) -> Result<(), String>,
 {
-    let resolver = ResolverProcess::new();
+    let resolver = ResolverProcess::for_preparation(configuration.preparation_directory())?;
     let mut on_started = Some(on_started);
     resolve_python_versions_with(configuration, managed_r, &resolver, &mut on_started)
 }
@@ -389,7 +339,7 @@ where
 {
     let uv = configuration.uv()?;
     let program = Path::new(uv);
-    let mut command = resolver_command(program);
+    let mut command = configuration.command(program, resolver);
     command
         .args([
             "python",
@@ -441,7 +391,7 @@ where
 {
     let uv = configuration.uv()?;
     let program = Path::new(uv);
-    let mut command = resolver_command(program);
+    let mut command = configuration.command(program, resolver);
     command
         .args(["tool", "run", "--isolated", "--python"])
         .arg(resolved_python);
@@ -471,13 +421,14 @@ where
 
 fn warm_matplotlib<F>(
     python: &Path,
+    configuration: &super::ManagedPythonResolverConfiguration,
     resolver: &ResolverProcess,
     on_started: &mut Option<F>,
 ) -> Result<(), String>
 where
     F: FnOnce(ResolverStopHandle) -> Result<(), String>,
 {
-    let mut command = resolver_command(python);
+    let mut command = configuration.command(python, resolver);
     command
         .args(["-I", "-c", "import matplotlib.font_manager"])
         .stdin(Stdio::null())
@@ -532,15 +483,12 @@ fn run_resolver_command<F>(
 where
     F: FnOnce(ResolverStopHandle) -> Result<(), String>,
 {
-    let mut child = command.spawn().map_err(|error| {
+    let (mut child, [stdout, stderr]) = resolver.spawn(&mut command).map_err(|error| {
         format!(
             "failed to run {kind} resolver with `{}`: {error}",
             program.display()
         )
     })?;
-    let stdout = read_output(child.stdout.take().expect("resolver stdout is piped"));
-    let stderr = read_output(child.stderr.take().expect("resolver stderr is piped"));
-    resolver.watch_exit(child.id());
     if let Some(on_started) = on_started.take()
         && let Err(error) = on_started(resolver.stop_handle())
     {

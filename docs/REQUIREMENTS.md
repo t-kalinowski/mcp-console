@@ -9,7 +9,7 @@ This guide describes preparation before a cell, standalone preparation, and requ
 
 Local [Python sessions without R](BUILTIN_RUNTIME.md#python-sessions-without-r) support explicit startup and restart preparation when Console manages the environment through uv.
 The default uses protected uv and uv-managed CPython; setting `python` in the Console config selects a non-managed environment without invoking uv.
-The [sans-R runtime contract](BUILTIN_RUNTIME.md#python-sessions-without-r) defines supported uv settings and the host resolver trust boundary.
+The [sans-R runtime contract](BUILTIN_RUNTIME.md#python-sessions-without-r) defines supported uv settings and the separate native preparation boundary.
 There is no automatic PATH-Python fallback.
 `requirements.python` alone or with a Python cell prepares additions before the first worker starts.
 After startup, changed requirements need `control: "restart"`, with or without code; already retained requirements are a no-op.
@@ -492,6 +492,9 @@ Evaluated Python imports and reticulate APIs can trigger managed Python resoluti
 Host resolution and managed-environment startup may run accepted distributions' installation, build, or initialization code with server permissions; use only packages you trust.
 
 ### Server-owned `uv` configuration
+
+This section describes R-present sessions.
+Sans-R sessions use the smaller [managed Python contract](BUILTIN_RUNTIME.md#python-sessions-without-r).
 
 An explicit `RETICULATE_UV` startup value is retained.
 Otherwise the server selects `uv` from `PATH`, from the managed R library's reticulate installation, or from ambient reticulate.

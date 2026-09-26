@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 mod managed;
@@ -11,9 +11,7 @@ pub(crate) struct ManagedPythonResolverConfiguration {
     explicit_uv: Option<OsString>,
     reticulate_uv: Option<OsString>,
     uv: Option<OsString>,
-    path: Option<OsString>,
-    worker_writable: Vec<PathBuf>,
-    sans_r: bool,
+    preparation: Option<Arc<managed::Preparation>>,
 }
 
 impl ManagedPythonResolverConfiguration {
@@ -35,95 +33,69 @@ impl ManagedPythonResolverConfiguration {
             explicit_uv,
             reticulate_uv,
             uv,
-            path: std::env::var_os("PATH"),
-            worker_writable: Vec::new(),
-            sans_r: false,
+            preparation: None,
         }
     }
 
-    pub(crate) fn without_r_bootstrap(mut self, blocked: &[PathBuf]) -> Result<Self, String> {
-        // A prior worker may have replaced a project uv. Select and pin a
-        // resolved executable before any resolver process starts.
-        self.worker_writable = blocked.iter().map(|root| normalize_path(root)).collect();
-        self.sans_r = true;
-        self.environment = Arc::new(self.capture_managed_settings()?);
-        let blocked = &self.worker_writable;
-        let uv = match self.explicit_uv.as_deref() {
-            Some(value) if value != OsStr::new("managed") => {
-                let path = PathBuf::from(value);
-                let path = if path.components().count() == 1 {
-                    super::find_path_entry(path.to_str().ok_or("selected uv is not UTF-8")?)
-                        .unwrap_or(path)
-                } else {
-                    path
-                };
-                Some(select_uv_path(&path, blocked)?.ok_or_else(|| {
-                    format!(
-                        "selected uv `{}` is in the project or a worker-writable path",
-                        path.display()
-                    )
-                })?)
-            }
-            _ => find_safe_path_uv(self.path.as_deref(), blocked)?,
-        };
-        let uv = uv.ok_or("R is unavailable and no protected `uv` executable was found on PATH; install uv or set python in .agents/console/config.yaml to select an existing environment")?;
+    pub(crate) fn without_r_bootstrap(
+        mut self,
+        policy: Option<&crate::settings::SandboxSettings>,
+    ) -> Result<Self, String> {
+        let (preparation, uv, environment) =
+            managed::Preparation::capture(policy, self.explicit_uv.as_deref())?;
         self.uv = Some(uv.into());
         self.reticulate_uv = self.uv.clone();
-        self.path = Some(self.protected_path(self.path.as_deref())?);
+        self.environment = Arc::new(environment);
+        self.preparation = Some(Arc::new(preparation));
         Ok(self)
     }
 
-    fn protected_path(&self, path: Option<&OsStr>) -> Result<OsString, String> {
-        let mut directories = Vec::new();
-        if let Some(path) = path {
-            for directory in std::env::split_paths(path) {
-                if self.path_is_worker_writable(&directory)? {
-                    continue;
-                }
-                // Keep only existing directories so a worker cannot create a
-                // previously absent PATH entry or redirect a broken symlink.
-                if let Ok(resolved) = directory.canonicalize()
-                    && resolved.is_dir()
-                {
-                    directories.push(resolved);
-                }
+    pub(crate) fn sans_r(&self) -> bool {
+        self.preparation.is_some()
+    }
+
+    pub(crate) fn preparation_directory(&self) -> Option<&Path> {
+        self.preparation
+            .as_ref()
+            .map(|preparation| preparation.storage.as_path())
+    }
+
+    pub(crate) fn output_directory(&self) -> PathBuf {
+        self.preparation
+            .as_ref()
+            .map_or_else(std::env::temp_dir, |preparation| {
+                preparation.storage.clone()
+            })
+    }
+
+    pub(crate) fn command(
+        &self,
+        program: &Path,
+        resolver: &super::process::ResolverProcess,
+    ) -> std::process::Command {
+        match &self.preparation {
+            Some(preparation) => preparation.command(
+                program,
+                &self.environment,
+                &resolver.status_file().expect("preparation status"),
+            ),
+            None => super::process::resolver_command(program),
+        }
+    }
+
+    pub(crate) fn ensure_safe_python_path(&self, path: &Path) -> Result<(), String> {
+        if let Some(preparation) = &self.preparation {
+            let resolved = path
+                .canonicalize()
+                .map_err(|error| format!("cannot resolve managed Python path: {error}"))?;
+            if !resolved.starts_with(&preparation.storage) {
+                return Err(format!(
+                    "managed Python path is outside Console storage: {}",
+                    path.display()
+                ));
             }
         }
-        std::env::join_paths(directories)
-            .map_err(|error| format!("cannot retain protected resolver PATH: {error}"))
-    }
-
-    pub(super) fn sans_r(&self) -> bool {
-        self.sans_r
-    }
-
-    pub(super) fn has_worker_writable_roots(&self) -> bool {
-        !self.worker_writable.is_empty()
-    }
-
-    pub(super) fn ensure_safe_python_path(&self, path: &Path) -> Result<(), String> {
-        if self.path_is_worker_writable(path)? {
-            return Err(format!(
-                "managed Python path is worker-writable: {}",
-                path.display()
-            ));
-        }
         Ok(())
-    }
-
-    fn path_is_worker_writable(&self, path: &Path) -> Result<bool, String> {
-        if self.worker_writable.is_empty() {
-            return Ok(false);
-        }
-        let absolute =
-            std::path::absolute(path).map_err(|error| format!("cannot locate uv path: {error}"))?;
-        let resolved = resolve_path(&absolute)?;
-        let absolute = normalize_path(&absolute);
-        let resolved = normalize_path(&resolved);
-        Ok(self
-            .worker_writable
-            .iter()
-            .any(|root| absolute.starts_with(root) || resolved.starts_with(root)))
     }
 
     pub(super) fn explicit_uv(&self) -> Option<&OsStr> {
@@ -171,16 +143,6 @@ impl ManagedPythonResolverConfiguration {
             .envs(self.environment.iter())
             .env("RETICULATE_UV", uv)
             .env_remove("UV_OFFLINE");
-        if self.sans_r {
-            command.env("PATH", self.path.as_deref().unwrap_or(OsStr::new("")));
-            // The host helper must not execute worker-controlled startup hooks.
-            for (name, _) in std::env::vars_os()
-                .filter(|(name, _)| name.as_encoded_bytes().starts_with(b"PYTHON"))
-            {
-                command.env_remove(name);
-            }
-            command.env_remove("VIRTUAL_ENV").env_remove("CONDA_PREFIX");
-        }
     }
 
     pub(super) fn configure_uv_bootstrap(&self, command: &mut std::process::Command) {
@@ -210,62 +172,6 @@ impl ManagedPythonResolverConfiguration {
         }
         Ok(())
     }
-}
-
-// Pin existing ancestors too: an intermediate symlink may cross a write grant
-// even when its final target is protected. Missing suffixes are created by uv.
-fn resolve_path(path: &Path) -> Result<PathBuf, String> {
-    let absolute =
-        std::path::absolute(path).map_err(|error| format!("cannot locate uv path: {error}"))?;
-    let (ancestor, resolved) = absolute
-        .ancestors()
-        .find_map(|ancestor| {
-            ancestor
-                .canonicalize()
-                .ok()
-                .map(|resolved| (ancestor, resolved))
-        })
-        .ok_or_else(|| format!("cannot resolve uv path: {}", path.display()))?;
-    let resolved = resolved.join(absolute.strip_prefix(ancestor).expect("path ancestor"));
-    Ok(normalize_path(&resolved))
-}
-
-fn normalize_path(path: &Path) -> PathBuf {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::ParentDir => {
-                normalized.pop();
-            }
-            Component::CurDir => {}
-            other => normalized.push(other.as_os_str()),
-        }
-    }
-    normalized
-}
-
-fn find_safe_path_uv(path: Option<&OsStr>, blocked: &[PathBuf]) -> Result<Option<PathBuf>, String> {
-    let Some(path) = path else {
-        return Ok(None);
-    };
-    for directory in std::env::split_paths(path) {
-        let candidate = directory.join("uv");
-        if std::fs::symlink_metadata(&candidate).is_ok()
-            && let Some(selected) = select_uv_path(&candidate, blocked)?
-        {
-            return Ok(Some(selected));
-        }
-    }
-    Ok(None)
-}
-
-fn select_uv_path(candidate: &Path, blocked: &[PathBuf]) -> Result<Option<PathBuf>, String> {
-    // Preserve an existing broken selection outside blocked roots so its
-    // resolver error remains visible instead of silently choosing another uv.
-    let absolute = std::path::absolute(candidate)
-        .map_err(|error| format!("cannot locate selected uv: {error}"))?;
-    let selected = candidate.canonicalize().unwrap_or(absolute);
-    Ok((!blocked.iter().any(|root| selected.starts_with(root))).then_some(selected))
 }
 
 fn normalize_python_preference(environment: &mut BTreeMap<OsString, OsString>) {

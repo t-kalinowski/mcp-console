@@ -64,7 +64,7 @@ impl Selection {
         // environment even though its base executable has the same identity.
         let executable = std::path::absolute(executable)
             .map_err(|error| format!("cannot locate selected Python: {error}"))?;
-        let selected = crate::python::inspect_native(&executable, on_started)?;
+        let selected = crate::python::inspect_prepared(&executable, resolver, on_started)?;
         let selection = Self::Python {
             selected: Box::new(selected),
             explicit,
@@ -119,101 +119,6 @@ impl Selection {
     }
 }
 
-/// Exclude project executables even if this worker's policy is read-only:
-/// another server instance may already have let a worker replace them.
-pub(crate) fn blocked_uv_roots(
-    settings: &crate::settings::SandboxSettings,
-) -> Result<Vec<PathBuf>, String> {
-    let filesystem = settings.get("filesystem");
-    let kind = filesystem
-        .and_then(|filesystem| filesystem.get("kind"))
-        .and_then(crate::settings::native_variant_name);
-    let entries = filesystem
-        .and_then(|filesystem| filesystem.get("entries"))
-        .and_then(serde_json::Value::as_array);
-    let root_write = entries.is_some_and(|entries| {
-        entries.iter().any(|entry| {
-            entry
-                .get("access")
-                .and_then(crate::settings::native_variant_name)
-                == Some("write")
-                && entry
-                    .pointer("/path/type")
-                    .and_then(crate::settings::native_variant_name)
-                    == Some("special")
-                && entry
-                    .pointer("/path/value/kind")
-                    .and_then(crate::settings::native_variant_name)
-                    == Some("root")
-        })
-    });
-    if matches!(kind, Some("unrestricted" | "external-sandbox")) || root_write {
-        // Console cannot establish a protected host resolver path here.
-        return Ok(vec![PathBuf::from("/")]);
-    }
-    let workspace = std::env::current_dir()
-        .map_err(|error| format!("cannot find launch workspace: {error}"))?;
-    let mut roots = vec![
-        workspace
-            .canonicalize()
-            .map_err(|error| format!("cannot resolve launch workspace: {error}"))?,
-    ];
-    let workspace_profile =
-        settings.get("extends").and_then(serde_json::Value::as_str) == Some(":workspace");
-    // Settings have Console's defaults applied; explicit null selects the
-    // native defaults, which grant both inherited temporary locations.
-    let temporary_grant = |option| {
-        workspace_profile
-            && settings
-                .get("workspace_options")
-                .and_then(|options| options.get(option))
-                .and_then(serde_json::Value::as_bool)
-                != Some(true)
-    };
-    let mut tmpdir = temporary_grant("exclude_tmpdir_env_var");
-    let mut slash_tmp = temporary_grant("exclude_slash_tmp");
-    if let Some(entries) = entries {
-        for entry in entries {
-            if entry
-                .get("access")
-                .and_then(crate::settings::native_variant_name)
-                != Some("write")
-            {
-                continue;
-            }
-            match entry
-                .pointer("/path/value/kind")
-                .and_then(crate::settings::native_variant_name)
-            {
-                Some("tmpdir") => tmpdir = true,
-                Some("slash_tmp") => slash_tmp = true,
-                _ => {}
-            }
-            if let Some(path) = entry
-                .pointer("/path/path")
-                .and_then(serde_json::Value::as_str)
-            {
-                let path = PathBuf::from(path);
-                roots.push(
-                    path.canonicalize()
-                        .or_else(|_| std::path::absolute(path))
-                        .map_err(|error| format!("cannot resolve worker writable root: {error}"))?,
-                );
-            }
-        }
-    }
-    for path in slash_tmp.then(|| PathBuf::from("/tmp")).into_iter().chain(
-        tmpdir
-            .then(|| std::env::var_os("TMPDIR"))
-            .flatten()
-            .map(PathBuf::from)
-            .filter(|path| path.is_absolute()),
-    ) {
-        roots.push(path.canonicalize().unwrap_or(path));
-    }
-    Ok(roots)
-}
-
 pub(crate) fn r_home() -> Result<PathBuf, Box<dyn std::error::Error>> {
     // Harp's setup reads R_HOME with env::var and mistakes non-UTF-8 values
     // for absence. Preserve its validation using the native path in that case.
@@ -240,8 +145,12 @@ pub(crate) struct TemporaryDirectory(Option<PathBuf>);
 
 impl TemporaryDirectory {
     pub(crate) fn create() -> Result<Self, String> {
+        Self::create_in(&std::env::temp_dir())
+    }
+
+    pub(crate) fn create_in(directory: &Path) -> Result<Self, String> {
         use std::os::unix::ffi::{OsStrExt, OsStringExt};
-        let template = std::env::temp_dir().join("mcp-console-worker-XXXXXX");
+        let template = directory.join("mcp-console-worker-XXXXXX");
         let mut bytes = template.as_os_str().as_bytes().to_vec();
         bytes.push(0);
         // mkdtemp creates a private, unique directory with mode 0700.

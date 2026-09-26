@@ -404,14 +404,9 @@ impl Client {
                     // Explicit Python selection has no managed resolver to run.
                     None
                 } else {
-                    let roots = if no_sandbox {
-                        Vec::new()
-                    } else {
-                        crate::local_runtime::blocked_uv_roots(&sandbox_settings)?
-                    };
                     Some(
                         crate::resolver::ManagedPythonResolverConfiguration::capture()
-                            .without_r_bootstrap(&roots)?,
+                            .without_r_bootstrap((!no_sandbox).then_some(&sandbox_settings))?,
                     )
                 };
                 let (selection, managed) = crate::local_runtime::Selection::python(

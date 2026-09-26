@@ -1,10 +1,10 @@
 ---
-UV_CACHE_DIR: managed startup rejected
+write grant: storage
+startup: rejected
 ---
-UV_PYTHON_INSTALL_DIR: managed startup rejected
+write grant: lib
+startup: rejected
 ---
-UV_CACHE_DIR with parent components: managed startup rejected
+raw policy extensions: unsupported
 ---
-LD_LIBRARY_PATH: managed startup rejected
----
-LD_LIBRARY_PATH after semicolon: managed startup rejected
+project-installed companion: rejected

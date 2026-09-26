@@ -62,23 +62,29 @@ Selection is captured at server startup, including when sandbox environment cont
 Without an explicit selection, uv is required; there is no automatic PATH-Python fallback.
 The local `python` setting is unavailable with custom workers or execution targets.
 
-Managed sessions capture supported user and system uv configuration at launch, including a protected explicit `UV_CONFIG_FILE`.
-Project `uv.toml` and `pyproject.toml` files are not consulted.
-Supported settings cover HTTP(S) registry indexes and credentials, resolution and prerelease policy, a global exclusion date, download and concurrency controls, TLS selection, and protected cache/install locations.
-Named `[[index]]` entries support `name`, `url`, and `default`; credentials can use the corresponding `UV_INDEX_<NAME>_USERNAME` and `UV_INDEX_<NAME>_PASSWORD` variables.
-Unsupported settings fail explicitly.
-In particular, local package sources, find-links, environment files, keyring subprocesses, Python download mirrors, and interpreter-selection overrides (`UV_PYTHON`, `UV_PYTHON_SEARCH_PATH`, or a preference other than `only-managed`) are unavailable.
-Select an existing environment for those workflows.
-Environment values override captured config values; later file edits do not change an active session's resolver settings.
+Managed sessions use the installed uv executable with a deliberately small configuration surface.
+They capture `UV_DEFAULT_INDEX` (or legacy `UV_INDEX_URL` when the current spelling is absent), `UV_EXTRA_INDEX_URL`, `UV_INDEX_STRATEGY`, and `UV_EXCLUDE_NEWER` at startup.
+Indexes must use HTTP or HTTPS.
+Other inherited resolver settings and uv configuration files are ignored, including project configuration, compiler commands, Python startup hooks, and loader overrides.
+Use an explicitly selected environment for custom uv configuration, source builds, local packages, or other interpreter installations.
 
-Resolution runs outside the worker sandbox and may execute accepted package build code with server permissions.
-At sandboxed launch, Console skips uv executables inside the workspace or worker write grants, checking later PATH entries, and retains the selected executable's canonical path.
-An explicit `RETICULATE_UV` in a writable location fails.
-Effective cache and installation locations, inventory paths, and candidate interpreters must also be outside worker write access before host inspection.
-Full filesystem write policies require an explicitly selected environment.
-Resolver Python helpers and executable inspection use isolated Python mode; host resolver children do not inherit Python startup variables.
-Managed startup rejects inherited `LD_*` and `DYLD_*` loader settings, except `LD_LIBRARY_PATH` with existing, canonical directory paths that neither overlap nor contain worker write grants.
-Relative paths, symlink aliases, empty entries, and loader tokens such as `$ORIGIN` are unsupported.
+Preparation runs in a separate native sandbox, including uv version discovery, resolution, cache warming, and native Python inspection.
+It requires the native runner even with `serve --no-sandbox`; that flag removes worker isolation only.
+The preparation process can access native platform runtime files, the selected uv executable, Console's storage, and its own temporary directory.
+It has network access but cannot read the project or unrelated user files.
+Console clears the child environment and runs from Console-owned storage.
+Only registry wheels are installed; source builds and keyring subprocesses are disabled.
+Console retains its cache and managed Python installations under `~/.cache/mcp-console/python`, independently of user uv caches.
+Workers can read those environments but cannot write them under the supported sandbox policies.
+Direct workers have the ordinary `--no-sandbox` trust contract.
+
+Managed sessions support the default policy and the unmodified `:workspace` and `:read-only` filesystem policies.
+Custom filesystem grants, temporary-directory grants, native backend overrides, and Seatbelt extensions require an explicitly selected Python environment.
+This boundary avoids reconstructing effective native permissions in the resolver.
+Console itself must be installed outside the project, and its verified native companion is readable inside preparation.
+Console skips project uv executables while searching PATH and retains the selected canonical path.
+An explicitly selected project uv is rejected, and Console storage must not overlap the project.
+The selected uv and native companion are trusted launch inputs.
 Shared resolver caches are never deleted when retiring a worker or discarding a candidate.
 
 A plain restart clears Python objects and reuses the accepted environment without resolving again.
@@ -90,6 +96,7 @@ Live additions are rejected without changing the environment or silently restart
 
 Restart preparation resolves the complete candidate manifest, including defaults and earlier additions, and inspects the resulting executable before retiring the current worker.
 Validation, resolution, or inspection failure preserves that worker, its objects, retained requirements, and queued input.
+Interrupting preparation retires its sandbox and discards the candidate before any worker retirement.
 Same-call code and input are sent only after successful replacement.
 After retirement begins, ordinary retirement and replacement failure semantics apply; the retired worker cannot be restored.
 The mutable session environment commits the manifest, executable, and inspected embedding configuration together.

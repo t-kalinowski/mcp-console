@@ -170,7 +170,7 @@ impl Client {
             {
                 // Inspect the resolved candidate before retirement. Both launch
                 // configuration and manifest stay provisional in this clone.
-                **inspected = self.inspect_managed_python(generation, &selected)?;
+                **inspected = self.inspect_managed_python(generation, &selected, &resolver)?;
             }
             environment.python = Some(PythonEnvironment::Managed {
                 selected,
@@ -187,14 +187,19 @@ impl Client {
         &self,
         generation: &WorkerGeneration,
         candidate: &crate::resolver::ManagedPython,
+        resolver: &crate::resolver::execution::PythonConfiguration,
     ) -> Result<crate::python::NativePython, EnvironmentResolutionFailure> {
         self.ensure_startup(generation)
             .map_err(EnvironmentResolutionFailure::Operation)?;
         let mut stop_handle = None;
-        let result = crate::python::inspect_native(candidate.python(), |handle| {
-            stop_handle = Some(handle.clone());
-            self.register_resolver_stop_handle(generation, handle)
-        });
+        let crate::resolver::execution::PythonConfiguration::Local(configuration) = resolver else {
+            unreachable!("native inspection belongs to local Python sessions")
+        };
+        let result =
+            crate::python::inspect_prepared(candidate.python(), Some(configuration), |handle| {
+                stop_handle = Some(handle.clone());
+                self.register_resolver_stop_handle(generation, handle)
+            });
         self.clear_resolver_stop_handle(generation)
             .map_err(EnvironmentResolutionFailure::Operation)?;
         self.ensure_startup(generation)

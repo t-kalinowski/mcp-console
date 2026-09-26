@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use crate::resolver::ResolverStopHandle;
-use crate::resolver::process::{ResolverProcess, completed_write, read_output, resolver_command};
+use crate::resolver::process::{ResolverProcess, completed_write, resolver_command};
 
 use super::startup::SelectedPython;
 
@@ -37,6 +37,14 @@ pub(crate) fn inspect_native(
     executable: &Path,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<NativePython, String> {
+    inspect_prepared(executable, None, on_started)
+}
+
+pub(crate) fn inspect_prepared(
+    executable: &Path,
+    preparation: Option<&crate::resolver::ManagedPythonResolverConfiguration>,
+    on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
+) -> Result<NativePython, String> {
     if !executable.is_absolute() || !executable.is_file() {
         return Err(format!(
             "selected Python executable is not an absolute file: {}",
@@ -46,9 +54,17 @@ pub(crate) fn inspect_native(
     let selected = executable
         .to_str()
         .ok_or_else(|| "selected Python executable is not UTF-8".to_string())?;
-    let result = InspectionOutput::create()?;
-    let resolver = ResolverProcess::new();
-    let mut command = resolver_command(executable);
+    let directory = preparation.map_or_else(std::env::temp_dir, |configuration| {
+        configuration.output_directory()
+    });
+    let result = InspectionOutput::create(&directory)?;
+    let resolver = ResolverProcess::for_preparation(
+        preparation.and_then(|configuration| configuration.preparation_directory()),
+    )?;
+    let mut command = preparation.map_or_else(
+        || resolver_command(executable),
+        |configuration| configuration.command(executable, &resolver),
+    );
     command
         // Inspect the selected installation without executing workspace,
         // PYTHONPATH, or user-site code with the host resolver's permissions.
@@ -59,12 +75,9 @@ pub(crate) fn inspect_native(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = command.spawn().map_err(|error| {
+    let (mut child, [stdout, stderr]) = resolver.spawn(&mut command).map_err(|error| {
         format!("failed to inspect selected Python executable `{selected}`: {error}")
     })?;
-    let stdout = read_output(child.stdout.take().expect("inspection stdout is piped"));
-    let stderr = read_output(child.stderr.take().expect("inspection stderr is piped"));
-    resolver.watch_exit(child.id());
     if let Err(error) = on_started(resolver.stop_handle()) {
         resolver
             .abort(&mut child, executable, "Python inspection")
@@ -94,6 +107,18 @@ pub(crate) fn inspect_native(
     )
     .map_err(|error| format!("invalid selected Python configuration: {error}"))?;
     description.validate(executable)?;
+    if let Some(configuration) = preparation {
+        for path in [
+            selected,
+            &description.libpython,
+            &description.prefix,
+            &description.exec_prefix,
+            &description.base_prefix,
+            &description.base_exec_prefix,
+        ] {
+            configuration.ensure_safe_python_path(Path::new(path))?;
+        }
+    }
     let python_home = if description.base_prefix == description.base_exec_prefix {
         description.base_prefix.clone()
     } else {
@@ -169,8 +194,8 @@ impl Description {
 struct InspectionOutput(PathBuf);
 
 impl InspectionOutput {
-    fn create() -> Result<Self, String> {
-        let mut template = std::env::temp_dir()
+    fn create(directory: &Path) -> Result<Self, String> {
+        let mut template = directory
             .join("mcp-console-python-inspection-XXXXXX")
             .as_os_str()
             .as_bytes()

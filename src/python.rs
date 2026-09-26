@@ -3,7 +3,7 @@ mod requirements;
 mod reticulate;
 mod startup;
 
-pub(crate) use inspection::{NativePython, inspect_native, inspect_selected};
+pub(crate) use inspection::{NativePython, inspect_prepared, inspect_selected};
 pub(crate) use startup::{
     SelectedPython, finish_initialization, initialize_selected, setup_runtime,
 };

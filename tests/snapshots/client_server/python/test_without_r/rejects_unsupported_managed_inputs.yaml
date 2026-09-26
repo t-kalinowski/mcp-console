@@ -1,36 +1,9 @@
 ---
-setting: UV_ENV_FILE
-rejected: worker.env
+setting: UV_DEFAULT_INDEX
+local index: rejected
 ---
-setting: UV_PYTHON
-rejected: project-python
+setting: UV_EXTRA_INDEX_URL
+local index: rejected
 ---
-setting: UV_CONFIG_FILE
-rejected: find-links = ["./packages"]
----
-setting: UV_CONFIG_FILE
-rejected: python-preference = "system"
----
-setting: LD_PRELOAD
-rejected: ./missing-preload.so
----
-setting: LD_AUDIT
-rejected: ./missing-audit.so
----
-setting: LD_LIBRARY_PATH
-rejected: ./missing-libraries
----
-setting: LD_LIBRARY_PATH
-rejected: /usr/$LIB
----
-setting: LD_LIBRARY_PATH
-rejected: "/usr/lib:"
----
-setting: DYLD_LIBRARY_PATH
-rejected: ./missing-libraries
----
-setting: DYLD_FALLBACK_LIBRARY_PATH
-rejected: ./missing-libraries
----
-setting: DYLD_INSERT_LIBRARIES
-rejected: ""
+setting: UV_INDEX_URL
+local index: rejected

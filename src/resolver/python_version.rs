@@ -1,6 +1,5 @@
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
 
 use pep508_rs::pep440_rs::{Version, VersionSpecifier};
 use serde::Deserialize;
@@ -11,7 +10,6 @@ pub(super) struct PythonVersions {
 
 struct Candidate {
     version: String,
-    path: Option<PathBuf>,
     parsed_version: Version,
     major: u64,
     minor: u64,
@@ -24,7 +22,6 @@ struct Candidate {
 #[derive(Deserialize)]
 struct UvPython {
     version: String,
-    path: Option<PathBuf>,
     version_parts: VersionParts,
     symlink: Option<String>,
     variant: String,
@@ -132,21 +129,6 @@ Available Python versions found: {available}
 "
         ))
     }
-
-    pub(super) fn validate_paths(
-        &self,
-        version: &str,
-        mut validate: impl FnMut(&Path) -> Result<(), String>,
-    ) -> Result<(), String> {
-        for candidate in &self.candidates {
-            if candidate.version == version
-                && let Some(path) = &candidate.path
-            {
-                validate(path)?;
-            }
-        }
-        Ok(())
-    }
 }
 
 impl Candidate {
@@ -163,7 +145,6 @@ impl Candidate {
         let prerelease = row.version != format!("{major}.{minor}.{patch}");
         Some(Self {
             version: row.version,
-            path: row.path,
             parsed_version,
             major,
             minor,

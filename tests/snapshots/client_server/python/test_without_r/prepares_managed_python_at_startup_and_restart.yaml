@@ -1,6 +1,4 @@
 ---
-!same-as python-managed MCP initialization for this execution mode
----
 send:
   requirements:
     python:

@@ -3,36 +3,48 @@ options:
   exclude_tmpdir_env_var: false
 special: ~
 temporary_root: /var/tmp
-stderr: |
-  selected uv `<temporary>/uv` is in the project or a worker-writable path
+stderr: >
+  managed Python requires the default, :workspace, or :read-only sandbox
+  policy without filesystem or native extensions; set python in
+  .agents/console/config.yaml to use an existing environment
 ---
 options:
   exclude_slash_tmp: false
 special: ~
 temporary_root: /tmp
-stderr: |
-  selected uv `<temporary>/uv` is in the project or a worker-writable path
+stderr: >
+  managed Python requires the default, :workspace, or :read-only sandbox
+  policy without filesystem or native extensions; set python in
+  .agents/console/config.yaml to use an existing environment
 ---
 options: ~
 special: ~
 temporary_root: /var/tmp
-stderr: |
-  selected uv `<temporary>/uv` is in the project or a worker-writable path
+stderr: >
+  managed Python requires the default, :workspace, or :read-only sandbox
+  policy without filesystem or native extensions; set python in
+  .agents/console/config.yaml to use an existing environment
 ---
 options: ~
 special: ~
 temporary_root: /tmp
-stderr: |
-  selected uv `<temporary>/uv` is in the project or a worker-writable path
+stderr: >
+  managed Python requires the default, :workspace, or :read-only sandbox
+  policy without filesystem or native extensions; set python in
+  .agents/console/config.yaml to use an existing environment
 ---
 options: {}
 special: tmpdir
 temporary_root: /var/tmp
-stderr: |
-  selected uv `<temporary>/uv` is in the project or a worker-writable path
+stderr: >
+  managed Python requires the default, :workspace, or :read-only sandbox
+  policy without filesystem or native extensions; set python in
+  .agents/console/config.yaml to use an existing environment
 ---
 options: {}
 special: slash_tmp
 temporary_root: /tmp
-stderr: |
-  selected uv `<temporary>/uv` is in the project or a worker-writable path
+stderr: >
+  managed Python requires the default, :workspace, or :read-only sandbox
+  policy without filesystem or native extensions; set python in
+  .agents/console/config.yaml to use an existing environment

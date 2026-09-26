@@ -407,6 +407,10 @@ The server waits, polls, or completes the MCP response without moving response o
 
 When a code-bearing `send` declares requirements, the server treats them as preconditions of that evaluation.
 One exclusive environment transition covers requirement-delta calculation, host resolution, live preparation or a pre-start retained-environment commit, and reservation and launch of the evaluation in the same generation.
+For local sans-R managed Python, the launch boundary constructs a separate native preparation sandbox with a fixed environment allowlist and Console-owned storage.
+Version discovery, uv resolution, cache warming, and native inspection all use it; the server owns ordinary child lifetime and requires successful native retirement before accepting a candidate.
+Interrupt and cancellation retire the preparation sandbox without changing the current worker.
+The supported worker policies exclude custom filesystem and native extensions, so the resolver does not reconstruct effective worker write permissions.
 No other send or environment-changing operation can enter that boundary, and a failed or superseded transition cannot dispatch the cell.
 The server releases the environment transition after launch; the active evaluation continues to own stdin, waiting, output cuts, response delivery, and restart handoff.
 

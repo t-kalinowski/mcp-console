@@ -1,4 +1,4 @@
-//! The remote parent owns ordinary launcher lifetime, never native supervision.
+//! Native launch configuration and ordinary child ownership, never native supervision.
 
 use std::io::{self, Read};
 use std::os::fd::AsRawFd;
@@ -344,4 +344,49 @@ fn supervise(
         let _ = task.join();
     }
     result
+}
+
+/// Capture the fixed local preparation sandbox through the native launch boundary.
+/// Resolver code sees only ordinary child argv, environment, and exit status.
+pub(crate) fn preparation_sandbox(
+    policy: Option<&crate::settings::SandboxSettings>,
+    workspace: &std::path::Path,
+    storage: &std::path::Path,
+    uv: &std::path::Path,
+) -> Result<(std::path::PathBuf, String), String> {
+    use serde_json::json;
+    if let Some(policy) = policy {
+        let mut baseline = crate::settings::SandboxSettings::new();
+        if let Some(profile) = policy.get("extends") {
+            baseline.insert("extends".into(), profile.clone());
+        }
+        let mut baseline = crate::sandbox::materialize_settings(baseline, Vec::new(), workspace)?;
+        let mut actual = policy.clone();
+        // These cannot grant filesystem access or change native enforcement.
+        for key in ["network", "proxy", "environment", "inherit_environment"] {
+            baseline.remove(key);
+            actual.remove(key);
+        }
+        if actual != baseline {
+            return Err("managed Python requires the default, :workspace, or :read-only sandbox policy without filesystem or native extensions; set python in .agents/console/config.yaml to use an existing environment".into());
+        }
+    }
+    let (runner, version) = crate::sandbox::preparation_runner()?;
+    let runner = runner.canonicalize().map_err(|error| error.to_string())?;
+    if runner.starts_with(workspace) {
+        return Err("managed Python requires Console to be installed outside the project; set python in .agents/console/config.yaml to use an existing environment".into());
+    }
+    let policy = json!({
+        "version": version,
+        "filesystem": {"kind": "restricted", "entries": [
+            {"path": {"type": "special", "value": {"kind": "minimal"}}, "access": "read"},
+            {"path": {"type": "path", "path": uv}, "access": "read"},
+            {"path": {"type": "path", "path": runner}, "access": "read"},
+            {"path": {"type": "path", "path": storage}, "access": "write"},
+            {"path": {"type": "path", "path": workspace}, "access": "deny"}
+        ]},
+        "network": "enabled",
+        "lifecycle": {"parent_pid": std::process::id(), "sigterm": "retire", "private_tmp": {"environment": ["TMPDIR"]}}
+    });
+    Ok((runner, policy.to_string()))
 }

@@ -214,3 +214,11 @@ pub fn run(
         unsupported::run(command)
     }
 }
+
+/// Capture the same verified companion used for worker launches.
+pub(crate) fn preparation_runner() -> Result<(PathBuf, u32), String> {
+    Ok((
+        installation::private_runner()?,
+        installation::PROTOCOL_VERSION,
+    ))
+}
