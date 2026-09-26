@@ -19,7 +19,9 @@ import os
 import pickle
 import runpy
 import shlex
+import shutil
 import signal
+import subprocess
 import sys
 import time
 from collections.abc import Callable, Sequence
@@ -474,6 +476,16 @@ def run_cases(
 ) -> None:
     if not selected:
         return
+
+    # Case homes isolate Console files. Keep R's original user library when
+    # HOME changes so installed test packages remain available.
+    if "R_LIBS_USER" not in os.environ and shutil.which("Rscript"):
+        user_library = subprocess.check_output(
+            ["Rscript", "--vanilla", "-e", "cat(Sys.getenv('R_LIBS_USER'))"],
+            text=True,
+        ).strip()
+        if user_library:
+            os.environ["R_LIBS_USER"] = user_library
 
     events: SimpleQueue[tuple[int, float | None, CaseProcess | None]] = SimpleQueue()
     executor = ThreadPoolExecutor(max_workers=min(jobs, len(selected)))
