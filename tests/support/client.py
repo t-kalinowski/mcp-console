@@ -76,6 +76,8 @@ class McpClient:
         pass_fds: tuple[int, ...] = (),
         response_timeout: float = 600,
         shutdown_timeout: float = SERVER_SHUTDOWN_SECONDS,
+        record_in_project: bool = True,
+        use_home_configuration: bool = False,
     ) -> None:
         self.response_timeout = response_timeout
         self.shutdown_timeout = shutdown_timeout
@@ -85,6 +87,18 @@ class McpClient:
         if current_directory is None:
             assert self.temporary_directory is not None
             current_directory = Path(self.temporary_directory.name)
+        self.console_home: tempfile.TemporaryDirectory[str] | None = None
+        if not use_home_configuration:
+            self.console_home = tempfile.TemporaryDirectory()
+            environment = {
+                **(os.environ if environment is None else environment),
+                "MCP_CONSOLE_HOME": self.console_home.name,
+            }
+        if record_in_project:
+            (current_directory / ".agents").mkdir(
+                mode=0o700, parents=True, exist_ok=True
+            )
+            (current_directory / ".agents/console").mkdir(mode=0o700, exist_ok=True)
         process = subprocess.Popen(
             [binary, *arguments],
             env=environment,
@@ -310,6 +324,8 @@ class McpClient:
             stream.close()
         if self.temporary_directory is not None:
             self.temporary_directory.cleanup()
+        if self.console_home is not None:
+            self.console_home.cleanup()
 
     def close(self) -> None:
         """Close input, allow staged retirement, then kill only the server PID."""

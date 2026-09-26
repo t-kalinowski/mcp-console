@@ -39,6 +39,7 @@ struct TranscriptState {
 
 struct ActiveTranscript {
     directory: PathBuf,
+    public_directory: PathBuf,
     writer: BufWriter<File>,
     projections: Option<markdown::Writers>,
     pending_projection_failure: Option<String>,
@@ -270,8 +271,40 @@ impl ActiveTranscript {
             started_at.format("%Y%m%dT%H%M%S%.9fZ"),
             std::process::id()
         );
-        let sessions = working_directory.join(".agents/console/sessions");
+        let project_console = working_directory.join(".agents/console");
+        let in_project = match std::fs::metadata(&project_console) {
+            Ok(metadata) => metadata.is_dir(),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) =>
+            {
+                false
+            }
+            Err(error) => {
+                return Err(format!(
+                    "cannot inspect {}: {error}",
+                    project_console.display()
+                ));
+            }
+        };
+        let console = if in_project {
+            project_console
+        } else {
+            crate::console_paths::home_console_directory()?
+                .ok_or_else(|| "HOME is not set".to_string())?
+        };
+        let sessions = console.join("sessions");
         let directory = sessions.join(&run_id);
+        let public_directory = if in_project {
+            PathBuf::from(".agents/console/sessions").join(&run_id)
+        } else {
+            directory.clone()
+        };
+        if public_directory.to_str().is_none() {
+            return Err("recording path must be UTF-8".to_string());
+        }
         create_private_directory(&sessions, true)
             .map_err(|error| format!("failed to create {}: {error}", sessions.display()))?;
         create_private_directory(&directory, false)
@@ -323,6 +356,7 @@ impl ActiveTranscript {
 
         let mut transcript = Self {
             directory,
+            public_directory,
             writer,
             projections,
             pending_projection_failure,

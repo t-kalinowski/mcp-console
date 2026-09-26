@@ -41,6 +41,7 @@ def test_sync_and_async_clients_receive_bounded_previews(
 ) -> Transcript:
     results = []
     with tempfile.TemporaryDirectory() as temporary:
+        (Path(temporary) / ".agents/console").mkdir(parents=True)
         settings = options(binary, execution)
         settings["server_parameters"]["cwd"] = temporary
         emitted = "x" * (8 * 1024 * 1024 + 7)

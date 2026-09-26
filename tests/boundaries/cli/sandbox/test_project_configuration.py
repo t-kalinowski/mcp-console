@@ -47,6 +47,7 @@ def accepted(binary: Path, host: Path, *arguments: str) -> None:
         binary,
         arguments or ("serve", "--worker", "unused-worker"),
         current_directory=host,
+        record_in_project=False,
     ) as client:
         client.initialize_and_list_tools()
         _, stderr = client.finish_with_standard_error()

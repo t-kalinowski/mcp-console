@@ -83,9 +83,11 @@ Their diagnostics use stderr, independently of MCP and relay protocol stdout.
 
 ## Configuration reference
 
-Only `.agents/console/config.yaml` in the controller's fixed launch directory is discovered.
+Console discovers `.agents/console/config.yaml` in the controller's fixed launch directory, then `~/.agents/console/config.yaml` if the project file is absent.
+The controller's `MCP_CONSOLE_HOME` can replace the fallback directory for configuration and recordings without changing Docker's home or CLI state.
 There is no ancestor search, container-side discovery, interpolation, tilde expansion, reload, or file synchronization.
-The captured target, raw native policy, CLI writable roots, and recording directory remain fixed for the session.
+The captured target, raw native policy, CLI writable roots, and launch directory remain fixed for the session.
+The recording location is selected on the first `send` call and remains fixed afterward.
 
 | Field                             | Accepted values and default                                                                                                                                                                                                                 |
 | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -199,8 +201,8 @@ There is no reconnect, resume, later attachment, heartbeat, or recovery after th
 
 The controller journal records target identity separately from its recording directory and includes generation container IDs.
 It records no credential values or environment dump.
-Journals, transcripts, output spools, and returned image bytes remain beneath the controller project's `.agents/console/sessions/`.
-Declared binds may expose that directory to the workload.
+Journals, transcripts, output spools, and returned image bytes remain beneath the controller project's `.agents/console/sessions/` when `.agents/console` already exists there, or beneath the controller's `~/.agents/console/sessions/` otherwise.
+Declared binds may expose the selected directory to the workload.
 Other files remain inside the container or declared binds.
 
 Quarto projections identify Docker and omit an incorrect controller execution root.
@@ -209,8 +211,8 @@ Rendering executes the captured cells, so recreate the target environment and fi
 ### Bounded output and retained text
 
 Tool results return bounded text previews with the beginning and latest tail under an 8 KiB total UTF-8 budget; images have separate limits.
-A retained-output path is relative to the Console server's recording workspace on the controller.
-Reading omitted text requires a filesystem tool with access to that controller directory; access only to the execution target or another client host is insufficient.
+A retained-output path is relative to the controller's launch directory for project recordings and absolute for home recordings.
+Reading omitted text requires a filesystem tool with access to the selected controller directory; access only to the execution target or another client host is insufficient.
 Console does not transfer these files or expose a read/search tool.
 A log can contain only a retained prefix after the file limit or a write failure; the preview still observes the latest output and reports the loss.
 See [the built-in runtime guide](BUILTIN_RUNTIME.md#output-and-notices).

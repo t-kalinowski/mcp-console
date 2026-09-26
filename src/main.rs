@@ -5,6 +5,7 @@ use clap::Parser;
 mod cell;
 mod cli;
 mod config;
+mod console_paths;
 mod docker;
 mod docker_sandbox;
 #[cfg(unix)]
@@ -166,7 +167,7 @@ fn run_server(
     } else if no_sandbox {
         settings::SandboxSettings::default()
     } else {
-        sandbox::capture_policy(source, policy, writable_roots)?
+        sandbox::capture_policy(source.as_deref(), policy, writable_roots)?
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
