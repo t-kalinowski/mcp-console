@@ -304,7 +304,6 @@ class ProgressReporter:
     def __init__(
         self,
         *,
-        profile: str | None,
         update: bool,
         full_update: bool,
         jobs: int,
@@ -313,8 +312,8 @@ class ProgressReporter:
         self.update = update
         self.full_update = full_update
         self.rerun = ["scripts/test"]
-        if profile is not None:
-            self.rerun.append(profile)
+        if full_update:
+            self.rerun.append("--full")
         if update:
             self.rerun.append("--update")
         if full_update and jobs != parser.get_default("jobs"):
@@ -628,14 +627,9 @@ def main() -> None:
     suites = {suite_identifier(path): path for path in suite_paths}
     # The global audit imports every suite, including external provider probes.
     # Keep smoke and focused runs confined to their selected suites.
-    orphans = orphan_snapshots(suites) if options.full else []
-    full_update = (
-        options.update
-        and options.full
-        and not options.selectors
-        and not options.list_tests
-        and options.locate is None
-    )
+    full_selection = options.full and not options.selectors and options.locate is None
+    orphans = orphan_snapshots(suites) if full_selection else []
+    full_update = options.update and full_selection and not options.list_tests
     if orphans and not full_update:
         for orphan in orphans:
             print(f"orphan snapshot: {orphan.relative_to(root)}", file=sys.stderr)
@@ -679,7 +673,6 @@ def main() -> None:
         break
 
     reporter = ProgressReporter(
-        profile="--full" if options.full else "--quick" if options.quick else None,
         update=options.update,
         full_update=full_update,
         jobs=options.jobs,

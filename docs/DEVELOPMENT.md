@@ -19,7 +19,7 @@ The smoke profile selects existing cases and snapshots by exact case name.
 It covers MCP and CLI admission, real R/Python/SQL execution, persistent and mixed runtime state, interactive input, interruption, recording with an image, and native sandbox policy.
 It omits remote providers, installation, stress, and broad environment matrices by selection, without changing their assertions or capability requirements.
 Use `scripts/test --list` to inspect the smoke selection and `scripts/test --full --list` to discover the whole suite.
-Only `--full` audits orphan snapshots globally; `scripts/test --full --update` can remove them after a successful complete update.
+Only `--full` without a case, suite, or `--locate` selector audits orphan snapshots globally; `scripts/test --full --update` can remove them after a successful complete update.
 Smoke and focused updates preserve unselected snapshots.
 
 Default core checks validate extracted runtime sources, architecture, Rust formatting, Clippy, and Rust tests.
@@ -169,7 +169,8 @@ For a stack, measure each layer against its intended parent rather than accumula
    For an internal refactor, establish the existing public suite's baseline.
 2. Implement the change and rerun the focused case or suite until it passes.
    Failures print an exact rerun command; completion records retain the selector and full log.
-   Full-update reruns retain nondefault concurrency; every rerun retains an explicit profile flag and a nondefault timeout.
+   Full-update reruns retain `--full` and nondefault concurrency; focused reruns omit redundant profile flags.
+   Every rerun retains a nondefault timeout.
    A failed full snapshot update retains full-update scope so orphan cleanup remains available; other failures narrow the rerun to the failed case.
 3. Regenerate only the snapshots affected by an intentional behavior change with `scripts/test --update SELECTOR`, then rerun that selection without `--update`.
    A broader interface change may require a full update; inspect every resulting difference.

@@ -7,7 +7,7 @@ The selection uses exact case names so new cases do not silently expand the loca
 `scripts/test --full` includes all capability-applicable cases; CI explicitly uses this full profile.
 Explicit selectors retain their scope with any profile flag.
 Use `scripts/test --list` to inspect the smoke selection or `scripts/test --full --list` to discover all cases.
-Only full runs audit orphan snapshots globally; use `scripts/test --full --update` for a complete snapshot update and orphan cleanup.
+Only full runs without a case, suite, or `--locate` selector audit orphan snapshots globally; use `scripts/test --full --update` for a complete snapshot update and orphan cleanup.
 Smoke and focused updates preserve unselected snapshots.
 The development wrapper records completed per-mode durations in `case-timings.jsonl` beside its completion record, including cases too fast for the progress reporter's slow-case messages.
 
@@ -248,7 +248,7 @@ This output belongs only to the test-runner user interface; it is not captured t
 A `BOUNDARY/SUITE` selector runs every case in that file; a `BOUNDARY/SUITE::CASE` selector runs one named function.
 `--locate SELECTOR` does not run cases.
 It prints every matching case, its source file and definition line, and its mechanically derived primary snapshot path.
-With `--full`, collection fails before listing, locating, or running cases when a snapshot has no matching suite and case.
+With selector-free `--full`, collection fails before listing or running cases when a snapshot has no matching suite and case.
 Companion snapshots remain owned by the case-name prefix.
 Use `--update` only to accept an intentional transcript change.
 `scripts/test --full --update` also removes snapshots for deleted suites and cases, as well as obsolete companion snapshots for cases that ran; selected updates leave other snapshots alone.

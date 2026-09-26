@@ -839,6 +839,11 @@ runner: example
             (),
             ("--quick",),
             ("client_server/server/test_tools::selected",),
+            ("--full", "client_server/server/test_tools::selected"),
+            ("--full", "client_server/server/test_tools"),
+            ("--full", "--list", "client_server/server/test_tools"),
+            ("--full", "--locate", "client_server/server/test_tools::selected"),
+            ("--full", "--update", "client_server/server/test_tools::selected"),
         ):
             with self.subTest(arguments=arguments):
                 result = self.run_runner(*arguments)
@@ -863,6 +868,28 @@ runner: orphan
         full = self.run_runner("--full", "--update")
         self.assertEqual(full.returncode, 0, full.stderr)
         self.assertFalse(orphan.exists())
+
+    def test_full_profile_selected_updates_preserve_unrelated_orphans(self) -> None:
+        orphan = self.snapshots / "deleted_case.yaml"
+        orphan.write_text("""---
+runner: orphan
+...
+""")
+        selected = self.snapshots / "selected.yaml"
+        expected = b"---\nrunner: selected\n"
+        for selector in (
+            "client_server/server/test_tools::selected",
+            "client_server/server/test_tools",
+        ):
+            with self.subTest(selector=selector):
+                selected.write_text("""---
+runner: outdated
+...
+""")
+                result = self.run_runner("--full", "--update", selector)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(selected.read_bytes(), expected)
+                self.assertTrue(orphan.exists())
 
     def test_explicit_profiles_preserve_external_ssh_host_selection(
         self,
@@ -1754,7 +1781,7 @@ runner: orphan
             },
         )
 
-    def test_failure_rerun_preserves_custom_timeout(self) -> None:
+    def test_focused_failure_rerun_omits_profiles_and_preserves_timeout(self) -> None:
         (self.snapshots / "selected.yaml").write_text("""---
 runner: mismatch
 ...
@@ -1762,12 +1789,11 @@ runner: mismatch
         for profile in ([], ["--quick"], ["--full"]):
             with self.subTest(profile=profile):
                 arguments = [
-                    *profile,
                     "--timeout",
                     "1200.5",
                     "client_server/server/test_tools::selected",
                 ]
-                result = self.run_runner(*arguments)
+                result = self.run_runner(*profile, *arguments)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(
                     f"rerun: scripts/test {shlex.join(arguments)}", result.stderr
@@ -1847,7 +1873,7 @@ runner: orphan
                 receipt,
                 [
                     "client_server/server/test_tools::first_failure: failed",
-                    "rerun: scripts/test --full client_server/server/test_tools::first_failure",
+                    "rerun: scripts/test client_server/server/test_tools::first_failure",
                 ],
             )
             observed_stderr = "\n".join(receipt) + "\n"
@@ -1873,7 +1899,7 @@ runner: orphan
         self.assertIn("client_server/server/test_tools::second_failure: failed", stderr)
         for name in ("first_failure", "second_failure"):
             self.assertIn(
-                f"rerun: scripts/test --full client_server/server/test_tools::{name}",
+                f"rerun: scripts/test client_server/server/test_tools::{name}",
                 stderr,
             )
         self.assertIn("runner: first actual", stderr)
