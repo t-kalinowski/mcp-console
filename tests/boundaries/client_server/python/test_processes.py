@@ -10,7 +10,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.assertions import last_result_text, last_tool_text
+from support.assertions import (
+    last_result_text,
+    last_tool_text,
+    wait_for_evaluation_output,
+)
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
@@ -30,82 +34,124 @@ def test_runs_sklearn_parallel_search(binary: Path, execution: Execution) -> Tra
         client.initialize_and_list_tools()
         client.send(python="import sys")
         assert last_tool_text(client) == "[done]"
-        client.send(
+        wait_for_evaluation_output(
+            client,
+            "[resolved PyPI distribution 'scikit-learn' for Python import 'sklearn']\n"
+            "parallel search matches serial\n",
+            "parallel grid search",
+            completion_timeout_seconds=client.response_timeout,
+            timeout_ms=0,
             # fmt: python
             python=code("""
-                from sklearn.datasets import make_classification
-                from sklearn.ensemble import HistGradientBoostingClassifier
+                from sklearn.dummy import DummyClassifier
                 from sklearn.model_selection import GridSearchCV
                 from sklearn.pipeline import make_pipeline
                 from sklearn.preprocessing import StandardScaler
 
                 from joblib import effective_n_jobs
+                from tempfile import TemporaryDirectory
                 import numpy as np
+                import os
 
                 assert effective_n_jobs(-1) == 2
-                # Exceed joblib's default 1 MiB automatic memmapping threshold.
-                X, y = make_classification(n_samples=2000, n_features=80, random_state=42)
+                # Just exceed the 1 MiB memmapping threshold without costly training.
+                X = np.tile(np.arange(16, dtype=np.float64)[:, None], (1, 8193))
+                y = np.arange(16) % 2
                 assert X.nbytes > 1024**2
-                model = make_pipeline(
-                    StandardScaler(),
-                    HistGradientBoostingClassifier(max_iter=4, max_leaf_nodes=7, random_state=42),
+                model = make_pipeline(StandardScaler(), DummyClassifier(strategy="constant"))
+                parameters = {"dummyclassifier__constant": [0, 1]}
+                folds = [(np.arange(8, 16), np.arange(8)), (np.arange(8), np.arange(8, 16))]
+
+
+                with TemporaryDirectory() as gates:
+                    for constant in parameters["dummyclassifier__constant"]:
+                        os.mkfifo(os.path.join(gates, f"workers-{constant}"))
+
+                    def worker_pid(estimator, features, labels) -> int:
+                        # Pair each candidate's folds so both process workers must run.
+                        constant = estimator.named_steps["dummyclassifier"].constant
+                        gate = os.path.join(gates, f"workers-{constant}")
+                        if features[0, 0] == 0:
+                            with open(gate, "wb") as pipe:
+                                pipe.write(b"1")
+                        else:
+                            with open(gate, "rb") as pipe:
+                                assert pipe.read(1) == b"1"
+                        return os.getpid()
+
+                    parallel = GridSearchCV(
+                        model,
+                        parameters,
+                        cv=folds,
+                        n_jobs=-1,
+                        error_score="raise",
+                        scoring={"accuracy": "accuracy", "worker": worker_pid},
+                        refit="accuracy",
+                    ).fit(X, y)
+                worker_pids = set(parallel.cv_results_["split0_test_worker"]) | set(
+                    parallel.cv_results_["split1_test_worker"]
                 )
-                parameters = {"histgradientboostingclassifier__l2_regularization": [0, 1]}
-                parallel = GridSearchCV(model, parameters, cv=2, n_jobs=-1, error_score="raise").fit(
+                assert len(worker_pids) == 2 and os.getpid() not in worker_pids
+                serial = GridSearchCV(model, parameters, cv=folds, n_jobs=1, error_score="raise").fit(
                     X, y
                 )
-                serial = GridSearchCV(model, parameters, cv=2, n_jobs=1, error_score="raise").fit(X, y)
                 np.testing.assert_array_equal(
-                    parallel.cv_results_["mean_test_score"],
+                    parallel.cv_results_["mean_test_accuracy"],
                     serial.cv_results_["mean_test_score"],
                 )
                 np.testing.assert_array_equal(parallel.predict(X), serial.predict(X))
                 print("parallel search matches serial")
-                """)
+                """),
         )
-        assert last_tool_text(client) == (
-            "[resolved PyPI distribution 'scikit-learn' for Python import 'sklearn']\n"
-            "parallel search matches serial\n"
-        ), client.transcript[-1]
-        client.send(
+        wait_for_evaluation_output(
+            client,
+            "parallel cross-validation and importance match serial\n",
+            "parallel cross-validation and importance",
+            completion_timeout_seconds=client.response_timeout,
+            timeout_ms=0,
             # fmt: python
             python=code("""
                 from sklearn.ensemble import RandomForestClassifier
                 from sklearn.inspection import permutation_importance
                 from sklearn.model_selection import cross_val_score
 
+                # Two trees and two features give each parallel API two tiny tasks.
+                small_X = X[:, :2].copy()
                 forest = RandomForestClassifier(
-                    n_estimators=8, max_depth=4, random_state=42, n_jobs=-1
-                ).fit(X, y)
-                parallel_scores = cross_val_score(forest, X, y, cv=2, n_jobs=-1, error_score="raise")
-                serial_scores = cross_val_score(forest, X, y, cv=2, n_jobs=1, error_score="raise")
+                    n_estimators=2, max_depth=1, random_state=42, n_jobs=-1
+                ).fit(small_X, y)
+                parallel_scores = cross_val_score(
+                    forest, small_X, y, cv=2, n_jobs=-1, error_score="raise"
+                )
+                serial_scores = cross_val_score(forest, small_X, y, cv=2, n_jobs=1, error_score="raise")
                 np.testing.assert_array_equal(parallel_scores, serial_scores)
                 parallel_importance = permutation_importance(
-                    forest, X[:100], y[:100], n_repeats=2, random_state=42, n_jobs=-1
+                    forest, small_X, y, n_repeats=1, random_state=42, n_jobs=-1
                 )
                 serial_importance = permutation_importance(
-                    forest, X[:100], y[:100], n_repeats=2, random_state=42, n_jobs=1
+                    forest, small_X, y, n_repeats=1, random_state=42, n_jobs=1
                 )
                 np.testing.assert_array_equal(
                     parallel_importance.importances, serial_importance.importances
                 )
                 print("parallel cross-validation and importance match serial")
-                """)
+                """),
         )
-        assert last_tool_text(client) == (
-            "parallel cross-validation and importance match serial\n"
-        ), client.transcript[-1]
         # Direct workers do not own descendant retirement. Close the reusable
         # pool explicitly so that this execution mode leaves no idle children.
-        client.send(
+        wait_for_evaluation_output(
+            client,
+            "[done]",
+            "process pool shutdown",
+            completion_timeout_seconds=client.response_timeout,
+            timeout_ms=0,
             # fmt: python
             python=code("""
                 from joblib.externals.loky import get_reusable_executor
 
                 get_reusable_executor().shutdown(wait=True)
-                """)
+                """),
         )
-        assert last_tool_text(client) == "[done]"
         return client.finish()
 
 
