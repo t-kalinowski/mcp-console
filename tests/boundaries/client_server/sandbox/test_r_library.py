@@ -1,5 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
+import re
 import sys
 import tarfile
 from pathlib import Path
@@ -45,8 +46,18 @@ Encoding: UTF-8
                 """),
             encoding="utf-8",
         )
+        (package / "man").mkdir()
+        (package / "man" / "answer.Rd").write_text(
+            r"""\name{answer}
+\alias{answer}
+\title{Return the fixture answer}
+\usage{answer()}
+\description{Returns 42.}
+""",
+            encoding="utf-8",
+        )
         archive = workspace / "mcpconsolelocalpkg_0.0.1.tar.gz"
-        with tarfile.open(archive, "w:gz") as tar:
+        with tarfile.open(archive, "w:gz", format=tarfile.USTAR_FORMAT) as tar:
             tar.add(package, arcname=package.name)
 
         with McpClient(binary, ("serve",), environment, workspace) as client:
@@ -64,24 +75,40 @@ Encoding: UTF-8
                       dir.exists(library),
                       file.access(library, 2L) == 0L
                     )
-                    suppressMessages(suppressWarnings(install.packages(
+                    install.packages(
                       "mcpconsolelocalpkg_0.0.1.tar.gz",
                       repos = NULL,
-                      type = "source",
-                      quiet = TRUE
-                    )))
+                      type = "source"
+                    )
                     stopifnot(
                       identical(dirname(find.package("mcpconsolelocalpkg")), library),
                       identical(mcpconsolelocalpkg::answer(), 42L)
                     )
-                    cat("installed in sandbox library\n")
                     """)
             )
-            assert last_tool_text(client) == "installed in sandbox library\n", (
-                last_tool_text(client)
-            )
+            install_output = last_tool_text(client)
             client.send(control="restart")
-            assert last_tool_text(client).endswith("[starting new worker]\n[idle]")
+            restart_output = last_tool_text(client)
+            restart_notices = (
+                "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+            )
+            assert restart_output.endswith(restart_notices), restart_output
+
+            # Restart collects installer bytes that missed the evaluation cut.
+            output = install_output + restart_output.removesuffix(restart_notices)
+            notice = re.search(
+                r"Installing package into .(/[^\n]+).\n\(as .lib. is unspecified\)\n",
+                output,
+            )
+            assert notice is not None, output
+            installer = output[: notice.start()] + output[notice.end() :]
+            assert installer.endswith("* DONE (mcpconsolelocalpkg)\n"), installer
+            # The R notice uses sideband; installer status uses inherited streams.
+            client.transcript[-2]["result"]["content"][0]["text"] = (
+                notice.group(0).replace(notice.group(1), "<sandbox R library>")
+                + installer
+            )
+            client.transcript[-1]["result"]["content"][0]["text"] = restart_notices
             client.send(
                 # fmt: r
                 r=code(r"""
