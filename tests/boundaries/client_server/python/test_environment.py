@@ -384,7 +384,10 @@ def test_uses_200_column_default(binary: Path, execution: Execution) -> Transcri
     client.send(python=python)
     output = last_result_text(client)
     assert output.startswith(
-        "terminal columns: 200\npandas display.width: 200\nNumPy linewidth: 200\n"
+        """terminal columns: 200
+pandas display.width: 200
+NumPy linewidth: 200
+"""
     ), repr(output)
     for column in range(12):
         assert f"column_{column:02}" in output

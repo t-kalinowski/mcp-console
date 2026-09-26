@@ -331,7 +331,10 @@ def test_callbacks_cannot_prepare_controller_packages(binary: Path) -> Transcrip
             client.initialize_and_list_tools()
             wait_for_evaluation_output(
                 client,
-                "dynamic environment resolution is unavailable for Docker targets; install packages in the image and start a new server session\ndynamic environment resolution is unavailable\ndynamic environment resolution is unavailable\n",
+                """dynamic environment resolution is unavailable for Docker targets; install packages in the image and start a new server session
+dynamic environment resolution is unavailable
+dynamic environment resolution is unavailable
+""",
                 "disabled container callbacks",
                 r="42",
             )

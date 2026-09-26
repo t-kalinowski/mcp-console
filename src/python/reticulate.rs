@@ -17,7 +17,14 @@ pub(super) fn configure_worker_environment() -> std::io::Result<()> {
 impl Adapter {
     pub(super) fn initialize() -> Result<Self, String> {
         let source = format!(
-            "base::local(\n  {{\n    state <- ({PYTHON_BRIDGE_SOURCE})\n{PYTHON_INITIALIZER_SOURCE}\n    state\n  }},\n  envir = base::new.env(parent = base::baseenv())\n)"
+            "base::local(
+  {{
+    state <- ({PYTHON_BRIDGE_SOURCE})
+{PYTHON_INITIALIZER_SOURCE}
+    state
+  }},
+  envir = base::new.env(parent = base::baseenv())
+)"
         );
         Ok(Self {
             bridge: crate::r_bridge::Bridge::initialize(&source, "Python")?,
