@@ -260,6 +260,10 @@ def test_first_cell_prepares_defaults_after_running_response(
             "duckdb",
             "arrow",
             "nanoarrow",
+            "jsonlite",
+            "pillar",
+            "tibble",
+            "utf8",
         }, preparation
         client.send(timeout_ms=0)
         assert last_tool_text(client) == RUNNING

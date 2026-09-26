@@ -56,20 +56,27 @@ with_temp_working_directory <- function(code) {
   directory <- tempfile("mcp-console-test-")
   dir.create(directory)
   old <- setwd(directory)
-  old_console <- Sys.getenv("MCP_CONSOLE_HOME", unset = NA_character_)
+  old_environment <- Sys.getenv(
+    c("MCP_CONSOLE_HOME", "R_USER_CACHE_DIR", "IR_CACHE_DIR"),
+    unset = NA_character_
+  )
   on.exit(
     {
       setwd(old)
-      if (is.na(old_console)) {
-        Sys.unsetenv("MCP_CONSOLE_HOME")
-      } else {
-        Sys.setenv(MCP_CONSOLE_HOME = old_console)
-      }
+      missing <- is.na(old_environment)
+      Sys.unsetenv(names(old_environment)[missing])
+      do.call(Sys.setenv, as.list(old_environment[!missing]))
       unlink(directory, recursive = TRUE)
     },
     add = TRUE
   )
-  Sys.setenv(MCP_CONSOLE_HOME = file.path(getwd(), "console"))
+  # Pak requires an explicit cache during R CMD check. A fresh ir cache keeps
+  # cached resolutions from hiding failures in the preparation path.
+  Sys.setenv(
+    MCP_CONSOLE_HOME = file.path(getwd(), "console"),
+    R_USER_CACHE_DIR = file.path(getwd(), "r-cache"),
+    IR_CACHE_DIR = file.path(getwd(), "ir-cache")
+  )
   force(code)
 }
 
@@ -188,7 +195,7 @@ test_that("requirements actions preserve scalar fields and empty lists", {
       send(requirements = list(action = "get"))@text
     )
     expect_false(startup$prepared)
-    send(
+    prepared <- send(
       requirements = list(
         action = "set",
         r = character(),
@@ -198,6 +205,7 @@ test_that("requirements actions preserve scalar fields and empty lists", {
         exclude_newer = "2026-01-01"
       )
     )
+    expect_identical(prepared@text, "[prepared]")
     selected <- jsonlite::fromJSON(
       send(requirements = list(action = "get"))@text
     )
@@ -206,7 +214,7 @@ test_that("requirements actions preserve scalar fields and empty lists", {
     expect_identical(selected$requirements$exclude_newer, "2026-01-01")
     declaration <- selected$requirements
     declaration$action <- "set"
-    send(requirements = declaration)
+    expect_identical(send(requirements = declaration)@text, "[prepared]")
     expect_identical(
       jsonlite::fromJSON(send(requirements = list(action = "get"))@text),
       selected
