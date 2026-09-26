@@ -7,6 +7,7 @@ import array
 import base64
 import errno
 import fcntl
+import io
 import json
 import os
 import select
@@ -15,6 +16,7 @@ import stat
 import sys
 import termios
 import time
+from contextlib import redirect_stdout
 from enum import StrEnum
 import tempfile
 from pathlib import Path
@@ -387,6 +389,7 @@ def main() -> None:
     emit_output_before_r_preparation_failure = False
     controlled_restart_state = "fresh"
     controlled_restart_evaluations = 0
+    python_globals: dict[str, Any] = {}
     queued_message: dict[str, Any] | None = None
     block_next_sideband_write: int | None = None
     idle_input_received = False
@@ -474,6 +477,17 @@ def main() -> None:
         assert set(message) == {"kind", "language", "source"}
         language = message["language"]
         source = message["source"]
+        if record := os.environ.get("MCP_CONSOLE_TEST_ZOD_PYTHON_CELLS"):
+            # Admission probes use real Python cells and record every evaluation.
+            with Path(record).open("a", encoding="utf-8") as cells:
+                cells.write(json.dumps(message) + "\n")
+            assert language == "python", message
+            with redirect_stdout(io.StringIO()) as output:
+                exec(source, python_globals)
+            if text := output.getvalue():
+                send_output(writer, text)
+            send(writer, {"kind": "completed"})
+            continue
         if idle_input_received:
             assert (language, source) == ("r", "echo echo"), message
         if language in {"python", "sql"}:

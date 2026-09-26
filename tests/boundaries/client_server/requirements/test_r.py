@@ -181,6 +181,59 @@ def test_prepares_and_uses_cran_packages(
 
 
 @executions(DIRECT, SANDBOXED)
+def test_prepares_with_empty_stdin_then_restarts(
+    binary: Path, execution: Execution
+) -> Transcript:
+    environment, _ = r_test_environment()
+    environment["RETICULATE_PYTHON"] = ""
+    with McpClient(binary, execution.serve(), environment) as client:
+        client.initialize_and_list_tools()
+        client.send(requirements={"r": ["praise"]})
+        assert last_result_text(client) == "[prepared]"
+        client.send(stdin="", requirements={"r": ["praise"]})
+        assert last_result_text(client) == "[prepared]"
+        client.send(control="restart", requirements={"r": ["praise"]})
+        assert last_result_text(client) == "[starting new worker]\n[idle]"
+
+        # fmt: r
+        r = code(r"""
+            managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
+            stopifnot(
+              identical(dirname(find.package("praise")), .libPaths()[[managed_index]])
+            )
+            sentinel <- 42L
+            worker_pid <- Sys.getpid()
+            praise::praise("ready")
+            """)
+        client.send(r=r)
+        assert last_result_text(client) == '[1] "ready"\n'
+        client.send(stdin="", requirements={"r": ["praise"]})
+        assert last_result_text(client) == "[prepared]"
+        client.send(r="stopifnot(identical(Sys.getpid(), worker_pid)); sentinel")
+        assert last_result_text(client) == "[1] 42\n"
+
+        # Prepare a new package while replacing the live worker.
+        client.send(control="restart", requirements={"r": ["zeallot"]})
+        assert last_result_text(client) == (
+            "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+        )
+        # fmt: r
+        r = code(r"""
+            managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
+            stopifnot(
+              !exists("sentinel"),
+              !exists("worker_pid"),
+              identical(dirname(find.package("praise")), .libPaths()[[managed_index]]),
+              identical(dirname(find.package("zeallot")), .libPaths()[[managed_index]])
+            )
+            praise::praise("restarted")
+            """)
+        client.send(r=r)
+        assert last_result_text(client) == '[1] "restarted"\n'
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
 def test_sends_r_cell_with_initial_requirements(
     binary: Path, execution: Execution
 ) -> Transcript:

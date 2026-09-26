@@ -218,10 +218,7 @@ unstaged
         )
         self.assertEqual(report["runtime"]["r_home"], str(self.root / "R-home"))
         self.assertEqual(report["caches"]["uv"], str(self.root / "shared-cache"))
-        self.assertEqual(
-            report["caches"]["host_budget"],
-            str(self.root / "home/.cache/mcp-console/checks"),
-        )
+        self.assertNotIn("host_budget", report["caches"])
         self.assertTrue(
             all(item["status"] == "skip" for item in report["providers"].values())
         )

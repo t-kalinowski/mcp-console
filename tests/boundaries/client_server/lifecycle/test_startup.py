@@ -16,7 +16,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.assertions import collect_running_output, last_tool_text
+from support.assertions import (
+    collect_running_output,
+    last_tool_text,
+    wait_for_evaluation_output,
+)
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
@@ -444,16 +448,30 @@ def test_restart_replaces_first_use_cell_and_stdin(
             assert input() == "replacement input"
             print("replacement only")
             """)
+        # Withhold the newline so managed input must report waiting before
+        # the replacement can complete, regardless of the input exposure grace.
         replacement = client.start_send(
             control="restart",
             python=python,
-            stdin="replacement input\n",
+            stdin="replacement input",
             timeout_ms=600_000,
         )
         contended.wait("restart waits for the cancelling evaluation's worker lock")
         cancel_release.release()
         unlocked.wait("old evaluation released the worker lock")
         client.receive(replacement)
+        assert last_tool_text(client) == code("""
+            [active evaluation stopped by session restart request]
+            [starting new worker]
+            [input requested: ""]
+            [waiting for stdin]
+            """).removesuffix("\n")
+        wait_for_evaluation_output(
+            client,
+            "replacement only\n[done]",
+            "replacement managed input",
+            stdin="\n",
+        )
         assert last_tool_text(client).count("replacement only\n") == 1, (
             client.transcript[-1]
         )
