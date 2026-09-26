@@ -257,7 +257,7 @@ Retain reported identities for manual recovery after the provider becomes availa
 Records identify the compute kind, effective provider, CLI version, captured template reference, VM name/UUID, target cwd, and shared-path access separately from controller recording paths.
 Target metadata contains no workload environment or credential values.
 MicroVM UUIDs are not labeled Docker container IDs.
-Quarto exports remain source-only and non-executing by default; recreating the runtime and filesystem is an explicit user step.
+Quarto exports remain source-only and execute the captured cells when rendered; recreate the runtime and files first.
 
 ### Bounded output and retained text
 

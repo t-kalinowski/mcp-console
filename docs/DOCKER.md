@@ -203,8 +203,8 @@ Journals, transcripts, output spools, and returned image bytes remain beneath th
 Declared binds may expose that directory to the workload.
 Other files remain inside the container or declared binds.
 
-Quarto projections identify Docker, omit an incorrect controller execution root, and default to `execute.eval: false`.
-Deliberately recreate the target environment and filesystem before enabling execution.
+Quarto projections identify Docker and omit an incorrect controller execution root.
+Rendering executes the captured cells, so recreate the target environment and files first.
 
 ### Bounded output and retained text
 
