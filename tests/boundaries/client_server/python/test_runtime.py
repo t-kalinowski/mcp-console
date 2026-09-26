@@ -290,9 +290,10 @@ def test_returns_matplotlib_plots(binary: Path, execution: Execution) -> Transcr
         output = result["content"][0]["text"]
         assert output.startswith("before show\nafter show\n<Figure size "), output
         assert output.endswith(" with 1 Axes>\n"), output
-        result["content"][0]["text"] = (
-            "before show\nafter show\n<matplotlib figure displayhook representation>\n"
-        )
+        result["content"][0]["text"] = """before show
+after show
+<matplotlib figure displayhook representation>
+"""
         assert_result_content(
             client,
             [result["content"][0]["text"], shown_reference.read_bytes()],

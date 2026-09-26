@@ -157,7 +157,10 @@ def test_cancelled_send_returns_owned_output_to_restart(
             "mimeType": "image/png",
         }, result
         assert result["content"][2]["text"] == (
-            "idle after image\n[output produced while idle]\ncell before image\n"
+            """idle after image
+[output produced while idle]
+cell before image
+"""
         ), result
         assert result["content"][3] == {
             "type": "image",

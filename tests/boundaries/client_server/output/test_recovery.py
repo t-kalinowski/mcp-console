@@ -83,7 +83,10 @@ def test_cancelled_control_recovery_keeps_bounded_allocations(
             compact_previews(
                 client,
                 "\n[idle]",
-                "\n[worker stopped: in-memory state lost]\n[starting new worker]\n[done]",
+                """
+[worker stopped: in-memory state lost]
+[starting new worker]
+[done]""",
                 "x",
             )
             return client.finish()
@@ -211,7 +214,10 @@ def recovered_recorded_cells(binary: Path, *, count: int, silent: bool) -> Trans
             compact_previews(
                 client,
                 "\n[idle]",
-                "\n[worker stopped: in-memory state lost]\n[starting new worker]\n[done]",
+                """
+[worker stopped: in-memory state lost]
+[starting new worker]
+[done]""",
                 "x",
                 "\n[done]",
             )
@@ -359,7 +365,10 @@ def test_cancelled_active_polls_replay_before_later_output(binary: Path) -> Tran
                 compact_previews(
                     client,
                     "\n[idle]",
-                    "\n[worker stopped: in-memory state lost]\n[starting new worker]\n[done]",
+                    """
+[worker stopped: in-memory state lost]
+[starting new worker]
+[done]""",
                     "x",
                 )
                 return client.finish()

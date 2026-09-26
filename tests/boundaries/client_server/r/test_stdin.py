@@ -94,7 +94,10 @@ def test_routes_combined_and_followup_stdin(
     # input-exposure response. Accumulate exact public output cuts in order.
     wait_for_evaluation_output(
         client,
-        '[input requested: "first> "]\n[input requested: "second> "]\nAda|Lovelace\n',
+        """[input requested: "first> "]
+[input requested: "second> "]
+Ada|Lovelace
+""",
         "combined same-call stdin",
         r=r,
         stdin="Ada\nLovelace\n",

@@ -778,7 +778,16 @@ def test_loads_package_with_devtools(binary: Path, execution: Execution) -> Tran
             """)
         client.send(r=r)
         output = last_result_text(client)
-        assert output == "$exported\n[1] 42\n\n$internal\n[1] 41\n\n", repr(output)
+        assert (
+            output
+            == """$exported
+[1] 42
+
+$internal
+[1] 41
+
+"""
+        ), repr(output)
         assert len(ir_run_records(record)) == baseline
         return client.finish()
 

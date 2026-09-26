@@ -155,7 +155,10 @@ def test_services_later_callbacks_while_idle(
                 client.send(r="idle_value")
                 output = last_tool_text(client)
                 assert output == (
-                    "idle callback\n[output produced while idle]\n[1] 42\n"
+                    """idle callback
+[output produced while idle]
+[1] 42
+"""
                 ), repr(output)
                 return client.finish()
             finally:
