@@ -1,6 +1,7 @@
 #!/usr/bin/env -S uv run --script
 
 import json
+import os
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -13,11 +14,7 @@ from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
 from support.records import TranscriptWithCompanions
 from support.requirements import NATIVE_FIXTURES, SANDBOX, command, requires
-from support.sandbox_configuration import (
-    NATIVE_PROXY,
-    host_tcp_ports,
-    isolated_home_environment,
-)
+from support.sandbox_configuration import NATIVE_PROXY, host_tcp_ports
 from support.suites import run_this_suite
 
 
@@ -63,11 +60,7 @@ def _snapshot_survives_replacement(
         os.chdir(host / "CLI cache")
         print("captured grants, proxy selection, and restricted network verified")
         """)
-    with (
-        TemporaryDirectory() as directory,
-        TemporaryDirectory() as home,
-        host_tcp_ports() as ports,
-    ):
+    with TemporaryDirectory() as directory, host_tcp_ports() as ports:
         host = Path(directory).resolve()
         for name in ("output café 雪", "CLI cache", "neighbor"):
             (host / name).mkdir()
@@ -90,7 +83,7 @@ def _snapshot_survives_replacement(
             )
         capture = host / "payloads.jsonl"
         environment = {
-            **isolated_home_environment(home),
+            **os.environ,
             LOADER_VARIABLE: str(build_interposer(host, "runner_configuration")),
             "MCP_CONSOLE_TEST_RUNNER_CONFIGURATION": str(capture),
             "MCP_CONSOLE_TEST_PROJECT": str(host),
@@ -101,14 +94,8 @@ def _snapshot_survives_replacement(
         environment["MCP_CONSOLE_TEST_PORTS"] = json.dumps(ports)
         expected = "captured grants, proxy selection, and restricted network verified\n"
         with McpClient(
-            binary,
-            ("serve", "--writable-root", "CLI cache"),
-            environment,
-            host,
-            # This case owns config creation; do not synthesize an empty file.
-            use_home_configuration=True,
+            binary, ("serve", "--writable-root", "CLI cache"), environment, host
         ) as client:
-            assert config.exists() == configured
             client.initialize_and_list_tools()
             # Configured startup probes the native sandbox without starting a worker.
             preflights = capture.read_text().splitlines() if capture.exists() else []

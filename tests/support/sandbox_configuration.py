@@ -1,14 +1,8 @@
-"""Isolated configuration and proxy inputs for native sandbox cases."""
+"""Explicit proxy inputs required by the pinned native runner."""
 
-import os
-import shutil
 import socket
-import subprocess
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
-
-from support.normalization import code
-from support.r import r_test_environment
 
 NATIVE_PROXY = {
     "enabled": True,
@@ -19,31 +13,6 @@ NATIVE_PROXY = {
     "mode": "full",
     "allowLocalBinding": False,
 }
-
-
-def isolated_home_environment(home: str) -> dict[str, str]:
-    environment = os.environ.copy()
-    # Match the server's R selection; Python-only hosts must not invoke R.
-    if "R_HOME" in environment or shutil.which("R") is not None:
-        environment, rscript = r_test_environment()
-        # Preserve the host libraries before changing HOME for config discovery.
-        environment["R_LIBS"] = subprocess.run(
-            [
-                rscript,
-                "--vanilla",
-                "-e",
-                # fmt: r
-                code("""
-                    cat(paste(.libPaths(), collapse = .Platform$path.sep))
-                    """),
-            ],
-            env=environment,
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout
-    environment["HOME"] = home
-    return environment
 
 
 @contextmanager
