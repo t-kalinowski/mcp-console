@@ -79,6 +79,7 @@ struct REvents {
 }
 
 pub(super) struct Runtime {
+    parser: parse::Parser,
     graphics: crate::r_graphics::Bridge,
     environment: crate::r_environment::Bridge,
 }
@@ -86,6 +87,7 @@ pub(super) struct Runtime {
 impl Runtime {
     pub(super) fn initialize() -> Result<Self, Box<dyn Error>> {
         Ok(Self {
+            parser: parse::Parser::initialize()?,
             graphics: crate::r_graphics::Bridge::initialize()?,
             environment: crate::r_environment::Bridge::initialize()?,
         })
@@ -114,6 +116,11 @@ impl Runtime {
     }
 
     pub(super) fn evaluate(&self, source: String) -> Result<(), String> {
+        // Console reads during preflight belong to R error handlers, not source.
+        REPL_EVALUATING.store(true, Ordering::SeqCst);
+        if !self.parser.complete(&source)? {
+            return Ok(());
+        }
         evaluate_r_cell(source)
     }
 }
@@ -197,11 +204,6 @@ fn acknowledge_console_interrupt() -> bool {
 }
 
 fn evaluate_r_cell(r: String) -> Result<(), String> {
-    // Console reads during preflight belong to R error handlers, not source.
-    REPL_EVALUATING.store(true, Ordering::SeqCst);
-    if !parse::complete(&r)? {
-        return Ok(());
-    }
     set_cell_source(r);
     let status = run_repl_cell();
     clear_cell_source();
@@ -264,7 +266,6 @@ pub(super) fn initialize_r(r_home: &std::path::Path) -> Result<std::path::PathBu
 
 fn initialize_r_repl() -> Result<(), Box<dyn Error>> {
     let library = libloading::os::unix::Library::this();
-    parse::initialize(&library)?;
     let init = unsafe { *library.get::<ReplInit>(b"R_ReplDLLinit\0")? };
     let do_one = unsafe { *library.get::<ReplDoOne>(b"R_ReplDLLdo1\0")? };
     let top_level_exec = unsafe { *library.get::<TopLevelExec>(b"R_ToplevelExec\0")? };

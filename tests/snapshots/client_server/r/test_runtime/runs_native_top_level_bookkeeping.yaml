@@ -17,7 +17,36 @@ send:
       }),
       name = "mcp-console-test"
     ))
-    mcp_console_callback_probe <- 42
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  r: "# No expression to evaluate."
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  r: |
+    mcp_console_callback_probe <- 99
+    (
+result:
+  content:
+    - type: text
+      text: |
+        Error in str2expression(source) : <text>:4:0: unexpected end of input
+        2: (
+        3: 
+          ^
+  isError: false
+---
+send:
+  r: mcp_console_callback_probe <- 42
 result:
   content:
     - type: text

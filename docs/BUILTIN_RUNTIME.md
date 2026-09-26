@@ -213,6 +213,7 @@ A waiting `send` whose evaluation finishes before restart interrupts it receives
 
 R cells must parse completely before any expression is evaluated.
 Incomplete or syntactically invalid source is rejected without applying earlier expressions from that cell.
+Validation uses R's `str2expression()` diagnostics and leaves task callbacks, history, and `.Last.value` unchanged.
 Accepted cells run in persistent global state through R's native console loop.
 Global bindings and `.Last.value` remain available to later calls.
 R parse, evaluation, and print errors are console output followed by normal completion; the worker stays reusable.

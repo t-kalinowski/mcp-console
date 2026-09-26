@@ -46,7 +46,7 @@ def test_rejects_incomplete_and_invalid_source(
         answer + (
         """)
     client.send(r=r)
-    assert last_tool_text(client) == "Error: Incomplete code\n"
+    assert "unexpected end of input" in last_tool_text(client), last_tool_text(client)
     assert client.transcript[-1]["result"]["isError"] is False
     # fmt: r
     unchanged = code(r"""
@@ -164,9 +164,21 @@ def test_runs_native_top_level_bookkeeping(
           }),
           name = "mcp-console-test"
         ))
-        mcp_console_callback_probe <- 42
         """)
     client.send(r=r)
+    assert last_tool_text(client) == "[done]"
+    client.send(r="# No expression to evaluate.")
+    assert last_tool_text(client) == "[done]"
+    # Neither preflight nor a rejected cell may consume the registered callback.
+    # fmt: r
+    r = code(r"""
+        mcp_console_callback_probe <- 99
+        (
+        """)
+    client.send(r=r)
+    assert "unexpected end of input" in last_tool_text(client), last_tool_text(client)
+    client.send(r="mcp_console_callback_probe <- 42")
+    assert last_tool_text(client) == "mcp_console_callback_probe <- 42\n"
     # fmt: r
     r = code(r"""
         warning("careful", call. = FALSE)
@@ -183,6 +195,13 @@ def test_preserves_native_stack_and_last_value_binding(
 ) -> Transcript:
     client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
+    # The private parser must not resolve helpers from the user's workspace.
+    # fmt: r
+    r = code(r"""
+        str2expression <- suppressWarnings <- function(...) stop("masked parser")
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "[done]"
     # fmt: r
     r = code(r"""
         user_calls <- function() {
