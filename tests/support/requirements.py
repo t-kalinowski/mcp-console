@@ -28,6 +28,12 @@ class Requirement:
 WORKER = Requirement(
     "worker", sys.platform in {"darwin", "linux"}, "workers require macOS or Linux"
 )
+# An invalid explicit R_HOME must reach the runtime's error, not skip the case.
+R = Requirement(
+    "R",
+    "R_HOME" in os.environ or shutil.which("R") is not None,
+    "requires R_HOME or R on PATH",
+)
 SANDBOX = Requirement(
     "sandbox",
     sys.platform in {"darwin", "linux"},
