@@ -80,7 +80,7 @@ This mode is local only; SSH and prepared Docker/SBX targets retain their existi
 A code-bearing `send` call accepts exactly one complete `r`, `python`, or `sql` cell.
 It may instead contain only control or stdin, or contain none of those fields as an ordinary poll.
 The source is not an interactive fragment assembled across calls.
-R uses its native top-level evaluation behavior; Python parses the entire submitted source before executing it; SQL passes the complete string to the active SQL backend.
+R and Python parse the entire submitted source before executing it; SQL passes the complete string to the active SQL backend.
 
 Use a REPL-style workflow: submit one coherent cell, inspect its result, then submit the next cell based on what the result showed.
 One assistant turn can make several sequential calls.
@@ -211,10 +211,14 @@ A waiting `send` whose evaluation finishes before restart interrupts it receives
 
 ## R
 
-R cells run in persistent global state through R's native console loop.
+R cells must parse completely before any expression is evaluated.
+Incomplete or syntactically invalid source is rejected without applying earlier expressions from that cell.
+Validation reports R's parse diagnostics without invoking `options(error)` or changing `.Traceback`, task callbacks, history, or `.Last.value`.
+Rejected cells do not add internal helper calls to the diagnostic or traceback.
+Accepted cells run in persistent global state through R's native console loop.
 Global bindings and `.Last.value` remain available to later calls.
 R parse, evaluation, and print errors are console output followed by normal completion; the worker stays reusable.
-Because R consumes top-level expressions as a console does, earlier complete expressions may take effect before a later expression in the same cell fails or remains incomplete.
+An evaluation or print error still preserves the effects of expressions already evaluated in that cell.
 
 Between cells, the worker continues servicing R event handlers such as `later` callbacks, which can mutate persistent R state and produce output.
 Output produced while idle remains pending until a later response drains it; when that response belongs to a new cell and both regions contain output, `[output produced while idle]` separates them.
@@ -244,7 +248,7 @@ They bypass automatic resolution for already available packages, `library()` hel
 
 Runtime discovery accepts plain package names only.
 Use `requirements.r` to stage a package before evaluation or to supply an explicit `ir` reference such as a remote source.
-The worker does not inspect R source before evaluation.
+The worker does not scan R source for package references.
 Each missing package is resolved only when execution reaches a covered operation, so unreachable or quoted code does not invoke `ir` and several new packages in one cell can cause several incremental `ir` calls in execution order.
 
 In a bare runtime, the worker does not replace `base::library` or `base::loadNamespace`.
