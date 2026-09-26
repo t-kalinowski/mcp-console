@@ -5,6 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.assertions import last_tool_text
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
@@ -31,26 +32,113 @@ def test_detects_cpu_cores(binary: Path, execution: Execution) -> Transcript:
 
 
 @executions(DIRECT, SANDBOXED)
-def test_applies_complete_expressions_before_incomplete_source(
+def test_rejects_incomplete_and_invalid_source(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
     client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
+    client.send(r="answer <- 41")
     # fmt: r
     r = code(r"""
         answer <- 42
+        created <- TRUE
         answer + (
         """)
     client.send(r=r)
-    client.send(r="answer")
+    assert last_tool_text(client) == "Error: Incomplete code\n"
+    assert client.transcript[-1]["result"]["isError"] is False
+    # fmt: r
+    unchanged = code(r"""
+        stopifnot(
+          identical(answer, 41),
+          identical(base::.Last.value, 41),
+          !exists("created", envir = globalenv(), inherits = FALSE)
+        )
+        answer
+        """)
+    client.send(r=unchanged)
+    assert last_tool_text(client) == "[1] 41\n"
+    client.send(r=")")
+    assert "unexpected ')'" in last_tool_text(client)
     # fmt: r
     r = code(r"""
         answer <- 43
+        created <- TRUE
         )
         """)
     client.send(r=r)
+    assert "unexpected ')'" in last_tool_text(client)
+    assert client.transcript[-1]["result"]["isError"] is False
+    client.send(r=unchanged)
+    assert last_tool_text(client) == "[1] 41\n"
+    # This parser failure raises an R condition instead of returning PARSE_ERROR.
+    # fmt: r
+    r = code(r"""
+        answer <- 44
+        created <- TRUE
+        function(x, x) x
+        """)
+    client.send(r=r)
+    assert "repeated formal argument 'x'" in last_tool_text(client)
+    assert client.transcript[-1]["result"]["isError"] is False
+    client.send(r=unchanged)
+    assert last_tool_text(client) == "[1] 41\n"
+    # A runtime error still preserves expressions evaluated before it.
+    # fmt: r
+    r = code(r"""
+        answer <- 45
+        stop("runtime failure")
+        answer <- 46
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "Error: runtime failure\n"
     client.send(r="answer")
+    assert last_tool_text(client) == "[1] 45\n"
+    return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_preserves_parser_warning_behavior(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = McpClient(binary, execution.serve())
+    client.initialize_and_list_tools()
+    client.send(r="invisible(1.0L)")
+    assert last_tool_text(client).count("unnecessary decimal point") == 1
+    # fmt: r
+    r = code(r"""
+        options(warning.expression = quote(cat("parser warning\n")))
+        """)
+    client.send(r=r)
+    client.send(r="invisible(1.0L)")
+    assert last_tool_text(client) == "parser warning\n", last_tool_text(client)
+    # fmt: r
+    r = code(r"""
+        options(
+          warning.expression = NULL,
+          warn = 2,
+          error = quote(cat("error handler warn: ", getOption("warn"), "\n", sep = ""))
+        )
+        """)
+    client.send(r=r)
+    # fmt: r
+    r = code(r"""
+        function(x, x) x
+        """)
+    client.send(r=r)
+    assert last_tool_text(client).endswith("error handler warn: 2\n")
+    # The warning becomes an error only when the native REPL reaches the literal.
+    # fmt: r
+    r = code(r"""
+        answer <- 42
+        1.0L
+        """)
+    client.send(r=r)
+    assert "(converted from warning)" in last_tool_text(client)
+    assert last_tool_text(client).endswith("error handler warn: 2\n")
+    client.send(r="answer")
+    assert last_tool_text(client) == "[1] 42\n"
     return client.finish()
 
 

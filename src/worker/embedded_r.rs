@@ -13,6 +13,8 @@ use super::input::{finish_console_stdin_operation, read_console_stdin};
 use crate::cell::Language;
 use crate::worker_protocol::ConsoleChannel;
 
+mod parse;
+
 static R_MAIN_ARGS: OnceLock<Vec<CString>> = OnceLock::new();
 static R_EVENTS: OnceLock<REvents> = OnceLock::new();
 static R_CHECK_USER_INTERRUPT: OnceLock<CheckUserInterrupt> = OnceLock::new();
@@ -195,6 +197,11 @@ fn acknowledge_console_interrupt() -> bool {
 }
 
 fn evaluate_r_cell(r: String) -> Result<(), String> {
+    // Console reads during preflight belong to R error handlers, not source.
+    REPL_EVALUATING.store(true, Ordering::SeqCst);
+    if !parse::complete(&r)? {
+        return Ok(());
+    }
     set_cell_source(r);
     let status = run_repl_cell();
     clear_cell_source();
@@ -257,6 +264,7 @@ pub(super) fn initialize_r(r_home: &std::path::Path) -> Result<std::path::PathBu
 
 fn initialize_r_repl() -> Result<(), Box<dyn Error>> {
     let library = libloading::os::unix::Library::this();
+    parse::initialize(&library)?;
     let init = unsafe { *library.get::<ReplInit>(b"R_ReplDLLinit\0")? };
     let do_one = unsafe { *library.get::<ReplDoOne>(b"R_ReplDLLdo1\0")? };
     let top_level_exec = unsafe { *library.get::<TopLevelExec>(b"R_ToplevelExec\0")? };
