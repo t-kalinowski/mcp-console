@@ -35,7 +35,7 @@ impl Selection {
 
     pub(crate) fn python(
         configured: Option<OsString>,
-        resolver: &ManagedPythonResolverConfiguration,
+        resolver: Option<&ManagedPythonResolverConfiguration>,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, Option<ManagedPython>), String> {
         let explicit = configured.filter(|value| !value.is_empty() && value != "managed");
@@ -52,18 +52,13 @@ impl Selection {
                 executable
             };
             (executable, None)
-        } else if resolver.has_uv() {
+        } else {
             let managed = crate::resolver::resolve_python_manifest(
                 crate::worker_protocol::default_python_requirement_manifest(),
-                resolver,
+                resolver.expect("managed Python selection requires a resolver"),
                 on_started,
             )?;
             (managed.python().to_path_buf(), Some(managed))
-        } else {
-            let executable = resolver
-                .find_path_python()?
-                .ok_or("R is unavailable and neither `uv`, `python3`, nor `python` was found on PATH; install uv or CPython with a shared libpython and restart MCP Console")?;
-            (executable, None)
         };
         // Preserve virtualenv symlinks: canonicalizing here would lose the
         // environment even though its base executable has the same identity.

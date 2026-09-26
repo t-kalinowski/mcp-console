@@ -1,5 +1,5 @@
 ---
 stderr: >
-  R is unavailable and neither `uv`, `python3`, nor `python` was found on
-  PATH; install uv or CPython with a shared libpython and restart MCP
-  Console
+  R is unavailable and no protected `uv` executable was found on PATH;
+  install uv or set python in .agents/console/config.yaml to select an
+  existing environment

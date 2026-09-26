@@ -3,6 +3,8 @@ use std::ffi::{OsStr, OsString};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
+mod managed;
+
 #[derive(Clone)]
 pub(crate) struct ManagedPythonResolverConfiguration {
     environment: Arc<BTreeMap<OsString, OsString>>,
@@ -11,6 +13,7 @@ pub(crate) struct ManagedPythonResolverConfiguration {
     uv: Option<OsString>,
     path: Option<OsString>,
     worker_writable: Vec<PathBuf>,
+    sans_r: bool,
 }
 
 impl ManagedPythonResolverConfiguration {
@@ -34,6 +37,7 @@ impl ManagedPythonResolverConfiguration {
             uv,
             path: std::env::var_os("PATH"),
             worker_writable: Vec::new(),
+            sans_r: false,
         }
     }
 
@@ -41,44 +45,9 @@ impl ManagedPythonResolverConfiguration {
         // A prior worker may have replaced a project uv. Select and pin a
         // resolved executable before any resolver process starts.
         self.worker_writable = blocked.iter().map(|root| normalize_path(root)).collect();
-        if !self.worker_writable.is_empty() {
-            self.path = Some(self.protected_path(self.path.as_deref())?);
-            if let Some(search_path) = self
-                .environment
-                .get(OsStr::new("UV_PYTHON_SEARCH_PATH"))
-                .cloned()
-            {
-                let protected = self.protected_path(Some(&search_path))?;
-                Arc::make_mut(&mut self.environment)
-                    .insert(OsString::from("UV_PYTHON_SEARCH_PATH"), protected);
-            }
-        }
-        if let Some(variable) = self.worker_writable_configuration()? {
-            if self.explicit_uv.is_some() {
-                return Err(format!("selected uv cannot use worker-writable {variable}"));
-            }
-            self.uv = None;
-            self.reticulate_uv = None;
-            return Ok(self);
-        }
-        if !self.pin_bare_uv_python()? {
-            if self.explicit_uv.is_some() {
-                return Err(
-                    "selected uv requires UV_PYTHON to resolve to a protected executable"
-                        .to_string(),
-                );
-            }
-            self.uv = None;
-            self.reticulate_uv = None;
-            return Ok(self);
-        }
+        self.sans_r = true;
+        self.environment = Arc::new(self.capture_managed_settings()?);
         let blocked = &self.worker_writable;
-        if !blocked.is_empty() && !self.environment.contains_key(OsStr::new("UV_CONFIG_FILE")) {
-            // A later worker can write project uv.toml files. Keep the host
-            // resolver on its captured environment instead of rediscovering them.
-            Arc::make_mut(&mut self.environment)
-                .insert(OsString::from("UV_NO_CONFIG"), OsString::from("1"));
-        }
         let uv = match self.explicit_uv.as_deref() {
             Some(value) if value != OsStr::new("managed") => {
                 let path = PathBuf::from(value);
@@ -97,8 +66,10 @@ impl ManagedPythonResolverConfiguration {
             }
             _ => find_safe_path_uv(self.path.as_deref(), blocked)?,
         };
-        self.uv = uv.clone().map(Into::into);
+        let uv = uv.ok_or("R is unavailable and no protected `uv` executable was found on PATH; install uv or set python in .agents/console/config.yaml to select an existing environment")?;
+        self.uv = Some(uv.into());
         self.reticulate_uv = self.uv.clone();
+        self.path = Some(self.protected_path(self.path.as_deref())?);
         Ok(self)
     }
 
@@ -113,7 +84,6 @@ impl ManagedPythonResolverConfiguration {
                 // previously absent PATH entry or redirect a broken symlink.
                 if let Ok(resolved) = directory.canonicalize()
                     && resolved.is_dir()
-                    && !self.has_worker_writable_python_link(&resolved)?
                 {
                     directories.push(resolved);
                 }
@@ -123,190 +93,8 @@ impl ManagedPythonResolverConfiguration {
             .map_err(|error| format!("cannot retain protected resolver PATH: {error}"))
     }
 
-    fn has_worker_writable_python_link(&self, directory: &Path) -> Result<bool, String> {
-        let Ok(entries) = std::fs::read_dir(directory) else {
-            return Ok(true);
-        };
-        'entries: for entry in entries {
-            let entry =
-                entry.map_err(|error| format!("cannot inspect Python search path: {error}"))?;
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            if !["python", "pypy", "graalpy", "pyodide"]
-                .iter()
-                .any(|prefix| name.starts_with(prefix))
-            {
-                continue;
-            }
-            let mut path = entry.path();
-            for _ in 0..32 {
-                let Ok(metadata) = std::fs::symlink_metadata(&path) else {
-                    return Ok(true);
-                };
-                if !metadata.file_type().is_symlink() {
-                    continue 'entries;
-                }
-                let Ok(link) = std::fs::read_link(&path) else {
-                    return Ok(true);
-                };
-                path = if link.is_absolute() {
-                    link
-                } else {
-                    path.parent().expect("Python link parent").join(link)
-                };
-                if self.path_is_worker_writable(&path)? {
-                    return Ok(true);
-                }
-            }
-            return Ok(true);
-        }
-        Ok(false)
-    }
-
-    fn pin_bare_uv_python(&mut self) -> Result<bool, String> {
-        if self.worker_writable.is_empty() {
-            return Ok(true);
-        }
-        let Some(value) = self.environment.get(OsStr::new("UV_PYTHON")).cloned() else {
-            return Ok(true);
-        };
-        if Path::new(&value).components().count() > 1 || is_abstract_python_request(&value) {
-            return Ok(true);
-        }
-        let search_path = self
-            .environment
-            .get(OsStr::new("UV_PYTHON_SEARCH_PATH"))
-            .map(OsString::as_os_str)
-            .or(self.path.as_deref());
-        let Some(candidate) = self.find_protected_path_entry_in(&value, search_path)? else {
-            return Ok(false);
-        };
-        let selected = candidate
-            .canonicalize()
-            .map_err(|error| format!("cannot pin UV_PYTHON executable: {error}"))?;
-        Arc::make_mut(&mut self.environment).insert(OsString::from("UV_PYTHON"), selected.into());
-        Ok(true)
-    }
-
-    fn find_protected_path_entry(&self, program: &OsStr) -> Result<Option<PathBuf>, String> {
-        self.find_protected_path_entry_in(program, self.path.as_deref())
-    }
-
-    fn find_protected_path_entry_in(
-        &self,
-        program: &OsStr,
-        path: Option<&OsStr>,
-    ) -> Result<Option<PathBuf>, String> {
-        let Some(path) = path else {
-            return Ok(None);
-        };
-        for directory in std::env::split_paths(path) {
-            let candidate = directory.join(program);
-            if candidate.canonicalize().is_ok() && !self.path_is_worker_writable(&candidate)? {
-                return Ok(Some(candidate));
-            }
-        }
-        Ok(None)
-    }
-
-    pub(crate) fn find_path_python(&self) -> Result<Option<PathBuf>, String> {
-        if self.worker_writable.is_empty() {
-            return Ok(
-                super::find_path_entry("python3").or_else(|| super::find_path_entry("python"))
-            );
-        }
-        if let Some(python) = self.find_protected_path_entry(OsStr::new("python3"))? {
-            return Ok(Some(python));
-        }
-        self.find_protected_path_entry(OsStr::new("python"))
-    }
-
-    fn worker_writable_configuration(&self) -> Result<Option<&'static str>, String> {
-        if self.worker_writable.is_empty() {
-            return Ok(None);
-        }
-        for name in [
-            "UV_CACHE_DIR",
-            "UV_PYTHON_INSTALL_DIR",
-            "UV_PYTHON_CACHE_DIR",
-            "UV_TOOL_DIR",
-            "UV_CONFIG_FILE",
-            "UV_PROJECT_ENVIRONMENT",
-        ] {
-            if let Some(value) = self.environment.get(OsStr::new(name))
-                && self.path_is_worker_writable(Path::new(value))?
-            {
-                return Ok(Some(name));
-            }
-        }
-        // These inputs can supply build code or interpreter downloads. Parse
-        // file URLs before checking paths, including percent-encoded names.
-        for (name, delimiter) in [
-            ("UV_FIND_LINKS", ','),
-            ("UV_INDEX", ' '),
-            ("UV_EXTRA_INDEX_URL", ' '),
-            ("UV_DEFAULT_INDEX", '\0'),
-            ("UV_INDEX_URL", '\0'),
-            ("UV_PYTHON_INSTALL_MIRROR", '\0'),
-            ("UV_PYPY_INSTALL_MIRROR", '\0'),
-            ("UV_PYTHON_DOWNLOADS_JSON_URL", '\0'),
-            ("UV_CONSTRAINT", ' '),
-            ("UV_BUILD_CONSTRAINT", ' '),
-            ("UV_OVERRIDE", ' '),
-        ] {
-            let Some(value) = self.environment.get(OsStr::new(name)) else {
-                continue;
-            };
-            let value = value
-                .to_str()
-                .ok_or_else(|| format!("{name} is not UTF-8"))?;
-            for source in value
-                .split(|c: char| c == delimiter || (name == "UV_INDEX" && c.is_whitespace()))
-                .filter(|source| !source.is_empty())
-            {
-                let source = if matches!(name, "UV_INDEX" | "UV_DEFAULT_INDEX") {
-                    source
-                        .split_once('=')
-                        .filter(|(name, _)| !name.contains(':'))
-                        .map_or(source, |(_, url)| url)
-                } else {
-                    source
-                };
-                let path = match pep508_rs::VerbatimUrl::parse_url(source) {
-                    Ok(url) if url.scheme() == "file" => url
-                        .to_file_path()
-                        .map_err(|_| format!("{name} has an unsupported local file URL"))?,
-                    Ok(url) if pep508_rs::Scheme::parse(url.scheme()).is_some() => continue,
-                    _ => PathBuf::from(source),
-                };
-                if self.path_is_worker_writable(&path)? {
-                    return Ok(Some(name));
-                }
-            }
-        }
-        if let Some(value) = self.environment.get(OsStr::new("UV_PYTHON"))
-            && Path::new(value).components().count() > 1
-            && self.path_is_worker_writable(Path::new(value))?
-        {
-            return Ok(Some("UV_PYTHON"));
-        }
-        for (name, override_name) in [
-            ("XDG_CACHE_HOME", "UV_CACHE_DIR"),
-            ("XDG_DATA_HOME", "UV_PYTHON_INSTALL_DIR"),
-        ] {
-            if !self.environment.contains_key(OsStr::new(override_name))
-                && let Some(value) = std::env::var_os(name)
-                && self.path_is_worker_writable(Path::new(&value))?
-            {
-                return Ok(Some(name));
-            }
-        }
-        if let Some(home) = std::env::var_os("HOME")
-            && self.path_is_worker_writable(Path::new(&home))?
-        {
-            return Ok(Some("HOME"));
-        }
-        Ok(None)
+    pub(super) fn sans_r(&self) -> bool {
+        self.sans_r
     }
 
     pub(super) fn has_worker_writable_roots(&self) -> bool {
@@ -329,16 +117,7 @@ impl ManagedPythonResolverConfiguration {
         }
         let absolute =
             std::path::absolute(path).map_err(|error| format!("cannot locate uv path: {error}"))?;
-        let (ancestor, resolved) = absolute
-            .ancestors()
-            .find_map(|ancestor| {
-                ancestor
-                    .canonicalize()
-                    .ok()
-                    .map(|resolved| (ancestor, resolved))
-            })
-            .ok_or_else(|| format!("cannot resolve uv path: {}", path.display()))?;
-        let resolved = resolved.join(absolute.strip_prefix(ancestor).expect("path ancestor"));
+        let resolved = resolve_path(&absolute)?;
         let absolute = normalize_path(&absolute);
         let resolved = normalize_path(&resolved);
         Ok(self
@@ -392,8 +171,15 @@ impl ManagedPythonResolverConfiguration {
             .envs(self.environment.iter())
             .env("RETICULATE_UV", uv)
             .env_remove("UV_OFFLINE");
-        if !self.worker_writable.is_empty() {
+        if self.sans_r {
             command.env("PATH", self.path.as_deref().unwrap_or(OsStr::new("")));
+            // The host helper must not execute worker-controlled startup hooks.
+            for (name, _) in std::env::vars_os()
+                .filter(|(name, _)| name.as_encoded_bytes().starts_with(b"PYTHON"))
+            {
+                command.env_remove(name);
+            }
+            command.env_remove("VIRTUAL_ENV").env_remove("CONDA_PREFIX");
         }
     }
 
@@ -426,32 +212,22 @@ impl ManagedPythonResolverConfiguration {
     }
 }
 
-fn is_abstract_python_request(value: &OsStr) -> bool {
-    let Some(value) = value.to_str() else {
-        return false;
-    };
-    let value = value.to_ascii_lowercase();
-    if matches!(
-        value.as_str(),
-        "any" | "default" | "cpython" | "pypy" | "graalpy" | "pyodide"
-    ) {
-        return true;
-    }
-    let mut version = value.as_str();
-    for implementation in ["python", "cpython", "pypy", "graalpy", "pyodide"] {
-        if let Some(suffix) = version.strip_prefix(implementation) {
-            version = suffix.strip_prefix('@').unwrap_or(suffix);
-            break;
-        }
-    }
-    let version = version.strip_suffix('t').unwrap_or(version);
-    let components = version.split('.').collect::<Vec<_>>();
-    components.len() <= 3
-        && components.iter().all(|component| {
-            !component.is_empty()
-                && component.bytes().all(|byte| byte.is_ascii_digit())
-                && component.parse::<u8>().is_ok()
+// Pin existing ancestors too: an intermediate symlink may cross a write grant
+// even when its final target is protected. Missing suffixes are created by uv.
+fn resolve_path(path: &Path) -> Result<PathBuf, String> {
+    let absolute =
+        std::path::absolute(path).map_err(|error| format!("cannot locate uv path: {error}"))?;
+    let (ancestor, resolved) = absolute
+        .ancestors()
+        .find_map(|ancestor| {
+            ancestor
+                .canonicalize()
+                .ok()
+                .map(|resolved| (ancestor, resolved))
         })
+        .ok_or_else(|| format!("cannot resolve uv path: {}", path.display()))?;
+    let resolved = resolved.join(absolute.strip_prefix(ancestor).expect("path ancestor"));
+    Ok(normalize_path(&resolved))
 }
 
 fn normalize_path(path: &Path) -> PathBuf {

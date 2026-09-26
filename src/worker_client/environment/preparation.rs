@@ -25,35 +25,6 @@ pub(in crate::worker_client) enum PreparationIntent {
 }
 
 impl Client {
-    pub(in crate::worker_client) fn check_python_interrupt_requirements(
-        &self,
-        requirements: &Requirements,
-    ) -> Result<(), String> {
-        if !self.python_preparation() {
-            return Ok(());
-        }
-        // This mode has no live activation. Reject additions before interrupt
-        // can signal the old worker or enqueue input; retained requests still
-        // use the ordinary interrupt ordering.
-        requirements.validate()?;
-        let environment = self
-            .0
-            .environment
-            .as_ref()
-            .expect("built-in environment")
-            .try_lock()
-            .map_err(|error| match error {
-                std::sync::TryLockError::WouldBlock => "worker environment is busy".to_string(),
-                std::sync::TryLockError::Poisoned(_) => {
-                    "worker environment lock poisoned".to_string()
-                }
-            })?;
-        if !RequirementDelta::calculate(&environment, requirements.clone())?.is_empty() {
-            return Err(crate::local_runtime::LIVE_PREPARATION_DISABLED.into());
-        }
-        Ok(())
-    }
-
     /// Adds requirements to the managed environment.
     pub(in crate::worker_client) async fn prepare(
         &self,

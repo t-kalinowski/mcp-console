@@ -1,0 +1,8 @@
+---
+rejected: worker.env
+---
+rejected: project-python
+---
+rejected: find-links = ["./packages"]
+---
+rejected: python-preference = "system"

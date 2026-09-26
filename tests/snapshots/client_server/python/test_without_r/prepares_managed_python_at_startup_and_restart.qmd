@@ -12,6 +12,7 @@ ir:
     - pandas
     - more-itertools
     - py-yaml12
+    - six
 ---
 
 ```{python}
@@ -41,6 +42,12 @@ print("no-op cell")
 ```
 
 ```{python}
+from pathlib import Path
+
+Path("sitecustomize.py").write_text(
+    "import os; from pathlib import Path; "
+    "'MCP_CONSOLE_LOCAL_RUNTIME' in os.environ or Path('../host-hook-ran').touch()"
+)
 input("old worker> ")
 open("old-worker-consumed-input", "w").close()
 ```
@@ -90,5 +97,11 @@ print("cumulative packages retained")
 import yaml12, more_itertools
 
 print("retained restart")
+```
+
+```{python}
+import six, yaml12, more_itertools
+
+42
 ```
 

@@ -372,22 +372,25 @@ impl Client {
     pub(crate) fn builtin(
         no_sandbox: bool,
         sandbox_settings: crate::settings::SandboxSettings,
+        python: Option<PathBuf>,
     ) -> Result<Self, String> {
         #[cfg(unix)]
         return startup::with_input_owner(|on_started| {
-            Self::builtin_with(no_sandbox, sandbox_settings, on_started)
+            Self::builtin_with(no_sandbox, sandbox_settings, python, on_started)
         });
         #[cfg(not(unix))]
-        Self::builtin_with(no_sandbox, sandbox_settings, &|_| Ok(()))
+        Self::builtin_with(no_sandbox, sandbox_settings, python, &|_| Ok(()))
     }
 
     fn builtin_with(
         no_sandbox: bool,
         sandbox_settings: crate::settings::SandboxSettings,
+        python: Option<PathBuf>,
         on_started: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
     ) -> Result<Self, String> {
-        let python_resolver = crate::resolver::ManagedPythonResolverConfiguration::capture();
-        let configured_python = std::env::var_os("RETICULATE_PYTHON");
+        let configured_python = python
+            .map(PathBuf::into_os_string)
+            .or_else(|| std::env::var_os("RETICULATE_PYTHON"));
         let program = std::env::current_exe()
             .map_err(|error| format!("failed to locate the R worker executable: {error}"))?;
         let local_runtime;
@@ -399,27 +402,34 @@ impl Client {
                     .is_some_and(|value| !value.is_empty() && value != "managed")
                 {
                     // Explicit Python selection has no managed resolver to run.
-                    python_resolver
+                    None
                 } else {
                     let roots = if no_sandbox {
                         Vec::new()
                     } else {
                         crate::local_runtime::blocked_uv_roots(&sandbox_settings)?
                     };
-                    python_resolver.without_r_bootstrap(&roots)?
+                    Some(
+                        crate::resolver::ManagedPythonResolverConfiguration::capture()
+                            .without_r_bootstrap(&roots)?,
+                    )
                 };
                 let (selection, managed) = crate::local_runtime::Selection::python(
                     configured_python,
-                    &resolver,
+                    resolver.as_ref(),
                     on_started,
                 )?;
                 local_runtime = Some(selection);
                 let python = managed.map(|selected| PythonEnvironment::Managed {
                     selected,
-                    resolver: crate::resolver::execution::PythonConfiguration::Local(resolver),
+                    resolver: crate::resolver::execution::PythonConfiguration::Local(
+                        resolver.expect("managed resolver"),
+                    ),
                 });
                 (None, Default::default(), python, RResolver::Disabled)
             } else {
+                let python_resolver =
+                    crate::resolver::ManagedPythonResolverConfiguration::capture();
                 let (bootstrap, rscript) = crate::resolver::discover(&python_resolver, on_started)?;
                 let home = rscript
                     .parent()
@@ -455,7 +465,7 @@ impl Client {
             Default::default(),
             Some(PythonEnvironment::builtin(
                 configured_python,
-                python_resolver,
+                crate::resolver::ManagedPythonResolverConfiguration::capture(),
                 None,
                 on_started,
             )?),
@@ -884,8 +894,8 @@ impl Client {
         call_id: Option<u64>,
     ) -> Result<ControlledEvaluation, String> {
         let generation = control.generation();
-        if let Some(requirements) = &requirements {
-            self.check_python_interrupt_requirements(requirements)?;
+        if self.python_preparation() && requirements.is_some() {
+            return Err("Python requirements cannot accompany control: interrupt; prepare before first use or with control: restart".into());
         }
         self.interrupt_blocking()?;
         self.ensure_controlled_generation(control, &generation)?;

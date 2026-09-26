@@ -265,6 +265,7 @@ impl ConsoleServer {
         no_sandbox: bool,
         sandbox_settings: crate::settings::SandboxSettings,
         target: Option<(crate::settings::Target, Vec<PathBuf>)>,
+        python: Option<PathBuf>,
     ) -> Result<Self, String> {
         let recording_directory = std::env::current_dir();
         let languages = Languages::from_environment()?;
@@ -277,7 +278,7 @@ impl ConsoleServer {
                     crate::worker_client::Client::new(program, relay, no_sandbox, sandbox_settings)?
                 }
                 (None, None) => {
-                    crate::worker_client::Client::builtin(no_sandbox, sandbox_settings)?
+                    crate::worker_client::Client::builtin(no_sandbox, sandbox_settings, python)?
                 }
                 (None, Some(_)) => {
                     return Err("a custom relay requires a custom worker".to_string());
@@ -612,8 +613,9 @@ pub async fn run(
     no_sandbox: bool,
     sandbox_settings: crate::settings::SandboxSettings,
     target: Option<(crate::settings::Target, Vec<PathBuf>)>,
+    python: Option<PathBuf>,
 ) -> Result<(), Box<dyn Error>> {
-    let server = ConsoleServer::new(worker, relay, no_sandbox, sandbox_settings, target)
+    let server = ConsoleServer::new(worker, relay, no_sandbox, sandbox_settings, target, python)
         .map_err(std::io::Error::other)?;
     let worker = server.worker.clone();
     let deliveries = server.deliveries.clone();

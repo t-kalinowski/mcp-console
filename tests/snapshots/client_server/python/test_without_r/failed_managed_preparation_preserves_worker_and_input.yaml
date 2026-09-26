@@ -22,150 +22,6 @@ send:
       - py-yaml12
   stdin: |
     must not reach old worker
-result:
-  content:
-    - type: text
-      text: |-
-        managed Python resolution failed:
-        resolver input:
-        {
-          "python": "3.12.x (reticulate default)",
-          "packages": [
-            "numpy",
-            "pandas",
-            "py-yaml12"
-          ]
-        }
-        uv output:
-        fixture Python resolution failed
-  isError: true
----
-send:
-  python: |
-    assert id(identity) == identity_id
-    print("objects intact")
-result:
-  content:
-    - type: text
-      text: |
-        objects intact
-  isError: false
----
-send:
-  control: restart
-  requirements:
-    python:
-      - py-yaml12
-  stdin: |
-    must not reach old worker
-result:
-  content:
-    - type: text
-      text: >-
-        selected Python embedding library is missing:
-        <preparation>/missing-libpython
-  isError: true
----
-send:
-  python: |
-    assert id(identity) == identity_id
-    print("objects intact")
-result:
-  content:
-    - type: text
-      text: |
-        objects intact
-  isError: false
----
-send:
-  control: restart
-  requirements:
-    python:
-      - py-yaml12
-  stdin: |
-    must not reach old worker
-result:
-  content:
-    - type: text
-      text: |-
-        managed Python resolution failed:
-        resolver input:
-        {
-          "python": "3.12.x (reticulate default)",
-          "packages": [
-            "numpy",
-            "pandas",
-            "py-yaml12"
-          ]
-        }
-        uv output:
-        fixture Python resolution interrupted
-  isError: true
----
-send:
-  control: interrupt
-result:
-  content:
-    - type: text
-      text: |-
-
-        [idle]
-  isError: false
----
-send:
-  python: |
-    assert id(identity) == identity_id
-    print("objects intact")
-result:
-  content:
-    - type: text
-      text: |
-        objects intact
-  isError: false
----
-send:
-  control: restart
-  requirements:
-    python:
-      - py-yaml12
-  stdin: |
-    must not reach old worker
-result:
-  content:
-    - type: text
-      text: >
-        selected Python inspection failed (exit status: 1): fixture Python
-        inspection interrupted
-  isError: true
----
-send:
-  control: interrupt
-result:
-  content:
-    - type: text
-      text: |-
-
-        [idle]
-  isError: false
----
-send:
-  python: |
-    assert id(identity) == identity_id
-    print("objects intact")
-result:
-  content:
-    - type: text
-      text: |
-        objects intact
-  isError: false
----
-send:
-  control: restart
-  requirements:
-    python:
-      - py-yaml12
-  stdin: |
-    must not reach old worker
   python: |
     raise AssertionError("failed restart ran code")
 result:
@@ -403,7 +259,7 @@ send:
   control: interrupt
   requirements:
     python:
-      - py-yaml12
+      - numpy
   python: |
     identity = None
   stdin: |
@@ -412,8 +268,8 @@ result:
   content:
     - type: text
       text: >-
-        [live Python requirements are unavailable without R; use
-        requirements.python with control: restart to prepare a new environment]
+        [Python requirements cannot accompany control: interrupt; prepare before
+        first use or with control: restart]
   isError: true
 ---
 send: {}

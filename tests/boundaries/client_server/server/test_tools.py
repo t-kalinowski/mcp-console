@@ -146,6 +146,8 @@ def _initializes_and_lists_tools(
                 "RETICULATE_UV",
             ):
                 environment.pop(name, None)
+            if not python_managed:
+                environment["RETICULATE_PYTHON"] = str(python_bin / "python3")
         workspace = Path(library) / "workspace"
         workspace.mkdir()
         if ssh:

@@ -8,26 +8,15 @@ This guide describes preparation before a cell, standalone preparation, and requ
 [Host resolution and trust](#host-resolution-and-trust) explains why requirement input is restricted and which work runs with server permissions.
 
 Local [Python sessions without R](BUILTIN_RUNTIME.md#python-sessions-without-r) support explicit startup and restart preparation when Console manages the environment through uv.
-When `uv` is available, the existing local host resolver prepares the default Python manifest before MCP readiness and retains the result for replacement workers.
-For sandboxed sans-R local selection, project-resident `uv` executables and executables beneath configured worker write grants are skipped before use; PATH selection continues to the next candidate, while an explicit selection there fails.
-Console captures a PATH and uv Python search path without worker-writable directories, and skips executable links into those roots for uv selection and the automatic Python fallback.
-A bare `UV_PYTHON` executable name is pinned to a protected executable before resolution; abstract version selectors remain available.
-Without a protected executable for a bare name, implicit uv management is disabled and an explicit uv selection fails.
-Full filesystem write policies, special root write grants, and externally enforced filesystem policies have no protected automatic interpreter selection; they require an explicit Python selection.
-Worker-writable uv cache, Python installation, tool, and explicit config paths disable implicit uv selection or reject an explicit selection.
-The same check covers local package indexes, find-links sources, Python download sources, and requirement-file overrides supplied through uv environment variables, including file URLs.
-Inherited `TMPDIR` and `/tmp` write grants count as worker-writable paths when enabled by the workspace policy or explicit special-path entries.
-Console disables implicit project uv configuration discovery, checks effective uv cache and installation locations, and rejects a worker-writable selected interpreter before host inspection.
-The selected executable is resolved and retained so a worker cannot redirect later host preparation by replacing a PATH entry.
-This does not invoke R, Rscript, or `ir`, and no installation runs inside the sandboxed worker.
-Executable inspection uses isolated Python mode, excluding workspace imports, `PYTHONPATH`, and the user site; the selected installation and its environment remain trusted.
-Without `uv`, a protected Python executable on `PATH` supplies its preinstalled packages.
+The default uses protected uv and uv-managed CPython; setting `python` in the Console config selects a non-managed environment without invoking uv.
+The [sans-R runtime contract](BUILTIN_RUNTIME.md#python-sessions-without-r) defines supported uv settings and the host resolver trust boundary.
+There is no automatic PATH-Python fallback.
 `requirements.python` alone or with a Python cell prepares additions before the first worker starts.
 After startup, changed requirements need `control: "restart"`, with or without code; already retained requirements are a no-op.
 The existing prestart/restart transaction resolves the complete candidate manifest and inspects its executable before retirement, using the captured resolver configuration and existing cancellation and child cleanup.
 Resolution or inspection failure preserves the current worker and environment; successful commit updates the retained manifest, executable, and launch configuration together.
 Plain restarts and crash replacement reuse that accepted environment without another resolution.
-PATH fallback and explicit selections do not enable preparation.
+Explicit Python selections do not enable preparation.
 Live requirement additions, automatic import resolution, R requirements, and DuckDB requirements are unavailable in this mode.
 The remaining preparation and SQL behavior in this document applies to sessions with R.
 
@@ -431,7 +420,7 @@ Paths, URLs, repository selectors, version expressions, and SQL fragments are no
 
 ## Python environment selection
 
-The built-in server reads inherited `RETICULATE_PYTHON` when it starts:
+The local built-in server uses the top-level `python` setting when present; otherwise it reads inherited `RETICULATE_PYTHON` when it starts:
 
 - unset, empty, or exactly `managed` selects the server-managed environment;
 - any other nonempty value selects that existing Python environment.

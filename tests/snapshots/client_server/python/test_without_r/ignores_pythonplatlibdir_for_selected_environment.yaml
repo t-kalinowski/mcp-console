@@ -8,7 +8,7 @@ send:
     import subprocess
 
     assert "PYTHONPLATLIBDIR" not in os.environ
-    assert "RETICULATE_PYTHON" not in os.environ
+    assert os.environ["RETICULATE_PYTHON"] == sys.executable
     assert os.path.samefile(sys.prefix, "../environment")
     assert sys.prefix != sys.base_prefix
     child = subprocess.check_output(
@@ -31,7 +31,7 @@ send:
     import subprocess
 
     assert "PYTHONPLATLIBDIR" not in os.environ
-    assert "RETICULATE_PYTHON" not in os.environ
+    assert os.environ["RETICULATE_PYTHON"] == sys.executable
     assert os.path.samefile(sys.prefix, "../environment")
     assert sys.prefix != sys.base_prefix
     child = subprocess.check_output(
@@ -58,7 +58,7 @@ send:
     import subprocess
 
     assert "PYTHONPLATLIBDIR" not in os.environ
-    assert "RETICULATE_PYTHON" not in os.environ
+    assert os.environ["RETICULATE_PYTHON"] == sys.executable
     assert os.path.samefile(sys.prefix, "../environment")
     assert sys.prefix != sys.base_prefix
     child = subprocess.check_output(
@@ -81,7 +81,7 @@ send:
     import subprocess
 
     assert "PYTHONPLATLIBDIR" not in os.environ
-    assert "RETICULATE_PYTHON" not in os.environ
+    assert os.environ["RETICULATE_PYTHON"] == sys.executable
     assert os.path.samefile(sys.prefix, "../environment")
     assert sys.prefix != sys.base_prefix
     child = subprocess.check_output(

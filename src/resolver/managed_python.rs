@@ -145,6 +145,7 @@ fn resolve_python_manifest_with_r(
     let requirements = requirements.normalized();
     let resolver = ResolverProcess::new();
     let mut on_started = Some(on_started);
+    validate_uv_storage(configuration, managed_r, &resolver, &mut on_started)?;
     let versions =
         resolve_python_versions_with(configuration, managed_r, &resolver, &mut on_started)?;
     let resolved_python = versions
@@ -153,7 +154,6 @@ fn resolve_python_manifest_with_r(
     versions.validate_paths(&resolved_python, |path| {
         configuration.ensure_safe_python_path(path)
     })?;
-    validate_uv_storage(configuration, managed_r, &resolver, &mut on_started)?;
     let output_path = PythonPathOutput::create()?;
     let output = run_managed_python_resolver(
         &requirements,
@@ -447,8 +447,12 @@ where
     for package in &requirements.packages {
         command.arg("--with").arg(package);
     }
+    command.args(["--", "python"]);
+    if configuration.sans_r() {
+        command.arg("-I");
+    }
     command
-        .args(["--", "python", "-c", PYTHON_PATH_SOURCE])
+        .args(["-c", PYTHON_PATH_SOURCE])
         .arg(output_path)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

@@ -21,8 +21,8 @@ They support standalone preparation and preparation with a Python cell before fi
 Changed requirements on a running worker are rejected before preparation or same-call code and input; exact retained requirements remain a no-op.
 Restart resolves the cumulative candidate and inspects its embedding configuration before retirement.
 Failure before retirement preserves the current worker, retained requirements, and queued input; same-call code and input are sent only after successful replacement.
-An interrupt with requirements may use only already retained Python requirements; additions are rejected before signaling or queuing stdin.
-The existing interrupt ordering for retained requirements and retirement/replacement failure semantics below still apply.
+Combining interrupt with Python requirements is rejected before signaling or queuing stdin, including retained requirements.
+The retirement/replacement failure semantics below still apply.
 
 Requirement-content errors normally also reject the call before those actions.
 For interrupt plus a cell, reporting those errors is deferred until after interrupt delivery, stdin enqueue, the 100-millisecond grace, and settlement of the previous evaluation.
