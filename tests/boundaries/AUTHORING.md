@@ -5,7 +5,8 @@ Use the [validation ladder](../../docs/DEVELOPMENT.md#validation-ladder) to keep
 
 ## Embedded programs
 
-Use `support.normalization.code()` to dedent a readable program.
+Choose the string representation for readability: short fixtures may use newline escapes, a list of lines joined with `"\n"`, or separate writes.
+For longer programs, use a multiline literal with `support.normalization.code()` to dedent it.
 Keep `code(` and the opening string delimiter on the same line.
 Place its formatting directive immediately above that line, including for nested calls.
 Start the payload on the line after the opening quotes.
