@@ -235,6 +235,18 @@ def test_discovers_home_configuration_with_project_precedence(
 
         assert str(home / CONFIG) in launch_error()
 
+        fixture_workspace = root / "default-client"
+        fixture_workspace.mkdir()
+        with McpClient(
+            binary,
+            ("serve", "--no-sandbox"),
+            environment=environment,
+            current_directory=fixture_workspace,
+        ) as client:
+            client.initialize_and_list_tools()
+            _, stderr = client.finish_with_standard_error()
+            assert stderr == "", stderr
+
         configure(workspace, {})
         with McpClient(
             binary,
@@ -258,6 +270,7 @@ def test_discovers_home_configuration_with_project_precedence(
             ("serve", "--no-sandbox"),
             environment=environment,
             current_directory=workspace,
+            record_in_project=False,
         ) as client:
             client.initialize_and_list_tools()
             _, stderr = client.finish_with_standard_error()
