@@ -1,5 +1,8 @@
 #!/usr/bin/env -S uv run --script
-
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["joblib"]
+# ///
 
 import os
 import sys
@@ -12,9 +15,11 @@ from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript
+from support.requirements import joblib_processes, requires
 from support.suites import run_this_suite
 
 
+@requires(joblib_processes())
 @executions(DIRECT, SANDBOXED)
 def test_runs_sklearn_parallel_search(binary: Path, execution: Execution) -> Transcript:
     environment = os.environ.copy()
@@ -34,8 +39,10 @@ def test_runs_sklearn_parallel_search(binary: Path, execution: Execution) -> Tra
                 from sklearn.pipeline import make_pipeline
                 from sklearn.preprocessing import StandardScaler
 
+                from joblib import effective_n_jobs
                 import numpy as np
 
+                assert effective_n_jobs(-1) == 2
                 # Exceed joblib's default 1 MiB automatic memmapping threshold.
                 X, y = make_classification(n_samples=2000, n_features=80, random_state=42)
                 assert X.nbytes > 1024**2

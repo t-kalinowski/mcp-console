@@ -2,6 +2,7 @@
 # requires-python = ">=3.11"
 # dependencies = [
 #     "py-yaml12>=0.2.0",
+#     "joblib",
 #     "anyio>=4.9",
 #     "mcp==2.*,>=2.2.0",
 #     "anthropic[mcp]>=1.4.0",

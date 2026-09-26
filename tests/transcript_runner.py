@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["py-yaml12>=0.2.0"]
+# dependencies = ["py-yaml12>=0.2.0", "joblib"]
 # ///
 
 from __future__ import annotations
@@ -1088,6 +1088,31 @@ runner: different
                         self.assertIn(
                             f"{missing}: {missing} is missing from PATH", line
                         )
+
+    def test_repository_sklearn_case_skips_one_effective_cpu(self) -> None:
+        shutil.copytree(
+            ROOT / "tests" / "support",
+            self.root / "tests" / "support",
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns("__pycache__"),
+        )
+        suite = Path("client_server/python/test_processes.py")
+        destination = self.boundaries / suite
+        destination.parent.mkdir(parents=True)
+        shutil.copy2(RUNNER.parent / suite, destination)
+        selector = "client_server/python/test_processes::runs_sklearn_parallel_search"
+        result = subprocess.run(
+            [sys.executable, self.boundaries / "_run.py", selector],
+            cwd=self.root,
+            env={**os.environ, "LOKY_MAX_CPU_COUNT": "1"},
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for execution in ("direct", "sandbox"):
+            self.assertIn(f"{selector}[{execution}]: skipped;", result.stdout)
+        self.assertIn("requires at least two effective joblib CPUs", result.stdout)
 
     def test_full_update_preserves_skipped_case_and_companions(self) -> None:
         self.suite.write_text(
