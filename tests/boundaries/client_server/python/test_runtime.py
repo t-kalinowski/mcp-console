@@ -372,6 +372,7 @@ after show
         assert result["isError"] is False, result
         output = result["content"][0]["text"]
         assert output.startswith("Traceback (most recent call last):\n"), output
+        assert 'File "<string>"' not in output, output
         assert output.endswith("RuntimeError: plot render failed\n"), output
         second_reference = wait_for_worker_file(
             Path(temporary_directory),
@@ -598,10 +599,11 @@ def test_recovers_from_python_errors(binary: Path, execution: Execution) -> Tran
         """)
     client.send(python=python)
     output = last_result_text(client)
-    assert client.transcript[-1]["result"]["isError"] is False
+    assert client.transcript[-1]["result"]["isError"] is False, client.transcript[-1]
     assert output.startswith("Traceback (most recent call last):\n")
     assert "<mcp-console:python:" in output
     assert "in fail\n" in output
+    assert 'File "<string>"' not in output
     assert output.endswith("ValueError: boom\n")
     # fmt: python
     python = code("""
@@ -610,8 +612,9 @@ def test_recovers_from_python_errors(binary: Path, execution: Execution) -> Tran
         """)
     client.send(python=python)
     output = last_result_text(client)
-    assert output.startswith("Traceback (most recent call last):\n")
+    assert not output.startswith("Traceback (most recent call last):\n")
     assert "<mcp-console:python:" in output
+    assert 'File "<string>"' not in output
     assert output.endswith("SyntaxError: 'await' outside function\n")
     client.send(python='"compile_partial" in globals()')
     assert last_result_text(client) == "False\n"
@@ -623,7 +626,25 @@ def test_recovers_from_python_errors(binary: Path, execution: Execution) -> Tran
     client.send(python="1 / 0")
     output = last_result_text(client)
     assert 'File "<mcp-console:python:e5>", line 1, in <module>' in output
+    assert 'File "<string>"' not in output
     assert output.endswith("ZeroDivisionError: division by zero\n")
+    client.send(python="exec(\"raise RuntimeError('from exec')\")")
+    output = last_result_text(client)
+    assert 'File "<mcp-console:python:e6>", line 1, in <module>' in output
+    assert 'File "<string>", line 1, in <module>' in output
+    assert output.endswith("RuntimeError: from exec\n")
+    # fmt: python
+    python = code("""
+        try:
+            raise ValueError("cause")
+        except ValueError as error:
+            raise RuntimeError("chained") from error
+        """)
+    client.send(python=python)
+    output = last_result_text(client)
+    assert 'File "<string>"' not in output
+    assert "ValueError: cause\n" in output
+    assert output.endswith("RuntimeError: chained\n")
     client.send(python="answer")
     assert last_result_text(client) == "41\n"
     return client.finish()

@@ -16,6 +16,9 @@ import types as _types
 import _mcp_console_services as _services
 
 
+_mcp_console_private_codes = set()
+
+
 _MCP_CONSOLE_IMPORT_DISTRIBUTIONS = {
     "PIL": "pillow",
     "OpenSSL": "pyopenssl",
@@ -402,11 +405,59 @@ def _mcp_console_disable_matplotlib_show(
     return None
 
 
+def _mcp_console_print_exception(
+    error,
+    source_error=False,
+    _traceback=_traceback,
+    _sys=_sys,
+    _private_codes=_mcp_console_private_codes,
+    _services_globals=_services.__dict__,
+    _getattr=_builtins.getattr,
+    _id=_builtins.id,
+    _zip=_builtins.zip,
+):
+    # Build every frame first so filtering retains Python's source positions.
+    rendered = _traceback.TracebackException.from_exception(error, limit=_sys.maxsize)
+
+    def remove_private_frames(exception, summary):
+        if exception is None or summary is None:
+            return
+        if source_error and exception is error:
+            summary.stack = _traceback.StackSummary()
+        else:
+            frames = []
+            traceback = exception.__traceback__
+            for position in summary.stack:
+                assert traceback is not None
+                frame = traceback.tb_frame
+                if (
+                    _id(frame.f_code) not in _private_codes
+                    and frame.f_globals is not _services_globals
+                ):
+                    frames.append(position)
+                traceback = traceback.tb_next
+            assert traceback is None
+            limit = _getattr(_sys, "tracebacklimit", None)
+            if limit is not None:
+                frames = frames[:limit] if limit >= 0 else frames[limit:]
+            summary.stack = _traceback.StackSummary(frames)
+        remove_private_frames(exception.__cause__, summary.__cause__)
+        remove_private_frames(exception.__context__, summary.__context__)
+        for child, child_summary in _zip(
+            _getattr(exception, "exceptions", ()),
+            _getattr(summary, "exceptions", ()) or (),
+        ):
+            remove_private_frames(child, child_summary)
+
+    remove_private_frames(error, rendered)
+    _sys.stderr.write("".join(rendered.format()))
+
+
 def _mcp_console_collect_plots(
     _BaseException=_builtins.BaseException,
     _base64=_base64,
     _io=_io,
-    _print_exc=_traceback.print_exc,
+    _print_exception=_mcp_console_print_exception,
     _sorted=_builtins.sorted,
     _sys=_sys,
 ):
@@ -424,13 +475,13 @@ def _mcp_console_collect_plots(
                 output = _io.BytesIO()
                 figure.savefig(output, format="png")
                 images.append(_base64.b64encode(output.getvalue()).decode("ascii"))
-            except _BaseException:
-                _print_exc()
+            except _BaseException as error:
+                _print_exception(error)
     finally:
         try:
             pyplot.close("all")
-        except _BaseException:
-            _print_exc()
+        except _BaseException as error:
+            _print_exception(error)
     return tuple(images)
 
 
@@ -449,7 +500,9 @@ def _mcp_console_eval_cell(
     _collect_plots=_mcp_console_collect_plots,
     _publish_plot=_services.publish_plot,
     _sys=_sys,
-    _print_exc=_traceback.print_exc,
+    _print_exception=_mcp_console_print_exception,
+    _ValueError=_builtins.ValueError,
+    _SyntaxError=_builtins.SyntaxError,
 ):
     try:
         module = _parse(source, filename=filename, mode="exec")
@@ -462,17 +515,23 @@ def _mcp_console_eval_cell(
             statements = _compile(module, filename, "exec")
             expression = None
 
-        if statements is not None:
-            _exec(statements, _main.__dict__)
-        if expression is not None:
-            _sys.displayhook(_eval(expression, _main.__dict__))
-    except _BaseException:
-        _print_exc(limit=0 if "\0" in source else None)
+    except _BaseException as error:
+        if "\0" in source and _isinstance(error, _ValueError):
+            error = _SyntaxError("source code string cannot contain null bytes")
+        _print_exception(error, source_error=_isinstance(error, _SyntaxError))
+    else:
+        try:
+            if statements is not None:
+                _exec(statements, _main.__dict__)
+            if expression is not None:
+                _sys.displayhook(_eval(expression, _main.__dict__))
+        except _BaseException as error:
+            _print_exception(error)
     try:
         for image in _collect_plots():
             _publish_plot(image)
-    except _BaseException:
-        _print_exc()
+    except _BaseException as error:
+        _print_exception(error)
     return None
 
 
@@ -683,3 +742,20 @@ def _mcp_console_display_setup_exception(
 
 
 _mcp_console.display_setup_exception = _mcp_console_display_setup_exception
+
+# The runtime runs with __main__ globals and private locals. Remember its code
+# objects so cell tracebacks can omit our frames without hiding user exec() code.
+_mcp_console_codes_to_record = []
+for _mcp_console_value in tuple(locals().values()):
+    if isinstance(_mcp_console_value, _types.FunctionType):
+        _mcp_console_codes_to_record.append(_mcp_console_value.__code__)
+    elif isinstance(_mcp_console_value, type):
+        for _mcp_console_member in vars(_mcp_console_value).values():
+            if isinstance(_mcp_console_member, _types.FunctionType):
+                _mcp_console_codes_to_record.append(_mcp_console_member.__code__)
+while _mcp_console_codes_to_record:
+    _mcp_console_code = _mcp_console_codes_to_record.pop()
+    _mcp_console_private_codes.add(id(_mcp_console_code))
+    for _mcp_console_constant in _mcp_console_code.co_consts:
+        if isinstance(_mcp_console_constant, _types.CodeType):
+            _mcp_console_codes_to_record.append(_mcp_console_constant)
