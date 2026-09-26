@@ -111,6 +111,9 @@ def run_case_subprocess(
         tempfile.TemporaryFile() as stderr,
     ):
         result = Path(directory) / "result.pickle"
+        # Cases can launch Console directly; keep account config out of defaults.
+        home = Path(directory) / "home"
+        home.mkdir(mode=0o700)
         started_at = time.monotonic()
         ownership_reader, ownership_writer = os.pipe()
         command = [
@@ -133,6 +136,7 @@ def run_case_subprocess(
                 pass_fds=(ownership_reader,),
                 env={
                     **os.environ,
+                    "HOME": str(home),
                     "MCP_CONSOLE_TEST_CASE_DEADLINE": str(started_at + timeout),
                 },
             )

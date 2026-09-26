@@ -359,6 +359,40 @@ class TranscriptRunnerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((self.root / "selected.marker").exists())
 
+    def test_cases_do_not_inherit_ambient_home_configuration(self) -> None:
+        environment = self.prepare_script()
+        ambient_home = self.root / "ambient-home"
+        config = ambient_home / ".agents/console/config.yaml"
+        config.parent.mkdir(parents=True)
+        config.write_text("invalid: [", encoding="utf-8")
+        environment["HOME"] = str(ambient_home)
+        self.suite.write_text(
+            PUBLIC_SUITE
+            # fmt: python
+            + code("""
+                import os
+
+
+                def test_selected(binary: Path) -> list[dict[str, str]]:
+                    home = Path(os.environ["HOME"])
+                    assert not (home / ".agents/console/config.yaml").exists(), home
+                    (binary.parents[2] / "case-home").write_text(str(home))
+                    return record(binary, "selected")
+                """),
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            ["scripts/test", "client_server/server/test_tools::selected"],
+            cwd=self.root,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotEqual((self.root / "case-home").read_text(), str(ambient_home))
+        self.assertTrue(config.exists())
+
     def test_script_creates_empty_timings_when_selected_case_is_skipped(self) -> None:
         environment = self.prepare_script()
         self.suite.write_text(
