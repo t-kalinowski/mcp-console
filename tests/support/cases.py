@@ -111,6 +111,8 @@ def run_case_subprocess(
         tempfile.TemporaryFile() as stderr,
     ):
         result = Path(directory) / "result.pickle"
+        workspace = Path(directory) / "workspace"
+        workspace.mkdir()
         started_at = time.monotonic()
         ownership_reader, ownership_writer = os.pipe()
         command = [
@@ -127,12 +129,15 @@ def run_case_subprocess(
         try:
             process = subprocess.Popen(
                 command,
+                cwd=workspace,
                 stdout=stdout,
                 stderr=stderr,
                 start_new_session=True,
                 pass_fds=(ownership_reader,),
                 env={
                     **os.environ,
+                    # Isolate Console files without changing host tool state.
+                    "MCP_CONSOLE_HOME": str(Path(directory) / "console"),
                     "MCP_CONSOLE_TEST_CASE_DEADLINE": str(started_at + timeout),
                 },
             )

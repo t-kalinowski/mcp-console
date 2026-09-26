@@ -263,8 +263,8 @@ Quarto exports remain source-only and execute the captured cells when rendered; 
 ### Bounded output and retained text
 
 Tool results return bounded text previews with the beginning and latest tail under an 8 KiB total UTF-8 budget; images have separate limits.
-A retained-output path is relative to the Console server's recording workspace on the controller.
-Reading omitted text requires a filesystem tool with access to that controller directory; access only to the execution target or another client host is insufficient.
+A retained-output path is relative to the controller's launch directory for project recordings and absolute for home recordings.
+Reading omitted text requires a filesystem tool with access to the selected controller directory; access only to the execution target or another client host is insufficient.
 Console does not transfer these files or expose a read/search tool.
 A log can contain only a retained prefix after the file limit or a write failure; the preview still observes the latest output and reports the loss.
 See [the built-in runtime guide](BUILTIN_RUNTIME.md#output-and-notices).

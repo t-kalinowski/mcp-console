@@ -11,6 +11,13 @@ Only full runs without a case, suite, or `--locate` selector audit orphan snapsh
 Smoke and focused updates preserve unselected snapshots.
 The development wrapper records completed per-mode durations in `case-timings.jsonl` beside its completion record, including cases too fast for the progress reporter's slow-case messages.
 
+Each case gets a private `MCP_CONSOLE_HOME` for fallback configuration and records.
+Cases also run from a temporary workspace, so an existing checkout `.agents/console` cannot capture their recordings or supply configuration.
+The runner removes the workspace and Console home after the case exits.
+`HOME` and the caller's R, Python, uv, and Docker environment remain unchanged; test discovery does not probe runtimes to reconstruct their storage paths.
+`McpClient` also isolates Console home when used outside the runner and creates no project config file.
+Cases that exercise home discovery pass their chosen `HOME` or `MCP_CONSOLE_HOME` explicitly and use `use_home_configuration=True`; remove the inherited `MCP_CONSOLE_HOME` when testing the default `~/.agents/console` location.
+
 Docker cases use the shared Linux daemon capability in `tests/support/docker.py` and the reproducible `examples/docker/Dockerfile`.
 Build the fixture before running tests and set `MCP_CONSOLE_TEST_DOCKER_IMAGE` to its tag or ID; see `docs/DOCKER.md` for commands.
 Missing Docker access or an unselected fixture skips integration cases; it is not Docker validation.

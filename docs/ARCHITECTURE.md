@@ -533,11 +533,14 @@ The [relay protocol](RELAY_PROTOCOL.md) owns that ordering guarantee, and the [b
 ## Recording, cell output, and image artifacts
 
 Recording is a server responsibility and does not add messages to either private protocol.
-On the first `send` call, the server creates a private run directory under `.agents/console/sessions/` in its working directory.
+On the first `send` call, the server creates a private run directory under the launch working directory's `.agents/console/sessions/` if `.agents/console` already exists there.
+Otherwise it writes under `~/.agents/console/sessions/` without creating a project `.agents` directory.
+`MCP_CONSOLE_HOME` can replace the default `~/.agents/console` directory; project directory selection still takes precedence.
+Raw-log paths returned to clients are relative to the launch directory for project recordings and absolute for home recordings.
 It appends tool calls and assembled results to `internal/events.jsonl`.
 The initial `session_started` event records whether dynamic environment resolution is available.
 The Quarto projection uses that capability and the captured Python-only managed selection separately to declare initial requirements.
-For SSH sessions, it also records `target.transport` and the initial remote `target.workspace` separately from the local `working_directory` that owns the recording.
+For SSH sessions, it also records `target.transport` and the initial remote `target.workspace` separately from the local launch `working_directory`.
 Docker session metadata additionally records compute kind, requested/resolved image identity, and container workspace; generation events identify created containers.
 Docker Sandbox metadata records its compute provider, template digest, CLI version, target workspace, and shares; generation events identify VM names and UUIDs separately from container IDs.
 Declared binds and shared paths can expose controller records to the workload.

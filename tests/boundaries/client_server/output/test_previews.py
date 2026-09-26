@@ -238,7 +238,8 @@ def test_keeps_tail_when_recording_is_disabled(
     with tempfile.TemporaryDirectory() as temporary:
         workspace = Path(temporary)
         (workspace / ".agents").mkdir()
-        (workspace / ".agents/console").write_text("occupied")
+        (workspace / ".agents/console").mkdir()
+        (workspace / ".agents/console/sessions").write_text("occupied")
         with McpClient(
             binary,
             execution.serve("--worker", str(worker)),

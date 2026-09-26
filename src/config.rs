@@ -1,5 +1,7 @@
 //! Schema-independent project-file and command-line configuration layering.
 
+use std::path::Path;
+
 use serde_json::{Map, Value};
 
 mod inline;
@@ -7,23 +9,27 @@ mod yaml;
 
 /// Read one optional project mapping, then apply overrides in argument order.
 /// Absence is distinct from an explicitly supplied empty configuration.
-pub fn load(path: &str, overrides: &[String]) -> Result<Option<Value>, String> {
+pub fn load(path: Option<&Path>, overrides: &[String]) -> Result<Option<Value>, String> {
     // A dangling symlink or an unreadable existing file must reach read_to_string.
-    let mut value = match std::fs::symlink_metadata(path) {
-        Err(error)
-            if matches!(
-                error.kind(),
-                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
-            ) =>
-        {
-            None
+    let mut value = if let Some(path) = path {
+        match std::fs::symlink_metadata(path) {
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) =>
+            {
+                None
+            }
+            Err(error) => return Err(format!("cannot inspect '{}': {error}", path.display())),
+            Ok(_) => {
+                let source = std::fs::read_to_string(path)
+                    .map_err(|error| format!("cannot read '{}': {error}", path.display()))?;
+                Some(yaml::load(&source).map_err(|error| format!("{}: {error}", path.display()))?)
+            }
         }
-        Err(error) => return Err(format!("cannot inspect '{path}': {error}")),
-        Ok(_) => {
-            let source = std::fs::read_to_string(path)
-                .map_err(|error| format!("cannot read '{path}': {error}"))?;
-            Some(yaml::load(&source).map_err(|error| format!("{path}: {error}"))?)
-        }
+    } else {
+        None
     };
     for argument in overrides {
         let (key, source) = argument

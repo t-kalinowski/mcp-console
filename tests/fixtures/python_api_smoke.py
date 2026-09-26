@@ -3,6 +3,7 @@
 import asyncio
 import json
 import sys
+import tempfile
 from importlib.metadata import version
 from pathlib import Path
 
@@ -64,8 +65,17 @@ async def main() -> None:
     ThreadStartParams(config={"mcp_servers": {"console": mcp_console.codex.server()}})
 
 
-sync_main()
-asyncio.run(main())
+with tempfile.TemporaryDirectory(prefix="mcp-console-sdk-smoke-") as directory:
+    options["server_parameters"]["cwd"] = directory
+    options["server_parameters"]["env"]["MCP_CONSOLE_HOME"] = str(
+        Path(directory) / "console"
+    )
+    sync_main()
+    asyncio.run(main())
+    journals = list(
+        (Path(directory) / "console/sessions").glob("*/internal/events.jsonl")
+    )
+    assert len(journals) == 2, journals
 print(sys.version)
 for package in (
     "mcp-console",

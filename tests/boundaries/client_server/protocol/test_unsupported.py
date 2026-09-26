@@ -19,7 +19,7 @@ def test_keeps_the_public_interface_without_starting_workers(
 ) -> Transcript:
     environment = os.environ.copy()
     environment.pop("MCP_CONSOLE_LANGUAGES", None)
-    client = McpClient(binary, SANDBOXED.serve(), environment)
+    client = McpClient(binary, SANDBOXED.serve(), environment, record_in_project=False)
     assert client.temporary_directory is not None
     workspace = Path(client.temporary_directory.name)
     client.initialize_and_list_tools()
