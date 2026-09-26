@@ -83,7 +83,6 @@ def main() -> None:
             "external_ssh": EXTERNAL_SSH,
         }.items()
     }
-    cache = Path(os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache"))
     report = {
         "checkout": str(ROOT),
         "revision": query("revision", "git", "rev-parse", "HEAD")
@@ -121,7 +120,6 @@ def main() -> None:
             "wheel_staging": companion["staging_directory"],
             "cargo_home": os.environ.get("CARGO_HOME", str(Path.home() / ".cargo")),
             "uv": query("uv_cache", "uv", "cache", "dir") if tools["uv"]["version"] else None,
-            "host_budget": str(cache / "mcp-console/checks"),
         },
         "required_missing": missing,
         "probe_errors": errors,

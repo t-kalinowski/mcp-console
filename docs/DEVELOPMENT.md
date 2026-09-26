@@ -123,6 +123,32 @@ These routes are starting points; read the relevant contract and case before cha
 | Fixture serialization  | `tests/support/snapshots.py`, `tests/transcript_runner.py` | `tests/transcript_runner.py`                      | For handshake changes: `scripts/test --update client_server/server/test_tools::initializes_and_lists_tools` |
 | Validation ownership   | `checkout_workflow.py`, `build_backend.py`                 | `python3 tests/workflow.py`                       | No transcript snapshots                                                                                     |
 
+For MCP admission changes, use the public server with a custom worker and resolver sentinels:
+
+```sh
+scripts/test \
+  client_server/server/test_tools::validates_send_arguments \
+  client_server/server/test_tools::validates_standalone_requirement_arguments \
+  client_server/server/test_tools::invalid_send_has_no_external_effects \
+  client_server/server/test_tools::bounds_argument_decoding_errors
+```
+
+These checks reject malformed requests before startup and with a live worker without preparing a package environment.
+Rejected requests contain real R, Python, and SQL source; the live-worker probes execute Python cells in the fixture and record every evaluation.
+Resolver capability discovery is distinct from dependency preparation.
+For preparation/lifecycle changes, also run the real-runtime sequence and the existing causal startup and custom-worker restart cases:
+
+```sh
+scripts/test \
+  client_server/requirements/test_r::prepares_with_empty_stdin_then_restarts \
+  client_server/requirements/test_custom_workers::standalone_preparation_before_worker_startup_is_causal_and_idempotent \
+  client_server/requirements/test_custom_workers::custom_worker_restart_prepares_r_and_duckdb_requirements
+```
+
+`prepares_with_empty_stdin_then_restarts` owns the successful preparation, repeated preparation with empty stdin, and preparation-plus-restart sequence formerly in `validates_send_arguments`.
+It uses small R packages, verifies their availability in the managed library, and checks live-state preservation and reset in direct and sandboxed execution.
+The smoke selection and its real R/Python/SQL, persistent-state, mixed-language recording, and native-sandbox executions remain unchanged.
+
 A case selector narrows a suite further, for example:
 
 ```sh
@@ -231,21 +257,18 @@ Commands invoked outside these entry points cannot be serialized by the wrapper.
 Keep separate Console checkouts' mutable build outputs separate; sharing download caches does not authorize sharing application `target` or wheel staging.
 The companion has separate source ownership at `<source-checkout>.stage.lock`, outside its Git checkout and Cargo output.
 That ownership covers fetch, build, and artifact copying, including when `MCP_CONSOLE_SANDBOX_SOURCE` selects the same source from different Console worktrees.
-A conflicting stage exits with `sandbox source is busy`; retry after its owner finishes.
+A concurrent stage waits for that owner, then checks Cargo freshness and stages the runner into its own checkout.
 The same cooperative owner-lifetime limits apply to source ownership.
 
-## Host concurrency
+## Concurrent worktrees
 
 `scripts/test --help`, `--list`, and `--locate` run before ownership or compilation; invalid test arguments also fail before building.
 Help and syntax-only validation use Python's standard library before invoking `uv`.
 Listing, location lookup, and semantic selector validation may prepare the script's dependency environment.
-Aggregate checks and transcript runs share a host budget of one active owner by default.
-Set `MCP_CONSOLE_CHECK_SLOTS` to a positive integer to select another budget, using the same setting for concurrent callers.
-When every slot is occupied, the command exits with `full-check budget is busy` before running a phase.
-Nested commands reuse their parent's slot.
-Slot locks live in `${XDG_CACHE_HOME:-$HOME/.cache}/mcp-console/checks/`.
-An explicitly configured `XDG_CACHE_HOME` must be absolute; relative paths fail before phases run because they would make the budget checkout-local.
-Changing the budget does not change case assertions, deadlines, or transcript worker concurrency.
+Checks and transcript runs in separate worktrees can run concurrently.
+Each checkout owns its mutable build output, while staging serializes access to the shared pinned companion source and Cargo output.
+An explicitly configured `XDG_CACHE_HOME` must be absolute for companion staging.
+Transcript worker concurrency remains controlled by `scripts/test --jobs`.
 
 ## Completion records
 

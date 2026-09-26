@@ -30,7 +30,6 @@ result:
       text: |
         before error
         Traceback (most recent call last):
-          File "<string>", line 466, in _mcp_console_eval_cell
           File "<mcp-console:python:e2>", line 1, in <module>
         ValueError: recoverable
   isError: false
@@ -92,9 +91,7 @@ result:
     - type: text
       text: |
         Traceback (most recent call last):
-          File "<string>", line 468, in _mcp_console_eval_cell
           File "<mcp-console:python:e6>", line 1, in <module>
-          File "<string>", line 49, in _console_input
         KeyboardInterrupt
   isError: false
 ---

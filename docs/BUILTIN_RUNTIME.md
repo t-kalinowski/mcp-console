@@ -328,6 +328,8 @@ Imports, assignments, functions, and objects remain available across cells and t
 The final expression of a cell is displayed through Python's normal display hook; source is not echoed.
 
 An uncaught exception prints its traceback and completes as a language outcome.
+Python cell tracebacks omit Console's private runtime frames while retaining user, standard-library, and third-party frames, including frames from user-created `exec()` code.
+Source syntax errors print the Python diagnostic and any available source location without a runtime traceback.
 The Python session remains usable, including state established before the exception.
 Python 3.10 or later is required.
 When R is available, it is initialized eagerly and reticulate supplies Python interpreter selection, candidate configuration, and cross-language access.

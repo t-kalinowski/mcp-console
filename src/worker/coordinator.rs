@@ -218,12 +218,14 @@ fn evaluate_cell(
     if let Some(message) = take_worker_failure() {
         return Err(message);
     }
-    let result = if cell.source.contains('\0') {
-        let message = match cell.language {
-            Language::R => "Error: R source cannot contain NUL\n",
-            Language::Python => "SyntaxError: source code string cannot contain null bytes\n",
-            Language::Sql => "Error: SQL source cannot contain NUL\n",
-        };
+    let nul_error = match cell.language {
+        Language::R if cell.source.contains('\0') => Some("Error: R source cannot contain NUL\n"),
+        Language::Sql if cell.source.contains('\0') => {
+            Some("Error: SQL source cannot contain NUL\n")
+        }
+        _ => None,
+    };
+    let result = if let Some(message) = nul_error {
         emit_output(ConsoleChannel::Diagnostic, message.as_bytes());
         Ok(())
     } else {

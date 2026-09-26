@@ -40,7 +40,6 @@ class WorkflowTests(unittest.TestCase):
             shutil.copy2(source, self.root / name)
         self.environment = os.environ | {
             "XDG_CACHE_HOME": str(self.directory / "cache"),
-            "MCP_CONSOLE_CHECK_SLOTS": "1",
         }
         self.environment.pop("MCP_CONSOLE_CHECKOUT_LOCKS", None)
         self.environment.pop("MCP_CONSOLE_VALIDATION_RUN", None)
@@ -622,77 +621,14 @@ class WorkflowTests(unittest.TestCase):
         result = self.run_command("scripts/with-checkout", sys.executable, "-c", "pass")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_full_gate_budget_is_shared_across_checkouts(self) -> None:
+    def test_checks_in_separate_checkouts_run_concurrently(self) -> None:
         other = self.directory / "other"
         shutil.copytree(self.root, other)
         process = self.start_check()
         result = self.run_command("scripts/check", root=other)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("full-check budget is busy", result.stdout + result.stderr)
-        self.environment["MCP_CONSOLE_CHECK_SLOTS"] = "2"
-        result = self.run_command("scripts/check", root=other)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIsNone(process.poll())
         self.finish_check(process)
-
-    def test_empty_xdg_cache_keeps_budget_shared_across_checkouts(self) -> None:
-        self.environment["HOME"] = str(self.directory / "home")
-        self.environment["XDG_CACHE_HOME"] = ""
-        other = self.directory / "other"
-        shutil.copytree(self.root, other)
-        process = self.start_check()
-        result = self.run_command("scripts/check", root=other)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("full-check budget is busy", result.stderr)
-        self.assertFalse((self.root / "mcp-console").exists())
-        self.finish_check(process)
-
-    def test_relative_xdg_cache_is_rejected_before_running_phases(self) -> None:
-        self.environment["XDG_CACHE_HOME"] = ".cache"
-        result = self.run_command("scripts/check")
-        self.assertNotEqual(result.returncode, 0, result.stderr)
-        self.assertIn("XDG_CACHE_HOME must be an absolute path", result.stderr)
-        self.assertFalse((self.root / ".cache").exists())
-        self.assertEqual(self.records(), [])
-
-    def test_nested_check_reuses_later_slot_after_first_slot_is_released(self) -> None:
-        second, third = (self.directory / name for name in ("second", "third"))
-        for root in (second, third):
-            shutil.copytree(self.root, root)
-        self.environment["MCP_CONSOLE_CHECK_SLOTS"] = "2"
-        ready = FifoCheckpoint.create(self.directory / "nested-ready")
-        self.addCleanup(ready.close)
-        self.environment["NESTED_READY"] = str(ready.path)
-        self.write_script(
-            "scripts/check-core",
-            # fmt: python
-            """
-            import os
-            import subprocess
-            import sys
-
-            if os.environ.get("NESTED"):
-                with open(os.environ["NESTED_READY"], "wb", buffering=0) as receipt:
-                    receipt.write(b"1")
-                assert sys.stdin.buffer.read(1) == b"1"
-            else:
-                environment = os.environ | {"NESTED": "1"}
-                environment.pop("HOLD_STAGE", None)
-                subprocess.run(["scripts/check"], env=environment, check=True)
-            """,
-        )
-        shutil.copy2(self.root / "scripts/check-core", second / "scripts/check-core")
-        # The first holder and third caller use the ordinary, non-nesting fixture.
-        shutil.copy2(third / "scripts/check-core", self.root / "scripts/check-core")
-        first = self.start_check()
-        nested = self.start_check(second)
-        self.finish_check(first)
-        assert nested.stdin is not None
-        nested.stdin.write("1")
-        nested.stdin.flush()
-        ready.wait("nested check owns its inherited slot")
-        result = self.run_command("scripts/check", root=third)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.finish_check(nested)
 
     def test_nested_launch_error_records_failure_after_successful_phase(self) -> None:
         shutil.copy2(ROOT / "scripts/check-core", self.root / "scripts/check-core")

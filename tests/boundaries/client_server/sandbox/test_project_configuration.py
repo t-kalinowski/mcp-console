@@ -13,7 +13,7 @@ from support.client import McpClient
 from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
 from support.records import TranscriptWithCompanions
-from support.requirements import NATIVE_FIXTURES, SANDBOX, requires
+from support.requirements import NATIVE_FIXTURES, R, SANDBOX, requires
 from support.sandbox_configuration import NATIVE_PROXY, host_tcp_ports
 from support.suites import run_this_suite
 
@@ -165,12 +165,13 @@ def _snapshot_survives_replacement(
         )
 
 
-@requires(SANDBOX, NATIVE_FIXTURES)
+# The final restart prepares live requirements, which currently requires R.
+@requires(SANDBOX, NATIVE_FIXTURES, R)
 def test_retains_project_settings_after_edits(binary: Path) -> TranscriptWithCompanions:
     return _snapshot_survives_replacement(binary, configured=True)
 
 
-@requires(SANDBOX, NATIVE_FIXTURES)
+@requires(SANDBOX, NATIVE_FIXTURES, R)
 def test_retains_defaults_after_config_creation(
     binary: Path,
 ) -> TranscriptWithCompanions:

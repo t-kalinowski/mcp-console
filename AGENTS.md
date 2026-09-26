@@ -127,7 +127,7 @@ scripts/test --update BOUNDARY/SUITE[::CASE]
 `scripts/format` attempts Ruff, Yamark, rustfmt, and Air in sequence and reports each result.
 A missing or failing formatter does not prevent the remaining formatters from running; the default exits successfully, while `--strict` returns failure if any formatter failed.
 Review its output and resulting changes.
-Validation records and phase logs remain in `.dev-workflow/runs/`; see `docs/DEVELOPMENT.md` for ownership and the host concurrency budget.
+Validation records and phase logs remain in `.dev-workflow/runs/`; see `docs/DEVELOPMENT.md` for checkout ownership and concurrent worktrees.
 `scripts/check` is the ordinary final local gate: stage the companion, validate extracted runtime sources, check architecture, check Rust formatting and Clippy, run Rust tests in debug, and run the explicit smoke transcript profile against the release executable.
 `scripts/check --quick` is a backwards-compatible alias for this default.
 `scripts/check --full` adds repository-tooling self-tests, all capability-applicable transcripts, and uv source and wheel installation checks.
@@ -289,13 +289,13 @@ Keep these invariants intact:
   Normalize only incidental values such as run-specific temporary paths; do not replace behavior with summaries or placeholders.
   Native R fidelity cases may record a live-reference comparison after asserting exact equality with the same source in `Rscript --vanilla`, including error calls and condition classes; see `tests/boundaries/README.md`.
   Synthetic stress repetitions may use lossless text-and-count notation after exact full-response assertions; see `tests/support/evidence.py`.
-- Show line breaks directly in multiline string literals so messages, documents, and embedded programs are readable in source.
-  As a rule, do not use more than two `\n` escapes to lay out one string.
-  Keep escapes when the newline itself is data or a short delimiter, terminator, or expected value is clearer with them.
-  Preserve exact indentation and trailing newlines when changing a literal.
-- Keep embedded R, Python, SQL, and shell fixture programs as readable multiline strings.
-  Use escapes such as `\n` only when the character is data.
-- Put `# fmt: r` or `# fmt: python` immediately before each embedded R or Python test program, including `code(...)` calls nested inside other calls.
+- Prioritize source readability when choosing a string representation.
+  Short strings and fixtures may use `\n` escapes when easy to read, such as `"#!/bin/sh\nexit 99\n"`.
+  Joining a short list of lines with `"\n"` or writing lines separately is also acceptable when clearer.
+  Prefer readable multiline literals for longer messages, documents, and embedded R, Python, SQL, or shell programs.
+  Dedent indented literals when needed to keep the surrounding source readable.
+  Preserve exact content, indentation, and trailing newlines when changing representations.
+- Put `# fmt: r` or `# fmt: python` immediately before each multiline embedded R or Python test program, including `code(...)` calls nested inside other calls.
   Keep `code(` and the opening string delimiter on the same line, immediately below the directive.
   Indent the payload and closing delimiter one Python indentation level deeper than the line containing `code(`, preserving the embedded program's own indentation.
   Recheck this indentation after running `scripts/format` and in the committed source.

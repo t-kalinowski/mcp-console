@@ -5,6 +5,8 @@ import os
 import shutil
 import sys
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -22,7 +24,9 @@ from support.ssh import configure, peer_environment
 from support.suites import run_this_suite
 
 
-def test_invalid_send_has_no_external_effects(binary: Path) -> Transcript:
+@contextmanager
+def _admission_client(binary: Path) -> Iterator[tuple[McpClient, Path]]:
+    """Allow capability discovery, but record and reject actual preparation."""
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
@@ -34,13 +38,18 @@ def test_invalid_send_has_no_external_effects(binary: Path) -> Transcript:
                 #!/bin/sh
 
                 set -eu
-                printf 'resolver started\n' >> "$MCP_CONSOLE_TEST_RESOLVER_RECORD"
+                printf '%s\n' "$*" >> "$MCP_CONSOLE_TEST_RESOLVER_RECORD"
+                if [ "$#" -eq 1 ] && [ "$1" = "--version" ]; then
+                  printf 'ir 0.4.0\n'
+                  exit 0
+                fi
                 exit 97
                 """),
             encoding="utf-8",
         )
         resolver_probe.chmod(0o755)
         (fake_bin / "ir").symlink_to(resolver_probe)
+        (fake_bin / "uv").symlink_to(resolver_probe)
 
         environment = os.environ.copy()
         path = environment.get("PATH")
@@ -48,34 +57,50 @@ def test_invalid_send_has_no_external_effects(binary: Path) -> Transcript:
         environment["PATH"] = os.pathsep.join((str(fake_bin), path))
         environment["RETICULATE_UV"] = str(resolver_probe)
         resolver_record = temporary / "resolver-record"
+        resolver_record.touch()
         worker_started = temporary / "zod-started"
+        environment["TMPDIR"] = str(temporary)
         environment["MCP_CONSOLE_TEST_RESOLVER_RECORD"] = str(resolver_record)
         environment["MCP_CONSOLE_TEST_ZOD_STARTED"] = str(worker_started)
+        environment["MCP_CONSOLE_TEST_ZOD_PYTHON_CELLS"] = str(
+            temporary / "cells.jsonl"
+        )
 
         with McpClient(
             binary, DIRECT.serve("--worker", str(zod)), environment
         ) as client:
             client.initialize_and_list_tools()
-            invalid = (
-                {"r": "echo invalid R cell ran", "requirements": {"r": [""]}},
-                {
-                    "python": "echo invalid Python cell ran",
-                    "requirements": {
-                        "python": ["example @ https://example.invalid/example.whl"]
-                    },
-                },
-                {
-                    "sql": "echo invalid DuckDB cell ran",
-                    "requirements": {"duckdb": ["spatial FROM community"]},
-                },
+            yield client, temporary
+            invocations = resolver_record.read_text(encoding="utf-8").splitlines()
+            assert all(arguments == "--version" for arguments in invocations), (
+                "invalid input started dependency preparation",
+                invocations,
             )
-            for arguments in invalid:
-                result = client.send(**arguments)
-                assert result["isError"] is True, result
 
-            assert not resolver_record.exists(), "invalid input started a host resolver"
-            assert not worker_started.exists(), "invalid input started or ran a worker"
-            return client.finish()
+
+def test_invalid_send_has_no_external_effects(binary: Path) -> Transcript:
+    with _admission_client(binary) as (client, temporary):
+        invalid = (
+            {"r": "stop('invalid R cell ran')", "requirements": {"r": [""]}},
+            {
+                "python": "raise AssertionError('invalid Python cell ran')",
+                "requirements": {
+                    "python": ["example @ https://example.invalid/example.whl"]
+                },
+            },
+            {
+                "sql": "SELECT 1",
+                "requirements": {"duckdb": ["spatial FROM community"]},
+            },
+        )
+        for arguments in invalid:
+            result = client.send(**arguments)
+            assert result["isError"] is True, result
+
+        assert not (temporary / "zod-started").exists(), (
+            "invalid input started a worker"
+        )
+        return client.finish()
 
 
 @executions(DIRECT, SANDBOXED)
@@ -385,106 +410,134 @@ def test_limits_send_languages_from_environment(binary: Path) -> Transcript:
 
 @requires(WORKER)
 def test_validates_send_arguments(binary: Path) -> Transcript:
-    with McpClient(binary, DIRECT.serve()) as client:
-        client.initialize_and_list_tools()
-        client.send(
-            # fmt: python
-            python=code("""
-                print("hello")
-                """),
-            wait_ms=0,
+    with _admission_client(binary) as (client, temporary):
+        _reject_send_arguments(client)
+        assert not (temporary / "zod-started").exists(), (
+            "invalid input started a worker"
         )
-        result = client.send(
-            r="1",
-            python="1",
-            sql="SELECT 1",
-            control="restart",
-            requirements={"r": ["praise"]},
-        )
-        assert result["isError"] is True, result
-        assert result["content"][0]["text"] == (
-            "only one of `r`, `python`, or `sql` may be supplied"
-        ), result
 
-        result = client.send(control="prepare")
-        assert result["isError"] is True, result
-        assert "prepare" in result["content"][0]["text"], result
+        # fmt: python
+        setup = code("""
+            import os
 
-        result = client.send(requirements={"r": ["tidyverse"]})
-        assert result == {
-            "content": [{"type": "text", "text": "[prepared]"}],
-            "isError": False,
-        }, result
+            worker_pid = os.getpid()
+            sentinel = 42
+            """)
+        result = client.send(python=setup)
+        assert result["content"] == [{"type": "text", "text": "[done]"}], result
+        _reject_send_arguments(client)
+        # fmt: python
+        verify = code("""
+            assert os.getpid() == worker_pid
+            assert sentinel == 42
+            print(sentinel)
+            """)
+        result = client.send(python=verify)
+        assert result["content"] == [{"type": "text", "text": "42\n"}], result
+        assert not (temporary / "zod-sigint-received").exists()
 
-        result = client.send(stdin="", requirements={"r": ["tidyverse"]})
-        assert result == {
-            "content": [{"type": "text", "text": "[prepared]"}],
-            "isError": False,
-        }, result
+        # An accepted stdin write follows every rejected stdin request in order.
+        result = client.send(python="print(input())", stdin="accepted\n")
+        assert result["content"] == [{"type": "text", "text": "accepted\n"}], result
+        cells = [
+            json.loads(line)
+            for line in (temporary / "cells.jsonl").read_text().splitlines()
+        ]
+        assert cells == [
+            {"kind": "evaluate", "language": "python", "source": source}
+            for source in (setup, verify, "print(input())")
+        ], cells
+        result = client.send(r=None)
+        assert result["content"] == [{"type": "text", "text": "\n[idle]"}], result
+        return client.finish()
 
-        result = client.send(stdin="answer\n", requirements={"r": ["tidyverse"]})
-        assert result["isError"] is True, result
-        assert result["content"][0]["text"] == (
-            "requirements-only `send` performs standalone preparation and cannot also "
-            "queue stdin"
-        ), result
 
-        result = client.send(
-            control="interrupt",
-            requirements={"r": ["tidyverse"]},
-        )
-        assert result["isError"] is True, result
-        assert result["content"][0]["text"] == (
-            '`requirements` with `control = "interrupt"` requires a code cell'
-        ), result
+def _reject_send_arguments(client: McpClient) -> None:
+    result = client.send(
+        # fmt: python
+        python=code("""
+            print("hello")
+            """),
+        wait_ms=0,
+    )
+    assert result["isError"] is True, result
+    assert result["content"][0]["text"] == (
+        "failed to deserialize parameters: unknown field `wait_ms`, expected one "
+        "of `r`, `python`, `sql`, `control`, `requirements`, `stdin`, `timeout_ms`"
+    ), result
+    result = client.send(
+        r="1",
+        python="1",
+        sql="SELECT 1",
+        control="restart",
+        requirements={"r": ["praise"]},
+    )
+    assert result["isError"] is True, result
+    assert result["content"][0]["text"] == (
+        "only one of `r`, `python`, or `sql` may be supplied"
+    ), result
 
-        result = client.send(
-            control="restart",
-            requirements={"r": ["tidyverse"]},
-        )
-        assert result.get("isError") is not True, result
+    result = client.send(control="prepare")
+    assert result["isError"] is True, result
+    assert result["content"][0]["text"] == (
+        "failed to deserialize parameters: unknown variant `prepare`, expected "
+        "`interrupt` or `restart`"
+    ), result
 
-        result = client.send(r="stop('cell was run')", requirements={})
+    result = client.send(stdin="answer\n", requirements={"r": ["praise"]})
+    assert result["isError"] is True, result
+    assert result["content"][0]["text"] == (
+        "requirements-only `send` performs standalone preparation and cannot also "
+        "queue stdin"
+    ), result
+
+    result = client.send(
+        control="interrupt",
+        stdin="must not queue\n",
+        requirements={"r": ["praise"]},
+    )
+    assert result["isError"] is True, result
+    assert result["content"][0]["text"] == (
+        '`requirements` with `control = "interrupt"` requires a code cell'
+    ), result
+
+    for control in (None, "restart"):
+        result = client.send(r="stop('cell was run')", control=control, requirements={})
         assert result["isError"] is True, result
         assert result["content"][0]["text"] == (
             "at least one of `requirements.r`, `requirements.python`, or "
             "`requirements.duckdb` is required"
         ), result
 
-        result = client.send(
-            r="stop('cell was run')",
-            requirements={"r": [""]},
-        )
-        assert result["isError"] is True, result
-        assert (
-            result["content"][0]["text"] == "R requirement strings must not be empty"
-        ), result
+    result = client.send(
+        r="stop('cell was run')",
+        requirements={"r": [""]},
+    )
+    assert result["isError"] is True, result
+    assert result["content"][0]["text"] == "R requirement strings must not be empty", (
+        result
+    )
 
-        invalid_python = "example @ https://example.invalid/example.whl"
-        result = client.send(
-            r="stop('cell was run')",
-            requirements={"python": [invalid_python]},
-        )
-        assert result["isError"] is True, result
-        assert result["content"][0]["text"] == (
-            f"Python requirement `{invalid_python}` is not accepted: host-side managed "
-            "resolution accepts named package requirements only"
-        ), result
+    invalid_python = "example @ https://example.invalid/example.whl"
+    result = client.send(
+        r="stop('cell was run')",
+        requirements={"python": [invalid_python]},
+    )
+    assert result["isError"] is True, result
+    assert result["content"][0]["text"] == (
+        f"Python requirement `{invalid_python}` is not accepted: host-side managed "
+        "resolution accepts named package requirements only"
+    ), result
 
-        result = client.send(
-            r="stop('cell was run')",
-            requirements={"duckdb": ["spatial FROM community"]},
-        )
-        assert result["isError"] is True, result
-        assert result["content"][0]["text"] == (
-            "DuckDB extension names must start with a lowercase ASCII letter and "
-            "contain only lowercase ASCII letters, digits, and underscores"
-        ), result
-
-        client.send(r=None)
-        output = client.transcript[-1]["result"]["content"][0]["text"]
-        assert output == "\n[idle]", output
-        return client.finish()
+    result = client.send(
+        r="stop('cell was run')",
+        requirements={"duckdb": ["spatial FROM community"]},
+    )
+    assert result["isError"] is True, result
+    assert result["content"][0]["text"] == (
+        "DuckDB extension names must start with a lowercase ASCII letter and "
+        "contain only lowercase ASCII letters, digits, and underscores"
+    ), result
 
 
 @executions(DIRECT, SANDBOXED)
@@ -549,8 +602,7 @@ def test_bounds_argument_decoding_errors(
 
 
 def test_validates_standalone_requirement_arguments(binary: Path) -> Transcript:
-    with McpClient(binary, DIRECT.serve()) as client:
-        client.initialize_and_list_tools()
+    with _admission_client(binary) as (client, temporary):
         client.send(requirements={})
         result = client.transcript[-1]["result"]
         assert result["isError"] is True
@@ -619,6 +671,9 @@ def test_validates_standalone_requirement_arguments(binary: Path) -> Transcript:
         assert result["content"][0]["text"] == (
             "DuckDB extension names must start with a lowercase ASCII letter and "
             "contain only lowercase ASCII letters, digits, and underscores"
+        )
+        assert not (temporary / "zod-started").exists(), (
+            "invalid input started a worker"
         )
         return client.finish()
 
