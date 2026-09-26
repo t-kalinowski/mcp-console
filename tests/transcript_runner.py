@@ -593,7 +593,7 @@ class TranscriptRunnerTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(expected, result.stderr)
 
-    def test_sbx_discovery_does_not_create_build_output(self) -> None:
+    def test_sbx_discovery_accepts_newer_versions_without_build_output(self) -> None:
         scripts = self.root / "scripts"
         scripts.mkdir()
         shutil.copy2(ROOT / "scripts/test", scripts / "test")
@@ -610,6 +610,7 @@ class TranscriptRunnerTests(unittest.TestCase):
                 from support.docker_sandbox import DOCKER_SANDBOX
                 from support.requirements import requires
 
+                assert DOCKER_SANDBOX.available, DOCKER_SANDBOX.reason
                 test_selected = requires(DOCKER_SANDBOX)(test_selected)
                 """)
         )
@@ -624,7 +625,7 @@ class TranscriptRunnerTests(unittest.TestCase):
                 from pathlib import Path
 
                 Path("sbx-probed").touch()
-                print("sbx version: v0.42.1 fixture" if sys.argv[1] == "version" else "[]")
+                print("sbx version: v99.0.0 fixture" if sys.argv[1] == "version" else "[]")
                 """)
         )
         sbx.chmod(0o755)
@@ -635,7 +636,7 @@ class TranscriptRunnerTests(unittest.TestCase):
             "MCP_CONSOLE_TEST_SBX_INNER_DOCKER": "0",
         }
         result = subprocess.run(
-            [scripts / "test", "--list"],
+            [scripts / "test", "--list", "client_server/server/test_tools::selected"],
             cwd=self.root,
             env=environment,
             capture_output=True,
