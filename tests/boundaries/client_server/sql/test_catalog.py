@@ -318,6 +318,7 @@ def test_queries_a_ragnar_store_created_in_r(
 
     # fmt: r
     r = code(r"""
+        managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
         stopifnot(
           identical(
             DBI::dbGetQuery(
@@ -326,7 +327,7 @@ def test_queries_a_ragnar_store_created_in_r(
             )$value,
             42L
           ),
-          identical(dirname(find.package("ragnar")), .libPaths()[[1L]])
+          identical(dirname(find.package("ragnar")), .libPaths()[[managed_index]])
         )
         embed_banana <- function(x) {
           out <- matrix(1, nrow = length(x), ncol = 2L)

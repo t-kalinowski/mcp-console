@@ -229,7 +229,8 @@ def test_first_cell_prepares_defaults_after_running_response(
               "arrow",
               "nanoarrow"
             )
-            stopifnot(all(defaults %in% list.files(.libPaths()[[1L]])))
+            managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
+            stopifnot(all(defaults %in% list.files(.libPaths()[[managed_index]])))
             stopifnot(identical(reticulate::py_require()$packages, c("numpy", "pandas")))
             cat("scientific defaults ready\n")
             """)
