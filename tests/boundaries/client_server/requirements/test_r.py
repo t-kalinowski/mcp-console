@@ -550,6 +550,10 @@ def test_evaluates_with_default_managed_r(
             "duckdb",
             "arrow",
             "nanoarrow",
+            "jsonlite",
+            "pillar",
+            "tibble",
+            "utf8",
         }, runs
         client.send(
             requirements={"r": ["DBI", "duckdb", "arrow", "nanoarrow"]},

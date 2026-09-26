@@ -75,7 +75,8 @@ Interrupts received while the worker is idle do not interrupt the next Python ce
 When `uv` resolved the initial environment, the generated Quarto document declares its NumPy and pandas defaults without enabling live requirements.
 Matplotlib plots are returned when Matplotlib is already installed in the selected environment; the default manifest does not install it.
 To use additional packages, prepare a Python environment before starting Console and make it available through the PATH fallback or existing explicit-selection interface.
-Live `requirements`, automatic missing-import installation, R cells, and SQL cells are unavailable.
+Requirement changes, automatic missing-import installation, R cells, and SQL cells are unavailable.
+`requirements.action="get"` inspects the retained declaration without starting a worker.
 The tool schema and descriptions reflect these limits; rejected requests leave existing Python state usable.
 This mode is local only; SSH and prepared Docker/SBX targets retain their existing R runtime requirements.
 
@@ -111,6 +112,8 @@ jobs.shape
 Each call reuses state created by earlier calls, and its output informs the next cell.
 
 A code-bearing call can declare additive R packages, Python packages, or DuckDB extensions in `requirements`, regardless of the cell language.
+`requirements.action="set"` replaces the declaration; `reset` restores startup defaults.
+A changed replacement of a live worker requires explicit restart.
 See [Requirements for a cell](REQUIREMENTS.md#requirements-for-a-cell) for the declaration syntax and [`send` operation order](SEND_OPERATIONS.md#operations) for preparation and failure behavior.
 R resolves missing plain package names when execution reaches a supported package-loading operation.
 The built-in managed Python environment likewise resolves a missing import when Python's ordinary import finders cannot satisfy it.

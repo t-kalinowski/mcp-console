@@ -10,6 +10,9 @@ if TYPE_CHECKING:
 
 
 class Requirements(TypedDict, total=False):
+    action: Literal["get", "add", "set", "reset"]
+    python_version: list[str]
+    exclude_newer: str | None
     r: list[str]
     python: list[str]
     duckdb: list[str]
@@ -105,7 +108,11 @@ class AsyncMCPConsole:
             python: One complete Python cell.
             sql: One complete SQL cell on the selected connection.
             control: Interrupt the active operation or restart the runtime.
-            requirements: Additive requirements keyed by r, python, or duckdb.
+            requirements: Declaration keyed by r, python, or duckdb, with optional
+                python_version and exclude_newer constraints. action defaults to
+                add; get returns complete inspection JSON; set replaces omitted
+                fields with empty values; reset restores startup defaults.
+                Changed replacements of a live worker require control="restart".
             stdin: Exact input for an active prompt or debugger.
             timeout_ms: Maximum wait after dispatch; timeout does not cancel work.
         """

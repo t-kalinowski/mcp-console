@@ -48,7 +48,9 @@ def test_persistent_image_runtime_and_controller_records(binary: Path) -> Transc
         with McpClient(binary, ("serve",), environment, project) as client:
             client.initialize_and_list_tools()
             tool = client.transcript[-1]["result"]["tools"][0]
-            assert "requirements" not in tool["inputSchema"]["properties"], tool
+            assert tool["inputSchema"]["properties"]["requirements"]["properties"][
+                "action"
+            ]["enum"] == ["get"], tool
             client.send(
                 r='x <- 41; stopifnot(getwd() == "/workspace", file.exists("/.dockerenv")); x + 1'
             )

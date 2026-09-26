@@ -39,7 +39,9 @@ def test_runs_without_a_resolver_bootstrap(
         send = client.transcript[-1]["result"]["tools"][0]
         properties = send["inputSchema"]["properties"]
         assert {"r", "python", "sql"} <= properties.keys(), properties
-        assert "requirements" not in properties, properties
+        assert properties["requirements"]["properties"]["action"]["enum"] == ["get"], (
+            properties
+        )
 
         client.send(r="1 + 1")
         assert last_result_text(client) == "[1] 2\n"

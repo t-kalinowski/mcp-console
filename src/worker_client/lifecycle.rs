@@ -283,6 +283,17 @@ impl Drop for WorkerStartupAdmission {
 }
 
 impl Client {
+    pub(super) fn has_live_worker(&self) -> Result<bool, String> {
+        Ok(self
+            .0
+            .lifecycle
+            .lock()
+            .map_err(|_| "worker lifecycle lock poisoned")?
+            .processes
+            .worker
+            .is_some())
+    }
+
     pub(super) fn reserve_worker_startup(
         &self,
         generation: &WorkerGeneration,
@@ -419,7 +430,10 @@ impl Client {
         defer_idle: bool,
         control: Option<&ControlledSendAdmission>,
     ) -> Result<RestartAttempt, String> {
-        let mut restart = if requirements.duckdb.is_empty()
+        let mut restart = if requirements.action == super::RequirementsAction::Add
+            && requirements.python_version.is_empty()
+            && requirements.exclude_newer.is_none()
+            && requirements.duckdb.is_empty()
             && requirements.python.is_empty()
             && requirements.r.is_empty()
         {
@@ -526,22 +540,31 @@ impl Client {
             .lock()
             .map_err(|_| "worker environment lock poisoned".to_string())?;
         self.ensure_generation(&generation)?;
+        let action = requirements.action;
+        let call_id = requirements.call_id;
         let delta = RequirementDelta::calculate(&environment, requirements)?;
-        if delta.is_empty() {
-            drop(environment);
-            return self.begin_restart(grace, control);
-        }
-        let resolved = self
-            .resolve_prestart_environment(&generation, &environment, delta)
-            .map_err(|failure| failure.into_message())?;
+        let resolved = if delta.is_empty() {
+            if action == super::RequirementsAction::Add {
+                drop(environment);
+                return self.begin_restart(grace, control);
+            }
+            // Even an unchanged replacement excludes uncommitted old-worker
+            // activations. Keep the environment locked through generation change.
+            environment.clone()
+        } else {
+            self.resolve_prestart_environment(&generation, &environment, delta)
+                .map_err(|failure| failure.into_message())?
+        };
 
-        self.commit_environment_and_begin_restart(
+        let restart = self.commit_environment_and_begin_restart(
             &generation,
             grace,
             &mut environment,
             resolved,
             control,
-        )
+        )?;
+        self.record_requirements(action, call_id, &environment);
+        Ok(restart)
     }
 
     fn commit_environment_and_begin_restart(
@@ -583,6 +606,7 @@ impl Client {
             .map(|active| active.evaluation.reserve_for_restart())
             .transpose()?;
         *environment = resolved;
+        self.publish_requirements(environment);
         let (processes, deadline, generation) =
             lifecycle.start_restart(grace, OldGenerationCommitDisposition::DiscardForReplacement);
         Ok(RestartContext {
