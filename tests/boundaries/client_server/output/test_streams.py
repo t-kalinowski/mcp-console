@@ -10,11 +10,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import (
+    LARGE_OUTPUT_SIZE,
     large_output,
     last_tool_text,
     remove_length_marker,
 )
 from support.previews import (
+    OMISSION,
     TEXT_BUDGET,
     assert_preview,
     cell_text,
@@ -418,9 +420,18 @@ def test_drains_background_stderr_while_idle(
         assert "no retained cell log" in output
         assert "outputs/call-" not in output
         assert cell_text(client, 1) == ""
-        assert_preview(
-            output.removesuffix("\n[idle]"), large_output("zod background stderr\n")
+        preview = output.removesuffix("\n[idle]")
+        (marker,) = list(OMISSION.finditer(preview))
+        observed = (
+            len(preview[: marker.start()].encode())
+            + int(marker[1])
+            + len(preview[marker.end() :].encode())
         )
+        expected = large_output("zod background stderr\n")
+        assert len(expected) <= observed <= len(expected) + LARGE_OUTPUT_SIZE, observed
+        assert f"({observed} raw bytes observed)" in preview
+        assert_preview(preview, expected + ("y" * (observed - len(expected))))
+        normalize_pipe_counts(client)
         compact_previews(client, "x", "y", "z", "s", "p", "ab")
         return client.finish()
 

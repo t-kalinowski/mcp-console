@@ -274,6 +274,9 @@ def emit_background_stderr(root: Path, reader: TextIO, writer: TextIO) -> None:
     while not (root / "zod-release-background-stderr").exists():
         time.sleep(0.01)
     emit_large_output(2, b"zod background stderr\n")
+    # Writing can finish with one pipe of bytes still unread. A further suffix
+    # makes the intended payload reach the relay before the sideband round trip.
+    write_all(2, b"y" * LARGE_OUTPUT_SIZE)
     wait_for_server_to_process_sideband(reader, writer)
     publish_marker(root / "zod-background-stderr-emitted")
 
