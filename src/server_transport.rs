@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use rmcp::RoleServer;
-use rmcp::model::{ClientNotification, ClientRequest, JsonRpcMessage, RequestId};
+use rmcp::model::{ClientNotification, ClientRequest, JsonRpcMessage, RequestId, ServerResult};
 use rmcp::service::{RxJsonRpcMessage, TxJsonRpcMessage};
 use rmcp::transport::{Transport, async_rw::AsyncRwTransport};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -777,9 +777,17 @@ where
                 .and_then(|request_id| self.deliveries.write(request_id)),
             JsonRpcMessage::Request(_) | JsonRpcMessage::Notification(_) => None,
         };
-        let send = self.inner.send(item);
+        // rmcp's EOF drain can forward a handler result after cancellation.
+        // Every console tool result must still own its response reservation.
+        let cancelled_tool_result = delivery.is_none()
+            && matches!(&item, JsonRpcMessage::Response(response)
+                if matches!(response.result, ServerResult::CallToolResult(_)));
+        let send = (!cancelled_tool_result).then(|| self.inner.send(item));
         let deliveries = self.deliveries.clone();
         async move {
+            let Some(send) = send else {
+                return Ok(());
+            };
             // Preserve a ready final response after input EOF, but abandon a
             // blocked stdout write so transport shutdown remains bounded.
             let result = tokio::select! {

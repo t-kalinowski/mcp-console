@@ -17,8 +17,10 @@ result:
 send:
   control: restart
   python: |
+    import sys
+
     assert "startup_cell_ran" not in globals()
-    assert input() == "replacement input"
+    assert sys.stdin.readline() == "replacement input\n"
     print("replacement only")
   stdin: |
     replacement input
@@ -29,7 +31,6 @@ result:
       text: |-
         [active evaluation stopped by session restart request]
         [starting new worker]
-        [input requested: ""]
         replacement only
         [done]
   isError: false
