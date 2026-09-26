@@ -438,7 +438,7 @@ def _mcp_console_eval_cell(
     source,
     filename,
     _main=_main,
-    _parse=_ast.parse,
+    _ast_flags=_ast.PyCF_ONLY_AST,
     _Expr=_ast.Expr,
     _Expression=_ast.Expression,
     _isinstance=_builtins.isinstance,
@@ -452,7 +452,7 @@ def _mcp_console_eval_cell(
     _print_exc=_traceback.print_exc,
 ):
     try:
-        module = _parse(source, filename=filename, mode="exec")
+        module = _compile(source, filename, "exec", _ast_flags)
         final = module.body[-1] if module.body else None
         if _isinstance(final, _Expr):
             module.body.pop()

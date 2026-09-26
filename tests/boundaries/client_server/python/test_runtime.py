@@ -619,8 +619,10 @@ def test_recovers_from_python_errors(binary: Path, execution: Execution) -> Tran
     client.send(python="nul_state = 42\0")
     output = last_result_text(client)
     assert client.transcript[-1]["result"]["isError"] is False
-    assert "SyntaxError" in output
-    assert "null bytes" in output
+    assert output.startswith("Traceback (most recent call last):\n")
+    assert output.endswith(
+        "SyntaxError: source code string cannot contain null bytes\n"
+    )
     client.send(python="answer")
     assert last_result_text(client) == "41\n"
     return client.finish()

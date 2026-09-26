@@ -51,6 +51,8 @@ result:
   content:
     - type: text
       text: |
+        Traceback (most recent call last):
+          File "<string>", line 455, in _mcp_console_eval_cell
         SyntaxError: source code string cannot contain null bytes
   isError: false
 ---
