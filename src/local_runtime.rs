@@ -60,8 +60,8 @@ impl Selection {
             )?;
             (managed.python().to_path_buf(), Some(managed))
         } else {
-            let executable = crate::resolver::find_path_entry("python3")
-                .or_else(|| crate::resolver::find_path_entry("python"))
+            let executable = resolver
+                .find_path_python()?
                 .ok_or("R is unavailable and neither `uv`, `python3`, nor `python` was found on PATH; install uv or CPython with a shared libpython and restart MCP Console")?;
             (executable, None)
         };

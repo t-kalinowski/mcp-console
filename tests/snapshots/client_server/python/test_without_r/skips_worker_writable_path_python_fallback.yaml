@@ -1,0 +1,132 @@
+---
+input:
+  method: initialize
+  params:
+    protocolVersion: 2025-11-25
+    capabilities: {}
+    clientInfo:
+      name: acceptance-test
+      version: 1.0.0
+result:
+  protocolVersion: 2025-11-25
+  capabilities:
+    tools: {}
+  serverInfo:
+    name: mcp-console
+    version: 0.0.4
+---
+input:
+  method: notifications/initialized
+---
+input:
+  method: tools/list
+result:
+  tools:
+    - name: send
+      description: >-
+        Persistent local Python workbench. State persists across calls. R and
+        SQL cells, live requirements, and automatic package installation are
+        unavailable in this session. Python uses the environment selected at
+        server startup; restart resets objects and retains that environment.
+
+
+        Send one complete `python` cell per call. Code-bearing calls must be
+        sequential; a control-only interrupt may overlap a pending `send`.
+        Inspect intermediate results before submitting dependent cells. Cells
+        are not transactional; changes made before an error may remain.
+
+
+        Omit code to poll, supply stdin, control the session, or prepare
+        requirements when available. If a response ends in `[running; poll with
+        an empty send]`, call `send` again without code or stdin; do not
+        resubmit the cell. Send `stdin` alone to answer an active prompt or
+        debugger. Field descriptions specify preparation, control, and timeout
+        ordering.
+
+
+        Each result has at most 8 KiB of UTF-8 text, including notices;
+        oversized output keeps its beginning and latest tail. Images have
+        separate limits. Retained raw-log paths are relative to the Console
+        server recording workspace (the controller for remote targets). Full
+        retained text requires filesystem access there through existing tools;
+        Console provides no read/search interface.
+
+
+        Evaluated code uses the native ":workspace" profile: it can edit files
+        beneath the fixed launch workspace, write in the worker's private
+        temporary directory and to explicitly allowed paths, and cannot directly
+        access the network. The workspace's .git, .agents, .codex, and .claude
+        paths are readable and protected from writes by default. Explicit native
+        rules can override these defaults or restrict reads. Dependency
+        resolution, when available, runs outside the sandbox and may execute
+        installation or build code; use only trusted dependencies.
+      inputSchema:
+        $schema: https://json-schema.org/draft/2020-12/schema
+        additionalProperties: false
+        type: object
+        properties:
+          python:
+            description: >-
+              One complete Python cell in persistent state. The final expression
+              displays automatically. Use input() for managed stdin; Matplotlib plots
+              return as PNG images when installed. Use only packages already in the
+              selected environment. R integration, SQL cells, live requirements, and
+              automatic package installation are unavailable. Use control: restart
+              with python to run in a fresh worker using the same environment, or
+              timeout_ms: 0 then poll for background execution.
+            type:
+              - string
+              - "null"
+          control:
+            description: >-
+              Applies lifecycle control alone or before compatible same-call fields.
+              interrupt requests SIGINT from the live worker and preserves Python
+              state. After successful delivery, stdin is queued and send waits 100
+              milliseconds before observing the earlier evaluation or attempting an
+              optional following cell; that cell is not run if the interrupted
+              evaluation remains active. restart discards Python objects, debugger
+              state, and unread stdin, retains the selected environment, and sends
+              same-call stdin and code only to the replacement worker.
+            type: string
+            enum:
+              - interrupt
+              - restart
+          stdin:
+            description: >-
+              Input for an active read, prompt, or debugger. When responding to active
+              input, omit code and send stdin on its own. Its UTF-8 encoding is queued
+              exactly; no newline is added. Line-oriented input normally needs a
+              trailing `\n`. After interrupt, nonempty stdin is queued before the
+              100-millisecond grace and may be consumed while the earlier operation
+              unwinds. After restart, same-call stdin goes only to the replacement.
+              When sent with a cell, nonempty text is queued before code runs. Empty
+              text queues nothing. If output ends in [waiting for stdin], send the
+              requested input here. Unread text can satisfy later reads and is
+              discarded by restart.
+            type:
+              - string
+              - "null"
+          timeout_ms:
+            description: >-
+              Omit for normal calls and polls. Defaults to 60,000 milliseconds. This
+              limits the wait after cell dispatch or attachment to an active
+              evaluation and includes one automatic worker replacement attempt.
+              Reaching the timeout does not cancel execution or startup. Inline
+              control, interrupt grace, and restart happen before dispatch and may
+              make the complete call take longer. Use 0 for background execution, then
+              poll with an empty send. If a response ends with [running; poll with an
+              empty send] or [worker starting], poll without resubmitting the cell.
+            type: integer
+            format: uint64
+            minimum: 0
+            default: 60000
+---
+send:
+  python: |
+    print("protected PATH Python selected")
+result:
+  content:
+    - type: text
+      text: |
+        protected PATH Python selected
+  isError: false

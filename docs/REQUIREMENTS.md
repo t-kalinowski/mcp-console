@@ -10,13 +10,16 @@ This guide describes preparation before a cell, standalone preparation, and requ
 Local [Python sessions without R](BUILTIN_RUNTIME.md#python-sessions-without-r) support explicit startup and restart preparation when Console manages the environment through uv.
 When `uv` is available, the existing local host resolver prepares the default Python manifest before MCP readiness and retains the result for replacement workers.
 For sandboxed sans-R local selection, project-resident `uv` executables and executables beneath configured worker write grants are skipped before use; PATH selection continues to the next candidate, while an explicit selection there fails.
-Full filesystem write policies, special root write grants, and externally enforced filesystem policies disable uv management, so PATH Python remains the fallback.
+Console captures a PATH and uv Python search path without worker-writable directories, and skips executable links into those roots for uv selection and the automatic Python fallback.
+A bare `UV_PYTHON` executable name is pinned to a protected executable before resolution; abstract version selectors remain available.
+Without a protected executable for a bare name, implicit uv management is disabled and an explicit uv selection fails.
+Full filesystem write policies, special root write grants, and externally enforced filesystem policies have no protected automatic interpreter selection; they require an explicit Python selection.
 Worker-writable uv cache, Python installation, tool, and explicit config paths disable implicit uv selection or reject an explicit selection.
 Console disables implicit project uv configuration discovery, checks effective uv cache and installation locations, and rejects a worker-writable selected interpreter before host inspection.
 The selected executable is resolved and retained so a worker cannot redirect later host preparation by replacing a PATH entry.
 This does not invoke R, Rscript, or `ir`, and no installation runs inside the sandboxed worker.
 Executable inspection uses isolated Python mode, excluding workspace imports, `PYTHONPATH`, and the user site; the selected installation and its environment remain trusted.
-Without `uv`, a Python executable on `PATH` supplies its preinstalled packages.
+Without `uv`, a protected Python executable on `PATH` supplies its preinstalled packages.
 `requirements.python` alone or with a Python cell prepares additions before the first worker starts.
 After startup, changed requirements need `control: "restart"`, with or without code; already retained requirements are a no-op.
 The existing prestart/restart transaction resolves the complete candidate manifest and inspects its executable before retirement, using the captured resolver configuration and existing cancellation and child cleanup.

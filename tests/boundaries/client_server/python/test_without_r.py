@@ -129,22 +129,19 @@ def test_full_write_policy_disables_managed_uv(
             )
             uv.chmod(0o755)
             (bin_dir / "python3").symlink_to(sys.executable)
-            with McpClient(
-                binary, execution.serve(), environment(bin_dir), workspace
-            ) as client:
-                client.initialize_and_list_tools()
-                schema = client.transcript[2]["result"]["tools"][0]["inputSchema"]
-                assert "requirements" not in schema["properties"]
-                client.send(
-                    # fmt: python
-                    python=code("""
-                        print("PATH Python selected")
-                        """)
-                )
-                assert last_result_text(client) == "PATH Python selected\n"
-                client.finish()
+            result = subprocess.run(
+                [binary, *execution.serve()],
+                cwd=workspace,
+                env=environment(bin_dir),
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            assert result.returncode != 0
+            assert "neither `uv`, `python3`, nor `python`" in result.stderr
             assert not marker.exists()
-            records.append({filesystem.splitlines()[0]: "managed uv disabled"})
+            records.append({filesystem.splitlines()[0]: "automatic selection rejected"})
     return records
 
 
@@ -331,6 +328,139 @@ def test_skips_project_uv_left_by_a_writable_worker(
         assert not (workspace / "project-uv-executed").exists()
         records.append({"explicit_python_selection": "kept without uv execution"})
         return records
+
+
+@executions(SANDBOXED)
+def test_pins_bare_uv_python_before_restart(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        workspace = root / "workspace"
+        workspace.mkdir()
+        (workspace / "bin").mkdir()
+        config = workspace / ".agents/console/config.yaml"
+        config.parent.mkdir(parents=True)
+        config.write_text('extends: ":workspace"\n')
+        env = preparation_environment(root)
+        (root / "mode").write_text("bare-python")
+        (root / "python").symlink_to(sys.executable)
+        env["PATH"] = os.pathsep.join((str(workspace / "bin"), str(root)))
+        env["UV_PYTHON"] = "python"
+        env["UV_NO_MANAGED_PYTHON"] = "1"
+        with McpClient(binary, execution.serve(), env, workspace) as client:
+            client.initialize_and_list_tools()
+            client.send(
+                # fmt: python
+                python=code(r"""
+                    from pathlib import Path
+
+                    identity = object()
+                    candidate = Path("bin/python")
+                    candidate.write_text("#!/bin/sh\nprintf touched > poisoned-python-ran\nexit 87\n")
+                    candidate.chmod(0o755)
+                    """)
+            )
+            assert not client.transcript[-1]["result"]["isError"]
+            client.send(
+                control="restart",
+                requirements={"python": ["py-yaml12"]},
+                # fmt: python
+                python=code("""
+                    print("trusted Python retained")
+                    """),
+            )
+            assert not (workspace / "poisoned-python-ran").exists()
+            assert last_result_text(client).endswith("trusted Python retained\n[done]")
+            return client.finish()
+
+
+@executions(SANDBOXED)
+def test_filters_uv_python_search_path_before_restart(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        workspace = root / "workspace"
+        workspace.mkdir()
+        (workspace / "bin").mkdir()
+        config = workspace / ".agents/console/config.yaml"
+        config.parent.mkdir(parents=True)
+        config.write_text('extends: ":workspace"\n')
+        env = preparation_environment(root)
+        (root / "mode").write_text("search-path")
+        (root / "python3").symlink_to(sys.executable)
+        alias = root / "alias"
+        alias.mkdir()
+        (alias / "python3").symlink_to(workspace / "bin/python3")
+        env["UV_PYTHON_SEARCH_PATH"] = os.pathsep.join(
+            (str(workspace / "bin"), str(alias), str(root))
+        )
+        env["UV_PYTHON"] = f"{sys.version_info.major}.{sys.version_info.minor}"
+        with McpClient(binary, execution.serve(), env, workspace) as client:
+            client.initialize_and_list_tools()
+            client.send(
+                # fmt: python
+                python=code(r"""
+                    from pathlib import Path
+
+                    candidate = Path("bin/python3")
+                    candidate.write_text("#!/bin/sh\nprintf touched > poisoned-python-ran\nexit 87\n")
+                    candidate.chmod(0o755)
+                    """)
+            )
+            assert not client.transcript[-1]["result"]["isError"]
+            client.send(
+                control="restart",
+                requirements={"python": ["py-yaml12"]},
+                # fmt: python
+                python=code("""
+                    print("trusted Python search path retained")
+                    """),
+            )
+            assert not (workspace / "poisoned-python-ran").exists()
+            assert last_result_text(client).endswith(
+                "trusted Python search path retained\n[done]"
+            )
+            return client.finish()
+
+
+@executions(SANDBOXED)
+def test_skips_worker_writable_path_python_fallback(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        workspace = root / "workspace"
+        workspace.mkdir()
+        (workspace / "bin").mkdir()
+        config = workspace / ".agents/console/config.yaml"
+        config.parent.mkdir(parents=True)
+        config.write_text('extends: ":workspace"\n')
+        for program in ("uv", "python3", "python"):
+            candidate = workspace / "bin" / program
+            candidate.write_text(
+                "#!/bin/sh\nprintf touched > poisoned-path-ran\nexit 87\n"
+            )
+            candidate.chmod(0o755)
+        safe_bin = root / "safe-bin"
+        safe_bin.mkdir()
+        (safe_bin / "python").symlink_to(sys.executable)
+        env = environment(workspace / "bin")
+        env["PATH"] = os.pathsep.join((str(workspace / "bin"), str(safe_bin)))
+        with McpClient(binary, execution.serve(), env, workspace) as client:
+            client.initialize_and_list_tools()
+            schema = client.transcript[2]["result"]["tools"][0]["inputSchema"]
+            assert "requirements" not in schema["properties"]
+            client.send(
+                # fmt: python
+                python=code("""
+                    print("protected PATH Python selected")
+                    """)
+            )
+            assert last_result_text(client) == "protected PATH Python selected\n"
+            assert not (workspace / "poisoned-path-ran").exists()
+            return client.finish()
 
 
 @executions(DIRECT, SANDBOXED)
@@ -1142,9 +1272,9 @@ def test_cleans_temporary_storage_after_startup_failure(
             if execution == SANDBOXED
             else execution.serve()
         )
-        with McpClient(
-            binary, arguments, environment(venv / "bin"), current_directory=root
-        ) as client:
+        env = environment(venv / "bin")
+        env["RETICULATE_PYTHON"] = str(selected)
+        with McpClient(binary, arguments, env, current_directory=root) as client:
             client.initialize_and_list_tools()
             result = client.send(
                 python="raise AssertionError('startup failure ran the cell')"
@@ -1184,10 +1314,12 @@ def test_records_python_execution(binary: Path, execution: Execution) -> Transcr
     with tempfile.TemporaryDirectory() as directory:
         workspace = Path(directory)
         (workspace / "python3").symlink_to(sys.executable)
+        env = environment(workspace)
+        env["RETICULATE_PYTHON"] = sys.executable
         with McpClient(
             binary,
             execution.serve(),
-            environment(workspace),
+            env,
             current_directory=workspace,
         ) as client:
             client.initialize_and_list_tools()
@@ -1371,6 +1503,7 @@ def test_inspection_excludes_workspace_and_pythonpath(
         (workspace / "ctypes.py").write_text(payload)
         (poisoned_path / "sitecustomize.py").write_text(payload)
         env = environment(workspace)
+        env["RETICULATE_PYTHON"] = sys.executable
         env["PYTHONPATH"] = str(poisoned_path)
         with McpClient(binary, execution.serve(), env, workspace) as client:
             client.initialize_and_list_tools()
@@ -1421,9 +1554,9 @@ def failed_native_startup(binary: Path, execution: Execution) -> Transcript:
             if execution == SANDBOXED
             else execution.serve()
         )
-        with McpClient(
-            binary, arguments, environment(venv / "bin"), workspace
-        ) as client:
+        env = environment(venv / "bin")
+        env["RETICULATE_PYTHON"] = str(selected)
+        with McpClient(binary, arguments, env, workspace) as client:
             client.initialize_and_list_tools()
             result = client.send(
                 python="raise AssertionError('failed startup ran cell')"
@@ -1538,8 +1671,10 @@ def test_imports_workspace_modules_without_pythonpath(
     binary: Path, execution: Execution
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
-        workspace = Path(directory)
-        (workspace / "python3").symlink_to(sys.executable)
+        root = Path(directory)
+        workspace = root / "workspace"
+        workspace.mkdir()
+        (root / "python3").symlink_to(sys.executable)
         (workspace / "workspace_module.py").write_text("value = 20\n")
         package = workspace / "workspace_package"
         package.mkdir()
@@ -1547,7 +1682,7 @@ def test_imports_workspace_modules_without_pythonpath(
         subdirectory = workspace / "subdirectory"
         subdirectory.mkdir()
         (subdirectory / "after_chdir.py").write_text("value = 43\n")
-        env = environment(workspace)
+        env = environment(root)
         env.pop("PYTHONPATH", None)
         with McpClient(binary, execution.serve(), env, workspace) as client:
             client.initialize_and_list_tools()
@@ -1595,8 +1730,10 @@ def ignores_python_layout_override(
     records = []
     for inherit in (True, False):
         with tempfile.TemporaryDirectory() as directory:
-            workspace = Path(directory)
-            venv = workspace / "environment"
+            root = Path(directory)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            venv = root / "environment"
             subprocess.run(
                 [sys.executable, "-m", "venv", "--without-pip", venv],
                 check=True,
@@ -1629,7 +1766,7 @@ def ignores_python_layout_override(
 
                             assert "{variable}" not in os.environ
                             assert "RETICULATE_PYTHON" not in os.environ
-                            assert os.path.samefile(sys.prefix, "environment")
+                            assert os.path.samefile(sys.prefix, "../environment")
                             assert sys.prefix != sys.base_prefix
                             child = subprocess.check_output(
                                 [sys.executable, "-c", "import sys; print(sys.prefix)"], text=True
@@ -1698,8 +1835,10 @@ def test_excludes_executable_directory_from_imports(
     binary: Path, execution: Execution
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
-        workspace = Path(directory)
-        venv = workspace / "environment"
+        root = Path(directory)
+        workspace = root / "workspace"
+        workspace.mkdir()
+        venv = root / "environment"
         subprocess.run(
             [sys.executable, "-m", "venv", "--copies", "--without-pip", venv],
             check=True,

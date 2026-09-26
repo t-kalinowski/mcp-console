@@ -51,7 +51,7 @@ With `uv` available, the server uses its existing host resolver and default Pyth
 Resolution honors the captured resolver configuration, cache handling, and Python version ranking.
 It runs outside the worker sandbox and may install packages with server permissions.
 An available resolver that fails reports the failure without trying a different interpreter.
-With no `uv`, selection checks `python3` then `python` on `PATH`; the selected CPython must provide a usable shared embedding library.
+With no `uv`, selection checks `python3` then `python` on `PATH`; sandboxed selection skips worker-writable candidates, and the selected CPython must provide a usable shared embedding library.
 If no interpreter is available, the error asks the user to install `uv` or CPython and restart the server.
 Existing explicit `RETICULATE_PYTHON` selection remains supported.
 Its captured value is preserved when sandbox environment inheritance is disabled or project environment settings provide a different value.
@@ -59,7 +59,10 @@ Its captured value is preserved when sandbox environment inheritance is disabled
 The session retains the selected environment and executable across cells, restarts, and worker replacement.
 At sandboxed local sans-R launch, Console skips `uv` executables whose resolved path is inside the project or a configured worker write grant, then checks later PATH entries.
 An explicit `RETICULATE_UV` at such a path is rejected before execution.
-Full filesystem write policies, special root write grants, and externally enforced filesystem policies disable managed uv preparation; the session uses PATH Python when available.
+Sandboxed selection captures a PATH and uv Python search path without worker-writable directories, then skips individual executable links into those roots for uv and the Python fallback.
+A bare `UV_PYTHON` executable name is pinned to a protected executable before the first resolver call; abstract version selectors remain available.
+If no protected executable exists, implicit uv management is disabled and an explicit uv selection fails.
+Full filesystem write policies, special root write grants, and externally enforced filesystem policies leave no protected automatic interpreter selection; use an explicit Python selection for those policies.
 Worker-writable uv cache, installation, tool, or explicit config paths also disable implicit uv selection, while an explicit uv selection fails.
 Console checks uv's effective cache and Python installation directories before creating a new environment, then checks the selected interpreter before host-side warmup and native inspection.
 Sandboxed managed sessions do not discover project uv configuration files; a trusted explicit `UV_CONFIG_FILE` remains available outside worker-writable paths.

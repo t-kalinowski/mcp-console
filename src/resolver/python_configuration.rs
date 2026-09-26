@@ -9,6 +9,7 @@ pub(crate) struct ManagedPythonResolverConfiguration {
     explicit_uv: Option<OsString>,
     reticulate_uv: Option<OsString>,
     uv: Option<OsString>,
+    path: Option<OsString>,
     worker_writable: Vec<PathBuf>,
 }
 
@@ -31,6 +32,7 @@ impl ManagedPythonResolverConfiguration {
             explicit_uv,
             reticulate_uv,
             uv,
+            path: std::env::var_os("PATH"),
             worker_writable: Vec::new(),
         }
     }
@@ -39,7 +41,18 @@ impl ManagedPythonResolverConfiguration {
         // A prior worker may have replaced a project uv. Select and pin a
         // resolved executable before any resolver process starts.
         self.worker_writable = blocked.iter().map(|root| normalize_path(root)).collect();
-        let blocked = &self.worker_writable;
+        if !self.worker_writable.is_empty() {
+            self.path = Some(self.protected_path(self.path.as_deref())?);
+            if let Some(search_path) = self
+                .environment
+                .get(OsStr::new("UV_PYTHON_SEARCH_PATH"))
+                .cloned()
+            {
+                let protected = self.protected_path(Some(&search_path))?;
+                Arc::make_mut(&mut self.environment)
+                    .insert(OsString::from("UV_PYTHON_SEARCH_PATH"), protected);
+            }
+        }
         if let Some(variable) = self.worker_writable_storage()? {
             if self.explicit_uv.is_some() {
                 return Err(format!("selected uv cannot use worker-writable {variable}"));
@@ -48,6 +61,18 @@ impl ManagedPythonResolverConfiguration {
             self.reticulate_uv = None;
             return Ok(self);
         }
+        if !self.pin_bare_uv_python()? {
+            if self.explicit_uv.is_some() {
+                return Err(
+                    "selected uv requires UV_PYTHON to resolve to a protected executable"
+                        .to_string(),
+                );
+            }
+            self.uv = None;
+            self.reticulate_uv = None;
+            return Ok(self);
+        }
+        let blocked = &self.worker_writable;
         if !blocked.is_empty() && !self.environment.contains_key(OsStr::new("UV_CONFIG_FILE")) {
             // A later worker can write project uv.toml files. Keep the host
             // resolver on its captured environment instead of rediscovering them.
@@ -70,11 +95,130 @@ impl ManagedPythonResolverConfiguration {
                     )
                 })?)
             }
-            _ => find_safe_path_uv(blocked)?,
+            _ => find_safe_path_uv(self.path.as_deref(), blocked)?,
         };
         self.uv = uv.clone().map(Into::into);
         self.reticulate_uv = self.uv.clone();
         Ok(self)
+    }
+
+    fn protected_path(&self, path: Option<&OsStr>) -> Result<OsString, String> {
+        let mut directories = Vec::new();
+        if let Some(path) = path {
+            for directory in std::env::split_paths(path) {
+                if self.path_is_worker_writable(&directory)? {
+                    continue;
+                }
+                // Keep only existing directories so a worker cannot create a
+                // previously absent PATH entry or redirect a broken symlink.
+                if let Ok(resolved) = directory.canonicalize()
+                    && resolved.is_dir()
+                    && !self.has_worker_writable_python_link(&resolved)?
+                {
+                    directories.push(resolved);
+                }
+            }
+        }
+        std::env::join_paths(directories)
+            .map_err(|error| format!("cannot retain protected resolver PATH: {error}"))
+    }
+
+    fn has_worker_writable_python_link(&self, directory: &Path) -> Result<bool, String> {
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            return Ok(true);
+        };
+        'entries: for entry in entries {
+            let entry =
+                entry.map_err(|error| format!("cannot inspect Python search path: {error}"))?;
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if !["python", "pypy", "graalpy", "pyodide"]
+                .iter()
+                .any(|prefix| name.starts_with(prefix))
+            {
+                continue;
+            }
+            let mut path = entry.path();
+            for _ in 0..32 {
+                let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+                    return Ok(true);
+                };
+                if !metadata.file_type().is_symlink() {
+                    continue 'entries;
+                }
+                let Ok(link) = std::fs::read_link(&path) else {
+                    return Ok(true);
+                };
+                path = if link.is_absolute() {
+                    link
+                } else {
+                    path.parent().expect("Python link parent").join(link)
+                };
+                if self.path_is_worker_writable(&path)? {
+                    return Ok(true);
+                }
+            }
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    fn pin_bare_uv_python(&mut self) -> Result<bool, String> {
+        if self.worker_writable.is_empty() {
+            return Ok(true);
+        }
+        let Some(value) = self.environment.get(OsStr::new("UV_PYTHON")).cloned() else {
+            return Ok(true);
+        };
+        if Path::new(&value).components().count() > 1 || is_abstract_python_request(&value) {
+            return Ok(true);
+        }
+        let search_path = self
+            .environment
+            .get(OsStr::new("UV_PYTHON_SEARCH_PATH"))
+            .map(OsString::as_os_str)
+            .or(self.path.as_deref());
+        let Some(candidate) = self.find_protected_path_entry_in(&value, search_path)? else {
+            return Ok(false);
+        };
+        let selected = candidate
+            .canonicalize()
+            .map_err(|error| format!("cannot pin UV_PYTHON executable: {error}"))?;
+        Arc::make_mut(&mut self.environment).insert(OsString::from("UV_PYTHON"), selected.into());
+        Ok(true)
+    }
+
+    fn find_protected_path_entry(&self, program: &OsStr) -> Result<Option<PathBuf>, String> {
+        self.find_protected_path_entry_in(program, self.path.as_deref())
+    }
+
+    fn find_protected_path_entry_in(
+        &self,
+        program: &OsStr,
+        path: Option<&OsStr>,
+    ) -> Result<Option<PathBuf>, String> {
+        let Some(path) = path else {
+            return Ok(None);
+        };
+        for directory in std::env::split_paths(path) {
+            let candidate = directory.join(program);
+            if candidate.canonicalize().is_ok() && !self.path_is_worker_writable(&candidate)? {
+                return Ok(Some(candidate));
+            }
+        }
+        Ok(None)
+    }
+
+    pub(crate) fn find_path_python(&self) -> Result<Option<PathBuf>, String> {
+        if self.worker_writable.is_empty() {
+            return Ok(
+                super::find_path_entry("python3").or_else(|| super::find_path_entry("python"))
+            );
+        }
+        if let Some(python) = self.find_protected_path_entry(OsStr::new("python3"))? {
+            return Ok(Some(python));
+        }
+        self.find_protected_path_entry(OsStr::new("python"))
     }
 
     fn worker_writable_storage(&self) -> Result<Option<&'static str>, String> {
@@ -202,6 +346,9 @@ impl ManagedPythonResolverConfiguration {
             .envs(self.environment.iter())
             .env("RETICULATE_UV", uv)
             .env_remove("UV_OFFLINE");
+        if !self.worker_writable.is_empty() {
+            command.env("PATH", self.path.as_deref().unwrap_or(OsStr::new("")));
+        }
     }
 
     pub(super) fn configure_uv_bootstrap(&self, command: &mut std::process::Command) {
@@ -233,6 +380,31 @@ impl ManagedPythonResolverConfiguration {
     }
 }
 
+fn is_abstract_python_request(value: &OsStr) -> bool {
+    let Some(value) = value.to_str() else {
+        return false;
+    };
+    let value = value.to_ascii_lowercase();
+    if matches!(
+        value.as_str(),
+        "any" | "default" | "cpython" | "pypy" | "graalpy" | "pyodide"
+    ) {
+        return true;
+    }
+    let mut version = value.as_str();
+    for implementation in ["python", "cpython", "pypy", "graalpy", "pyodide"] {
+        if let Some(suffix) = version.strip_prefix(implementation) {
+            version = suffix.strip_prefix('@').unwrap_or(suffix);
+            break;
+        }
+    }
+    let version = version.strip_suffix('t').unwrap_or(version);
+    !version.is_empty()
+        && version.split('.').all(|component| {
+            !component.is_empty() && component.bytes().all(|byte| byte.is_ascii_digit())
+        })
+}
+
 fn normalize_path(path: &Path) -> PathBuf {
     let mut normalized = PathBuf::new();
     for component in path.components() {
@@ -247,11 +419,11 @@ fn normalize_path(path: &Path) -> PathBuf {
     normalized
 }
 
-fn find_safe_path_uv(blocked: &[PathBuf]) -> Result<Option<PathBuf>, String> {
-    let Some(path) = std::env::var_os("PATH") else {
+fn find_safe_path_uv(path: Option<&OsStr>, blocked: &[PathBuf]) -> Result<Option<PathBuf>, String> {
+    let Some(path) = path else {
         return Ok(None);
     };
-    for directory in std::env::split_paths(&path) {
+    for directory in std::env::split_paths(path) {
         let candidate = directory.join("uv");
         if std::fs::symlink_metadata(&candidate).is_ok()
             && let Some(selected) = select_uv_path(&candidate, blocked)?
