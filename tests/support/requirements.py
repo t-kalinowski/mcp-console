@@ -28,6 +28,19 @@ class Requirement:
 WORKER = Requirement(
     "worker", sys.platform in {"darwin", "linux"}, "workers require macOS or Linux"
 )
+# Match runtime selection so invalid R_HOME and broken PATH entries report errors.
+R = Requirement(
+    "R",
+    "R_HOME" in os.environ
+    or (
+        "PATH" in os.environ
+        and any(
+            os.path.lexists(Path(directory) / "R")
+            for directory in os.environ["PATH"].split(os.pathsep)
+        )
+    ),
+    "requires R_HOME or R on PATH",
+)
 SANDBOX = Requirement(
     "sandbox",
     sys.platform in {"darwin", "linux"},

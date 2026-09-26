@@ -857,6 +857,57 @@ exit 97
         self.assertEqual(selected_skip.returncode, 0, selected_skip.stderr)
         self.assertIn("fixture deliberately unavailable", selected_skip.stdout)
 
+    def test_r_cases_run_with_home_or_path_selection(self) -> None:
+        self.suite.write_text(
+            PUBLIC_SUITE
+            # fmt: python
+            + code("""
+                from support.requirements import R, requires
+
+                test_selected = requires(R)(test_selected)
+                """),
+            encoding="utf-8",
+        )
+        commands = self.root / "commands"
+        commands.mkdir()
+        executable = commands / "R"
+        marker = self.root / "selected.marker"
+        for home, entry, expected in (
+            (None, None, False),
+            (str(self.root / "selected-R-home"), None, True),
+            ("", None, True),
+            (None, "executable", True),
+            (None, "non-executable", True),
+            (None, "broken symlink", True),
+        ):
+            with self.subTest(home=home, entry=entry):
+                executable.unlink(missing_ok=True)
+                if entry == "broken symlink":
+                    executable.symlink_to(commands / "missing-R")
+                elif entry is not None:
+                    executable.write_text("#!/bin/sh\nexit 99\n")
+                    executable.chmod(0o755 if entry == "executable" else 0o644)
+                environment = os.environ | {"PATH": str(commands)}
+                environment.pop("R_HOME", None)
+                if home is not None:
+                    environment["R_HOME"] = home
+                marker.unlink(missing_ok=True)
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        self.boundaries / "_run.py",
+                        "client_server/server/test_tools::selected",
+                    ],
+                    cwd=self.root,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(marker.exists(), expected, result.stdout)
+                self.assertEqual("skipped; R:" in result.stdout, not expected)
+
     def test_script_profiles_and_explicit_selectors(self) -> None:
         environment = self.prepare_script()
         environment.update(
