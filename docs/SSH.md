@@ -97,7 +97,7 @@ R libraries and Python executables are validated on the remote host; their paths
 Other workload settings retain their existing meaning.
 In particular, configuring a workload cache does not relocate trusted preparation caches.
 
-When discovery finds no resolver bootstrap, Console retains the bare-runtime model: the schema omits `requirements`, automatic resolution is disabled, and available preinstalled packages and adapters can still be used.
+When discovery finds no resolver bootstrap, Console retains the bare-runtime model: the schema exposes only `requirements.action="get"`, automatic resolution is disabled, and available preinstalled packages and adapters can still be used.
 A selected bootstrap that fails later reports an error; it does not change the schema, select a different bootstrap, or run a controller resolver.
 Bare and user-selected Python modes disable reticulate's implicit managed-venv installation.
 Managed Python uses the existing server callbacks and retained manifest; the worker stays offline and does not install its own environment.

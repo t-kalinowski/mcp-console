@@ -249,3 +249,24 @@ Each complete result contains at most 8 KiB of rendered UTF-8 text across all te
 Oversized output includes the beginning, latest tail, and a retained raw-log path when available.
 That path is relative to the Console server's recording workspace, including for SSH and container targets.
 Retrieving omitted text requires filesystem access to that directory through existing file tools; the clients add no retrieval methods and never re-run a cell to recover its original output.
+
+## Inspecting and replacing requirements
+
+Both clients accept `requirements.action`: `get`, `add` (default), `set`, or `reset`.
+Inspection returns complete JSON text, including large manifests:
+
+```python
+import json
+from mcp_console import MCPConsole
+
+with MCPConsole() as console:
+    snapshot = json.loads(console.send(requirements={"action": "get"}))
+    declaration = snapshot["requirements"]
+    declaration["python"] = ["requests>=2"]
+    console.send(control="restart", requirements={**declaration, "action": "set"})
+```
+
+`set` replaces omitted lists and constraints with empty values.
+`reset` accepts no payload and restores startup defaults.
+Changed replacements require explicit restart when a worker is live.
+See [requirements and environments](REQUIREMENTS.md#inspecting-and-replacing-requirements) for lifecycle and target limits.

@@ -134,7 +134,7 @@ Missing analysis packages retain ordinary package or adapter errors.
 Install them in the Dockerfile and start a new server session.
 
 Docker deliberately selects the existing bare-runtime capability even when `uv` or `ir` is present.
-The tool schema omits `requirements`; explicit requests and worker callbacks cannot run controller resolvers.
+The tool schema exposes only `requirements.action="get"`; explicit preparation requests and worker callbacks cannot run controller resolvers.
 Reticulate's implicit managed-environment installation is disabled.
 No mutable preparation container, package volume, or automatic image mutation is provided.
 Future container preparation must have a separate trusted lifecycle from the relay and worker.

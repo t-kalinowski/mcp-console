@@ -50,3 +50,11 @@ tool <- console_tool(version = "0.0.2")
 `path` and `version` are mutually exclusive and must be named.
 `no_sandbox = TRUE` skips the sandbox launcher and does not guarantee cleanup of worker descendants.
 `...` is reserved for future use and must currently be empty.
+
+The tool also accepts `requirements = list(action = "get")` for read-only inspection.
+`action = "add"` is the default.
+`set` replaces all lists and Python constraints; omitted fields are empty.
+`reset` takes no payload and restores startup defaults.
+Changed replacements of a live worker require `control = "restart"`.
+Use `character()` for explicitly empty lists.
+Inspection returns complete JSON text, including the Python version constraints and publication cutoff; copy its `requirements` object and add `action = "set"` to round-trip it.
