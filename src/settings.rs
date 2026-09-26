@@ -98,22 +98,25 @@ pub(crate) struct Captured {
 pub fn discover(overrides: &[String]) -> Result<Captured, String> {
     let project = Path::new(".agents/console/config.yaml");
     let path = match std::fs::symlink_metadata(project) {
-        Ok(_) => PathBuf::from(project),
+        Ok(_) => Some(PathBuf::from(project)),
         Err(error)
             if matches!(
                 error.kind(),
                 std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
             ) =>
         {
-            crate::console_paths::home_console_directory()?.join("config.yaml")
+            crate::console_paths::home_console_directory()?
+                .map(|directory| directory.join("config.yaml"))
         }
         Err(error) => return Err(format!("cannot inspect '{}': {error}", project.display())),
     };
-    let Some(value) = crate::config::load(&path, overrides)? else {
+    let Some(value) = crate::config::load(path.as_deref(), overrides)? else {
         return Ok(Captured::default());
     };
     let name = if overrides.is_empty() {
-        path.to_string_lossy().into_owned()
+        path.expect("configuration came from a file")
+            .to_string_lossy()
+            .into_owned()
     } else {
         "configuration with CLI overrides".into()
     };

@@ -88,7 +88,10 @@ class McpClient:
             current_directory = Path(self.temporary_directory.name)
         if record_in_project:
             # Existing transcript cases keep their project-local recording fixture.
-            (current_directory / ".agents/console").mkdir(parents=True, exist_ok=True)
+            (current_directory / ".agents").mkdir(
+                mode=0o700, parents=True, exist_ok=True
+            )
+            (current_directory / ".agents/console").mkdir(mode=0o700, exist_ok=True)
         process = subprocess.Popen(
             [binary, *arguments],
             env=environment,

@@ -293,6 +293,7 @@ impl ActiveTranscript {
             project_console
         } else {
             crate::console_paths::home_console_directory()?
+                .ok_or_else(|| "HOME is not set".to_string())?
         };
         let sessions = console.join("sessions");
         let directory = sessions.join(&run_id);

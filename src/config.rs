@@ -9,23 +9,27 @@ mod yaml;
 
 /// Read one optional project mapping, then apply overrides in argument order.
 /// Absence is distinct from an explicitly supplied empty configuration.
-pub fn load(path: &Path, overrides: &[String]) -> Result<Option<Value>, String> {
+pub fn load(path: Option<&Path>, overrides: &[String]) -> Result<Option<Value>, String> {
     // A dangling symlink or an unreadable existing file must reach read_to_string.
-    let mut value = match std::fs::symlink_metadata(path) {
-        Err(error)
-            if matches!(
-                error.kind(),
-                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
-            ) =>
-        {
-            None
+    let mut value = if let Some(path) = path {
+        match std::fs::symlink_metadata(path) {
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) =>
+            {
+                None
+            }
+            Err(error) => return Err(format!("cannot inspect '{}': {error}", path.display())),
+            Ok(_) => {
+                let source = std::fs::read_to_string(path)
+                    .map_err(|error| format!("cannot read '{}': {error}", path.display()))?;
+                Some(yaml::load(&source).map_err(|error| format!("{}: {error}", path.display()))?)
+            }
         }
-        Err(error) => return Err(format!("cannot inspect '{}': {error}", path.display())),
-        Ok(_) => {
-            let source = std::fs::read_to_string(path)
-                .map_err(|error| format!("cannot read '{}': {error}", path.display()))?;
-            Some(yaml::load(&source).map_err(|error| format!("{}: {error}", path.display()))?)
-        }
+    } else {
+        None
     };
     for argument in overrides {
         let (key, source) = argument
