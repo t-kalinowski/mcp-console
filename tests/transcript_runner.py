@@ -303,13 +303,33 @@ class TranscriptRunnerTests(unittest.TestCase):
             encoding="utf-8",
         )
         cargo.chmod(0o755)
+        return self.script_environment(commands)
+
+    def script_environment(self, commands: Path) -> dict[str, str]:
+        # Exercise the bootstrap argv with this test's prepared interpreter.
+        # Resolving the copied runner's SDK dependencies would make each temporary
+        # checkout depend on registry access inside the command's ten-second limit.
+        uv = commands / "uv"
+        uv.write_text(
+            f"#!{sys.executable}\n"
+            # fmt: python
+            + code("""
+                import os
+                import sys
+
+                assert sys.argv[1:3] == ["run", "--script"], sys.argv
+                os.execv(sys.executable, [sys.executable, *sys.argv[3:]])
+                """),
+            encoding="utf-8",
+        )
+        uv.chmod(0o755)
         return os.environ | {
             "PATH": f"{commands}{os.pathsep}{os.environ['PATH']}",
-            # Isolate the fake build's budget while reusing uv dependencies.
-            "UV_CACHE_DIR": subprocess.check_output(
-                ["uv", "cache", "dir"], text=True
-            ).strip(),
+            # Isolate the fake build's host concurrency budget.
             "XDG_CACHE_HOME": str(self.root / "cache"),
+            # Any accidental real dependency resolution must fail immediately.
+            "UV_CACHE_DIR": str(self.root / "cache/uv"),
+            "UV_OFFLINE": "1",
         }
 
     def test_script_builds_and_uses_release_with_a_stale_debug_binary(self) -> None:
@@ -376,6 +396,7 @@ class TranscriptRunnerTests(unittest.TestCase):
         cargo = commands / "cargo"
         cargo.write_text("#!/bin/sh\nexit 99\n")
         cargo.chmod(0o755)
+        environment = self.script_environment(commands)
         (self.root / "target/release/mcp-console").unlink()
         suite = "client_server/server/test_tools"
         for arguments, status, expected in (
@@ -394,8 +415,7 @@ class TranscriptRunnerTests(unittest.TestCase):
                 result = subprocess.run(
                     [scripts / "test", *arguments],
                     cwd=self.root,
-                    env=os.environ
-                    | {"PATH": f"{commands}{os.pathsep}{os.environ['PATH']}"},
+                    env=environment,
                     capture_output=True,
                     text=True,
                     timeout=10,
@@ -467,8 +487,7 @@ class TranscriptRunnerTests(unittest.TestCase):
         )
         sbx.chmod(0o755)
         shutil.rmtree(self.root / "target")
-        environment = os.environ | {
-            "PATH": f"{commands}{os.pathsep}{os.environ['PATH']}",
+        environment = self.script_environment(commands) | {
             "MCP_CONSOLE_TEST_SBX_TEMPLATE": "fixture@sha256:example",
             "MCP_CONSOLE_TEST_SBX_NETWORK": "0",
             "MCP_CONSOLE_TEST_SBX_INNER_DOCKER": "0",
